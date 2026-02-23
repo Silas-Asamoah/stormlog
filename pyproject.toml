@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel", "setuptools_scm[toml]>=7.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gpu-memory-profiler"
+name = "stormlog"
 dynamic = ["version"]
 description = "A comprehensive GPU memory profiler for PyTorch and TensorFlow with CLI, visualization, and analytics"
 readme = "README.md"
@@ -107,11 +107,11 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Silas-Asamoah/gpu-memory-profiler"
-Documentation = "https://github.com/Silas-Asamoah/gpu-memory-profiler/tree/main/docs"
-Repository = "https://github.com/Silas-Asamoah/gpu-memory-profiler.git"
-"Bug Tracker" = "https://github.com/Silas-Asamoah/gpu-memory-profiler/issues"
-"Release Notes" = "https://github.com/Silas-Asamoah/gpu-memory-profiler/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Silas-Asamoah/stormlog"
+Documentation = "https://github.com/Silas-Asamoah/stormlog/tree/main/docs"
+Repository = "https://github.com/Silas-Asamoah/stormlog.git"
+"Bug Tracker" = "https://github.com/Silas-Asamoah/stormlog/issues"
+"Release Notes" = "https://github.com/Silas-Asamoah/stormlog/blob/main/CHANGELOG.md"
 
 [project.scripts]
 gpumemprof = "gpumemprof.cli:main"

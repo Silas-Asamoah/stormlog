@@ -1,10 +1,10 @@
-# Core dependencies for GPU Memory Profiler
+# Core dependencies for Stormlog
 # Install with: pip install -r requirements.txt
 
 # Optional framework extras are installed via package extras:
-#   pip install "gpu-memory-profiler[torch]"
-#   pip install "gpu-memory-profiler[tf]"
-#   pip install "gpu-memory-profiler[all]"
+#   pip install "stormlog[torch]"
+#   pip install "stormlog[tf]"
+#   pip install "stormlog[all]"
 
 # Core Data Processing
 numpy>=1.19.0

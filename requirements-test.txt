@@ -1,4 +1,4 @@
-# Testing dependencies for GPU Memory Profiler
+# Testing dependencies for Stormlog
 # Install with: pip install -r requirements-test.txt
 
 # Core testing framework
