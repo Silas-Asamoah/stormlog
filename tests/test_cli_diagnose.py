@@ -5,12 +5,18 @@ from datetime import datetime as real_datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import gpumemprof.cli as gpumemprof_cli
 import gpumemprof.diagnose as diagnose_module
 import gpumemprof.tracker as tracker_module
 
 
-def _patch_diagnose_env(monkeypatch, cuda_available=False, risk_detected=False):
+def _patch_diagnose_env(
+    monkeypatch: pytest.MonkeyPatch,
+    cuda_available: bool = False,
+    risk_detected: bool = False,
+) -> None:
     """Patch diagnose module's env/summary dependencies for predictable output."""
     monkeypatch.setattr(
         diagnose_module,
@@ -23,6 +29,8 @@ def _patch_diagnose_env(monkeypatch, cuda_available=False, risk_detected=False):
             "detected_backend": "cuda" if cuda_available else "cpu",
         },
     )
+    gpu_info: dict[str, object]
+    frag_info: dict[str, object]
     if cuda_available and risk_detected:
         gpu_info = {
             "device_id": 0,
@@ -68,10 +76,12 @@ def _patch_diagnose_env(monkeypatch, cuda_available=False, risk_detected=False):
     )
 
 
-def _patch_timeline_capture(monkeypatch):
+def _patch_timeline_capture(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch run_timeline_capture to return fixed data without starting a tracker."""
 
-    def _fake_capture(device, duration_seconds, interval):
+    def _fake_capture(
+        device: object, duration_seconds: float, interval: float
+    ) -> dict[str, list[object]]:
         if duration_seconds <= 0:
             return {"timestamps": [], "allocated": [], "reserved": []}
         return {
@@ -83,7 +93,9 @@ def _patch_timeline_capture(monkeypatch):
     monkeypatch.setattr(diagnose_module, "run_timeline_capture", _fake_capture)
 
 
-def test_diagnose_produces_artifact_bundle_with_duration_zero(monkeypatch, tmp_path):
+def test_diagnose_produces_artifact_bundle_with_duration_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Invocation with duration=0 produces directory with required files."""
     _patch_diagnose_env(monkeypatch, cuda_available=False)
     _patch_timeline_capture(monkeypatch)
@@ -94,7 +106,7 @@ def test_diagnose_produces_artifact_bundle_with_duration_zero(monkeypatch, tmp_p
         duration=0,
         interval=0.5,
     )
-    exit_code = gpumemprof_cli.cmd_diagnose(args)
+    exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     assert exit_code in (0, 2)
     dirs = list(tmp_path.iterdir())
@@ -125,7 +137,9 @@ def test_diagnose_produces_artifact_bundle_with_duration_zero(monkeypatch, tmp_p
     assert "suggestions" in summary
 
 
-def test_diagnose_artifact_completeness_with_timeline(monkeypatch, tmp_path):
+def test_diagnose_artifact_completeness_with_timeline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """With duration > 0, telemetry_timeline.json has data (when capture is mocked)."""
     _patch_diagnose_env(monkeypatch, cuda_available=False)
     _patch_timeline_capture(monkeypatch)
@@ -136,7 +150,7 @@ def test_diagnose_artifact_completeness_with_timeline(monkeypatch, tmp_path):
         duration=5.0,
         interval=0.5,
     )
-    gpumemprof_cli.cmd_diagnose(args)
+    gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     dirs = list(tmp_path.iterdir())
     artifact_dir = dirs[0]
@@ -149,7 +163,9 @@ def test_diagnose_artifact_completeness_with_timeline(monkeypatch, tmp_path):
     assert len(timeline["allocated"]) == 3
 
 
-def test_diagnose_invalid_duration_returns_one(monkeypatch, capsys):
+def test_diagnose_invalid_duration_returns_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Invalid --duration < 0 returns 1 and prints error."""
     args = SimpleNamespace(
         output=None,
@@ -157,13 +173,15 @@ def test_diagnose_invalid_duration_returns_one(monkeypatch, capsys):
         duration=-1,
         interval=0.5,
     )
-    exit_code = gpumemprof_cli.cmd_diagnose(args)
+    exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     assert exit_code == 1
     err = capsys.readouterr().err
     assert "duration" in err.lower()
 
 
-def test_diagnose_invalid_interval_returns_one(monkeypatch, capsys):
+def test_diagnose_invalid_interval_returns_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Invalid --interval <= 0 returns 1 and prints error."""
     args = SimpleNamespace(
         output=None,
@@ -171,13 +189,15 @@ def test_diagnose_invalid_interval_returns_one(monkeypatch, capsys):
         duration=0,
         interval=0,
     )
-    exit_code = gpumemprof_cli.cmd_diagnose(args)
+    exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     assert exit_code == 1
     err = capsys.readouterr().err
     assert "interval" in err.lower()
 
 
-def test_diagnose_exit_code_zero_when_no_risk(monkeypatch, tmp_path):
+def test_diagnose_exit_code_zero_when_no_risk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When risk flags are false, cmd_diagnose returns 0."""
     _patch_diagnose_env(monkeypatch, cuda_available=True, risk_detected=False)
     _patch_timeline_capture(monkeypatch)
@@ -188,11 +208,13 @@ def test_diagnose_exit_code_zero_when_no_risk(monkeypatch, tmp_path):
         duration=0,
         interval=0.5,
     )
-    exit_code = gpumemprof_cli.cmd_diagnose(args)
+    exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     assert exit_code == 0
 
 
-def test_diagnose_exit_code_two_when_risk_detected(monkeypatch, tmp_path):
+def test_diagnose_exit_code_two_when_risk_detected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When risk is detected (e.g. high utilization, OOM), returns 2."""
     _patch_diagnose_env(monkeypatch, cuda_available=True, risk_detected=True)
     _patch_timeline_capture(monkeypatch)
@@ -203,11 +225,13 @@ def test_diagnose_exit_code_two_when_risk_detected(monkeypatch, tmp_path):
         duration=0,
         interval=0.5,
     )
-    exit_code = gpumemprof_cli.cmd_diagnose(args)
+    exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     assert exit_code == 2
 
 
-def test_diagnose_stdout_contains_artifact_path_and_status(monkeypatch, tmp_path, capsys):
+def test_diagnose_stdout_contains_artifact_path_and_status(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Stdout summary contains artifact path and status line."""
     _patch_diagnose_env(monkeypatch, cuda_available=False)
     _patch_timeline_capture(monkeypatch)
@@ -218,7 +242,7 @@ def test_diagnose_stdout_contains_artifact_path_and_status(monkeypatch, tmp_path
         duration=0,
         interval=0.5,
     )
-    gpumemprof_cli.cmd_diagnose(args)
+    gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     out = capsys.readouterr().out
 
     assert "Artifact:" in out
@@ -227,7 +251,9 @@ def test_diagnose_stdout_contains_artifact_path_and_status(monkeypatch, tmp_path
     assert "OK" in out or "MEMORY_RISK" in out or "FAILED" in out
 
 
-def test_diagnose_stdout_findings_when_risk(monkeypatch, tmp_path, capsys):
+def test_diagnose_stdout_findings_when_risk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """When risk detected, stdout includes findings line."""
     _patch_diagnose_env(monkeypatch, cuda_available=True, risk_detected=True)
     _patch_timeline_capture(monkeypatch)
@@ -238,14 +264,16 @@ def test_diagnose_stdout_findings_when_risk(monkeypatch, tmp_path, capsys):
         duration=0,
         interval=0.5,
     )
-    gpumemprof_cli.cmd_diagnose(args)
+    gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     out = capsys.readouterr().out
 
     assert "Findings:" in out
     assert "MEMORY_RISK" in out
 
 
-def test_diagnose_default_output_creates_timestamped_dir_in_cwd(monkeypatch, tmp_path):
+def test_diagnose_default_output_creates_timestamped_dir_in_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """With no --output, artifact is created in cwd with timestamped name."""
     _patch_diagnose_env(monkeypatch, cuda_available=False)
     _patch_timeline_capture(monkeypatch)
@@ -257,14 +285,16 @@ def test_diagnose_default_output_creates_timestamped_dir_in_cwd(monkeypatch, tmp
         duration=0,
         interval=0.5,
     )
-    gpumemprof_cli.cmd_diagnose(args)
+    gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     dirs = [d for d in tmp_path.iterdir() if d.is_dir()]
     assert len(dirs) == 1
     assert dirs[0].name.startswith("gpumemprof-diagnose-")
 
 
-def test_diagnose_output_existing_dir_creates_timestamped_subdir(monkeypatch, tmp_path):
+def test_diagnose_output_existing_dir_creates_timestamped_subdir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When --output is an existing directory, create timestamped subdir inside."""
     out_dir = tmp_path / "myout"
     out_dir.mkdir()
@@ -277,7 +307,7 @@ def test_diagnose_output_existing_dir_creates_timestamped_subdir(monkeypatch, tm
         duration=0,
         interval=0.5,
     )
-    gpumemprof_cli.cmd_diagnose(args)
+    gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     subdirs = list(out_dir.iterdir())
     assert len(subdirs) == 1
@@ -285,7 +315,9 @@ def test_diagnose_output_existing_dir_creates_timestamped_subdir(monkeypatch, tm
     assert (subdirs[0] / "manifest.json").exists()
 
 
-def test_diagnose_invalid_output_returns_one(monkeypatch, tmp_path):
+def test_diagnose_invalid_output_returns_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When --output is an existing file (cannot create dir), returns 1."""
     existing_file = tmp_path / "existing_file"
     existing_file.write_text("x")
@@ -298,27 +330,34 @@ def test_diagnose_invalid_output_returns_one(monkeypatch, tmp_path):
         duration=0,
         interval=0.5,
     )
-    exit_code = gpumemprof_cli.cmd_diagnose(args)
+    exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     assert exit_code == 1
 
 
-def test_run_timeline_capture_uses_memory_tracker_for_mps(monkeypatch):
+def test_run_timeline_capture_uses_memory_tracker_for_mps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """MPS runtime should use MemoryTracker, not CPUMemoryTracker."""
     created = {}
 
     class _FakeTracker:
-        def __init__(self, device=None, sampling_interval=0.5, enable_alerts=False):
+        def __init__(
+            self,
+            device: object = None,
+            sampling_interval: float = 0.5,
+            enable_alerts: bool = False,
+        ) -> None:
             created["device"] = device
             created["sampling_interval"] = sampling_interval
             created["enable_alerts"] = enable_alerts
 
-        def start_tracking(self):
+        def start_tracking(self) -> None:
             created["started"] = True
 
-        def stop_tracking(self):
+        def stop_tracking(self) -> None:
             created["stopped"] = True
 
-        def get_memory_timeline(self, interval=0.5):
+        def get_memory_timeline(self, interval: float = 0.5) -> dict[str, list[object]]:
             created["interval"] = interval
             return {"timestamps": [0.0], "allocated": [1], "reserved": [2]}
 
@@ -326,7 +365,9 @@ def test_run_timeline_capture_uses_memory_tracker_for_mps(monkeypatch):
     monkeypatch.setattr(tracker_module, "MemoryTracker", _FakeTracker)
     monkeypatch.setattr(diagnose_module.time, "sleep", lambda _: None)
 
-    timeline = diagnose_module.run_timeline_capture(device=None, duration_seconds=0.1, interval=0.05)
+    timeline = diagnose_module.run_timeline_capture(
+        device=None, duration_seconds=0.1, interval=0.05
+    )
 
     assert created["device"] == "mps"
     assert created["started"] is True
@@ -335,8 +376,11 @@ def test_run_timeline_capture_uses_memory_tracker_for_mps(monkeypatch):
     assert timeline["reserved"] == [2]
 
 
-def test_collect_environment_uses_mps_backend_sample(monkeypatch):
+def test_collect_environment_uses_mps_backend_sample(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """MPS environment collection should include backend sample instead of CUDA error."""
+
     class _Sample:
         device_id = 0
         allocated_bytes = 123
@@ -348,8 +392,12 @@ def test_collect_environment_uses_mps_backend_sample(monkeypatch):
         "get_system_info",
         lambda: {"detected_backend": "mps"},
     )
-    monkeypatch.setattr(diagnose_module, "get_gpu_info", lambda _: {"error": "CUDA is not available"})
-    monkeypatch.setattr(diagnose_module, "_collect_backend_sample", lambda _: ("mps", _Sample()))
+    monkeypatch.setattr(
+        diagnose_module, "get_gpu_info", lambda _: {"error": "CUDA is not available"}
+    )
+    monkeypatch.setattr(
+        diagnose_module, "_collect_backend_sample", lambda _: ("mps", _Sample())
+    )
 
     env = diagnose_module.collect_environment(device=None)
 
@@ -358,11 +406,14 @@ def test_collect_environment_uses_mps_backend_sample(monkeypatch):
     assert env["fragmentation"]["note"]
 
 
-def test_diagnose_same_second_creates_unique_artifact_dirs(monkeypatch, tmp_path):
+def test_diagnose_same_second_creates_unique_artifact_dirs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Two runs in same second should not overwrite the same artifact directory."""
+
     class _FixedDateTime:
         @staticmethod
-        def utcnow():
+        def utcnow() -> "real_datetime":
             return real_datetime(2026, 2, 15, 12, 0, 0)
 
     out_dir = tmp_path / "out"
@@ -378,8 +429,8 @@ def test_diagnose_same_second_creates_unique_artifact_dirs(monkeypatch, tmp_path
         duration=0,
         interval=0.5,
     )
-    code_one = gpumemprof_cli.cmd_diagnose(args)
-    code_two = gpumemprof_cli.cmd_diagnose(args)
+    code_one = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
+    code_two = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     subdirs = sorted([path.name for path in out_dir.iterdir() if path.is_dir()])
     assert code_one in (0, 2)

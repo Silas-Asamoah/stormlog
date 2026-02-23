@@ -7,7 +7,7 @@ import csv
 import json
 import threading
 import time
-from collections import deque
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, List
 from unittest.mock import patch
@@ -20,24 +20,25 @@ from gpumemprof.cpu_profiler import (
     CPUMemoryTracker,
     CPUProfileResult,
 )
-from gpumemprof.tracker import TrackingEvent
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_mock_process(rss: int = 1024 * 1024, vms: int = 2048 * 1024, cpu_pct: float = 5.0):
+
+def _make_mock_process(
+    rss: int = 1024 * 1024, vms: int = 2048 * 1024, cpu_pct: float = 5.0
+) -> object:
     """Return a mock ``psutil.Process`` that reports fixed memory values."""
 
     class _MockProcess:
-        def oneshot(self):
+        def oneshot(self) -> object:
             return contextlib.nullcontext()
 
-        def memory_info(self):
+        def memory_info(self) -> object:
             return SimpleNamespace(rss=rss, vms=vms)
 
-        def cpu_percent(self, interval=None):  # noqa: ARG002
+        def cpu_percent(self, interval: object = None) -> float:  # noqa: ARG002
             return cpu_pct
 
     return _MockProcess()
@@ -47,14 +48,15 @@ def _make_mock_process(rss: int = 1024 * 1024, vms: int = 2048 * 1024, cpu_pct: 
 # CPUMemorySnapshot
 # ---------------------------------------------------------------------------
 
+
 class TestCPUMemorySnapshot:
-    def test_creation(self):
+    def test_creation(self) -> None:
         snap = CPUMemorySnapshot(timestamp=1.0, rss=100, vms=200, cpu_percent=1.5)
         assert snap.rss == 100
         assert snap.vms == 200
         assert snap.cpu_percent == 1.5
 
-    def test_to_dict(self):
+    def test_to_dict(self) -> None:
         snap = CPUMemorySnapshot(timestamp=1.0, rss=100, vms=200, cpu_percent=1.5)
         d = snap.to_dict()
         assert d == {"timestamp": 1.0, "rss": 100, "vms": 200, "cpu_percent": 1.5}
@@ -63,6 +65,7 @@ class TestCPUMemorySnapshot:
 # ---------------------------------------------------------------------------
 # CPUProfileResult
 # ---------------------------------------------------------------------------
+
 
 class TestCPUProfileResult:
     def _make_result(self) -> CPUProfileResult:
@@ -76,11 +79,11 @@ class TestCPUProfileResult:
             peak_rss=350,
         )
 
-    def test_memory_diff(self):
+    def test_memory_diff(self) -> None:
         result = self._make_result()
         assert result.memory_diff() == 200  # 300 - 100
 
-    def test_to_dict(self):
+    def test_to_dict(self) -> None:
         result = self._make_result()
         d = result.to_dict()
         assert d["name"] == "test_fn"
@@ -95,11 +98,12 @@ class TestCPUProfileResult:
 # CPUMemoryProfiler
 # ---------------------------------------------------------------------------
 
+
 class TestCPUMemoryProfiler:
     """Tests for the lightweight CPU profiler class."""
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_init(self, mock_cls):
+    def test_init(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         profiler = CPUMemoryProfiler()
 
@@ -109,7 +113,7 @@ class TestCPUMemoryProfiler:
         assert profiler._baseline_snapshot is not None
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_take_snapshot(self, mock_cls):
+    def test_take_snapshot(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process(rss=4096, vms=8192, cpu_pct=10.0)
         profiler = CPUMemoryProfiler()
         snap = profiler._take_snapshot()
@@ -121,7 +125,7 @@ class TestCPUMemoryProfiler:
         assert snap.timestamp > 0
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_profile_function(self, mock_cls):
+    def test_profile_function(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         profiler = CPUMemoryProfiler()
 
@@ -133,7 +137,7 @@ class TestCPUMemoryProfiler:
         assert len(profiler.results) == 1
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_profile_function_preserves_return_value(self, mock_cls):
+    def test_profile_function_preserves_return_value(self, mock_cls: Any) -> None:
         """profile_function must not swallow the profiled function's return."""
         mock_cls.return_value = _make_mock_process()
         profiler = CPUMemoryProfiler()
@@ -143,7 +147,7 @@ class TestCPUMemoryProfiler:
         assert isinstance(result, CPUProfileResult)
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_profile_context(self, mock_cls):
+    def test_profile_context(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         profiler = CPUMemoryProfiler()
 
@@ -154,7 +158,7 @@ class TestCPUMemoryProfiler:
         assert profiler.results[0].name == "block"
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_start_stop_monitoring(self, mock_cls):
+    def test_start_stop_monitoring(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         profiler = CPUMemoryProfiler()
 
@@ -166,7 +170,7 @@ class TestCPUMemoryProfiler:
         assert len(profiler.snapshots) > 0
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_start_monitoring_idempotent(self, mock_cls):
+    def test_start_monitoring_idempotent(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         profiler = CPUMemoryProfiler()
         profiler.start_monitoring(interval=0.05)
@@ -174,7 +178,7 @@ class TestCPUMemoryProfiler:
         profiler.stop_monitoring()
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_clear_results(self, mock_cls):
+    def test_clear_results(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         profiler = CPUMemoryProfiler()
         profiler.profile_function(lambda: None)
@@ -185,7 +189,7 @@ class TestCPUMemoryProfiler:
         assert profiler.snapshots == []
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_get_summary_empty(self, mock_cls):
+    def test_get_summary_empty(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process(rss=512)
         profiler = CPUMemoryProfiler()
         summary = profiler.get_summary()
@@ -195,7 +199,7 @@ class TestCPUMemoryProfiler:
         assert summary["baseline_rss"] == 512
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_get_summary_with_snapshots(self, mock_cls):
+    def test_get_summary_with_snapshots(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process(rss=1000)
         profiler = CPUMemoryProfiler()
         # Manually inject snapshots
@@ -216,11 +220,12 @@ class TestCPUMemoryProfiler:
 # CPUMemoryTracker
 # ---------------------------------------------------------------------------
 
+
 class TestCPUMemoryTracker:
     """Tests for the real-time CPU memory tracker (thread-safe)."""
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_init_defaults(self, mock_cls):
+    def test_init_defaults(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
 
@@ -231,7 +236,7 @@ class TestCPUMemoryTracker:
         assert isinstance(tracker._events_lock, type(threading.Lock()))
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_start_stop_tracking(self, mock_cls):
+    def test_start_stop_tracking(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker(sampling_interval=0.05)
 
@@ -241,13 +246,13 @@ class TestCPUMemoryTracker:
         tracker.stop_tracking()
         assert tracker.is_tracking is False
 
-        events = tracker.get_events()
+        events = tracker.get_events()  # type: ignore[unreachable, unused-ignore]
         types = [e.event_type for e in events]
         assert "start" in types
         assert "stop" in types
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_start_tracking_idempotent(self, mock_cls):
+    def test_start_tracking_idempotent(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker(sampling_interval=0.05)
         tracker.start_tracking()
@@ -255,13 +260,13 @@ class TestCPUMemoryTracker:
         tracker.stop_tracking()
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_stop_tracking_idempotent(self, mock_cls):
+    def test_stop_tracking_idempotent(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker(sampling_interval=0.05)
         tracker.stop_tracking()  # not started – should be a no-op
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_add_event_under_lock(self, mock_cls):
+    def test_add_event_under_lock(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process(rss=2048)
         tracker = CPUMemoryTracker()
 
@@ -275,7 +280,7 @@ class TestCPUMemoryTracker:
         assert event.device_id == -1
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_get_events_no_filter(self, mock_cls):
+    def test_get_events_no_filter(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
         tracker._add_event("a", 0, "first")
@@ -285,7 +290,7 @@ class TestCPUMemoryTracker:
         assert len(events) == 2
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_get_events_filter_by_type(self, mock_cls):
+    def test_get_events_filter_by_type(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
         tracker._add_event("allocation", 10, "alloc")
@@ -297,7 +302,7 @@ class TestCPUMemoryTracker:
         assert all(e.event_type == "allocation" for e in allocs)
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_get_events_filter_by_since(self, mock_cls):
+    def test_get_events_filter_by_since(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
 
@@ -312,7 +317,7 @@ class TestCPUMemoryTracker:
         assert events[0].context == "new"
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_get_events_filter_last_n(self, mock_cls):
+    def test_get_events_filter_last_n(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
         for i in range(5):
@@ -324,7 +329,7 @@ class TestCPUMemoryTracker:
         assert events[1].context == "event_4"
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_clear_events(self, mock_cls):
+    def test_clear_events(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
         tracker._add_event("x", 0, "first")
@@ -338,7 +343,7 @@ class TestCPUMemoryTracker:
         assert tracker.stats["total_events"] == 0
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_get_statistics(self, mock_cls):
+    def test_get_statistics(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process(rss=4096)
         tracker = CPUMemoryTracker()
         tracker._add_event("x", 0, "ev")
@@ -350,7 +355,7 @@ class TestCPUMemoryTracker:
         assert isinstance(stats["tracking_duration_seconds"], float)
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_get_statistics_with_tracking_duration(self, mock_cls):
+    def test_get_statistics_with_tracking_duration(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker(sampling_interval=0.05)
         tracker.start_tracking()
@@ -361,7 +366,7 @@ class TestCPUMemoryTracker:
         assert stats["tracking_duration_seconds"] > 0
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_get_memory_timeline_empty(self, mock_cls):
+    def test_get_memory_timeline_empty(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
 
@@ -369,7 +374,7 @@ class TestCPUMemoryTracker:
         assert timeline == {"timestamps": [], "allocated": [], "reserved": []}
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_get_memory_timeline(self, mock_cls):
+    def test_get_memory_timeline(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process(rss=1024)
         tracker = CPUMemoryTracker()
         tracker._add_event("a", 0, "ev1")
@@ -382,7 +387,7 @@ class TestCPUMemoryTracker:
         assert timeline["allocated"] == timeline["reserved"]
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_export_events_csv(self, mock_cls, tmp_path):
+    def test_export_events_csv(self, mock_cls: Any, tmp_path: Path) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
         tracker._add_event("allocation", 10, "csv_test")
@@ -400,7 +405,7 @@ class TestCPUMemoryTracker:
         assert rows[0]["context"] == "csv_test"
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_export_events_json(self, mock_cls, tmp_path):
+    def test_export_events_json(self, mock_cls: Any, tmp_path: Path) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
         tracker._add_event("deallocation", -5, "json_test")
@@ -420,7 +425,9 @@ class TestCPUMemoryTracker:
         assert isinstance(data[0]["metadata"], dict)
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_export_events_unsupported_format(self, mock_cls, tmp_path):
+    def test_export_events_unsupported_format(
+        self, mock_cls: Any, tmp_path: Path
+    ) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
         tracker._add_event("x", 0, "ev")
@@ -429,7 +436,7 @@ class TestCPUMemoryTracker:
             tracker.export_events(str(tmp_path / "out.xml"), format="xml")
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_export_events_empty_is_noop(self, mock_cls, tmp_path):
+    def test_export_events_empty_is_noop(self, mock_cls: Any, tmp_path: Path) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
         filepath = tmp_path / "empty.csv"
@@ -438,7 +445,7 @@ class TestCPUMemoryTracker:
         assert not filepath.exists()
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_export_events_with_timestamp(self, mock_cls, tmp_path):
+    def test_export_events_with_timestamp(self, mock_cls: Any, tmp_path: Path) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
         tracker._add_event("x", 0, "ts_test")
@@ -447,17 +454,17 @@ class TestCPUMemoryTracker:
         assert result.endswith(".json")
         assert "cpu_tracker_" in result
 
-    def test_format_bytes(self):
+    def test_format_bytes(self) -> None:
         assert CPUMemoryTracker._format_bytes(0) == "0.00 B"
         assert CPUMemoryTracker._format_bytes(1024) == "1.00 KB"
         assert CPUMemoryTracker._format_bytes(1024 * 1024) == "1.00 MB"
         assert CPUMemoryTracker._format_bytes(1024 * 1024 * 1024) == "1.00 GB"
-        assert CPUMemoryTracker._format_bytes(1024 ** 4) == "1.00 TB"
+        assert CPUMemoryTracker._format_bytes(1024**4) == "1.00 TB"
         # Stays at TB for very large values
-        assert "TB" in CPUMemoryTracker._format_bytes(1024 ** 5)
+        assert "TB" in CPUMemoryTracker._format_bytes(1024**5)
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_max_events_respected(self, mock_cls):
+    def test_max_events_respected(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker(max_events=5)
 
@@ -474,7 +481,7 @@ class TestCPUMemoryTracker:
     # ------------------------------------------------------------------
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_concurrent_add_and_read(self, mock_cls):
+    def test_concurrent_add_and_read(self, mock_cls: Any) -> None:
         """Multiple writers and readers should not raise or lose events."""
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker(max_events=50_000)
@@ -513,13 +520,15 @@ class TestCPUMemoryTracker:
         for t in threads:
             t.join(timeout=10)
         for t in threads:
-            assert not t.is_alive(), f"Thread {t.name} did not complete (deadlock/timeout)"
+            assert (
+                not t.is_alive()
+            ), f"Thread {t.name} did not complete (deadlock/timeout)"
 
         assert errors == [], f"Concurrent access raised errors: {errors}"
         assert len(tracker.events) == num_writers * writes_per_thread
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_concurrent_tracking_and_get_events(self, mock_cls):
+    def test_concurrent_tracking_and_get_events(self, mock_cls: Any) -> None:
         """get_events() must not raise while _tracking_loop() runs."""
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker(sampling_interval=0.01)
@@ -538,14 +547,16 @@ class TestCPUMemoryTracker:
         reader_thread = threading.Thread(target=reader)
         reader_thread.start()
         reader_thread.join(timeout=5)
-        assert not reader_thread.is_alive(), "reader_thread timed out (possible deadlock)"
+        assert (
+            not reader_thread.is_alive()
+        ), "reader_thread timed out (possible deadlock)"
 
         tracker.stop_tracking()
 
         assert errors == [], f"get_events() raised during tracking: {errors}"
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_concurrent_clear_and_add(self, mock_cls):
+    def test_concurrent_clear_and_add(self, mock_cls: Any) -> None:
         """clear_events() and _add_event() running concurrently must not raise."""
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
@@ -578,7 +589,7 @@ class TestCPUMemoryTracker:
         assert errors == [], f"Concurrent clear/add raised: {errors}"
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_events_lock_exists(self, mock_cls):
+    def test_events_lock_exists(self, mock_cls: Any) -> None:
         """Verify the lock attribute is present and is a Lock."""
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
@@ -588,7 +599,7 @@ class TestCPUMemoryTracker:
         tracker._events_lock.release()
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_concurrent_export_and_add(self, mock_cls, tmp_path):
+    def test_concurrent_export_and_add(self, mock_cls: Any, tmp_path: Path) -> None:
         """export_events() must not raise while _add_event() runs concurrently."""
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
@@ -624,7 +635,9 @@ class TestCPUMemoryTracker:
         assert errors == [], f"Concurrent export/add raised: {errors}"
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_no_deque_mutation_error_under_concurrent_load(self, mock_cls, tmp_path):
+    def test_no_deque_mutation_error_under_concurrent_load(
+        self, mock_cls: Any, tmp_path: Path
+    ) -> None:
         """Regression: concurrent add/read/export must not raise
         ``RuntimeError: deque mutated during iteration`` (the exact error
         that was reproducible on *main* before the thread-safety fix).
@@ -675,7 +688,8 @@ class TestCPUMemoryTracker:
 
         # Explicitly check for the *exact* failure mode fixed by this PR.
         deque_errors = [
-            e for e in errors
+            e
+            for e in errors
             if isinstance(e, RuntimeError) and "deque mutated" in str(e)
         ]
         assert deque_errors == [], (

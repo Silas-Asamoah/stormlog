@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from gpumemprof.device_collectors import DeviceMemorySample
 from gpumemprof.oom_flight_recorder import (
     OOMFlightRecorder,
     OOMFlightRecorderConfig,
     classify_oom_exception,
 )
 from gpumemprof.tracker import MemoryTracker
-from gpumemprof.device_collectors import DeviceMemorySample
 
 
 class _ResourceExhaustedError(RuntimeError):
@@ -23,7 +24,9 @@ class _ResourceExhaustedError(RuntimeError):
 class _TrackerHarness:
     """Minimal harness that exercises MemoryTracker OOM methods without a GPU."""
 
-    def __init__(self, dump_dir: Path, *, enabled: bool = True, buffer_size: int = 8) -> None:
+    def __init__(
+        self, dump_dir: Path, *, enabled: bool = True, buffer_size: int = 8
+    ) -> None:
         self.backend = "cuda"
         self.collector_capabilities = {"telemetry_collector": "gpumemprof.cuda_tracker"}
         self.total_memory = 1024 * 1024 * 1024
@@ -39,7 +42,7 @@ class _TrackerHarness:
             )
         )
 
-    def get_statistics(self):
+    def get_statistics(self) -> dict[str, int]:
         return {"total_events": len(self._oom_flight_recorder.snapshot_events())}
 
     def _safe_sample(self) -> DeviceMemorySample:
@@ -54,7 +57,14 @@ class _TrackerHarness:
             device_id=0,
         )
 
-    def _add_event(self, event_type, memory_change, context, metadata=None, sample=None):
+    def _add_event(
+        self,
+        event_type: str,
+        memory_change: int,
+        context: str,
+        metadata: dict[str, object] | None = None,
+        sample: object = None,
+    ) -> None:
         _ = sample
         payload = {
             "event_type": event_type,
@@ -65,21 +75,34 @@ class _TrackerHarness:
         }
         self._oom_flight_recorder.record_event(payload)
 
-    def handle_exception(self, exc, context=None, metadata=None):
-        return MemoryTracker.handle_exception(self, exc, context=context, metadata=metadata)
+    def handle_exception(
+        self,
+        exc: BaseException,
+        context: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> str | None:
+        return MemoryTracker.handle_exception(
+            self, exc, context=context, metadata=metadata  # type: ignore[arg-type, unused-ignore]
+        )
 
-    def capture_oom(self, context="runtime", metadata=None):
-        return MemoryTracker.capture_oom(self, context=context, metadata=metadata)
+    def capture_oom(
+        self, context: str = "runtime", metadata: dict[str, object] | None = None
+    ) -> Any:
+        return MemoryTracker.capture_oom(self, context=context, metadata=metadata)  # type: ignore[arg-type, unused-ignore]
 
 
 def test_classify_oom_runtime_error_pattern() -> None:
-    classified = classify_oom_exception(RuntimeError("CUDA out of memory. Tried to allocate"))
+    classified = classify_oom_exception(
+        RuntimeError("CUDA out of memory. Tried to allocate")
+    )
     assert classified.is_oom is True
     assert classified.reason == "message_pattern:out of memory"
 
 
 def test_classify_tensorflow_style_resource_exhausted_error() -> None:
-    classified = classify_oom_exception(_ResourceExhaustedError("OOM when allocating tensor"))
+    classified = classify_oom_exception(
+        _ResourceExhaustedError("OOM when allocating tensor")
+    )
     assert classified.is_oom is True
     assert classified.reason == "tensorflow.ResourceExhaustedError"
 
@@ -235,5 +258,5 @@ def test_capture_oom_context_triggers_dump_then_reraises(tmp_path: Path) -> None
         with harness.capture_oom(context="capture-oom", metadata={"source": "ctx"}):
             raise RuntimeError("CUDA out of memory in context")
 
-    assert harness.last_oom_dump_path is not None
-    assert Path(harness.last_oom_dump_path).exists()
+    assert harness.last_oom_dump_path is not None  # type: ignore[unreachable, unused-ignore]
+    assert Path(harness.last_oom_dump_path).exists()  # type: ignore[unreachable, unused-ignore]

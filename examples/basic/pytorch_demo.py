@@ -12,8 +12,8 @@ try:
     import torch
     import torch.nn as nn
 except ImportError:
-    torch = None
-    nn = None
+    torch = None  # type: ignore[assignment, unused-ignore]
+    nn = None  # type: ignore[assignment, unused-ignore]
 
 from examples.common import (
     build_simple_torch_model,
@@ -42,9 +42,11 @@ def profile_tensor_allocation(profiler: GPUMemoryProfiler, repeats: int = 3) -> 
     for idx in range(repeats):
         size_mb = 32 * (idx + 1)
 
-        def allocate(sz=size_mb, dev=device):  # capture via default args
+        def allocate(
+            sz: int = size_mb, dev: "torch.device" = device
+        ) -> float:  # capture via default args
             tensor = _allocate_tensor_mb(sz, dev)
-            return tensor.mean().item()
+            return float(tensor.mean().item())
 
         allocate.__name__ = f"tensor_alloc_{size_mb}mb"
         profiler.profile_function(allocate)
@@ -89,7 +91,7 @@ def main() -> None:
     print_header("GPU Memory Profiler - PyTorch Demo")
 
     if torch is None or nn is None:
-        print("PyTorch is not installed. Skipping PyTorch demo.")
+        print("PyTorch is not installed. Skipping PyTorch demo.")  # type: ignore[unreachable, unused-ignore]
         return
 
     display_environment()

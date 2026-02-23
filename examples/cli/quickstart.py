@@ -19,7 +19,7 @@ def _torch_cuda_available() -> bool:
         import torch
     except (ImportError, ModuleNotFoundError):
         return False
-    return torch.cuda.is_available()
+    return bool(torch.cuda.is_available())
 
 
 def run_gpumemprof_examples() -> None:

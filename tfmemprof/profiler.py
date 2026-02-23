@@ -5,13 +5,13 @@ Main profiling engine for capturing and analyzing GPU memory usage during
 TensorFlow model training and inference.
 """
 
-import time
 import logging
 import threading
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Callable, TYPE_CHECKING, Iterator
-from contextlib import contextmanager
+import time
 import weakref
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional
 
 from .tf_env import configure_tensorflow_logging
 
@@ -19,6 +19,7 @@ configure_tensorflow_logging()
 
 try:
     import tensorflow as tf
+
     TF_AVAILABLE = True
 except ImportError:
     TF_AVAILABLE = False
@@ -27,13 +28,11 @@ except ImportError:
 if TYPE_CHECKING:
     import tensorflow as tf
 
-import numpy as np
-from .utils import format_memory, get_gpu_info
-
 
 @dataclass
 class MemorySnapshot:
     """Represents a point-in-time memory snapshot."""
+
     timestamp: float
     name: str
     gpu_memory_mb: float
@@ -56,6 +55,7 @@ class MemorySnapshot:
 @dataclass
 class ProfileResult:
     """Comprehensive profiling results."""
+
     start_time: float
     end_time: float
     peak_memory_mb: float
@@ -92,7 +92,9 @@ class TensorTracker:
         self.tensor_sizes: Dict[int, int] = {}
         self._lock = threading.Lock()
 
-    def track_tensor(self, tensor: "tf.Tensor", operation_name: str = "unknown") -> None:
+    def track_tensor(
+        self, tensor: "tf.Tensor", operation_name: str = "unknown"
+    ) -> None:
         """Track a new tensor."""
         if not TF_AVAILABLE or tensor is None:
             return
@@ -104,17 +106,21 @@ class TensorTracker:
 
             # Calculate tensor size
             try:
-                size_bytes = tensor.numpy().nbytes if hasattr(tensor, 'numpy') else 0
+                size_bytes = tensor.numpy().nbytes if hasattr(tensor, "numpy") else 0
                 self.tensor_sizes[tensor_id] = size_bytes
 
-                self.tensor_history.append({
-                    'tensor_id': tensor_id,
-                    'operation': operation_name,
-                    'timestamp': time.time(),
-                    'action': 'created',
-                    'size_bytes': size_bytes,
-                    'shape': tensor.shape.as_list() if hasattr(tensor, 'shape') else []
-                })
+                self.tensor_history.append(
+                    {
+                        "tensor_id": tensor_id,
+                        "operation": operation_name,
+                        "timestamp": time.time(),
+                        "action": "created",
+                        "size_bytes": size_bytes,
+                        "shape": (
+                            tensor.shape.as_list() if hasattr(tensor, "shape") else []
+                        ),
+                    }
+                )
             except Exception as e:
                 logging.warning(f"Could not track tensor: {e}")
 
@@ -122,13 +128,16 @@ class TensorTracker:
         """Get information about currently active tensors."""
         with self._lock:
             active_count = len(self.tensors)
-            total_size = sum(self.tensor_sizes.get(id(t), 0)
-                             for t in self.tensors)
+            total_size = sum(self.tensor_sizes.get(id(t), 0) for t in self.tensors)
 
             return {
-                'count': active_count,
-                'total_size_mb': total_size / (1024 * 1024),
-                'average_size_mb': (total_size / active_count / (1024 * 1024)) if active_count > 0 else 0
+                "count": active_count,
+                "total_size_mb": total_size / (1024 * 1024),
+                "average_size_mb": (
+                    (total_size / active_count / (1024 * 1024))
+                    if active_count > 0
+                    else 0
+                ),
             }
 
     def get_tensor_lifecycle(self) -> List[Dict[str, Any]]:
@@ -140,7 +149,9 @@ class TensorTracker:
 class TFMemoryProfiler:
     """Main TensorFlow GPU Memory Profiler class."""
 
-    def __init__(self, device: Optional[str] = None, enable_tensor_tracking: bool = True) -> None:
+    def __init__(
+        self, device: Optional[str] = None, enable_tensor_tracking: bool = True
+    ) -> None:
         """
         Initialize TensorFlow memory profiler.
 
@@ -150,13 +161,16 @@ class TFMemoryProfiler:
         """
         if not TF_AVAILABLE:
             raise ImportError(
-                "TensorFlow not available. Please install TensorFlow to use this profiler.")
+                "TensorFlow not available. Please install TensorFlow to use this profiler."
+            )
 
         self.device = device or self._get_default_device()
         self.enable_tensor_tracking = enable_tensor_tracking
 
         # Initialize components
-        self.tensor_tracker: Optional[TensorTracker] = TensorTracker() if enable_tensor_tracking else None
+        self.tensor_tracker: Optional[TensorTracker] = (
+            TensorTracker() if enable_tensor_tracking else None
+        )
         self.snapshots: List[MemorySnapshot] = []
         self.function_profiles: Dict[str, Dict[str, Any]] = {}
         self.profiling_active = False
@@ -167,24 +181,25 @@ class TFMemoryProfiler:
         self._setup_tf_memory()
 
         logging.info(
-            f"TensorFlow Memory Profiler initialized for device: {self.device}")
+            f"TensorFlow Memory Profiler initialized for device: {self.device}"
+        )
 
     def _get_default_device(self) -> str:
         """Get default TensorFlow device."""
         try:
-            gpus = tf.config.list_physical_devices('GPU')
+            gpus = tf.config.list_physical_devices("GPU")
             if gpus:
-                return f'/GPU:0'
+                return "/GPU:0"
             else:
-                return '/CPU:0'
+                return "/CPU:0"
         except Exception as exc:
             logging.debug("TF device detection failed: %s", exc)
-            return '/CPU:0'
+            return "/CPU:0"
 
     def _setup_tf_memory(self) -> None:
         """Setup TensorFlow memory growth to avoid OOM errors."""
         try:
-            gpus = tf.config.list_physical_devices('GPU')
+            gpus = tf.config.list_physical_devices("GPU")
             if gpus:
                 for gpu in gpus:
                     tf.config.experimental.set_memory_growth(gpu, True)
@@ -195,13 +210,19 @@ class TFMemoryProfiler:
     def _get_memory_info(self) -> Dict[str, float]:
         """Get current memory usage information."""
         try:
-            if '/GPU:' in self.device:
+            if "/GPU:" in self.device:
                 # GPU memory information
-                gpu_details = tf.config.experimental.get_memory_info('/GPU:0')
-                gpu_memory_mb = gpu_details.get('current', 0) / (1024 * 1024)
-                gpu_reserved_mb = gpu_details.get('peak', 0) / (1024 * 1024)
+                gpu_details = tf.config.experimental.get_memory_info("/GPU:0")
+                gpu_memory_mb = gpu_details.get("current", 0) / (1024 * 1024)
+                gpu_reserved_mb = gpu_details.get("peak", 0) / (1024 * 1024)
                 gpu_utilization = min(
-                    100.0, (gpu_memory_mb / gpu_reserved_mb * 100) if gpu_reserved_mb > 0 else 0)
+                    100.0,
+                    (
+                        (gpu_memory_mb / gpu_reserved_mb * 100)
+                        if gpu_reserved_mb > 0
+                        else 0
+                    ),
+                )
             else:
                 gpu_memory_mb = 0.0
                 gpu_reserved_mb = 0.0
@@ -209,23 +230,24 @@ class TFMemoryProfiler:
 
             # CPU memory (approximate)
             import psutil
+
             process = psutil.Process()
             cpu_memory_mb = process.memory_info().rss / (1024 * 1024)
 
             return {
-                'gpu_memory_mb': gpu_memory_mb,
-                'cpu_memory_mb': cpu_memory_mb,
-                'gpu_reserved_mb': gpu_reserved_mb,
-                'gpu_utilization': gpu_utilization
+                "gpu_memory_mb": gpu_memory_mb,
+                "cpu_memory_mb": cpu_memory_mb,
+                "gpu_reserved_mb": gpu_reserved_mb,
+                "gpu_utilization": gpu_utilization,
             }
 
         except Exception as e:
             logging.warning(f"Could not get memory info: {e}")
             return {
-                'gpu_memory_mb': 0.0,
-                'cpu_memory_mb': 0.0,
-                'gpu_reserved_mb': 0.0,
-                'gpu_utilization': 0.0
+                "gpu_memory_mb": 0.0,
+                "cpu_memory_mb": 0.0,
+                "gpu_reserved_mb": 0.0,
+                "gpu_utilization": 0.0,
             }
 
     def capture_snapshot(self, name: str = "snapshot") -> MemorySnapshot:
@@ -237,18 +259,18 @@ class TFMemoryProfiler:
         tensor_sizes = {}
         if self.tensor_tracker:
             active_tensors = self.tensor_tracker.get_active_tensors()
-            num_tensors = active_tensors['count']
-            tensor_sizes = {'total_mb': active_tensors['total_size_mb']}
+            num_tensors = active_tensors["count"]
+            tensor_sizes = {"total_mb": active_tensors["total_size_mb"]}
 
         snapshot = MemorySnapshot(
             timestamp=time.time(),
             name=name,
-            gpu_memory_mb=memory_info['gpu_memory_mb'],
-            cpu_memory_mb=memory_info['cpu_memory_mb'],
-            gpu_memory_reserved_mb=memory_info['gpu_reserved_mb'],
-            gpu_utilization=memory_info['gpu_utilization'],
+            gpu_memory_mb=memory_info["gpu_memory_mb"],
+            cpu_memory_mb=memory_info["cpu_memory_mb"],
+            gpu_memory_reserved_mb=memory_info["gpu_reserved_mb"],
+            gpu_utilization=memory_info["gpu_utilization"],
             num_tensors=num_tensors,
-            tensor_sizes=tensor_sizes
+            tensor_sizes=tensor_sizes,
         )
 
         with self._lock:
@@ -258,6 +280,7 @@ class TFMemoryProfiler:
 
     def profile_function(self, func: Callable[..., Any]) -> Callable[..., Any]:
         """Decorator to profile function memory usage."""
+
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             func_name = func.__name__
 
@@ -275,35 +298,36 @@ class TFMemoryProfiler:
 
                 # Calculate metrics
                 duration = end_time - start_time
-                memory_used = after_snapshot.gpu_memory_mb - before_snapshot.gpu_memory_mb
-                peak_memory = max(before_snapshot.gpu_memory_mb,
-                                  after_snapshot.gpu_memory_mb)
+                memory_used = (
+                    after_snapshot.gpu_memory_mb - before_snapshot.gpu_memory_mb
+                )
+                peak_memory = max(
+                    before_snapshot.gpu_memory_mb, after_snapshot.gpu_memory_mb
+                )
 
                 # Store function profile
                 with self._lock:
                     if func_name not in self.function_profiles:
                         self.function_profiles[func_name] = {
-                            'calls': 0,
-                            'total_duration': 0.0,
-                            'total_memory_used': 0.0,
-                            'peak_memory': 0.0,
-                            'snapshots': []
+                            "calls": 0,
+                            "total_duration": 0.0,
+                            "total_memory_used": 0.0,
+                            "peak_memory": 0.0,
+                            "snapshots": [],
                         }
 
                     profile = self.function_profiles[func_name]
-                    profile['calls'] += 1
-                    profile['total_duration'] += duration
-                    profile['total_memory_used'] += memory_used
-                    profile['peak_memory'] = max(
-                        profile['peak_memory'], peak_memory)
-                    profile['snapshots'].extend(
-                        [before_snapshot, after_snapshot])
+                    profile["calls"] += 1
+                    profile["total_duration"] += duration
+                    profile["total_memory_used"] += memory_used
+                    profile["peak_memory"] = max(profile["peak_memory"], peak_memory)
+                    profile["snapshots"].extend([before_snapshot, after_snapshot])
 
                 return result
 
             except Exception as e:
                 # Capture error state
-                error_snapshot = self.capture_snapshot(f"{func_name}_error")
+                _error_snapshot = self.capture_snapshot(f"{func_name}_error")
                 logging.error(f"Error in profiled function {func_name}: {e}")
                 raise
 
@@ -328,20 +352,22 @@ class TFMemoryProfiler:
             with self._lock:
                 if name not in self.function_profiles:
                     self.function_profiles[name] = {
-                        'calls': 0,
-                        'total_duration': 0.0,
-                        'total_memory_used': 0.0,
-                        'peak_memory': 0.0,
-                        'snapshots': []
+                        "calls": 0,
+                        "total_duration": 0.0,
+                        "total_memory_used": 0.0,
+                        "peak_memory": 0.0,
+                        "snapshots": [],
                     }
 
                 profile = self.function_profiles[name]
-                profile['calls'] += 1
-                profile['total_duration'] += duration
-                profile['total_memory_used'] += memory_used
-                profile['peak_memory'] = max(profile['peak_memory'],
-                                             max(before_snapshot.gpu_memory_mb, after_snapshot.gpu_memory_mb))
-                profile['snapshots'].extend([before_snapshot, after_snapshot])
+                profile["calls"] += 1
+                profile["total_duration"] += duration
+                profile["total_memory_used"] += memory_used
+                profile["peak_memory"] = max(
+                    profile["peak_memory"],
+                    max(before_snapshot.gpu_memory_mb, after_snapshot.gpu_memory_mb),
+                )
+                profile["snapshots"].extend([before_snapshot, after_snapshot])
 
     def start_continuous_profiling(self, interval: float = 1.0) -> None:
         """Start continuous memory profiling."""
@@ -352,8 +378,7 @@ class TFMemoryProfiler:
                 self.capture_snapshot("continuous")
                 time.sleep(interval)
 
-        self.profile_thread = threading.Thread(
-            target=profile_loop, daemon=True)
+        self.profile_thread = threading.Thread(target=profile_loop, daemon=True)
         self.profile_thread.start()
         logging.info("Started continuous profiling")
 
@@ -379,7 +404,7 @@ class TFMemoryProfiler:
                     total_allocations=0,
                     total_deallocations=0,
                     snapshots=[],
-                    function_profiles={}
+                    function_profiles={},
                 )
 
             # Calculate metrics from snapshots
@@ -389,17 +414,23 @@ class TFMemoryProfiler:
             min_memory = min(gpu_memories)
 
             # Estimate allocations/deallocations from memory changes
-            total_allocations = sum(1 for i in range(1, len(gpu_memories))
-                                    if gpu_memories[i] > gpu_memories[i-1])
-            total_deallocations = sum(1 for i in range(1, len(gpu_memories))
-                                      if gpu_memories[i] < gpu_memories[i-1])
+            total_allocations = sum(
+                1
+                for i in range(1, len(gpu_memories))
+                if gpu_memories[i] > gpu_memories[i - 1]
+            )
+            total_deallocations = sum(
+                1
+                for i in range(1, len(gpu_memories))
+                if gpu_memories[i] < gpu_memories[i - 1]
+            )
 
             # Get tensor lifecycle if available
             tensor_lifecycle = {}
             if self.tensor_tracker:
                 tensor_lifecycle = {
-                    'history': self.tensor_tracker.get_tensor_lifecycle(),
-                    'active': self.tensor_tracker.get_active_tensors()
+                    "history": self.tensor_tracker.get_tensor_lifecycle(),
+                    "active": self.tensor_tracker.get_active_tensors(),
                 }
 
             return ProfileResult(
@@ -412,7 +443,7 @@ class TFMemoryProfiler:
                 total_deallocations=total_deallocations,
                 snapshots=self.snapshots.copy(),
                 function_profiles=self.function_profiles.copy(),
-                tensor_lifecycle=tensor_lifecycle
+                tensor_lifecycle=tensor_lifecycle,
             )
 
     def reset(self) -> None:

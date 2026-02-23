@@ -6,7 +6,9 @@ import pytest
 
 
 def test_cpu_telemetry_scenario_writes_exports(tmp_path: Path) -> None:
-    from examples.scenarios.cpu_telemetry_scenario import run_scenario as run_cpu_telemetry
+    from examples.scenarios.cpu_telemetry_scenario import (
+        run_scenario as run_cpu_telemetry,
+    )
 
     output_dir = tmp_path / "cpu"
     summary = run_cpu_telemetry(
@@ -15,14 +17,16 @@ def test_cpu_telemetry_scenario_writes_exports(tmp_path: Path) -> None:
         workload_duration_s=0.5,
     )
 
-    assert summary["exported_event_count"] > 0
+    assert summary["exported_event_count"] > 0  # type: ignore[operator, unused-ignore]
     assert (output_dir / "cpu_tracker_events.json").exists()
     assert (output_dir / "cpu_tracker_events.csv").exists()
     assert (output_dir / "cpu_profiler_summary.json").exists()
 
 
 def test_mps_telemetry_scenario_passes_or_skips(tmp_path: Path) -> None:
-    from examples.scenarios.mps_telemetry_scenario import run_scenario as run_mps_telemetry
+    from examples.scenarios.mps_telemetry_scenario import (
+        run_scenario as run_mps_telemetry,
+    )
 
     output_dir = tmp_path / "mps"
     summary = run_mps_telemetry(
@@ -37,7 +41,9 @@ def test_mps_telemetry_scenario_passes_or_skips(tmp_path: Path) -> None:
 
 
 def test_oom_flight_recorder_scenario_simulated_passes_or_skips(tmp_path: Path) -> None:
-    from examples.scenarios.oom_flight_recorder_scenario import run_scenario as run_oom_scenario
+    from examples.scenarios.oom_flight_recorder_scenario import (
+        run_scenario as run_oom_scenario,
+    )
 
     output_dir = tmp_path / "oom"
     summary = run_oom_scenario(
@@ -66,7 +72,7 @@ def test_tf_end_to_end_scenario_writes_outputs(tmp_path: Path) -> None:
     )
 
     assert summary["status"] == "PASS"
-    assert summary["track_event_count"] > 0
+    assert summary["track_event_count"] > 0  # type: ignore[operator, unused-ignore]
     assert (output_dir / "tf_monitor.json").exists()
     assert (output_dir / "tf_track.json").exists()
     assert (output_dir / "tf_diagnose" / "manifest.json").exists()

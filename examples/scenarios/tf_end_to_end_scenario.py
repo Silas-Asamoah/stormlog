@@ -14,9 +14,10 @@ from typing import Sequence
 from examples.common.formatting import print_header, print_kv, print_section
 from gpumemprof.telemetry import validate_telemetry_record
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts" / "examples" / "scenarios" / "tf_end_to_end"
+DEFAULT_OUTPUT_DIR = (
+    REPO_ROOT / "artifacts" / "examples" / "scenarios" / "tf_end_to_end"
+)
 
 
 def _run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -58,7 +59,7 @@ def run_scenario(
     print_kv("Output directory", output_dir)
 
     if importlib.util.find_spec("tensorflow") is None:
-        summary = {
+        summary: dict[str, object] = {
             "status": "SKIP",
             "reason": "TensorFlow is not installed.",
             "monitor_output": str(monitor_path),

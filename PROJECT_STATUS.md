@@ -2,8 +2,8 @@
 
 ## Current Status: v0.2 Launch Candidate
 
-**Version Target**: `0.2.0`  
-**Branch**: `release/v0.2-readiness`  
+**Version Target**: `0.2.0`
+**Branch**: `release/v0.2-readiness`
 **State**: Launch QA hardening in progress
 
 ## Completed in This Launch Hardening Pass

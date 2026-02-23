@@ -12,9 +12,10 @@ from examples.common.formatting import print_header, print_kv, print_section
 from gpumemprof.telemetry import validate_telemetry_record
 from gpumemprof.utils import get_system_info
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts" / "examples" / "scenarios" / "mps_telemetry"
+DEFAULT_OUTPUT_DIR = (
+    REPO_ROOT / "artifacts" / "examples" / "scenarios" / "mps_telemetry"
+)
 
 
 def _run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -42,7 +43,7 @@ def run_scenario(
 
     backend = str(get_system_info().get("detected_backend", "cpu"))
     if backend != "mps":
-        summary = {
+        summary: dict[str, object] = {
             "status": "SKIP",
             "reason": f"MPS backend unavailable (detected_backend={backend})",
             "exports": {},

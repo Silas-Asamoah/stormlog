@@ -77,7 +77,9 @@ def _coerce_optional_int(value: Any, field_name: str) -> Optional[int]:
     return _coerce_int(value, field_name)
 
 
-def _coerce_string(value: Any, field_name: str, *, allow_none: bool = False) -> Optional[str]:
+def _coerce_string(
+    value: Any, field_name: str, *, allow_none: bool = False
+) -> Optional[str]:
     if value is None:
         if allow_none:
             return None
@@ -155,7 +157,9 @@ def _legacy_device_id(record: Mapping[str, Any]) -> int:
 
 def _legacy_allocator_allocated_bytes(record: Mapping[str, Any]) -> int:
     if "allocator_allocated_bytes" in record:
-        return _coerce_int(record["allocator_allocated_bytes"], "allocator_allocated_bytes")
+        return _coerce_int(
+            record["allocator_allocated_bytes"], "allocator_allocated_bytes"
+        )
 
     if "memory_allocated" in record:
         return _coerce_int(record["memory_allocated"], "memory_allocated")
@@ -172,7 +176,9 @@ def _legacy_allocator_allocated_bytes(record: Mapping[str, Any]) -> int:
 
 def _legacy_allocator_reserved_bytes(record: Mapping[str, Any], allocated: int) -> int:
     if "allocator_reserved_bytes" in record:
-        return _coerce_int(record["allocator_reserved_bytes"], "allocator_reserved_bytes")
+        return _coerce_int(
+            record["allocator_reserved_bytes"], "allocator_reserved_bytes"
+        )
     if "memory_reserved" in record:
         return _coerce_int(record["memory_reserved"], "memory_reserved")
     return allocated
@@ -193,9 +199,13 @@ def _legacy_optional_counter(record: Mapping[str, Any], key: str) -> Optional[in
     return _coerce_int(value, key)
 
 
-def _legacy_total_memory_bytes(record: Mapping[str, Any], metadata: Mapping[str, Any]) -> Optional[int]:
+def _legacy_total_memory_bytes(
+    record: Mapping[str, Any], metadata: Mapping[str, Any]
+) -> Optional[int]:
     if "device_total_bytes" in record:
-        return _coerce_optional_int(record.get("device_total_bytes"), "device_total_bytes")
+        return _coerce_optional_int(
+            record.get("device_total_bytes"), "device_total_bytes"
+        )
 
     for key in ("total_memory", "device_total", "total_bytes"):
         if key in record:
@@ -226,7 +236,9 @@ def _legacy_device_free_bytes(
     total: Optional[int],
 ) -> Optional[int]:
     if "device_free_bytes" in record:
-        return _coerce_optional_int(record.get("device_free_bytes"), "device_free_bytes")
+        return _coerce_optional_int(
+            record.get("device_free_bytes"), "device_free_bytes"
+        )
 
     if total is None:
         return None
@@ -277,7 +289,9 @@ def _legacy_collector(
         return "tfmemprof.memory_tracker"
 
     if "memory_allocated" in record:
-        return "gpumemprof.cpu_tracker" if device_id == -1 else "gpumemprof.cuda_tracker"
+        return (
+            "gpumemprof.cpu_tracker" if device_id == -1 else "gpumemprof.cuda_tracker"
+        )
 
     return default_collector
 
@@ -332,7 +346,9 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
     _coerce_required_string(record["event_type"], "event_type")
     _coerce_required_string(record["collector"], "collector")
 
-    sampling_interval_ms = _coerce_int(record["sampling_interval_ms"], "sampling_interval_ms")
+    sampling_interval_ms = _coerce_int(
+        record["sampling_interval_ms"], "sampling_interval_ms"
+    )
     if sampling_interval_ms < 0:
         raise ValueError("sampling_interval_ms must be >= 0")
 
@@ -368,8 +384,12 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
         raise ValueError("allocator_inactive_bytes must be >= 0 when provided")
 
     device_used_bytes = _coerce_int(record["device_used_bytes"], "device_used_bytes")
-    device_free_bytes = _coerce_optional_int(record["device_free_bytes"], "device_free_bytes")
-    device_total_bytes = _coerce_optional_int(record["device_total_bytes"], "device_total_bytes")
+    device_free_bytes = _coerce_optional_int(
+        record["device_free_bytes"], "device_free_bytes"
+    )
+    device_total_bytes = _coerce_optional_int(
+        record["device_total_bytes"], "device_total_bytes"
+    )
 
     if device_used_bytes < 0:
         raise ValueError("device_used_bytes must be >= 0")
@@ -415,7 +435,9 @@ def telemetry_event_from_record(
             timestamp_ns=_coerce_int(record["timestamp_ns"], "timestamp_ns"),
             event_type=_coerce_required_string(record["event_type"], "event_type"),
             collector=_coerce_required_string(record["collector"], "collector"),
-            sampling_interval_ms=_coerce_int(record["sampling_interval_ms"], "sampling_interval_ms"),
+            sampling_interval_ms=_coerce_int(
+                record["sampling_interval_ms"], "sampling_interval_ms"
+            ),
             pid=_coerce_int(record["pid"], "pid"),
             host=_coerce_required_string(record["host"], "host"),
             device_id=_coerce_int(record["device_id"], "device_id"),
@@ -431,10 +453,18 @@ def telemetry_event_from_record(
             allocator_inactive_bytes=_coerce_optional_int(
                 record["allocator_inactive_bytes"], "allocator_inactive_bytes"
             ),
-            allocator_change_bytes=_coerce_int(record["allocator_change_bytes"], "allocator_change_bytes"),
-            device_used_bytes=_coerce_int(record["device_used_bytes"], "device_used_bytes"),
-            device_free_bytes=_coerce_optional_int(record["device_free_bytes"], "device_free_bytes"),
-            device_total_bytes=_coerce_optional_int(record["device_total_bytes"], "device_total_bytes"),
+            allocator_change_bytes=_coerce_int(
+                record["allocator_change_bytes"], "allocator_change_bytes"
+            ),
+            device_used_bytes=_coerce_int(
+                record["device_used_bytes"], "device_used_bytes"
+            ),
+            device_free_bytes=_coerce_optional_int(
+                record["device_free_bytes"], "device_free_bytes"
+            ),
+            device_total_bytes=_coerce_optional_int(
+                record["device_total_bytes"], "device_total_bytes"
+            ),
             context=_coerce_string(record["context"], "context", allow_none=True),
             metadata=_coerce_metadata_dict(record["metadata"]),
         )
@@ -447,20 +477,28 @@ def telemetry_event_from_record(
     device_id = _legacy_device_id(record)
 
     allocator_allocated_bytes = _legacy_allocator_allocated_bytes(record)
-    allocator_reserved_bytes = _legacy_allocator_reserved_bytes(record, allocator_allocated_bytes)
+    allocator_reserved_bytes = _legacy_allocator_reserved_bytes(
+        record, allocator_allocated_bytes
+    )
     allocator_change_bytes = _legacy_allocator_change_bytes(record)
 
     allocator_active_bytes = _legacy_optional_counter(record, "allocator_active_bytes")
-    allocator_inactive_bytes = _legacy_optional_counter(record, "allocator_inactive_bytes")
+    allocator_inactive_bytes = _legacy_optional_counter(
+        record, "allocator_inactive_bytes"
+    )
 
     device_used_bytes = _legacy_device_used_bytes(record, allocator_allocated_bytes)
     device_total_bytes = _legacy_total_memory_bytes(record, metadata)
-    device_free_bytes = _legacy_device_free_bytes(record, device_used_bytes, device_total_bytes)
+    device_free_bytes = _legacy_device_free_bytes(
+        record, device_used_bytes, device_total_bytes
+    )
 
     event_type_value = record.get("event_type", record.get("type", "sample"))
     event_type = _coerce_string(event_type_value, "event_type") or "sample"
 
-    sampling_interval_value = record.get("sampling_interval_ms", default_sampling_interval_ms)
+    sampling_interval_value = record.get(
+        "sampling_interval_ms", default_sampling_interval_ms
+    )
     sampling_interval_ms = _coerce_int(sampling_interval_value, "sampling_interval_ms")
 
     pid = _legacy_pid(record, metadata)
@@ -524,7 +562,9 @@ def load_telemetry_events(
         if events_key is not None:
             records = payload.get(events_key)
             if not isinstance(records, list):
-                raise ValueError(f"Top-level key '{events_key}' must contain a list of events")
+                raise ValueError(
+                    f"Top-level key '{events_key}' must contain a list of events"
+                )
         elif isinstance(payload.get("events"), list):
             records = payload["events"]
         elif _looks_like_event_record(payload):

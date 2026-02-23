@@ -13,14 +13,17 @@ from gpumemprof.utils import get_system_info
 
 if TYPE_CHECKING:
     import torch
+
     from gpumemprof.tracker import MemoryTracker
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts" / "examples" / "scenarios" / "oom_flight_recorder"
+DEFAULT_OUTPUT_DIR = (
+    REPO_ROOT / "artifacts" / "examples" / "scenarios" / "oom_flight_recorder"
+)
 
 
-def _tracker_device_for_backend(backend: str) -> object:
+def _tracker_device_for_backend(backend: str) -> str | int:
     if backend == "mps":
         return "mps"
     return 0
@@ -103,7 +106,7 @@ def run_scenario(
 
     backend = str(get_system_info().get("detected_backend", "cpu"))
     if backend not in {"cuda", "rocm", "mps"}:
-        summary = {
+        summary: dict[str, object] = {
             "status": "SKIP",
             "reason": f"GPU tracker backend unavailable (detected_backend={backend})",
             "mode": mode,

@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _BANNED_DOC_SNIPPETS = {
@@ -31,11 +30,11 @@ _PARAMS = [
 ]
 
 
-@pytest.mark.parametrize(("relative_path", "snippet"), _PARAMS)
+@pytest.mark.parametrize(("relative_path", "snippet"), _PARAMS)  # type: ignore[misc, unused-ignore]
 def test_docs_do_not_reintroduce_known_stale_api_snippets(
     relative_path: str, snippet: str
 ) -> None:
     content = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
-    assert snippet not in content, (
-        f"{relative_path} contains stale docs snippet: {snippet!r}"
-    )
+    assert (
+        snippet not in content
+    ), f"{relative_path} contains stale docs snippet: {snippet!r}"

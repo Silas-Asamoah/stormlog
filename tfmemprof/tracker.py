@@ -5,14 +5,13 @@ This module provides real-time monitoring of GPU memory usage during TensorFlow
 model training and inference, with configurable alerts and automatic cleanup.
 """
 
-import time
-import threading
 import logging
 import os
 import socket
+import threading
+import time
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Callable, Any
-import queue
+from typing import Any, Callable, Dict, List, Optional
 
 from .tf_env import configure_tensorflow_logging
 
@@ -20,18 +19,19 @@ configure_tensorflow_logging()
 
 try:
     import tensorflow as tf
+
     TF_AVAILABLE = True
 except ImportError:
     TF_AVAILABLE = False
     tf = None
 
-from .utils import format_memory, get_gpu_info
 from gpumemprof.telemetry import telemetry_event_from_record, telemetry_event_to_dict
 
 
 @dataclass
 class TrackingResult:
     """Results from real-time memory tracking."""
+
     start_time: float
     end_time: float
     memory_usage: List[float] = field(default_factory=list)
@@ -40,7 +40,7 @@ class TrackingResult:
     alerts_triggered: List[Dict] = field(default_factory=list)
     peak_memory: float = 0.0
     average_memory: float = 0.0
-    min_memory: float = float('inf')
+    min_memory: float = float("inf")
 
     @property
     def duration(self) -> float:
@@ -58,11 +58,13 @@ class TrackingResult:
 class MemoryTracker:
     """Real-time TensorFlow GPU memory tracker."""
 
-    def __init__(self,
-                 sampling_interval: float = 1.0,
-                 alert_threshold_mb: Optional[float] = None,
-                 device: Optional[str] = None,
-                 enable_logging: bool = True):
+    def __init__(
+        self,
+        sampling_interval: float = 1.0,
+        alert_threshold_mb: Optional[float] = None,
+        device: Optional[str] = None,
+        enable_logging: bool = True,
+    ):
         """
         Initialize memory tracker.
 
@@ -73,12 +75,11 @@ class MemoryTracker:
             enable_logging: Whether to log events
         """
         if not TF_AVAILABLE:
-            raise ImportError(
-                "TensorFlow not available. Please install TensorFlow.")
+            raise ImportError("TensorFlow not available. Please install TensorFlow.")
 
         self.sampling_interval = sampling_interval
         self.alert_threshold_mb = alert_threshold_mb
-        self.device = device or '/GPU:0'
+        self.device = device or "/GPU:0"
         self.enable_logging = enable_logging
 
         # Tracking state
@@ -97,8 +98,7 @@ class MemoryTracker:
         self.alert_callbacks: List[Callable[[Dict[str, Any]], None]] = []
 
         if enable_logging:
-            logging.info(
-                f"TensorFlow Memory Tracker initialized for {self.device}")
+            logging.info(f"TensorFlow Memory Tracker initialized for {self.device}")
 
     def _device_id(self) -> int:
         """Best-effort device id extraction."""
@@ -145,31 +145,30 @@ class MemoryTracker:
     def _get_default_device(self) -> str:
         """Get default TensorFlow device."""
         try:
-            gpus = tf.config.list_physical_devices('GPU')
+            gpus = tf.config.list_physical_devices("GPU")
             if gpus:
-                return '/GPU:0'
+                return "/GPU:0"
             else:
-                return '/CPU:0'
+                return "/CPU:0"
         except Exception as exc:
             logging.debug("Default device detection failed: %s", exc)
-            return '/CPU:0'
+            return "/CPU:0"
 
     def _get_current_memory(self) -> float:
         """Get current memory usage in MB."""
         try:
-            if '/GPU:' in self.device:
+            if "/GPU:" in self.device:
                 # Extract GPU index from device string
-                gpu_id = int(self.device.split(':')[
-                             1]) if ':' in self.device else 0
-                memory_info = tf.config.experimental.get_memory_info(
-                    f'/GPU:{gpu_id}')
-                current_bytes = memory_info.get('current', 0)
+                gpu_id = int(self.device.split(":")[1]) if ":" in self.device else 0
+                memory_info = tf.config.experimental.get_memory_info(f"/GPU:{gpu_id}")
+                current_bytes = memory_info.get("current", 0)
                 if isinstance(current_bytes, (int, float)):
                     return float(current_bytes) / (1024 * 1024)
                 return 0.0
             else:
                 # CPU memory tracking
                 import psutil
+
                 process = psutil.Process()
                 return float(process.memory_info().rss) / (1024 * 1024)
         except Exception as e:
@@ -212,10 +211,10 @@ class MemoryTracker:
     def _trigger_alert(self, memory_mb: float, timestamp: float) -> None:
         """Trigger memory usage alert."""
         alert = {
-            'timestamp': timestamp,
-            'memory_mb': memory_mb,
-            'threshold_mb': self.alert_threshold_mb,
-            'message': f"Memory usage {memory_mb:.1f} MB exceeds threshold {self.alert_threshold_mb:.1f} MB"
+            "timestamp": timestamp,
+            "memory_mb": memory_mb,
+            "threshold_mb": self.alert_threshold_mb,
+            "message": f"Memory usage {memory_mb:.1f} MB exceeds threshold {self.alert_threshold_mb:.1f} MB",
         }
 
         with self._lock:
@@ -223,7 +222,7 @@ class MemoryTracker:
 
         # Log alert
         if self.enable_logging:
-            logging.warning(alert['message'])
+            logging.warning(alert["message"])
 
         # Call alert callbacks
         for callback in self.alert_callbacks:
@@ -255,13 +254,13 @@ class MemoryTracker:
             self.alerts.clear()
 
         # Start tracking thread
-        self.tracking_thread = threading.Thread(
-            target=self._tracking_loop, daemon=True)
+        self.tracking_thread = threading.Thread(target=self._tracking_loop, daemon=True)
         self.tracking_thread.start()
 
         if self.enable_logging:
             logging.info(
-                f"Started memory tracking with {self.sampling_interval}s interval")
+                f"Started memory tracking with {self.sampling_interval}s interval"
+            )
 
     def stop_tracking(self) -> TrackingResult:
         """Stop tracking and return results."""
@@ -282,7 +281,8 @@ class MemoryTracker:
 
         if self.enable_logging:
             logging.info(
-                f"Stopped memory tracking. Peak usage: {result.peak_memory:.1f} MB")
+                f"Stopped memory tracking. Peak usage: {result.peak_memory:.1f} MB"
+            )
 
         return result
 
@@ -302,11 +302,13 @@ class MemoryTracker:
                 timestamps=self.timestamps.copy(),
                 events=self.events.copy(),
                 alerts_triggered=self.alerts.copy(),
-                peak_memory=max(
-                    self.memory_usage) if self.memory_usage else 0.0,
-                average_memory=sum(
-                    self.memory_usage) / len(self.memory_usage) if self.memory_usage else 0.0,
-                min_memory=min(self.memory_usage) if self.memory_usage else 0.0
+                peak_memory=max(self.memory_usage) if self.memory_usage else 0.0,
+                average_memory=(
+                    sum(self.memory_usage) / len(self.memory_usage)
+                    if self.memory_usage
+                    else 0.0
+                ),
+                min_memory=min(self.memory_usage) if self.memory_usage else 0.0,
             )
 
     def _create_empty_result(self) -> TrackingResult:
@@ -321,7 +323,7 @@ class MemoryTracker:
             alerts_triggered=[],
             peak_memory=0.0,
             average_memory=0.0,
-            min_memory=0.0
+            min_memory=0.0,
         )
 
     def get_current_memory(self) -> float:
@@ -339,8 +341,9 @@ class MemoryTracker:
         with self._lock:
             # Check for alerts in the last 10 seconds
             recent_alerts = [
-                alert for alert in self.alerts
-                if time.time() - alert['timestamp'] < 10.0
+                alert
+                for alert in self.alerts
+                if time.time() - alert["timestamp"] < 10.0
             ]
             return len(recent_alerts) > 0
 
@@ -352,10 +355,12 @@ class MemoryTracker:
 class MemoryWatchdog:
     """Automatic memory management and cleanup for TensorFlow."""
 
-    def __init__(self,
-                 max_memory_mb: float = 8000,
-                 cleanup_threshold_mb: float = 6000,
-                 check_interval: float = 5.0):
+    def __init__(
+        self,
+        max_memory_mb: float = 8000,
+        cleanup_threshold_mb: float = 6000,
+        check_interval: float = 5.0,
+    ):
         """
         Initialize memory watchdog.
 
@@ -378,8 +383,7 @@ class MemoryWatchdog:
         # Cleanup callbacks
         self.cleanup_callbacks: List[Callable[[], None]] = []
 
-        logging.info(
-            f"Memory Watchdog initialized with {max_memory_mb} MB limit")
+        logging.info(f"Memory Watchdog initialized with {max_memory_mb} MB limit")
 
     def add_cleanup_callback(self, callback: Callable[[], None]) -> None:
         """Add cleanup callback function."""
@@ -388,10 +392,10 @@ class MemoryWatchdog:
     def _get_memory_usage(self) -> float:
         """Get current GPU memory usage."""
         try:
-            gpus = tf.config.list_physical_devices('GPU')
+            gpus = tf.config.list_physical_devices("GPU")
             if gpus:
-                memory_info = tf.config.experimental.get_memory_info('/GPU:0')
-                current_bytes = memory_info.get('current', 0)
+                memory_info = tf.config.experimental.get_memory_info("/GPU:0")
+                current_bytes = memory_info.get("current", 0)
                 if isinstance(current_bytes, (int, float)):
                     return float(current_bytes) / (1024 * 1024)
                 return 0.0
@@ -408,6 +412,7 @@ class MemoryWatchdog:
 
             # Force garbage collection
             import gc
+
             gc.collect()
 
             # Call custom cleanup callbacks
@@ -430,12 +435,14 @@ class MemoryWatchdog:
 
                 if current_memory > self.max_memory_mb:
                     logging.warning(
-                        f"Memory usage {current_memory:.1f} MB exceeds limit {self.max_memory_mb} MB - forcing cleanup")
+                        f"Memory usage {current_memory:.1f} MB exceeds limit {self.max_memory_mb} MB - forcing cleanup"
+                    )
                     self._cleanup_memory()
 
                 elif current_memory > self.cleanup_threshold_mb:
                     logging.info(
-                        f"Memory usage {current_memory:.1f} MB above threshold {self.cleanup_threshold_mb} MB - performing cleanup")
+                        f"Memory usage {current_memory:.1f} MB above threshold {self.cleanup_threshold_mb} MB - performing cleanup"
+                    )
                     self._cleanup_memory()
 
                 # Wait for next check
@@ -454,8 +461,7 @@ class MemoryWatchdog:
         self.active = True
         self._stop_event.clear()
 
-        self.watchdog_thread = threading.Thread(
-            target=self._watchdog_loop, daemon=True)
+        self.watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
         self.watchdog_thread.start()
 
         logging.info("Started memory watchdog")
@@ -476,4 +482,3 @@ class MemoryWatchdog:
     def force_cleanup(self) -> None:
         """Force immediate memory cleanup."""
         self._cleanup_memory()
- 

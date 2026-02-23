@@ -8,14 +8,15 @@ from typing import TYPE_CHECKING, List
 
 if TYPE_CHECKING:
     import torch
+
     from gpumemprof.tracker import MemoryTracker, MemoryWatchdog
 
 try:
     import torch
     import torch.nn.functional as F
 except ImportError:
-    torch = None
-    F = None
+    torch = None  # type: ignore[assignment, unused-ignore]
+    F = None  # type: ignore[assignment, unused-ignore]
 
 from examples.common import (
     describe_torch_environment,
@@ -29,10 +30,14 @@ from gpumemprof import get_gpu_info
 LEAK_BUCKET: List[object] = []
 
 
-def alert_handler(event) -> None:
-    timestamp = time.strftime("%H:%M:%S", time.localtime(event.timestamp))
-    print(f"\n⚠️  [{timestamp}] {event.event_type.upper()}: {event.context}")
-    for key, value in (event.metadata or {}).items():
+def alert_handler(event: object) -> None:
+    timestamp = time.strftime(
+        "%H:%M:%S", time.localtime(getattr(event, "timestamp", 0))
+    )
+    event_type = str(getattr(event, "event_type", "")).upper()
+    context = getattr(event, "context", "")
+    print(f"\n⚠️  [{timestamp}] {event_type}: {context}")
+    for key, value in (getattr(event, "metadata", None) or {}).items():
         print(f"    {key}: {value}")
 
 
@@ -87,7 +92,7 @@ def run_monitored_workload(duration: float = 20.0) -> None:
                 F.relu_(tmp)
 
             if step % 5 == 0:
-                watchdog.perform_cleanup()
+                watchdog.force_cleanup()
 
             time.sleep(0.2)
             step += 1
@@ -129,10 +134,7 @@ def export_results(tracker: MemoryTracker) -> None:
                 "Install it with: pip install matplotlib"
             ) from e
 
-        times = [
-            t - timeline["timestamps"][0]
-            for t in timeline["timestamps"]
-        ]
+        times = [t - timeline["timestamps"][0] for t in timeline["timestamps"]]
         allocated = [value / (1024**3) for value in timeline["allocated"]]
         plt.figure(figsize=(10, 4))
         plt.plot(times, allocated, label="Allocated GB", linewidth=2)
@@ -155,7 +157,7 @@ def main() -> None:
     print_header("GPU Memory Profiler - Advanced Tracking Demo")
 
     if torch is None or F is None:
-        print("PyTorch is not installed. Skipping advanced tracking demo.")
+        print("PyTorch is not installed. Skipping advanced tracking demo.")  # type: ignore[unreachable, unused-ignore]
         return
 
     if not torch.cuda.is_available():
@@ -178,9 +180,9 @@ def main() -> None:
     print_section("Final GPU state")
     print_kv("Allocated (GB)", f"{final_state['allocated_memory'] / (1024**3):.2f}")
     print_kv("Reserved (GB)", f"{final_state['reserved_memory'] / (1024**3):.2f}")
-    delta = (
-        final_state["allocated_memory"] - initial_state["allocated_memory"]
-    ) / (1024**3)
+    delta = (final_state["allocated_memory"] - initial_state["allocated_memory"]) / (
+        1024**3
+    )
     print_kv("Delta from start (GB)", f"{delta:+.2f}")
 
 

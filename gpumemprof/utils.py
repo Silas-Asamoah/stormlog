@@ -6,14 +6,16 @@ import logging
 import os
 import platform
 import subprocess
-import json
 import sys
-from typing import Dict, List, Optional, Union, Any, cast
+from typing import Any, Dict, List, Optional, Union, cast
+
 import psutil
 
 try:
     import torch as _torch
-except ModuleNotFoundError:  # pragma: no cover - exercised in torch-less subprocess tests
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - exercised in torch-less subprocess tests
     _torch = cast(Any, None)
 
 torch: Any = _torch
@@ -78,7 +80,9 @@ def convert_bytes(value: Union[int, float], from_unit: str, to_unit: str) -> flo
     return bytes_value / units[to_unit]
 
 
-def get_gpu_info(device: Optional[Union[str, int, torch.device]] = None) -> Dict[str, Any]:
+def get_gpu_info(
+    device: Optional[Union[str, int, torch.device]] = None,
+) -> Dict[str, Any]:
     """
     Get comprehensive GPU information.
 
@@ -110,19 +114,25 @@ def get_gpu_info(device: Optional[Union[str, int, torch.device]] = None) -> Dict
         "device_name": torch_module.cuda.get_device_name(device_id),
         "device_capability": torch_module.cuda.get_device_capability(device_id),
         "total_memory": torch_module.cuda.get_device_properties(device_id).total_memory,
-        "multiprocessor_count": torch_module.cuda.get_device_properties(device_id).multi_processor_count,
+        "multiprocessor_count": torch_module.cuda.get_device_properties(
+            device_id
+        ).multi_processor_count,
         "cuda_version": torch_module.version.cuda,
         "pytorch_version": torch_module.__version__,
     }
 
     # Current memory usage
     try:
-        gpu_info.update({
-            "allocated_memory": torch_module.cuda.memory_allocated(device_id),
-            "reserved_memory": torch_module.cuda.memory_reserved(device_id),
-            "max_memory_allocated": torch_module.cuda.max_memory_allocated(device_id),
-            "max_memory_reserved": torch_module.cuda.max_memory_reserved(device_id),
-        })
+        gpu_info.update(
+            {
+                "allocated_memory": torch_module.cuda.memory_allocated(device_id),
+                "reserved_memory": torch_module.cuda.memory_reserved(device_id),
+                "max_memory_allocated": torch_module.cuda.max_memory_allocated(
+                    device_id
+                ),
+                "max_memory_reserved": torch_module.cuda.max_memory_reserved(device_id),
+            }
+        )
 
         # Memory stats
         memory_stats = torch_module.cuda.memory_stats(device_id)
@@ -149,15 +159,20 @@ def _get_nvidia_smi_info(device_id: int) -> Dict[str, Any]:
     """Get additional GPU info via nvidia-smi."""
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu,power.draw",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu,power.draw",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
 
         if result.returncode == 0:
-            lines = result.stdout.strip().split('\n')
+            lines = result.stdout.strip().split("\n")
             if device_id < len(lines):
-                values = lines[device_id].split(',')
+                values = lines[device_id].split(",")
                 if len(values) >= 8:
                     return {
                         "nvidia_smi_info": {
@@ -246,7 +261,11 @@ def get_system_info() -> Dict[str, Any]:
     detected_backend = (
         "rocm"
         if rocm_available
-        else ("cuda" if cuda_available else ("mps" if mps_info["mps_available"] else "cpu"))
+        else (
+            "cuda"
+            if cuda_available
+            else ("mps" if mps_info["mps_available"] else "cpu")
+        )
     )
     system_info = {
         "platform": platform_info["platform"],
@@ -266,29 +285,35 @@ def get_system_info() -> Dict[str, Any]:
         cudnn_version = None
         if cudnn_backend is not None and hasattr(cudnn_backend, "version"):
             cudnn_version = cudnn_backend.version()
-        system_info.update({
-            "cuda_device_count": torch.cuda.device_count(),
-            "cuda_version": torch.version.cuda,
-            "cudnn_version": cudnn_version,
-            "current_device": torch.cuda.current_device(),
-        })
+        system_info.update(
+            {
+                "cuda_device_count": torch.cuda.device_count(),
+                "cuda_version": torch.version.cuda,
+                "cudnn_version": cudnn_version,
+                "current_device": torch.cuda.current_device(),
+            }
+        )
 
     # CPU and memory info
     try:
-        system_info.update({
-            "cpu_count": psutil.cpu_count(),
-            "cpu_count_logical": psutil.cpu_count(logical=True),
-            "memory_total": psutil.virtual_memory().total,
-            "memory_available": psutil.virtual_memory().available,
-            "memory_percent": psutil.virtual_memory().percent,
-        })
+        system_info.update(
+            {
+                "cpu_count": psutil.cpu_count(),
+                "cpu_count_logical": psutil.cpu_count(logical=True),
+                "memory_total": psutil.virtual_memory().total,
+                "memory_available": psutil.virtual_memory().available,
+                "memory_percent": psutil.virtual_memory().percent,
+            }
+        )
     except Exception as e:
         system_info["system_info_error"] = str(e)
 
     return system_info
 
 
-def check_memory_fragmentation(device: Optional[Union[str, int, torch.device]] = None) -> Dict[str, Any]:
+def check_memory_fragmentation(
+    device: Optional[Union[str, int, torch.device]] = None,
+) -> Dict[str, Any]:
     """
     Check GPU memory fragmentation.
 
@@ -334,7 +359,9 @@ def check_memory_fragmentation(device: Optional[Union[str, int, torch.device]] =
         "fragmentation_ratio": inactive / reserved if reserved > 0 else 0,
         "utilization_ratio": allocated / total_gpu_memory,
         "reservation_ratio": reserved / total_gpu_memory,
-        "waste_ratio": (reserved - allocated) / total_gpu_memory if reserved > allocated else 0,
+        "waste_ratio": (
+            (reserved - allocated) / total_gpu_memory if reserved > allocated else 0
+        ),
     }
 
     # Add formatted versions
@@ -386,12 +413,14 @@ def suggest_memory_optimization(fragmentation_info: Dict[str, Any]) -> List[str]
         )
 
     # General suggestions
-    suggestions.extend([
-        "Use torch.no_grad() context for inference to reduce memory usage.",
-        "Consider using mixed precision training (torch.cuda.amp) to reduce memory footprint.",
-        "Profile memory usage at different points in your code to identify bottlenecks.",
-        "Use del statement to explicitly delete large tensors when no longer needed.",
-    ])
+    suggestions.extend(
+        [
+            "Use torch.no_grad() context for inference to reduce memory usage.",
+            "Consider using mixed precision training (torch.cuda.amp) to reduce memory footprint.",
+            "Profile memory usage at different points in your code to identify bottlenecks.",
+            "Use del statement to explicitly delete large tensors when no longer needed.",
+        ]
+    )
 
     return suggestions
 
@@ -417,29 +446,35 @@ def memory_summary(device: Optional[Union[str, int, torch.device]] = None) -> st
 
     # Device info
     summary.append(
-        f"Device: {gpu_info.get('device_name', 'Unknown')} (cuda:{gpu_info.get('device_id', 0)})")
-    summary.append(
-        f"Total Memory: {format_bytes(gpu_info.get('total_memory', 0))}")
+        f"Device: {gpu_info.get('device_name', 'Unknown')} (cuda:{gpu_info.get('device_id', 0)})"
+    )
+    summary.append(f"Total Memory: {format_bytes(gpu_info.get('total_memory', 0))}")
     summary.append("")
 
     # Current usage
     summary.append("Current Memory Usage:")
     summary.append(
-        f"  Allocated: {format_bytes(fragmentation_info.get('allocated_memory', 0))}")
+        f"  Allocated: {format_bytes(fragmentation_info.get('allocated_memory', 0))}"
+    )
     summary.append(
-        f"  Reserved:  {format_bytes(fragmentation_info.get('reserved_memory', 0))}")
+        f"  Reserved:  {format_bytes(fragmentation_info.get('reserved_memory', 0))}"
+    )
     summary.append(
-        f"  Free:      {format_bytes(fragmentation_info.get('free_memory', 0))}")
+        f"  Free:      {format_bytes(fragmentation_info.get('free_memory', 0))}"
+    )
     summary.append("")
 
     # Ratios
     summary.append("Memory Ratios:")
     summary.append(
-        f"  Utilization: {fragmentation_info.get('utilization_ratio', 0):.1%}")
+        f"  Utilization: {fragmentation_info.get('utilization_ratio', 0):.1%}"
+    )
     summary.append(
-        f"  Reservation: {fragmentation_info.get('reservation_ratio', 0):.1%}")
+        f"  Reservation: {fragmentation_info.get('reservation_ratio', 0):.1%}"
+    )
     summary.append(
-        f"  Fragmentation: {fragmentation_info.get('fragmentation_ratio', 0):.1%}")
+        f"  Fragmentation: {fragmentation_info.get('fragmentation_ratio', 0):.1%}"
+    )
     summary.append(f"  Waste: {fragmentation_info.get('waste_ratio', 0):.1%}")
     summary.append("")
 
@@ -459,7 +494,11 @@ def memory_summary(device: Optional[Union[str, int, torch.device]] = None) -> st
 class MemoryContext:
     """Context manager for tracking memory usage in a block of code."""
 
-    def __init__(self, name: str = "memory_context", device: Optional[Union[str, int, torch.device]] = None):
+    def __init__(
+        self,
+        name: str = "memory_context",
+        device: Optional[Union[str, int, torch.device]] = None,
+    ):
         self.name = name
         self.device = device
         self.start_memory: Optional[int] = None
@@ -497,6 +536,10 @@ class MemoryContext:
             "start_memory_formatted": format_bytes(self.start_memory),
             "end_memory_formatted": format_bytes(self.end_memory),
             "peak_memory_formatted": format_bytes(self.peak_memory),
-            "memory_diff_formatted": format_bytes(abs(self.end_memory - self.start_memory)),
-            "peak_memory_usage_formatted": format_bytes(self.peak_memory - self.start_memory),
+            "memory_diff_formatted": format_bytes(
+                abs(self.end_memory - self.start_memory)
+            ),
+            "peak_memory_usage_formatted": format_bytes(
+                self.peak_memory - self.start_memory
+            ),
         }

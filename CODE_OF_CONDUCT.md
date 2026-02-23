@@ -139,5 +139,5 @@ You can also report issues through:
 
 ---
 
-**Version:** 2.0  
+**Version:** 2.0
 **Last Updated:** February 2026

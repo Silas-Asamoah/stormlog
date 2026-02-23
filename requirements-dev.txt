@@ -33,7 +33,7 @@ tox>=3.24.0
 
 # Optional: For performance profiling
 memory-profiler>=0.60.0
-line-profiler>=3.3.0 
+line-profiler>=3.3.0
 
 # TUI development
 textual>=0.57.0

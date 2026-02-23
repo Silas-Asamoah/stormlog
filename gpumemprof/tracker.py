@@ -3,17 +3,15 @@
 import logging
 import os
 import socket
-import time
 import threading
-from contextlib import contextmanager
-from typing import Dict, List, Optional, Callable, Any, Union
+import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
-import psutil
 
-from .utils import format_bytes, get_gpu_info
 from .device_collectors import (
     DeviceMemorySample,
     _resolve_device,
@@ -26,6 +24,7 @@ from .oom_flight_recorder import (
     classify_oom_exception,
 )
 from .telemetry import telemetry_event_from_record, telemetry_event_to_dict
+from .utils import format_bytes, get_gpu_info
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +32,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TrackingEvent:
     """Represents a memory tracking event."""
+
     timestamp: float
     event_type: str  # 'allocation', 'deallocation', 'peak', 'warning', 'error'
     memory_allocated: int
@@ -52,16 +52,18 @@ class TrackingEvent:
 class MemoryTracker:
     """Real-time memory tracker with alerts and monitoring."""
 
-    def __init__(self,
-                 device: Optional[Union[str, int, torch.device]] = None,
-                 sampling_interval: float = 0.1,
-                 max_events: int = 10000,
-                 enable_alerts: bool = True,
-                 enable_oom_flight_recorder: bool = False,
-                 oom_dump_dir: str = "oom_dumps",
-                 oom_buffer_size: Optional[int] = None,
-                 oom_max_dumps: int = 5,
-                 oom_max_total_mb: int = 256):
+    def __init__(
+        self,
+        device: Optional[Union[str, int, torch.device]] = None,
+        sampling_interval: float = 0.1,
+        max_events: int = 10000,
+        enable_alerts: bool = True,
+        enable_oom_flight_recorder: bool = False,
+        oom_dump_dir: str = "oom_dumps",
+        oom_buffer_size: Optional[int] = None,
+        oom_max_dumps: int = 5,
+        oom_max_total_mb: int = 256,
+    ):
         """
         Initialize the memory tracker.
 
@@ -85,7 +87,9 @@ class MemoryTracker:
         self.enable_alerts = enable_alerts
         self.last_oom_dump_path: Optional[str] = None
 
-        recorder_buffer_size = oom_buffer_size if oom_buffer_size is not None else max_events
+        recorder_buffer_size = (
+            oom_buffer_size if oom_buffer_size is not None else max_events
+        )
         if recorder_buffer_size <= 0:
             recorder_buffer_size = max_events
         self._oom_flight_recorder = OOMFlightRecorder(
@@ -106,10 +110,10 @@ class MemoryTracker:
 
         # Memory thresholds for alerts
         self.thresholds: Dict[str, float] = {
-            'memory_warning_percent': 80.0,  # Warn at 80% memory usage
-            'memory_critical_percent': 95.0,  # Critical at 95% memory usage
-            'memory_leak_threshold': float(100 * 1024 * 1024),  # 100MB growth
-            'fragmentation_threshold': 0.3,  # 30% fragmentation
+            "memory_warning_percent": 80.0,  # Warn at 80% memory usage
+            "memory_critical_percent": 95.0,  # Critical at 95% memory usage
+            "memory_leak_threshold": float(100 * 1024 * 1024),  # 100MB growth
+            "fragmentation_threshold": 0.3,  # 30% fragmentation
         }
 
         # Alert callbacks
@@ -117,14 +121,14 @@ class MemoryTracker:
 
         # Statistics
         self.stats: Dict[str, Any] = {
-            'peak_memory': 0,
-            'total_allocations': 0,
-            'total_deallocations': 0,
-            'total_allocation_bytes': 0,
-            'total_deallocation_bytes': 0,
-            'alert_count': 0,
-            'tracking_start_time': None,
-            'last_memory_check': 0
+            "peak_memory": 0,
+            "total_allocations": 0,
+            "total_deallocations": 0,
+            "total_allocation_bytes": 0,
+            "total_deallocation_bytes": 0,
+            "alert_count": 0,
+            "tracking_start_time": None,
+            "last_memory_check": 0,
         }
 
         # Get memory limits with backend-aware fallback.
@@ -133,7 +137,9 @@ class MemoryTracker:
         total_memory = initial_sample.total_bytes
         if total_memory is None:
             fallback_total = self.gpu_info.get("total_memory", 0)
-            total_memory = int(fallback_total) if isinstance(fallback_total, (int, float)) else 0
+            total_memory = (
+                int(fallback_total) if isinstance(fallback_total, (int, float)) else 0
+            )
         self.total_memory = int(total_memory)
 
     @property
@@ -141,13 +147,16 @@ class MemoryTracker:
         """Resolved OOM ring-buffer size."""
         return self._oom_flight_recorder.config.buffer_size
 
-    def _setup_device(self, device: Union[str, int, torch.device, None]) -> torch.device:
+    def _setup_device(
+        self, device: Union[str, int, torch.device, None]
+    ) -> torch.device:
         """Setup and validate the device for tracking."""
         resolved_device = _resolve_device(device)
 
         if resolved_device.type not in {"cuda", "mps"}:
             raise ValueError(
-                "Only CUDA/ROCm or MPS devices are supported for GPU memory tracking")
+                "Only CUDA/ROCm or MPS devices are supported for GPU memory tracking"
+            )
 
         if resolved_device.type == "cuda":
             if not torch.cuda.is_available():
@@ -175,7 +184,9 @@ class MemoryTracker:
             if self.device.type == "cuda":
                 try:
                     device_id = (
-                        self.device.index if self.device.index is not None else torch.cuda.current_device()
+                        self.device.index
+                        if self.device.index is not None
+                        else torch.cuda.current_device()
                     )
                 except Exception:
                     device_id = 0
@@ -197,14 +208,14 @@ class MemoryTracker:
 
         self.is_tracking = True
         self._stop_event.clear()
-        self.stats['tracking_start_time'] = time.time()
+        self.stats["tracking_start_time"] = time.time()
 
         self._tracking_thread = threading.Thread(target=self._tracking_loop)
         self._tracking_thread.daemon = True
         self._tracking_thread.start()
 
         # Add initial event
-        self._add_event('start', 0, "Memory tracking started")
+        self._add_event("start", 0, "Memory tracking started")
 
     def stop_tracking(self) -> None:
         """Stop real-time memory tracking."""
@@ -218,7 +229,7 @@ class MemoryTracker:
             self._tracking_thread.join(timeout=1.0)
 
         # Add final event
-        self._add_event('stop', 0, "Memory tracking stopped")
+        self._add_event("stop", 0, "Memory tracking stopped")
 
     def _tracking_loop(self) -> None:
         """Main tracking loop running in background thread."""
@@ -235,11 +246,11 @@ class MemoryTracker:
                 memory_change = current_allocated - last_allocated
 
                 # Update statistics
-                self.stats['last_memory_check'] = time.time()
-                if current_allocated > self.stats['peak_memory']:
-                    self.stats['peak_memory'] = current_allocated
+                self.stats["last_memory_check"] = time.time()
+                if current_allocated > self.stats["peak_memory"]:
+                    self.stats["peak_memory"] = current_allocated
                     self._add_event(
-                        'peak',
+                        "peak",
                         memory_change,
                         f"New peak memory: {format_bytes(current_allocated)}",
                         sample=sample,
@@ -247,20 +258,19 @@ class MemoryTracker:
 
                 # Track allocations/deallocations
                 if memory_change > 0:
-                    self.stats['total_allocations'] += 1
-                    self.stats['total_allocation_bytes'] += memory_change
+                    self.stats["total_allocations"] += 1
+                    self.stats["total_allocation_bytes"] += memory_change
                     self._add_event(
-                        'allocation',
+                        "allocation",
                         memory_change,
                         f"Memory allocated: {format_bytes(memory_change)}",
                         sample=sample,
                     )
                 elif memory_change < 0:
-                    self.stats['total_deallocations'] += 1
-                    self.stats['total_deallocation_bytes'] += abs(
-                        memory_change)
+                    self.stats["total_deallocations"] += 1
+                    self.stats["total_deallocation_bytes"] += abs(memory_change)
                     self._add_event(
-                        'deallocation',
+                        "deallocation",
                         memory_change,
                         f"Memory freed: {format_bytes(abs(memory_change))}",
                         sample=sample,
@@ -268,18 +278,24 @@ class MemoryTracker:
 
                 # Check for alerts
                 if self.enable_alerts:
-                    self._check_alerts(current_allocated,
-                                       current_reserved, memory_change)
+                    self._check_alerts(
+                        current_allocated, current_reserved, memory_change
+                    )
 
                 last_allocated = current_allocated
 
             except Exception as e:
-                self._add_event('error', 0, f"Tracking error: {str(e)}")
+                self._add_event("error", 0, f"Tracking error: {str(e)}")
                 time.sleep(1.0)  # Back off on errors
 
-    def _add_event(self, event_type: str, memory_change: int, context: str,
-                   metadata: Optional[Dict[str, Any]] = None,
-                   sample: Optional[DeviceMemorySample] = None) -> None:
+    def _add_event(
+        self,
+        event_type: str,
+        memory_change: int,
+        context: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        sample: Optional[DeviceMemorySample] = None,
+    ) -> None:
         """Add a tracking event."""
         snapshot = sample if sample is not None else self._safe_sample()
         current_allocated = snapshot.allocated_bytes
@@ -306,8 +322,8 @@ class MemoryTracker:
         self._oom_flight_recorder.record_event(self._tracking_event_payload(event))
 
         # Trigger callbacks for alerts
-        if event_type in ['warning', 'critical', 'error']:
-            self.stats['alert_count'] += 1
+        if event_type in ["warning", "critical", "error"]:
+            self.stats["alert_count"] += 1
             for callback in self.alert_callbacks:
                 try:
                     callback(event)
@@ -323,30 +339,42 @@ class MemoryTracker:
         usage_percent = (allocated / self.total_memory) * 100
 
         # Critical memory usage
-        if usage_percent >= self.thresholds['memory_critical_percent']:
-            self._add_event('critical', change,
-                            f"CRITICAL: Memory usage at {usage_percent:.1f}%",
-                            {'usage_percent': usage_percent})
+        if usage_percent >= self.thresholds["memory_critical_percent"]:
+            self._add_event(
+                "critical",
+                change,
+                f"CRITICAL: Memory usage at {usage_percent:.1f}%",
+                {"usage_percent": usage_percent},
+            )
 
         # Warning memory usage
-        elif usage_percent >= self.thresholds['memory_warning_percent']:
-            self._add_event('warning', change,
-                            f"WARNING: Memory usage at {usage_percent:.1f}%",
-                            {'usage_percent': usage_percent})
+        elif usage_percent >= self.thresholds["memory_warning_percent"]:
+            self._add_event(
+                "warning",
+                change,
+                f"WARNING: Memory usage at {usage_percent:.1f}%",
+                {"usage_percent": usage_percent},
+            )
 
         # Large allocation warning
-        if change > self.thresholds['memory_leak_threshold']:
-            self._add_event('warning', change,
-                            f"Large allocation detected: {format_bytes(change)}",
-                            {'large_allocation': True})
+        if change > self.thresholds["memory_leak_threshold"]:
+            self._add_event(
+                "warning",
+                change,
+                f"Large allocation detected: {format_bytes(change)}",
+                {"large_allocation": True},
+            )
 
         # Fragmentation warning
         if reserved > 0:
             fragmentation = (reserved - allocated) / reserved
-            if fragmentation > self.thresholds['fragmentation_threshold']:
-                self._add_event('warning', change,
-                                f"High fragmentation: {fragmentation:.1%}",
-                                {'fragmentation': fragmentation})
+            if fragmentation > self.thresholds["fragmentation_threshold"]:
+                self._add_event(
+                    "warning",
+                    change,
+                    f"High fragmentation: {fragmentation:.1%}",
+                    {"fragmentation": fragmentation},
+                )
 
     @staticmethod
     def _tracking_event_payload(event: TrackingEvent) -> Dict[str, Any]:
@@ -448,9 +476,12 @@ class MemoryTracker:
         if callback in self.alert_callbacks:
             self.alert_callbacks.remove(callback)
 
-    def get_events(self, event_type: Optional[str] = None,
-                   last_n: Optional[int] = None,
-                   since: Optional[float] = None) -> List[TrackingEvent]:
+    def get_events(
+        self,
+        event_type: Optional[str] = None,
+        last_n: Optional[int] = None,
+        since: Optional[float] = None,
+    ) -> List[TrackingEvent]:
         """
         Get tracking events with optional filtering.
 
@@ -489,7 +520,7 @@ class MemoryTracker:
             Dictionary with timeline data
         """
         if not self.events:
-            return {'timestamps': [], 'allocated': [], 'reserved': []}
+            return {"timestamps": [], "allocated": [], "reserved": []}
 
         # Group events by time intervals
         start_time = self.events[0].timestamp
@@ -503,7 +534,8 @@ class MemoryTracker:
         while current_time <= end_time:
             # Find events in this interval
             interval_events = [
-                e for e in self.events
+                e
+                for e in self.events
                 if current_time <= e.timestamp < current_time + interval
             ]
 
@@ -517,9 +549,9 @@ class MemoryTracker:
             current_time += interval
 
         return {
-            'timestamps': timestamps,
-            'allocated': allocated_values,
-            'reserved': reserved_values
+            "timestamps": timestamps,
+            "allocated": allocated_values,
+            "reserved": reserved_values,
         }
 
     def get_statistics(self) -> Dict[str, Any]:
@@ -529,41 +561,49 @@ class MemoryTracker:
         if self.events:
             # Calculate additional statistics
             recent_events = [
-                e for e in self.events if e.timestamp > time.time() - 3600]  # Last hour
+                e for e in self.events if e.timestamp > time.time() - 3600
+            ]  # Last hour
             sample = self._safe_sample()
 
-            current_stats.update({
-                'total_events': len(self.events),
-                'events_last_hour': len(recent_events),
-                'backend': self.backend,
-                'oom_flight_recorder_enabled': self._oom_flight_recorder.config.enabled,
-                'last_oom_dump_path': self.last_oom_dump_path,
-                'current_memory_allocated': sample.allocated_bytes,
-                'current_memory_reserved': sample.reserved_bytes,
-                'memory_utilization_percent': (
-                    (sample.used_bytes / self.total_memory * 100)
-                    if self.total_memory > 0
-                    else 0
-                ),
-                'average_allocation_size': self.stats['total_allocation_bytes']
-                / max(self.stats['total_allocations'], 1),
-                'average_deallocation_size': self.stats['total_deallocation_bytes']
-                / max(self.stats['total_deallocations'], 1),
-            })
+            current_stats.update(
+                {
+                    "total_events": len(self.events),
+                    "events_last_hour": len(recent_events),
+                    "backend": self.backend,
+                    "oom_flight_recorder_enabled": self._oom_flight_recorder.config.enabled,
+                    "last_oom_dump_path": self.last_oom_dump_path,
+                    "current_memory_allocated": sample.allocated_bytes,
+                    "current_memory_reserved": sample.reserved_bytes,
+                    "memory_utilization_percent": (
+                        (sample.used_bytes / self.total_memory * 100)
+                        if self.total_memory > 0
+                        else 0
+                    ),
+                    "average_allocation_size": self.stats["total_allocation_bytes"]
+                    / max(self.stats["total_allocations"], 1),
+                    "average_deallocation_size": self.stats["total_deallocation_bytes"]
+                    / max(self.stats["total_deallocations"], 1),
+                }
+            )
 
             # Time-based statistics
-            if self.stats['tracking_start_time']:
-                tracking_duration = time.time(
-                ) - self.stats['tracking_start_time']
-                current_stats.update({
-                    'tracking_duration_seconds': tracking_duration,
-                    'allocations_per_second': self.stats['total_allocations'] / max(tracking_duration, 1),
-                    'bytes_allocated_per_second': self.stats['total_allocation_bytes'] / max(tracking_duration, 1)
-                })
+            if self.stats["tracking_start_time"]:
+                tracking_duration = time.time() - self.stats["tracking_start_time"]
+                current_stats.update(
+                    {
+                        "tracking_duration_seconds": tracking_duration,
+                        "allocations_per_second": self.stats["total_allocations"]
+                        / max(tracking_duration, 1),
+                        "bytes_allocated_per_second": self.stats[
+                            "total_allocation_bytes"
+                        ]
+                        / max(tracking_duration, 1),
+                    }
+                )
 
         return current_stats
 
-    def export_events(self, filename: str, format: str = 'csv') -> None:
+    def export_events(self, filename: str, format: str = "csv") -> None:
         """
         Export tracking events to file.
 
@@ -571,8 +611,9 @@ class MemoryTracker:
             filename: Output filename
             format: Export format ('csv' or 'json')
         """
-        import pandas as pd
         import json
+
+        import pandas as pd
 
         if not self.events:
             return
@@ -581,7 +622,9 @@ class MemoryTracker:
         pid = os.getpid()
         sampling_interval_ms = int(round(self.sampling_interval * 1000))
         default_collector = str(
-            self.collector_capabilities.get("telemetry_collector", "gpumemprof.cuda_tracker")
+            self.collector_capabilities.get(
+                "telemetry_collector", "gpumemprof.cuda_tracker"
+            )
         )
         capability_metadata = {
             "backend": self.backend,
@@ -604,28 +647,30 @@ class MemoryTracker:
             device_used = event.device_used
             if device_used is None:
                 device_used = max(event.memory_allocated, event.memory_reserved)
-            event_total = event.device_total if event.device_total is not None else (
-                self.total_memory or None
+            event_total = (
+                event.device_total
+                if event.device_total is not None
+                else (self.total_memory or None)
             )
             legacy = {
-                'timestamp': event.timestamp,
-                'event_type': event.event_type,
-                'memory_allocated': event.memory_allocated,
-                'memory_reserved': event.memory_reserved,
-                'memory_change': event.memory_change,
-                'allocator_active_bytes': event.active_memory,
-                'allocator_inactive_bytes': event.inactive_memory,
-                'device_used_bytes': device_used,
-                'device_free_bytes': event.device_free,
-                'device_total_bytes': event_total,
-                'device_id': event.device_id,
-                'context': event.context,
-                'metadata': metadata,
-                'total_memory': event_total,
-                'pid': pid,
-                'host': host,
-                'collector': default_collector,
-                'sampling_interval_ms': sampling_interval_ms,
+                "timestamp": event.timestamp,
+                "event_type": event.event_type,
+                "memory_allocated": event.memory_allocated,
+                "memory_reserved": event.memory_reserved,
+                "memory_change": event.memory_change,
+                "allocator_active_bytes": event.active_memory,
+                "allocator_inactive_bytes": event.inactive_memory,
+                "device_used_bytes": device_used,
+                "device_free_bytes": event.device_free,
+                "device_total_bytes": event_total,
+                "device_id": event.device_id,
+                "context": event.context,
+                "metadata": metadata,
+                "total_memory": event_total,
+                "pid": pid,
+                "host": host,
+                "collector": default_collector,
+                "sampling_interval_ms": sampling_interval_ms,
             }
             telemetry_event = telemetry_event_from_record(
                 legacy,
@@ -634,11 +679,11 @@ class MemoryTracker:
             )
             records.append(telemetry_event_to_dict(telemetry_event))
 
-        if format == 'csv':
+        if format == "csv":
             df = pd.DataFrame(records)
             df.to_csv(filename, index=False)
-        elif format == 'json':
-            with open(filename, 'w') as f:
+        elif format == "json":
+            with open(filename, "w") as f:
                 json.dump(records, f, indent=2, default=str)
         else:
             raise ValueError(f"Unsupported format: {format}")
@@ -648,14 +693,16 @@ class MemoryTracker:
         self.events.clear()
 
         # Reset statistics
-        self.stats.update({
-            'peak_memory': 0,
-            'total_allocations': 0,
-            'total_deallocations': 0,
-            'total_allocation_bytes': 0,
-            'total_deallocation_bytes': 0,
-            'alert_count': 0
-        })
+        self.stats.update(
+            {
+                "peak_memory": 0,
+                "total_allocations": 0,
+                "total_deallocations": 0,
+                "total_allocation_bytes": 0,
+                "total_deallocation_bytes": 0,
+                "alert_count": 0,
+            }
+        )
 
     def set_threshold(self, threshold_name: str, value: Union[int, float]) -> None:
         """
@@ -672,7 +719,7 @@ class MemoryTracker:
 
     def get_alerts(self, last_n: Optional[int] = None) -> List[TrackingEvent]:
         """Get all alert events (warnings, critical, errors)."""
-        alert_types = ['warning', 'critical', 'error']
+        alert_types = ["warning", "critical", "error"]
         alerts = [e for e in self.events if e.event_type in alert_types]
 
         if last_n:
@@ -693,11 +740,13 @@ class MemoryTracker:
 class MemoryWatchdog:
     """Memory watchdog for automated memory management."""
 
-    def __init__(self,
-                 tracker: MemoryTracker,
-                 auto_cleanup: bool = True,
-                 cleanup_threshold: float = 0.9,
-                 aggressive_cleanup_threshold: float = 0.95):
+    def __init__(
+        self,
+        tracker: MemoryTracker,
+        auto_cleanup: bool = True,
+        cleanup_threshold: float = 0.9,
+        aggressive_cleanup_threshold: float = 0.95,
+    ):
         """
         Initialize memory watchdog.
 
@@ -731,13 +780,12 @@ class MemoryWatchdog:
             return
 
         # Check if cleanup is needed
-        if event.event_type == 'critical' or (
-            event.event_type == 'warning' and
-            event.metadata and
-            event.metadata.get(
-                'usage_percent', 0) >= self.cleanup_threshold * 100
+        if event.event_type == "critical" or (
+            event.event_type == "warning"
+            and event.metadata
+            and event.metadata.get("usage_percent", 0) >= self.cleanup_threshold * 100
         ):
-            self._perform_cleanup(aggressive=event.event_type == 'critical')
+            self._perform_cleanup(aggressive=event.event_type == "critical")
             self.last_cleanup_time = current_time
 
     def _perform_cleanup(self, aggressive: bool = False) -> None:
@@ -750,11 +798,13 @@ class MemoryWatchdog:
                 torch.cuda.empty_cache()
                 if aggressive:
                     import gc
+
                     gc.collect()
                     torch.cuda.synchronize()
                     torch.cuda.empty_cache()
             elif backend == "mps":
                 import gc
+
                 import torch.mps as torch_mps
 
                 if hasattr(torch_mps, "empty_cache"):
@@ -765,15 +815,17 @@ class MemoryWatchdog:
                         torch_mps.empty_cache()
             elif aggressive:
                 import gc
+
                 gc.collect()
 
             # Log cleanup event
             cleanup_type = "aggressive" if aggressive else "standard"
             self.tracker._add_event(
-                'cleanup', 0, f"Performed {cleanup_type} memory cleanup")
+                "cleanup", 0, f"Performed {cleanup_type} memory cleanup"
+            )
 
         except Exception as e:
-            self.tracker._add_event('error', 0, f"Cleanup failed: {str(e)}")
+            self.tracker._add_event("error", 0, f"Cleanup failed: {str(e)}")
 
     def force_cleanup(self, aggressive: bool = False) -> None:
         """Force immediate memory cleanup."""
@@ -782,9 +834,9 @@ class MemoryWatchdog:
     def get_cleanup_stats(self) -> Dict[str, Any]:
         """Get cleanup statistics."""
         return {
-            'cleanup_count': self.cleanup_count,
-            'last_cleanup_time': self.last_cleanup_time,
-            'auto_cleanup_enabled': self.auto_cleanup,
-            'cleanup_threshold': self.cleanup_threshold,
-            'aggressive_cleanup_threshold': self.aggressive_cleanup_threshold
+            "cleanup_count": self.cleanup_count,
+            "last_cleanup_time": self.last_cleanup_time,
+            "auto_cleanup_enabled": self.auto_cleanup,
+            "cleanup_threshold": self.cleanup_threshold,
+            "aggressive_cleanup_threshold": self.aggressive_cleanup_threshold,
         }

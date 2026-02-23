@@ -2,7 +2,7 @@
 
 # GPU Memory Profiler: A Complete Guide to Monitoring and Optimizing Deep Learning Memory Usage
 
-**Authors:** Prince Agyei Tuffour and Silas Bempong  
+**Authors:** Prince Agyei Tuffour and Silas Bempong
 **Publication Date:** June 2025
 
 ---

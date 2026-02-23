@@ -12,7 +12,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import psutil
 
@@ -26,6 +26,7 @@ else:
     try:
         from gpumemprof.tracker import TrackingEvent
     except ImportError:
+
         @dataclass
         class TrackingEvent:
             """Fallback CPU tracking event used when GPU tracker imports are unavailable."""
@@ -135,7 +136,7 @@ class CPUMemoryProfiler:
     ) -> CPUProfileResult:
         before = self._take_snapshot()
         start = time.time()
-        result = func(*args, **kwargs)
+        _result = func(*args, **kwargs)
         end = time.time()
         after = self._take_snapshot()
         peak_rss = max(before.rss, after.rss)
@@ -235,7 +236,9 @@ class CPUMemoryTracker:
         self._stop_event.clear()
         with self._events_lock:
             self.stats["tracking_start_time"] = time.time()
-        self._tracking_thread = threading.Thread(target=self._tracking_loop, daemon=True)
+        self._tracking_thread = threading.Thread(
+            target=self._tracking_loop, daemon=True
+        )
         self._tracking_thread.start()
         self._add_event("start", 0, "CPU memory tracking started")
 
@@ -420,9 +423,7 @@ class CPUMemoryTracker:
             raise ValueError(f"Unsupported format: {format}")
 
     def export_events_with_timestamp(self, directory: str, format: str) -> str:
-        filename = (
-            f"{directory}/cpu_tracker_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{format}"
-        )
+        filename = f"{directory}/cpu_tracker_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{format}"
         self.export_events(filename, format=format)
         return filename
 

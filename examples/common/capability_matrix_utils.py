@@ -7,7 +7,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 
 @dataclass
@@ -20,7 +20,9 @@ class CheckResult:
     details: Dict[str, object] = field(default_factory=dict)
 
 
-def run_command(cmd: Sequence[str], timeout_s: Optional[float] = None) -> subprocess.CompletedProcess[str]:
+def run_command(
+    cmd: Sequence[str], timeout_s: Optional[float] = None
+) -> subprocess.CompletedProcess[str]:
     """Run a subprocess command and capture stdout/stderr."""
     return subprocess.run(
         list(cmd),
@@ -44,7 +46,7 @@ def result_to_dict(result: CheckResult) -> Dict[str, object]:
 
 def timed_result(
     name: str,
-    fn,
+    fn: Callable[[], object],
 ) -> CheckResult:
     """Execute callable and normalize PASS/SKIP/FAIL output."""
     started = time.perf_counter()
@@ -56,7 +58,9 @@ def timed_result(
                 name=name,
                 status="FAIL",
                 duration_s=duration,
-                details={"error": f"Expected dict payload, got {type(payload).__name__}"},
+                details={
+                    "error": f"Expected dict payload, got {type(payload).__name__}"
+                },
             )
         status = str(payload.get("status", "PASS")).upper()
         if status not in {"PASS", "SKIP", "FAIL"}:
@@ -83,4 +87,3 @@ def summarize_results(results: List[CheckResult]) -> Dict[str, int]:
     for result in results:
         summary[result.status] = summary.get(result.status, 0) + 1
     return summary
-

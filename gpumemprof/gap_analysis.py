@@ -83,7 +83,12 @@ def analyze_hidden_memory_gaps(
     )
 
     severity_order = {"critical": 0, "warning": 1, "info": 2}
-    findings.sort(key=lambda finding: (severity_order.get(finding.severity, 9), -finding.confidence))
+    findings.sort(
+        key=lambda finding: (
+            severity_order.get(finding.severity, 9),
+            -finding.confidence,
+        )
+    )
 
     _LOGGER.debug("Hidden-memory gap analysis produced %d finding(s)", len(findings))
     return findings
@@ -102,7 +107,9 @@ def _detect_gap_transient_spikes(
         return []
 
     spike_indices = [
-        index for index, gap_value in enumerate(arr) if (gap_value - mean) / std > z_threshold
+        index
+        for index, gap_value in enumerate(arr)
+        if (gap_value - mean) / std > z_threshold
     ]
     if not spike_indices:
         return []

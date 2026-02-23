@@ -2,7 +2,7 @@
 
 # TensorFlow Testing & Usage Guide
 
-**Authors:** Prince Agyei Tuffour and Silas Bempong  
+**Authors:** Prince Agyei Tuffour and Silas Bempong
 **Last Updated:** June 2025
 
 ---

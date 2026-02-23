@@ -9,7 +9,7 @@ import numpy as np
 try:
     import tensorflow as tf
 except ImportError:
-    tf = None  # type: ignore[assignment]
+    tf = None
 
 from .device import seed_everything
 

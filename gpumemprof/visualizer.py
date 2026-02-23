@@ -1,28 +1,20 @@
 """Visualization tools for GPU memory profiling data."""
 
-import os
-import time
-from typing import List, Dict, Any, Optional, Union, Tuple
 from datetime import datetime
-
-import numpy as np
-import pandas as pd
+from typing import Dict, List, Optional, Union
 
 # Plotting imports
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.patches import Rectangle
-from matplotlib.figure import Figure
-import seaborn as sns
+import numpy as np
+import pandas as pd
 
 # Interactive plotting
 import plotly.graph_objects as go
-import plotly.express as px
+import seaborn as sns
+from matplotlib.figure import Figure
 from plotly.subplots import make_subplots
-import plotly.offline as pyo
 
-from .profiler import ProfileResult, MemorySnapshot, GPUMemoryProfiler
-from .utils import format_bytes
+from .profiler import GPUMemoryProfiler, MemorySnapshot, ProfileResult
 
 
 class MemoryVisualizer:
@@ -37,29 +29,31 @@ class MemoryVisualizer:
         """
         self.profiler = profiler
         self.style_config = {
-            'figure_size': (12, 8),
-            'dpi': 100,
-            'color_palette': 'viridis',
-            'font_size': 10,
-            'title_size': 14,
-            'label_size': 12
+            "figure_size": (12, 8),
+            "dpi": 100,
+            "color_palette": "viridis",
+            "font_size": 10,
+            "title_size": 14,
+            "label_size": 12,
         }
 
         # Set up plotting style
-        plt.style.use('default')
-        sns.set_palette(self.style_config['color_palette'])
+        plt.style.use("default")
+        sns.set_palette(self.style_config["color_palette"])
 
-    def plot_memory_timeline(self,
-                             results: Optional[List[ProfileResult]] = None,
-                             snapshots: Optional[List[MemorySnapshot]] = None,
-                             save_path: Optional[str] = None,
-                             interactive: bool = True) -> Union[plt.Figure, go.Figure]:
+    def plot_memory_timeline(
+        self,
+        results: Optional[List[ProfileResult]] = None,
+        snapshots: Optional[List[MemorySnapshot]] = None,
+        save_path: Optional[str] = None,
+        interactive: bool = True,
+    ) -> Union[plt.Figure, go.Figure]:
         """
         Plot memory usage over time.
 
         Args:
             results: List of ProfileResults to plot
-            snapshots: List of MemorySnapshots to plot  
+            snapshots: List of MemorySnapshots to plot
             save_path: Path to save the plot
             interactive: Whether to create interactive plot
 
@@ -120,59 +114,82 @@ class MemoryVisualizer:
                 relative_times, allocated_memory, reserved_memory, labels, save_path
             )
 
-    def _create_static_timeline(self, times: List[float], allocated: List[int],
-                                reserved: List[int], labels: List[str],
-                                save_path: Optional[str]) -> plt.Figure:
+    def _create_static_timeline(
+        self,
+        times: List[float],
+        allocated: List[int],
+        reserved: List[int],
+        labels: List[str],
+        save_path: Optional[str],
+    ) -> plt.Figure:
         """Create static matplotlib timeline plot."""
         fig_obj, (ax1, ax2) = plt.subplots(
             2,
             1,
-            figsize=self.style_config['figure_size'],
+            figsize=self.style_config["figure_size"],
             sharex=True,
-            dpi=self.style_config['dpi'],
+            dpi=self.style_config["dpi"],
         )
         fig: Figure = fig_obj
 
         # Plot allocated memory
-        ax1.plot(times, [m / (1024**3) for m in allocated],
-                 'b-', linewidth=2, label='Allocated')
-        ax1.fill_between(times, [m / (1024**3)
-                         for m in allocated], alpha=0.3, color='blue')
-        ax1.set_ylabel('Allocated Memory (GB)',
-                       fontsize=self.style_config['label_size'])
-        ax1.set_title('GPU Memory Usage Over Time',
-                      fontsize=self.style_config['title_size'])
+        ax1.plot(
+            times,
+            [m / (1024**3) for m in allocated],
+            "b-",
+            linewidth=2,
+            label="Allocated",
+        )
+        ax1.fill_between(
+            times, [m / (1024**3) for m in allocated], alpha=0.3, color="blue"
+        )
+        ax1.set_ylabel(
+            "Allocated Memory (GB)", fontsize=self.style_config["label_size"]
+        )
+        ax1.set_title(
+            "GPU Memory Usage Over Time", fontsize=self.style_config["title_size"]
+        )
         ax1.grid(True, alpha=0.3)
         ax1.legend()
 
         # Plot reserved memory
-        ax2.plot(times, [m / (1024**3) for m in reserved],
-                 'r-', linewidth=2, label='Reserved')
-        ax2.fill_between(times, [m / (1024**3)
-                         for m in reserved], alpha=0.3, color='red')
-        ax2.set_ylabel('Reserved Memory (GB)',
-                       fontsize=self.style_config['label_size'])
-        ax2.set_xlabel('Time (seconds)',
-                       fontsize=self.style_config['label_size'])
+        ax2.plot(
+            times,
+            [m / (1024**3) for m in reserved],
+            "r-",
+            linewidth=2,
+            label="Reserved",
+        )
+        ax2.fill_between(
+            times, [m / (1024**3) for m in reserved], alpha=0.3, color="red"
+        )
+        ax2.set_ylabel("Reserved Memory (GB)", fontsize=self.style_config["label_size"])
+        ax2.set_xlabel("Time (seconds)", fontsize=self.style_config["label_size"])
         ax2.grid(True, alpha=0.3)
         ax2.legend()
 
         plt.tight_layout()
 
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
 
         return fig
 
-    def _create_interactive_timeline(self, times: List[float], allocated: List[int],
-                                     reserved: List[int], labels: List[str],
-                                     save_path: Optional[str]) -> go.Figure:
+    def _create_interactive_timeline(
+        self,
+        times: List[float],
+        allocated: List[int],
+        reserved: List[int],
+        labels: List[str],
+        save_path: Optional[str],
+    ) -> go.Figure:
         """Create interactive plotly timeline plot."""
         fig = make_subplots(
-            rows=2, cols=1,
+            rows=2,
+            cols=1,
             shared_xaxes=True,
-            subplot_titles=('Allocated Memory', 'Reserved Memory'),
-            vertical_spacing=0.1
+            subplot_titles=("Allocated Memory", "Reserved Memory"),
+            vertical_spacing=0.1,
         )
 
         # Convert bytes to GB for better readability
@@ -184,16 +201,17 @@ class MemoryVisualizer:
             go.Scatter(
                 x=times,
                 y=allocated_gb,
-                mode='lines+markers',
-                name='Allocated Memory',
-                line=dict(color='blue', width=2),
-                fill='tonexty',
-                hovertemplate='<b>Time:</b> %{x:.2f}s<br>' +
-                '<b>Allocated:</b> %{y:.2f} GB<br>' +
-                '<b>Operation:</b> %{text}<extra></extra>',
-                text=labels
+                mode="lines+markers",
+                name="Allocated Memory",
+                line=dict(color="blue", width=2),
+                fill="tonexty",
+                hovertemplate="<b>Time:</b> %{x:.2f}s<br>"
+                + "<b>Allocated:</b> %{y:.2f} GB<br>"
+                + "<b>Operation:</b> %{text}<extra></extra>",
+                text=labels,
             ),
-            row=1, col=1
+            row=1,
+            col=1,
         )
 
         # Reserved memory trace
@@ -201,24 +219,25 @@ class MemoryVisualizer:
             go.Scatter(
                 x=times,
                 y=reserved_gb,
-                mode='lines+markers',
-                name='Reserved Memory',
-                line=dict(color='red', width=2),
-                fill='tonexty',
-                hovertemplate='<b>Time:</b> %{x:.2f}s<br>' +
-                '<b>Reserved:</b> %{y:.2f} GB<br>' +
-                '<b>Operation:</b> %{text}<extra></extra>',
-                text=labels
+                mode="lines+markers",
+                name="Reserved Memory",
+                line=dict(color="red", width=2),
+                fill="tonexty",
+                hovertemplate="<b>Time:</b> %{x:.2f}s<br>"
+                + "<b>Reserved:</b> %{y:.2f} GB<br>"
+                + "<b>Operation:</b> %{text}<extra></extra>",
+                text=labels,
             ),
-            row=2, col=1
+            row=2,
+            col=1,
         )
 
         # Update layout
         fig.update_layout(
-            title='GPU Memory Usage Timeline',
+            title="GPU Memory Usage Timeline",
             showlegend=True,
             height=800,
-            hovermode='closest'
+            hovermode="closest",
         )
 
         fig.update_xaxes(title_text="Time (seconds)", row=2, col=1)
@@ -226,18 +245,20 @@ class MemoryVisualizer:
         fig.update_yaxes(title_text="Memory (GB)", row=2, col=1)
 
         if save_path:
-            if save_path.endswith('.html'):
+            if save_path.endswith(".html"):
                 fig.write_html(save_path)
             else:
                 fig.write_image(save_path, width=1200, height=800)
 
         return fig
 
-    def plot_function_comparison(self,
-                                 results: Optional[List[ProfileResult]] = None,
-                                 metric: str = 'memory_allocated',
-                                 save_path: Optional[str] = None,
-                                 interactive: bool = True) -> Union[plt.Figure, go.Figure]:
+    def plot_function_comparison(
+        self,
+        results: Optional[List[ProfileResult]] = None,
+        metric: str = "memory_allocated",
+        save_path: Optional[str] = None,
+        interactive: bool = True,
+    ) -> Union[plt.Figure, go.Figure]:
         """
         Compare memory usage across different functions.
 
@@ -275,95 +296,118 @@ class MemoryVisualizer:
         # Prepare plot data
         functions = list(function_memory_allocated.keys())
 
-        if metric == 'memory_allocated':
-            values = [float(np.mean(function_memory_allocated[func]))
-                      for func in functions]
-            ylabel = 'Average Memory Allocated (GB)'
-            title = 'Average Memory Allocation by Function'
+        if metric == "memory_allocated":
+            values = [
+                float(np.mean(function_memory_allocated[func])) for func in functions
+            ]
+            ylabel = "Average Memory Allocated (GB)"
+            title = "Average Memory Allocation by Function"
             values = [v / (1024**3) for v in values]  # Convert to GB
-        elif metric == 'execution_time':
-            values = [float(np.mean(function_execution_time[func]))
-                      for func in functions]
-            ylabel = 'Average Execution Time (seconds)'
-            title = 'Average Execution Time by Function'
-        elif metric == 'peak_memory':
-            values = [float(np.max(function_peak_memory[func]))
-                      for func in functions]
-            ylabel = 'Peak Memory Usage (GB)'
-            title = 'Peak Memory Usage by Function'
+        elif metric == "execution_time":
+            values = [
+                float(np.mean(function_execution_time[func])) for func in functions
+            ]
+            ylabel = "Average Execution Time (seconds)"
+            title = "Average Execution Time by Function"
+        elif metric == "peak_memory":
+            values = [float(np.max(function_peak_memory[func])) for func in functions]
+            ylabel = "Peak Memory Usage (GB)"
+            title = "Peak Memory Usage by Function"
             values = [v / (1024**3) for v in values]  # Convert to GB
         else:
             raise ValueError(f"Unknown metric: {metric}")
 
         if interactive:
-            return self._create_interactive_bar_chart(functions, values, ylabel, title, save_path)
+            return self._create_interactive_bar_chart(
+                functions, values, ylabel, title, save_path
+            )
         else:
-            return self._create_static_bar_chart(functions, values, ylabel, title, save_path)
+            return self._create_static_bar_chart(
+                functions, values, ylabel, title, save_path
+            )
 
-    def _create_static_bar_chart(self, labels: List[str], values: List[float],
-                                 ylabel: str, title: str, save_path: Optional[str]) -> plt.Figure:
+    def _create_static_bar_chart(
+        self,
+        labels: List[str],
+        values: List[float],
+        ylabel: str,
+        title: str,
+        save_path: Optional[str],
+    ) -> plt.Figure:
         """Create static matplotlib bar chart."""
         fig_obj, ax = plt.subplots(
-            figsize=self.style_config['figure_size'],
-            dpi=self.style_config['dpi'],
+            figsize=self.style_config["figure_size"],
+            dpi=self.style_config["dpi"],
         )
         fig: Figure = fig_obj
 
         bars = ax.bar(labels, values, alpha=0.8)
-        ax.set_ylabel(ylabel, fontsize=self.style_config['label_size'])
-        ax.set_title(title, fontsize=self.style_config['title_size'])
-        ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylabel(ylabel, fontsize=self.style_config["label_size"])
+        ax.set_title(title, fontsize=self.style_config["title_size"])
+        ax.grid(True, alpha=0.3, axis="y")
 
         # Rotate x-axis labels if they're too long
         if max(len(label) for label in labels) > 10:
-            plt.xticks(rotation=45, ha='right')
+            plt.xticks(rotation=45, ha="right")
 
         # Add value labels on bars
         for bar in bars:
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{height:.2f}', ha='center', va='bottom',
-                    fontsize=self.style_config['font_size'])
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{height:.2f}",
+                ha="center",
+                va="bottom",
+                fontsize=self.style_config["font_size"],
+            )
 
         plt.tight_layout()
 
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
 
         return fig
 
-    def _create_interactive_bar_chart(self, labels: List[str], values: List[float],
-                                      ylabel: str, title: str, save_path: Optional[str]) -> go.Figure:
+    def _create_interactive_bar_chart(
+        self,
+        labels: List[str],
+        values: List[float],
+        ylabel: str,
+        title: str,
+        save_path: Optional[str],
+    ) -> go.Figure:
         """Create interactive plotly bar chart."""
-        fig = go.Figure(data=[
-            go.Bar(
-                x=labels,
-                y=values,
-                text=[f'{v:.2f}' for v in values],
-                textposition='auto',
-                hovertemplate='<b>%{x}</b><br>' +
-                             f'{ylabel}: %{{y:.2f}}<extra></extra>'
-            )
-        ])
+        fig = go.Figure(
+            data=[
+                go.Bar(
+                    x=labels,
+                    y=values,
+                    text=[f"{v:.2f}" for v in values],
+                    textposition="auto",
+                    hovertemplate="<b>%{x}</b><br>"
+                    + f"{ylabel}: %{{y:.2f}}<extra></extra>",
+                )
+            ]
+        )
 
         fig.update_layout(
-            title=title,
-            xaxis_title="Function",
-            yaxis_title=ylabel,
-            height=600
+            title=title, xaxis_title="Function", yaxis_title=ylabel, height=600
         )
 
         if save_path:
-            if save_path.endswith('.html'):
+            if save_path.endswith(".html"):
                 fig.write_html(save_path)
             else:
                 fig.write_image(save_path, width=1000, height=600)
 
         return fig
 
-    def plot_memory_heatmap(self,
-                            results: Optional[List[ProfileResult]] = None,
-                            save_path: Optional[str] = None) -> plt.Figure:
+    def plot_memory_heatmap(
+        self,
+        results: Optional[List[ProfileResult]] = None,
+        save_path: Optional[str] = None,
+    ) -> plt.Figure:
         """
         Create a heatmap showing memory usage patterns.
 
@@ -382,8 +426,7 @@ class MemoryVisualizer:
 
         # Create data matrix
         functions = list(set(r.function_name for r in results))
-        metrics = ['execution_time', 'memory_allocated',
-                   'memory_freed', 'peak_memory']
+        metrics = ["execution_time", "memory_allocated", "memory_freed", "peak_memory"]
 
         data_matrix = np.zeros((len(functions), len(metrics)))
 
@@ -391,19 +434,23 @@ class MemoryVisualizer:
             func_results = [r for r in results if r.function_name == func]
 
             # Calculate average metrics
-            data_matrix[i, 0] = np.mean(
-                [r.execution_time for r in func_results])
-            data_matrix[i, 1] = np.mean(
-                [r.memory_allocated for r in func_results]) / (1024**3)  # GB
-            data_matrix[i, 2] = np.mean(
-                [r.memory_freed for r in func_results]) / (1024**3)  # GB
+            data_matrix[i, 0] = np.mean([r.execution_time for r in func_results])
+            data_matrix[i, 1] = np.mean([r.memory_allocated for r in func_results]) / (
+                1024**3
+            )  # GB
+            data_matrix[i, 2] = np.mean([r.memory_freed for r in func_results]) / (
+                1024**3
+            )  # GB
             data_matrix[i, 3] = np.mean(
-                [r.peak_memory_usage() for r in func_results]) / (1024**3)  # GB
+                [r.peak_memory_usage() for r in func_results]
+            ) / (
+                1024**3
+            )  # GB
 
         # Create heatmap
         fig_obj, ax = plt.subplots(
             figsize=(10, max(6, len(functions) * 0.5)),
-            dpi=self.style_config['dpi'],
+            dpi=self.style_config["dpi"],
         )
         fig: Figure = fig_obj
 
@@ -414,52 +461,59 @@ class MemoryVisualizer:
             if col_max > 0:
                 normalized_data[:, j] = data_matrix[:, j] / col_max
 
-        im = ax.imshow(normalized_data, cmap='YlOrRd', aspect='auto')
+        im = ax.imshow(normalized_data, cmap="YlOrRd", aspect="auto")
 
         # Set ticks and labels
         ax.set_xticks(np.arange(len(metrics)))
         ax.set_yticks(np.arange(len(functions)))
-        ax.set_xticklabels(['Execution Time', 'Memory Allocated (GB)',
-                           'Memory Freed (GB)', 'Peak Memory (GB)'])
+        ax.set_xticklabels(
+            [
+                "Execution Time",
+                "Memory Allocated (GB)",
+                "Memory Freed (GB)",
+                "Peak Memory (GB)",
+            ]
+        )
         ax.set_yticklabels(functions)
 
         # Rotate the tick labels and set their alignment
-        plt.setp(ax.get_xticklabels(), rotation=45,
-                 ha="right", rotation_mode="anchor")
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
 
         # Add colorbar
         cbar = fig.colorbar(im, ax=ax)
-        cbar.ax.set_ylabel('Normalized Value', rotation=-90, va="bottom")
+        cbar.ax.set_ylabel("Normalized Value", rotation=-90, va="bottom")
 
         # Add text annotations
         for i in range(len(functions)):
             for j in range(len(metrics)):
-                if metrics[j] == 'execution_time':
-                    text = f'{data_matrix[i, j]:.3f}s'
+                if metrics[j] == "execution_time":
+                    text = f"{data_matrix[i, j]:.3f}s"
                 else:
-                    text = f'{data_matrix[i, j]:.2f}GB'
-                ax.text(j, i, text, ha="center", va="center",
-                        color="black", fontsize=8)
+                    text = f"{data_matrix[i, j]:.2f}GB"
+                ax.text(j, i, text, ha="center", va="center", color="black", fontsize=8)
 
-        ax.set_title("Memory Usage Heatmap by Function",
-                     fontsize=self.style_config['title_size'])
+        ax.set_title(
+            "Memory Usage Heatmap by Function", fontsize=self.style_config["title_size"]
+        )
         fig.tight_layout()
 
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
 
         return fig
 
-    def create_dashboard(self,
-                         results: Optional[List[ProfileResult]] = None,
-                         snapshots: Optional[List[MemorySnapshot]] = None,
-                         save_path: Optional[str] = None) -> go.Figure:
+    def create_dashboard(
+        self,
+        results: Optional[List[ProfileResult]] = None,
+        snapshots: Optional[List[MemorySnapshot]] = None,
+        save_path: Optional[str] = None,
+    ) -> go.Figure:
         """
         Create a comprehensive dashboard with multiple visualizations.
 
         Args:
             results: List of ProfileResults
-            snapshots: List of MemorySnapshots  
+            snapshots: List of MemorySnapshots
             save_path: Path to save the dashboard
 
         Returns:
@@ -472,11 +526,18 @@ class MemoryVisualizer:
 
         # Create subplot grid
         fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=('Memory Timeline', 'Function Comparison',
-                            'Memory Distribution', 'Peak Memory Usage'),
-            specs=[[{"secondary_y": True}, {"type": "bar"}],
-                   [{"type": "histogram"}, {"type": "scatter"}]]
+            rows=2,
+            cols=2,
+            subplot_titles=(
+                "Memory Timeline",
+                "Function Comparison",
+                "Memory Distribution",
+                "Peak Memory Usage",
+            ),
+            specs=[
+                [{"secondary_y": True}, {"type": "bar"}],
+                [{"type": "histogram"}, {"type": "scatter"}],
+            ],
         )
 
         # Timeline plot (top left)
@@ -485,9 +546,9 @@ class MemoryVisualizer:
             allocated = [s.allocated_memory / (1024**3) for s in snapshots]
 
             fig.add_trace(
-                go.Scatter(x=times, y=allocated, mode='lines',
-                           name='Allocated Memory'),
-                row=1, col=1
+                go.Scatter(x=times, y=allocated, mode="lines", name="Allocated Memory"),
+                row=1,
+                col=1,
             )
 
         # Function comparison (top right)
@@ -497,22 +558,21 @@ class MemoryVisualizer:
                 if result.function_name not in func_memory:
                     func_memory[result.function_name] = []
                 func_memory[result.function_name].append(
-                    result.memory_allocated / (1024**3))
+                    result.memory_allocated / (1024**3)
+                )
 
             functions = list(func_memory.keys())
             avg_memory = [np.mean(func_memory[f]) for f in functions]
 
             fig.add_trace(
-                go.Bar(x=functions, y=avg_memory, name='Avg Memory'),
-                row=1, col=2
+                go.Bar(x=functions, y=avg_memory, name="Avg Memory"), row=1, col=2
             )
 
         # Memory distribution (bottom left)
         if results:
             memory_values = [r.memory_allocated / (1024**3) for r in results]
             fig.add_trace(
-                go.Histogram(x=memory_values, name='Memory Distribution'),
-                row=2, col=1
+                go.Histogram(x=memory_values, name="Memory Distribution"), row=2, col=1
             )
 
         # Peak memory scatter (bottom right)
@@ -521,16 +581,19 @@ class MemoryVisualizer:
             peak_memory = [r.peak_memory_usage() / (1024**3) for r in results]
 
             fig.add_trace(
-                go.Scatter(x=exec_times, y=peak_memory, mode='markers',
-                           name='Execution Time vs Peak Memory'),
-                row=2, col=2
+                go.Scatter(
+                    x=exec_times,
+                    y=peak_memory,
+                    mode="markers",
+                    name="Execution Time vs Peak Memory",
+                ),
+                row=2,
+                col=2,
             )
 
         # Update layout
         fig.update_layout(
-            title_text="GPU Memory Profiling Dashboard",
-            height=800,
-            showlegend=True
+            title_text="GPU Memory Profiling Dashboard", height=800, showlegend=True
         )
 
         # Update axis labels
@@ -544,18 +607,20 @@ class MemoryVisualizer:
         fig.update_yaxes(title_text="Peak Memory (GB)", row=2, col=2)
 
         if save_path:
-            if save_path.endswith('.html'):
+            if save_path.endswith(".html"):
                 fig.write_html(save_path)
             else:
                 fig.write_image(save_path, width=1400, height=800)
 
         return fig
 
-    def export_data(self,
-                    results: Optional[List[ProfileResult]] = None,
-                    snapshots: Optional[List[MemorySnapshot]] = None,
-                    format: str = 'csv',
-                    save_path: str = 'memory_profile_data') -> str:
+    def export_data(
+        self,
+        results: Optional[List[ProfileResult]] = None,
+        snapshots: Optional[List[MemorySnapshot]] = None,
+        format: str = "csv",
+        save_path: str = "memory_profile_data",
+    ) -> str:
         """
         Export profiling data to various formats.
 
@@ -575,21 +640,23 @@ class MemoryVisualizer:
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        if format == 'csv':
+        if format == "csv":
             # Export results
             if results:
                 results_data = []
                 for r in results:
-                    results_data.append({
-                        'function_name': r.function_name,
-                        'execution_time': r.execution_time,
-                        'memory_allocated': r.memory_allocated,
-                        'memory_freed': r.memory_freed,
-                        'peak_memory': r.peak_memory_usage(),
-                        'memory_diff': r.memory_diff(),
-                        'tensors_created': r.tensors_created,
-                        'tensors_deleted': r.tensors_deleted
-                    })
+                    results_data.append(
+                        {
+                            "function_name": r.function_name,
+                            "execution_time": r.execution_time,
+                            "memory_allocated": r.memory_allocated,
+                            "memory_freed": r.memory_freed,
+                            "peak_memory": r.peak_memory_usage(),
+                            "memory_diff": r.memory_diff(),
+                            "tensors_created": r.tensors_created,
+                            "tensors_deleted": r.tensors_deleted,
+                        }
+                    )
 
                 results_df = pd.DataFrame(results_data)
                 results_path = f"{save_path}_results_{timestamp}.csv"
@@ -599,15 +666,17 @@ class MemoryVisualizer:
             if snapshots:
                 snapshots_data = []
                 for s in snapshots:
-                    snapshots_data.append({
-                        'timestamp': s.timestamp,
-                        'operation': s.operation,
-                        'allocated_memory': s.allocated_memory,
-                        'reserved_memory': s.reserved_memory,
-                        'active_memory': s.active_memory,
-                        'inactive_memory': s.inactive_memory,
-                        'device_id': s.device_id
-                    })
+                    snapshots_data.append(
+                        {
+                            "timestamp": s.timestamp,
+                            "operation": s.operation,
+                            "allocated_memory": s.allocated_memory,
+                            "reserved_memory": s.reserved_memory,
+                            "active_memory": s.active_memory,
+                            "inactive_memory": s.inactive_memory,
+                            "device_id": s.device_id,
+                        }
+                    )
 
                 snapshots_df = pd.DataFrame(snapshots_data)
                 snapshots_path = f"{save_path}_snapshots_{timestamp}.csv"
@@ -615,21 +684,21 @@ class MemoryVisualizer:
 
             return f"{save_path}_{timestamp}.csv"
 
-        elif format == 'json':
+        elif format == "json":
             import json
 
             export_data = {
-                'metadata': {
-                    'export_time': timestamp,
-                    'num_results': len(results) if results else 0,
-                    'num_snapshots': len(snapshots) if snapshots else 0
+                "metadata": {
+                    "export_time": timestamp,
+                    "num_results": len(results) if results else 0,
+                    "num_snapshots": len(snapshots) if snapshots else 0,
                 },
-                'results': [r.to_dict() for r in results] if results else [],
-                'snapshots': [s.to_dict() for s in snapshots] if snapshots else []
+                "results": [r.to_dict() for r in results] if results else [],
+                "snapshots": [s.to_dict() for s in snapshots] if snapshots else [],
             }
 
             json_path = f"{save_path}_{timestamp}.json"
-            with open(json_path, 'w') as f:
+            with open(json_path, "w") as f:
                 json.dump(export_data, f, indent=2, default=str)
 
             return json_path

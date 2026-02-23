@@ -10,7 +10,7 @@ import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Any, Dict, List, Sequence, cast
 
 from examples.common import print_header, print_kv, print_section
 from examples.common.capability_matrix_utils import (
@@ -22,7 +22,6 @@ from examples.common.capability_matrix_utils import (
     write_report,
 )
 from gpumemprof.utils import get_system_info
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ARTIFACTS_ROOT = REPO_ROOT / "artifacts" / "examples" / "capability_matrix"
@@ -43,7 +42,7 @@ def _target_flags(target: str, backend: str) -> tuple[bool, bool]:
     return True, backend == "mps"
 
 
-def _load_scenario_runner(module_name: str):
+def _load_scenario_runner(module_name: str) -> Any:
     module = importlib.import_module(module_name)
     return getattr(module, "run_scenario")
 
@@ -56,7 +55,8 @@ def _run_optional_scenario(module_name: str, **kwargs: object) -> Dict[str, obje
             "status": "SKIP",
             "reason": f"{module_name} unavailable: {exc}",
         }
-    return runner(**kwargs)
+    result: Dict[str, object] = runner(**kwargs)
+    return result
 
 
 def _run_gpumemprof_diagnose(check_dir: Path) -> Dict[str, object]:
@@ -125,7 +125,7 @@ def _run_tui_smoke() -> Dict[str, object]:
         return {"status": "SKIP", "reason": "gpu-profiler entrypoint not found"}
 
     try:
-        import pexpect
+        import pexpect  # type: ignore[import-untyped, unused-ignore]
     except ModuleNotFoundError:
         return {"status": "SKIP", "reason": "pexpect is not installed"}
 
@@ -136,7 +136,11 @@ def _run_tui_smoke() -> Dict[str, object]:
         child.expect(["Overview", "PyTorch"])
         child.send("q")
         child.expect(pexpect.EOF, timeout=10)
-        return {"status": "PASS", "exitstatus": child.exitstatus, "signalstatus": child.signalstatus}
+        return {
+            "status": "PASS",
+            "exitstatus": child.exitstatus,
+            "signalstatus": child.signalstatus,
+        }
     except Exception as exc:  # noqa: BLE001
         tail = (child.before or "")[-1200:]
         return {"status": "FAIL", "error": str(exc), "output_tail": tail}
@@ -295,7 +299,7 @@ def run_matrix(
         results.extend(_run_full_extra_examples(run_dir))
 
     summary = summarize_results(results)
-    report = {
+    report: Dict[str, object] = {
         "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "mode": mode,
         "target": target,
@@ -316,8 +320,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run launch readiness capability checks for GPU Memory Profiler.",
     )
     parser.add_argument("--mode", choices=["smoke", "full"], default="smoke")
-    parser.add_argument("--target", choices=["auto", "cpu", "mps", "both"], default="auto")
-    parser.add_argument("--oom-mode", choices=["simulated", "stress"], default="simulated")
+    parser.add_argument(
+        "--target", choices=["auto", "cpu", "mps", "both"], default="auto"
+    )
+    parser.add_argument(
+        "--oom-mode", choices=["simulated", "stress"], default="simulated"
+    )
     parser.add_argument(
         "--artifacts-dir",
         type=Path,
@@ -347,11 +355,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     print_section("Summary")
-    summary = report["summary"]
+    summary = cast(Dict[str, int], report["summary"])
     print_kv("PASS", summary["PASS"])
     print_kv("SKIP", summary["SKIP"])
     print_kv("FAIL", summary["FAIL"])
-    print_kv("Report", Path(report["run_dir"]) / "report.json")
+    print_kv("Report", Path(cast(str, report["run_dir"])) / "report.json")
 
     return 1 if summary["FAIL"] > 0 else 0
 

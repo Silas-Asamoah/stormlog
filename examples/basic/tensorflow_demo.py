@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import tensorflow as tf
+
     from tfmemprof import TFMemoryProfiler
 
 try:
@@ -29,7 +30,7 @@ def profile_tensor_allocation(profiler: TFMemoryProfiler, repeats: int = 3) -> N
     for idx in range(repeats):
 
         @profiler.profile_function
-        def allocate_batch():
+        def allocate_batch() -> float:
             inputs, targets = generate_tf_batch(batch_size=128)
             # Return a cheap scalar to keep TF graphs simple
             return float(inputs.mean())
@@ -54,7 +55,7 @@ def profile_inference(profiler: TFMemoryProfiler, model: tf.keras.Model) -> None
         print_kv("Mean entropy", f"{tf.reduce_mean(entropy).numpy():.4f}")
 
 
-def print_results(results) -> None:
+def print_results(results: Any) -> None:
     print_section("Profiler Results")
     print_kv("Duration (s)", f"{results.duration:.3f}")
     print_kv("Peak memory (MB)", f"{results.peak_memory_mb:.2f}")

@@ -1,19 +1,16 @@
 """Core GPU Memory Profiler for PyTorch."""
 
-import logging
-import time
-import threading
-import psutil
 import gc
-from typing import Dict, List, Optional, Callable, Any, Union
-from collections import defaultdict, deque
-from dataclasses import dataclass, field
+import logging
+import threading
+import time
+from collections import defaultdict
 from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Union
 
+import psutil
 import torch
-import numpy as np
-
-from .utils import get_gpu_info, format_bytes, convert_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MemorySnapshot:
     """Represents a memory snapshot at a specific point in time."""
+
     timestamp: float
     allocated_memory: int
     reserved_memory: int
@@ -36,23 +34,24 @@ class MemorySnapshot:
     def to_dict(self) -> Dict[str, Any]:
         """Convert snapshot to dictionary."""
         return {
-            'timestamp': self.timestamp,
-            'allocated_memory': self.allocated_memory,
-            'reserved_memory': self.reserved_memory,
-            'max_memory_allocated': self.max_memory_allocated,
-            'max_memory_reserved': self.max_memory_reserved,
-            'active_memory': self.active_memory,
-            'inactive_memory': self.inactive_memory,
-            'cpu_memory': self.cpu_memory,
-            'device_id': self.device_id,
-            'operation': self.operation,
-            'stack_trace': self.stack_trace
+            "timestamp": self.timestamp,
+            "allocated_memory": self.allocated_memory,
+            "reserved_memory": self.reserved_memory,
+            "max_memory_allocated": self.max_memory_allocated,
+            "max_memory_reserved": self.max_memory_reserved,
+            "active_memory": self.active_memory,
+            "inactive_memory": self.inactive_memory,
+            "cpu_memory": self.cpu_memory,
+            "device_id": self.device_id,
+            "operation": self.operation,
+            "stack_trace": self.stack_trace,
         }
 
 
 @dataclass
 class ProfileResult:
     """Results from profiling a function or operation."""
+
     function_name: str
     execution_time: float
     memory_before: MemorySnapshot
@@ -75,28 +74,31 @@ class ProfileResult:
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to dictionary."""
         return {
-            'function_name': self.function_name,
-            'execution_time': self.execution_time,
-            'memory_before': self.memory_before.to_dict(),
-            'memory_after': self.memory_after.to_dict(),
-            'memory_peak': self.memory_peak.to_dict(),
-            'memory_allocated': self.memory_allocated,
-            'memory_freed': self.memory_freed,
-            'memory_diff': self.memory_diff(),
-            'peak_memory_usage': self.peak_memory_usage(),
-            'tensors_created': self.tensors_created,
-            'tensors_deleted': self.tensors_deleted,
-            'call_count': self.call_count
+            "function_name": self.function_name,
+            "execution_time": self.execution_time,
+            "memory_before": self.memory_before.to_dict(),
+            "memory_after": self.memory_after.to_dict(),
+            "memory_peak": self.memory_peak.to_dict(),
+            "memory_allocated": self.memory_allocated,
+            "memory_freed": self.memory_freed,
+            "memory_diff": self.memory_diff(),
+            "peak_memory_usage": self.peak_memory_usage(),
+            "tensors_created": self.tensors_created,
+            "tensors_deleted": self.tensors_deleted,
+            "call_count": self.call_count,
         }
 
 
 class GPUMemoryProfiler:
     """Comprehensive GPU memory profiler for PyTorch operations."""
 
-    def __init__(self, device: Union[str, int, torch.device, None] = None,
-                 track_tensors: bool = True,
-                 track_cpu_memory: bool = True,
-                 collect_stack_traces: bool = False):
+    def __init__(
+        self,
+        device: Union[str, int, torch.device, None] = None,
+        track_tensors: bool = True,
+        track_cpu_memory: bool = True,
+        collect_stack_traces: bool = False,
+    ):
         """
         Initialize the GPU Memory Profiler.
 
@@ -123,7 +125,9 @@ class GPUMemoryProfiler:
         # Initialize baseline measurements
         self._baseline_snapshot = self._take_snapshot("baseline")
 
-    def _setup_device(self, device: Union[str, int, torch.device, None]) -> torch.device:
+    def _setup_device(
+        self, device: Union[str, int, torch.device, None]
+    ) -> torch.device:
         """Setup and validate the device for profiling."""
         resolved_device: torch.device
 
@@ -131,8 +135,7 @@ class GPUMemoryProfiler:
             if torch.cuda.is_available():
                 resolved_device = torch.device(f"cuda:{torch.cuda.current_device()}")
             else:
-                raise RuntimeError(
-                    "CUDA is not available, cannot profile GPU memory")
+                raise RuntimeError("CUDA is not available, cannot profile GPU memory")
         elif isinstance(device, int):
             resolved_device = torch.device(f"cuda:{device}")
         elif isinstance(device, str):
@@ -140,9 +143,8 @@ class GPUMemoryProfiler:
         else:
             resolved_device = device
 
-        if resolved_device.type != 'cuda':
-            raise ValueError(
-                "Only CUDA devices are supported for GPU memory profiling")
+        if resolved_device.type != "cuda":
+            raise ValueError("Only CUDA devices are supported for GPU memory profiling")
 
         # Ensure device is available
         device_index = (
@@ -165,18 +167,21 @@ class GPUMemoryProfiler:
             reserved_memory=torch.cuda.memory_reserved(self.device),
             max_memory_allocated=torch.cuda.max_memory_allocated(self.device),
             max_memory_reserved=torch.cuda.max_memory_reserved(self.device),
-            active_memory=torch.cuda.memory_stats(
-                self.device).get('active_bytes.all.current', 0),
+            active_memory=torch.cuda.memory_stats(self.device).get(
+                "active_bytes.all.current", 0
+            ),
             inactive_memory=torch.cuda.memory_stats(self.device).get(
-                'inactive_split_bytes.all.current', 0),
+                "inactive_split_bytes.all.current", 0
+            ),
             cpu_memory=psutil.virtual_memory().used if self.track_cpu_memory else 0,
             device_id=self.device.index,
-            operation=operation
+            operation=operation,
         )
 
         if self.collect_stack_traces and operation:
             import traceback
-            snapshot.stack_trace = ''.join(traceback.format_stack()[-5:])
+
+            snapshot.stack_trace = "".join(traceback.format_stack()[-5:])
 
         return snapshot
 
@@ -194,7 +199,7 @@ class GPUMemoryProfiler:
         Returns:
             ProfileResult with profiling information
         """
-        function_name = getattr(func, '__name__', str(func))
+        function_name = getattr(func, "__name__", str(func))
 
         # Reset peak memory stats
         torch.cuda.reset_peak_memory_stats(self.device)
@@ -210,7 +215,7 @@ class GPUMemoryProfiler:
         start_time = time.time()
 
         try:
-            result = func(*args, **kwargs)
+            _result = func(*args, **kwargs)
             # Ensure all operations complete
             torch.cuda.synchronize(self.device)
         except Exception as exc:
@@ -228,7 +233,7 @@ class GPUMemoryProfiler:
                 memory_allocated=0,
                 memory_freed=0,
                 tensors_created=0,
-                tensors_deleted=0
+                tensors_deleted=0,
             )
 
             self.results.append(profile_result)
@@ -243,20 +248,23 @@ class GPUMemoryProfiler:
         # Get peak memory usage
         memory_stats = torch.cuda.memory_stats(self.device)
         peak_allocated = memory_stats.get(
-            'allocated_bytes.all.peak', memory_after.allocated_memory)
+            "allocated_bytes.all.peak", memory_after.allocated_memory
+        )
         memory_peak = MemorySnapshot(
             timestamp=end_time,
             allocated_memory=peak_allocated,
             reserved_memory=memory_stats.get(
-                'reserved_bytes.all.peak', memory_after.reserved_memory),
+                "reserved_bytes.all.peak", memory_after.reserved_memory
+            ),
             max_memory_allocated=torch.cuda.max_memory_allocated(self.device),
             max_memory_reserved=torch.cuda.max_memory_reserved(self.device),
             active_memory=memory_stats.get(
-                'active_bytes.all.peak', memory_after.active_memory),
+                "active_bytes.all.peak", memory_after.active_memory
+            ),
             inactive_memory=memory_after.inactive_memory,
             cpu_memory=memory_after.cpu_memory,
             device_id=self.device.index,
-            operation=f"peak_{function_name}"
+            operation=f"peak_{function_name}",
         )
 
         # Track tensor changes
@@ -275,11 +283,13 @@ class GPUMemoryProfiler:
             memory_after=memory_after,
             memory_peak=memory_peak,
             memory_allocated=max(
-                0, memory_after.allocated_memory - memory_before.allocated_memory),
-            memory_freed=max(0, memory_before.allocated_memory -
-                             memory_after.allocated_memory),
+                0, memory_after.allocated_memory - memory_before.allocated_memory
+            ),
+            memory_freed=max(
+                0, memory_before.allocated_memory - memory_after.allocated_memory
+            ),
             tensors_created=tensors_created,
-            tensors_deleted=tensors_deleted
+            tensors_deleted=tensors_deleted,
         )
 
         # Store results
@@ -317,22 +327,23 @@ class GPUMemoryProfiler:
             # Get peak memory
             memory_stats = torch.cuda.memory_stats(self.device)
             peak_allocated = memory_stats.get(
-                'allocated_bytes.all.peak', memory_after.allocated_memory)
+                "allocated_bytes.all.peak", memory_after.allocated_memory
+            )
             memory_peak = MemorySnapshot(
                 timestamp=end_time,
                 allocated_memory=peak_allocated,
                 reserved_memory=memory_stats.get(
-                    'reserved_bytes.all.peak', memory_after.reserved_memory),
-                max_memory_allocated=torch.cuda.max_memory_allocated(
-                    self.device),
-                max_memory_reserved=torch.cuda.max_memory_reserved(
-                    self.device),
+                    "reserved_bytes.all.peak", memory_after.reserved_memory
+                ),
+                max_memory_allocated=torch.cuda.max_memory_allocated(self.device),
+                max_memory_reserved=torch.cuda.max_memory_reserved(self.device),
                 active_memory=memory_stats.get(
-                    'active_bytes.all.peak', memory_after.active_memory),
+                    "active_bytes.all.peak", memory_after.active_memory
+                ),
                 inactive_memory=memory_after.inactive_memory,
                 cpu_memory=memory_after.cpu_memory,
                 device_id=self.device.index,
-                operation=f"peak_{name}"
+                operation=f"peak_{name}",
             )
 
             # Track tensors
@@ -350,11 +361,13 @@ class GPUMemoryProfiler:
                 memory_after=memory_after,
                 memory_peak=memory_peak,
                 memory_allocated=max(
-                    0, memory_after.allocated_memory - memory_before.allocated_memory),
+                    0, memory_after.allocated_memory - memory_before.allocated_memory
+                ),
                 memory_freed=max(
-                    0, memory_before.allocated_memory - memory_after.allocated_memory),
+                    0, memory_before.allocated_memory - memory_after.allocated_memory
+                ),
                 tensors_created=tensors_created,
-                tensors_deleted=tensors_deleted
+                tensors_deleted=tensors_deleted,
             )
 
             self.results.append(profile_result)
@@ -407,32 +420,34 @@ class GPUMemoryProfiler:
         function_summaries = {}
         for func_name, results in self.function_stats.items():
             function_summaries[func_name] = {
-                'call_count': len(results),
-                'total_time': sum(r.execution_time for r in results),
-                'avg_time': sum(r.execution_time for r in results) / len(results),
-                'total_memory_allocated': sum(r.memory_allocated for r in results),
-                'avg_memory_allocated': sum(r.memory_allocated for r in results) / len(results),
-                'peak_memory': max(r.peak_memory_usage() for r in results),
+                "call_count": len(results),
+                "total_time": sum(r.execution_time for r in results),
+                "avg_time": sum(r.execution_time for r in results) / len(results),
+                "total_memory_allocated": sum(r.memory_allocated for r in results),
+                "avg_memory_allocated": sum(r.memory_allocated for r in results)
+                / len(results),
+                "peak_memory": max(r.peak_memory_usage() for r in results),
             }
 
         # Current memory state
         current_snapshot = self._take_snapshot("current")
 
         return {
-            'device': str(self.device),
-            'total_functions_profiled': total_functions,
-            'total_function_calls': total_calls,
-            'total_execution_time': total_time,
-            'total_memory_allocated': total_memory_allocated,
-            'total_memory_freed': total_memory_freed,
-            'net_memory_change': total_memory_allocated - total_memory_freed,
-            'peak_memory_usage': peak_memory,
-            'current_memory_usage': current_snapshot.allocated_memory,
-            'baseline_memory_usage': self._baseline_snapshot.allocated_memory,
-            'memory_change_from_baseline': current_snapshot.allocated_memory - self._baseline_snapshot.allocated_memory,
-            'function_summaries': function_summaries,
-            'monitoring_active': self._monitoring,
-            'snapshots_collected': len(self.snapshots)
+            "device": str(self.device),
+            "total_functions_profiled": total_functions,
+            "total_function_calls": total_calls,
+            "total_execution_time": total_time,
+            "total_memory_allocated": total_memory_allocated,
+            "total_memory_freed": total_memory_freed,
+            "net_memory_change": total_memory_allocated - total_memory_freed,
+            "peak_memory_usage": peak_memory,
+            "current_memory_usage": current_snapshot.allocated_memory,
+            "baseline_memory_usage": self._baseline_snapshot.allocated_memory,
+            "memory_change_from_baseline": current_snapshot.allocated_memory
+            - self._baseline_snapshot.allocated_memory,
+            "function_summaries": function_summaries,
+            "monitoring_active": self._monitoring,
+            "snapshots_collected": len(self.snapshots),
         }
 
     def clear_results(self) -> None:

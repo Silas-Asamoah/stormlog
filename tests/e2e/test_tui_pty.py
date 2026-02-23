@@ -4,8 +4,7 @@ import shutil
 import pytest
 
 pytest.importorskip("pexpect")
-import pexpect
-
+import pexpect  # type: ignore[import-untyped, unused-ignore]
 
 pytestmark = [
     pytest.mark.tui_pty,

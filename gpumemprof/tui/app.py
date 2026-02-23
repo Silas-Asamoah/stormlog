@@ -21,33 +21,29 @@ from textual.widgets import (
     Footer,
     Header,
     Input,
+    Label,
     LoadingIndicator,
     Markdown,
     RichLog,
     Rule,
-    TabPane,
     TabbedContent,
-    Label,
+    TabPane,
 )
 
-from .monitor import TrackerEventView, TrackerSession, TrackerUnavailableError
+from gpumemprof.utils import format_bytes, get_gpu_info, get_system_info
+from tfmemprof.utils import get_gpu_info as get_tf_gpu_info
+from tfmemprof.utils import get_system_info as get_tf_system_info
+
+from . import builders as tui_builders
 from .commands import CLICommandRunner
+from .monitor import TrackerEventView, TrackerSession, TrackerUnavailableError
 from .profiles import (
     clear_pytorch_profiles,
     clear_tensorflow_profiles,
     fetch_pytorch_profiles,
     fetch_tensorflow_profiles,
 )
-from . import builders as tui_builders
 from .styles import TUI_APP_CSS
-from .workloads import (
-    format_cpu_summary,
-    format_pytorch_summary,
-    format_tensorflow_results,
-    run_cpu_sample_workload,
-    run_pytorch_sample_workload,
-    run_tensorflow_sample_workload,
-)
 from .widgets import (
     AlertHistoryTable,
     AsciiWelcome,
@@ -57,12 +53,18 @@ from .widgets import (
     ProfileResultsTable,
     TimelineCanvas,
 )
-from gpumemprof.utils import get_system_info, get_gpu_info, format_bytes
-from tfmemprof.utils import get_system_info as get_tf_system_info
-from tfmemprof.utils import get_gpu_info as get_tf_gpu_info
+from .workloads import (
+    format_cpu_summary,
+    format_pytorch_summary,
+    format_tensorflow_results,
+    run_cpu_sample_workload,
+    run_pytorch_sample_workload,
+    run_tensorflow_sample_workload,
+)
 
 try:
     import torch as _torch
+
     torch: Any = _torch
 except ImportError as e:
     raise ImportError(
@@ -71,6 +73,7 @@ except ImportError as e:
 
 try:
     import tensorflow as _tf
+
     # Suppress TensorFlow INFO and WARNING messages
     _tf.get_logger().setLevel("ERROR")
     # Also suppress oneDNN warnings via environment
@@ -81,12 +84,14 @@ except ImportError:
 
 try:
     from pyfiglet import Figlet as _Figlet
+
     Figlet: Optional[Any] = _Figlet
 except ImportError:
     Figlet = None
 
 try:
     from gpumemprof import GPUMemoryProfiler as _GPUMemoryProfiler
+
     GPUMemoryProfiler: Optional[Any] = _GPUMemoryProfiler
 except ImportError as e:
     raise ImportError(
@@ -96,6 +101,7 @@ except ImportError as e:
 
 try:
     from gpumemprof.cpu_profiler import CPUMemoryProfiler as _CPUMemoryProfiler
+
     CPUMemoryProfiler: Optional[Any] = _CPUMemoryProfiler
 except ImportError as e:
     raise ImportError(
@@ -105,6 +111,7 @@ except ImportError as e:
 
 try:
     from tfmemprof.profiler import TFMemoryProfiler as _TFMemoryProfiler
+
     TFMemoryProfiler: Optional[Any] = _TFMemoryProfiler
 except ImportError:
     TFMemoryProfiler = None
@@ -231,11 +238,15 @@ class GPUMemoryProfilerTUI(App):
         self.watchdog_button = Button(
             "Auto Cleanup: OFF", id="btn-toggle-watchdog", variant="warning"
         )
-        self.timeline_stats_table = KeyValueTable(zebra_stripes=True, id="timeline-stats")
+        self.timeline_stats_table = KeyValueTable(
+            zebra_stripes=True, id="timeline-stats"
+        )
         self.timeline_canvas = TimelineCanvas(id="timeline-canvas")
         self.visual_log = RichLog(highlight=True, markup=True, id="visual-log")
         self.pytorch_profile_table = ProfileResultsTable(id="pytorch-profile-table")
-        self.tensorflow_profile_table = ProfileResultsTable(id="tensorflow-profile-table")
+        self.tensorflow_profile_table = ProfileResultsTable(
+            id="tensorflow-profile-table"
+        )
         self.alert_history_table = AlertHistoryTable(id="monitor-alerts-table")
         self.warning_input = Input(value="80", placeholder="80", id="input-warning")
         self.critical_input = Input(value="95", placeholder="95", id="input-critical")
@@ -304,7 +315,11 @@ class GPUMemoryProfilerTUI(App):
                             variant="warning",
                         ),
                         self.watchdog_button,
-                        Button("Apply Thresholds", id="btn-apply-thresholds", variant="primary"),
+                        Button(
+                            "Apply Thresholds",
+                            id="btn-apply-thresholds",
+                            variant="primary",
+                        ),
                         id="monitor-controls-row1",
                     ),
                     Horizontal(
@@ -380,7 +395,9 @@ class GPUMemoryProfilerTUI(App):
                     self.cli_panel,
                     Rule(),
                     Horizontal(
-                        Button("gpumemprof info", id="btn-log-system", variant="primary"),
+                        Button(
+                            "gpumemprof info", id="btn-log-system", variant="primary"
+                        ),
                         Button(
                             "gpumemprof monitor",
                             id="btn-log-pytorch",
@@ -399,16 +416,26 @@ class GPUMemoryProfilerTUI(App):
                         id="cli-buttons-row1",
                     ),
                     Horizontal(
-                        Button("PyTorch Sample", id="btn-run-pytorch", variant="primary"),
+                        Button(
+                            "PyTorch Sample", id="btn-run-pytorch", variant="primary"
+                        ),
                         Button("TensorFlow Sample", id="btn-run-tf", variant="primary"),
-                        Button("OOM Scenario", id="btn-run-oom-scenario", variant="warning"),
-                        Button("Capability Matrix", id="btn-run-cap-matrix", variant="success"),
+                        Button(
+                            "OOM Scenario", id="btn-run-oom-scenario", variant="warning"
+                        ),
+                        Button(
+                            "Capability Matrix",
+                            id="btn-run-cap-matrix",
+                            variant="success",
+                        ),
                         id="cli-buttons-row2",
                     ),
                     Horizontal(
                         self.cli_command_input,
                         Button("Run Command", id="btn-cli-run", variant="primary"),
-                        Button("Cancel Command", id="btn-cli-cancel", variant="warning"),
+                        Button(
+                            "Cancel Command", id="btn-cli-cancel", variant="warning"
+                        ),
                         id="cli-runner",
                     ),
                     self.loader,
@@ -427,10 +454,16 @@ class GPUMemoryProfilerTUI(App):
         self.set_focus(self.command_log)
 
     def action_log_gpumemprof_help(self) -> None:
-        self.log_message("gpumemprof info", "Run: gpumemprof info\nRun: gpumemprof monitor --duration 30")
+        self.log_message(
+            "gpumemprof info",
+            "Run: gpumemprof info\nRun: gpumemprof monitor --duration 30",
+        )
 
     def action_log_tfmemprof_help(self) -> None:
-        self.log_message("tfmemprof info", "Run: tfmemprof info\nRun: tfmemprof monitor --duration 30")
+        self.log_message(
+            "tfmemprof info",
+            "Run: tfmemprof info\nRun: tfmemprof monitor --duration 30",
+        )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
@@ -439,11 +472,11 @@ class GPUMemoryProfilerTUI(App):
         elif button_id == "btn-log-system":
             await self.run_cli_command("gpumemprof info")
         elif button_id == "btn-log-pytorch":
-            await self.run_cli_command("gpumemprof monitor --duration 30 --interval 0.5")
-        elif button_id == "btn-log-tensorflow":
             await self.run_cli_command(
-                "tfmemprof monitor --duration 30 --interval 0.5"
+                "gpumemprof monitor --duration 30 --interval 0.5"
             )
+        elif button_id == "btn-log-tensorflow":
+            await self.run_cli_command("tfmemprof monitor --duration 30 --interval 0.5")
         elif button_id == "btn-log-diagnose":
             await self.run_cli_command(
                 "gpumemprof diagnose --duration 0 --output artifacts/tui_diagnose"
@@ -499,11 +532,15 @@ class GPUMemoryProfilerTUI(App):
 
     async def run_pytorch_sample(self) -> None:
         if GPUMemoryProfiler is None or torch is None:
-            self.log_message("PyTorch Sample", "PyTorch profiler is unavailable in this environment.")
+            self.log_message(
+                "PyTorch Sample", "PyTorch profiler is unavailable in this environment."
+            )
             return
         if not torch.cuda.is_available():
             if CPUMemoryProfiler is None:
-                self.log_message("PyTorch Sample", "CPU profiler is unavailable; install psutil.")
+                self.log_message(
+                    "PyTorch Sample", "CPU profiler is unavailable; install psutil."
+                )
                 return
             await self._execute_task(
                 "PyTorch Sample (CPU)",
@@ -523,7 +560,7 @@ class GPUMemoryProfilerTUI(App):
             self.log_message(
                 "TensorFlow Sample",
                 "TensorFlow profiler is unavailable. Install tensorflow and tfmemprof: "
-                "pip install tensorflow tfmemprof"
+                "pip install tensorflow tfmemprof",
             )
             return
         await self._execute_task(
@@ -571,7 +608,9 @@ class GPUMemoryProfilerTUI(App):
     def force_cleanup(self, aggressive: bool = False) -> None:
         session = self.tracker_session
         if not session or not session.is_active:
-            self.log_monitor_message("Watchdog", "Start tracking before requesting cleanup.")
+            self.log_monitor_message(
+                "Watchdog", "Start tracking before requesting cleanup."
+            )
             return
         if not session.force_cleanup(aggressive=aggressive):
             self.log_monitor_message(
@@ -600,7 +639,9 @@ class GPUMemoryProfilerTUI(App):
         self._set_loader(True)
         try:
             exit_code = await self.cli_runner.run(command, self._handle_cli_output)
-            self.log_message("CLI Runner", f"Command finished with exit code {exit_code}.")
+            self.log_message(
+                "CLI Runner", f"Command finished with exit code {exit_code}."
+            )
         except Exception as exc:
             self.log_message("CLI Runner", f"Error running command: {exc}")
         finally:
@@ -659,8 +700,12 @@ class GPUMemoryProfilerTUI(App):
             )
             return
 
-        warning_text = (self.warning_input.value or self.warning_input.placeholder or "").strip()
-        critical_text = (self.critical_input.value or self.critical_input.placeholder or "").strip()
+        warning_text = (
+            self.warning_input.value or self.warning_input.placeholder or ""
+        ).strip()
+        critical_text = (
+            self.critical_input.value or self.critical_input.placeholder or ""
+        ).strip()
 
         try:
             warning = float(warning_text)
@@ -685,24 +730,40 @@ class GPUMemoryProfilerTUI(App):
     async def refresh_pytorch_profiles(self) -> None:
         rows = await asyncio.to_thread(fetch_pytorch_profiles)
         self.pytorch_profile_table.update_rows(rows)
-        msg = "Loaded PyTorch profile results." if rows else "No PyTorch profiles captured yet."
+        msg = (
+            "Loaded PyTorch profile results."
+            if rows
+            else "No PyTorch profiles captured yet."
+        )
         self.log_message("PyTorch Profiles", msg)
 
     async def clear_pytorch_profiles(self) -> None:
         success = await asyncio.to_thread(clear_pytorch_profiles)
-        message = "Cleared PyTorch profile results." if success else "No PyTorch profiles to clear."
+        message = (
+            "Cleared PyTorch profile results."
+            if success
+            else "No PyTorch profiles to clear."
+        )
         self.log_message("PyTorch Profiles", message)
         await self.refresh_pytorch_profiles()
 
     async def refresh_tensorflow_profiles(self) -> None:
         rows = await asyncio.to_thread(fetch_tensorflow_profiles)
         self.tensorflow_profile_table.update_rows(rows)
-        msg = "Loaded TensorFlow profile summaries." if rows else "No TensorFlow profiles captured yet."
+        msg = (
+            "Loaded TensorFlow profile summaries."
+            if rows
+            else "No TensorFlow profiles captured yet."
+        )
         self.log_message("TensorFlow Profiles", msg)
 
     async def clear_tensorflow_profiles(self) -> None:
         success = await asyncio.to_thread(clear_tensorflow_profiles)
-        message = "Cleared TensorFlow profiles." if success else "No TensorFlow profiles to clear."
+        message = (
+            "Cleared TensorFlow profiles."
+            if success
+            else "No TensorFlow profiles to clear."
+        )
         self.log_message("TensorFlow Profiles", message)
         await self.refresh_tensorflow_profiles()
 
@@ -939,7 +1000,9 @@ class GPUMemoryProfilerTUI(App):
             self._clear_timeline_stats_table()
             return
 
-        duration = max(0.0, timestamps[-1] - timestamps[0]) if len(timestamps) > 1 else 0.0
+        duration = (
+            max(0.0, timestamps[-1] - timestamps[0]) if len(timestamps) > 1 else 0.0
+        )
         alloc_max = max(allocated) if allocated else 0
         reserv_max = max(reserved) if reserved else 0
         alloc_latest = allocated[-1] if allocated else 0
