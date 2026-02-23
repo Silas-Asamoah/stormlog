@@ -11,12 +11,12 @@ import numpy as np
 try:
     import torch
 except ImportError:
-    torch = None  # type: ignore[assignment]
+    torch = None  # type: ignore[assignment, unused-ignore]
 
 try:
     import tensorflow as tf
 except ImportError:
-    tf = None  # type: ignore[assignment]
+    tf = None
 
 
 def seed_everything(seed: int = 42) -> None:
@@ -88,7 +88,7 @@ def get_tf_device() -> str:
 
     gpus = tf.config.list_physical_devices("GPU")
     if gpus:
-        return gpus[0].name
+        return str(gpus[0].name)
     return "/device:CPU:0"
 
 

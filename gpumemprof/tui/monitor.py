@@ -11,11 +11,10 @@ from ..utils import format_bytes
 logger = logging.getLogger(__name__)
 
 try:
-    from gpumemprof.tracker import (
-        MemoryTracker as _MemoryTracker,
-        MemoryWatchdog as _MemoryWatchdog,
-        TrackingEvent as _TrackingEvent,
-    )
+    from gpumemprof.tracker import MemoryTracker as _MemoryTracker
+    from gpumemprof.tracker import MemoryWatchdog as _MemoryWatchdog
+    from gpumemprof.tracker import TrackingEvent as _TrackingEvent
+
     MemoryTracker: Any = _MemoryTracker
     MemoryWatchdog: Any = _MemoryWatchdog
     TrackingEvent: Any = _TrackingEvent
@@ -27,6 +26,7 @@ except ImportError as e:
 
 try:
     from gpumemprof.cpu_profiler import CPUMemoryTracker as _CPUMemoryTracker
+
     CPUMemoryTracker: Any = _CPUMemoryTracker
 except ImportError as e:
     raise ImportError(
@@ -36,6 +36,7 @@ except ImportError as e:
 
 try:
     import torch as _torch
+
     torch: Any = _torch
 except ImportError as e:
     raise ImportError(
@@ -157,7 +158,9 @@ class TrackerSession:
 
         self._last_seen_ts = raw_events[-1].timestamp
         recent_events = (
-            raw_events[-self.max_events_per_poll :] if self.max_events_per_poll else raw_events
+            raw_events[-self.max_events_per_poll :]
+            if self.max_events_per_poll
+            else raw_events
         )
 
         views: List[TrackerEventView] = []
@@ -184,7 +187,9 @@ class TrackerSession:
         """Return aggregated timeline data from the tracker."""
         if not self._tracker:
             return {}
-        return cast(Dict[str, Any], self._tracker.get_memory_timeline(interval=interval))
+        return cast(
+            Dict[str, Any], self._tracker.get_memory_timeline(interval=interval)
+        )
 
     def get_device_label(self) -> Optional[str]:
         """Return the CUDA device label, if tracking."""
@@ -229,16 +234,28 @@ class TrackerSession:
         return True
 
     def get_thresholds(self) -> Dict[str, float]:
-        if self.backend == "gpu" and self._tracker and hasattr(self._tracker, "thresholds"):
+        if (
+            self.backend == "gpu"
+            and self._tracker
+            and hasattr(self._tracker, "thresholds")
+        ):
             thresholds = self._tracker.thresholds
             return {
-                "memory_warning_percent": thresholds.get("memory_warning_percent", 80.0),
-                "memory_critical_percent": thresholds.get("memory_critical_percent", 95.0),
+                "memory_warning_percent": thresholds.get(
+                    "memory_warning_percent", 80.0
+                ),
+                "memory_critical_percent": thresholds.get(
+                    "memory_critical_percent", 95.0
+                ),
             }
         return self._cpu_thresholds.copy()
 
     def set_thresholds(self, warning: float, critical: float) -> None:
-        if self.backend == "gpu" and self._tracker and hasattr(self._tracker, "set_threshold"):
+        if (
+            self.backend == "gpu"
+            and self._tracker
+            and hasattr(self._tracker, "set_threshold")
+        ):
             self._tracker.set_threshold("memory_warning_percent", warning)
             self._tracker.set_threshold("memory_critical_percent", critical)
         else:

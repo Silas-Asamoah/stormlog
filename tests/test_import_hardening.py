@@ -3,7 +3,7 @@ import sys
 import textwrap
 
 
-def test_imports_are_hardened_when_torch_is_missing():
+def test_imports_are_hardened_when_torch_is_missing() -> None:
     code = textwrap.dedent(
         """
         import builtins

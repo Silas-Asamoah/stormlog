@@ -9,9 +9,9 @@ try:
     import torch.nn as nn
     import torch.nn.functional as F
 except ImportError:
-    torch = None  # type: ignore[assignment]
-    nn = None  # type: ignore[assignment]
-    F = None  # type: ignore[assignment]
+    torch = None  # type: ignore[assignment, unused-ignore]
+    nn = None  # type: ignore[assignment, unused-ignore]
+    F = None  # type: ignore[assignment, unused-ignore]
 
 from .device import get_torch_device, seed_everything
 
@@ -32,12 +32,12 @@ def build_simple_torch_model(
     layers.append(nn.Linear(hidden_size, num_classes))
 
     class SimpleModel(nn.Module):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.layers = nn.ModuleList(layers)
             self.dropout = nn.Dropout(0.1)
 
-        def forward(self, x):
+        def forward(self, x: object) -> object:
             for layer in self.layers[:-1]:
                 x = self.dropout(F.relu(layer(x)))
             return self.layers[-1](x)

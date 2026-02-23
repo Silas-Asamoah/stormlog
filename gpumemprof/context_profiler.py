@@ -1,20 +1,21 @@
 """Context profiler for easy function and code block profiling."""
 
 import functools
-from typing import Optional, Union, Callable, Any, List, Dict, Iterator, TypeVar, cast
 from contextlib import contextmanager
+from typing import Any, Callable, Dict, Iterator, List, Optional, TypeVar, Union, cast
 
 import torch
 
 from .profiler import GPUMemoryProfiler, ProfileResult
-
 
 # Global profiler instance for convenience
 _global_profiler: Optional[GPUMemoryProfiler] = None
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def get_global_profiler(device: Optional[Union[str, int, torch.device]] = None) -> GPUMemoryProfiler:
+def get_global_profiler(
+    device: Optional[Union[str, int, torch.device]] = None,
+) -> GPUMemoryProfiler:
     """Get or create the global profiler instance."""
     global _global_profiler
     if _global_profiler is None:
@@ -28,10 +29,13 @@ def set_global_profiler(profiler: GPUMemoryProfiler) -> None:
     _global_profiler = profiler
 
 
-def profile_function(func: Optional[F] = None, *,
-                     name: Optional[str] = None,
-                     device: Optional[Union[str, int, torch.device]] = None,
-                     profiler: Optional[GPUMemoryProfiler] = None) -> Union[Callable[[F], F], F]:
+def profile_function(
+    func: Optional[F] = None,
+    *,
+    name: Optional[str] = None,
+    device: Optional[Union[str, int, torch.device]] = None,
+    profiler: Optional[GPUMemoryProfiler] = None,
+) -> Union[Callable[[F], F], F]:
     """
     Decorator to profile a function's GPU memory usage.
 
@@ -46,8 +50,11 @@ def profile_function(func: Optional[F] = None, *,
     Returns:
         Decorated function or ProfileResult if called directly
     """
+
     def decorator(f: F) -> F:
-        resolved_name = name if name is not None else getattr(f, '__name__', 'unknown_function')
+        resolved_name = (
+            name if name is not None else getattr(f, "__name__", "unknown_function")
+        )
         function_name = str(resolved_name)
 
         @functools.wraps(f)
@@ -86,9 +93,11 @@ def profile_function(func: Optional[F] = None, *,
 
 
 @contextmanager
-def profile_context(name: str = "context",
-                    device: Optional[Union[str, int, torch.device]] = None,
-                    profiler: Optional[GPUMemoryProfiler] = None) -> Iterator[GPUMemoryProfiler]:
+def profile_context(
+    name: str = "context",
+    device: Optional[Union[str, int, torch.device]] = None,
+    profiler: Optional[GPUMemoryProfiler] = None,
+) -> Iterator[GPUMemoryProfiler]:
     """
     Context manager for profiling a block of code.
 
@@ -121,10 +130,13 @@ class ProfiledModule(torch.nn.Module):
         output = model(input)  # Automatically profiled
     """
 
-    def __init__(self, module: torch.nn.Module,
-                 name: Optional[str] = None,
-                 device: Optional[Union[str, int, torch.device]] = None,
-                 profiler: Optional[GPUMemoryProfiler] = None) -> None:
+    def __init__(
+        self,
+        module: torch.nn.Module,
+        name: Optional[str] = None,
+        device: Optional[Union[str, int, torch.device]] = None,
+        profiler: Optional[GPUMemoryProfiler] = None,
+    ) -> None:
         super().__init__()
         self.module = module
         self.profile_name = name or module.__class__.__name__
@@ -164,7 +176,9 @@ class MemoryProfiler:
         self.profiler.stop_monitoring()
         self._monitoring = False
 
-    def profile(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> ProfileResult:
+    def profile(
+        self, func: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> ProfileResult:
         """Profile a function call."""
         return self.profiler.profile_function(func, *args, **kwargs)
 
@@ -174,7 +188,9 @@ class MemoryProfiler:
         with self.profiler.profile_context(name):
             yield
 
-    def wrap_module(self, module: torch.nn.Module, name: Optional[str] = None) -> ProfiledModule:
+    def wrap_module(
+        self, module: torch.nn.Module, name: Optional[str] = None
+    ) -> ProfiledModule:
         """Wrap a PyTorch module for automatic profiling."""
         return ProfiledModule(module, name=name, profiler=self.profiler)
 
@@ -189,22 +205,24 @@ class MemoryProfiler:
     def save_results(self, filename: str) -> None:
         """Save profiling results to file."""
         import json
+
         summary = self.get_summary()
 
         # Convert results to JSON-serializable format
         json_data = {
             "summary": summary,
             "results": [result.to_dict() for result in self.profiler.results],
-            "snapshots": [snapshot.to_dict() for snapshot in self.profiler.snapshots]
+            "snapshots": [snapshot.to_dict() for snapshot in self.profiler.snapshots],
         }
 
-        with open(filename, 'w') as f:
+        with open(filename, "w") as f:
             json.dump(json_data, f, indent=2, default=str)
 
     def load_results(self, filename: str) -> Any:
         """Load profiling results from file."""
         import json
-        with open(filename, 'r') as f:
+
+        with open(filename, "r") as f:
             data = json.load(f)
         return data
 
@@ -219,7 +237,9 @@ class MemoryProfiler:
 
 
 # Convenience functions for global profiler
-def start_monitoring(interval: float = 0.1, device: Optional[Union[str, int, torch.device]] = None) -> None:
+def start_monitoring(
+    interval: float = 0.1, device: Optional[Union[str, int, torch.device]] = None
+) -> None:
     """Start global memory monitoring."""
     profiler = get_global_profiler(device)
     profiler.start_monitoring(interval)
@@ -255,10 +275,12 @@ def get_profile_results(limit: Optional[int] = None) -> List[ProfileResult]:
     return results
 
 
-def profile_model_training(model: torch.nn.Module,
-                           train_loader: Any,
-                           epochs: int = 1,
-                           device: Optional[Union[str, int, torch.device]] = None) -> Dict[str, Any]:
+def profile_model_training(
+    model: torch.nn.Module,
+    train_loader: Any,
+    epochs: int = 1,
+    device: Optional[Union[str, int, torch.device]] = None,
+) -> Dict[str, Any]:
     """
     Profile an entire training loop.
 
@@ -276,15 +298,15 @@ def profile_model_training(model: torch.nn.Module,
     # Profile training setup
     with profiler.profile_context("training_setup"):
         model.train()
-        if hasattr(train_loader, '__len__'):
-            total_batches = len(train_loader) * epochs
+        if hasattr(train_loader, "__len__"):
+            _total_batches = len(train_loader) * epochs
         else:
-            total_batches = epochs * 100  # Estimate
+            _total_batches = epochs * 100  # Estimate
 
     results: Dict[str, Any] = {
         "total_epochs": epochs,
         "batch_results": [],
-        "epoch_summaries": []
+        "epoch_summaries": [],
     }
 
     for epoch in range(epochs):
@@ -311,8 +333,13 @@ def profile_model_training(model: torch.nn.Module,
             epoch_summary = {
                 "epoch": epoch,
                 "batches_profiled": len(epoch_results),
-                "total_memory_allocated": sum(r.get("memory_allocated", 0) for r in epoch_results),
-                "average_batch_time": sum(r.get("execution_time", 0) for r in epoch_results) / max(len(epoch_results), 1)
+                "total_memory_allocated": sum(
+                    r.get("memory_allocated", 0) for r in epoch_results
+                ),
+                "average_batch_time": sum(
+                    r.get("execution_time", 0) for r in epoch_results
+                )
+                / max(len(epoch_results), 1),
             }
             results["epoch_summaries"].append(epoch_summary)
 

@@ -5,11 +5,17 @@ from datetime import datetime as real_datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import tfmemprof.cli as tfmemprof_cli
 import tfmemprof.diagnose as diagnose_module
 
 
-def _patch_tfmemprof_diagnose_env(monkeypatch, gpu_available=False, risk_detected=False):
+def _patch_tfmemprof_diagnose_env(
+    monkeypatch: pytest.MonkeyPatch,
+    gpu_available: bool = False,
+    risk_detected: bool = False,
+) -> None:
     """Patch diagnose module's env/summary dependencies for predictable output."""
     monkeypatch.setattr(
         diagnose_module,
@@ -61,10 +67,12 @@ def _patch_tfmemprof_diagnose_env(monkeypatch, gpu_available=False, risk_detecte
     )
 
 
-def _patch_tfmemprof_timeline_capture(monkeypatch):
+def _patch_tfmemprof_timeline_capture(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch run_timeline_capture to return fixed data without starting a tracker."""
 
-    def _fake_capture(device, duration_seconds, interval):
+    def _fake_capture(
+        device: object, duration_seconds: float, interval: float
+    ) -> dict[str, list[object]]:
         if duration_seconds <= 0:
             return {"timestamps": [], "allocated": [], "reserved": []}
         return {
@@ -76,10 +84,12 @@ def _patch_tfmemprof_timeline_capture(monkeypatch):
     monkeypatch.setattr(diagnose_module, "run_timeline_capture", _fake_capture)
 
 
-def _patch_tfmemprof_build_summary(monkeypatch, risk_detected=False):
+def _patch_tfmemprof_build_summary(
+    monkeypatch: pytest.MonkeyPatch, risk_detected: bool = False
+) -> None:
     """Patch build_diagnostic_summary to return controlled (summary, risk_detected)."""
 
-    def _fake_build(device):
+    def _fake_build(device: object) -> tuple[dict[str, object], bool]:
         summary = {
             "backend": "cuda",
             "allocated_bytes": 0,
@@ -101,7 +111,9 @@ def _patch_tfmemprof_build_summary(monkeypatch, risk_detected=False):
     monkeypatch.setattr(diagnose_module, "build_diagnostic_summary", _fake_build)
 
 
-def test_tfmemprof_diagnose_produces_artifact_bundle(monkeypatch, tmp_path):
+def test_tfmemprof_diagnose_produces_artifact_bundle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """tfmemprof diagnose with duration=0 produces directory with required files."""
     _patch_tfmemprof_diagnose_env(monkeypatch, gpu_available=False)
     _patch_tfmemprof_timeline_capture(monkeypatch)
@@ -113,7 +125,7 @@ def test_tfmemprof_diagnose_produces_artifact_bundle(monkeypatch, tmp_path):
         duration=0,
         interval=0.5,
     )
-    exit_code = tfmemprof_cli.cmd_diagnose(args)
+    exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     assert exit_code in (0, 2)
     dirs = list(tmp_path.iterdir())
@@ -142,7 +154,9 @@ def test_tfmemprof_diagnose_produces_artifact_bundle(monkeypatch, tmp_path):
     assert "suggestions" in summary
 
 
-def test_tfmemprof_diagnose_invalid_duration_returns_one(capsys):
+def test_tfmemprof_diagnose_invalid_duration_returns_one(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """Invalid --duration < 0 returns 1."""
     args = SimpleNamespace(
         output=None,
@@ -150,13 +164,15 @@ def test_tfmemprof_diagnose_invalid_duration_returns_one(capsys):
         duration=-1,
         interval=0.5,
     )
-    exit_code = tfmemprof_cli.cmd_diagnose(args)
+    exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     assert exit_code == 1
     err = capsys.readouterr().err
     assert "duration" in err.lower()
 
 
-def test_tfmemprof_diagnose_invalid_interval_returns_one(capsys):
+def test_tfmemprof_diagnose_invalid_interval_returns_one(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """Invalid --interval <= 0 returns 1."""
     args = SimpleNamespace(
         output=None,
@@ -164,13 +180,15 @@ def test_tfmemprof_diagnose_invalid_interval_returns_one(capsys):
         duration=0,
         interval=0,
     )
-    exit_code = tfmemprof_cli.cmd_diagnose(args)
+    exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     assert exit_code == 1
     err = capsys.readouterr().err
     assert "interval" in err.lower()
 
 
-def test_tfmemprof_diagnose_exit_code_zero_when_no_risk(monkeypatch, tmp_path):
+def test_tfmemprof_diagnose_exit_code_zero_when_no_risk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When risk is false, cmd_diagnose returns 0."""
     _patch_tfmemprof_diagnose_env(monkeypatch, gpu_available=True, risk_detected=False)
     _patch_tfmemprof_timeline_capture(monkeypatch)
@@ -182,11 +200,13 @@ def test_tfmemprof_diagnose_exit_code_zero_when_no_risk(monkeypatch, tmp_path):
         duration=0,
         interval=0.5,
     )
-    exit_code = tfmemprof_cli.cmd_diagnose(args)
+    exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     assert exit_code == 0
 
 
-def test_tfmemprof_diagnose_exit_code_two_when_risk_detected(monkeypatch, tmp_path):
+def test_tfmemprof_diagnose_exit_code_two_when_risk_detected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When risk is detected, returns 2."""
     _patch_tfmemprof_diagnose_env(monkeypatch, gpu_available=True, risk_detected=True)
     _patch_tfmemprof_timeline_capture(monkeypatch)
@@ -198,11 +218,13 @@ def test_tfmemprof_diagnose_exit_code_two_when_risk_detected(monkeypatch, tmp_pa
         duration=0,
         interval=0.5,
     )
-    exit_code = tfmemprof_cli.cmd_diagnose(args)
+    exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     assert exit_code == 2
 
 
-def test_tfmemprof_diagnose_stdout_contains_artifact_and_status(monkeypatch, tmp_path, capsys):
+def test_tfmemprof_diagnose_stdout_contains_artifact_and_status(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Stdout summary contains artifact path and status."""
     _patch_tfmemprof_diagnose_env(monkeypatch, gpu_available=False)
     _patch_tfmemprof_timeline_capture(monkeypatch)
@@ -214,7 +236,7 @@ def test_tfmemprof_diagnose_stdout_contains_artifact_and_status(monkeypatch, tmp
         duration=0,
         interval=0.5,
     )
-    tfmemprof_cli.cmd_diagnose(args)
+    tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     out = capsys.readouterr().out
 
     assert "Artifact:" in out
@@ -223,7 +245,9 @@ def test_tfmemprof_diagnose_stdout_contains_artifact_and_status(monkeypatch, tmp
     assert "OK" in out or "MEMORY_RISK" in out or "FAILED" in out
 
 
-def test_tfmemprof_diagnose_default_output_creates_timestamped_dir(monkeypatch, tmp_path):
+def test_tfmemprof_diagnose_default_output_creates_timestamped_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """With no --output, artifact is created in cwd with timestamped name."""
     _patch_tfmemprof_diagnose_env(monkeypatch, gpu_available=False)
     _patch_tfmemprof_timeline_capture(monkeypatch)
@@ -236,14 +260,16 @@ def test_tfmemprof_diagnose_default_output_creates_timestamped_dir(monkeypatch, 
         duration=0,
         interval=0.5,
     )
-    tfmemprof_cli.cmd_diagnose(args)
+    tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     dirs = [d for d in tmp_path.iterdir() if d.is_dir()]
     assert len(dirs) == 1
     assert dirs[0].name.startswith("tfmemprof-diagnose-")
 
 
-def test_tfmemprof_diagnose_output_existing_dir_creates_timestamped_subdir(monkeypatch, tmp_path):
+def test_tfmemprof_diagnose_output_existing_dir_creates_timestamped_subdir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When --output is an existing directory, create timestamped subdir inside."""
     out_dir = tmp_path / "myout"
     out_dir.mkdir()
@@ -257,7 +283,7 @@ def test_tfmemprof_diagnose_output_existing_dir_creates_timestamped_subdir(monke
         duration=0,
         interval=0.5,
     )
-    tfmemprof_cli.cmd_diagnose(args)
+    tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     subdirs = list(out_dir.iterdir())
     assert len(subdirs) == 1
@@ -265,7 +291,9 @@ def test_tfmemprof_diagnose_output_existing_dir_creates_timestamped_subdir(monke
     assert (subdirs[0] / "manifest.json").exists()
 
 
-def test_tfmemprof_diagnose_invalid_output_returns_one(monkeypatch, tmp_path):
+def test_tfmemprof_diagnose_invalid_output_returns_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When --output is an existing file (cannot create dir), returns 1."""
     existing_file = tmp_path / "existing_file"
     existing_file.write_text("x")
@@ -279,11 +307,13 @@ def test_tfmemprof_diagnose_invalid_output_returns_one(monkeypatch, tmp_path):
         duration=0,
         interval=0.5,
     )
-    exit_code = tfmemprof_cli.cmd_diagnose(args)
+    exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
     assert exit_code == 1
 
 
-def test_tfmemprof_build_summary_without_capacity_does_not_flag_high_utilization(monkeypatch):
+def test_tfmemprof_build_summary_without_capacity_does_not_flag_high_utilization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """When device capacity is unknown, high-utilization risk should remain false."""
     monkeypatch.setattr(
         diagnose_module,
@@ -316,11 +346,14 @@ def test_tfmemprof_build_summary_without_capacity_does_not_flag_high_utilization
     assert risk_detected is False
 
 
-def test_tfmemprof_diagnose_same_second_creates_unique_artifact_dirs(monkeypatch, tmp_path):
+def test_tfmemprof_diagnose_same_second_creates_unique_artifact_dirs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Two runs in same second should not overwrite the same artifact directory."""
+
     class _FixedDateTime:
         @staticmethod
-        def utcnow():
+        def utcnow() -> "real_datetime":
             return real_datetime(2026, 2, 15, 12, 0, 0)
 
     out_dir = tmp_path / "out"
@@ -337,8 +370,8 @@ def test_tfmemprof_diagnose_same_second_creates_unique_artifact_dirs(monkeypatch
         duration=0,
         interval=0.5,
     )
-    code_one = tfmemprof_cli.cmd_diagnose(args)
-    code_two = tfmemprof_cli.cmd_diagnose(args)
+    code_one = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
+    code_two = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     subdirs = sorted([path.name for path in out_dir.iterdir() if path.is_dir()])
     assert code_one in (0, 2)

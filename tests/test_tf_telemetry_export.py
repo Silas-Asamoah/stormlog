@@ -7,12 +7,14 @@ import time
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 import tfmemprof.cli as tf_cli
 import tfmemprof.tracker as tf_tracker
 from gpumemprof.telemetry import validate_telemetry_record
 
 
-def test_tf_tracker_emits_v2_event_records(monkeypatch) -> None:
+def test_tf_tracker_emits_v2_event_records(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tf_tracker, "TF_AVAILABLE", True)
 
     tracker = tf_tracker.MemoryTracker(
@@ -33,7 +35,9 @@ def test_tf_tracker_emits_v2_event_records(monkeypatch) -> None:
     validate_telemetry_record(first)
 
 
-def test_tf_cli_track_output_normalizes_legacy_events(tmp_path: Path, monkeypatch) -> None:
+def test_tf_cli_track_output_normalizes_legacy_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(tf_cli, "TF_AVAILABLE", True)
 
     class _FakeResult:
@@ -42,7 +46,7 @@ def test_tf_cli_track_output_normalizes_legacy_events(tmp_path: Path, monkeypatc
         duration = 1.0
         memory_usage = [2.0]
         timestamps = [1700000000.0]
-        alerts_triggered = []
+        alerts_triggered: list[object] = []
         events = [
             {
                 "timestamp": 1700000000.0,
@@ -53,20 +57,20 @@ def test_tf_cli_track_output_normalizes_legacy_events(tmp_path: Path, monkeypatc
         ]
 
     class _FakeTracker:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: object, **kwargs: object) -> None:
             _ = args
             _ = kwargs
 
-        def add_alert_callback(self, callback):
+        def add_alert_callback(self, callback: object) -> None:
             _ = callback
 
-        def start_tracking(self):
+        def start_tracking(self) -> None:
             return None
 
-        def get_current_memory(self):
+        def get_current_memory(self) -> float:
             return 2.0
 
-        def stop_tracking(self):
+        def stop_tracking(self) -> "_FakeResult":
             return _FakeResult()
 
     def _interrupt(_: float) -> None:

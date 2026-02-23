@@ -29,13 +29,22 @@ _SYMBOL_TO_MODULE = {
     "MemoryTracker": (".tracker", "MemoryTracker"),
     "OOMFlightRecorder": (".oom_flight_recorder", "OOMFlightRecorder"),
     "OOMFlightRecorderConfig": (".oom_flight_recorder", "OOMFlightRecorderConfig"),
-    "OOMExceptionClassification": (".oom_flight_recorder", "OOMExceptionClassification"),
+    "OOMExceptionClassification": (
+        ".oom_flight_recorder",
+        "OOMExceptionClassification",
+    ),
     "classify_oom_exception": (".oom_flight_recorder", "classify_oom_exception"),
     "TelemetryEventV2": (".telemetry", "TelemetryEventV2"),
     "DeviceMemoryCollector": (".device_collectors", "DeviceMemoryCollector"),
     "DeviceMemorySample": (".device_collectors", "DeviceMemorySample"),
-    "build_device_memory_collector": (".device_collectors", "build_device_memory_collector"),
-    "detect_torch_runtime_backend": (".device_collectors", "detect_torch_runtime_backend"),
+    "build_device_memory_collector": (
+        ".device_collectors",
+        "build_device_memory_collector",
+    ),
+    "detect_torch_runtime_backend": (
+        ".device_collectors",
+        "detect_torch_runtime_backend",
+    ),
     "CPUMemoryProfiler": (".cpu_profiler", "CPUMemoryProfiler"),
     "CPUMemoryTracker": (".cpu_profiler", "CPUMemoryTracker"),
     "telemetry_event_from_record": (".telemetry", "telemetry_event_from_record"),
@@ -106,6 +115,7 @@ def __getattr__(name: str) -> Any:
 
 def __dir__() -> list[str]:
     return sorted(list(globals().keys()) + __all__)
+
 
 __all__ = [
     "GPUMemoryProfiler",

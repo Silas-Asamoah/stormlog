@@ -7,7 +7,7 @@ from gpumemprof.tui.workloads import (
 )
 
 
-def test_format_pytorch_summary_formats_negative_delta_in_gb():
+def test_format_pytorch_summary_formats_negative_delta_in_gb() -> None:
     summary = {
         "total_functions_profiled": 1,
         "total_function_calls": 1,
@@ -21,7 +21,7 @@ def test_format_pytorch_summary_formats_negative_delta_in_gb():
     assert "-1073741824" not in formatted
 
 
-def test_format_cpu_summary_formats_negative_delta_in_gb():
+def test_format_cpu_summary_formats_negative_delta_in_gb() -> None:
     summary = {
         "snapshots_collected": 1,
         "peak_memory_usage": 0,
@@ -34,7 +34,7 @@ def test_format_cpu_summary_formats_negative_delta_in_gb():
     assert "-1073741824" not in formatted
 
 
-def test_format_tensorflow_results_handles_missing_attributes():
+def test_format_tensorflow_results_handles_missing_attributes() -> None:
     formatted = format_tensorflow_results(object())
 
     assert formatted == (
@@ -45,7 +45,7 @@ def test_format_tensorflow_results_handles_missing_attributes():
     )
 
 
-def test_format_tensorflow_results_handles_none_values():
+def test_format_tensorflow_results_handles_none_values() -> None:
     results = SimpleNamespace(
         duration=None,
         peak_memory_mb=None,

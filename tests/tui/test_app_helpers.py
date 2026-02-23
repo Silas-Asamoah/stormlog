@@ -32,7 +32,9 @@ def test_build_system_markdown_uses_system_info_fallback_on_error(
     monkeypatch.setattr(appmod, "_safe_get_gpu_info", lambda: {})
     monkeypatch.setattr(appmod, "_safe_get_tf_system_info", lambda: {})
     monkeypatch.setattr(appmod, "_safe_get_tf_gpu_info", lambda: {})
-    monkeypatch.setattr(appmod.tui_builders, "build_system_markdown", _fake_build_system_markdown)
+    monkeypatch.setattr(
+        appmod.tui_builders, "build_system_markdown", _fake_build_system_markdown
+    )
 
     assert appmod._build_system_markdown() == "ok"
     assert captured["system_info"] == {}

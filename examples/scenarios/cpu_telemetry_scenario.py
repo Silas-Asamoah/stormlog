@@ -12,9 +12,10 @@ from examples.common.formatting import print_header, print_kv, print_section
 from gpumemprof.cpu_profiler import CPUMemoryProfiler, CPUMemoryTracker
 from gpumemprof.telemetry import validate_telemetry_record
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts" / "examples" / "scenarios" / "cpu_telemetry"
+DEFAULT_OUTPUT_DIR = (
+    REPO_ROOT / "artifacts" / "examples" / "scenarios" / "cpu_telemetry"
+)
 
 
 def _run_cpu_workload(duration_s: float) -> int:

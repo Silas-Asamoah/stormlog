@@ -1,16 +1,18 @@
 import contextlib
 from types import SimpleNamespace
 
+import pytest
+
 import gpumemprof.cli as gpumemprof_cli
 import tfmemprof.cli as tfmemprof_cli
 
 
-def _patch_cpu_process(monkeypatch):
+def _patch_cpu_process(monkeypatch: pytest.MonkeyPatch) -> None:
     class DummyProcess:
-        def oneshot(self):
+        def oneshot(self) -> object:
             return contextlib.nullcontext()
 
-        def memory_info(self):
+        def memory_info(self) -> object:
             return SimpleNamespace(rss=1024, vms=2048)
 
     monkeypatch.setattr(gpumemprof_cli.psutil, "Process", lambda: DummyProcess())
@@ -21,7 +23,9 @@ def _patch_cpu_process(monkeypatch):
     )
 
 
-def test_gpumemprof_info_reports_mps_without_cpu_only_message(monkeypatch, capsys):
+def test_gpumemprof_info_reports_mps_without_cpu_only_message(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
         gpumemprof_cli,
         "get_system_info",
@@ -36,7 +40,7 @@ def test_gpumemprof_info_reports_mps_without_cpu_only_message(monkeypatch, capsy
     )
     _patch_cpu_process(monkeypatch)
 
-    gpumemprof_cli.cmd_info(SimpleNamespace(device=None, detailed=False))
+    gpumemprof_cli.cmd_info(SimpleNamespace(device=None, detailed=False))  # type: ignore[arg-type, unused-ignore]
     output = capsys.readouterr().out
 
     assert "Detected Backend: mps" in output
@@ -46,7 +50,9 @@ def test_gpumemprof_info_reports_mps_without_cpu_only_message(monkeypatch, capsy
     assert "Falling back to CPU-only profiling." not in output
 
 
-def test_gpumemprof_info_reports_cpu_fallback_when_mps_unavailable(monkeypatch, capsys):
+def test_gpumemprof_info_reports_cpu_fallback_when_mps_unavailable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
         gpumemprof_cli,
         "get_system_info",
@@ -61,7 +67,7 @@ def test_gpumemprof_info_reports_cpu_fallback_when_mps_unavailable(monkeypatch, 
     )
     _patch_cpu_process(monkeypatch)
 
-    gpumemprof_cli.cmd_info(SimpleNamespace(device=None, detailed=False))
+    gpumemprof_cli.cmd_info(SimpleNamespace(device=None, detailed=False))  # type: ignore[arg-type, unused-ignore]
     output = capsys.readouterr().out
 
     assert "Detected Backend: cpu" in output
@@ -69,7 +75,9 @@ def test_gpumemprof_info_reports_cpu_fallback_when_mps_unavailable(monkeypatch, 
     assert "CUDA is not available. Falling back to CPU-only profiling." in output
 
 
-def test_gpumemprof_info_keeps_cuda_output_when_available(monkeypatch, capsys):
+def test_gpumemprof_info_keeps_cuda_output_when_available(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
         gpumemprof_cli,
         "get_system_info",
@@ -100,7 +108,7 @@ def test_gpumemprof_info_keeps_cuda_output_when_available(monkeypatch, capsys):
         },
     )
 
-    gpumemprof_cli.cmd_info(SimpleNamespace(device=None, detailed=False))
+    gpumemprof_cli.cmd_info(SimpleNamespace(device=None, detailed=False))  # type: ignore[arg-type, unused-ignore]
     output = capsys.readouterr().out
 
     assert "Detected Backend: cuda" in output
@@ -109,7 +117,9 @@ def test_gpumemprof_info_keeps_cuda_output_when_available(monkeypatch, capsys):
     assert "Falling back to CPU-only profiling." not in output
 
 
-def test_gpumemprof_info_reports_rocm_backend_details(monkeypatch, capsys):
+def test_gpumemprof_info_reports_rocm_backend_details(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
         gpumemprof_cli,
         "get_system_info",
@@ -141,14 +151,16 @@ def test_gpumemprof_info_reports_rocm_backend_details(monkeypatch, capsys):
         },
     )
 
-    gpumemprof_cli.cmd_info(SimpleNamespace(device=None, detailed=False))
+    gpumemprof_cli.cmd_info(SimpleNamespace(device=None, detailed=False))  # type: ignore[arg-type, unused-ignore]
     output = capsys.readouterr().out
 
     assert "Detected Backend: rocm" in output
     assert "ROCm Version: 6.3.0" in output
 
 
-def test_tfmemprof_info_reports_backend_diagnostics_for_apple(monkeypatch, capsys):
+def test_tfmemprof_info_reports_backend_diagnostics_for_apple(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
         tfmemprof_cli,
         "get_system_info",
@@ -187,7 +199,7 @@ def test_tfmemprof_info_reports_backend_diagnostics_for_apple(monkeypatch, capsy
         ),
     )
 
-    tfmemprof_cli.cmd_info(SimpleNamespace())
+    tfmemprof_cli.cmd_info(SimpleNamespace())  # type: ignore[arg-type, unused-ignore]
     output = capsys.readouterr().out
 
     assert "GPU Hardware Detected: Yes" in output
@@ -201,7 +213,9 @@ def test_tfmemprof_info_reports_backend_diagnostics_for_apple(monkeypatch, capsy
     assert "CUDA Build: False" in output
 
 
-def test_tfmemprof_info_keeps_cuda_build_output(monkeypatch, capsys):
+def test_tfmemprof_info_keeps_cuda_build_output(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
         tfmemprof_cli,
         "get_system_info",
@@ -216,7 +230,9 @@ def test_tfmemprof_info_keeps_cuda_build_output(monkeypatch, capsys):
                 "available": True,
                 "count": 1,
                 "total_memory": 4096,
-                "devices": [{"name": "GPU 0", "current_memory_mb": 10.0, "peak_memory_mb": 20.0}],
+                "devices": [
+                    {"name": "GPU 0", "current_memory_mb": 10.0, "peak_memory_mb": 20.0}
+                ],
             },
             "backend": {
                 "is_apple_silicon": False,
@@ -245,7 +261,7 @@ def test_tfmemprof_info_keeps_cuda_build_output(monkeypatch, capsys):
         ),
     )
 
-    tfmemprof_cli.cmd_info(SimpleNamespace())
+    tfmemprof_cli.cmd_info(SimpleNamespace())  # type: ignore[arg-type, unused-ignore]
     output = capsys.readouterr().out
 
     assert "Runtime Backend: cuda" in output

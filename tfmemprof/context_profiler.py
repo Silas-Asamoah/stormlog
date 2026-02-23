@@ -3,7 +3,7 @@
 import functools
 import threading
 from contextlib import contextmanager
-from typing import Optional, Any, Dict, List, Callable, Iterator, TypeVar, Union, cast
+from typing import Any, Callable, Dict, Iterator, List, Optional, TypeVar, Union, cast
 
 from .tf_env import configure_tensorflow_logging
 
@@ -11,6 +11,7 @@ configure_tensorflow_logging()
 
 try:
     import tensorflow as tf
+
     TF_AVAILABLE = True
 except ImportError:
     TF_AVAILABLE = False
@@ -56,6 +57,7 @@ def profile_function(
         profiler: Profiler instance (uses global if None)
         name: Custom name for profiling
     """
+
     def decorator(f: F) -> F:
         @functools.wraps(f)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -74,7 +76,9 @@ def profile_function(
 
 
 @contextmanager
-def profile_context(name: str = "context", profiler: Optional[TFMemoryProfiler] = None) -> Iterator[None]:
+def profile_context(
+    name: str = "context", profiler: Optional[TFMemoryProfiler] = None
+) -> Iterator[None]:
     """
     Context manager for profiling code blocks.
 
@@ -91,7 +95,12 @@ def profile_context(name: str = "context", profiler: Optional[TFMemoryProfiler] 
 class ProfiledLayer:
     """Wrapper for TensorFlow layers with automatic profiling."""
 
-    def __init__(self, layer: Any, profiler: Optional[TFMemoryProfiler] = None, name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        layer: Any,
+        profiler: Optional[TFMemoryProfiler] = None,
+        name: Optional[str] = None,
+    ) -> None:
         """
         Initialize profiled layer.
 
@@ -105,7 +114,7 @@ class ProfiledLayer:
 
         self.layer = layer
         self.profiler = profiler or get_global_profiler()
-        self.name = name or getattr(layer, 'name', layer.__class__.__name__)
+        self.name = name or getattr(layer, "name", layer.__class__.__name__)
 
         # Wrap the call method
         self._original_call = layer.call
@@ -156,7 +165,13 @@ class TensorFlowProfiler:
         self.profiler = TFMemoryProfiler(device=device)
         set_global_profiler(self.profiler)
 
-    def profile_training(self, model: Any, dataset: Any, epochs: int = 1, steps_per_epoch: Optional[int] = None) -> None:
+    def profile_training(
+        self,
+        model: Any,
+        dataset: Any,
+        epochs: int = 1,
+        steps_per_epoch: Optional[int] = None,
+    ) -> None:
         """
         Profile model training.
 
@@ -181,7 +196,7 @@ class TensorFlowProfiler:
 
                         with self.profiler.profile_context(f"step_{step_count}"):
                             # Assume the model has a train_step method or similar
-                            if hasattr(model, 'train_step'):
+                            if hasattr(model, "train_step"):
                                 model.train_step(batch)
                             else:
                                 # Generic training step
@@ -189,18 +204,17 @@ class TensorFlowProfiler:
                                     if isinstance(batch, tuple):
                                         x, y = batch
                                         predictions = model(x, training=True)
-                                        loss = model.compiled_loss(
-                                            y, predictions)
+                                        loss = model.compiled_loss(y, predictions)
                                     else:
-                                        predictions = model(
-                                            batch, training=True)
-                                        loss = model.compiled_loss(
-                                            batch, predictions)
+                                        predictions = model(batch, training=True)
+                                        loss = model.compiled_loss(batch, predictions)
 
                                 gradients = tape.gradient(
-                                    loss, model.trainable_variables)
+                                    loss, model.trainable_variables
+                                )
                                 model.optimizer.apply_gradients(
-                                    zip(gradients, model.trainable_variables))
+                                    zip(gradients, model.trainable_variables)
+                                )
 
                         step_count += 1
 
@@ -218,11 +232,12 @@ class TensorFlowProfiler:
 
         with self.profiler.profile_context("inference"):
             # Batch the data if needed
-            if hasattr(data, 'batch'):
-                batched_data = data.batch(batch_size)
+            if hasattr(data, "batch"):
+                _batched_data = data.batch(batch_size)
             else:
                 # Assume data is a tensor or numpy array
                 import numpy as np
+
                 if isinstance(data, np.ndarray):
                     data = tf.constant(data)
 

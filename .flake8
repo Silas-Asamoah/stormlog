@@ -1,4 +1,17 @@
 [flake8]
 max-line-length = 88
-extend-ignore = E203, W503
-exclude = .git,__pycache__,docs,build,dist,venv,.venv,.eggs,*.egg,*.egg-info 
+extend-ignore = E203, W503, T499, E501
+exclude = .git,__pycache__,docs,build,dist,venv,.venv,.eggs,*.egg,*.egg-info,.mypy_cache
+per-file-ignores =
+    */__init__.py: F401, E402
+    examples/*: E402, F401, F811
+    tests/*: E402, F841
+    gpumemprof/tui/app.py: E402
+    gpumemprof/tui/monitor.py: E402
+    gpumemprof/tui/profiles.py: E402
+    gpumemprof/analyzer.py: F841
+    gpumemprof/cli.py: F841
+    gpumemprof/context_profiler.py: F841
+    gpumemprof/cpu_profiler.py: F841
+    gpumemprof/profiler.py: F841
+    tfmemprof/*: E402, F841

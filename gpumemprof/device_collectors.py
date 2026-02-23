@@ -105,7 +105,9 @@ class CudaDeviceCollector(DeviceMemoryCollector):
 
     def sample(self) -> DeviceMemorySample:
         device_index = (
-            self.device.index if self.device.index is not None else torch.cuda.current_device()
+            self.device.index
+            if self.device.index is not None
+            else torch.cuda.current_device()
         )
         allocated = int(torch.cuda.memory_allocated(self.device))
         reserved = int(torch.cuda.memory_reserved(self.device))

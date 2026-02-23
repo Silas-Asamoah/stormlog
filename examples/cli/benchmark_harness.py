@@ -12,7 +12,6 @@ from typing import Any, Dict, Optional
 
 from gpumemprof.cpu_profiler import CPUMemoryTracker
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUDGETS_PATH = REPO_ROOT / "docs" / "benchmarks" / "v0.2_budgets.json"
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "artifacts" / "benchmarks" / "latest.json"
@@ -141,9 +140,7 @@ def load_budget_thresholds(path: Path) -> Dict[str, float]:
     budgets_obj = payload.get("budgets", payload)
 
     missing_keys = [
-        key
-        for key in _BUDGET_KEY_BY_METRIC.values()
-        if key not in budgets_obj
+        key for key in _BUDGET_KEY_BY_METRIC.values() if key not in budgets_obj
     ]
     if missing_keys:
         missing = ", ".join(sorted(missing_keys))
@@ -249,7 +246,9 @@ def run_benchmark_harness(
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
+    )
     return report
 
 

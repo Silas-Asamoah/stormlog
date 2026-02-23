@@ -148,18 +148,19 @@ jobs:
                   python3 -m pip install --upgrade pip
                   # Lint does not require heavy runtime ML dependencies.
                   pip install -e . --no-deps
-                  pip install black flake8 mypy rich
+                  pip install black isort flake8 mypy rich
+
+            - name: Run isort
+              run: |
+                  python3 -m isort --check --diff gpumemprof/ tfmemprof/ tests/ examples/
 
             - name: Run black
               run: |
-                  # Temporarily disabled - will be addressed in separate PR
-                  # python3 -m black --check gpumemprof/ tfmemprof/ tests/ examples/
-                  echo "Black formatting check temporarily disabled"
+                  python3 -m black --check gpumemprof/ tfmemprof/ tests/ examples/
 
             - name: Run flake8
               run: |
-                  # Current repository has broad legacy lint debt; keep CI focused on fatal lint errors.
-                  python3 -m flake8 gpumemprof/ tfmemprof/ tests/ examples/ --select=E9,F63,F7,F82 --show-source --statistics
+                  python3 -m flake8 gpumemprof/ tfmemprof/ tests/ examples/ --show-source --statistics
 
             - name: Run mypy
               run: |

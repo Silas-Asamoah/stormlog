@@ -5,10 +5,9 @@ import pytest
 
 pytest.importorskip("textual")
 
-from textual.widgets import RichLog, TabPane, TabbedContent
+from textual.widgets import RichLog, TabbedContent, TabPane
 
 from gpumemprof.tui.app import GPUMemoryProfilerTUI
-
 
 pytestmark = pytest.mark.tui_pilot
 
@@ -35,7 +34,7 @@ def _tab_labels(app: GPUMemoryProfilerTUI) -> list[str]:
         if title is None:
             title = getattr(pane, "_title", "")
         if hasattr(title, "plain"):
-            title = title.plain
+            title = title.plain  # type: ignore[union-attr, unused-ignore]
         labels.append(str(title))
     return labels
 
@@ -91,7 +90,7 @@ class _StubCLIRunner:
         self.commands: list[str] = []
         self.cancel_calls = 0
 
-    async def run(self, command: str, callback) -> int:
+    async def run(self, command: str, callback: Any) -> int:
         self.is_running = True
         self.commands.append(command)
         await callback("stdout", "hello")
@@ -105,7 +104,9 @@ class _StubCLIRunner:
         return True
 
 
-def test_tab_rendering_and_key_bindings_r_f_g_t(monkeypatch):
+def test_tab_rendering_and_key_bindings_r_f_g_t(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def scenario() -> None:
         app = GPUMemoryProfilerTUI()
         async with app.run_test(headless=True, size=(140, 44)) as pilot:
@@ -130,7 +131,9 @@ def test_tab_rendering_and_key_bindings_r_f_g_t(monkeypatch):
                 refresh_calls["count"] += 1
 
             monkeypatch.setattr(app, "log_message", fake_log_message)
-            monkeypatch.setattr(app.overview_panel, "refresh_content", fake_refresh_content)
+            monkeypatch.setattr(
+                app.overview_panel, "refresh_content", fake_refresh_content
+            )
 
             await pilot.press("f")
             await pilot.pause()
@@ -157,7 +160,7 @@ def test_tab_rendering_and_key_bindings_r_f_g_t(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_monitoring_buttons_start_stop_apply_thresholds_clear_log():
+def test_monitoring_buttons_start_stop_apply_thresholds_clear_log() -> None:
     async def scenario() -> None:
         app = GPUMemoryProfilerTUI()
         async with app.run_test(headless=True, size=(140, 44)) as pilot:
@@ -166,8 +169,8 @@ def test_monitoring_buttons_start_stop_apply_thresholds_clear_log():
             await pilot.pause()
 
             session = _StubTrackerSession()
-            app.tracker_session = session
-            app._get_or_create_tracker_session = lambda: session
+            app.tracker_session = session  # type: ignore[assignment, unused-ignore]
+            app._get_or_create_tracker_session = lambda: session  # type: ignore[assignment, method-assign, return-value, unused-ignore]
 
             await pilot.click("#btn-start-tracking")
             await pilot.pause()
@@ -194,7 +197,7 @@ def test_monitoring_buttons_start_stop_apply_thresholds_clear_log():
     asyncio.run(scenario())
 
 
-def test_cli_runner_run_stream_output_and_cancel():
+def test_cli_runner_run_stream_output_and_cancel() -> None:
     async def scenario() -> None:
         app = GPUMemoryProfilerTUI()
         async with app.run_test(headless=True, size=(140, 44)) as pilot:
@@ -203,7 +206,7 @@ def test_cli_runner_run_stream_output_and_cancel():
             await pilot.pause()
 
             runner = _StubCLIRunner()
-            app.cli_runner = runner
+            app.cli_runner = runner  # type: ignore[assignment, unused-ignore]
 
             app.cli_command_input.value = "gpumemprof info"
             await pilot.click("#btn-cli-run")
@@ -226,7 +229,7 @@ def test_cli_runner_run_stream_output_and_cancel():
     asyncio.run(scenario())
 
 
-def test_cli_action_buttons_cover_diagnose_oom_and_matrix():
+def test_cli_action_buttons_cover_diagnose_oom_and_matrix() -> None:
     async def scenario() -> None:
         app = GPUMemoryProfilerTUI()
         async with app.run_test(headless=True, size=(140, 44)) as pilot:
@@ -235,7 +238,7 @@ def test_cli_action_buttons_cover_diagnose_oom_and_matrix():
             await pilot.pause()
 
             runner = _StubCLIRunner()
-            app.cli_runner = runner
+            app.cli_runner = runner  # type: ignore[assignment, unused-ignore]
 
             await pilot.click("#btn-log-diagnose")
             await pilot.pause()

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections import UserDict
 import json
+from collections import UserDict
 from pathlib import Path
 
+import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
-from jsonschema import validate as jsonschema_validate
 
 from gpumemprof.telemetry import (
     SCHEMA_VERSION_V2,
@@ -21,14 +21,15 @@ from gpumemprof.telemetry import (
 )
 
 
-def _schema() -> dict:
+def _schema() -> dict[str, object]:
     schema_path = (
         Path(__file__).resolve().parents[1]
         / "docs"
         / "schemas"
         / "telemetry_event_v2.schema.json"
     )
-    return json.loads(schema_path.read_text(encoding="utf-8"))
+    result: dict[str, object] = json.loads(schema_path.read_text(encoding="utf-8"))
+    return result
 
 
 def _make_valid_event() -> TelemetryEventV2:
@@ -59,7 +60,7 @@ def test_telemetry_event_v2_serialization_validates_against_schema() -> None:
     record = telemetry_event_to_dict(event)
 
     validate_telemetry_record(record)
-    jsonschema_validate(instance=record, schema=_schema())
+    jsonschema.validate(instance=record, schema=_schema())
 
 
 def test_validate_telemetry_record_rejects_missing_fields() -> None:
@@ -119,7 +120,7 @@ def test_legacy_gpumemprof_record_converts_to_v2() -> None:
     assert record["allocator_reserved_bytes"] == 15_000
     assert record["allocator_change_bytes"] == 512
     assert record["metadata"]["usage_percent"] == 75.5
-    jsonschema_validate(instance=record, schema=_schema())
+    jsonschema.validate(instance=record, schema=_schema())
 
 
 def test_legacy_cpu_record_converts_with_defaults() -> None:
@@ -144,7 +145,7 @@ def test_legacy_cpu_record_converts_with_defaults() -> None:
     assert record["device_total_bytes"] is None
     assert record["pid"] == UNKNOWN_PID
     assert record["host"] == UNKNOWN_HOST
-    jsonschema_validate(instance=record, schema=_schema())
+    jsonschema.validate(instance=record, schema=_schema())
 
 
 def test_legacy_record_uses_backend_metadata_for_collector() -> None:
@@ -186,7 +187,7 @@ def test_legacy_tf_record_converts_with_defaults() -> None:
     assert record["device_id"] == 0
     assert record["allocator_allocated_bytes"] == 2 * 1024 * 1024
     assert record["device_used_bytes"] == 2 * 1024 * 1024
-    jsonschema_validate(instance=record, schema=_schema())
+    jsonschema.validate(instance=record, schema=_schema())
 
 
 def test_load_telemetry_events_reads_dict_events_payload(tmp_path: Path) -> None:
@@ -270,7 +271,9 @@ def test_unsupported_schema_version_is_rejected_without_legacy_fallback() -> Non
         telemetry_event_from_record(legacy, permissive_legacy=True)
 
 
-def test_load_telemetry_events_rejects_unsupported_schema_version(tmp_path: Path) -> None:
+def test_load_telemetry_events_rejects_unsupported_schema_version(
+    tmp_path: Path,
+) -> None:
     payload = [
         {
             "schema_version": 3,
@@ -307,4 +310,4 @@ def test_legacy_total_memory_null_is_accepted() -> None:
     assert record["schema_version"] == 2
     assert record["device_total_bytes"] is None
     assert record["device_free_bytes"] is None
-    jsonschema_validate(instance=record, schema=_schema())
+    jsonschema.validate(instance=record, schema=_schema())

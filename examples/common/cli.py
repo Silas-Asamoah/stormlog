@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional
 
-from .formatting import print_section, print_kv
+from .formatting import print_kv, print_section
 
 
 def run_cli_command(

@@ -3,14 +3,14 @@
 import logging
 import statistics
 from dataclasses import asdict
-from typing import List, Dict, Any, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
 
 from gpumemprof.gap_analysis import GapFinding, analyze_hidden_memory_gaps
 from gpumemprof.telemetry import TelemetryEventV2
-from .utils import format_memory
 
+from .utils import format_memory
 
 _GAP_REMEDIATION_BY_CLASSIFICATION: Dict[str, List[str]] = {
     "transient_spike": [
@@ -42,49 +42,60 @@ class MemoryAnalyzer:
 
         # Hidden-memory gap analysis thresholds
         self.thresholds = {
-            'gap_ratio_threshold': 0.05,  # 5% of device total = significant gap
-            'gap_spike_zscore': 2.0,  # z-score for transient spike detection
-            'gap_drift_r_squared': 0.6,  # R-squared for persistent drift
-            'gap_fragmentation_ratio': 0.3,  # reserved-allocated / reserved
+            "gap_ratio_threshold": 0.05,  # 5% of device total = significant gap
+            "gap_spike_zscore": 2.0,  # z-score for transient spike detection
+            "gap_drift_r_squared": 0.6,  # R-squared for persistent drift
+            "gap_fragmentation_ratio": 0.3,  # reserved-allocated / reserved
         }
 
     def detect_memory_leaks(self, tracking_results: Any) -> List[Dict[str, Any]]:
         """Detect potential memory leaks using statistical analysis."""
-        if not hasattr(tracking_results, 'memory_usage') or len(tracking_results.memory_usage) < 10:
+        if (
+            not hasattr(tracking_results, "memory_usage")
+            or len(tracking_results.memory_usage) < 10
+        ):
             return []
 
         memory_data = tracking_results.memory_usage
-        timestamps = tracking_results.timestamps
+        _timestamps = tracking_results.timestamps
 
         leaks: List[Dict[str, Any]] = []
 
         # Check for monotonic increase
-        increasing_samples = sum(1 for i in range(1, len(memory_data))
-                                 if memory_data[i] > memory_data[i-1])
+        increasing_samples = sum(
+            1 for i in range(1, len(memory_data)) if memory_data[i] > memory_data[i - 1]
+        )
         increase_ratio = increasing_samples / (len(memory_data) - 1)
 
         if increase_ratio > 0.7:  # 70% of samples show increase
-            leaks.append({
-                'type': 'monotonic_increase',
-                'severity': 'high' if increase_ratio > 0.9 else 'medium',
-                'description': f'Memory shows monotonic increase in {increase_ratio:.1%} of samples',
-                'growth_rate': tracking_results.memory_growth_rate if hasattr(tracking_results, 'memory_growth_rate') else 0
-            })
+            leaks.append(
+                {
+                    "type": "monotonic_increase",
+                    "severity": "high" if increase_ratio > 0.9 else "medium",
+                    "description": f"Memory shows monotonic increase in {increase_ratio:.1%} of samples",
+                    "growth_rate": (
+                        tracking_results.memory_growth_rate
+                        if hasattr(tracking_results, "memory_growth_rate")
+                        else 0
+                    ),
+                }
+            )
 
         # Check for sudden spikes
         if len(memory_data) > 5:
             mean_memory = statistics.mean(memory_data)
             std_memory = statistics.stdev(memory_data)
 
-            spikes = [m for m in memory_data if m >
-                      mean_memory + 3 * std_memory]
+            spikes = [m for m in memory_data if m > mean_memory + 3 * std_memory]
             if spikes:
-                leaks.append({
-                    'type': 'memory_spikes',
-                    'severity': 'medium',
-                    'description': f'Detected {len(spikes)} memory spikes above 3σ',
-                    'spike_values': spikes
-                })
+                leaks.append(
+                    {
+                        "type": "memory_spikes",
+                        "severity": "medium",
+                        "description": f"Detected {len(spikes)} memory spikes above 3σ",
+                        "spike_values": spikes,
+                    }
+                )
 
         # Check for lack of cleanup
         final_memory = memory_data[-5:]  # Last 5 samples
@@ -95,20 +106,25 @@ class MemoryAnalyzer:
             initial_avg = statistics.mean(initial_memory)
 
             if final_avg > initial_avg * 1.5:  # 50% increase from start
-                leaks.append({
-                    'type': 'insufficient_cleanup',
-                    'severity': 'medium',
-                    'description': f'Final memory {final_avg:.1f}MB is {final_avg/initial_avg:.1f}x initial memory',
-                    'initial_avg': initial_avg,
-                    'final_avg': final_avg
-                })
+                leaks.append(
+                    {
+                        "type": "insufficient_cleanup",
+                        "severity": "medium",
+                        "description": f"Final memory {final_avg:.1f}MB is {final_avg/initial_avg:.1f}x initial memory",
+                        "initial_avg": initial_avg,
+                        "final_avg": final_avg,
+                    }
+                )
 
         return leaks
 
     def analyze_fragmentation(self, profile_result: Any) -> Dict[str, float]:
         """Analyze memory fragmentation patterns."""
-        if not hasattr(profile_result, 'snapshots') or len(profile_result.snapshots) < 2:
-            return {'fragmentation_score': 0.0, 'trend': 0.0}
+        if (
+            not hasattr(profile_result, "snapshots")
+            or len(profile_result.snapshots) < 2
+        ):
+            return {"fragmentation_score": 0.0, "trend": 0.0}
 
         fragmentation_scores: List[float] = []
 
@@ -119,7 +135,7 @@ class MemoryAnalyzer:
                 fragmentation_scores.append(fragmentation)
 
         if not fragmentation_scores:
-            return {'fragmentation_score': 0.0, 'trend': 0.0}
+            return {"fragmentation_score": 0.0, "trend": 0.0}
 
         avg_fragmentation = statistics.mean(fragmentation_scores)
 
@@ -132,15 +148,18 @@ class MemoryAnalyzer:
             trend = 0.0
 
         return {
-            'fragmentation_score': avg_fragmentation,
-            'trend': trend,
-            'max_fragmentation': max(fragmentation_scores),
-            'min_fragmentation': min(fragmentation_scores)
+            "fragmentation_score": avg_fragmentation,
+            "trend": trend,
+            "max_fragmentation": max(fragmentation_scores),
+            "min_fragmentation": min(fragmentation_scores),
         }
 
     def detect_patterns(self, tracking_results: Any) -> List[Dict[str, Any]]:
         """Detect memory usage patterns."""
-        if not hasattr(tracking_results, 'memory_usage') or len(tracking_results.memory_usage) < 20:
+        if (
+            not hasattr(tracking_results, "memory_usage")
+            or len(tracking_results.memory_usage) < 20
+        ):
             return []
 
         memory_data = tracking_results.memory_usage
@@ -157,8 +176,8 @@ class MemoryAnalyzer:
             if chunk_size > 2:
                 chunk_correlations = []
                 for i in range(0, len(normalized_data) - chunk_size, chunk_size):
-                    chunk1 = normalized_data[i:i+chunk_size]
-                    chunk2 = normalized_data[i+chunk_size:i+2*chunk_size]
+                    chunk1 = normalized_data[i : i + chunk_size]
+                    chunk2 = normalized_data[i + chunk_size : i + 2 * chunk_size]
 
                     if len(chunk2) == chunk_size:
                         correlation = np.corrcoef(chunk1, chunk2)[0, 1]
@@ -168,11 +187,13 @@ class MemoryAnalyzer:
                 if chunk_correlations:
                     avg_correlation = statistics.mean(chunk_correlations)
                     if avg_correlation > 0.7:
-                        patterns.append({
-                            'type': 'periodic_pattern',
-                            'correlation': avg_correlation,
-                            'description': f'Detected periodic memory pattern (correlation: {avg_correlation:.3f})'
-                        })
+                        patterns.append(
+                            {
+                                "type": "periodic_pattern",
+                                "correlation": avg_correlation,
+                                "description": f"Detected periodic memory pattern (correlation: {avg_correlation:.3f})",
+                            }
+                        )
         except Exception as exc:
             logging.debug("Periodic pattern detection failed: %s", exc)
 
@@ -180,21 +201,23 @@ class MemoryAnalyzer:
         if len(memory_data) > 10:
             step_increases = 0
             for i in range(1, len(memory_data)):
-                if memory_data[i] > memory_data[i-1] * 1.2:  # 20% sudden increase
+                if memory_data[i] > memory_data[i - 1] * 1.2:  # 20% sudden increase
                     step_increases += 1
 
             if step_increases > len(memory_data) * 0.1:  # More than 10% of samples
-                patterns.append({
-                    'type': 'step_pattern',
-                    'step_count': step_increases,
-                    'description': f'Detected {step_increases} sudden memory increases (step pattern)'
-                })
+                patterns.append(
+                    {
+                        "type": "step_pattern",
+                        "step_count": step_increases,
+                        "description": f"Detected {step_increases} sudden memory increases (step pattern)",
+                    }
+                )
 
         return patterns
 
     def analyze_efficiency(self, profile_result: Any) -> float:
         """Analyze memory usage efficiency (0-10 scale)."""
-        if not hasattr(profile_result, 'peak_memory_mb'):
+        if not hasattr(profile_result, "peak_memory_mb"):
             return 0.0
 
         score = 10.0
@@ -206,22 +229,22 @@ class MemoryAnalyzer:
             score -= 1.5
 
         # Penalize high memory growth rate
-        if hasattr(profile_result, 'memory_growth_rate'):
+        if hasattr(profile_result, "memory_growth_rate"):
             if profile_result.memory_growth_rate > 200:  # > 200 MB/s
                 score -= 2.0
             elif profile_result.memory_growth_rate > 100:  # > 100 MB/s
                 score -= 1.0
 
         # Penalize fragmentation
-        if hasattr(profile_result, 'snapshots'):
+        if hasattr(profile_result, "snapshots"):
             frag_info = self.analyze_fragmentation(profile_result)
-            if frag_info['fragmentation_score'] > 0.5:
+            if frag_info["fragmentation_score"] > 0.5:
                 score -= 2.0
-            elif frag_info['fragmentation_score'] > 0.3:
+            elif frag_info["fragmentation_score"] > 0.3:
                 score -= 1.0
 
         # Penalize memory leaks
-        if hasattr(profile_result, 'memory_usage'):
+        if hasattr(profile_result, "memory_usage"):
             # Create a simple tracking result for leak detection
             class SimpleTrackingResult:
                 def __init__(self, memory_usage: List[float]) -> None:
@@ -230,11 +253,13 @@ class MemoryAnalyzer:
                     self.memory_growth_rate = 0
 
             simple_result = SimpleTrackingResult(
-                [s.gpu_memory_mb for s in profile_result.snapshots])
+                [s.gpu_memory_mb for s in profile_result.snapshots]
+            )
             leaks = self.detect_memory_leaks(simple_result)
 
             high_severity_leaks = [
-                l for l in leaks if l.get('severity') == 'high']
+                leak for leak in leaks if leak.get("severity") == "high"
+            ]
             if high_severity_leaks:
                 score -= 3.0
             elif leaks:
@@ -245,25 +270,27 @@ class MemoryAnalyzer:
     def correlate_with_performance(self, profile_result: Any) -> Dict[str, Any]:
         """Correlate memory usage with performance metrics."""
         correlation_data: Dict[str, Any] = {
-            'memory_duration_correlation': 0.0,
-            'function_efficiency': {},
-            'recommendations': []
+            "memory_duration_correlation": 0.0,
+            "function_efficiency": {},
+            "recommendations": [],
         }
         function_efficiency = cast(
-            Dict[str, Dict[str, Any]], correlation_data['function_efficiency']
+            Dict[str, Dict[str, Any]], correlation_data["function_efficiency"]
         )
-        recommendations = cast(List[str], correlation_data['recommendations'])
+        recommendations = cast(List[str], correlation_data["recommendations"])
 
-        if not hasattr(profile_result, 'function_profiles'):
+        if not hasattr(profile_result, "function_profiles"):
             return correlation_data
 
         # Analyze function efficiency
         for func_name, profile in profile_result.function_profiles.items():
-            if profile.get('calls', 0) > 0:
-                avg_memory_per_call = profile.get(
-                    'total_memory_used', 0) / profile['calls']
-                avg_duration_per_call = profile.get(
-                    'total_duration', 0) / profile['calls']
+            if profile.get("calls", 0) > 0:
+                avg_memory_per_call = (
+                    profile.get("total_memory_used", 0) / profile["calls"]
+                )
+                avg_duration_per_call = (
+                    profile.get("total_duration", 0) / profile["calls"]
+                )
 
                 # Calculate efficiency score
                 efficiency = 1.0
@@ -273,10 +300,10 @@ class MemoryAnalyzer:
                     efficiency *= 0.7
 
                 function_efficiency[func_name] = {
-                    'avg_memory_per_call': avg_memory_per_call,
-                    'avg_duration_per_call': avg_duration_per_call,
-                    'efficiency_score': efficiency,
-                    'total_calls': profile['calls']
+                    "avg_memory_per_call": avg_memory_per_call,
+                    "avg_duration_per_call": avg_duration_per_call,
+                    "efficiency_score": efficiency,
+                    "total_calls": profile["calls"],
                 }
 
                 # Generate recommendations
@@ -285,7 +312,7 @@ class MemoryAnalyzer:
                         f"Function '{func_name}' uses high memory per call - consider optimization"
                     )
 
-                if profile['calls'] > 100 and avg_duration_per_call > 0.1:
+                if profile["calls"] > 100 and avg_duration_per_call > 0.1:
                     recommendations.append(
                         f"Function '{func_name}' called frequently - consider caching or @tf.function"
                     )
@@ -296,9 +323,7 @@ class MemoryAnalyzer:
     # Hidden-memory gap analysis (operates on TelemetryEventV2 series)
     # ------------------------------------------------------------------
 
-    def analyze_memory_gaps(
-        self, events: List[TelemetryEventV2]
-    ) -> List[GapFinding]:
+    def analyze_memory_gaps(self, events: List[TelemetryEventV2]) -> List[GapFinding]:
         """Classify allocator-vs-device hidden memory gaps over time.
 
         Args:
@@ -327,64 +352,65 @@ class MemoryAnalyzer:
                     When provided, the result includes a ``gap_analysis`` section.
         """
         optimization_score: Dict[str, Any] = {
-            'overall_score': 0.0,
-            'categories': {},
-            'top_recommendations': [],
-            'priority_actions': []
+            "overall_score": 0.0,
+            "categories": {},
+            "top_recommendations": [],
+            "priority_actions": [],
         }
-        categories = cast(Dict[str, float], optimization_score['categories'])
-        priority_actions = cast(List[str], optimization_score['priority_actions'])
+        categories = cast(Dict[str, float], optimization_score["categories"])
+        priority_actions = cast(List[str], optimization_score["priority_actions"])
 
         # Memory efficiency
         efficiency_score = self.analyze_efficiency(profile_result)
-        categories['memory_efficiency'] = efficiency_score
+        categories["memory_efficiency"] = efficiency_score
 
         # Fragmentation analysis
-        if hasattr(profile_result, 'snapshots'):
+        if hasattr(profile_result, "snapshots"):
             frag_info = self.analyze_fragmentation(profile_result)
-            frag_score = max(0, 10 - frag_info['fragmentation_score'] * 10)
-            categories['fragmentation'] = frag_score
+            frag_score = max(0, 10 - frag_info["fragmentation_score"] * 10)
+            categories["fragmentation"] = frag_score
         else:
             frag_score = 5.0
 
         # Performance correlation
         perf_corr = self.correlate_with_performance(profile_result)
-        if perf_corr['function_efficiency']:
-            avg_efficiency = statistics.mean([
-                func['efficiency_score'] for func in perf_corr['function_efficiency'].values()
-            ])
+        if perf_corr["function_efficiency"]:
+            avg_efficiency = statistics.mean(
+                [
+                    func["efficiency_score"]
+                    for func in perf_corr["function_efficiency"].values()
+                ]
+            )
             perf_score = avg_efficiency * 10
         else:
             perf_score = 5.0
 
-        categories['performance'] = perf_score
+        categories["performance"] = perf_score
 
         # Overall score
-        optimization_score['overall_score'] = statistics.mean([
-            efficiency_score, frag_score, perf_score
-        ])
+        optimization_score["overall_score"] = statistics.mean(
+            [efficiency_score, frag_score, perf_score]
+        )
 
         # Generate recommendations
         if efficiency_score < 6:
-            priority_actions.append(
-                "Address memory efficiency issues")
+            priority_actions.append("Address memory efficiency issues")
 
         if frag_score < 6:
-            priority_actions.append(
-                "Reduce memory fragmentation")
+            priority_actions.append("Reduce memory fragmentation")
 
         if perf_score < 6:
-            priority_actions.append(
-                "Optimize function performance")
+            priority_actions.append("Optimize function performance")
 
         # Top recommendations based on analysis
         from .utils import suggest_optimizations
+
         top_suggestions = suggest_optimizations(profile_result)
-        optimization_score['top_recommendations'] = top_suggestions[:5]
+        optimization_score["top_recommendations"] = top_suggestions[:5]
 
         # Hidden-memory gap analysis (only when telemetry events are supplied).
         if events is not None:
             gap_findings = self.analyze_memory_gaps(events)
-            optimization_score['gap_analysis'] = [asdict(f) for f in gap_findings]
+            optimization_score["gap_analysis"] = [asdict(f) for f in gap_findings]
 
         return optimization_score

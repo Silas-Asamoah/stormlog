@@ -7,13 +7,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .device_collectors import (
+    build_device_memory_collector,
+    detect_torch_runtime_backend,
+)
 from .utils import (
     check_memory_fragmentation,
     get_gpu_info,
     get_system_info,
     suggest_memory_optimization,
 )
-from .device_collectors import build_device_memory_collector, detect_torch_runtime_backend
 
 # Risk thresholds (align with suggest_memory_optimization where applicable)
 HIGH_UTILIZATION_RATIO = 0.85
@@ -28,7 +31,9 @@ def _default_str(obj: Any) -> str:
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-def _collect_backend_sample(device: Optional[int]) -> Tuple[Optional[str], Optional[Any]]:
+def _collect_backend_sample(
+    device: Optional[int],
+) -> Tuple[Optional[str], Optional[Any]]:
     """Collect one backend-aware sample when a GPU runtime is available."""
     runtime_backend = detect_torch_runtime_backend()
     if runtime_backend not in {"cuda", "rocm", "mps"}:
@@ -118,6 +123,7 @@ def run_timeline_capture(
         runtime_backend = detect_torch_runtime_backend()
         if runtime_backend in {"cuda", "rocm", "mps"}:
             from .tracker import MemoryTracker
+
             tracker_device = "mps" if runtime_backend == "mps" else device
             tracker: Any = MemoryTracker(
                 device=tracker_device,
@@ -126,6 +132,7 @@ def run_timeline_capture(
             )
         else:
             from .cpu_profiler import CPUMemoryTracker
+
             tracker = CPUMemoryTracker(sampling_interval=interval)
 
         tracker.start_tracking()
@@ -144,7 +151,9 @@ def run_timeline_capture(
         return {"timestamps": [], "allocated": [], "reserved": []}
 
 
-def build_diagnostic_summary(device: Optional[int] = None) -> Tuple[Dict[str, Any], bool]:
+def build_diagnostic_summary(
+    device: Optional[int] = None,
+) -> Tuple[Dict[str, Any], bool]:
     """
     Build diagnostic summary and risk flags from current state.
     Returns (summary_dict, risk_detected).
@@ -177,7 +186,11 @@ def build_diagnostic_summary(device: Optional[int] = None) -> Tuple[Dict[str, An
     utilization_ratio = float(allocated / total) if total else 0.0
     fragmentation_ratio = float(frag_info.get("fragmentation_ratio", 0))
     num_ooms = 0
-    if backend in {"cuda", "rocm"} and "memory_stats" in gpu_info and isinstance(gpu_info["memory_stats"], dict):
+    if (
+        backend in {"cuda", "rocm"}
+        and "memory_stats" in gpu_info
+        and isinstance(gpu_info["memory_stats"], dict)
+    ):
         num_ooms = gpu_info["memory_stats"].get("num_ooms", 0) or 0
 
     # Risk flags

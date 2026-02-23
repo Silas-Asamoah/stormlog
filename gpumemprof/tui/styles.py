@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 TUI_APP_CSS = """
     TabbedContent {
         padding: 1;

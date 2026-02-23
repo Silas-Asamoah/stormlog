@@ -5,7 +5,9 @@ import pytest
 import gpumemprof.device_collectors as collectors
 
 
-def test_detect_torch_runtime_backend_reports_rocm(monkeypatch):
+def test_detect_torch_runtime_backend_reports_rocm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(collectors.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(collectors.torch, "version", SimpleNamespace(hip="6.3.0"))
 
@@ -14,7 +16,9 @@ def test_detect_torch_runtime_backend_reports_rocm(monkeypatch):
     assert backend == "rocm"
 
 
-def test_detect_torch_runtime_backend_reports_cuda(monkeypatch):
+def test_detect_torch_runtime_backend_reports_cuda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(collectors.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(collectors.torch, "version", SimpleNamespace(hip=None))
 
@@ -23,7 +27,9 @@ def test_detect_torch_runtime_backend_reports_cuda(monkeypatch):
     assert backend == "cuda"
 
 
-def test_detect_torch_runtime_backend_reports_mps(monkeypatch):
+def test_detect_torch_runtime_backend_reports_mps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(collectors.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(collectors, "_is_mps_available", lambda: True)
 
@@ -32,7 +38,9 @@ def test_detect_torch_runtime_backend_reports_mps(monkeypatch):
     assert backend == "mps"
 
 
-def test_detect_torch_runtime_backend_reports_cpu(monkeypatch):
+def test_detect_torch_runtime_backend_reports_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(collectors.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(collectors, "_is_mps_available", lambda: False)
 
@@ -41,12 +49,14 @@ def test_detect_torch_runtime_backend_reports_cpu(monkeypatch):
     assert backend == "cpu"
 
 
-def test_build_device_memory_collector_rejects_cpu_device():
+def test_build_device_memory_collector_rejects_cpu_device() -> None:
     with pytest.raises(ValueError, match="Only CUDA/ROCm and MPS"):
         collectors.build_device_memory_collector("cpu")
 
 
-def test_resolve_device_rejects_int_when_cuda_backends_unavailable(monkeypatch):
+def test_resolve_device_rejects_int_when_cuda_backends_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(collectors, "detect_torch_runtime_backend", lambda: "mps")
 
     with pytest.raises(
@@ -55,7 +65,9 @@ def test_resolve_device_rejects_int_when_cuda_backends_unavailable(monkeypatch):
         collectors._resolve_device(0)
 
 
-def test_build_device_memory_collector_allows_mps_device(monkeypatch):
+def test_build_device_memory_collector_allows_mps_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         collectors,
         "_resolve_device",

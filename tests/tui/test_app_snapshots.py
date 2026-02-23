@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("textual")
 from textual.widgets import Header as TextualHeader
-from textual.widgets import TabPane, TabbedContent
+from textual.widgets import TabbedContent, TabPane
 
 from gpumemprof.tui import app as appmod
 from gpumemprof.tui.app import GPUMemoryProfilerTUI
@@ -63,7 +63,9 @@ def _configure_snapshot_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(appmod, "fetch_pytorch_profiles", lambda limit=15: [])
     monkeypatch.setattr(appmod, "fetch_tensorflow_profiles", lambda limit=15: [])
-    monkeypatch.setattr(appmod.GPUMemoryProfilerTUI, "set_interval", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        appmod.GPUMemoryProfilerTUI, "set_interval", lambda *args, **kwargs: None
+    )
 
     class SnapshotHeader(TextualHeader):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -73,7 +75,7 @@ def _configure_snapshot_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(appmod, "Header", SnapshotHeader)
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)  # type: ignore[misc, unused-ignore]
 def _deterministic_snapshot_state(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_snapshot_overrides(monkeypatch)
 
@@ -83,7 +85,7 @@ def _pane_title(pane: TabPane) -> str:
     if title is None:
         title = getattr(pane, "_title", "")
     if hasattr(title, "plain"):
-        title = title.plain
+        title = title.plain  # type: ignore[union-attr, unused-ignore]
     return str(title)
 
 
@@ -91,7 +93,7 @@ def _tab_id_by_title(app: GPUMemoryProfilerTUI, title: str) -> str:
     for pane in app.query(TabPane):
         if _pane_title(pane) == title:
             assert pane.id is not None
-            return pane.id
+            return str(pane.id)
     raise AssertionError(f"Tab not found: {title}")
 
 
@@ -144,7 +146,11 @@ def test_snapshot_tensorflow_tab() -> None:
 def test_snapshot_monitoring_tab() -> None:
     _capture_tab_svg(
         tab_title="Monitoring",
-        visible_selectors=("#monitor-controls-row1", "#monitor-controls-row2", "#monitor-controls-row3"),
+        visible_selectors=(
+            "#monitor-controls-row1",
+            "#monitor-controls-row2",
+            "#monitor-controls-row3",
+        ),
     )
 
 

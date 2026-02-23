@@ -14,4 +14,3 @@ modules instead:
 These cover the same scenarios as the removed scripts (CPU-only validation,
 PyTorch GPU profiling, TensorFlow GPU profiling, and CLI walkthroughs) while
 keeping the repository lint-clean.
-

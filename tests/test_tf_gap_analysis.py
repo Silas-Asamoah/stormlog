@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
-
-from tfmemprof.analyzer import GapFinding, MemoryAnalyzer
 from gpumemprof.telemetry import TelemetryEventV2
 from tests.gap_test_helpers import build_gap_event
-
+from tfmemprof.analyzer import MemoryAnalyzer
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_event(
     index: int,
@@ -35,6 +33,7 @@ def _make_event(
 # Scenario 1: allocator-only growth -- gap stays small, no findings expected
 # ---------------------------------------------------------------------------
 
+
 class TestAllocatorOnlyGrowth:
     def test_no_gap_findings(self) -> None:
         """When device_used tracks allocator_reserved closely, no gap is flagged."""
@@ -53,6 +52,7 @@ class TestAllocatorOnlyGrowth:
 # ---------------------------------------------------------------------------
 # Scenario 2: non-allocator growth -- device_used drifts up, allocator flat
 # ---------------------------------------------------------------------------
+
 
 class TestPersistentDrift:
     def test_persistent_drift_detected(self) -> None:
@@ -82,6 +82,7 @@ class TestPersistentDrift:
 # ---------------------------------------------------------------------------
 # Scenario 3: transient spikes in device_used
 # ---------------------------------------------------------------------------
+
 
 class TestTransientSpike:
     def test_transient_spike_detected(self) -> None:
@@ -115,6 +116,7 @@ class TestTransientSpike:
 # Scenario 4: fragmentation-like -- high reserved-allocated ratio
 # ---------------------------------------------------------------------------
 
+
 class TestFragmentationLike:
     def test_fragmentation_like_detected(self) -> None:
         """High (reserved - allocated) / reserved ratio -> fragmentation_like."""
@@ -129,7 +131,9 @@ class TestFragmentationLike:
         analyzer = MemoryAnalyzer()
         findings = analyzer.analyze_memory_gaps(events)
 
-        frag_findings = [f for f in findings if f.classification == "fragmentation_like"]
+        frag_findings = [
+            f for f in findings if f.classification == "fragmentation_like"
+        ]
         assert len(frag_findings) == 1
 
         finding = frag_findings[0]
@@ -143,6 +147,7 @@ class TestFragmentationLike:
 # Edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestEdgeCases:
     def test_empty_events(self) -> None:
         analyzer = MemoryAnalyzer()
@@ -153,7 +158,9 @@ class TestEdgeCases:
         analyzer = MemoryAnalyzer()
         assert analyzer.analyze_memory_gaps(events) == []
 
-    def test_score_optimization_includes_gap_analysis_when_events_provided(self) -> None:
+    def test_score_optimization_includes_gap_analysis_when_events_provided(
+        self,
+    ) -> None:
         """score_optimization includes gap_analysis key when events are given."""
         events = []
         alloc = 2_000_000_000
@@ -174,6 +181,7 @@ class TestEdgeCases:
 
     def test_score_optimization_omits_gap_analysis_when_no_events(self) -> None:
         """score_optimization omits gap_analysis when events is None."""
+
         class _Stub:
             peak_memory_mb = 100.0
             average_memory_mb = 80.0

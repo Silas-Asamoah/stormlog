@@ -63,7 +63,9 @@ def collect_environment(device: Optional[str] = None) -> Dict[str, Any]:
     env["system"] = get_system_info()
     env["gpu"] = get_gpu_info()
     # TensorFlow does not expose fragmentation like PyTorch; omit or empty
-    env["fragmentation"] = {"note": "TensorFlow does not expose fragmentation in this build"}
+    env["fragmentation"] = {
+        "note": "TensorFlow does not expose fragmentation in this build"
+    }
     return env
 
 
@@ -122,20 +124,24 @@ def _suggest_tf_optimizations(utilization_ratio: float) -> List[str]:
             "Enable mixed precision with tf.keras.mixed_precision.Policy('mixed_float16') "
             "to reduce memory footprint."
         )
-    suggestions.extend([
-        "Use tf.data for efficient input pipelines and memory use.",
-        "Profile memory at different points in training to find bottlenecks.",
-        "Consider clearing the session or limiting GPU growth with tf.config.experimental.set_memory_growth.",
-    ])
+    suggestions.extend(
+        [
+            "Use tf.data for efficient input pipelines and memory use.",
+            "Profile memory at different points in training to find bottlenecks.",
+            "Consider clearing the session or limiting GPU growth with tf.config.experimental.set_memory_growth.",
+        ]
+    )
     return suggestions
 
 
-def build_diagnostic_summary(device: Optional[str] = None) -> Tuple[Dict[str, Any], bool]:
+def build_diagnostic_summary(
+    device: Optional[str] = None,
+) -> Tuple[Dict[str, Any], bool]:
     """
     Build diagnostic summary and risk flags from current state.
     Returns (summary_dict, risk_detected).
     """
-    system_info = get_system_info()
+    _system_info = get_system_info()
     backend_info = get_backend_info()
     backend = backend_info.get("runtime_backend", "cpu")
     gpu_info = get_gpu_info()

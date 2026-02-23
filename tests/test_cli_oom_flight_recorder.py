@@ -5,14 +5,17 @@ from __future__ import annotations
 import sys
 from argparse import Namespace
 from contextlib import nullcontext
+from typing import Any
+
+import pytest
 
 import gpumemprof.cli as gpumemprof_cli
 
 
-def test_main_parses_oom_track_flags(monkeypatch) -> None:
-    captured = {}
+def test_main_parses_oom_track_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
 
-    def _fake_cmd_track(args):
+    def _fake_cmd_track(args: object) -> None:
         captured["args"] = args
 
     monkeypatch.setattr(gpumemprof_cli, "cmd_track", _fake_cmd_track)
@@ -44,29 +47,31 @@ def test_main_parses_oom_track_flags(monkeypatch) -> None:
     assert args.oom_max_total_mb == 2048
 
 
-def test_cmd_track_passes_oom_config_to_memorytracker(monkeypatch) -> None:
-    created = {}
+def test_cmd_track_passes_oom_config_to_memorytracker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: dict[str, Any] = {}
 
     class _FakeTracker:
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs: object) -> None:
             created.update(kwargs)
             self.max_events = 10_000
             self.oom_buffer_size = kwargs.get("oom_buffer_size") or self.max_events
             self.last_oom_dump_path = None
 
-        def set_threshold(self, name, value):
+        def set_threshold(self, name: str, value: float) -> None:
             created[f"threshold_{name}"] = value
 
-        def add_alert_callback(self, callback):
+        def add_alert_callback(self, callback: object) -> None:
             created["alert_callback_registered"] = callback is not None
 
-        def start_tracking(self):
+        def start_tracking(self) -> None:
             created["started"] = True
 
-        def stop_tracking(self):
+        def stop_tracking(self) -> None:
             created["stopped"] = True
 
-        def get_statistics(self):
+        def get_statistics(self) -> dict[str, object]:
             return {
                 "current_memory_allocated": 0,
                 "peak_memory": 0,
@@ -74,17 +79,21 @@ def test_cmd_track_passes_oom_config_to_memorytracker(monkeypatch) -> None:
                 "total_events": 0,
             }
 
-        def export_events(self, output, fmt):
+        def export_events(self, output: str, fmt: str) -> None:
             created["export"] = (output, fmt)
 
-        def capture_oom(self, context="runtime", metadata=None):
+        def capture_oom(
+            self, context: str = "runtime", metadata: object = None
+        ) -> object:
             created["capture_context"] = context
             created["capture_metadata"] = metadata
             return nullcontext()
 
     monkeypatch.setattr(gpumemprof_cli, "MemoryTracker", _FakeTracker)
     monkeypatch.setattr(gpumemprof_cli, "MemoryWatchdog", lambda tracker: None)
-    monkeypatch.setattr(gpumemprof_cli, "get_system_info", lambda: {"detected_backend": "cuda"})
+    monkeypatch.setattr(
+        gpumemprof_cli, "get_system_info", lambda: {"detected_backend": "cuda"}
+    )
 
     def _interrupt(_: float) -> None:
         raise KeyboardInterrupt

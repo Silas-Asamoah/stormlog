@@ -8,16 +8,13 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from ..context_profiler import (
-    get_profile_results as get_pt_results,
-    clear_results as clear_pt_results,
-)
+from ..context_profiler import clear_results as clear_pt_results
+from ..context_profiler import get_profile_results as get_pt_results
 
 try:
-    from tfmemprof.context_profiler import (
-        get_profile_summaries as _get_tf_summaries,
-        clear_profiles as _clear_tf_profiles,
-    )
+    from tfmemprof.context_profiler import clear_profiles as _clear_tf_profiles
+    from tfmemprof.context_profiler import get_profile_summaries as _get_tf_summaries
+
     get_tf_summaries: Optional[Callable[..., List[Dict[str, Any]]]] = _get_tf_summaries
     clear_tf_profiles: Optional[Callable[[], None]] = _clear_tf_profiles
 except ImportError as e:

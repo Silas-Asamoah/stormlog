@@ -39,7 +39,9 @@ class CLICommandRunner:
                 line = await stream.readline()
                 if not line:
                     break
-                await callback(label, line.decode("utf-8", errors="replace").rstrip("\n"))
+                await callback(
+                    label, line.decode("utf-8", errors="replace").rstrip("\n")
+                )
 
         stdout_task = asyncio.create_task(pump(self._process.stdout, "stdout"))
         stderr_task = asyncio.create_task(pump(self._process.stderr, "stderr"))
@@ -69,5 +71,3 @@ class CLICommandRunner:
     def _cleanup(self) -> None:
         self._process = None
         self._io_tasks = []
-
-
