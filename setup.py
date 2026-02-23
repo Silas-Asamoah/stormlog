@@ -1,4 +1,4 @@
-"""Setup configuration for GPU Memory Profiler."""
+"""Setup configuration for Stormlog."""
 
 from setuptools import setup
 
