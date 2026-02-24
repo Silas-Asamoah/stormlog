@@ -178,7 +178,7 @@ launch the Textual interface:
 
 ```bash
 pip install "gpu-memory-profiler[tui]"
-gpu-profiler
+stormlog
 ```
 
 The TUI surfaces system info, PyTorch/TensorFlow quick actions, and CLI tips.

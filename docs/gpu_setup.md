@@ -92,7 +92,7 @@ Once the GPU stack is working, run the Textual TUI for an interactive check:
 
 ```bash
 pip install "gpu-memory-profiler[tui]"
-gpu-profiler
+stormlog
 ```
 
 Use the overview tab to confirm the profiler sees your GPUs before running the

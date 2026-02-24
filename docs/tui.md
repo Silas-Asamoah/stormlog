@@ -18,7 +18,7 @@ includes `textual`.
 ## Launching the TUI
 
 ```bash
-gpu-profiler
+stormlog
 ```
 
 ### What You’ll See
