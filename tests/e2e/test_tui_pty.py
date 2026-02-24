@@ -13,9 +13,9 @@ pytestmark = [
 
 
 def _spawn_tui() -> pexpect.spawn:
-    executable = shutil.which("gpu-profiler")
+    executable = shutil.which("stormlog")
     if executable is None:
-        pytest.skip("gpu-profiler entrypoint is unavailable in this environment.")
+        pytest.skip("stormlog entrypoint is unavailable in this environment.")
 
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
@@ -59,7 +59,7 @@ def _assert_still_running(child: pexpect.spawn, *, timeout: float = 1.0) -> None
         child.expect(pexpect.EOF, timeout=timeout)
     except pexpect.TIMEOUT:
         return
-    raise AssertionError("gpu-profiler exited unexpectedly before quit key.")
+    raise AssertionError("stormlog exited unexpectedly before quit key.")
 
 
 def test_gpu_profiler_pty_smoke_start_interact_quit() -> None:

@@ -217,7 +217,7 @@ def build_cli_markdown() -> str:
         python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated --skip-tui
 
         # Optional: fuller dashboard
-        gpu-profiler
+        stormlog
 
         # Ensure pip shows progress
         pip install --progress-bar on "gpu-memory-profiler[tui]"
