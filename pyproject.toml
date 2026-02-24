@@ -116,7 +116,7 @@ Repository = "https://github.com/Silas-Asamoah/stormlog.git"
 [project.scripts]
 gpumemprof = "gpumemprof.cli:main"
 tfmemprof = "tfmemprof.cli:main"
-gpu-profiler = "gpumemprof.tui.app:run_app"
+stormlog = "gpumemprof.tui.app:run_app"
 
 [tool.setuptools_scm]
 write_to = "gpumemprof/_version.py"

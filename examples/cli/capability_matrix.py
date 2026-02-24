@@ -120,9 +120,9 @@ def _run_benchmark_check(check_dir: Path, mode: str) -> Dict[str, object]:
 
 
 def _run_tui_smoke() -> Dict[str, object]:
-    executable = shutil.which("gpu-profiler")
+    executable = shutil.which("stormlog")
     if executable is None:
-        return {"status": "SKIP", "reason": "gpu-profiler entrypoint not found"}
+        return {"status": "SKIP", "reason": "stormlog entrypoint not found"}
 
     try:
         import pexpect  # type: ignore[import-untyped, unused-ignore]
