@@ -1,7 +1,8 @@
 # Stormlog Rebrand Spec (Decision-Complete, Atomic Commits)
 
 ## Summary
-This spec renames the project branding and package metadata to `stormlog` while keeping runtime Python module imports and CLI commands unchanged (`gpumemprof`, `tfmemprof`, `gpu-profiler`).  
+This spec renames the project branding and package metadata to `stormlog` while keeping runtime Python module imports and primary CLI commands unchanged (`gpumemprof`, `tfmemprof`).  
+The TUI launcher command is intentionally renamed from `gpu-profiler` to `stormlog` (breaking CLI change).  
 It also includes GitHub repository rename steps (`Silas-Asamoah/gpu-memory-profiler` -> `Silas-Asamoah/stormlog`), PyPI package rename to `stormlog`, and Read the Docs slug updates.  
 Execution must follow Karpathy principles: think first, smallest safe change, surgical edits, and explicit verification after each atomic commit.
 
@@ -20,7 +21,11 @@ No rename of `/Users/jojoasamoah/Documents/learnings/gpu-memory-profiler/tfmempr
 No rename of `gpumemprof` or `tfmemprof` console scripts in `/Users/jojoasamoah/Documents/learnings/gpu-memory-profiler/pyproject.toml`.
 No telemetry collector identifier rename (`gpumemprof.*`, `tfmemprof.*` strings remain unchanged where they represent runtime IDs).
 
-4. No API/type surface refactor:
+4. TUI command migration (breaking):
+`gpu-profiler` console script is replaced by `stormlog` in `/Users/jojoasamoah/Documents/learnings/gpu-memory-profiler/pyproject.toml`.
+User migration command: use `stormlog` instead of `gpu-profiler`.
+
+5. No API/type surface refactor:
 No behavioral feature changes, no new abstractions, no unrelated cleanup.
 
 ## Karpathy-Guidelines Execution Rules
@@ -87,7 +92,7 @@ All matched tracked files in code/examples/tests for branding/install guidance u
 `/Users/jojoasamoah/Documents/learnings/gpu-memory-profiler/examples/`  
 `/Users/jojoasamoah/Documents/learnings/gpu-memory-profiler/tests/`  
 Changes:
-Replace project name text and install guidance (`gpu-memory-profiler[...]` -> `stormlog[...]`) in user-facing messages and corresponding assertions. Keep command names/import paths unchanged.  
+Replace project name text and install guidance (`gpu-memory-profiler[...]` -> `stormlog[...]`) in user-facing messages and corresponding assertions. Keep import paths unchanged and rename the TUI command from `gpu-profiler` to `stormlog` wherever referenced.  
 Verify:
 ```bash
 python3 -m pytest /Users/jojoasamoah/Documents/learnings/gpu-memory-profiler/tests/test_import_hardening.py -q
@@ -180,7 +185,7 @@ tfmemprof --help
 Editable install reports package name `stormlog`.
 
 2. Runtime compatibility scenario:
-`gpumemprof` and `tfmemprof` commands still work and docs/examples still show these command names.
+`gpumemprof` and `tfmemprof` commands still work; `stormlog` launches the TUI; docs/examples no longer instruct `gpu-profiler`.
 
 3. Missing dependency messaging scenario:
 Import guidance points to `stormlog[torch]` and `stormlog[viz]` where applicable; updated tests pass.
@@ -194,7 +199,7 @@ No stale canonical old-name links outside explicit changelog migration/history r
 ## Assumptions And Defaults
 1. Canonical naming is fixed to `stormlog` everywhere externally (repo slug, package name, docs host).
 2. Repository owner remains `Silas-Asamoah`.
-3. Scope is brand + metadata rename only; import paths and CLI binary names remain unchanged.
+3. Scope is brand + metadata rename with one intentional CLI break: import paths remain unchanged, `gpumemprof` and `tfmemprof` remain unchanged, and TUI command is renamed from `gpu-profiler` to `stormlog`.
 4. Existing telemetry collector IDs remain unchanged for compatibility.
 5. `docs/_build`, `dist`, `*.egg-info`, and other generated artifacts are not edited or committed.
 6. Merge strategy should preserve atomic commits (no squash merge for this PR).
