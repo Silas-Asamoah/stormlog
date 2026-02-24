@@ -94,7 +94,7 @@ Prefer an interactive dashboard? Launch the Textual TUI:
 
 ```bash
 pip install "gpu-memory-profiler[tui]"
-gpu-profiler
+stormlog
 ```
 
 ## Enabling the CUDA Path

@@ -54,7 +54,7 @@ conda run -n tensor-torch-profiler python -m examples.cli.benchmark_harness --ch
 
 ## 5. TUI Gate
 
-- [ ] TUI launches successfully: `conda run -n tensor-torch-profiler gpu-profiler`
+- [ ] TUI launches successfully: `conda run -n tensor-torch-profiler stormlog`
 - [ ] PTY smoke start/quit (`q`) passes
 - [ ] CLI & Actions tab includes diagnose + OOM + capability-matrix launch actions
 
