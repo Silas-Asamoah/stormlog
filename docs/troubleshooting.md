@@ -182,7 +182,7 @@ print(f"Memory change: {summary['memory_change_from_baseline'] / (1024**3):.2f} 
 pip install -e .
 
 # Check if entry points are installed
-pip show gpu-memory-profiler
+pip show stormlog
 ```
 
 #### Problem: CLI commands fail
@@ -199,7 +199,7 @@ which gpumemprof
 2. **Reinstall with entry points:**
 
 ```bash
-pip uninstall gpu-memory-profiler
+pip uninstall stormlog
 pip install -e .
 ```
 
@@ -466,7 +466,7 @@ When reporting issues, include:
 
 ### Community Support
 
-- **GitHub Issues**: [Create an issue](https://github.com/Silas-Asamoah/gpu-memory-profiler/issues)
+- **GitHub Issues**: [Create an issue](https://github.com/Silas-Asamoah/stormlog/issues)
 - **Documentation**: Check the [docs](index.md)
 - **Examples**: See the [examples directory](../examples/)
 

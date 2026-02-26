@@ -1,7 +1,7 @@
 # GPU Memory Profiler
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/Silas-Asamoah/gpu-memory-profiler/actions)
-[![PyPI Version](https://img.shields.io/pypi/v/gpu-memory-profiler.svg)](https://pypi.org/project/gpu-memory-profiler/)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/Silas-Asamoah/stormlog/actions)
+[![PyPI Version](https://img.shields.io/pypi/v/stormlog.svg)](https://pypi.org/project/stormlog/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.8+-red.svg)](https://pytorch.org/)
@@ -11,7 +11,7 @@
 [![Prompt%20Toolkit](https://img.shields.io/badge/Prompt--toolkit-roadmap-lightgrey)](docs/tui.md#prompt-toolkit-roadmap)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Silas-Asamoah/gpu-memory-profiler/main/docs/gpu-profiler-overview.gif" alt="GPU Profiler TUI Demo" width="900">
+  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/gpu-profiler-overview.gif" alt="GPU Profiler TUI Demo" width="900">
   <br/>
   <em>Interactive Textual dashboard with live monitoring, visualizations, and CLI automation.</em>
 </p>
@@ -40,7 +40,7 @@ A production-ready, open source tool for real-time GPU memory profiling, leak de
 
 ### From PyPI
 
-Package page: <https://pypi.org/project/gpu-memory-profiler/>
+Package page: <https://pypi.org/project/stormlog/>
 
 ```bash
 # Basic installation
@@ -61,8 +61,8 @@ pip install stormlog[docs]   # Documentation tools
 ### From Source
 
 ```bash
-git clone https://github.com/Silas-Asamoah/gpu-memory-profiler.git
-cd gpu-memory-profiler
+git clone https://github.com/Silas-Asamoah/stormlog.git
+cd stormlog
 
 # Install in development mode
 pip install -e .
@@ -86,8 +86,8 @@ pip install -e .[test]
 
 ```bash
 # Clone and setup development environment
-git clone https://github.com/Silas-Asamoah/gpu-memory-profiler.git
-cd gpu-memory-profiler
+git clone https://github.com/Silas-Asamoah/stormlog.git
+cd stormlog
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -e .[dev,test]
@@ -134,7 +134,7 @@ print(f"Peak memory: {results.peak_memory_mb:.2f} MB")
 Start at the docs home page and follow the same structure locally or when hosted:
 
 -   **[Documentation Home (local)](docs/index.md)**
--   **[Documentation Home (hosted)](https://gpu-memory-profiler.readthedocs.io/en/latest/)**
+-   **[Documentation Home (hosted)](https://stormlog.readthedocs.io/en/latest/)**
 
 Key guides:
 -   [CLI Usage](docs/cli.md)
@@ -186,13 +186,13 @@ Future prompt_toolkit enhancements will add a command palette for advanced
 workflows—see [docs/tui.md](docs/tui.md) for details.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Silas-Asamoah/gpu-memory-profiler/main/docs/gpu-profiler-1.png" alt="GPU Profiler Overview" width="700">
+  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/gpu-profiler-1.png" alt="GPU Profiler Overview" width="700">
   <br/>
   <em>Overview, PyTorch, and TensorFlow tabs inside the Textual dashboard.</em>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Silas-Asamoah/gpu-memory-profiler/main/docs/gpu-profiler-2.png" alt="GPU Profiler CLI Actions" width="700">
+  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/gpu-profiler-2.png" alt="GPU Profiler CLI Actions" width="700">
   <br/>
   <em>CLI & Actions tab with quick commands, loaders, and log output.</em>
 </p>

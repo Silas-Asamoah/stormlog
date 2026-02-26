@@ -12,7 +12,7 @@
 1. [Introduction](#introduction)
 2. [Why GPU Memory Matters](#why-gpu-memory-matters)
 3. [Understanding the Problem](#understanding-the-problem)
-4. [Our Solution: The GPU Memory Profiler](#our-solution-the-gpu-memory-profiler)
+4. [Our Solution: Stormlog](#our-solution-stormlog)
 5. [PyTorch Memory Profiling](#pytorch-memory-profiling)
 6. [TensorFlow Memory Profiling](#tensorflow-memory-profiling)
 7. [Key Features Explained](#key-features-explained)
@@ -102,7 +102,7 @@ for batch in dataset:
 
 _[Image Placeholder: Memory usage graph showing memory leak over time]_
 
-## Our Solution: The GPU Memory Profiler
+## Our Solution: Stormlog
 
 We built a comprehensive tool that works with both **PyTorch** and **TensorFlow** – the two most popular deep learning frameworks. Our profiler is like having a sophisticated monitoring system for your AI training.
 
@@ -713,8 +713,8 @@ _[Image Placeholder: Analysis dashboard showing efficiency scores, correlation p
 1. **Clone the Repository**
 
 ```bash
-git clone https://github.com/Silas-Asamoah/gpu-memory-profiler.git
-cd gpu-memory-profiler
+git clone https://github.com/Silas-Asamoah/stormlog.git
+cd stormlog
 ```
 
 2. **Install Dependencies**
@@ -1099,13 +1099,13 @@ This project is released under the MIT License, making it free for both academic
 
 ---
 
-**Repository**: [https://github.com/Silas-Asamoah/gpu-memory-profiler](https://github.com/Silas-Asamoah/gpu-memory-profiler)
+**Repository**: [https://github.com/Silas-Asamoah/stormlog](https://github.com/Silas-Asamoah/stormlog)
 
 **Documentation**: [Documentation Home](index.md)
 
 **Examples**: [examples/](../examples/)
 
-**Issues and Support**: [GitHub Issues](https://github.com/Silas-Asamoah/gpu-memory-profiler/issues)
+**Issues and Support**: [GitHub Issues](https://github.com/Silas-Asamoah/stormlog/issues)
 
 ---
 

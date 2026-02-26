@@ -89,8 +89,8 @@ The TensorFlow GPU Memory Profiler is a comprehensive tool for monitoring and op
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/Silas-Asamoah/gpu-memory-profiler.git
-cd gpu-memory-profiler
+git clone https://github.com/Silas-Asamoah/stormlog.git
+cd stormlog
 ```
 
 ### Step 2: Choose Your TensorFlow Installation
@@ -887,7 +887,7 @@ tfmemprof info                                    # System summary
 4. **Optimize**: Use insights to improve TensorFlow memory efficiency
 5. **Contribute**: Share improvements with the TensorFlow community
 
-For questions, issues, or contributions, visit our [GitHub repository](https://github.com/Silas-Asamoah/gpu-memory-profiler).
+For questions, issues, or contributions, visit our [GitHub repository](https://github.com/Silas-Asamoah/stormlog).
 
 ---
 

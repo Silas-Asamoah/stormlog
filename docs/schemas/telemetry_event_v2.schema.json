@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Silas-Asamoah/gpu-memory-profiler/docs/schemas/telemetry_event_v2.schema.json",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/telemetry_event_v2.schema.json",
   "title": "TelemetryEvent v2",
   "description": "Canonical telemetry event emitted by tracker/export paths.",
   "type": "object",
