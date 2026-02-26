@@ -26,7 +26,7 @@ torch: Any = _torch
 
 _TORCH_INSTALL_GUIDANCE = (
     "PyTorch is required for this feature. Install with "
-    "`pip install 'gpu-memory-profiler[torch]'` "
+    "`pip install 'stormlog[torch]'` "
     "or follow https://pytorch.org/get-started/locally/."
 )
 
@@ -465,7 +465,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
             except ImportError:
                 print(
                     "Visualization export requires optional dependencies. "
-                    "Install with `pip install gpu-memory-profiler[viz]`."
+                    "Install with `pip install stormlog[viz]`."
                 )
                 return
 

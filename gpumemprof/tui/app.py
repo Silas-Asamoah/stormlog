@@ -1066,7 +1066,7 @@ class GPUMemoryProfilerTUI(App):
                 import plotly.graph_objects as go
             except ImportError as exc:
                 raise ImportError(
-                    "Plotly is required for HTML output. Install gpu-memory-profiler[viz]."
+                    "Plotly is required for HTML output. Install stormlog[viz]."
                 ) from exc
 
             fig = go.Figure()

@@ -59,14 +59,14 @@ def test_imports_are_hardened_when_torch_is_missing() -> None:
         try:
             gpumemprof_utils.get_gpu_info()
         except ImportError as exc:
-            assert "gpu-memory-profiler[torch]" in str(exc)
+            assert "stormlog[torch]" in str(exc)
         else:
             raise AssertionError("Expected get_gpu_info to fail lazily without torch")
 
         try:
             _ = gpumemprof.GPUMemoryProfiler
         except ImportError as exc:
-            assert "gpu-memory-profiler[torch]" in str(exc)
+            assert "stormlog[torch]" in str(exc)
         else:
             raise AssertionError("Expected GPUMemoryProfiler symbol load to fail lazily without torch")
 

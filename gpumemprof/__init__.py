@@ -10,12 +10,12 @@ __author__ = "GPU Memory Profiler Team"
 
 _TORCH_INSTALL_GUIDANCE = (
     "PyTorch is required for this feature. Install with "
-    "`pip install 'gpu-memory-profiler[torch]'` "
+    "`pip install 'stormlog[torch]'` "
     "or follow https://pytorch.org/get-started/locally/."
 )
 _VIZ_INSTALL_GUIDANCE = (
     "MemoryVisualizer requires optional visualization dependencies. "
-    "Install with `pip install gpu-memory-profiler[viz]`."
+    "Install with `pip install stormlog[viz]`."
 )
 
 _SYMBOL_TO_MODULE = {

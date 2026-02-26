@@ -91,7 +91,7 @@ PY
 Once the GPU stack is working, run the Textual TUI for an interactive check:
 
 ```bash
-pip install "gpu-memory-profiler[tui]"
+pip install "stormlog[tui]"
 stormlog
 ```
 
