@@ -220,7 +220,7 @@ def build_cli_markdown() -> str:
         stormlog
 
         # Ensure pip shows progress
-        pip install --progress-bar on "gpu-memory-profiler[tui]"
+        pip install --progress-bar on "stormlog[tui]"
         ```
 
         Use the buttons below to log summaries or copy commands.
