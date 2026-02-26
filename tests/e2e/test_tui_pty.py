@@ -62,7 +62,7 @@ def _assert_still_running(child: pexpect.spawn, *, timeout: float = 1.0) -> None
     raise AssertionError("stormlog exited unexpectedly before quit key.")
 
 
-def test_gpu_profiler_pty_smoke_start_interact_quit() -> None:
+def test_stormlog_pty_smoke_start_interact_quit() -> None:
     child = _spawn_tui()
     try:
         _expect_with_retry(child, "Refresh Overview", attempts=4, timeout=4)
