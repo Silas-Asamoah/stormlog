@@ -9,7 +9,7 @@ an interactive terminal experience.
 Install the optional TUI dependencies:
 
 ```bash
-pip install "gpu-memory-profiler[tui]"
+pip install "stormlog[tui]"
 ```
 
 During development you can also rely on `requirements-dev.txt`, which already
@@ -57,7 +57,7 @@ The Visualizations tab reads from the same tracking session: hit **Refresh
 Timeline** once events start flowing to render an ASCII graph plus summary
 stats, then use **Generate PNG Plot** (Matplotlib) or **Generate HTML Plot**
 (Plotly) to save richer artifacts you can share. Install the `[viz]` extra
-(`pip install "gpu-memory-profiler[viz]"`) if you want the optional Plotly
+(`pip install "stormlog[viz]"`) if you want the optional Plotly
 export.
 
 The PyTorch/TensorFlow tabs both include **Refresh Profiles** and **Clear
@@ -105,7 +105,7 @@ designed to accommodate this future addition without breaking compatibility.
 
 ## Troubleshooting
 
-- **Missing dependency** – Ensure you used `pip install "gpu-memory-profiler[tui]"`.
+- **Missing dependency** – Ensure you used `pip install "stormlog[tui]"`.
 - **GPU-less environments** – The overview tab will fall back to CPU-only data
   and explicitly state when GPU metrics are unavailable.
 - **Terminal too small** – Textual adapts to smaller windows, but a minimum of

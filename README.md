@@ -44,18 +44,18 @@ Package page: <https://pypi.org/project/gpu-memory-profiler/>
 
 ```bash
 # Basic installation
-pip install gpu-memory-profiler
+pip install stormlog
 
 # With visualization support
-pip install gpu-memory-profiler[viz]
+pip install stormlog[viz]
 
 # With optional dependencies
-pip install gpu-memory-profiler[torch]  # PyTorch support
-pip install gpu-memory-profiler[tf]     # TensorFlow support
-pip install gpu-memory-profiler[all]    # Both frameworks
-pip install gpu-memory-profiler[dev]    # Development tools
-pip install gpu-memory-profiler[test]   # Testing dependencies
-pip install gpu-memory-profiler[docs]   # Documentation tools
+pip install stormlog[torch]  # PyTorch support
+pip install stormlog[tf]     # TensorFlow support
+pip install stormlog[all]    # Both frameworks
+pip install stormlog[dev]    # Development tools
+pip install stormlog[test]   # Testing dependencies
+pip install stormlog[docs]   # Documentation tools
 ```
 
 ### From Source
@@ -177,7 +177,7 @@ Prefer an interactive dashboard? Install the optional TUI dependencies and
 launch the Textual interface:
 
 ```bash
-pip install "gpu-memory-profiler[tui]"
+pip install "stormlog[tui]"
 stormlog
 ```
 

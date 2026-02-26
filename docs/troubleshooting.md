@@ -17,7 +17,7 @@ This guide helps you resolve common issues with GPU Memory Profiler.
 pip install -e .
 
 # Or install from PyPI
-pip install gpu-memory-profiler
+pip install stormlog
 ```
 
 #### Problem: `ModuleNotFoundError: No module named 'torch'`

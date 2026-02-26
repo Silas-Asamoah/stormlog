@@ -93,7 +93,7 @@ python -m examples.scenarios.tf_end_to_end_scenario
 Prefer an interactive dashboard? Launch the Textual TUI:
 
 ```bash
-pip install "gpu-memory-profiler[tui]"
+pip install "stormlog[tui]"
 stormlog
 ```
 

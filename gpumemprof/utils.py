@@ -23,7 +23,7 @@ torch: Any = _torch
 logger = logging.getLogger(__name__)
 _TORCH_INSTALL_GUIDANCE = (
     "PyTorch is required for this feature. Install with "
-    "`pip install 'gpu-memory-profiler[torch]'` "
+    "`pip install 'stormlog[torch]'` "
     "or follow https://pytorch.org/get-started/locally/."
 )
 
