@@ -14,7 +14,7 @@ This guide covers different installation methods for GPU Memory Profiler.
 
 ### 1. From PyPI
 
-Package page: <https://pypi.org/project/gpu-memory-profiler/>
+Package page: <https://pypi.org/project/stormlog/>
 
 ```bash
 # Basic installation (core dependencies only)
@@ -41,8 +41,8 @@ For development or if you need the latest features:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Silas-Asamoah/gpu-memory-profiler.git
-cd gpu-memory-profiler
+git clone https://github.com/Silas-Asamoah/stormlog.git
+cd stormlog
 
 # Install in development mode
 pip install -e .
@@ -65,8 +65,8 @@ For contributors and developers:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Silas-Asamoah/gpu-memory-profiler.git
-cd gpu-memory-profiler
+git clone https://github.com/Silas-Asamoah/stormlog.git
+cd stormlog
 
 # Create virtual environment
 python3 -m venv venv
@@ -186,7 +186,7 @@ After installation:
 If you encounter issues:
 
 1. Check the [Troubleshooting Guide](troubleshooting.md)
-2. Search existing [GitHub Issues](https://github.com/Silas-Asamoah/gpu-memory-profiler/issues)
+2. Search existing [GitHub Issues](https://github.com/Silas-Asamoah/stormlog/issues)
 3. Create a new issue with detailed information
 
 ---
