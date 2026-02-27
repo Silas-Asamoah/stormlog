@@ -263,23 +263,26 @@ def resolve_distributed_identity(
     if raw_rank is not None and raw_local_rank is None:
         raw_local_rank = raw_rank
 
-    normalized = {
-        "job_id": _coerce_optional_non_empty_string(raw_job_id, "job_id"),
-        "rank": _coerce_non_negative_int(raw_rank, "rank"),
-        "local_rank": _coerce_non_negative_int(raw_local_rank, "local_rank"),
-        "world_size": _coerce_positive_int(raw_world_size, "world_size"),
-    }
+    normalized_job_id = _coerce_optional_non_empty_string(raw_job_id, "job_id")
+    normalized_rank = _coerce_non_negative_int(raw_rank, "rank")
+    normalized_local_rank = _coerce_non_negative_int(raw_local_rank, "local_rank")
+    normalized_world_size = _coerce_positive_int(raw_world_size, "world_size")
 
-    if normalized["rank"] >= normalized["world_size"]:
+    if normalized_rank >= normalized_world_size:
         raise ValueError("rank must be < world_size")
-    if normalized["local_rank"] >= normalized["world_size"]:
+    if normalized_local_rank >= normalized_world_size:
         raise ValueError("local_rank must be < world_size")
-    if normalized["world_size"] == 1 and normalized["rank"] != 0:
+    if normalized_world_size == 1 and normalized_rank != 0:
         raise ValueError("rank must be 0 when world_size is 1")
-    if normalized["world_size"] == 1 and normalized["local_rank"] != 0:
+    if normalized_world_size == 1 and normalized_local_rank != 0:
         raise ValueError("local_rank must be 0 when world_size is 1")
 
-    return normalized
+    return {
+        "job_id": normalized_job_id,
+        "rank": normalized_rank,
+        "local_rank": normalized_local_rank,
+        "world_size": normalized_world_size,
+    }
 
 
 def _strip_distributed_identity_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -593,7 +596,7 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
 
     _coerce_string(record["context"], "context", allow_none=True)
 
-    metadata = _coerce_metadata_dict(record["metadata"])
+    _coerce_metadata_dict(record["metadata"])
     resolve_distributed_identity(
         job_id=record.get("job_id"),
         rank=record.get("rank"),
