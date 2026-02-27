@@ -1,4 +1,4 @@
-"""GPU Memory Profiler - A comprehensive memory profiling tool for PyTorch."""
+"""Stormlog - A comprehensive memory profiling tool for PyTorch."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import importlib
 from typing import Any
 
 __version__ = "0.2.0"
-__author__ = "GPU Memory Profiler Team"
+__author__ = "Stormlog Team"
 
 _TORCH_INSTALL_GUIDANCE = (
     "PyTorch is required for this feature. Install with "

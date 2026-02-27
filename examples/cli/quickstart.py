@@ -57,7 +57,7 @@ def run_tfmemprof_examples() -> None:
 
 
 def main() -> None:
-    print_header("GPU Memory Profiler CLI Quickstart")
+    print_header("Stormlog CLI Quickstart")
     print_section("gpumemprof commands")
     run_gpumemprof_examples()
 

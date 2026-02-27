@@ -1,4 +1,4 @@
-"""Command-line interface for GPU Memory Profiler."""
+"""Command-line interface for Stormlog."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def _resolve_runtime_symbol(
 def main() -> None:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="GPU Memory Profiler - Monitor and analyze GPU memory usage",
+        description="Stormlog - Monitor and analyze GPU memory usage",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -285,7 +285,7 @@ Examples:
 
 def cmd_info(args: argparse.Namespace) -> None:
     """Handle info command."""
-    print("GPU Memory Profiler - System Information")
+    print("Stormlog - System Information")
     print("=" * 50)
 
     # System info

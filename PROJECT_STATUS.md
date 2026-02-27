@@ -1,4 +1,4 @@
-# GPU Memory Profiler - Project Status
+# Stormlog - Project Status
 
 ## Current Status: v0.2 Launch Candidate
 

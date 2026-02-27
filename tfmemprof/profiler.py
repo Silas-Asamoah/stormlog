@@ -1,5 +1,5 @@
 """
-Core TensorFlow Memory Profiler
+Core TensorFlow Stormlog
 
 Main profiling engine for capturing and analyzing GPU memory usage during
 TensorFlow model training and inference.
@@ -147,7 +147,7 @@ class TensorTracker:
 
 
 class TFMemoryProfiler:
-    """Main TensorFlow GPU Memory Profiler class."""
+    """Main TensorFlow Stormlog class."""
 
     def __init__(
         self, device: Optional[str] = None, enable_tensor_tracking: bool = True
@@ -180,9 +180,7 @@ class TFMemoryProfiler:
         # Setup TensorFlow memory growth
         self._setup_tf_memory()
 
-        logging.info(
-            f"TensorFlow Memory Profiler initialized for device: {self.device}"
-        )
+        logging.info(f"TensorFlow Stormlog initialized for device: {self.device}")
 
     def _get_default_device(self) -> str:
         """Get default TensorFlow device."""

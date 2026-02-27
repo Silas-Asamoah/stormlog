@@ -2,7 +2,7 @@
 
 # Usage Guide
 
-This guide covers how to use GPU Memory Profiler for both PyTorch and TensorFlow applications.
+This guide covers how to use Stormlog for both PyTorch and TensorFlow applications.
 
 ## Canonical Workflow (v0.2)
 

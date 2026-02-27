@@ -1,4 +1,4 @@
-"""Textual-based terminal UI for GPU Memory Profiler."""
+"""Textual-based terminal UI for Stormlog."""
 
 
 def run_app() -> None:

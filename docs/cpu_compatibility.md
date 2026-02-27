@@ -2,7 +2,7 @@
 
 # CPU Compatibility Guide
 
-This guide explains how to use GPU Memory Profiler on systems without CUDA/GPU support.
+This guide explains how to use Stormlog on systems without CUDA/GPU support.
 
 ## Built-in CPU Mode
 

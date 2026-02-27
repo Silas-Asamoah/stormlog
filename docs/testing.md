@@ -2,7 +2,7 @@
 
 # Testing & Validation Guide
 
-This guide covers how to test and validate GPU Memory Profiler functionality.
+This guide covers how to test and validate Stormlog functionality.
 
 Install test dependencies before running the suite:
 
@@ -328,7 +328,7 @@ def test_gpumemprof_cli():
     result = subprocess.run(['gpumemprof', 'info'],
                           capture_output=True, text=True)
     assert result.returncode == 0
-    assert 'GPU Memory Profiler' in result.stdout
+    assert 'Stormlog' in result.stdout
 
 def test_gpumemprof_monitor():
     # Test monitor command (short duration)

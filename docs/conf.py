@@ -1,4 +1,4 @@
-"""Sphinx configuration for GPU Memory Profiler docs."""
+"""Sphinx configuration for Stormlog docs."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 
-project = "GPU Memory Profiler"
-author = "GPU Memory Profiler Team"
-copyright = "2026, GPU Memory Profiler Team"
+project = "Stormlog"
+author = "Stormlog Team"
+copyright = "2026, Stormlog Team"
 
 extensions = [
     "myst_parser",
@@ -68,4 +68,4 @@ suppress_warnings = [
 
 html_theme = "sphinx_rtd_theme"
 html_static_path: list[str] = []
-html_title = "GPU Memory Profiler Docs"
+html_title = "Stormlog Docs"

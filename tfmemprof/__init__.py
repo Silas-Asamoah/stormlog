@@ -1,12 +1,12 @@
 """
-TensorFlow GPU Memory Profiler
+TensorFlow Stormlog
 
 A comprehensive GPU memory profiling tool for TensorFlow applications.
 Provides real-time monitoring, leak detection, and optimization insights.
 """
 
 __version__ = "0.2.0"
-__author__ = "GPU Memory Profiler Team"
+__author__ = "Stormlog Team"
 __email__ = "prince.agyei.tuffour@gmail.com"
 
 from .analyzer import GapFinding as TensorFlowGapFinding

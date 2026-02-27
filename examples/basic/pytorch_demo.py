@@ -88,7 +88,7 @@ def display_environment() -> None:
 
 def main() -> None:
     seed_everything()
-    print_header("GPU Memory Profiler - PyTorch Demo")
+    print_header("Stormlog - PyTorch Demo")
 
     if torch is None or nn is None:
         print("PyTorch is not installed. Skipping PyTorch demo.")  # type: ignore[unreachable, unused-ignore]

@@ -31,7 +31,7 @@
 
 ## Overview
 
-The PyTorch GPU Memory Profiler is a comprehensive tool for monitoring and optimizing memory usage during PyTorch model training and inference. This guide provides complete instructions for testing and using the profiler in both GPU and CPU environments.
+The PyTorch Stormlog is a comprehensive tool for monitoring and optimizing memory usage during PyTorch model training and inference. This guide provides complete instructions for testing and using the profiler in both GPU and CPU environments.
 
 ### Key Features
 
@@ -184,7 +184,7 @@ python -c "import torch; print(f'GPU: {torch.cuda.get_device_name() if torch.cud
 nvidia-smi
 ```
 
-### Testing the GPU Profiler
+### Testing the Stormlog
 
 Run the curated demos (these are the same ones exercised in CI):
 
@@ -1295,7 +1295,7 @@ optimal_batch_size = optimizer.optimize_batch_size(model)
 
 ## Conclusion
 
-This comprehensive guide provides everything you need to test and use the PyTorch GPU Memory Profiler in both GPU and CPU environments. Whether you're debugging memory issues, optimizing performance, or learning about memory management, the profiler provides valuable insights and tools.
+This comprehensive guide provides everything you need to test and use the PyTorch Stormlog in both GPU and CPU environments. Whether you're debugging memory issues, optimizing performance, or learning about memory management, the profiler provides valuable insights and tools.
 
 ### Quick Reference
 

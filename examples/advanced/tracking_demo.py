@@ -154,7 +154,7 @@ def export_results(tracker: MemoryTracker) -> None:
 
 def main() -> None:
     seed_everything()
-    print_header("GPU Memory Profiler - Advanced Tracking Demo")
+    print_header("Stormlog - Advanced Tracking Demo")
 
     if torch is None or F is None:
         print("PyTorch is not installed. Skipping advanced tracking demo.")  # type: ignore[unreachable, unused-ignore]

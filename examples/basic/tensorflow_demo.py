@@ -65,7 +65,7 @@ def print_results(results: Any) -> None:
 
 def main() -> None:
     seed_everything()
-    print_header("GPU Memory Profiler - TensorFlow Demo")
+    print_header("Stormlog - TensorFlow Demo")
 
     if tf is None:
         print("TensorFlow is not installed. Skipping TensorFlow demo.")

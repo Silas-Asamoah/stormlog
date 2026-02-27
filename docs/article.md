@@ -1,6 +1,6 @@
 [← Back to main docs](index.md)
 
-# GPU Memory Profiler: A Complete Guide to Monitoring and Optimizing Deep Learning Memory Usage
+# Stormlog: A Complete Guide to Monitoring and Optimizing Deep Learning Memory Usage
 
 **Authors:** Prince Agyei Tuffour and Silas Bempong
 **Publication Date:** June 2025
@@ -33,7 +33,7 @@ Imagine you're baking cookies in your kitchen. You have limited counter space (l
 
 In the world of artificial intelligence and machine learning, we face a similar challenge with **GPU memory** when training deep learning models. Graphics Processing Units (GPUs) are like super-powered ovens that can process thousands of calculations simultaneously, but they have limited memory space. When we train AI models like ChatGPT or image recognition systems, we need to carefully manage this memory to avoid crashes and ensure optimal performance.
 
-That's where our **GPU Memory Profiler** comes in – it's like having a smart kitchen assistant that monitors how you use your counter space, suggests better organization methods, and warns you before you run out of room.
+That's where our **Stormlog** comes in – it's like having a smart kitchen assistant that monitors how you use your counter space, suggests better organization methods, and warns you before you run out of room.
 
 _[Image Placeholder: Diagram showing GPU memory like kitchen counter space with ingredients representing data]_
 
@@ -121,7 +121,7 @@ We built a comprehensive tool that works with both **PyTorch** and **TensorFlow*
 Our profiler consists of 7 core modules:
 
 ```
-GPU Memory Profiler
+Stormlog
 ├── Core Profiler      # Captures memory snapshots
 ├── Real-time Tracker  # Background monitoring
 ├── Visualizer         # Creates charts and dashboards
@@ -1037,7 +1037,7 @@ _[Image Placeholder: Roadmap timeline showing planned features]_
 
 ## Conclusion
 
-GPU memory management is one of the most challenging aspects of deep learning development. Poor memory usage leads to crashed training runs, wasted resources, and frustrated developers. Our GPU Memory Profiler addresses these challenges with a comprehensive, dual-framework solution that makes memory optimization accessible to everyone.
+GPU memory management is one of the most challenging aspects of deep learning development. Poor memory usage leads to crashed training runs, wasted resources, and frustrated developers. Our Stormlog addresses these challenges with a comprehensive, dual-framework solution that makes memory optimization accessible to everyone.
 
 ### Key Takeaways
 
@@ -1075,7 +1075,7 @@ This is an open-source project, and we welcome contributions:
 
 Memory optimization shouldn't be a barrier to innovation in AI. With the right tools and understanding, anyone can efficiently manage GPU memory and focus on building amazing AI applications.
 
-Whether you're a student learning deep learning, a researcher pushing the boundaries of AI, or a company building production ML systems, our GPU Memory Profiler empowers you to use memory efficiently and avoid common pitfalls.
+Whether you're a student learning deep learning, a researcher pushing the boundaries of AI, or a company building production ML systems, our Stormlog empowers you to use memory efficiently and avoid common pitfalls.
 
 The future of AI depends on making powerful tools accessible to everyone. We're proud to contribute to that future with this comprehensive memory profiling solution.
 

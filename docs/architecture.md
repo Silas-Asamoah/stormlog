@@ -2,17 +2,17 @@
 
 # Architecture Guide
 
-This document describes the architecture and design principles of GPU Memory Profiler.
+This document describes the architecture and design principles of Stormlog.
 
 ## Overview
 
-GPU Memory Profiler is designed with a modular, extensible architecture that supports both PyTorch and TensorFlow while maintaining clean separation of concerns.
+Stormlog is designed with a modular, extensible architecture that supports both PyTorch and TensorFlow while maintaining clean separation of concerns.
 
 ## High-Level Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    GPU Memory Profiler                      │
+│                    Stormlog                      │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
 │  │   PyTorch   │  │ TensorFlow  │  │     CLI     │         │
