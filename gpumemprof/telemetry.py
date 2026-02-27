@@ -231,34 +231,34 @@ def resolve_distributed_identity(
     env: Optional[Mapping[str, str]] = None,
 ) -> dict[str, Any]:
     """Normalize distributed identity fields from explicit, metadata, or env inputs."""
-
-    inferred = _infer_distributed_identity_from_env(env)
     metadata_values = dict(metadata or {})
-
-    raw_job_id = (
-        job_id
-        if job_id is not None
-        else metadata_values.get("job_id", inferred["job_id"])
-    )
-    raw_rank = (
-        rank if rank is not None else metadata_values.get("rank", inferred["rank"])
+    raw_job_id = job_id if job_id is not None else metadata_values.get("job_id")
+    raw_rank = rank if rank is not None else metadata_values.get("rank")
+    raw_local_rank = (
+        local_rank if local_rank is not None else metadata_values.get("local_rank")
     )
     raw_world_size = (
-        world_size
-        if world_size is not None
-        else metadata_values.get("world_size", inferred["world_size"])
+        world_size if world_size is not None else metadata_values.get("world_size")
     )
 
-    if local_rank is not None:
-        raw_local_rank = local_rank
-    elif "local_rank" in metadata_values:
-        raw_local_rank = metadata_values["local_rank"]
-    elif raw_rank is not None and (
-        rank is not None or world_size is not None or "rank" in metadata_values
-    ):
+    needs_rank_env = any(
+        value is None for value in (raw_rank, raw_local_rank, raw_world_size)
+    )
+    if needs_rank_env:
+        inferred = _infer_distributed_identity_from_env(env)
+        if raw_rank is None:
+            raw_rank = inferred["rank"]
+        if raw_local_rank is None:
+            raw_local_rank = inferred["local_rank"]
+        if raw_world_size is None:
+            raw_world_size = inferred["world_size"]
+        if raw_job_id is None:
+            raw_job_id = inferred["job_id"]
+    elif raw_job_id is None and env is not None:
+        raw_job_id = _first_env_value(env, _JOB_ID_ENV_KEYS)
+
+    if raw_rank is not None and raw_local_rank is None:
         raw_local_rank = raw_rank
-    else:
-        raw_local_rank = inferred["local_rank"]
 
     normalized = {
         "job_id": _coerce_optional_non_empty_string(raw_job_id, "job_id"),

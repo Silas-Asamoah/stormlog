@@ -234,6 +234,22 @@ def test_resolve_distributed_identity_prefers_explicit_overrides() -> None:
     }
 
 
+def test_resolve_distributed_identity_explicit_overrides_bypass_partial_env() -> None:
+    identity = resolve_distributed_identity(
+        rank=5,
+        local_rank=2,
+        world_size=16,
+        env={"WORLD_SIZE": "8"},
+    )
+
+    assert identity == {
+        "job_id": None,
+        "rank": 5,
+        "local_rank": 2,
+        "world_size": 16,
+    }
+
+
 def test_resolve_distributed_identity_rejects_partial_env() -> None:
     with pytest.raises(
         ValueError,
