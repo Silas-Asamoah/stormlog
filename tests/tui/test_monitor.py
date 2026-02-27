@@ -33,7 +33,8 @@ class DummyCPUTracker:
         return {}
 
     def get_events(self, since: float | None = None) -> list[object]:
-        return []
+        _ = since
+        return list(self.events)
 
     def clear_events(self) -> None:
         self.events.clear()
@@ -101,3 +102,44 @@ def test_tracker_session_requires_backend(monkeypatch: pytest.MonkeyPatch) -> No
 
     with pytest.raises(monitor.TrackerUnavailableError):
         monitor.TrackerSession()
+
+
+def test_tracker_session_get_telemetry_events_normalizes_cpu_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(monitor, "MemoryTracker", BrokenGPUTracker)
+    monkeypatch.setattr(monitor, "MemoryWatchdog", None)
+    monkeypatch.setattr(monitor, "CPUMemoryTracker", DummyCPUTracker)
+    monkeypatch.setattr(monitor, "torch", _stub_torch(False))
+
+    session = monitor.TrackerSession()
+    session.start()
+
+    assert isinstance(session._tracker, DummyCPUTracker)
+    session._tracker.events.append(
+        types.SimpleNamespace(
+            timestamp=1700000000.0,
+            event_type="warning",
+            memory_allocated=1024,
+            memory_reserved=2048,
+            memory_change=1024,
+            device_id=-1,
+            context="cpu warning",
+            job_id="job-123",
+            rank=2,
+            local_rank=0,
+            world_size=4,
+            metadata={"source": "test"},
+        )
+    )
+
+    telemetry_events = session.get_telemetry_events()
+    assert len(telemetry_events) == 1
+    first = telemetry_events[0]
+    assert first.schema_version == 2
+    assert first.collector == "gpumemprof.cpu_tracker"
+    assert first.event_type == "warning"
+    assert first.rank == 2
+    assert first.local_rank == 0
+    assert first.world_size == 4
+    assert first.job_id == "job-123"
