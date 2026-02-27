@@ -185,7 +185,7 @@ def _infer_distributed_identity_from_env(
     env: Optional[Mapping[str, str]] = None,
 ) -> dict[str, Any]:
     if env is None:
-        return {"job_id": None, "rank": 0, "local_rank": 0, "world_size": 1}
+        return {"job_id": None, "rank": None, "local_rank": None, "world_size": None}
 
     raw_job_id = _first_env_value(env, _JOB_ID_ENV_KEYS)
 
@@ -199,9 +199,7 @@ def _infer_distributed_identity_from_env(
         raw_rank = env.get(rank_key)
         raw_world_size = env.get(world_size_key)
         if raw_rank is None or raw_world_size is None:
-            raise ValueError(
-                "distributed environment must provide rank and world_size together"
-            )
+            continue
 
         local_rank_value = env.get(local_rank_key)
         if local_rank_value is None or not local_rank_value.strip():
@@ -218,7 +216,7 @@ def _infer_distributed_identity_from_env(
             "world_size": _coerce_positive_int(world_size_value, "world_size"),
         }
 
-    return {"job_id": raw_job_id, "rank": 0, "local_rank": 0, "world_size": 1}
+    return {"job_id": raw_job_id, "rank": None, "local_rank": None, "world_size": None}
 
 
 def resolve_distributed_identity(
@@ -241,10 +239,12 @@ def resolve_distributed_identity(
         world_size if world_size is not None else metadata_values.get("world_size")
     )
 
-    needs_rank_env = any(
-        value is None for value in (raw_rank, raw_local_rank, raw_world_size)
-    )
-    if needs_rank_env:
+    if (
+        raw_job_id is None
+        or raw_rank is None
+        or raw_local_rank is None
+        or raw_world_size is None
+    ):
         inferred = _infer_distributed_identity_from_env(env)
         if raw_rank is None:
             raw_rank = inferred["rank"]
@@ -254,8 +254,11 @@ def resolve_distributed_identity(
             raw_world_size = inferred["world_size"]
         if raw_job_id is None:
             raw_job_id = inferred["job_id"]
-    elif raw_job_id is None and env is not None:
-        raw_job_id = _first_env_value(env, _JOB_ID_ENV_KEYS)
+
+    if raw_world_size is None:
+        raw_world_size = 1
+    if raw_rank is None:
+        raw_rank = 0
 
     if raw_rank is not None and raw_local_rank is None:
         raw_local_rank = raw_rank
@@ -596,7 +599,6 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
         rank=record.get("rank"),
         local_rank=record.get("local_rank"),
         world_size=record.get("world_size"),
-        metadata=metadata,
     )
 
 
@@ -623,7 +625,6 @@ def telemetry_event_from_record(
             rank=record.get("rank"),
             local_rank=record.get("local_rank"),
             world_size=record.get("world_size"),
-            metadata=metadata,
         )
 
         return TelemetryEventV2(
@@ -666,7 +667,7 @@ def telemetry_event_from_record(
             rank=distributed_identity["rank"],
             local_rank=distributed_identity["local_rank"],
             world_size=distributed_identity["world_size"],
-            metadata=_strip_distributed_identity_metadata(metadata),
+            metadata=metadata,
         )
 
     if not permissive_legacy:
