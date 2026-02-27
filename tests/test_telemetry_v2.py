@@ -250,6 +250,26 @@ def test_resolve_distributed_identity_explicit_overrides_bypass_partial_env() ->
     }
 
 
+def test_resolve_distributed_identity_reads_job_id_without_rank_env_inference() -> None:
+    identity = resolve_distributed_identity(
+        rank=5,
+        local_rank=2,
+        world_size=16,
+        env={
+            "RANK": "oops",
+            "WORLD_SIZE": "8",
+            "TORCHELASTIC_RUN_ID": "train-42",
+        },
+    )
+
+    assert identity == {
+        "job_id": "train-42",
+        "rank": 5,
+        "local_rank": 2,
+        "world_size": 16,
+    }
+
+
 def test_resolve_distributed_identity_skips_partial_env() -> None:
     identity = resolve_distributed_identity(
         env={"WORLD_SIZE": "8", "TORCHELASTIC_RUN_ID": "train-42"}

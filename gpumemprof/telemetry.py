@@ -239,12 +239,10 @@ def resolve_distributed_identity(
         world_size if world_size is not None else metadata_values.get("world_size")
     )
 
-    if (
-        raw_job_id is None
-        or raw_rank is None
-        or raw_local_rank is None
-        or raw_world_size is None
-    ):
+    needs_rank_env = (
+        raw_rank is None or raw_local_rank is None or raw_world_size is None
+    )
+    if needs_rank_env:
         inferred = _infer_distributed_identity_from_env(env)
         if raw_rank is None:
             raw_rank = inferred["rank"]
@@ -254,6 +252,8 @@ def resolve_distributed_identity(
             raw_world_size = inferred["world_size"]
         if raw_job_id is None:
             raw_job_id = inferred["job_id"]
+    elif raw_job_id is None and env is not None:
+        raw_job_id = _first_env_value(env, _JOB_ID_ENV_KEYS)
 
     if raw_world_size is None:
         raw_world_size = 1
