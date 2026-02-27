@@ -214,12 +214,20 @@ def cmd_track(args: argparse.Namespace) -> int:
         return 1
 
     print("Starting background memory tracking...")
+    job_id = getattr(args, "job_id", None)
+    rank = getattr(args, "rank", None)
+    local_rank = getattr(args, "local_rank", None)
+    world_size = getattr(args, "world_size", None)
 
     tracker = MemoryTracker(
         sampling_interval=args.interval,
         alert_threshold_mb=args.threshold,
         device=args.device,
         enable_logging=True,
+        job_id=job_id,
+        rank=rank,
+        local_rank=local_rank,
+        world_size=world_size,
     )
 
     # Add alert callback
@@ -522,6 +530,29 @@ def main() -> int:
         "--device",
         default="/GPU:0",
         help="TensorFlow device to monitor (default: /GPU:0)",
+    )
+    track_parser.add_argument(
+        "--job-id",
+        default=None,
+        help="Distributed job identifier override (default: infer from env)",
+    )
+    track_parser.add_argument(
+        "--rank",
+        type=int,
+        default=None,
+        help="Global distributed rank override (default: infer from env)",
+    )
+    track_parser.add_argument(
+        "--local-rank",
+        type=int,
+        default=None,
+        help="Local distributed rank override (default: infer from env)",
+    )
+    track_parser.add_argument(
+        "--world-size",
+        type=int,
+        default=None,
+        help="Distributed world size override (default: infer from env)",
     )
     track_parser.add_argument(
         "--output", required=True, help="Output file for tracking results"

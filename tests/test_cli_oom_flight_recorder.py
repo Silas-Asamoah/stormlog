@@ -34,6 +34,14 @@ def test_main_parses_oom_track_flags(monkeypatch: pytest.MonkeyPatch) -> None:
             "7",
             "--oom-max-total-mb",
             "2048",
+            "--job-id",
+            "train-42",
+            "--rank",
+            "2",
+            "--local-rank",
+            "0",
+            "--world-size",
+            "8",
         ],
     )
 
@@ -45,6 +53,10 @@ def test_main_parses_oom_track_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.oom_buffer_size == 512
     assert args.oom_max_dumps == 7
     assert args.oom_max_total_mb == 2048
+    assert args.job_id == "train-42"
+    assert args.rank == 2
+    assert args.local_rank == 0
+    assert args.world_size == 8
 
 
 def test_cmd_track_passes_oom_config_to_memorytracker(
@@ -114,6 +126,10 @@ def test_cmd_track_passes_oom_config_to_memorytracker(
         oom_buffer_size=1024,
         oom_max_dumps=9,
         oom_max_total_mb=512,
+        job_id="train-42",
+        rank=2,
+        local_rank=0,
+        world_size=8,
     )
 
     gpumemprof_cli.cmd_track(args)
@@ -125,6 +141,10 @@ def test_cmd_track_passes_oom_config_to_memorytracker(
     assert created["oom_buffer_size"] == 1024
     assert created["oom_max_dumps"] == 9
     assert created["oom_max_total_mb"] == 512
+    assert created["job_id"] == "train-42"
+    assert created["rank"] == 2
+    assert created["local_rank"] == 0
+    assert created["world_size"] == 8
     assert created["capture_context"] == "gpumemprof.track"
     assert created["capture_metadata"]["command"] == "track"
     assert created["capture_metadata"]["runtime_backend"] == "cuda"

@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import psutil
 
-from gpumemprof.telemetry import telemetry_event_from_record, telemetry_event_to_dict
+from gpumemprof.telemetry import (
+    resolve_distributed_identity,
+    telemetry_event_from_record,
+    telemetry_event_to_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +42,10 @@ else:
             memory_change: int
             device_id: int
             context: Optional[str] = None
+            job_id: Optional[str] = None
+            rank: int = 0
+            local_rank: int = 0
+            world_size: int = 1
             metadata: Optional[Dict[str, Any]] = None
             active_memory: Optional[int] = None
             inactive_memory: Optional[int] = None
@@ -208,6 +216,10 @@ class CPUMemoryTracker:
         sampling_interval: float = 0.5,
         max_events: int = 10_000,
         enable_alerts: bool = True,
+        job_id: Optional[str] = None,
+        rank: Optional[int] = None,
+        local_rank: Optional[int] = None,
+        world_size: Optional[int] = None,
     ) -> None:
         self.process = psutil.Process()
         self.sampling_interval = sampling_interval
@@ -217,6 +229,13 @@ class CPUMemoryTracker:
         self._stop_event = threading.Event()
         self._tracking_thread: Optional[threading.Thread] = None
         self.enable_alerts = enable_alerts
+        self.distributed_identity = resolve_distributed_identity(
+            job_id=job_id,
+            rank=rank,
+            local_rank=local_rank,
+            world_size=world_size,
+            env=os.environ,
+        )
 
         self.stats: Dict[str, Any] = {
             "tracking_start_time": None,
@@ -301,6 +320,10 @@ class CPUMemoryTracker:
             memory_change=memory_change,
             device_id=-1,
             context=context,
+            job_id=self.distributed_identity["job_id"],
+            rank=self.distributed_identity["rank"],
+            local_rank=self.distributed_identity["local_rank"],
+            world_size=self.distributed_identity["world_size"],
         )
         with self._events_lock:
             self.events.append(event)
@@ -396,6 +419,10 @@ class CPUMemoryTracker:
                         "memory_change": event.memory_change,
                         "device_id": event.device_id,
                         "context": event.context,
+                        "job_id": event.job_id,
+                        "rank": event.rank,
+                        "local_rank": event.local_rank,
+                        "world_size": event.world_size,
                         "collector": "gpumemprof.cpu_tracker",
                         "sampling_interval_ms": sampling_interval_ms,
                         "pid": pid,

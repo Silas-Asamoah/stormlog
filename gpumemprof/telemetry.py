@@ -31,7 +31,24 @@ REQUIRED_V2_FIELDS = (
     "context",
     "metadata",
 )
-REQUIRED_V2_FIELD_SET = frozenset(REQUIRED_V2_FIELDS)
+OPTIONAL_V2_FIELDS = (
+    "job_id",
+    "rank",
+    "local_rank",
+    "world_size",
+)
+KNOWN_V2_FIELD_SET = frozenset(REQUIRED_V2_FIELDS + OPTIONAL_V2_FIELDS)
+_DISTRIBUTED_METADATA_KEYS = frozenset(OPTIONAL_V2_FIELDS)
+_RANK_ENV_GROUPS = (
+    ("RANK", "LOCAL_RANK", "WORLD_SIZE"),
+    (
+        "OMPI_COMM_WORLD_RANK",
+        "OMPI_COMM_WORLD_LOCAL_RANK",
+        "OMPI_COMM_WORLD_SIZE",
+    ),
+    ("SLURM_PROCID", "SLURM_LOCALID", "SLURM_NTASKS"),
+)
+_JOB_ID_ENV_KEYS = ("TORCHELASTIC_RUN_ID", "SLURM_JOB_ID")
 
 
 @dataclass
@@ -55,6 +72,10 @@ class TelemetryEventV2:
     device_free_bytes: Optional[int]
     device_total_bytes: Optional[int]
     context: Optional[str]
+    job_id: Optional[str] = None
+    rank: int = 0
+    local_rank: int = 0
+    world_size: int = 1
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -98,6 +119,12 @@ def _coerce_required_string(value: Any, field_name: str) -> str:
     return coerced
 
 
+def _coerce_optional_non_empty_string(value: Any, field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    return _coerce_required_string(value, field_name)
+
+
 def _coerce_metadata_dict(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("metadata must be an object")
@@ -120,6 +147,144 @@ def _extract_metadata(record: Mapping[str, Any]) -> dict[str, Any]:
             metadata[key.removeprefix("metadata_")] = value
 
     return metadata
+
+
+def _first_env_value(env: Mapping[str, str], keys: tuple[str, ...]) -> Optional[str]:
+    for key in keys:
+        value = env.get(key)
+        if value is None:
+            continue
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _coerce_non_negative_int(value: Any, field_name: str) -> int:
+    coerced = _coerce_int(value, field_name)
+    if coerced < 0:
+        raise ValueError(f"{field_name} must be >= 0")
+    return coerced
+
+
+def _coerce_positive_int(value: Any, field_name: str) -> int:
+    coerced = _coerce_int(value, field_name)
+    if coerced <= 0:
+        raise ValueError(f"{field_name} must be >= 1")
+    return coerced
+
+
+def _coerce_env_int(value: str, field_name: str) -> int:
+    try:
+        return int(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+
+
+def _infer_distributed_identity_from_env(
+    env: Optional[Mapping[str, str]] = None,
+) -> dict[str, Any]:
+    if env is None:
+        return {"job_id": None, "rank": 0, "local_rank": 0, "world_size": 1}
+
+    raw_job_id = _first_env_value(env, _JOB_ID_ENV_KEYS)
+
+    for rank_key, local_rank_key, world_size_key in _RANK_ENV_GROUPS:
+        keys_present = any(
+            key in env for key in (rank_key, local_rank_key, world_size_key)
+        )
+        if not keys_present:
+            continue
+
+        raw_rank = env.get(rank_key)
+        raw_world_size = env.get(world_size_key)
+        if raw_rank is None or raw_world_size is None:
+            raise ValueError(
+                "distributed environment must provide rank and world_size together"
+            )
+
+        local_rank_value = env.get(local_rank_key)
+        if local_rank_value is None or not local_rank_value.strip():
+            local_rank_value = raw_rank
+
+        rank_value = _coerce_env_int(raw_rank, "rank")
+        local_rank_int = _coerce_env_int(local_rank_value, "local_rank")
+        world_size_value = _coerce_env_int(raw_world_size, "world_size")
+
+        return {
+            "job_id": raw_job_id,
+            "rank": _coerce_non_negative_int(rank_value, "rank"),
+            "local_rank": _coerce_non_negative_int(local_rank_int, "local_rank"),
+            "world_size": _coerce_positive_int(world_size_value, "world_size"),
+        }
+
+    return {"job_id": raw_job_id, "rank": 0, "local_rank": 0, "world_size": 1}
+
+
+def resolve_distributed_identity(
+    *,
+    job_id: Any = None,
+    rank: Any = None,
+    local_rank: Any = None,
+    world_size: Any = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> dict[str, Any]:
+    """Normalize distributed identity fields from explicit, metadata, or env inputs."""
+
+    inferred = _infer_distributed_identity_from_env(env)
+    metadata_values = dict(metadata or {})
+
+    raw_job_id = (
+        job_id
+        if job_id is not None
+        else metadata_values.get("job_id", inferred["job_id"])
+    )
+    raw_rank = (
+        rank if rank is not None else metadata_values.get("rank", inferred["rank"])
+    )
+    raw_world_size = (
+        world_size
+        if world_size is not None
+        else metadata_values.get("world_size", inferred["world_size"])
+    )
+
+    if local_rank is not None:
+        raw_local_rank = local_rank
+    elif "local_rank" in metadata_values:
+        raw_local_rank = metadata_values["local_rank"]
+    elif raw_rank is not None and (
+        rank is not None or world_size is not None or "rank" in metadata_values
+    ):
+        raw_local_rank = raw_rank
+    else:
+        raw_local_rank = inferred["local_rank"]
+
+    normalized = {
+        "job_id": _coerce_optional_non_empty_string(raw_job_id, "job_id"),
+        "rank": _coerce_non_negative_int(raw_rank, "rank"),
+        "local_rank": _coerce_non_negative_int(raw_local_rank, "local_rank"),
+        "world_size": _coerce_positive_int(raw_world_size, "world_size"),
+    }
+
+    if normalized["rank"] >= normalized["world_size"]:
+        raise ValueError("rank must be < world_size")
+    if normalized["local_rank"] >= normalized["world_size"]:
+        raise ValueError("local_rank must be < world_size")
+    if normalized["world_size"] == 1 and normalized["rank"] != 0:
+        raise ValueError("rank must be 0 when world_size is 1")
+    if normalized["world_size"] == 1 and normalized["local_rank"] != 0:
+        raise ValueError("local_rank must be 0 when world_size is 1")
+
+    return normalized
+
+
+def _strip_distributed_identity_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key not in _DISTRIBUTED_METADATA_KEYS
+    }
 
 
 def _legacy_timestamp_ns(record: Mapping[str, Any]) -> int:
@@ -306,6 +471,10 @@ def telemetry_event_to_dict(event: TelemetryEventV2) -> dict[str, Any]:
         "sampling_interval_ms": event.sampling_interval_ms,
         "pid": event.pid,
         "host": event.host,
+        "job_id": event.job_id,
+        "rank": event.rank,
+        "local_rank": event.local_rank,
+        "world_size": event.world_size,
         "device_id": event.device_id,
         "allocator_allocated_bytes": event.allocator_allocated_bytes,
         "allocator_reserved_bytes": event.allocator_reserved_bytes,
@@ -331,7 +500,7 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
     if missing:
         raise ValueError(f"Missing required telemetry fields: {', '.join(missing)}")
 
-    unknown = sorted(str(name) for name in record if name not in REQUIRED_V2_FIELD_SET)
+    unknown = sorted(str(name) for name in record if name not in KNOWN_V2_FIELD_SET)
     if unknown:
         raise ValueError(f"Unknown telemetry fields: {', '.join(unknown)}")
 
@@ -357,6 +526,18 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
         raise ValueError("pid must be >= -1")
 
     _coerce_required_string(record["host"], "host")
+
+    if "job_id" in record:
+        _coerce_optional_non_empty_string(record["job_id"], "job_id")
+
+    if "rank" in record:
+        _coerce_non_negative_int(record["rank"], "rank")
+
+    if "local_rank" in record:
+        _coerce_non_negative_int(record["local_rank"], "local_rank")
+
+    if "world_size" in record:
+        _coerce_positive_int(record["world_size"], "world_size")
 
     _coerce_int(record["device_id"], "device_id")
 
@@ -409,7 +590,14 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
 
     _coerce_string(record["context"], "context", allow_none=True)
 
-    _coerce_metadata_dict(record["metadata"])
+    metadata = _coerce_metadata_dict(record["metadata"])
+    resolve_distributed_identity(
+        job_id=record.get("job_id"),
+        rank=record.get("rank"),
+        local_rank=record.get("local_rank"),
+        world_size=record.get("world_size"),
+        metadata=metadata,
+    )
 
 
 def telemetry_event_from_record(
@@ -429,6 +617,14 @@ def telemetry_event_from_record(
             raise ValueError(f"Unsupported schema_version: {schema_version}")
 
         validate_telemetry_record(record)
+        metadata = _coerce_metadata_dict(record["metadata"])
+        distributed_identity = resolve_distributed_identity(
+            job_id=record.get("job_id"),
+            rank=record.get("rank"),
+            local_rank=record.get("local_rank"),
+            world_size=record.get("world_size"),
+            metadata=metadata,
+        )
 
         return TelemetryEventV2(
             schema_version=SCHEMA_VERSION_V2,
@@ -466,7 +662,11 @@ def telemetry_event_from_record(
                 record["device_total_bytes"], "device_total_bytes"
             ),
             context=_coerce_string(record["context"], "context", allow_none=True),
-            metadata=_coerce_metadata_dict(record["metadata"]),
+            job_id=distributed_identity["job_id"],
+            rank=distributed_identity["rank"],
+            local_rank=distributed_identity["local_rank"],
+            world_size=distributed_identity["world_size"],
+            metadata=_strip_distributed_identity_metadata(metadata),
         )
 
     if not permissive_legacy:
@@ -504,6 +704,14 @@ def telemetry_event_from_record(
     pid = _legacy_pid(record, metadata)
     host = _legacy_host(record, metadata)
     collector = _legacy_collector(record, default_collector, device_id, metadata)
+    distributed_identity = resolve_distributed_identity(
+        job_id=record.get("job_id"),
+        rank=record.get("rank"),
+        local_rank=record.get("local_rank"),
+        world_size=record.get("world_size"),
+        metadata=metadata,
+    )
+    metadata = _strip_distributed_identity_metadata(metadata)
 
     context_value = record.get("context", record.get("message"))
     context = _coerce_string(context_value, "context", allow_none=True)
@@ -526,6 +734,10 @@ def telemetry_event_from_record(
         device_free_bytes=device_free_bytes,
         device_total_bytes=device_total_bytes,
         context=context,
+        job_id=distributed_identity["job_id"],
+        rank=distributed_identity["rank"],
+        local_rank=distributed_identity["local_rank"],
+        world_size=distributed_identity["world_size"],
         metadata=metadata,
     )
     return event
@@ -594,4 +806,5 @@ __all__ = [
     "telemetry_event_to_dict",
     "validate_telemetry_record",
     "load_telemetry_events",
+    "resolve_distributed_identity",
 ]

@@ -403,6 +403,10 @@ class TestCPUMemoryTracker:
         assert rows[0]["event_type"] == "allocation"
         assert rows[0]["collector"] == "gpumemprof.cpu_tracker"
         assert rows[0]["context"] == "csv_test"
+        assert rows[0]["job_id"] == ""
+        assert rows[0]["rank"] == "0"
+        assert rows[0]["local_rank"] == "0"
+        assert rows[0]["world_size"] == "1"
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
     def test_export_events_json(self, mock_cls: Any, tmp_path: Path) -> None:
@@ -422,7 +426,28 @@ class TestCPUMemoryTracker:
         assert isinstance(data[0]["sampling_interval_ms"], int)
         assert isinstance(data[0]["pid"], int)
         assert isinstance(data[0]["host"], str)
+        assert data[0]["job_id"] is None
+        assert data[0]["rank"] == 0
+        assert data[0]["local_rank"] == 0
+        assert data[0]["world_size"] == 1
         assert isinstance(data[0]["metadata"], dict)
+
+    @patch("gpumemprof.cpu_profiler.psutil.Process")
+    def test_explicit_distributed_identity_is_exported(
+        self, mock_cls: Any, tmp_path: Path
+    ) -> None:
+        mock_cls.return_value = _make_mock_process()
+        tracker = CPUMemoryTracker(job_id="job-9", rank=3, local_rank=1, world_size=8)
+        tracker._add_event("allocation", 10, "identity_test")
+
+        filepath = tmp_path / "events.json"
+        tracker.export_events(str(filepath), format="json")
+
+        data = json.loads(filepath.read_text())
+        assert data[0]["job_id"] == "job-9"
+        assert data[0]["rank"] == 3
+        assert data[0]["local_rank"] == 1
+        assert data[0]["world_size"] == 8
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
     def test_export_events_unsupported_format(

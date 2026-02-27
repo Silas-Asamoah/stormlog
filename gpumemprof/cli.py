@@ -176,6 +176,30 @@ Examples:
         help="Memory critical threshold percentage (default: 95)",
     )
     track_parser.add_argument(
+        "--job-id",
+        type=str,
+        default=None,
+        help="Distributed job identifier override (default: infer from env)",
+    )
+    track_parser.add_argument(
+        "--rank",
+        type=int,
+        default=None,
+        help="Global distributed rank override (default: infer from env)",
+    )
+    track_parser.add_argument(
+        "--local-rank",
+        type=int,
+        default=None,
+        help="Local distributed rank override (default: infer from env)",
+    )
+    track_parser.add_argument(
+        "--world-size",
+        type=int,
+        default=None,
+        help="Distributed world size override (default: infer from env)",
+    )
+    track_parser.add_argument(
         "--oom-flight-recorder",
         action="store_true",
         help="Enable automatic OOM flight recorder dump artifacts",
@@ -490,6 +514,10 @@ def cmd_track(args: argparse.Namespace) -> None:
     device = args.device
     duration = args.duration
     interval = args.interval
+    job_id = getattr(args, "job_id", None)
+    rank = getattr(args, "rank", None)
+    local_rank = getattr(args, "local_rank", None)
+    world_size = getattr(args, "world_size", None)
 
     print("Starting real-time memory tracking...")
     print(f"Device: {device if device is not None else 'current'}")
@@ -525,6 +553,10 @@ def cmd_track(args: argparse.Namespace) -> None:
             oom_buffer_size=args.oom_buffer_size,
             oom_max_dumps=args.oom_max_dumps,
             oom_max_total_mb=args.oom_max_total_mb,
+            job_id=job_id,
+            rank=rank,
+            local_rank=local_rank,
+            world_size=world_size,
         )
 
         if args.oom_flight_recorder:
@@ -563,7 +595,13 @@ def cmd_track(args: argparse.Namespace) -> None:
             "CPUMemoryTracker",
             "The track command",
         )
-        tracker = cpu_tracker_cls(sampling_interval=interval)
+        tracker = cpu_tracker_cls(
+            sampling_interval=interval,
+            job_id=job_id,
+            rank=rank,
+            local_rank=local_rank,
+            world_size=world_size,
+        )
         print("Running CPU memory tracker (no GPU backend available).")
 
     # Start tracking
