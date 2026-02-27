@@ -317,7 +317,7 @@ def run_matrix(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run launch readiness capability checks for GPU Memory Profiler.",
+        description="Run launch readiness capability checks for Stormlog.",
     )
     parser.add_argument("--mode", choices=["smoke", "full"], default="smoke")
     parser.add_argument(

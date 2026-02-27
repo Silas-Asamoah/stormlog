@@ -1,4 +1,4 @@
-"""Core GPU Memory Profiler for PyTorch."""
+"""Core Stormlog for PyTorch."""
 
 import gc
 import logging
@@ -100,7 +100,7 @@ class GPUMemoryProfiler:
         collect_stack_traces: bool = False,
     ):
         """
-        Initialize the GPU Memory Profiler.
+        Initialize the Stormlog.
 
         Args:
             device: GPU device to profile (None for auto-detection)

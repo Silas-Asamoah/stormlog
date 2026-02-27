@@ -2,7 +2,7 @@
 
 # Troubleshooting Guide
 
-This guide helps you resolve common issues with GPU Memory Profiler.
+This guide helps you resolve common issues with Stormlog.
 
 ## Common Issues
 

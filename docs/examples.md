@@ -2,7 +2,7 @@
 
 # Examples Guide
 
-This guide provides comprehensive examples for using GPU Memory Profiler with both PyTorch and TensorFlow.
+This guide provides comprehensive examples for using Stormlog with both PyTorch and TensorFlow.
 
 ## PyTorch Examples
 

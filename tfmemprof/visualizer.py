@@ -221,28 +221,22 @@ class MemoryVisualizer:
             comparison_fig = go.Figure()
 
         # Dashboard layout
-        app.layout = html.Div(
-            [
-                html.H1("TensorFlow Memory Profiler Dashboard"),
-                html.Div(
-                    [
-                        html.H3("Memory Statistics"),
-                        html.P(
-                            f"Peak Memory: {getattr(results, 'peak_memory_mb', 0):.2f} MB"
-                        ),
-                        html.P(
-                            f"Average Memory: {getattr(results, 'average_memory_mb', 0):.2f} MB"
-                        ),
-                        html.P(
-                            f"Total Allocations: {getattr(results, 'total_allocations', 0)}"
-                        ),
-                    ],
-                    style={"margin": "20px"},
-                ),
-                dcc.Graph(figure=timeline_fig),
-                dcc.Graph(figure=comparison_fig),
-            ]
-        )
+        app.layout = html.Div([
+            html.H1("TensorFlow Stormlog Dashboard"),
+
+            html.Div([
+                html.H3("Memory Statistics"),
+                html.P(
+                    f"Peak Memory: {getattr(results, 'peak_memory_mb', 0):.2f} MB"),
+                html.P(
+                    f"Average Memory: {getattr(results, 'average_memory_mb', 0):.2f} MB"),
+                html.P(
+                    f"Total Allocations: {getattr(results, 'total_allocations', 0)}")
+            ], style={'margin': '20px'}),
+
+            dcc.Graph(figure=timeline_fig),
+            dcc.Graph(figure=comparison_fig)
+        ])
 
         try:
             app.run_server(debug=False, port=port, host="127.0.0.1")

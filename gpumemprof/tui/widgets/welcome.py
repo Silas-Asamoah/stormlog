@@ -22,7 +22,7 @@ class AsciiWelcome(Static):
         **kwargs: Any,
     ) -> None:
         super().__init__("", **kwargs)
-        self.messages = messages or ["GPU Memory Profiler"]
+        self.messages = messages or ["Stormlog"]
         self.font_name = font
         self.interval = interval
         self._frame_index = 0

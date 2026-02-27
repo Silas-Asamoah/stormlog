@@ -30,7 +30,7 @@
 
 ## Overview
 
-The TensorFlow GPU Memory Profiler is a comprehensive tool for monitoring and optimizing memory usage during TensorFlow model training and inference. This guide provides complete instructions for testing and using the profiler in both GPU and CPU environments with TensorFlow-specific optimizations.
+The TensorFlow Stormlog is a comprehensive tool for monitoring and optimizing memory usage during TensorFlow model training and inference. This guide provides complete instructions for testing and using the profiler in both GPU and CPU environments with TensorFlow-specific optimizations.
 
 ### Key Features
 
@@ -191,7 +191,7 @@ print('GPU support:', tf.test.is_built_with_gpu_support())
 nvidia-smi
 ```
 
-### Testing the TensorFlow GPU Profiler
+### Testing the TensorFlow Stormlog
 
 Run the curated demo:
 
@@ -854,7 +854,7 @@ tracker = MemoryTracker(
 
 ## Conclusion
 
-This comprehensive guide provides everything needed to test and use the TensorFlow GPU Memory Profiler in both GPU and CPU environments. The profiler offers TensorFlow-specific optimizations and insights that help optimize deep learning workflows.
+This comprehensive guide provides everything needed to test and use the TensorFlow Stormlog in both GPU and CPU environments. The profiler offers TensorFlow-specific optimizations and insights that help optimize deep learning workflows.
 
 ### Quick Reference
 

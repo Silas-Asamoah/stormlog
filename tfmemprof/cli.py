@@ -1,4 +1,4 @@
-"""TensorFlow Memory Profiler CLI"""
+"""TensorFlow Stormlog CLI"""
 
 import argparse
 import json
@@ -55,7 +55,7 @@ def _normalize_telemetry_events(
 
 def cmd_info(args: argparse.Namespace) -> int:
     """Display system and GPU information."""
-    print("TensorFlow Memory Profiler - System Information")
+    print("TensorFlow Stormlog - System Information")
     print("=" * 50)
 
     system_info = get_system_info()
@@ -466,7 +466,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
 def main() -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="TensorFlow GPU Memory Profiler CLI",
+        description="TensorFlow Stormlog CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 

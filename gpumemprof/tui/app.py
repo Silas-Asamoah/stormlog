@@ -1,4 +1,4 @@
-"""Interactive Textual TUI for GPU Memory Profiler."""
+"""Interactive Textual TUI for Stormlog."""
 
 from __future__ import annotations
 
@@ -118,7 +118,7 @@ except ImportError:
 
 
 WELCOME_MESSAGES = [
-    "GPU Memory Profiler",
+    "Stormlog",
     "Live Monitoring & Watchdogs",
     "CLI · Docs · Examples",
 ]

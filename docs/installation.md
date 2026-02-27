@@ -2,7 +2,7 @@
 
 # Installation Guide
 
-This guide covers different installation methods for GPU Memory Profiler.
+This guide covers different installation methods for Stormlog.
 
 ## Prerequisites
 
