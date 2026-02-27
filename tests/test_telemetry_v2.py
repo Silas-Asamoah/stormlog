@@ -250,12 +250,32 @@ def test_resolve_distributed_identity_explicit_overrides_bypass_partial_env() ->
     }
 
 
-def test_resolve_distributed_identity_rejects_partial_env() -> None:
-    with pytest.raises(
-        ValueError,
-        match="distributed environment must provide rank and world_size together",
-    ):
-        resolve_distributed_identity(env={"WORLD_SIZE": "8"})
+def test_resolve_distributed_identity_skips_partial_env() -> None:
+    identity = resolve_distributed_identity(
+        env={"WORLD_SIZE": "8", "TORCHELASTIC_RUN_ID": "train-42"}
+    )
+
+    assert identity == {
+        "job_id": "train-42",
+        "rank": 0,
+        "local_rank": 0,
+        "world_size": 1,
+    }
+
+
+def test_resolve_distributed_identity_keeps_inferred_local_rank() -> None:
+    identity = resolve_distributed_identity(
+        rank=7,
+        world_size=16,
+        env={"RANK": "3", "LOCAL_RANK": "1", "WORLD_SIZE": "8"},
+    )
+
+    assert identity == {
+        "job_id": None,
+        "rank": 7,
+        "local_rank": 1,
+        "world_size": 16,
+    }
 
 
 def test_validate_telemetry_record_rejects_invalid_rank_metadata() -> None:
@@ -264,6 +284,30 @@ def test_validate_telemetry_record_rejects_invalid_rank_metadata() -> None:
 
     with pytest.raises(ValueError, match="rank must be < world_size"):
         telemetry_event_from_record(record)
+
+
+def test_v2_record_keeps_metadata_identity_keys_opaque() -> None:
+    record = telemetry_event_to_dict(_make_valid_event())
+    record.pop("job_id")
+    record.pop("rank")
+    record.pop("local_rank")
+    record.pop("world_size")
+    record["metadata"] = {
+        "job_id": "meta-job",
+        "rank": "metadata-rank",
+        "local_rank": "metadata-local-rank",
+        "world_size": "metadata-world-size",
+        "origin": "test",
+    }
+
+    validate_telemetry_record(record)
+    round_tripped = telemetry_event_to_dict(telemetry_event_from_record(record))
+
+    assert round_tripped["job_id"] is None
+    assert round_tripped["rank"] == 0
+    assert round_tripped["local_rank"] == 0
+    assert round_tripped["world_size"] == 1
+    assert round_tripped["metadata"] == record["metadata"]
 
 
 def test_load_telemetry_events_reads_dict_events_payload(tmp_path: Path) -> None:
