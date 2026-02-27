@@ -29,9 +29,28 @@ Schema file:
 - `context`
 - `metadata`
 
+## Distributed identity fields
+
+`TelemetryEvent v2` also recognizes these top-level distributed identity fields:
+
+- `job_id` (`string | null`)
+- `rank` (`integer`)
+- `local_rank` (`integer`)
+- `world_size` (`integer`)
+
+New exports always emit these fields. For single-process runs, the defaults are:
+
+- `job_id` -> `null`
+- `rank` -> `0`
+- `local_rank` -> `0`
+- `world_size` -> `1`
+
 `TelemetryEvent v2` validation is strict:
 - Unknown top-level fields are rejected.
 - `metadata` must be a JSON object (`dict` in Python terms).
+- `rank` and `local_rank` must be >= `0`.
+- `world_size` must be >= `1`.
+- `rank` and `local_rank` must be < `world_size`.
 
 ## Collector values
 
@@ -68,9 +87,20 @@ If `schema_version` is present:
 - Missing `device_used_bytes` -> `allocator_allocated_bytes`
 - Missing `device_total_bytes` and `device_free_bytes` -> `null`
 - Missing `event_type` -> `type` field if present, else `"sample"`
+- Missing distributed identity -> `job_id: null`, `rank: 0`, `local_rank: 0`, `world_size: 1`
 - Legacy `metadata_*` fields are folded into the v2 `metadata` object
 
 If a legacy record is missing a valid timestamp, conversion fails.
+
+## Distributed env inference
+
+Tracker constructors can infer distributed identity from common launcher env vars:
+
+- PyTorch / `torchrun`: `RANK`, `LOCAL_RANK`, `WORLD_SIZE`, `TORCHELASTIC_RUN_ID`
+- Open MPI: `OMPI_COMM_WORLD_RANK`, `OMPI_COMM_WORLD_LOCAL_RANK`, `OMPI_COMM_WORLD_SIZE`
+- Slurm: `SLURM_PROCID`, `SLURM_LOCALID`, `SLURM_NTASKS`, `SLURM_JOB_ID`
+
+CLI and Python API callers can override these values explicitly.
 
 ## Python API
 

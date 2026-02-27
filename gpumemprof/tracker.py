@@ -23,7 +23,11 @@ from .oom_flight_recorder import (
     OOMFlightRecorderConfig,
     classify_oom_exception,
 )
-from .telemetry import telemetry_event_from_record, telemetry_event_to_dict
+from .telemetry import (
+    resolve_distributed_identity,
+    telemetry_event_from_record,
+    telemetry_event_to_dict,
+)
 from .utils import format_bytes, get_gpu_info
 
 logger = logging.getLogger(__name__)
@@ -40,6 +44,10 @@ class TrackingEvent:
     memory_change: int
     device_id: int
     context: Optional[str] = None
+    job_id: Optional[str] = None
+    rank: int = 0
+    local_rank: int = 0
+    world_size: int = 1
     metadata: Optional[Dict[str, Any]] = None
     active_memory: Optional[int] = None
     inactive_memory: Optional[int] = None
@@ -63,6 +71,10 @@ class MemoryTracker:
         oom_buffer_size: Optional[int] = None,
         oom_max_dumps: int = 5,
         oom_max_total_mb: int = 256,
+        job_id: Optional[str] = None,
+        rank: Optional[int] = None,
+        local_rank: Optional[int] = None,
+        world_size: Optional[int] = None,
     ):
         """
         Initialize the memory tracker.
@@ -86,6 +98,13 @@ class MemoryTracker:
         self.max_events = max_events
         self.enable_alerts = enable_alerts
         self.last_oom_dump_path: Optional[str] = None
+        self.distributed_identity = resolve_distributed_identity(
+            job_id=job_id,
+            rank=rank,
+            local_rank=local_rank,
+            world_size=world_size,
+            env=os.environ,
+        )
 
         recorder_buffer_size = (
             oom_buffer_size if oom_buffer_size is not None else max_events
@@ -309,6 +328,10 @@ class MemoryTracker:
             memory_change=memory_change,
             device_id=snapshot.device_id,
             context=context,
+            job_id=self.distributed_identity["job_id"],
+            rank=self.distributed_identity["rank"],
+            local_rank=self.distributed_identity["local_rank"],
+            world_size=self.distributed_identity["world_size"],
             metadata=metadata,
             active_memory=snapshot.active_bytes,
             inactive_memory=snapshot.inactive_bytes,
@@ -387,6 +410,10 @@ class MemoryTracker:
             "memory_change": event.memory_change,
             "device_id": event.device_id,
             "context": event.context,
+            "job_id": event.job_id,
+            "rank": event.rank,
+            "local_rank": event.local_rank,
+            "world_size": event.world_size,
             "metadata": dict(event.metadata or {}),
             "active_memory": event.active_memory,
             "inactive_memory": event.inactive_memory,
@@ -414,6 +441,10 @@ class MemoryTracker:
             "collector_capabilities": dict(self.collector_capabilities),
             "total_memory_bytes": self.total_memory,
             "sampling_interval_s": self.sampling_interval,
+            "job_id": self.distributed_identity["job_id"],
+            "rank": self.distributed_identity["rank"],
+            "local_rank": self.distributed_identity["local_rank"],
+            "world_size": self.distributed_identity["world_size"],
         }
         if metadata:
             dump_metadata.update(metadata)
@@ -665,6 +696,10 @@ class MemoryTracker:
                 "device_total_bytes": event_total,
                 "device_id": event.device_id,
                 "context": event.context,
+                "job_id": event.job_id,
+                "rank": event.rank,
+                "local_rank": event.local_rank,
+                "world_size": event.world_size,
                 "metadata": metadata,
                 "total_memory": event_total,
                 "pid": pid,

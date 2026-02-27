@@ -32,6 +32,10 @@ def test_tf_tracker_emits_v2_event_records(monkeypatch: pytest.MonkeyPatch) -> N
     first = result.events[0]
     assert first["schema_version"] == 2
     assert first["collector"] == "tfmemprof.memory_tracker"
+    assert first["job_id"] is None
+    assert first["rank"] == 0
+    assert first["local_rank"] == 0
+    assert first["world_size"] == 1
     validate_telemetry_record(first)
 
 
@@ -96,3 +100,61 @@ def test_tf_cli_track_output_normalizes_legacy_events(
     assert event["schema_version"] == 2
     assert event["collector"] == "tfmemprof.memory_tracker"
     validate_telemetry_record(event)
+
+
+def test_tf_cli_track_passes_distributed_identity_to_tracker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tf_cli, "TF_AVAILABLE", True)
+    created: dict[str, object] = {}
+
+    class _FakeResult:
+        peak_memory = 0.0
+        average_memory = 0.0
+        duration = 0.0
+        memory_usage: list[float] = []
+        timestamps: list[float] = []
+        alerts_triggered: list[object] = []
+        events: list[dict[str, object]] = []
+
+    class _FakeTracker:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            _ = args
+            created.update(kwargs)
+
+        def add_alert_callback(self, callback: object) -> None:
+            _ = callback
+
+        def start_tracking(self) -> None:
+            return None
+
+        def get_current_memory(self) -> float:
+            return 0.0
+
+        def stop_tracking(self) -> "_FakeResult":
+            return _FakeResult()
+
+    def _interrupt(_: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(tf_cli, "MemoryTracker", _FakeTracker)
+    monkeypatch.setattr(tf_cli.time, "sleep", _interrupt)
+
+    exit_code = tf_cli.cmd_track(
+        Namespace(
+            interval=0.25,
+            threshold=4000,
+            device="/GPU:0",
+            output=None,
+            job_id="train-42",
+            rank=3,
+            local_rank=1,
+            world_size=8,
+        )
+    )
+
+    assert exit_code == 0
+    assert created["job_id"] == "train-42"
+    assert created["rank"] == 3
+    assert created["local_rank"] == 1
+    assert created["world_size"] == 8

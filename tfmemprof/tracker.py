@@ -25,7 +25,11 @@ except ImportError:
     TF_AVAILABLE = False
     tf = None
 
-from gpumemprof.telemetry import telemetry_event_from_record, telemetry_event_to_dict
+from gpumemprof.telemetry import (
+    resolve_distributed_identity,
+    telemetry_event_from_record,
+    telemetry_event_to_dict,
+)
 
 
 @dataclass
@@ -64,6 +68,10 @@ class MemoryTracker:
         alert_threshold_mb: Optional[float] = None,
         device: Optional[str] = None,
         enable_logging: bool = True,
+        job_id: Optional[str] = None,
+        rank: Optional[int] = None,
+        local_rank: Optional[int] = None,
+        world_size: Optional[int] = None,
     ):
         """
         Initialize memory tracker.
@@ -81,6 +89,13 @@ class MemoryTracker:
         self.alert_threshold_mb = alert_threshold_mb
         self.device = device or "/GPU:0"
         self.enable_logging = enable_logging
+        self.distributed_identity = resolve_distributed_identity(
+            job_id=job_id,
+            rank=rank,
+            local_rank=local_rank,
+            world_size=world_size,
+            env=os.environ,
+        )
 
         # Tracking state
         self.tracking = False
@@ -134,6 +149,10 @@ class MemoryTracker:
             "sampling_interval_ms": sampling_interval_ms,
             "pid": os.getpid(),
             "host": socket.gethostname(),
+            "job_id": self.distributed_identity["job_id"],
+            "rank": self.distributed_identity["rank"],
+            "local_rank": self.distributed_identity["local_rank"],
+            "world_size": self.distributed_identity["world_size"],
         }
         event = telemetry_event_from_record(
             legacy,

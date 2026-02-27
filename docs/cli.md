@@ -55,6 +55,7 @@ gpumemprof monitor --duration 30 --interval 0.5 --output monitor.json --format j
 ```bash
 gpumemprof track --duration 30 --interval 0.5 --output track.json --format json --watchdog
 gpumemprof track --warning-threshold 75 --critical-threshold 90 --output alerts.csv
+gpumemprof track --job-id train-42 --rank 1 --local-rank 1 --world-size 8 --output rank1.json --format json
 ```
 
 OOM flight-recorder options are available for stress workflows:
@@ -106,6 +107,7 @@ tfmemprof monitor --interval 0.5 --duration 30 --output tf_monitor.json
 
 ```bash
 tfmemprof track --interval 0.5 --threshold 4096 --output tf_track.json
+tfmemprof track --interval 0.5 --threshold 4096 --job-id train-42 --rank 3 --local-rank 1 --world-size 8 --output tf_rank3.json
 ```
 
 ### `analyze`

@@ -15,6 +15,7 @@ from gpumemprof.telemetry import (
     UNKNOWN_PID,
     TelemetryEventV2,
     load_telemetry_events,
+    resolve_distributed_identity,
     telemetry_event_from_record,
     telemetry_event_to_dict,
     validate_telemetry_record,
@@ -41,6 +42,10 @@ def _make_valid_event() -> TelemetryEventV2:
         sampling_interval_ms=100,
         pid=1234,
         host="host-a",
+        job_id="job-123",
+        rank=1,
+        local_rank=1,
+        world_size=8,
         device_id=0,
         allocator_allocated_bytes=1024,
         allocator_reserved_bytes=2048,
@@ -145,6 +150,10 @@ def test_legacy_cpu_record_converts_with_defaults() -> None:
     assert record["device_total_bytes"] is None
     assert record["pid"] == UNKNOWN_PID
     assert record["host"] == UNKNOWN_HOST
+    assert record["job_id"] is None
+    assert record["rank"] == 0
+    assert record["local_rank"] == 0
+    assert record["world_size"] == 1
     jsonschema.validate(instance=record, schema=_schema())
 
 
@@ -188,6 +197,57 @@ def test_legacy_tf_record_converts_with_defaults() -> None:
     assert record["allocator_allocated_bytes"] == 2 * 1024 * 1024
     assert record["device_used_bytes"] == 2 * 1024 * 1024
     jsonschema.validate(instance=record, schema=_schema())
+
+
+def test_resolve_distributed_identity_uses_torchrun_env() -> None:
+    identity = resolve_distributed_identity(
+        env={
+            "RANK": "3",
+            "LOCAL_RANK": "1",
+            "WORLD_SIZE": "8",
+            "TORCHELASTIC_RUN_ID": "train-42",
+        }
+    )
+
+    assert identity == {
+        "job_id": "train-42",
+        "rank": 3,
+        "local_rank": 1,
+        "world_size": 8,
+    }
+
+
+def test_resolve_distributed_identity_prefers_explicit_overrides() -> None:
+    identity = resolve_distributed_identity(
+        job_id="manual-job",
+        rank=5,
+        local_rank=2,
+        world_size=16,
+        env={"RANK": "3", "LOCAL_RANK": "1", "WORLD_SIZE": "8"},
+    )
+
+    assert identity == {
+        "job_id": "manual-job",
+        "rank": 5,
+        "local_rank": 2,
+        "world_size": 16,
+    }
+
+
+def test_resolve_distributed_identity_rejects_partial_env() -> None:
+    with pytest.raises(
+        ValueError,
+        match="distributed environment must provide rank and world_size together",
+    ):
+        resolve_distributed_identity(env={"WORLD_SIZE": "8"})
+
+
+def test_validate_telemetry_record_rejects_invalid_rank_metadata() -> None:
+    record = telemetry_event_to_dict(_make_valid_event())
+    record["rank"] = 8
+
+    with pytest.raises(ValueError, match="rank must be < world_size"):
+        telemetry_event_from_record(record)
 
 
 def test_load_telemetry_events_reads_dict_events_payload(tmp_path: Path) -> None:
