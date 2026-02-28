@@ -67,6 +67,7 @@ def test_stormlog_pty_smoke_start_interact_quit() -> None:
     try:
         _expect_with_retry(child, "Refresh Overview", attempts=4, timeout=4)
         _expect_with_retry(child, "Focus Log", attempts=2, timeout=2)
+        _expect_with_retry(child, "Diagnostics", attempts=2, timeout=2)
         _expect_with_retry(child, "Quit", attempts=2, timeout=2)
 
         for key in ("r", "f"):

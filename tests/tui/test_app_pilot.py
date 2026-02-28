@@ -7,6 +7,7 @@ pytest.importorskip("textual")
 
 from textual.widgets import RichLog, TabbedContent, TabPane
 
+from gpumemprof.telemetry import telemetry_event_from_record
 from gpumemprof.tui.app import GPUMemoryProfilerTUI
 
 pytestmark = pytest.mark.tui_pilot
@@ -30,13 +31,26 @@ def _tab_labels(app: GPUMemoryProfilerTUI) -> list[str]:
         return labels
 
     for pane in app.query(TabPane):
-        title = getattr(pane, "title", None)
-        if title is None:
-            title = getattr(pane, "_title", "")
-        if hasattr(title, "plain"):
-            title = title.plain  # type: ignore[union-attr, unused-ignore]
-        labels.append(str(title))
+        title = _pane_title(pane)
+        labels.append(title)
     return labels
+
+
+def _pane_title(pane: TabPane) -> str:
+    title = getattr(pane, "title", None)
+    if title is None:
+        title = getattr(pane, "_title", "")
+    if hasattr(title, "plain"):
+        title = title.plain  # type: ignore[union-attr, unused-ignore]
+    return str(title)
+
+
+def _tab_id_by_title(app: GPUMemoryProfilerTUI, title: str) -> str:
+    for pane in app.query(TabPane):
+        if _pane_title(pane) == title:
+            assert pane.id is not None
+            return str(pane.id)
+    raise AssertionError(f"Tab not found: {title}")
 
 
 class _StubTrackerSession:
@@ -46,6 +60,7 @@ class _StubTrackerSession:
         self.start_calls = 0
         self.stop_calls = 0
         self.threshold_calls: list[tuple[float, float]] = []
+        self.telemetry_events: list[Any] = []
 
     def start(self) -> None:
         self.start_calls += 1
@@ -83,6 +98,9 @@ class _StubTrackerSession:
         _ = interval
         return {}
 
+    def get_telemetry_events(self) -> list[Any]:
+        return list(self.telemetry_events)
+
 
 class _StubCLIRunner:
     def __init__(self) -> None:
@@ -104,6 +122,34 @@ class _StubCLIRunner:
         return True
 
 
+def _make_event(rank: int, timestamp_s: float = 1.0) -> Any:
+    return telemetry_event_from_record(
+        {
+            "timestamp": timestamp_s,
+            "event_type": "sample",
+            "memory_allocated": 1000 + rank,
+            "memory_reserved": 1200 + rank,
+            "memory_change": 0,
+            "device_used_bytes": 1300 + rank,
+            "device_total_bytes": 10000,
+            "device_id": rank,
+            "collector": "gpumemprof.cuda_tracker",
+            "sampling_interval_ms": 100,
+            "pid": 1,
+            "host": "host",
+            "context": "pilot",
+            "job_id": "job-1",
+            "rank": rank,
+            "local_rank": rank,
+            "world_size": 2,
+            "metadata": {},
+        },
+        permissive_legacy=True,
+        default_collector="gpumemprof.cuda_tracker",
+        default_sampling_interval_ms=100,
+    )
+
+
 def test_tab_rendering_and_key_bindings_r_f_g_t(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -118,6 +164,7 @@ def test_tab_rendering_and_key_bindings_r_f_g_t(
                 "TensorFlow",
                 "Monitoring",
                 "Visualizations",
+                "Diagnostics",
                 "CLI & Actions",
             ]
 
@@ -165,7 +212,7 @@ def test_monitoring_buttons_start_stop_apply_thresholds_clear_log() -> None:
         app = GPUMemoryProfilerTUI()
         async with app.run_test(headless=True, size=(140, 44)) as pilot:
             await pilot.pause()
-            app.query_one(TabbedContent).active = "tab-4"
+            app.query_one(TabbedContent).active = _tab_id_by_title(app, "Monitoring")
             await pilot.pause()
 
             session = _StubTrackerSession()
@@ -197,12 +244,48 @@ def test_monitoring_buttons_start_stop_apply_thresholds_clear_log() -> None:
     asyncio.run(scenario())
 
 
+def test_diagnostics_buttons_load_live_apply_filter_and_reset() -> None:
+    async def scenario() -> None:
+        app = GPUMemoryProfilerTUI()
+        async with app.run_test(headless=True, size=(140, 44)) as pilot:
+            await pilot.pause()
+            app.query_one(TabbedContent).active = _tab_id_by_title(app, "Diagnostics")
+            await pilot.pause()
+
+            session = _StubTrackerSession()
+            session.telemetry_events = [_make_event(0, 1.0), _make_event(1, 2.0)]
+            app.tracker_session = session  # type: ignore[assignment, unused-ignore]
+            app._get_or_create_tracker_session = lambda: session  # type: ignore[assignment, method-assign, return-value, unused-ignore]
+
+            await pilot.click("#btn-diag-load-live")
+            await pilot.pause()
+
+            assert app._diagnostics_source == "live"
+            assert len(app._diagnostics_events) == 2
+
+            app.diagnostics_rank_filter_input.value = "1"
+            await pilot.click("#btn-diag-apply-filter")
+            await pilot.pause()
+            assert app._diagnostics_selected_ranks == {1}
+
+            await pilot.click("#btn-diag-reset-filter")
+            await pilot.pause()
+            assert app.diagnostics_rank_filter_input.value == "all"
+
+            diagnostics_text = _log_text(app.diagnostics_log)
+            assert "Loaded 2 live telemetry events" in diagnostics_text
+            assert "Applied rank filter: 1" in diagnostics_text
+            assert "Reset rank filter to: all" in diagnostics_text
+
+    asyncio.run(scenario())
+
+
 def test_cli_runner_run_stream_output_and_cancel() -> None:
     async def scenario() -> None:
         app = GPUMemoryProfilerTUI()
         async with app.run_test(headless=True, size=(140, 44)) as pilot:
             await pilot.pause()
-            app.query_one(TabbedContent).active = "tab-6"
+            app.query_one(TabbedContent).active = _tab_id_by_title(app, "CLI & Actions")
             await pilot.pause()
 
             runner = _StubCLIRunner()
@@ -234,7 +317,7 @@ def test_cli_action_buttons_cover_diagnose_oom_and_matrix() -> None:
         app = GPUMemoryProfilerTUI()
         async with app.run_test(headless=True, size=(140, 44)) as pilot:
             await pilot.pause()
-            app.query_one(TabbedContent).active = "tab-6"
+            app.query_one(TabbedContent).active = _tab_id_by_title(app, "CLI & Actions")
             await pilot.pause()
 
             runner = _StubCLIRunner()
