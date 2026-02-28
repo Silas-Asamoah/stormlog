@@ -46,7 +46,10 @@ from .profiles import (
 from .styles import TUI_APP_CSS
 from .widgets import (
     AlertHistoryTable,
+    AnomalySummaryTable,
     AsciiWelcome,
+    DistributedRankTable,
+    DistributedTimelineCanvas,
     GPUStatsTable,
     KeyValueTable,
     MarkdownPanel,
@@ -189,6 +192,10 @@ def _build_visual_markdown() -> str:
     return tui_builders.build_visual_markdown()
 
 
+def _build_diagnostics_markdown() -> str:
+    return tui_builders.build_diagnostics_markdown()
+
+
 class GPUMemoryProfilerTUI(App):
     """Main Textual application."""
 
@@ -226,6 +233,9 @@ class GPUMemoryProfilerTUI(App):
         )
         self.cli_panel = MarkdownPanel(_build_cli_markdown, id="cli-docs")
         self.visual_panel = MarkdownPanel(_build_visual_markdown, id="visual-docs")
+        self.diagnostics_panel = MarkdownPanel(
+            _build_diagnostics_markdown, id="diagnostics-docs"
+        )
         self.command_log = RichLog(highlight=True, markup=True, id="command-log")
         self.loader = LoadingIndicator(id="cli-loader")
         self.loader.display = False
@@ -250,6 +260,25 @@ class GPUMemoryProfilerTUI(App):
         self.alert_history_table = AlertHistoryTable(id="monitor-alerts-table")
         self.warning_input = Input(value="80", placeholder="80", id="input-warning")
         self.critical_input = Input(value="95", placeholder="95", id="input-critical")
+        self.diagnostics_path_input = Input(
+            placeholder="artifacts/run_rank0.json,artifacts/run_rank1.json",
+            id="diagnostics-path-input",
+        )
+        self.diagnostics_rank_filter_input = Input(
+            value="all",
+            placeholder="all",
+            id="diagnostics-rank-filter",
+        )
+        self.diagnostics_rank_table = DistributedRankTable(id="diagnostics-rank-table")
+        self.diagnostics_timeline_canvas = DistributedTimelineCanvas(
+            id="diagnostics-timeline-canvas"
+        )
+        self.diagnostics_anomaly_table = AnomalySummaryTable(
+            id="diagnostics-anomaly-table"
+        )
+        self.diagnostics_log = RichLog(
+            highlight=True, markup=True, id="diagnostics-log"
+        )
 
         yield Header(show_clock=True)
         with TabbedContent():
@@ -390,6 +419,44 @@ class GPUMemoryProfilerTUI(App):
                     self.visual_log,
                 )
 
+            with TabPane("Diagnostics"):
+                yield VerticalScroll(
+                    self.diagnostics_panel,
+                    Horizontal(
+                        Button(
+                            "Load Live",
+                            id="btn-diag-load-live",
+                            variant="primary",
+                        ),
+                        Button(
+                            "Load Artifacts",
+                            id="btn-diag-load-artifacts",
+                            variant="success",
+                        ),
+                        Button("Refresh", id="btn-diag-refresh", variant="primary"),
+                        id="diagnostics-controls-row1",
+                    ),
+                    Horizontal(
+                        self.diagnostics_path_input,
+                        self.diagnostics_rank_filter_input,
+                        Button(
+                            "Apply Filter",
+                            id="btn-diag-apply-filter",
+                            variant="primary",
+                        ),
+                        Button(
+                            "Reset Filter",
+                            id="btn-diag-reset-filter",
+                            variant="warning",
+                        ),
+                        id="diagnostics-controls-row2",
+                    ),
+                    self.diagnostics_rank_table,
+                    self.diagnostics_timeline_canvas,
+                    self.diagnostics_anomaly_table,
+                    self.diagnostics_log,
+                )
+
             with TabPane("CLI & Actions"):
                 yield VerticalScroll(
                     self.cli_panel,
@@ -521,6 +588,16 @@ class GPUMemoryProfilerTUI(App):
             await self.generate_visual_plot("png")
         elif button_id == "btn-visual-html":
             await self.generate_visual_plot("html")
+        elif button_id == "btn-diag-load-live":
+            await self.load_diagnostics_live()
+        elif button_id == "btn-diag-load-artifacts":
+            await self.load_diagnostics_artifacts()
+        elif button_id == "btn-diag-refresh":
+            await self.refresh_diagnostics()
+        elif button_id == "btn-diag-apply-filter":
+            self.apply_diagnostics_rank_filter()
+        elif button_id == "btn-diag-reset-filter":
+            self.reset_diagnostics_rank_filter()
         elif button_id == "btn-refresh-pt-profiles":
             await self.refresh_pytorch_profiles()
         elif button_id == "btn-clear-pt-profiles":
@@ -969,6 +1046,40 @@ class GPUMemoryProfilerTUI(App):
             "Visualizations", f"Saved timeline plot to: {file_path}"
         )
 
+    async def load_diagnostics_live(self) -> None:
+        self.log_diagnostics_message(
+            "Diagnostics",
+            "Live diagnostics loading is enabled. Press Refresh to update rank views.",
+        )
+
+    async def load_diagnostics_artifacts(self) -> None:
+        paths_value = (self.diagnostics_path_input.value or "").strip()
+        if not paths_value:
+            self.log_diagnostics_message(
+                "Diagnostics",
+                "Enter one or more artifact paths (comma-separated) first.",
+            )
+            return
+
+        self.log_diagnostics_message(
+            "Diagnostics",
+            "Artifact diagnostics source configured. Press Refresh to load data.",
+        )
+
+    async def refresh_diagnostics(self) -> None:
+        self.log_diagnostics_message(
+            "Diagnostics",
+            "Diagnostics tab is ready. Data binding and rank analytics load next.",
+        )
+
+    def apply_diagnostics_rank_filter(self) -> None:
+        text = (self.diagnostics_rank_filter_input.value or "all").strip() or "all"
+        self.log_diagnostics_message("Diagnostics", f"Applied rank filter: {text}")
+
+    def reset_diagnostics_rank_filter(self) -> None:
+        self.diagnostics_rank_filter_input.value = "all"
+        self.log_diagnostics_message("Diagnostics", "Reset rank filter to: all")
+
     def _collect_timeline_data(self, interval: float = 1.0) -> dict[str, Any]:
         session = self.tracker_session
         if session:
@@ -1160,6 +1271,9 @@ class GPUMemoryProfilerTUI(App):
     def log_visual_message(self, title: str, content: str) -> None:
         self.visual_log.write(f"[bold]{title}[/bold]\n{content}\n")
 
+    def log_diagnostics_message(self, title: str, content: str) -> None:
+        self.diagnostics_log.write(f"[bold]{title}[/bold]\n{content}\n")
+
     def log_message(self, title: str, content: str) -> None:
         self.command_log.write(f"[bold]{title}[/bold]\n{content}\n")
 
@@ -1170,6 +1284,7 @@ class GPUMemoryProfilerTUI(App):
         self._last_monitor_stats = {}
         self._last_timeline = {}
         self.recent_alerts = []
+        self._diagnostics_source = "none"
         self.set_interval(1.0, self.refresh_monitoring_panel)
         self._update_watchdog_button_label()
         self._update_monitor_status()
@@ -1177,6 +1292,11 @@ class GPUMemoryProfilerTUI(App):
             "No timeline data yet. Start live tracking and refresh."
         )
         self._clear_timeline_stats_table()
+        self.diagnostics_rank_table.update_rows([])
+        self.diagnostics_timeline_canvas.render_placeholder(
+            "No distributed timelines yet. Load live or artifact data."
+        )
+        self.diagnostics_anomaly_table.update_rows([])
 
         # Initial log entry
         await asyncio.sleep(0)
@@ -1184,6 +1304,10 @@ class GPUMemoryProfilerTUI(App):
             "Welcome",
             "Use the tabs or press [b]r[/b] to refresh the overview. "
             "Buttons in the CLI tab will log summaries here.",
+        )
+        self.log_diagnostics_message(
+            "Diagnostics",
+            "Use Load Live or Load Artifacts, then Refresh to build rank-level diagnostics.",
         )
         await self.refresh_pytorch_profiles()
         await self.refresh_tensorflow_profiles()
