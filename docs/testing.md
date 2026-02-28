@@ -175,6 +175,7 @@ tests/
 └── tui/
     ├── test_app_pilot.py          # Textual Pilot interaction tests
     ├── test_app_snapshots.py      # Textual visual snapshot tests
+    ├── test_distributed_diagnostics.py # Distributed diagnostics model/load tests
     └── test_monitor.py            # TUI monitor component tests
 ```
 
