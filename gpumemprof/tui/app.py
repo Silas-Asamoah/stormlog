@@ -18,6 +18,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import (
     Button,
+    DataTable,
     Footer,
     Header,
     Input,
@@ -30,12 +31,19 @@ from textual.widgets import (
     TabPane,
 )
 
+from gpumemprof.telemetry import TelemetryEventV2
 from gpumemprof.utils import format_bytes, get_gpu_info, get_system_info
 from tfmemprof.utils import get_gpu_info as get_tf_gpu_info
 from tfmemprof.utils import get_system_info as get_tf_system_info
 
 from . import builders as tui_builders
 from .commands import CLICommandRunner
+from .distributed_diagnostics import (
+    DistributedDiagnosticsModel,
+    build_distributed_model,
+    load_distributed_artifacts,
+    parse_rank_filter,
+)
 from .monitor import TrackerEventView, TrackerSession, TrackerUnavailableError
 from .profiles import (
     clear_pytorch_profiles,
@@ -204,6 +212,12 @@ class GPUMemoryProfilerTUI(App):
     monitor_auto_cleanup: bool
     _last_monitor_stats: dict[str, Any]
     _last_timeline: dict[str, list[Any]]
+    _diagnostics_source: str
+    _diagnostics_events: list[TelemetryEventV2]
+    _diagnostics_selected_ranks: set[int] | None
+    _diagnostics_active_rank: int | None
+    _diagnostics_last_paths: list[Path]
+    _diagnostics_model: DistributedDiagnosticsModel | None
     recent_alerts: List[dict[str, Any]]
 
     CSS = TUI_APP_CSS
@@ -606,6 +620,25 @@ class GPUMemoryProfilerTUI(App):
             await self.refresh_tensorflow_profiles()
         elif button_id == "btn-clear-tf-profiles":
             await self.clear_tensorflow_profiles()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table is not self.diagnostics_rank_table:
+            return
+
+        rank = self.diagnostics_rank_table.rank_from_row_key(event.row_key)
+        if rank is None:
+            return
+        self._diagnostics_active_rank = rank
+
+        model = self._diagnostics_model
+        if model is None:
+            return
+
+        self.diagnostics_timeline_canvas.render_rank_timelines(
+            model.per_rank_timelines,
+            active_rank=self._diagnostics_active_rank,
+        )
+        self.log_diagnostics_message("Diagnostics", f"Focused timeline on rank {rank}.")
 
     async def run_pytorch_sample(self) -> None:
         if GPUMemoryProfiler is None or torch is None:
@@ -1047,38 +1080,209 @@ class GPUMemoryProfilerTUI(App):
         )
 
     async def load_diagnostics_live(self) -> None:
+        session = self._get_or_create_tracker_session()
+        if not session:
+            return
+
+        events = session.get_telemetry_events()
+        if not events:
+            self.log_diagnostics_message(
+                "Diagnostics",
+                "No live telemetry events found. Start tracking and generate events first.",
+            )
+            self._set_diagnostics_events([], source="live", reset_filter=True)
+            return
+
+        self._set_diagnostics_events(events, source="live", reset_filter=True)
         self.log_diagnostics_message(
             "Diagnostics",
-            "Live diagnostics loading is enabled. Press Refresh to update rank views.",
+            f"Loaded {len(events)} live telemetry events for distributed diagnostics.",
         )
 
     async def load_diagnostics_artifacts(self) -> None:
-        paths_value = (self.diagnostics_path_input.value or "").strip()
-        if not paths_value:
+        paths = self._parse_diagnostics_paths(self.diagnostics_path_input.value)
+        if not paths:
             self.log_diagnostics_message(
                 "Diagnostics",
                 "Enter one or more artifact paths (comma-separated) first.",
             )
             return
 
+        result = await asyncio.to_thread(load_distributed_artifacts, paths)
+        self._diagnostics_last_paths = paths
+        self._set_diagnostics_events(
+            result.events,
+            source="artifacts",
+            reset_filter=True,
+            extra_warnings=result.warnings,
+        )
+        if result.sources_loaded:
+            self.log_diagnostics_message(
+                "Diagnostics",
+                f"Loaded sources: {', '.join(result.sources_loaded)}",
+            )
+
         self.log_diagnostics_message(
             "Diagnostics",
-            "Artifact diagnostics source configured. Press Refresh to load data.",
+            f"Loaded {len(result.events)} artifact telemetry events.",
         )
 
     async def refresh_diagnostics(self) -> None:
+        if self._diagnostics_source == "live":
+            session = self.tracker_session
+            if not session:
+                self.log_diagnostics_message(
+                    "Diagnostics",
+                    "No active tracker session to refresh from.",
+                )
+                return
+            events = session.get_telemetry_events()
+            self._set_diagnostics_events(events, source="live")
+            self.log_diagnostics_message(
+                "Diagnostics",
+                f"Refreshed live diagnostics ({len(events)} events).",
+            )
+            return
+
+        if self._diagnostics_source == "artifacts":
+            paths = list(self._diagnostics_last_paths)
+            if not paths:
+                paths = self._parse_diagnostics_paths(self.diagnostics_path_input.value)
+            if not paths:
+                self.log_diagnostics_message(
+                    "Diagnostics",
+                    "No artifact paths configured. Use Load Artifacts first.",
+                )
+                return
+            result = await asyncio.to_thread(load_distributed_artifacts, paths)
+            self._diagnostics_last_paths = paths
+            self._set_diagnostics_events(
+                result.events,
+                source="artifacts",
+                extra_warnings=result.warnings,
+            )
+            self.log_diagnostics_message(
+                "Diagnostics",
+                f"Refreshed artifact diagnostics ({len(result.events)} events).",
+            )
+            return
+
+        if self._diagnostics_events:
+            self._refresh_diagnostics_model()
+            self.log_diagnostics_message("Diagnostics", "Refreshed diagnostics view.")
+            return
+
         self.log_diagnostics_message(
             "Diagnostics",
-            "Diagnostics tab is ready. Data binding and rank analytics load next.",
+            "No diagnostics source loaded yet. Use Load Live or Load Artifacts first.",
         )
 
     def apply_diagnostics_rank_filter(self) -> None:
+        if not self._diagnostics_events:
+            self.log_diagnostics_message(
+                "Diagnostics",
+                "Load diagnostics data before applying a rank filter.",
+            )
+            return
+
         text = (self.diagnostics_rank_filter_input.value or "all").strip() or "all"
-        self.log_diagnostics_message("Diagnostics", f"Applied rank filter: {text}")
+        available = self._diagnostics_available_ranks()
+        try:
+            selected = parse_rank_filter(text, available)
+        except ValueError as exc:
+            self.log_diagnostics_message("Diagnostics", f"Invalid rank filter: {exc}")
+            return
+
+        if set(selected) == set(available):
+            self._diagnostics_selected_ranks = None
+        else:
+            self._diagnostics_selected_ranks = selected
+
+        self._refresh_diagnostics_model()
+        self.log_diagnostics_message(
+            "Diagnostics", f"Applied rank filter: {text} ({len(selected)} ranks)"
+        )
 
     def reset_diagnostics_rank_filter(self) -> None:
         self.diagnostics_rank_filter_input.value = "all"
+        self._diagnostics_selected_ranks = None
+        self._refresh_diagnostics_model()
         self.log_diagnostics_message("Diagnostics", "Reset rank filter to: all")
+
+    def _parse_diagnostics_paths(self, value: str) -> list[Path]:
+        parts = [part.strip() for part in (value or "").split(",") if part.strip()]
+        return [Path(part).expanduser() for part in parts]
+
+    def _set_diagnostics_events(
+        self,
+        events: list[TelemetryEventV2],
+        *,
+        source: str,
+        reset_filter: bool = False,
+        extra_warnings: list[str] | None = None,
+    ) -> None:
+        self._diagnostics_source = source
+        self._diagnostics_events = list(events)
+        if reset_filter:
+            self._diagnostics_selected_ranks = None
+            self.diagnostics_rank_filter_input.value = "all"
+        self._refresh_diagnostics_model(extra_warnings=extra_warnings)
+
+    def _diagnostics_available_ranks(self) -> list[int]:
+        if not self._diagnostics_events:
+            return []
+
+        present_ranks = sorted({event.rank for event in self._diagnostics_events})
+        world_sizes = {
+            event.world_size
+            for event in self._diagnostics_events
+            if event.world_size > 0
+        }
+        world_size = max(world_sizes) if world_sizes else len(present_ranks)
+        if world_size <= 0:
+            return present_ranks
+        return list(range(world_size))
+
+    def _refresh_diagnostics_model(
+        self, extra_warnings: list[str] | None = None
+    ) -> None:
+        if not self._diagnostics_events:
+            self._diagnostics_model = None
+            self._clear_diagnostics_views()
+            if extra_warnings:
+                for warning in extra_warnings:
+                    self.log_diagnostics_message("Diagnostics", warning)
+            return
+
+        model = build_distributed_model(
+            self._diagnostics_events,
+            selected_ranks=self._diagnostics_selected_ranks,
+        )
+        self._diagnostics_model = model
+        if self._diagnostics_active_rank not in model.per_rank_timelines:
+            self._diagnostics_active_rank = (
+                model.present_ranks[0] if model.present_ranks else None
+            )
+
+        self.diagnostics_rank_table.update_rows(model.rows)
+        self.diagnostics_anomaly_table.update_rows(model.indicators)
+        self.diagnostics_timeline_canvas.render_rank_timelines(
+            model.per_rank_timelines,
+            active_rank=self._diagnostics_active_rank,
+        )
+
+        combined_warnings = list(model.warnings)
+        if extra_warnings:
+            combined_warnings.extend(extra_warnings)
+        for warning in combined_warnings:
+            self.log_diagnostics_message("Diagnostics", warning)
+
+    def _clear_diagnostics_views(self) -> None:
+        self.diagnostics_rank_table.update_rows([])
+        self.diagnostics_anomaly_table.update_rows([])
+        self.diagnostics_timeline_canvas.render_placeholder(
+            "No distributed timelines yet. Load live or artifact data."
+        )
 
     def _collect_timeline_data(self, interval: float = 1.0) -> dict[str, Any]:
         session = self.tracker_session
@@ -1285,6 +1489,11 @@ class GPUMemoryProfilerTUI(App):
         self._last_timeline = {}
         self.recent_alerts = []
         self._diagnostics_source = "none"
+        self._diagnostics_events = []
+        self._diagnostics_selected_ranks = None
+        self._diagnostics_active_rank = None
+        self._diagnostics_last_paths = []
+        self._diagnostics_model = None
         self.set_interval(1.0, self.refresh_monitoring_panel)
         self._update_watchdog_button_label()
         self._update_monitor_status()
@@ -1292,11 +1501,7 @@ class GPUMemoryProfilerTUI(App):
             "No timeline data yet. Start live tracking and refresh."
         )
         self._clear_timeline_stats_table()
-        self.diagnostics_rank_table.update_rows([])
-        self.diagnostics_timeline_canvas.render_placeholder(
-            "No distributed timelines yet. Load live or artifact data."
-        )
-        self.diagnostics_anomaly_table.update_rows([])
+        self._clear_diagnostics_views()
 
         # Initial log entry
         await asyncio.sleep(0)
