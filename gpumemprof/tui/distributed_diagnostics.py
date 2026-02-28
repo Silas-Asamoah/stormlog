@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -61,6 +62,10 @@ _CSV_INT_FIELDS = frozenset(
     }
 )
 _CSV_FLOAT_FIELDS = frozenset({"timestamp"})
+_RANK_CONTEXT_PATTERN = re.compile(
+    r"(?<!local_)(?:^|[^a-z0-9])rank[_-]?(?P<rank>\d+)(?:[^0-9]|$)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -122,6 +127,35 @@ class _AnomalyCandidate:
     details: str
 
 
+@dataclass(frozen=True)
+class _TimelineRankContext:
+    rank: int
+    local_rank: int
+    world_size: int
+    source: str
+
+
+@dataclass
+class _TimelineRankAllocator:
+    used_ranks: set[int] = field(default_factory=set)
+    max_world_size: int = 1
+
+    def register_events(self, events: Iterable[TelemetryEventV2]) -> None:
+        for event in events:
+            self.register_rank(event.rank, event.world_size)
+
+    def register_rank(self, rank: int, world_size: int) -> None:
+        self.used_ranks.add(rank)
+        if world_size > self.max_world_size:
+            self.max_world_size = world_size
+
+    def next_available_rank(self) -> int:
+        rank = 0
+        while rank in self.used_ranks:
+            rank += 1
+        return rank
+
+
 def parse_rank_filter(expr: str, available_ranks: list[int]) -> set[int]:
     """Parse a rank filter expression (e.g., ``all`` or ``0,2,4-7``)."""
     available_set = set(available_ranks)
@@ -158,6 +192,7 @@ def load_distributed_artifacts(paths: list[Path]) -> ArtifactLoadResult:
     events: list[TelemetryEventV2] = []
     warnings: list[str] = []
     sources_loaded: list[str] = []
+    rank_allocator = _TimelineRankAllocator()
 
     for input_path in paths:
         path = input_path.expanduser().resolve()
@@ -166,16 +201,24 @@ def load_distributed_artifacts(paths: list[Path]) -> ArtifactLoadResult:
             continue
 
         if path.is_file():
-            loaded, file_warnings = _load_artifact_file(path)
+            loaded, file_warnings = _load_artifact_file(
+                path,
+                rank_allocator=rank_allocator,
+            )
             events.extend(loaded)
+            rank_allocator.register_events(loaded)
             warnings.extend(file_warnings)
             if loaded:
                 sources_loaded.append(str(path))
             continue
 
         if path.is_dir():
-            loaded, dir_warnings, dir_sources = _load_artifact_directory(path)
+            loaded, dir_warnings, dir_sources = _load_artifact_directory(
+                path,
+                rank_allocator=rank_allocator,
+            )
             events.extend(loaded)
+            rank_allocator.register_events(loaded)
             warnings.extend(dir_warnings)
             sources_loaded.extend(dir_sources)
             continue
@@ -417,7 +460,11 @@ def _build_first_cause_indicators(
     ]
 
 
-def _load_artifact_file(path: Path) -> tuple[list[TelemetryEventV2], list[str]]:
+def _load_artifact_file(
+    path: Path,
+    *,
+    rank_allocator: _TimelineRankAllocator | None = None,
+) -> tuple[list[TelemetryEventV2], list[str]]:
     warnings: list[str] = []
     suffix = path.suffix.lower()
 
@@ -426,7 +473,10 @@ def _load_artifact_file(path: Path) -> tuple[list[TelemetryEventV2], list[str]]:
             return load_telemetry_events(path, permissive_legacy=True), warnings
         except Exception as exc:
             if path.name == "telemetry_timeline.json":
-                synthesized, synth_warnings = _synthesize_events_from_timeline(path)
+                synthesized, synth_warnings = _synthesize_events_from_timeline(
+                    path,
+                    rank_allocator=rank_allocator,
+                )
                 return synthesized, synth_warnings
             warnings.append(f"Failed to parse JSON telemetry file {path}: {exc}")
             return [], warnings
@@ -497,28 +547,36 @@ def _normalize_csv_record(row: Mapping[str, str]) -> dict[str, Any]:
 
 def _load_artifact_directory(
     directory: Path,
+    *,
+    rank_allocator: _TimelineRankAllocator | None = None,
 ) -> tuple[list[TelemetryEventV2], list[str], list[str]]:
     warnings: list[str] = []
     sources: list[str] = []
     events: list[TelemetryEventV2] = []
+    allocator = rank_allocator or _TimelineRankAllocator()
 
     candidate_files = _discover_candidate_files(directory)
     for file_path in candidate_files:
         if file_path.name == "telemetry_timeline.json":
             continue
-        loaded, file_warnings = _load_artifact_file(file_path)
+        loaded, file_warnings = _load_artifact_file(
+            file_path,
+            rank_allocator=allocator,
+        )
         events.extend(loaded)
+        allocator.register_events(loaded)
         warnings.extend(file_warnings)
         if loaded:
             sources.append(str(file_path))
 
-    if events:
-        return events, warnings, sources
-
     timeline_files = sorted(directory.rglob("telemetry_timeline.json"))
     for timeline_file in timeline_files:
-        synthesized, synth_warnings = _synthesize_events_from_timeline(timeline_file)
+        synthesized, synth_warnings = _synthesize_events_from_timeline(
+            timeline_file,
+            rank_allocator=allocator,
+        )
         events.extend(synthesized)
+        allocator.register_events(synthesized)
         warnings.extend(synth_warnings)
         if synthesized:
             sources.append(str(timeline_file))
@@ -545,8 +603,11 @@ def _discover_candidate_files(directory: Path) -> list[Path]:
 
 def _synthesize_events_from_timeline(
     timeline_file: Path,
+    *,
+    rank_allocator: _TimelineRankAllocator | None = None,
 ) -> tuple[list[TelemetryEventV2], list[str]]:
     warnings: list[str] = []
+    allocator = rank_allocator or _TimelineRankAllocator()
 
     try:
         with timeline_file.open("r", encoding="utf-8") as handle:
@@ -572,6 +633,12 @@ def _synthesize_events_from_timeline(
     sample_count = min(len(timestamps), len(allocated), len(reserved))
     if sample_count == 0:
         return [], [f"Timeline payload has no aligned samples in {timeline_file}"]
+
+    rank_context = _resolve_timeline_rank_context(
+        timeline_file=timeline_file,
+        payload=payload,
+        rank_allocator=allocator,
+    )
 
     events: list[TelemetryEventV2] = []
     previous_allocated = 0
@@ -599,9 +666,9 @@ def _synthesize_events_from_timeline(
             "device_total_bytes": None,
             "context": "diagnose timeline sample",
             "job_id": None,
-            "rank": 0,
-            "local_rank": 0,
-            "world_size": 1,
+            "rank": rank_context.rank,
+            "local_rank": rank_context.local_rank,
+            "world_size": rank_context.world_size,
             "metadata": {"source": "diagnose.telemetry_timeline"},
         }
         event = telemetry_event_from_record(
@@ -616,9 +683,111 @@ def _synthesize_events_from_timeline(
 
     warnings.append(
         "Synthesized telemetry events from telemetry_timeline.json; "
-        "distributed rank metadata may be incomplete."
+        f"assigned rank={rank_context.rank} world_size={rank_context.world_size} "
+        f"(source={rank_context.source})."
     )
     return events, warnings
+
+
+def _resolve_timeline_rank_context(
+    *,
+    timeline_file: Path,
+    payload: Mapping[str, Any],
+    rank_allocator: _TimelineRankAllocator,
+) -> _TimelineRankContext:
+    metadata = payload.get("metadata") if isinstance(payload, Mapping) else None
+    identity = (
+        payload.get("distributed_identity")
+        if isinstance(payload.get("distributed_identity"), Mapping)
+        else None
+    )
+
+    hinted_rank = _first_int(
+        payload.get("rank"),
+        metadata.get("rank") if isinstance(metadata, Mapping) else None,
+        identity.get("rank") if isinstance(identity, Mapping) else None,
+        minimum=0,
+    )
+    hinted_local_rank = _first_int(
+        payload.get("local_rank"),
+        metadata.get("local_rank") if isinstance(metadata, Mapping) else None,
+        identity.get("local_rank") if isinstance(identity, Mapping) else None,
+        minimum=0,
+    )
+    hinted_world_size = _first_int(
+        payload.get("world_size"),
+        metadata.get("world_size") if isinstance(metadata, Mapping) else None,
+        identity.get("world_size") if isinstance(identity, Mapping) else None,
+        minimum=1,
+    )
+
+    path_rank = _infer_rank_from_path(timeline_file)
+    if hinted_rank is not None:
+        rank = hinted_rank
+        source = "payload"
+    elif path_rank is not None:
+        rank = path_rank
+        source = "path"
+    else:
+        rank = rank_allocator.next_available_rank()
+        source = "allocator"
+
+    local_rank = hinted_local_rank if hinted_local_rank is not None else rank
+    minimum_world_size = max(
+        rank + 1,
+        local_rank + 1,
+        rank_allocator.max_world_size,
+        len(rank_allocator.used_ranks | {rank}),
+    )
+    world_size = (
+        hinted_world_size if hinted_world_size is not None else minimum_world_size
+    )
+    if world_size < minimum_world_size:
+        world_size = minimum_world_size
+
+    rank_allocator.register_rank(rank, world_size)
+    return _TimelineRankContext(
+        rank=rank,
+        local_rank=local_rank,
+        world_size=world_size,
+        source=source,
+    )
+
+
+def _infer_rank_from_path(path: Path) -> int | None:
+    for segment in [
+        path.name,
+        *(parent.name for parent in path.parents if parent.name),
+    ]:
+        match = _RANK_CONTEXT_PATTERN.search(segment)
+        if match:
+            try:
+                return int(match.group("rank"))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _first_int(*values: Any, minimum: int) -> int | None:
+    for value in values:
+        parsed = _coerce_optional_int(value, minimum=minimum)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _coerce_optional_int(value: Any, *, minimum: int) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    if parsed < minimum:
+        return None
+    return parsed
 
 
 def _dedupe_events(events: Iterable[TelemetryEventV2]) -> list[TelemetryEventV2]:

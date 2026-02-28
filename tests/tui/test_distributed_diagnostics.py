@@ -277,6 +277,96 @@ def test_load_distributed_artifacts_synthesizes_events_from_diagnose_timeline(
     assert str(timeline_path) in result.sources_loaded
 
 
+def test_load_distributed_artifacts_merges_mixed_directory_event_and_timeline_ranks(
+    tmp_path: Path,
+) -> None:
+    artifact_dir = tmp_path / "artifact"
+    rank0_dir = artifact_dir / "rank0"
+    rank1_dir = artifact_dir / "rank1"
+    rank0_dir.mkdir(parents=True)
+    rank1_dir.mkdir(parents=True)
+
+    rank0_event = _make_event(
+        timestamp=1.0,
+        rank=0,
+        world_size=2,
+        allocated=100,
+        reserved=120,
+        used=120,
+        total=1000,
+    )
+    events_path = rank0_dir / "events.json"
+    events_path.write_text(
+        json.dumps([telemetry_event_to_dict(rank0_event)]),
+        encoding="utf-8",
+    )
+
+    timeline_path = rank1_dir / "telemetry_timeline.json"
+    timeline_path.write_text(
+        json.dumps(
+            {
+                "timestamps": [1.0, 2.0],
+                "allocated": [200, 240],
+                "reserved": [220, 260],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_distributed_artifacts([artifact_dir])
+
+    assert sorted({event.rank for event in result.events}) == [0, 1]
+    assert str(events_path) in result.sources_loaded
+    assert str(timeline_path) in result.sources_loaded
+
+
+def test_load_distributed_artifacts_preserves_rank_identity_across_timeline_bundles(
+    tmp_path: Path,
+) -> None:
+    rank0_bundle = tmp_path / "rank0-bundle"
+    rank1_bundle = tmp_path / "rank1-bundle"
+    rank0_bundle.mkdir()
+    rank1_bundle.mkdir()
+    rank0_timeline = rank0_bundle / "telemetry_timeline.json"
+    rank1_timeline = rank1_bundle / "telemetry_timeline.json"
+    rank0_timeline.write_text(
+        json.dumps(
+            {
+                "timestamps": [1.0, 2.0],
+                "allocated": [100, 120],
+                "reserved": [100, 120],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rank1_timeline.write_text(
+        json.dumps(
+            {
+                "timestamps": [1.0, 2.0],
+                "allocated": [200, 220],
+                "reserved": [200, 220],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_distributed_artifacts([rank0_bundle, rank1_bundle])
+    model = build_distributed_model(result.events)
+
+    rank_to_allocated: dict[int, list[int]] = {}
+    for event in result.events:
+        rank_to_allocated.setdefault(event.rank, []).append(
+            event.allocator_allocated_bytes
+        )
+
+    assert sorted(rank_to_allocated.keys()) == [0, 1]
+    assert sorted(rank_to_allocated[0]) == [100, 120]
+    assert sorted(rank_to_allocated[1]) == [200, 220]
+    assert model.present_ranks == [0, 1]
+    assert str(rank0_timeline) in result.sources_loaded
+    assert str(rank1_timeline) in result.sources_loaded
+
+
 @dataclass(slots=True)
 class _SyntheticEvent:
     timestamp_ns: int
