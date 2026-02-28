@@ -161,6 +161,13 @@ def test_snapshot_visualizations_tab() -> None:
     )
 
 
+def test_snapshot_diagnostics_tab() -> None:
+    _capture_tab_svg(
+        tab_title="Diagnostics",
+        visible_selectors=("#diagnostics-controls-row1", "#diagnostics-controls-row2"),
+    )
+
+
 def test_snapshot_cli_actions_tab() -> None:
     _capture_tab_svg(
         tab_title="CLI & Actions",
