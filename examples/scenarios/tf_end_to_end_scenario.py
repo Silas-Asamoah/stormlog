@@ -7,6 +7,7 @@ import importlib.util
 import json
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Sequence
@@ -27,6 +28,11 @@ def _run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def _tfmemprof_cmd(*args: str) -> list[str]:
+    """Run tfmemprof via the current Python interpreter for env consistency."""
+    return [sys.executable, "-m", "tfmemprof.cli", *args]
 
 
 def _run_track_with_sigint(cmd: list[str], interrupt_after_s: float) -> int:
@@ -73,8 +79,7 @@ def run_scenario(
         return summary
 
     print_section("Monitor")
-    monitor_cmd = [
-        "tfmemprof",
+    monitor_cmd = _tfmemprof_cmd(
         "monitor",
         "--interval",
         str(monitor_interval_s),
@@ -82,7 +87,7 @@ def run_scenario(
         str(monitor_duration_s),
         "--output",
         str(monitor_path),
-    ]
+    )
     monitor_result = _run_command(monitor_cmd)
     if monitor_result.returncode != 0:
         raise RuntimeError(
@@ -90,8 +95,7 @@ def run_scenario(
         )
 
     print_section("Track")
-    track_cmd = [
-        "tfmemprof",
+    track_cmd = _tfmemprof_cmd(
         "track",
         "--interval",
         str(monitor_interval_s),
@@ -99,7 +103,7 @@ def run_scenario(
         "4096",
         "--output",
         str(track_path),
-    ]
+    )
     track_exit_code = _run_track_with_sigint(track_cmd, track_interrupt_after_s)
     if track_exit_code != 0 and not track_path.exists():
         raise RuntimeError(f"Track command failed ({track_exit_code})")
@@ -110,14 +114,13 @@ def run_scenario(
         validate_telemetry_record(event)
 
     print_section("Analyze")
-    analyze_cmd = [
-        "tfmemprof",
+    analyze_cmd = _tfmemprof_cmd(
         "analyze",
         "--input",
         str(monitor_path),
         "--detect-leaks",
         "--optimize",
-    ]
+    )
     analyze_result = _run_command(analyze_cmd)
     if analyze_result.returncode != 0:
         raise RuntimeError(
@@ -125,14 +128,13 @@ def run_scenario(
         )
 
     print_section("Diagnose")
-    diagnose_cmd = [
-        "tfmemprof",
+    diagnose_cmd = _tfmemprof_cmd(
         "diagnose",
         "--duration",
         "0",
         "--output",
         str(diagnose_dir),
-    ]
+    )
     diagnose_result = _run_command(diagnose_cmd)
     if diagnose_result.returncode != 0:
         raise RuntimeError(

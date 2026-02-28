@@ -32,6 +32,12 @@ class _TrackerHarness:
         self.total_memory = 1024 * 1024 * 1024
         self.sampling_interval = 0.1
         self.last_oom_dump_path = None
+        self.distributed_identity = {
+            "job_id": "test-job",
+            "rank": 0,
+            "local_rank": 0,
+            "world_size": 1,
+        }
         self._oom_flight_recorder = OOMFlightRecorder(
             OOMFlightRecorderConfig(
                 enabled=enabled,
