@@ -206,7 +206,6 @@ def load_distributed_artifacts(paths: list[Path]) -> ArtifactLoadResult:
                 rank_allocator=rank_allocator,
             )
             events.extend(loaded)
-            rank_allocator.register_events(loaded)
             warnings.extend(file_warnings)
             if loaded:
                 sources_loaded.append(str(path))
@@ -218,7 +217,6 @@ def load_distributed_artifacts(paths: list[Path]) -> ArtifactLoadResult:
                 rank_allocator=rank_allocator,
             )
             events.extend(loaded)
-            rank_allocator.register_events(loaded)
             warnings.extend(dir_warnings)
             sources_loaded.extend(dir_sources)
             continue
@@ -470,7 +468,10 @@ def _load_artifact_file(
 
     if suffix == ".json":
         try:
-            return load_telemetry_events(path, permissive_legacy=True), warnings
+            events = load_telemetry_events(path, permissive_legacy=True)
+            if rank_allocator is not None:
+                rank_allocator.register_events(events)
+            return events, warnings
         except Exception as exc:
             if path.name == "telemetry_timeline.json":
                 synthesized, synth_warnings = _synthesize_events_from_timeline(
@@ -482,7 +483,10 @@ def _load_artifact_file(
             return [], warnings
 
     if suffix == ".csv":
-        return _load_csv_events(path)
+        events, csv_warnings = _load_csv_events(path)
+        if rank_allocator is not None:
+            rank_allocator.register_events(events)
+        return events, csv_warnings
 
     warnings.append(f"Unsupported artifact file type: {path}")
     return [], warnings
@@ -564,7 +568,6 @@ def _load_artifact_directory(
             rank_allocator=allocator,
         )
         events.extend(loaded)
-        allocator.register_events(loaded)
         warnings.extend(file_warnings)
         if loaded:
             sources.append(str(file_path))
@@ -576,7 +579,6 @@ def _load_artifact_directory(
             rank_allocator=allocator,
         )
         events.extend(synthesized)
-        allocator.register_events(synthesized)
         warnings.extend(synth_warnings)
         if synthesized:
             sources.append(str(timeline_file))
