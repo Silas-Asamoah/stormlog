@@ -10,6 +10,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from gpumemprof.collective_attribution import (
+    CollectiveAttributionResult,
+    attribute_collective_memory,
+    resolve_collective_attribution_config,
+)
 from gpumemprof.gap_analysis import analyze_hidden_memory_gaps
 from gpumemprof.telemetry import (
     TelemetryEventV2,
@@ -32,6 +37,7 @@ _EMPTY_REMEDIATION: dict[str, list[str]] = {
     "persistent_drift": [],
     "fragmentation_like": [],
 }
+_COLLECTIVE_ATTRIBUTION_CONFIG = resolve_collective_attribution_config("medium")
 
 _ALERT_TYPES = frozenset({"warning", "critical", "error"})
 _SEVERITY_ORDER = {"info": 1, "warning": 2, "critical": 3}
@@ -103,6 +109,8 @@ class AnomalyIndicator:
     timestamp_ns: int
     signal: str
     details: str
+    confidence: float | None = None
+    reason_codes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -125,6 +133,8 @@ class _AnomalyCandidate:
     timestamp_ns: int
     signal: str
     details: str
+    confidence: float | None = None
+    reason_codes: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -283,6 +293,7 @@ def build_distributed_model(
     rows: list[RankDiagnosticsRow] = []
     timelines: dict[int, dict[str, list[int]]] = {}
     candidates: list[_AnomalyCandidate] = []
+    collective_by_rank = _group_collective_attribution_by_rank(events)
 
     for rank in filtered_expected:
         rank_events = grouped.get(rank, [])
@@ -301,7 +312,11 @@ def build_distributed_model(
             )
             continue
 
-        row, rank_candidates = _build_rank_row(rank, rank_events)
+        row, rank_candidates = _build_rank_row(
+            rank,
+            rank_events,
+            collective_by_rank.get(rank, []),
+        )
         rows.append(row)
         candidates.extend(rank_candidates)
         timelines[rank] = {
@@ -328,6 +343,7 @@ def build_distributed_model(
 def _build_rank_row(
     rank: int,
     rank_events: list[TelemetryEventV2],
+    collective_attribution: list[CollectiveAttributionResult],
 ) -> tuple[RankDiagnosticsRow, list[_AnomalyCandidate]]:
     first_event = rank_events[0]
     last_event = rank_events[-1]
@@ -345,7 +361,11 @@ def _build_rank_row(
     gap_latest = gaps[-1] if gaps else 0
     gap_peak_abs = max((abs(value) for value in gaps), default=0)
 
-    candidates = _derive_rank_anomaly_candidates(rank, rank_events)
+    candidates = _derive_rank_anomaly_candidates(
+        rank,
+        rank_events,
+        collective_attribution,
+    )
     earliest = (
         min(candidates, key=lambda candidate: candidate.timestamp_ns)
         if candidates
@@ -369,6 +389,7 @@ def _build_rank_row(
 def _derive_rank_anomaly_candidates(
     rank: int,
     rank_events: list[TelemetryEventV2],
+    collective_attribution: list[CollectiveAttributionResult],
 ) -> list[_AnomalyCandidate]:
     candidates: list[_AnomalyCandidate] = []
     first_gap_breach_ts: int | None = None
@@ -420,7 +441,47 @@ def _derive_rank_anomaly_candidates(
             )
         )
 
+    for attribution in collective_attribution:
+        confidence = round(float(attribution.confidence), 3)
+        reason_codes = sorted(set(attribution.reason_codes))
+        reason_summary = ", ".join(reason_codes) if reason_codes else "no reason codes"
+        candidates.append(
+            _AnomalyCandidate(
+                rank=rank,
+                severity=_collective_severity(confidence),
+                timestamp_ns=attribution.interval_start_ns,
+                signal=f"collective:{attribution.classification}",
+                details=(
+                    "Communication-attributed hidden-memory spike "
+                    f"(confidence {confidence:.2f}; reasons: {reason_summary})."
+                ),
+                confidence=confidence,
+                reason_codes=reason_codes,
+            )
+        )
+
     return candidates
+
+
+def _group_collective_attribution_by_rank(
+    events: list[TelemetryEventV2],
+) -> dict[int, list[CollectiveAttributionResult]]:
+    grouped: dict[int, list[CollectiveAttributionResult]] = {}
+    attributions = attribute_collective_memory(
+        events=events,
+        config=_COLLECTIVE_ATTRIBUTION_CONFIG,
+    )
+    for attribution in attributions:
+        grouped.setdefault(attribution.rank, []).append(attribution)
+    return grouped
+
+
+def _collective_severity(confidence: float) -> str:
+    if confidence >= 0.8:
+        return "critical"
+    if confidence >= 0.6:
+        return "warning"
+    return "info"
 
 
 def _build_first_cause_indicators(
@@ -446,6 +507,8 @@ def _build_first_cause_indicators(
             timestamp_ns=earliest.timestamp_ns,
             signal=earliest.signal,
             details=earliest.details,
+            confidence=earliest.confidence,
+            reason_codes=list(earliest.reason_codes),
         ),
         AnomalyIndicator(
             kind="most_severe",
@@ -454,6 +517,8 @@ def _build_first_cause_indicators(
             timestamp_ns=most_severe.timestamp_ns,
             signal=most_severe.signal,
             details=most_severe.details,
+            confidence=most_severe.confidence,
+            reason_codes=list(most_severe.reason_codes),
         ),
     ]
 

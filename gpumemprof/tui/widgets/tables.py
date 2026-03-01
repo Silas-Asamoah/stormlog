@@ -177,22 +177,42 @@ class AnomalySummaryTable(DataTable):
 
     def on_mount(self) -> None:
         if not self.columns:
-            self.add_columns("Indicator", "Rank", "Severity", "Time (UTC)", "Signal")
+            self.add_columns(
+                "Indicator",
+                "Rank",
+                "Severity",
+                "Time (UTC)",
+                "Signal",
+                "Confidence",
+                "Reason Codes",
+            )
 
     def update_rows(self, indicators: list[AnomalyIndicator]) -> None:
         self.clear()
         if not indicators:
-            self.add_row("-", "-", "-", "-", "No anomaly indicators detected.")
+            self.add_row(
+                "-", "-", "-", "-", "No anomaly indicators detected.", "-", "-"
+            )
             return
 
         for indicator in indicators:
             time_label = datetime.utcfromtimestamp(
                 indicator.timestamp_ns / 1e9
             ).strftime("%H:%M:%S")
+            confidence_label = (
+                f"{indicator.confidence:.2f}"
+                if indicator.confidence is not None
+                else "-"
+            )
+            reason_codes_label = (
+                ",".join(indicator.reason_codes) if indicator.reason_codes else "-"
+            )
             self.add_row(
                 indicator.kind,
                 str(indicator.rank),
                 indicator.severity,
                 time_label,
                 indicator.signal,
+                confidence_label,
+                reason_codes_label,
             )
