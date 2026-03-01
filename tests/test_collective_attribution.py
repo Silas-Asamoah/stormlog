@@ -200,3 +200,69 @@ def test_collective_attribution_stability_no_significant_hidden_gap() -> None:
 
     results = attribute_collective_memory(events)
     assert results == []
+
+
+def test_collective_attribution_keeps_marker_evidence_rank_local() -> None:
+    events = _build_sync_spike_events(world_size=2, with_markers=False)
+    marker_time_ns = BASE_NS + 6 * STEP_NS + 10_000_000
+    events.append(
+        _make_event(
+            timestamp_ns=marker_time_ns,
+            rank=0,
+            world_size=2,
+            allocator_reserved=2_000_000_000,
+            device_used=2_000_000_000,
+            event_type="collective",
+            context="NCCL all_reduce phase",
+            metadata={"phase": "communication.collective"},
+        )
+    )
+
+    results = sorted(attribute_collective_memory(events), key=lambda item: item.rank)
+
+    assert len(results) == 2
+    rank0 = results[0]
+    rank1 = results[1]
+    assert rank0.rank == 0
+    assert rank1.rank == 1
+    assert "marker_collective_token" in rank0.reason_codes
+    assert "marker_collective_token" not in rank1.reason_codes
+    assert "weak_marker_signal" in rank1.reason_codes
+
+
+def test_collective_attribution_accepts_uppercase_sample_event_type() -> None:
+    events = _build_sync_spike_events(world_size=2, with_markers=True)
+    normalized: list[TelemetryEventV2] = []
+    for event in events:
+        if event.event_type == "sample":
+            normalized.append(
+                TelemetryEventV2(
+                    schema_version=event.schema_version,
+                    timestamp_ns=event.timestamp_ns,
+                    event_type="SAMPLE",
+                    collector=event.collector,
+                    sampling_interval_ms=event.sampling_interval_ms,
+                    pid=event.pid,
+                    host=event.host,
+                    device_id=event.device_id,
+                    allocator_allocated_bytes=event.allocator_allocated_bytes,
+                    allocator_reserved_bytes=event.allocator_reserved_bytes,
+                    allocator_active_bytes=event.allocator_active_bytes,
+                    allocator_inactive_bytes=event.allocator_inactive_bytes,
+                    allocator_change_bytes=event.allocator_change_bytes,
+                    device_used_bytes=event.device_used_bytes,
+                    device_free_bytes=event.device_free_bytes,
+                    device_total_bytes=event.device_total_bytes,
+                    context=event.context,
+                    job_id=event.job_id,
+                    rank=event.rank,
+                    local_rank=event.local_rank,
+                    world_size=event.world_size,
+                    metadata=dict(event.metadata),
+                )
+            )
+        else:
+            normalized.append(event)
+
+    results = attribute_collective_memory(normalized)
+    assert len(results) == 2
