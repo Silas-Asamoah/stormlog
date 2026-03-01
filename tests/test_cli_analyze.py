@@ -92,3 +92,31 @@ def test_cmd_analyze_non_telemetry_falls_back_gracefully(tmp_path, capsys) -> No
     stdout = capsys.readouterr().out
     assert "Analyzing profiling results from:" in stdout
     assert "Notes: JSON payload does not contain telemetry events" in stdout
+
+
+def test_cmd_analyze_non_telemetry_array_falls_back_gracefully(tmp_path, capsys) -> None:
+    input_path = tmp_path / "results.json"
+    input_path.write_text(
+        json.dumps(
+            [
+                {"function_name": "train_step", "duration_ms": 12.5},
+                {"function_name": "eval_step", "duration_ms": 8.0},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    cmd_analyze(
+        argparse.Namespace(
+            input_file=str(input_path),
+            output=None,
+            format="json",
+            visualization=False,
+            plot_dir=str(tmp_path / "plots"),
+        )
+    )
+
+    stdout = capsys.readouterr().out
+    assert "Analyzing profiling results from:" in stdout
+    assert "Notes: JSON payload does not contain telemetry events" in stdout
+    assert "Error parsing telemetry events" not in stdout

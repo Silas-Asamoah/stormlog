@@ -739,6 +739,34 @@ def _build_analyze_summary(
     return "\n".join(lines)
 
 
+def _json_payload_looks_like_telemetry(payload: Any) -> bool:
+    """Return whether a loaded JSON payload plausibly contains telemetry events."""
+
+    candidate_keys = {
+        "schema_version",
+        "timestamp",
+        "timestamp_ns",
+        "event_type",
+        "memory_allocated",
+        "memory_mb",
+        "allocator_allocated_bytes",
+        "device_used_bytes",
+    }
+
+    if isinstance(payload, dict):
+        if isinstance(payload.get("events"), list):
+            return True
+        return any(key in payload for key in candidate_keys)
+
+    if isinstance(payload, list):
+        return any(
+            isinstance(item, dict) and any(key in item for key in candidate_keys)
+            for item in payload
+        )
+
+    return False
+
+
 def cmd_analyze(args: argparse.Namespace) -> None:
     """Handle analyze command."""
     input_file = args.input_file
@@ -764,8 +792,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     try:
         events = load_telemetry_events(input_path, permissive_legacy=True)
     except ValueError as exc:
-        if "does not contain telemetry events" in str(exc):
-            telemetry_note = str(exc)
+        if not _json_payload_looks_like_telemetry(data):
+            telemetry_note = "JSON payload does not contain telemetry events"
         else:
             print(f"Error parsing telemetry events: {exc}")
             return
