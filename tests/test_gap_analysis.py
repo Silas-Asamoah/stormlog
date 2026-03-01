@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from gpumemprof.analyzer import MemoryAnalyzer
-from gpumemprof.telemetry import TelemetryEventV2
+from gpumemprof.telemetry import SCHEMA_VERSION_V2, TelemetryEventV2
 from tests.gap_test_helpers import build_gap_event
 
 # ---------------------------------------------------------------------------
@@ -26,6 +26,43 @@ def _make_event(
         device_used=device_used,
         collector="gpumemprof.cuda_tracker",
         device_total=device_total,
+    )
+
+
+def _make_collective_event(
+    *,
+    timestamp_ns: int,
+    rank: int,
+    world_size: int,
+    allocator_reserved: int,
+    device_used: int,
+    event_type: str = "sample",
+    context: str | None = None,
+    metadata: dict | None = None,
+) -> TelemetryEventV2:
+    total_bytes = 16 * 1024**3
+    return TelemetryEventV2(
+        schema_version=SCHEMA_VERSION_V2,
+        timestamp_ns=timestamp_ns,
+        event_type=event_type,
+        collector="gpumemprof.cuda_tracker",
+        sampling_interval_ms=100,
+        pid=1,
+        host="test",
+        device_id=0,
+        allocator_allocated_bytes=max(0, allocator_reserved - 100_000_000),
+        allocator_reserved_bytes=allocator_reserved,
+        allocator_active_bytes=None,
+        allocator_inactive_bytes=None,
+        allocator_change_bytes=0,
+        device_used_bytes=device_used,
+        device_free_bytes=max(0, total_bytes - device_used),
+        device_total_bytes=total_bytes,
+        context=context,
+        rank=rank,
+        local_rank=rank,
+        world_size=world_size,
+        metadata=metadata or {},
     )
 
 
@@ -184,3 +221,49 @@ class TestEdgeCases:
         report = analyzer.generate_optimization_report(results=[])
         assert "gap_analysis" not in report
         assert "collective_attribution" not in report
+
+    def test_report_collective_attribution_includes_confidence_and_reason_codes(
+        self,
+    ) -> None:
+        events: list[TelemetryEventV2] = []
+        base_ns = 1_700_000_000_000_000_000
+        for rank in (0, 1):
+            rank_offset = rank * 2_000_000
+            for index in range(12):
+                timestamp_ns = base_ns + index * 100_000_000 + rank_offset
+                reserved = 2_000_000_000
+                used = reserved + 40_000_000
+                if index == 6:
+                    used = reserved + 1_600_000_000
+                events.append(
+                    _make_collective_event(
+                        timestamp_ns=timestamp_ns,
+                        rank=rank,
+                        world_size=2,
+                        allocator_reserved=reserved,
+                        device_used=used,
+                    )
+                )
+                if index == 6:
+                    events.append(
+                        _make_collective_event(
+                            timestamp_ns=timestamp_ns + 10_000_000,
+                            rank=rank,
+                            world_size=2,
+                            allocator_reserved=reserved,
+                            device_used=reserved,
+                            event_type="collective",
+                            context="NCCL all_reduce phase",
+                            metadata={"phase": "communication.collective"},
+                        )
+                    )
+
+        analyzer = MemoryAnalyzer()
+        report = analyzer.generate_optimization_report(results=[], events=events)
+        attributions = report["collective_attribution"]
+
+        assert attributions
+        for attribution in attributions:
+            assert "confidence" in attribution
+            assert "reason_codes" in attribution
+            assert attribution["reason_codes"]
