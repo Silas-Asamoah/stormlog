@@ -99,11 +99,13 @@ Advanced analysis and optimization recommendations.
 - Performance analysis
 - Optimization suggestions
 - Pattern recognition
+- Hidden-memory collective communication attribution heuristics
 
 **Key Classes:**
 
 - `MemoryAnalyzer`
 - `GapFinding` (hidden-memory gap analysis)
+- `CollectiveAttributionResult` (communication-attributed hidden-memory spikes)
 
 ### 5. Context Profiler (`context_profiler.py`)
 

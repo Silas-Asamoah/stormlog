@@ -41,7 +41,8 @@ stormlog
   `./visualizations`) for richer analysis.
 - **Diagnostics tab** – Load distributed telemetry from live sessions or merged
   artifacts, compare per-rank deltas/gaps, inspect first-cause indicators
-  (earliest + most severe), and focus timeline comparisons by rank.
+  (earliest + most severe), review collective-memory attribution confidence and
+  reason codes, and focus timeline comparisons by rank.
 - **CLI & Actions tab** – Rich instructions plus quick-run buttons that execute
   `gpumemprof` / `tfmemprof` commands directly inside the TUI. Dedicated launch
   helpers include buttons for `gpumemprof diagnose`, the OOM scenario runner,
@@ -68,10 +69,26 @@ The Diagnostics tab consumes either live telemetry (from the active
 Use **Load Live** / **Load Artifacts**, then **Refresh** to rebuild the model.
 The rank table surfaces per-rank deltas and hidden-gap metrics, while the
 anomaly summary highlights both first-cause views: earliest anomaly and most
-severe anomaly. Rank filter expressions support `all`, comma-separated ranks,
-and inclusive ranges such as `0,2,4-7`.
+severe anomaly. Collective-attribution indicators include confidence and reason
+codes (for example `marker_collective_token`, `cross_rank_synchrony`) so you
+can separate communication-related growth from generic hidden-gap drift. Rank
+filter expressions support `all`, comma-separated ranks, and inclusive ranges
+such as `0,2,4-7`.
 The current tested responsiveness bound is **64 ranks × 2,000 samples/rank**
 via synthetic diagnostics model coverage in `tests/tui/test_distributed_diagnostics.py`.
+
+### Known limitations
+
+- Collective attribution is heuristic and not a replacement for runtime-level
+  allocator traces or `memory_snapshot()`-style forensic tools.
+- Confidence can be lower when `device_total_bytes` is unavailable because
+  ratio-based evidence is missing.
+- Single-rank traces can still be attributed, but they are explicitly tagged
+  with `single_rank_only` to indicate weaker synchrony evidence.
+- Marker quality depends on telemetry text (`event_type`, `context`, metadata);
+  missing marker tokens can reduce confidence and increase ambiguity.
+- Fast overlapping collectives can collapse into one interval in summaries,
+  which favors readability over exact phase boundaries.
 
 The PyTorch/TensorFlow tabs both include **Refresh Profiles** and **Clear
 Profiles** buttons. They query the global profiler instances used by the
