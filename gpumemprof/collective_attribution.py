@@ -532,10 +532,14 @@ def _merge_classification(first: str, second: str) -> str:
 
 
 def _event_has_collective_marker(event: TelemetryEventV2) -> bool:
-    text_fragments: list[str] = [event.event_type]
-    if event.context:
-        text_fragments.append(event.context)
-    text_fragments.extend(_iter_string_values(event.metadata))
+    event_type = str(getattr(event, "event_type", ""))
+    context = getattr(event, "context", None)
+    metadata = getattr(event, "metadata", {})
+
+    text_fragments: list[str] = [event_type]
+    if isinstance(context, str) and context:
+        text_fragments.append(context)
+    text_fragments.extend(_iter_string_values(metadata))
 
     for fragment in text_fragments:
         if _contains_collective_token(fragment):
