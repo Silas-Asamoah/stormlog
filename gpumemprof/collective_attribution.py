@@ -183,6 +183,7 @@ def attribute_collective_memory(
         return []
 
     expected_world_size = _expected_world_size(ordered_events)
+    trace_start_ns = max(0, ordered_events[0].timestamp_ns)
     synchrony_by_spike = _build_synchrony_lookup(
         spikes_by_rank, resolved.synchrony_window_ns
     )
@@ -195,6 +196,7 @@ def attribute_collective_memory(
                 spike=spike,
                 synchronized_ranks=synchronized_ranks,
                 expected_world_size=expected_world_size,
+                trace_start_ns=trace_start_ns,
                 config=resolved,
             )
             if scored is not None and scored.confidence >= resolved.min_confidence:
@@ -375,6 +377,7 @@ def _score_spike(
     spike: _RankSpike,
     synchronized_ranks: set[int],
     expected_world_size: int,
+    trace_start_ns: int,
     config: CollectiveAttributionConfig,
 ) -> CollectiveAttributionResult | None:
     marker_overlap = bool(spike.marker_times)
@@ -432,7 +435,8 @@ def _score_spike(
 
     marker_start = min(spike.marker_times) if spike.marker_times else spike.timestamp_ns
     marker_end = max(spike.marker_times) if spike.marker_times else spike.timestamp_ns
-    interval_start = min(marker_start, spike.timestamp_ns) - config.interval_padding_ns
+    unclamped_start = min(marker_start, spike.timestamp_ns) - config.interval_padding_ns
+    interval_start = max(0, trace_start_ns, unclamped_start)
     interval_end = max(marker_end, spike.timestamp_ns) + config.interval_padding_ns
 
     evidence = CollectiveAttributionEvidence(
@@ -569,9 +573,7 @@ def _iter_string_values(value: Any) -> Iterable[str]:
         yield value
         return
     if isinstance(value, Mapping):
-        for key, nested in value.items():
-            if isinstance(key, str):
-                yield key
+        for _, nested in value.items():
             yield from _iter_string_values(nested)
         return
     if isinstance(value, (list, tuple, set)):
