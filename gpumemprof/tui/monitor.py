@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
+import socket
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, cast
+
+from gpumemprof.telemetry import TelemetryEventV2, telemetry_event_from_record
 
 from ..utils import format_bytes
 
@@ -190,6 +194,97 @@ class TrackerSession:
         return cast(
             Dict[str, Any], self._tracker.get_memory_timeline(interval=interval)
         )
+
+    def get_telemetry_events(self) -> list[TelemetryEventV2]:
+        """Return normalized telemetry events from the active tracker session."""
+        tracker = self._tracker
+        if not tracker:
+            return []
+
+        sampling_interval_ms = max(0, int(round(self.sampling_interval * 1000)))
+        host = socket.gethostname()
+        pid = os.getpid()
+
+        backend_name = str(getattr(tracker, "backend", self.backend)).lower()
+        collector = f"gpumemprof.{backend_name}_tracker"
+        if backend_name == "gpu":
+            collector = "gpumemprof.cuda_tracker"
+        elif backend_name == "cpu":
+            collector = "gpumemprof.cpu_tracker"
+
+        raw_events = []
+        if hasattr(tracker, "get_events"):
+            try:
+                raw_events = list(tracker.get_events())
+            except Exception as exc:
+                logger.debug(
+                    "TrackerSession.get_telemetry_events get_events failed: %s", exc
+                )
+                raw_events = []
+        elif hasattr(tracker, "events"):
+            raw_events = list(getattr(tracker, "events", []))
+
+        normalized: list[TelemetryEventV2] = []
+        for raw_event in raw_events:
+            timestamp = getattr(raw_event, "timestamp", None)
+            if timestamp is None:
+                continue
+            event_type = str(getattr(raw_event, "event_type", "sample"))
+
+            allocated = int(getattr(raw_event, "memory_allocated", 0))
+            reserved = int(getattr(raw_event, "memory_reserved", allocated))
+            memory_change = int(getattr(raw_event, "memory_change", 0))
+            device_used = getattr(raw_event, "device_used", None)
+            if device_used is None:
+                device_used = max(allocated, reserved)
+
+            metadata = dict(getattr(raw_event, "metadata", {}) or {})
+            metadata.setdefault("backend", backend_name)
+
+            device_total = getattr(raw_event, "device_total", None)
+            if device_total is None:
+                tracker_total = getattr(tracker, "total_memory", None)
+                device_total = int(tracker_total) if tracker_total is not None else None
+
+            record = {
+                "timestamp": float(timestamp),
+                "event_type": event_type,
+                "collector": collector,
+                "sampling_interval_ms": sampling_interval_ms,
+                "pid": int(pid),
+                "host": host,
+                "device_id": int(getattr(raw_event, "device_id", -1)),
+                "memory_allocated": allocated,
+                "memory_reserved": reserved,
+                "memory_change": memory_change,
+                "allocator_active_bytes": getattr(raw_event, "active_memory", None),
+                "allocator_inactive_bytes": getattr(raw_event, "inactive_memory", None),
+                "device_used_bytes": int(device_used),
+                "device_free_bytes": getattr(raw_event, "device_free", None),
+                "device_total_bytes": device_total,
+                "context": getattr(raw_event, "context", None),
+                "job_id": getattr(raw_event, "job_id", None),
+                "rank": int(getattr(raw_event, "rank", 0)),
+                "local_rank": int(getattr(raw_event, "local_rank", 0)),
+                "world_size": int(getattr(raw_event, "world_size", 1)),
+                "metadata": metadata,
+            }
+            try:
+                normalized.append(
+                    telemetry_event_from_record(
+                        record,
+                        permissive_legacy=True,
+                        default_collector=collector,
+                        default_sampling_interval_ms=sampling_interval_ms,
+                    )
+                )
+            except Exception as exc:
+                logger.debug(
+                    "TrackerSession.get_telemetry_events dropped malformed event: %s",
+                    exc,
+                )
+
+        return normalized
 
     def get_device_label(self) -> Optional[str]:
         """Return the CUDA device label, if tracking."""

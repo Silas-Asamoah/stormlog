@@ -202,6 +202,18 @@ an ASCII timeline from the live tracker and can export the same data to PNG
 (Matplotlib) or HTML (Plotly) under `./visualizations` for deeper inspection.
 Just start tracking, refresh the tab, and hit the export buttons.
 
+Need fast distributed triage? The **Diagnostics** tab loads live telemetry or
+merged artifacts (`JSON`, `CSV`, diagnose directories), then renders per-rank
+delta/gap diagnostics, timeline comparisons, and first-cause indicators
+(earliest + most severe). It also handles partial rank availability and
+supports rank filters like `0,2,4-7`.
+
+<p align=\"center\">
+  <img src=\"docs/tui-distributed-diagnostics-workflow.png\" alt=\"Stormlog distributed diagnostics workflow\" width=\"900\">
+  <br/>
+  <em>Distributed Diagnostics tab workflow (live + artifact inputs, rank table, timeline compare, anomaly summary).</em>
+</p>
+
 The PyTorch and TensorFlow tabs now surface recent decorator/context profiling
 results as live tables—with refresh/clear controls—so you can review peak
 memory, deltas, and durations gathered via `gpumemprof.context_profiler` or

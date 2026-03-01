@@ -186,6 +186,52 @@ TUI_APP_CSS = """
         margin-top: 1;
     }
 
+    #diagnostics-tab {
+        layout: vertical;
+        height: 1fr;
+        border: solid gray;
+        padding: 0 1;
+    }
+
+    #diagnostics-controls-row1,
+    #diagnostics-controls-row2 {
+        layout: horizontal;
+        content-align: left middle;
+        margin-bottom: 1;
+        height: auto;
+        min-height: 6;
+    }
+
+    #diagnostics-path-input,
+    #diagnostics-rank-filter {
+        width: 1fr;
+        margin-right: 1;
+    }
+
+    #diagnostics-rank-table {
+        height: 12;
+        border: solid gray;
+    }
+
+    #diagnostics-timeline-canvas {
+        height: 12;
+        border: solid gray;
+        padding: 1;
+        margin-top: 1;
+    }
+
+    #diagnostics-anomaly-table {
+        height: 8;
+        border: solid gray;
+        margin-top: 1;
+    }
+
+    #diagnostics-log {
+        height: 8;
+        border: solid gray;
+        margin-top: 1;
+    }
+
     #overview-welcome {
         border: round $primary;
         padding: 1;

@@ -39,6 +39,9 @@ stormlog
 - **Visualizations tab** – Refresh an ASCII timeline for quick inspection, then
   export the same data as a Matplotlib PNG or Plotly HTML file (saved under
   `./visualizations`) for richer analysis.
+- **Diagnostics tab** – Load distributed telemetry from live sessions or merged
+  artifacts, compare per-rank deltas/gaps, inspect first-cause indicators
+  (earliest + most severe), and focus timeline comparisons by rank.
 - **CLI & Actions tab** – Rich instructions plus quick-run buttons that execute
   `gpumemprof` / `tfmemprof` commands directly inside the TUI. Dedicated launch
   helpers include buttons for `gpumemprof diagnose`, the OOM scenario runner,
@@ -59,6 +62,16 @@ stats, then use **Generate PNG Plot** (Matplotlib) or **Generate HTML Plot**
 (Plotly) to save richer artifacts you can share. Install the `[viz]` extra
 (`pip install "stormlog[viz]"`) if you want the optional Plotly
 export.
+
+The Diagnostics tab consumes either live telemetry (from the active
+`TrackerSession`) or merged artifacts (`JSON`, `CSV`, and diagnose directories).
+Use **Load Live** / **Load Artifacts**, then **Refresh** to rebuild the model.
+The rank table surfaces per-rank deltas and hidden-gap metrics, while the
+anomaly summary highlights both first-cause views: earliest anomaly and most
+severe anomaly. Rank filter expressions support `all`, comma-separated ranks,
+and inclusive ranges such as `0,2,4-7`.
+The current tested responsiveness bound is **64 ranks × 2,000 samples/rank**
+via synthetic diagnostics model coverage in `tests/tui/test_distributed_diagnostics.py`.
 
 The PyTorch/TensorFlow tabs both include **Refresh Profiles** and **Clear
 Profiles** buttons. They query the global profiler instances used by the
@@ -85,6 +98,16 @@ For release QA, use these CLI tab quick actions:
 Watching for leaks? The monitoring tab now includes a live alert history plus
 sliders for warning/critical thresholds (GPU mode) so you can tune signal/noise
 without restarting the tracker.
+
+## Distributed Diagnostics Screenshots
+
+Deterministic workflow snapshot (SVG):
+
+![Distributed diagnostics workflow (SVG)](tui-distributed-diagnostics-workflow.svg)
+
+Manual render (PNG):
+
+![Distributed diagnostics workflow (PNG)](tui-distributed-diagnostics-workflow.png)
 
 Keyboard shortcuts:
 

@@ -7,6 +7,7 @@ from typing import Any, Callable, List
 
 from textual.widgets import DataTable
 
+from ..distributed_diagnostics import AnomalyIndicator, RankDiagnosticsRow
 from ..profiles import ProfileRow
 
 
@@ -109,4 +110,89 @@ class ProfileResultsTable(DataTable):
                 f"{row.duration_ms:.2f}",
                 str(row.call_count),
                 timestamp,
+            )
+
+
+class DistributedRankTable(DataTable):
+    """Table displaying per-rank distributed diagnostics metrics."""
+
+    def on_mount(self) -> None:
+        if not self.columns:
+            self.add_columns(
+                "Rank",
+                "Status",
+                "Samples",
+                "Δ Allocated",
+                "Δ Reserved",
+                "Gap Latest",
+                "Gap Peak |abs|",
+                "Anomaly",
+            )
+
+    def update_rows(self, rows: list[RankDiagnosticsRow]) -> None:
+        self.clear()
+        if not rows:
+            self.add_row("-", "-", "-", "-", "-", "-", "-", "No rank data.")
+            return
+
+        for row in rows:
+            anomaly_label = "Yes" if row.has_anomaly else "No"
+            self.add_row(
+                str(row.rank),
+                row.availability,
+                str(row.samples),
+                self._format_bytes(row.allocated_delta_bytes),
+                self._format_bytes(row.reserved_delta_bytes),
+                self._format_bytes(row.hidden_gap_latest_bytes),
+                self._format_bytes(row.hidden_gap_peak_abs_bytes),
+                anomaly_label,
+                key=f"rank-{row.rank}",
+            )
+
+    @staticmethod
+    def rank_from_row_key(row_key: Any) -> int | None:
+        raw_key = getattr(row_key, "value", row_key)
+        text = str(raw_key)
+        if text.startswith("rank-"):
+            rank_text = text.removeprefix("rank-")
+            if rank_text.isdigit():
+                return int(rank_text)
+        return None
+
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        sign = "-" if value < 0 else ""
+        absolute = abs(value)
+        units = ["B", "KB", "MB", "GB", "TB"]
+        size = float(absolute)
+        unit_index = 0
+        while size >= 1024 and unit_index < len(units) - 1:
+            size /= 1024.0
+            unit_index += 1
+        return f"{sign}{size:.2f} {units[unit_index]}"
+
+
+class AnomalySummaryTable(DataTable):
+    """Table displaying first-cause anomaly indicators."""
+
+    def on_mount(self) -> None:
+        if not self.columns:
+            self.add_columns("Indicator", "Rank", "Severity", "Time (UTC)", "Signal")
+
+    def update_rows(self, indicators: list[AnomalyIndicator]) -> None:
+        self.clear()
+        if not indicators:
+            self.add_row("-", "-", "-", "-", "No anomaly indicators detected.")
+            return
+
+        for indicator in indicators:
+            time_label = datetime.utcfromtimestamp(
+                indicator.timestamp_ns / 1e9
+            ).strftime("%H:%M:%S")
+            self.add_row(
+                indicator.kind,
+                str(indicator.rank),
+                indicator.severity,
+                time_label,
+                indicator.signal,
             )

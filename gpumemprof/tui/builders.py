@@ -20,6 +20,7 @@ def build_welcome_info() -> str:
         - **TensorFlow** → View TensorFlow GPU stats, run profiling samples, and see profile results
         - **Monitoring** → Start live memory tracking, set alert thresholds, export CSV/JSON data
         - **Visualizations** → Generate timeline plots (PNG/HTML) from tracking sessions
+        - **Diagnostics** → Compare distributed ranks, hidden gaps, and first-cause indicators
         - **CLI & Actions** → Run CLI commands interactively and execute sample workloads
 
         ## Keyboard Shortcuts
@@ -237,5 +238,19 @@ def build_visual_markdown() -> str:
         - Use `Generate PNG Plot` to save a Matplotlib graph (writes to ./visualizations).
         - Prefer `Generate HTML Plot` for an interactive Plotly view you can open in a browser.
         - A lightweight ASCII chart appears below so you can inspect trends without leaving the terminal.
+        """
+    ).strip()
+
+
+def build_diagnostics_markdown() -> str:
+    return dedent(
+        """
+        # Distributed Diagnostics
+
+        - **Load Live** to read telemetry directly from the active tracker session.
+        - **Load Artifacts** to merge JSON/CSV exports or diagnose directories.
+        - Use **Rank Filter** (`all`, `0,2,4-7`) to narrow the comparison set.
+        - Select a rank in the table to pin timeline focus.
+        - Review **earliest** and **most severe** first-cause indicators in the anomaly summary.
         """
     ).strip()
