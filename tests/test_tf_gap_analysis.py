@@ -176,7 +176,9 @@ class TestEdgeCases:
         analyzer = MemoryAnalyzer()
         result = analyzer.score_optimization(_Stub(), events=events)
         assert "gap_analysis" in result
+        assert "collective_attribution" in result
         assert isinstance(result["gap_analysis"], list)
+        assert isinstance(result["collective_attribution"], list)
         assert len(result["gap_analysis"]) > 0
 
     def test_score_optimization_omits_gap_analysis_when_no_events(self) -> None:
@@ -189,3 +191,4 @@ class TestEdgeCases:
         analyzer = MemoryAnalyzer()
         result = analyzer.score_optimization(_Stub())
         assert "gap_analysis" not in result
+        assert "collective_attribution" not in result

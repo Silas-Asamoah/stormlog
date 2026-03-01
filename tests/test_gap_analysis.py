@@ -173,7 +173,9 @@ class TestEdgeCases:
         analyzer = MemoryAnalyzer()
         report = analyzer.generate_optimization_report(results=[], events=events)
         assert "gap_analysis" in report
+        assert "collective_attribution" in report
         assert isinstance(report["gap_analysis"], list)
+        assert isinstance(report["collective_attribution"], list)
         assert len(report["gap_analysis"]) > 0
 
     def test_report_omits_gap_analysis_when_no_events(self) -> None:
@@ -181,3 +183,4 @@ class TestEdgeCases:
         analyzer = MemoryAnalyzer()
         report = analyzer.generate_optimization_report(results=[])
         assert "gap_analysis" not in report
+        assert "collective_attribution" not in report
