@@ -266,3 +266,73 @@ def test_collective_attribution_accepts_uppercase_sample_event_type() -> None:
 
     results = attribute_collective_memory(normalized)
     assert len(results) == 2
+
+
+def test_collective_attribution_clamps_interval_start_to_trace_start() -> None:
+    events: list[TelemetryEventV2] = []
+    base_ns = 5_000_000
+    for rank in (0, 1):
+        for sample_index in range(10):
+            timestamp_ns = base_ns + sample_index * 1_000_000 + rank * 100_000
+            reserved = 2_000_000_000
+            used = reserved
+            if sample_index == 5:
+                used = reserved + 2_200_000_000
+            events.append(
+                _make_event(
+                    timestamp_ns=timestamp_ns,
+                    rank=rank,
+                    world_size=2,
+                    allocator_reserved=reserved,
+                    device_used=used,
+                )
+            )
+            if sample_index == 5:
+                events.append(
+                    _make_event(
+                        timestamp_ns=timestamp_ns + 100_000,
+                        rank=rank,
+                        world_size=2,
+                        allocator_reserved=reserved,
+                        device_used=reserved,
+                        event_type="collective",
+                        context="NCCL all_reduce phase",
+                        metadata={"phase": "communication.collective"},
+                    )
+                )
+
+    earliest_ts = min(event.timestamp_ns for event in events)
+    results = attribute_collective_memory(events)
+
+    assert results
+    assert all(result.interval_start_ns >= earliest_ts for result in results)
+    assert all(result.interval_start_ns >= 0 for result in results)
+
+
+def test_collective_attribution_ignores_metadata_key_names_for_markers() -> None:
+    events: list[TelemetryEventV2] = []
+    for rank in (0, 1):
+        for sample_index in range(12):
+            timestamp_ns = BASE_NS + sample_index * STEP_NS + rank * 2_000_000
+            reserved = 2_000_000_000
+            used = reserved + 40_000_000
+            if sample_index == 6:
+                used = reserved + 1_600_000_000
+            events.append(
+                _make_event(
+                    timestamp_ns=timestamp_ns,
+                    rank=rank,
+                    world_size=2,
+                    allocator_reserved=reserved,
+                    device_used=used,
+                    metadata={"communication_stats": 0},
+                )
+            )
+
+    results = attribute_collective_memory(events)
+
+    assert len(results) == 2
+    assert all(
+        "marker_collective_token" not in result.reason_codes for result in results
+    )
+    assert all("weak_marker_signal" in result.reason_codes for result in results)
