@@ -163,11 +163,7 @@ def attribute_collective_memory(
 
     resolved = config or resolve_collective_attribution_config(preset, overrides)
     ordered_events = sorted(events, key=lambda item: item.timestamp_ns)
-    marker_timestamps = tuple(
-        event.timestamp_ns
-        for event in ordered_events
-        if _event_has_collective_marker(event)
-    )
+    marker_timestamps_by_rank = _collect_marker_timestamps_by_rank(ordered_events)
     grouped_samples = _group_sample_events_by_rank(ordered_events)
     if not grouped_samples:
         return []
@@ -177,7 +173,7 @@ def attribute_collective_memory(
         spikes = _detect_rank_spikes(
             rank=rank,
             rank_events=rank_samples,
-            marker_timestamps=marker_timestamps,
+            marker_timestamps=marker_timestamps_by_rank.get(rank, ()),
             config=resolved,
         )
         if spikes:
@@ -233,10 +229,20 @@ def _group_sample_events_by_rank(
 ) -> dict[int, list[TelemetryEventV2]]:
     grouped: dict[int, list[TelemetryEventV2]] = {}
     for event in events:
-        if event.event_type != "sample":
+        if str(event.event_type).strip().lower() != "sample":
             continue
         grouped.setdefault(event.rank, []).append(event)
     return grouped
+
+
+def _collect_marker_timestamps_by_rank(
+    events: Iterable[TelemetryEventV2],
+) -> dict[int, tuple[int, ...]]:
+    grouped: dict[int, list[int]] = {}
+    for event in events:
+        if _event_has_collective_marker(event):
+            grouped.setdefault(event.rank, []).append(event.timestamp_ns)
+    return {rank: tuple(sorted(values)) for rank, values in grouped.items()}
 
 
 def _detect_rank_spikes(
@@ -340,11 +346,22 @@ def _build_synchrony_lookup(
     synchrony_window_ns: int,
 ) -> dict[tuple[int, int, int], set[int]]:
     all_spikes = [spike for spikes in spikes_by_rank.values() for spike in spikes]
+    if not all_spikes:
+        return {}
+
+    bucket_size = max(1, synchrony_window_ns)
+    buckets: dict[int, list[_RankSpike]] = {}
+    for spike in all_spikes:
+        bucket = spike.timestamp_ns // bucket_size
+        buckets.setdefault(bucket, []).append(spike)
+
     lookup: dict[tuple[int, int, int], set[int]] = {}
     for spike in all_spikes:
+        bucket = spike.timestamp_ns // bucket_size
         synchronized = {
             other.rank
-            for other in all_spikes
+            for neighbor_bucket in (bucket - 1, bucket, bucket + 1)
+            for other in buckets.get(neighbor_bucket, [])
             if abs(other.timestamp_ns - spike.timestamp_ns) <= synchrony_window_ns
         }
         if not synchronized:

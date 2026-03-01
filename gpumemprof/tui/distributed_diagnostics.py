@@ -445,11 +445,12 @@ def _derive_rank_anomaly_candidates(
         confidence = round(float(attribution.confidence), 3)
         reason_codes = sorted(set(attribution.reason_codes))
         reason_summary = ", ".join(reason_codes) if reason_codes else "no reason codes"
+        attribution_ts = max(attribution.interval_start_ns, rank_events[0].timestamp_ns)
         candidates.append(
             _AnomalyCandidate(
                 rank=rank,
                 severity=_collective_severity(confidence),
-                timestamp_ns=attribution.interval_start_ns,
+                timestamp_ns=attribution_ts,
                 signal=f"collective:{attribution.classification}",
                 details=(
                     "Communication-attributed hidden-memory spike "
