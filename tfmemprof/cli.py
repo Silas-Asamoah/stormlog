@@ -320,8 +320,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             self.snapshots = []
             memory_usage = data.get("memory_usage", [])
             timestamps = data.get("timestamps", list(range(len(memory_usage))))
+            if len(memory_usage) != len(timestamps):
+                raise ValueError(
+                    "Invalid input: 'memory_usage' and 'timestamps' must have equal length"
+                )
 
-            for i, (mem, ts) in enumerate(zip(memory_usage, timestamps)):
+            for i, (mem, ts) in enumerate(zip(memory_usage, timestamps, strict=True)):
                 snapshot = type(
                     "Snapshot",
                     (),
@@ -337,7 +341,11 @@ def cmd_analyze(args: argparse.Namespace) -> int:
                 )()
                 self.snapshots.append(snapshot)
 
-    result = AnalysisResult(data)
+    try:
+        result = AnalysisResult(data)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
 
     # Basic analysis
     print("\nBasic Analysis:")
