@@ -83,3 +83,41 @@ def test_imports_are_hardened_when_torch_is_missing() -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert "ok" in completed.stdout
+
+
+def test_tui_entrypoint_reports_tui_install_guidance_when_textual_is_missing() -> None:
+    code = textwrap.dedent(
+        """
+        import builtins
+
+        original_import = builtins.__import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "textual" or name.startswith("textual."):
+                raise ModuleNotFoundError("No module named 'textual'", name="textual")
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = blocked_import
+
+        import gpumemprof.tui as gpumemprof_tui
+
+        try:
+            gpumemprof_tui.run_app()
+        except SystemExit as exc:
+            assert "stormlog[tui]" in str(exc)
+        else:
+            raise AssertionError("Expected TUI entrypoint to fail with install guidance")
+
+        print("ok")
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "ok" in completed.stdout
