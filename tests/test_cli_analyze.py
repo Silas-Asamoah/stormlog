@@ -6,7 +6,9 @@ import argparse
 import json
 
 import matplotlib
+import pytest
 
+import gpumemprof.cli as gpumemprof_cli
 from gpumemprof.cli import cmd_analyze
 from gpumemprof.telemetry import telemetry_event_to_dict
 from tests.gap_test_helpers import BASE_NS, INTERVAL_NS, build_gap_event
@@ -55,7 +57,7 @@ def test_cmd_analyze_reports_cross_rank_findings_and_writes_artifacts(
         encoding="utf-8",
     )
 
-    cmd_analyze(
+    exit_code = cmd_analyze(
         argparse.Namespace(
             input_file=str(input_path),
             output=str(report_path),
@@ -65,6 +67,7 @@ def test_cmd_analyze_reports_cross_rank_findings_and_writes_artifacts(
         )
     )
 
+    assert exit_code == 0
     stdout = capsys.readouterr().out
     assert "Distributed Analysis:" in stdout
     assert "Top first-cause suspect: rank 2" in stdout
@@ -79,7 +82,7 @@ def test_cmd_analyze_non_telemetry_falls_back_gracefully(tmp_path, capsys) -> No
     input_path = tmp_path / "results.json"
     input_path.write_text(json.dumps({"results": []}), encoding="utf-8")
 
-    cmd_analyze(
+    exit_code = cmd_analyze(
         argparse.Namespace(
             input_file=str(input_path),
             output=None,
@@ -89,6 +92,7 @@ def test_cmd_analyze_non_telemetry_falls_back_gracefully(tmp_path, capsys) -> No
         )
     )
 
+    assert exit_code == 0
     stdout = capsys.readouterr().out
     assert "Analyzing profiling results from:" in stdout
     assert "Notes: JSON payload does not contain telemetry events" in stdout
@@ -106,7 +110,7 @@ def test_cmd_analyze_non_telemetry_array_falls_back_gracefully(tmp_path, capsys)
         encoding="utf-8",
     )
 
-    cmd_analyze(
+    exit_code = cmd_analyze(
         argparse.Namespace(
             input_file=str(input_path),
             output=None,
@@ -116,7 +120,58 @@ def test_cmd_analyze_non_telemetry_array_falls_back_gracefully(tmp_path, capsys)
         )
     )
 
+    assert exit_code == 0
     stdout = capsys.readouterr().out
     assert "Analyzing profiling results from:" in stdout
     assert "Notes: JSON payload does not contain telemetry events" in stdout
     assert "Error parsing telemetry events" not in stdout
+
+
+def test_cmd_analyze_missing_input_returns_failure(tmp_path, capsys) -> None:
+    missing_path = tmp_path / "missing.json"
+
+    exit_code = cmd_analyze(
+        argparse.Namespace(
+            input_file=str(missing_path),
+            output=None,
+            format="json",
+            visualization=False,
+            plot_dir=str(tmp_path / "plots"),
+        )
+    )
+
+    assert exit_code == 1
+    assert "Error: Input file" in capsys.readouterr().out
+
+
+def test_cmd_analyze_malformed_telemetry_returns_failure(tmp_path, capsys) -> None:
+    input_path = tmp_path / "broken.json"
+    input_path.write_text(json.dumps([{"timestamp": "oops"}]), encoding="utf-8")
+
+    exit_code = cmd_analyze(
+        argparse.Namespace(
+            input_file=str(input_path),
+            output=None,
+            format="json",
+            visualization=False,
+            plot_dir=str(tmp_path / "plots"),
+        )
+    )
+
+    assert exit_code == 1
+    assert "Error parsing telemetry events:" in capsys.readouterr().out
+
+
+def test_main_exits_nonzero_for_analyze_failures(monkeypatch, tmp_path, capsys) -> None:
+    missing_path = tmp_path / "missing.json"
+    monkeypatch.setattr(
+        gpumemprof_cli.sys,
+        "argv",
+        ["gpumemprof", "analyze", str(missing_path)],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        gpumemprof_cli.main()
+
+    assert excinfo.value.code == 1
+    assert "Error: Input file" in capsys.readouterr().out

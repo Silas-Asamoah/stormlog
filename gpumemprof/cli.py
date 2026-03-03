@@ -296,7 +296,7 @@ Examples:
         elif args.command == "track":
             cmd_track(args)
         elif args.command == "analyze":
-            cmd_analyze(args)
+            sys.exit(cmd_analyze(args))
         elif args.command == "diagnose":
             sys.exit(cmd_diagnose(args))
     except KeyboardInterrupt:
@@ -767,21 +767,21 @@ def _json_payload_looks_like_telemetry(payload: Any) -> bool:
     return False
 
 
-def cmd_analyze(args: argparse.Namespace) -> None:
+def cmd_analyze(args: argparse.Namespace) -> int:
     """Handle analyze command."""
     input_file = args.input_file
     input_path = Path(input_file)
 
     if not input_path.exists():
         print(f"Error: Input file '{input_file}' not found")
-        return
+        return 1
 
     try:
         with input_path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
     except Exception as e:
         print(f"Error loading input file: {e}")
-        return
+        return 1
 
     (load_telemetry_events,) = _import_runtime_symbols(
         ".telemetry", ("load_telemetry_events",), "The analyze command"
@@ -796,10 +796,10 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             telemetry_note = "JSON payload does not contain telemetry events"
         else:
             print(f"Error parsing telemetry events: {exc}")
-            return
+            return 1
     except Exception as exc:
         print(f"Error parsing telemetry events: {exc}")
-        return
+        return 1
 
     if events is not None:
         (MemoryAnalyzer,) = _import_runtime_symbols(
@@ -844,7 +844,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             print(
                 "Visualization skipped: cross-rank plots require multi-rank telemetry input."
             )
-            return
+            return 0
 
         try:
             (MemoryVisualizer,) = _import_runtime_symbols(
@@ -857,6 +857,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             print(f"Visualization saved to: {plot_path}")
         except Exception as exc:
             print(f"Visualization skipped: {exc}")
+
+    return 0
 
 
 def cmd_diagnose(args: argparse.Namespace) -> int:
