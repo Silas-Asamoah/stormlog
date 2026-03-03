@@ -148,7 +148,7 @@ jobs:
                   python3 -m pip install --upgrade pip
                   # Lint does not require heavy runtime ML dependencies.
                   pip install -e . --no-deps
-                  pip install black isort flake8 mypy rich
+                  pip install -r requirements-ci-lint.txt
 
             - name: Run isort
               run: |
