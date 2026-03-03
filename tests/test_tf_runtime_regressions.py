@@ -7,6 +7,7 @@ from argparse import Namespace
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Iterator
 
 import pytest
 
@@ -55,7 +56,7 @@ def test_tf_profile_inference_batches_dataset_inputs(
             self.contexts: list[str] = []
 
         @contextmanager
-        def profile_context(self, name: str):
+        def profile_context(self, name: str) -> Iterator[None]:
             self.contexts.append(name)
             yield
 
@@ -77,7 +78,7 @@ def test_tf_profile_inference_batches_dataset_inputs(
     monkeypatch.setattr(tf_context, "TF_AVAILABLE", True)
 
     profiler = object.__new__(tf_context.TensorFlowProfiler)
-    fake_profiler = _FakeProfiler()
+    fake_profiler: Any = _FakeProfiler()
     profiler.profiler = fake_profiler
     dataset = _FakeDataset()
     model = _FakeModel()
