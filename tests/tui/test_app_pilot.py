@@ -357,6 +357,46 @@ def test_save_timeline_plot_png_avoids_pyplot(
     assert file_path.suffix == ".png"
 
 
+def test_generate_visual_plot_dependency_error_logs_install_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        app = GPUMemoryProfilerTUI()
+        messages: list[tuple[str, str]] = []
+
+        def _log_visual_message(title: str, content: str) -> None:
+            messages.append((title, content))
+
+        app.log_visual_message = _log_visual_message  # type: ignore[assignment, method-assign, unused-ignore]
+        app._last_timeline = {
+            "timestamps": [0.0, 1.0],
+            "allocated": [1024**3, int(1.1 * 1024**3)],
+            "reserved": [int(1.2 * 1024**3), int(1.3 * 1024**3)],
+        }
+
+        def _raise_visualization_import_error(
+            _timeline: dict[str, Any], _format: str
+        ) -> str:
+            raise ImportError("dlopen(PIL/_imaging): incompatible architecture")
+
+        monkeypatch.setattr(
+            app,
+            "_save_timeline_plot",
+            _raise_visualization_import_error,
+        )
+
+        await app.generate_visual_plot("png")
+
+        assert any(
+            title == "Visualizations"
+            and "Visualization dependencies are unavailable." in content
+            and "stormlog[viz]" in content
+            for title, content in messages
+        )
+
+    asyncio.run(scenario())
+
+
 def test_cli_runner_run_stream_output_and_cancel() -> None:
     async def scenario() -> None:
         app = GPUMemoryProfilerTUI()
