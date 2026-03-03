@@ -1,4 +1,6 @@
+import builtins
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -317,6 +319,42 @@ def test_diagnostics_artifact_actions_surface_loader_failures(
             assert "Failed to refresh artifacts: refresh boom" in diagnostics_text
 
     asyncio.run(scenario())
+
+
+def test_save_timeline_plot_png_avoids_pyplot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_import = builtins.__import__
+
+    def _guarded_import(
+        name: str,
+        globals: dict[str, Any] | None = None,
+        locals: dict[str, Any] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> Any:
+        if name == "matplotlib.pyplot":
+            raise AssertionError("PNG export should not import matplotlib.pyplot")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _guarded_import)
+    monkeypatch.chdir(tmp_path)
+
+    app = GPUMemoryProfilerTUI()
+    file_path = Path(
+        app._save_timeline_plot(
+            {
+                "timestamps": [1.0, 2.0],
+                "allocated": [1024**3, 2 * 1024**3],
+                "reserved": [int(1.5 * 1024**3), int(2.5 * 1024**3)],
+            },
+            "png",
+        )
+    )
+
+    assert file_path.exists()
+    assert file_path.parent == tmp_path / "visualizations"
+    assert file_path.suffix == ".png"
 
 
 def test_cli_runner_run_stream_output_and_cancel() -> None:
