@@ -14,6 +14,7 @@ from .collective_attribution import (
     attribute_collective_memory,
     resolve_collective_attribution_config,
 )
+from .distributed_analysis import summarize_cross_rank_analysis
 from .gap_analysis import GapFinding, analyze_hidden_memory_gaps
 from .profiler import GPUMemoryProfiler, ProfileResult
 from .telemetry import TelemetryEventV2
@@ -717,6 +718,13 @@ class MemoryAnalyzer:
             remediation_by_classification=_GAP_REMEDIATION_BY_CLASSIFICATION,
         )
 
+    def analyze_cross_rank_timeline(
+        self, events: List[TelemetryEventV2]
+    ) -> Dict[str, Any]:
+        """Merge rank timelines and detect the earliest cluster-wide spike cause."""
+
+        return summarize_cross_rank_analysis(events)
+
     def analyze_collective_attribution(
         self, events: List[TelemetryEventV2]
     ) -> List[CollectiveAttributionResult]:
@@ -791,6 +799,8 @@ class MemoryAnalyzer:
             report["collective_attribution"] = [
                 asdict(result) for result in collective_attribution
             ]
+            if len({event.rank for event in events}) > 1:
+                report["cross_rank_analysis"] = self.analyze_cross_rank_timeline(events)
 
         return report
 

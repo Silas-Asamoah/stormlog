@@ -666,51 +666,197 @@ def cmd_track(args: argparse.Namespace) -> None:
         print(f"Events saved to: {args.output}")
 
 
+def _json_default(value: Any) -> Any:
+    """Convert common non-JSON-native values to plain Python scalars."""
+
+    if hasattr(value, "item"):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _build_analyze_summary(
+    input_file: str, file_size_bytes: int, report: dict[str, Any]
+) -> str:
+    """Create a concise human-readable analyze summary."""
+
+    lines = [
+        f"Analyzing profiling results from: {input_file}",
+        "",
+        "Basic Analysis:",
+        f"Input file: {input_file}",
+        f"File size: {file_size_bytes} bytes",
+    ]
+
+    if "gap_analysis" in report:
+        lines.append(f"Gap findings: {len(report['gap_analysis'])}")
+
+    cross_rank_analysis = report.get("cross_rank_analysis")
+    if isinstance(cross_rank_analysis, dict):
+        participating_ranks = cross_rank_analysis.get("participating_ranks", [])
+        missing_ranks = cross_rank_analysis.get("missing_ranks", [])
+        suspects = cross_rank_analysis.get("first_cause_suspects", [])
+        lines.extend(
+            [
+                "",
+                "Distributed Analysis:",
+                "Participating ranks: "
+                + (", ".join(str(rank) for rank in participating_ranks) or "none"),
+                "Missing ranks: "
+                + (", ".join(str(rank) for rank in missing_ranks) or "none"),
+            ]
+        )
+
+        cluster_onset = cross_rank_analysis.get("cluster_onset_timestamp_ns")
+        if cluster_onset is not None:
+            lines.append(f"Cluster onset (aligned ns): {cluster_onset}")
+
+        if suspects:
+            top_suspect = suspects[0]
+            lines.extend(
+                [
+                    "Top first-cause suspect: "
+                    f"rank {top_suspect['rank']} ({top_suspect['confidence']})",
+                    "Evidence: "
+                    f"timestamp_ns={top_suspect['first_spike_timestamp_ns']}, "
+                    f"aligned_timestamp_ns={top_suspect['aligned_first_spike_timestamp_ns']}, "
+                    f"lead_ns={top_suspect['lead_over_cluster_onset_ns']}, "
+                    f"delta={format_bytes(int(top_suspect['peak_delta_bytes']))}",
+                ]
+            )
+        else:
+            lines.append("No qualifying first-cause suspect identified.")
+
+        notes = cross_rank_analysis.get("notes", [])
+        if notes:
+            lines.append("Notes: " + " ".join(str(note) for note in notes))
+    else:
+        notes = report.get("notes", [])
+        if notes:
+            lines.append("Notes: " + " ".join(str(note) for note in notes))
+
+    return "\n".join(lines)
+
+
+def _json_payload_looks_like_telemetry(payload: Any) -> bool:
+    """Return whether a loaded JSON payload plausibly contains telemetry events."""
+
+    candidate_keys = {
+        "schema_version",
+        "timestamp",
+        "timestamp_ns",
+        "event_type",
+        "memory_allocated",
+        "memory_mb",
+        "allocator_allocated_bytes",
+        "device_used_bytes",
+    }
+
+    if isinstance(payload, dict):
+        if isinstance(payload.get("events"), list):
+            return True
+        return any(key in payload for key in candidate_keys)
+
+    if isinstance(payload, list):
+        return any(
+            isinstance(item, dict) and any(key in item for key in candidate_keys)
+            for item in payload
+        )
+
+    return False
+
+
 def cmd_analyze(args: argparse.Namespace) -> None:
     """Handle analyze command."""
     input_file = args.input_file
+    input_path = Path(input_file)
 
-    if not Path(input_file).exists():
+    if not input_path.exists():
         print(f"Error: Input file '{input_file}' not found")
         return
 
-    print(f"Analyzing profiling results from: {input_file}")
-
-    # Load data
     try:
-        with open(input_file, "r") as f:
-            data = json.load(f)
+        with input_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
     except Exception as e:
         print(f"Error loading input file: {e}")
         return
 
-    # Create analyzer
-    (MemoryAnalyzer,) = _import_runtime_symbols(
-        ".analyzer", ("MemoryAnalyzer",), "The analyze command"
+    (load_telemetry_events,) = _import_runtime_symbols(
+        ".telemetry", ("load_telemetry_events",), "The analyze command"
     )
-    _analyzer = MemoryAnalyzer()
 
-    # For now, create dummy results for demonstration
-    # In a real implementation, you'd parse the loaded data
-    print("Analysis functionality is available through the Python API.")
-    print("Please use the Python library for detailed analysis:")
-    print()
-    print("Example:")
-    print("from gpumemprof import MemoryAnalyzer")
-    print("analyzer = MemoryAnalyzer()")
-    print("patterns = analyzer.analyze_memory_patterns(results)")
-    print("insights = analyzer.generate_performance_insights(results)")
-    print("report = analyzer.generate_optimization_report(results)")
+    events: list[Any] | None = None
+    telemetry_note: str | None = None
+    try:
+        events = load_telemetry_events(input_path, permissive_legacy=True)
+    except ValueError as exc:
+        if not _json_payload_looks_like_telemetry(data):
+            telemetry_note = "JSON payload does not contain telemetry events"
+        else:
+            print(f"Error parsing telemetry events: {exc}")
+            return
+    except Exception as exc:
+        print(f"Error parsing telemetry events: {exc}")
+        return
 
-    # Generate basic report
-    print("\nBasic Analysis:")
-    print(f"Input file: {input_file}")
-    print(f"File size: {Path(input_file).stat().st_size} bytes")
+    if events is not None:
+        (MemoryAnalyzer,) = _import_runtime_symbols(
+            ".analyzer", ("MemoryAnalyzer",), "The analyze command"
+        )
+        analyzer = MemoryAnalyzer()
+        report = analyzer.generate_optimization_report(events=events)
+    else:
+        report = {
+            "summary": {
+                "analysis_timestamp": None,
+                "total_functions_analyzed": 0,
+                "total_function_calls": 0,
+                "total_memory_allocated": 0,
+                "total_execution_time": 0,
+            },
+            "top_level_keys": sorted(data.keys()) if isinstance(data, dict) else [],
+            "notes": [telemetry_note] if telemetry_note else [],
+        }
 
-    if "results" in data:
-        print(f"Number of results: {len(data['results'])}")
-    if "snapshots" in data:
-        print(f"Number of snapshots: {len(data['snapshots'])}")
+    summary_text = _build_analyze_summary(
+        input_file=input_file,
+        file_size_bytes=input_path.stat().st_size,
+        report=report,
+    )
+    print(summary_text)
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if args.format == "json":
+            output_path.write_text(
+                json.dumps(report, indent=2, default=_json_default) + "\n",
+                encoding="utf-8",
+            )
+        else:
+            output_path.write_text(summary_text + "\n", encoding="utf-8")
+        print(f"Analysis report saved to: {output_path}")
+
+    if args.visualization:
+        if events is None or "cross_rank_analysis" not in report:
+            print(
+                "Visualization skipped: cross-rank plots require multi-rank telemetry input."
+            )
+            return
+
+        try:
+            (MemoryVisualizer,) = _import_runtime_symbols(
+                ".visualizer", ("MemoryVisualizer",), "The analyze command"
+            )
+            plot_dir = Path(args.plot_dir)
+            plot_dir.mkdir(parents=True, exist_ok=True)
+            plot_path = plot_dir / "cross_rank_timeline.png"
+            MemoryVisualizer().plot_cross_rank_timeline(events=events, save_path=str(plot_path))
+            print(f"Visualization saved to: {plot_path}")
+        except Exception as exc:
+            print(f"Visualization skipped: {exc}")
 
 
 def cmd_diagnose(args: argparse.Namespace) -> int:
