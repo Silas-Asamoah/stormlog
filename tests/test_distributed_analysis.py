@@ -103,7 +103,7 @@ class TestCrossRankMerge:
         merged = merge_cross_rank_timelines(events)
 
         assert merged.alignment_offsets_ns == {0: 0, 1: 2 * INTERVAL_NS}
-        first_points = {}
+        first_points: dict[int, int] = {}
         for point in merged.merged_points:
             first_points.setdefault(point.rank, point.aligned_timestamp_ns)
         assert first_points[0] == first_points[1] == BASE_NS

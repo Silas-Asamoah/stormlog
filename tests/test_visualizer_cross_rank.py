@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -40,7 +42,7 @@ def _build_cross_rank_events() -> list:
     return events
 
 
-def test_plot_cross_rank_timeline_saves_png(tmp_path) -> None:
+def test_plot_cross_rank_timeline_saves_png(tmp_path: Path) -> None:
     visualizer = MemoryVisualizer()
     output_path = tmp_path / "cross_rank_timeline.png"
 
