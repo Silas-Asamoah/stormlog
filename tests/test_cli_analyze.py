@@ -53,7 +53,9 @@ def test_cmd_analyze_reports_cross_rank_findings_and_writes_artifacts(
     report_path = tmp_path / "report.json"
     plot_dir = tmp_path / "plots"
     input_path.write_text(
-        json.dumps([telemetry_event_to_dict(event) for event in _build_cross_rank_events()]),
+        json.dumps(
+            [telemetry_event_to_dict(event) for event in _build_cross_rank_events()]
+        ),
         encoding="utf-8",
     )
 
@@ -98,7 +100,9 @@ def test_cmd_analyze_non_telemetry_falls_back_gracefully(tmp_path, capsys) -> No
     assert "Notes: JSON payload does not contain telemetry events" in stdout
 
 
-def test_cmd_analyze_non_telemetry_array_falls_back_gracefully(tmp_path, capsys) -> None:
+def test_cmd_analyze_non_telemetry_array_falls_back_gracefully(
+    tmp_path, capsys
+) -> None:
     input_path = tmp_path / "results.json"
     input_path.write_text(
         json.dumps(

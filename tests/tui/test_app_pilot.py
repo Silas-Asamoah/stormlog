@@ -7,8 +7,8 @@ pytest.importorskip("textual")
 
 from textual.widgets import RichLog, TabbedContent, TabPane
 
-from gpumemprof.telemetry import telemetry_event_from_record
 import gpumemprof.tui.app as appmod
+from gpumemprof.telemetry import telemetry_event_from_record
 from gpumemprof.tui.app import GPUMemoryProfilerTUI
 
 pytestmark = pytest.mark.tui_pilot

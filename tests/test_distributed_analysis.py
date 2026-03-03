@@ -109,7 +109,9 @@ class TestCrossRankMerge:
         assert first_points[0] == first_points[1] == BASE_NS
 
     def test_detects_injected_first_cause_rank(self) -> None:
-        merge_result, first_cause = analyze_cross_rank_events(_build_cross_rank_fixture())
+        merge_result, first_cause = analyze_cross_rank_events(
+            _build_cross_rank_fixture()
+        )
 
         assert merge_result.participating_ranks == [0, 1, 2, 3]
         assert first_cause.cluster_onset_timestamp_ns is not None
@@ -248,7 +250,10 @@ class TestCrossRankMerge:
         merge_result, first_cause = analyze_cross_rank_events(events)
 
         assert merge_result.rank_sample_counts == {0: 2, 1: 3}
-        assert "Ignored non-sample events during cross-rank analysis." in merge_result.notes
+        assert (
+            "Ignored non-sample events during cross-rank analysis."
+            in merge_result.notes
+        )
         assert first_cause.suspects[0].rank == 1
 
     def test_filters_to_most_common_job_id_for_cross_rank_analysis(self) -> None:
