@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from gpumemprof.analyzer import MemoryAnalyzer
 from gpumemprof.distributed_analysis import (
     analyze_cross_rank_events,
@@ -225,6 +227,104 @@ class TestCrossRankMerge:
 
         _, first_cause_same_delta = analyze_cross_rank_events(second_tie)
         assert first_cause_same_delta.suspects[0].rank == 0
+
+    def test_ignores_non_sample_events_when_detecting_spikes(self) -> None:
+        events = []
+        rank_zero = _build_rank_series(
+            rank=0,
+            world_size=2,
+            device_used_values=[1 * _GB, int(1.40 * _GB), int(1.40 * _GB)],
+        )
+        rank_zero[1] = replace(rank_zero[1], event_type="warning")
+        events.extend(rank_zero)
+        events.extend(
+            _build_rank_series(
+                rank=1,
+                world_size=2,
+                device_used_values=[1 * _GB, int(1.35 * _GB), int(1.35 * _GB)],
+            )
+        )
+
+        merge_result, first_cause = analyze_cross_rank_events(events)
+
+        assert merge_result.rank_sample_counts == {0: 2, 1: 3}
+        assert "Ignored non-sample events during cross-rank analysis." in merge_result.notes
+        assert first_cause.suspects[0].rank == 1
+
+    def test_filters_to_most_common_job_id_for_cross_rank_analysis(self) -> None:
+        events = []
+        events.extend(
+            _build_rank_series(
+                rank=0,
+                world_size=2,
+                device_used_values=[1 * _GB, 1 * _GB, 1 * _GB],
+                job_id="job-a",
+            )
+        )
+        events.extend(
+            _build_rank_series(
+                rank=1,
+                world_size=2,
+                device_used_values=[1 * _GB, 1 * _GB, 1 * _GB],
+                job_id="job-a",
+            )
+        )
+        events.extend(
+            _build_rank_series(
+                rank=0,
+                world_size=2,
+                device_used_values=[1 * _GB, int(1.40 * _GB)],
+                job_id="job-b",
+            )
+        )
+        events.extend(
+            _build_rank_series(
+                rank=1,
+                world_size=2,
+                device_used_values=[1 * _GB, int(1.35 * _GB)],
+                job_id="job-b",
+            )
+        )
+
+        merge_result, first_cause = analyze_cross_rank_events(events)
+
+        assert merge_result.job_id == "job-a"
+        assert (
+            "Multiple job_id values were observed; filtering to the most common value."
+            in merge_result.notes
+        )
+        assert first_cause.suspects == []
+
+    def test_ranks_spikes_by_threshold_crossing_timestamp(self) -> None:
+        events = []
+        events.extend(
+            _build_rank_series(
+                rank=0,
+                world_size=2,
+                device_used_values=[
+                    1 * _GB,
+                    int(1.05 * _GB),
+                    int(1.10 * _GB),
+                    int(1.15 * _GB),
+                ],
+            )
+        )
+        events.extend(
+            _build_rank_series(
+                rank=1,
+                world_size=2,
+                device_used_values=[
+                    1 * _GB,
+                    int(1.13 * _GB),
+                    int(1.13 * _GB),
+                    int(1.13 * _GB),
+                ],
+            )
+        )
+
+        _, first_cause = analyze_cross_rank_events(events)
+
+        assert first_cause.suspects[0].rank == 1
 
 
 class TestAnalyzerIntegration:

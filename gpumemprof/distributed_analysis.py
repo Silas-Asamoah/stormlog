@@ -72,6 +72,10 @@ class _RankSpikeCandidate:
     spike_window_samples: int
 
 
+def _is_sample_event(event: TelemetryEventV2) -> bool:
+    return event.event_type.casefold() == "sample"
+
+
 def _group_events_by_rank(
     events: Sequence[TelemetryEventV2],
 ) -> dict[int, list[TelemetryEventV2]]:
@@ -89,6 +93,28 @@ def _select_job_id(events: Sequence[TelemetryEventV2]) -> str | None:
         return None
     counts = Counter(job_ids)
     return counts.most_common(1)[0][0]
+
+
+def _select_cross_rank_analysis_events(
+    events: Sequence[TelemetryEventV2],
+) -> tuple[list[TelemetryEventV2], str | None, list[str]]:
+    notes: list[str] = []
+    sample_events = [event for event in events if _is_sample_event(event)]
+    if len(sample_events) != len(events):
+        notes.append("Ignored non-sample events during cross-rank analysis.")
+    if not sample_events:
+        notes.append("No sample telemetry events were available for distributed analysis.")
+        return [], None, notes
+
+    job_id = _select_job_id(sample_events)
+    observed_job_ids = {event.job_id for event in sample_events if event.job_id}
+    if len(observed_job_ids) > 1 and job_id is not None:
+        notes.append(
+            "Multiple job_id values were observed; filtering to the most common value."
+        )
+        sample_events = [event for event in sample_events if event.job_id == job_id]
+
+    return sample_events, job_id, notes
 
 
 def _determine_world_size(
@@ -142,20 +168,26 @@ def merge_cross_rank_timelines(
             notes=["No telemetry events were provided."],
         )
 
-    grouped = _group_events_by_rank(events)
+    analysis_events, job_id, notes = _select_cross_rank_analysis_events(events)
+    if not analysis_events:
+        return CrossRankMergeResult(
+            job_id=job_id,
+            world_size=0,
+            participating_ranks=[],
+            missing_ranks=[],
+            rank_sample_counts={},
+            alignment_offsets_ns={},
+            merged_points=[],
+            notes=notes,
+        )
+
+    grouped = _group_events_by_rank(analysis_events)
     participating_ranks = sorted(grouped)
-    world_size = _determine_world_size(events, participating_ranks)
+    world_size = _determine_world_size(analysis_events, participating_ranks)
     expected_ranks = set(range(world_size)) if world_size > 0 else set()
     missing_ranks = sorted(expected_ranks.difference(participating_ranks))
     rank_sample_counts = {rank: len(rank_events) for rank, rank_events in grouped.items()}
 
-    notes: list[str] = []
-    job_id = _select_job_id(events)
-    non_empty_job_ids = {event.job_id for event in events if event.job_id}
-    if len(non_empty_job_ids) > 1:
-        notes.append(
-            "Multiple job_id values were observed; using the most common value."
-        )
     if missing_ranks:
         notes.append(
             "Missing rank data for ranks: "
@@ -242,7 +274,7 @@ def _find_rank_spike_candidate(
         if cumulative_delta < spike_threshold:
             continue
 
-        spike_event = rank_events[window_start_index]
+        spike_event = rank_events[index]
         return _RankSpikeCandidate(
             rank=spike_event.rank,
             first_spike_timestamp_ns=spike_event.timestamp_ns,
@@ -388,7 +420,14 @@ def analyze_cross_rank_events(
     """Analyze distributed telemetry for merged timelines and first-cause spikes."""
 
     merge_result = merge_cross_rank_timelines(events)
-    grouped = _group_events_by_rank(events)
+    analysis_events, _, _ = _select_cross_rank_analysis_events(events)
+    if not analysis_events:
+        return merge_result, FirstCauseAnalysisResult(
+            cluster_onset_timestamp_ns=None,
+            suspects=[],
+            notes=[],
+        )
+    grouped = _group_events_by_rank(analysis_events)
     first_cause_result = _detect_first_cause_spikes(grouped, merge_result)
     return merge_result, first_cause_result
 
