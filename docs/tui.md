@@ -146,8 +146,14 @@ designed to accommodate this future addition without breaking compatibility.
 ## Troubleshooting
 
 - **Missing dependency** – Ensure you used `pip install "stormlog[tui]"`.
+- **Missing schema validator in tests** – If `tests/test_telemetry_v2.py` fails with
+  `ModuleNotFoundError: No module named 'jsonschema'`, install test deps with
+  `pip install -r requirements-test.txt` (or `requirements-dev.txt`).
 - **GPU-less environments** – The overview tab will fall back to CPU-only data
   and explicitly state when GPU metrics are unavailable.
+- **macOS arm64 visualization import failure** – If PNG export fails with
+  `PIL/_imaging` architecture errors, reinstall Pillow for arm64:
+  `python3 -m pip install --no-cache-dir --force-reinstall --only-binary=:all: pillow`.
 - **Terminal too small** – Textual adapts to smaller windows, but a minimum of
   ~100x30 characters makes the tabs most readable.
 
