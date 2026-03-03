@@ -41,6 +41,18 @@ pip install torch --index-url https://download.pytorch.org/whl/cu118
 pip install tensorflow
 ```
 
+#### Problem: `ModuleNotFoundError: No module named 'jsonschema'`
+
+**Solution:**
+
+```bash
+# Install test dependencies (includes jsonschema)
+pip install -r requirements-test.txt
+
+# Or install the broader dev toolchain
+pip install -r requirements-dev.txt
+```
+
 ### CUDA Issues
 
 #### Problem: `CUDA not available`
@@ -256,6 +268,37 @@ visualizer.export_data(format='json', save_path='dashboard_data')
 
 ```bash
 pip install dash
+```
+
+#### Problem: Matplotlib/Pillow import fails on macOS arm64
+
+**Symptoms:**
+
+- Error mentions `PIL/_imaging` incompatible architecture
+- TUI/CLI PNG export is skipped or fails during `matplotlib` import
+
+**Solutions:**
+
+1. **Reinstall Pillow as arm64 wheel:**
+
+```bash
+python3 -m pip install --no-cache-dir --force-reinstall --only-binary=:all: pillow
+```
+
+2. **Verify the loaded binary architecture:**
+
+```bash
+python3 -c "import PIL._imaging as m; print(m.__file__)"
+file $(python3 -c "import PIL._imaging as m; print(m.__file__)")
+```
+
+3. **If you still see mixed-architecture packages, recreate a clean virtualenv:**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python -m pip install -e ".[viz]"
 ```
 
 ### Performance Issues
