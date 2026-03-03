@@ -419,6 +419,47 @@ def test_load_distributed_artifacts_preserves_rank_identity_across_timeline_bund
     assert str(rank1_timeline) in result.sources_loaded
 
 
+def test_load_distributed_artifacts_ignores_local_rank_path_segments_for_inference(
+    tmp_path: Path,
+) -> None:
+    local_dash_bundle = tmp_path / "node-local-rank3"
+    local_underscore_bundle = tmp_path / "node_local_rank4"
+    local_dash_bundle.mkdir()
+    local_underscore_bundle.mkdir()
+
+    local_dash_timeline = local_dash_bundle / "telemetry_timeline.json"
+    local_underscore_timeline = local_underscore_bundle / "telemetry_timeline.json"
+    local_dash_timeline.write_text(
+        json.dumps(
+            {
+                "timestamps": [1.0, 2.0],
+                "allocated": [100, 120],
+                "reserved": [120, 140],
+            }
+        ),
+        encoding="utf-8",
+    )
+    local_underscore_timeline.write_text(
+        json.dumps(
+            {
+                "timestamps": [1.0, 2.0],
+                "allocated": [200, 220],
+                "reserved": [220, 240],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_distributed_artifacts([local_dash_bundle, local_underscore_bundle])
+    model = build_distributed_model(result.events)
+
+    assert sorted({event.rank for event in result.events}) == [0, 1]
+    assert model.present_ranks == [0, 1]
+    assert model.missing_ranks == []
+    assert str(local_dash_timeline) in result.sources_loaded
+    assert str(local_underscore_timeline) in result.sources_loaded
+
+
 @dataclass(slots=True)
 class _SyntheticEvent:
     timestamp_ns: int
