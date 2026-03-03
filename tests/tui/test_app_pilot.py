@@ -8,6 +8,7 @@ pytest.importorskip("textual")
 from textual.widgets import RichLog, TabbedContent, TabPane
 
 from gpumemprof.telemetry import telemetry_event_from_record
+import gpumemprof.tui.app as appmod
 from gpumemprof.tui.app import GPUMemoryProfilerTUI
 
 pytestmark = pytest.mark.tui_pilot
@@ -276,6 +277,44 @@ def test_diagnostics_buttons_load_live_apply_filter_and_reset() -> None:
             assert "Loaded 2 live telemetry events" in diagnostics_text
             assert "Applied rank filter: 1" in diagnostics_text
             assert "Reset rank filter to: all" in diagnostics_text
+
+    asyncio.run(scenario())
+
+
+def test_diagnostics_artifact_actions_surface_loader_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    errors = [RuntimeError("load boom"), RuntimeError("refresh boom")]
+
+    def _fail_load(_paths: list[object]) -> object:
+        raise errors.pop(0)
+
+    monkeypatch.setattr(appmod, "load_distributed_artifacts", _fail_load)
+
+    async def scenario() -> None:
+        app = GPUMemoryProfilerTUI()
+        async with app.run_test(headless=True, size=(140, 44)) as pilot:
+            await pilot.pause()
+            app.query_one(TabbedContent).active = _tab_id_by_title(app, "Diagnostics")
+            await pilot.pause()
+
+            app.diagnostics_path_input.value = "/tmp/broken.json"
+            await app.load_diagnostics_artifacts()
+            await pilot.pause()
+
+            assert app._diagnostics_source == "artifacts"
+            assert app._diagnostics_events == []
+            assert len(app._diagnostics_last_paths) == 1
+            assert app._diagnostics_last_paths[0].name == "broken.json"
+
+            diagnostics_text = _log_text(app.diagnostics_log)
+            assert "Failed to load artifacts: load boom" in diagnostics_text
+
+            await app.refresh_diagnostics()
+            await pilot.pause()
+
+            diagnostics_text = _log_text(app.diagnostics_log)
+            assert "Failed to refresh artifacts: refresh boom" in diagnostics_text
 
     asyncio.run(scenario())
 
