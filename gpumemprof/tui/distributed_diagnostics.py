@@ -69,7 +69,7 @@ _CSV_INT_FIELDS = frozenset(
 )
 _CSV_FLOAT_FIELDS = frozenset({"timestamp"})
 _RANK_CONTEXT_PATTERN = re.compile(
-    r"(?<!local_)(?:^|[^a-z0-9])rank[_-]?(?P<rank>\d+)(?:[^0-9]|$)",
+    r"(?:^|[^a-z0-9])(?<!local[_-])rank[_-]?(?P<rank>\d+)(?:[^0-9]|$)",
     re.IGNORECASE,
 )
 
