@@ -210,7 +210,7 @@ class TFMemoryProfiler:
         try:
             if "/GPU:" in self.device:
                 # GPU memory information
-                gpu_details = tf.config.experimental.get_memory_info("/GPU:0")
+                gpu_details = tf.config.experimental.get_memory_info(self.device)
                 gpu_memory_mb = gpu_details.get("current", 0) / (1024 * 1024)
                 gpu_reserved_mb = gpu_details.get("peak", 0) / (1024 * 1024)
                 gpu_utilization = min(
