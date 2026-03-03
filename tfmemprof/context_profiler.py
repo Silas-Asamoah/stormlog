@@ -230,28 +230,32 @@ class TensorFlowProfiler:
         if not TF_AVAILABLE:
             raise ImportError("TensorFlow not available")
 
+        # Batch the data if needed
+        if hasattr(data, "batch"):
+            batched_data = data.batch(batch_size)
+            for i, batch in enumerate(batched_data):
+                with self.profiler.profile_context(f"inference_batch_{i}"):
+                    model(batch, training=False)
+            return
+
         with self.profiler.profile_context("inference"):
-            # Batch the data if needed
-            if hasattr(data, "batch"):
-                _batched_data = data.batch(batch_size)
-            else:
-                # Assume data is a tensor or numpy array
-                import numpy as np
+            # Assume data is a tensor or numpy array
+            import numpy as np
 
-                if isinstance(data, np.ndarray):
-                    data = tf.constant(data)
+            if isinstance(data, np.ndarray):
+                data = tf.constant(data)
 
-                # Create batches manually
-                num_samples = tf.shape(data)[0]
-                num_batches = (num_samples + batch_size - 1) // batch_size
+            # Create batches manually
+            num_samples = tf.shape(data)[0]
+            num_batches = (num_samples + batch_size - 1) // batch_size
 
-                for i in range(num_batches):
-                    start_idx = i * batch_size
-                    end_idx = min((i + 1) * batch_size, num_samples)
-                    batch = data[start_idx:end_idx]
+            for i in range(num_batches):
+                start_idx = i * batch_size
+                end_idx = min((i + 1) * batch_size, num_samples)
+                batch = data[start_idx:end_idx]
 
-                    with self.profiler.profile_context(f"inference_batch_{i}"):
-                        model(batch, training=False)
+                with self.profiler.profile_context(f"inference_batch_{i}"):
+                    model(batch, training=False)
 
     def get_results(self) -> Any:
         """Get profiling results."""

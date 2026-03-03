@@ -87,7 +87,7 @@ class MemoryTracker:
 
         self.sampling_interval = sampling_interval
         self.alert_threshold_mb = alert_threshold_mb
-        self.device = device or "/GPU:0"
+        self.device = device or self._get_default_device()
         self.enable_logging = enable_logging
         self.distributed_identity = resolve_distributed_identity(
             job_id=job_id,
