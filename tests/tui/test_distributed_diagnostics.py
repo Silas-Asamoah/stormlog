@@ -31,6 +31,7 @@ def _make_event(
     used: int = 0,
     total: int | None = None,
     context: str = "",
+    metadata: dict[str, object] | None = None,
 ) -> TelemetryEventV2:
     return telemetry_event_from_record(
         {
@@ -51,7 +52,7 @@ def _make_event(
             "rank": rank,
             "local_rank": rank,
             "world_size": world_size,
-            "metadata": {},
+            "metadata": metadata or {},
         },
         permissive_legacy=True,
         default_collector="gpumemprof.cuda_tracker",
@@ -183,6 +184,57 @@ def test_build_distributed_model_includes_earliest_and_most_severe_indicators() 
     assert indicators["most_severe"].rank == 2
     assert indicators["most_severe"].severity == "critical"
     assert indicators["most_severe"].signal == "alert:critical"
+
+
+def test_build_distributed_model_surfaces_collective_attribution_signals() -> None:
+    events: list[TelemetryEventV2] = []
+    for rank in (0, 1):
+        for index in range(12):
+            timestamp = 1.0 + index * 0.1 + rank * 0.001
+            reserved = 2_000_000_000
+            used = reserved + 40_000_000
+            if index == 6:
+                used = reserved + 1_600_000_000
+            events.append(
+                _make_event(
+                    timestamp=timestamp,
+                    rank=rank,
+                    world_size=2,
+                    allocated=reserved - 100_000_000,
+                    reserved=reserved,
+                    used=used,
+                    total=16 * 1024**3,
+                    context="sample",
+                )
+            )
+            if index == 6:
+                events.append(
+                    _make_event(
+                        timestamp=timestamp + 0.01,
+                        rank=rank,
+                        world_size=2,
+                        event_type="collective",
+                        allocated=reserved - 100_000_000,
+                        reserved=reserved,
+                        used=reserved,
+                        total=16 * 1024**3,
+                        context="NCCL all_reduce phase",
+                        metadata={"phase": "communication.collective"},
+                    )
+                )
+
+    model = build_distributed_model(events)
+    collective_indicators = [
+        indicator
+        for indicator in model.indicators
+        if indicator.signal.startswith("collective:")
+    ]
+
+    assert collective_indicators
+    for indicator in collective_indicators:
+        assert indicator.confidence is not None
+        assert indicator.reason_codes
+        assert "marker_collective_token" in indicator.reason_codes
 
 
 def test_load_distributed_artifacts_merges_json_and_csv_inputs(

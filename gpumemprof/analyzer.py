@@ -3,11 +3,17 @@
 import statistics
 from collections import defaultdict
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
 from scipy import stats
 
+from .collective_attribution import (
+    CollectiveAttributionConfig,
+    CollectiveAttributionResult,
+    attribute_collective_memory,
+    resolve_collective_attribution_config,
+)
 from .distributed_analysis import summarize_cross_rank_analysis
 from .gap_analysis import GapFinding, analyze_hidden_memory_gaps
 from .profiler import GPUMemoryProfiler, ProfileResult
@@ -64,14 +70,28 @@ _GAP_REMEDIATION_BY_CLASSIFICATION: Dict[str, List[str]] = {
 class MemoryAnalyzer:
     """Advanced analyzer for memory profiling data."""
 
-    def __init__(self, profiler: Optional[GPUMemoryProfiler] = None):
+    def __init__(
+        self,
+        profiler: Optional[GPUMemoryProfiler] = None,
+        collective_sensitivity: str = "medium",
+        collective_threshold_overrides: Optional[Mapping[str, Any]] = None,
+    ):
         """
         Initialize the analyzer.
 
         Args:
             profiler: GPUMemoryProfiler instance to analyze
+            collective_sensitivity: Preset sensitivity for collective-memory attribution
+            collective_threshold_overrides: Optional per-threshold overrides for
+                collective-memory attribution heuristics
         """
         self.profiler = profiler
+        self.collective_attribution_config: CollectiveAttributionConfig = (
+            resolve_collective_attribution_config(
+                collective_sensitivity,
+                collective_threshold_overrides,
+            )
+        )
 
         # Analysis thresholds
         self.thresholds = {
@@ -705,6 +725,15 @@ class MemoryAnalyzer:
 
         return summarize_cross_rank_analysis(events)
 
+    def analyze_collective_attribution(
+        self, events: List[TelemetryEventV2]
+    ) -> List[CollectiveAttributionResult]:
+        """Attribute hidden-memory spikes to collective communication phases."""
+        return attribute_collective_memory(
+            events=events,
+            config=self.collective_attribution_config,
+        )
+
     def generate_optimization_report(
         self,
         results: Optional[List[ProfileResult]] = None,
@@ -765,7 +794,11 @@ class MemoryAnalyzer:
         # Hidden-memory gap analysis (only when telemetry events are supplied).
         if events is not None:
             gap_findings = self.analyze_memory_gaps(events)
+            collective_attribution = self.analyze_collective_attribution(events)
             report["gap_analysis"] = [asdict(f) for f in gap_findings]
+            report["collective_attribution"] = [
+                asdict(result) for result in collective_attribution
+            ]
             if len({event.rank for event in events}) > 1:
                 report["cross_rank_analysis"] = self.analyze_cross_rank_timeline(events)
 

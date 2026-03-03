@@ -3,10 +3,16 @@
 import logging
 import statistics
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Mapping, Optional, cast
 
 import numpy as np
 
+from gpumemprof.collective_attribution import (
+    CollectiveAttributionConfig,
+    CollectiveAttributionResult,
+    attribute_collective_memory,
+    resolve_collective_attribution_config,
+)
 from gpumemprof.gap_analysis import GapFinding, analyze_hidden_memory_gaps
 from gpumemprof.telemetry import TelemetryEventV2
 
@@ -37,8 +43,19 @@ _GAP_REMEDIATION_BY_CLASSIFICATION: Dict[str, List[str]] = {
 class MemoryAnalyzer:
     """Advanced TensorFlow memory analysis and optimization."""
 
-    def __init__(self, sensitivity: float = 0.05) -> None:
+    def __init__(
+        self,
+        sensitivity: float = 0.05,
+        collective_sensitivity: str = "medium",
+        collective_threshold_overrides: Optional[Mapping[str, Any]] = None,
+    ) -> None:
         self.sensitivity = sensitivity
+        self.collective_attribution_config: CollectiveAttributionConfig = (
+            resolve_collective_attribution_config(
+                collective_sensitivity,
+                collective_threshold_overrides,
+            )
+        )
 
         # Hidden-memory gap analysis thresholds
         self.thresholds = {
@@ -339,6 +356,15 @@ class MemoryAnalyzer:
             remediation_by_classification=_GAP_REMEDIATION_BY_CLASSIFICATION,
         )
 
+    def analyze_collective_attribution(
+        self, events: List[TelemetryEventV2]
+    ) -> List[CollectiveAttributionResult]:
+        """Attribute hidden-memory spikes to collective communication phases."""
+        return attribute_collective_memory(
+            events=events,
+            config=self.collective_attribution_config,
+        )
+
     def score_optimization(
         self,
         profile_result: Any,
@@ -411,6 +437,10 @@ class MemoryAnalyzer:
         # Hidden-memory gap analysis (only when telemetry events are supplied).
         if events is not None:
             gap_findings = self.analyze_memory_gaps(events)
+            collective_attribution = self.analyze_collective_attribution(events)
             optimization_score["gap_analysis"] = [asdict(f) for f in gap_findings]
+            optimization_score["collective_attribution"] = [
+                asdict(result) for result in collective_attribution
+            ]
 
         return optimization_score
