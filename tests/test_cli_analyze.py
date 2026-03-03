@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 import pytest
@@ -190,3 +191,51 @@ def test_main_exits_nonzero_for_analyze_failures(
 
     assert excinfo.value.code == 1
     assert "Error: Input file" in capsys.readouterr().out
+
+
+def test_cmd_analyze_visualization_dependency_error_reports_install_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "telemetry.json"
+    input_path.write_text(
+        json.dumps(
+            [telemetry_event_to_dict(event) for event in _build_cross_rank_events()]
+        ),
+        encoding="utf-8",
+    )
+
+    original_import_runtime_symbols = gpumemprof_cli._import_runtime_symbols
+
+    def _patched_import_runtime_symbols(
+        module_name: str,
+        symbols: tuple[str, ...],
+        feature: str,
+    ) -> tuple[Any, ...]:
+        if module_name == ".visualizer":
+            raise ImportError("dlopen(PIL/_imaging): incompatible architecture")
+        return original_import_runtime_symbols(module_name, symbols, feature)
+
+    monkeypatch.setattr(
+        gpumemprof_cli,
+        "_import_runtime_symbols",
+        _patched_import_runtime_symbols,
+    )
+
+    exit_code = cmd_analyze(
+        argparse.Namespace(
+            input_file=str(input_path),
+            output=None,
+            format="json",
+            visualization=True,
+            plot_dir=str(tmp_path / "plots"),
+        )
+    )
+
+    assert exit_code == 0
+    stdout = capsys.readouterr().out
+    assert (
+        "Visualization skipped: Visualization dependencies are unavailable." in stdout
+    )
+    assert "stormlog[viz]" in stdout
