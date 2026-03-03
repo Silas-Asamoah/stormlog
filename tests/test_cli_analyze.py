@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 import matplotlib
 import pytest
@@ -47,7 +48,7 @@ def _build_cross_rank_events() -> list:
 
 
 def test_cmd_analyze_reports_cross_rank_findings_and_writes_artifacts(
-    tmp_path, capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     input_path = tmp_path / "telemetry.json"
     report_path = tmp_path / "report.json"
@@ -80,7 +81,9 @@ def test_cmd_analyze_reports_cross_rank_findings_and_writes_artifacts(
     assert report["cross_rank_analysis"]["first_cause_suspects"][0]["rank"] == 2
 
 
-def test_cmd_analyze_non_telemetry_falls_back_gracefully(tmp_path, capsys) -> None:
+def test_cmd_analyze_non_telemetry_falls_back_gracefully(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     input_path = tmp_path / "results.json"
     input_path.write_text(json.dumps({"results": []}), encoding="utf-8")
 
@@ -101,7 +104,7 @@ def test_cmd_analyze_non_telemetry_falls_back_gracefully(tmp_path, capsys) -> No
 
 
 def test_cmd_analyze_non_telemetry_array_falls_back_gracefully(
-    tmp_path, capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     input_path = tmp_path / "results.json"
     input_path.write_text(
@@ -131,7 +134,9 @@ def test_cmd_analyze_non_telemetry_array_falls_back_gracefully(
     assert "Error parsing telemetry events" not in stdout
 
 
-def test_cmd_analyze_missing_input_returns_failure(tmp_path, capsys) -> None:
+def test_cmd_analyze_missing_input_returns_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     missing_path = tmp_path / "missing.json"
 
     exit_code = cmd_analyze(
@@ -148,7 +153,9 @@ def test_cmd_analyze_missing_input_returns_failure(tmp_path, capsys) -> None:
     assert "Error: Input file" in capsys.readouterr().out
 
 
-def test_cmd_analyze_malformed_telemetry_returns_failure(tmp_path, capsys) -> None:
+def test_cmd_analyze_malformed_telemetry_returns_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     input_path = tmp_path / "broken.json"
     input_path.write_text(json.dumps([{"timestamp": "oops"}]), encoding="utf-8")
 
@@ -166,7 +173,11 @@ def test_cmd_analyze_malformed_telemetry_returns_failure(tmp_path, capsys) -> No
     assert "Error parsing telemetry events:" in capsys.readouterr().out
 
 
-def test_main_exits_nonzero_for_analyze_failures(monkeypatch, tmp_path, capsys) -> None:
+def test_main_exits_nonzero_for_analyze_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     missing_path = tmp_path / "missing.json"
     monkeypatch.setattr(
         gpumemprof_cli.sys,
