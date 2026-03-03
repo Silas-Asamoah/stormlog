@@ -1108,8 +1108,17 @@ class GPUMemoryProfilerTUI(App):
             )
             return
 
-        result = await asyncio.to_thread(load_distributed_artifacts, paths)
         self._diagnostics_last_paths = paths
+        try:
+            result = await asyncio.to_thread(load_distributed_artifacts, paths)
+        except Exception as exc:
+            self._set_diagnostics_events(
+                [],
+                source="artifacts",
+                reset_filter=True,
+                extra_warnings=[f"Failed to load artifacts: {exc}"],
+            )
+            return
         self._set_diagnostics_events(
             result.events,
             source="artifacts",
@@ -1154,8 +1163,16 @@ class GPUMemoryProfilerTUI(App):
                     "No artifact paths configured. Use Load Artifacts first.",
                 )
                 return
-            result = await asyncio.to_thread(load_distributed_artifacts, paths)
             self._diagnostics_last_paths = paths
+            try:
+                result = await asyncio.to_thread(load_distributed_artifacts, paths)
+            except Exception as exc:
+                self._set_diagnostics_events(
+                    [],
+                    source="artifacts",
+                    extra_warnings=[f"Failed to refresh artifacts: {exc}"],
+                )
+                return
             self._set_diagnostics_events(
                 result.events,
                 source="artifacts",
