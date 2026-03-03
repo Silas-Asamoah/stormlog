@@ -1375,9 +1375,12 @@ class GPUMemoryProfilerTUI(App):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         if format == "png":
-            import matplotlib.pyplot as plt
+            from matplotlib.backends.backend_agg import FigureCanvasAgg
+            from matplotlib.figure import Figure
 
-            fig, ax = plt.subplots(figsize=(10, 5))
+            fig = Figure(figsize=(10, 5))
+            FigureCanvasAgg(fig)
+            ax = fig.add_subplot(1, 1, 1)
             ax.plot(rel_times, allocated_gb, label="Allocated (GB)", color="tab:blue")
             if reserved_gb:
                 ax.plot(rel_times, reserved_gb, label="Reserved (GB)", color="tab:red")
@@ -1390,7 +1393,6 @@ class GPUMemoryProfilerTUI(App):
 
             file_path = plots_dir / f"timeline_{stamp}.png"
             fig.savefig(file_path, dpi=200, bbox_inches="tight")
-            plt.close(fig)
             return str(file_path)
 
         if format == "html":
