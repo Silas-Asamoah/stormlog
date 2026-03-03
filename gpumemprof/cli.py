@@ -853,7 +853,9 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             plot_dir = Path(args.plot_dir)
             plot_dir.mkdir(parents=True, exist_ok=True)
             plot_path = plot_dir / "cross_rank_timeline.png"
-            MemoryVisualizer().plot_cross_rank_timeline(events=events, save_path=str(plot_path))
+            MemoryVisualizer().plot_cross_rank_timeline(
+                events=events, save_path=str(plot_path)
+            )
             print(f"Visualization saved to: {plot_path}")
         except Exception as exc:
             print(f"Visualization skipped: {exc}")

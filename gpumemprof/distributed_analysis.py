@@ -103,7 +103,9 @@ def _select_cross_rank_analysis_events(
     if len(sample_events) != len(events):
         notes.append("Ignored non-sample events during cross-rank analysis.")
     if not sample_events:
-        notes.append("No sample telemetry events were available for distributed analysis.")
+        notes.append(
+            "No sample telemetry events were available for distributed analysis."
+        )
         return [], None, notes
 
     job_id = _select_job_id(sample_events)
@@ -134,7 +136,9 @@ def _median_sampling_interval_ns(grouped: dict[int, list[TelemetryEventV2]]) -> 
     intervals: list[int] = []
     for rank_events in grouped.values():
         for index in range(1, len(rank_events)):
-            delta = rank_events[index].timestamp_ns - rank_events[index - 1].timestamp_ns
+            delta = (
+                rank_events[index].timestamp_ns - rank_events[index - 1].timestamp_ns
+            )
             if delta > 0:
                 intervals.append(delta)
     if intervals:
@@ -186,7 +190,9 @@ def merge_cross_rank_timelines(
     world_size = _determine_world_size(analysis_events, participating_ranks)
     expected_ranks = set(range(world_size)) if world_size > 0 else set()
     missing_ranks = sorted(expected_ranks.difference(participating_ranks))
-    rank_sample_counts = {rank: len(rank_events) for rank, rank_events in grouped.items()}
+    rank_sample_counts = {
+        rank: len(rank_events) for rank, rank_events in grouped.items()
+    }
 
     if missing_ranks:
         notes.append(
@@ -257,7 +263,10 @@ def _find_rank_spike_candidate(
     spike_window_samples = 0
 
     for index in range(1, len(rank_events)):
-        delta = rank_events[index].device_used_bytes - rank_events[index - 1].device_used_bytes
+        delta = (
+            rank_events[index].device_used_bytes
+            - rank_events[index - 1].device_used_bytes
+        )
         if delta <= 0:
             window_start_index = None
             cumulative_delta = 0
@@ -301,7 +310,9 @@ def _detect_first_cause_spikes(
         return FirstCauseAnalysisResult(
             cluster_onset_timestamp_ns=None,
             suspects=[],
-            notes=["At least two ranks are required for cross-rank first-cause analysis."],
+            notes=[
+                "At least two ranks are required for cross-rank first-cause analysis."
+            ],
         )
 
     candidates: list[_RankSpikeCandidate] = []
@@ -388,7 +399,9 @@ def _detect_first_cause_spikes(
                 )
             ):
                 confidence = "high"
-            elif candidate.aligned_first_spike_timestamp_ns == earliest_aligned_timestamp:
+            elif (
+                candidate.aligned_first_spike_timestamp_ns == earliest_aligned_timestamp
+            ):
                 confidence = "medium" if not sparse_evidence else "low"
 
         suspects.append(
@@ -450,7 +463,9 @@ def summarize_cross_rank_analysis(events: Sequence[TelemetryEventV2]) -> dict[st
             for rank, offset in merge_result.alignment_offsets_ns.items()
         },
         "cluster_onset_timestamp_ns": first_cause_result.cluster_onset_timestamp_ns,
-        "first_cause_suspects": [asdict(suspect) for suspect in first_cause_result.suspects],
+        "first_cause_suspects": [
+            asdict(suspect) for suspect in first_cause_result.suspects
+        ],
         "notes": notes,
     }
 

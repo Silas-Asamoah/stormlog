@@ -136,7 +136,9 @@ def test_tf_memory_tracker_uses_detected_default_device(
         return "/CPU:0"
 
     monkeypatch.setattr(tf_tracker, "TF_AVAILABLE", True)
-    monkeypatch.setattr(tf_tracker.MemoryTracker, "_get_default_device", _get_default_device)
+    monkeypatch.setattr(
+        tf_tracker.MemoryTracker, "_get_default_device", _get_default_device
+    )
 
     tracker = tf_tracker.MemoryTracker(enable_logging=False)
     explicit_tracker = tf_tracker.MemoryTracker(device="/GPU:1", enable_logging=False)
