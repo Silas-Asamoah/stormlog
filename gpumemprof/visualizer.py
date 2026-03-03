@@ -155,10 +155,14 @@ class MemoryVisualizer:
                 (point.aligned_timestamp_ns - first_aligned_timestamp) / 1_000_000_000
                 for point in rank_points
             ]
-            device_used_gb = [point.device_used_bytes / (1024**3) for point in rank_points]
+            device_used_gb = [
+                point.device_used_bytes / (1024**3) for point in rank_points
+            ]
             ax.plot(relative_times, device_used_gb, linewidth=2, label=f"Rank {rank}")
 
-        top_suspect = first_cause_result.suspects[0] if first_cause_result.suspects else None
+        top_suspect = (
+            first_cause_result.suspects[0] if first_cause_result.suspects else None
+        )
         if top_suspect is not None:
             spike_relative_time = (
                 top_suspect.aligned_first_spike_timestamp_ns - first_aligned_timestamp
@@ -205,8 +209,12 @@ class MemoryVisualizer:
             title += f" - top suspect rank {top_suspect.rank}"
 
         ax.set_title(title, fontsize=self.style_config["title_size"])
-        ax.set_xlabel("Aligned Time (seconds)", fontsize=self.style_config["label_size"])
-        ax.set_ylabel("Device Used Memory (GB)", fontsize=self.style_config["label_size"])
+        ax.set_xlabel(
+            "Aligned Time (seconds)", fontsize=self.style_config["label_size"]
+        )
+        ax.set_ylabel(
+            "Device Used Memory (GB)", fontsize=self.style_config["label_size"]
+        )
         ax.grid(True, alpha=0.3)
         ax.legend()
         fig.tight_layout()
