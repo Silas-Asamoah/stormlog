@@ -76,6 +76,17 @@ gpumemprof analyze track.json --format txt --output analysis.txt
 gpumemprof analyze track.json --visualization --plot-dir plots
 ```
 
+`gpumemprof analyze` now attempts to load telemetry exports directly. When the
+input contains multi-rank `TelemetryEventV2` samples, it emits:
+
+- hidden-memory gap findings
+- a cross-rank merge summary (participating and missing ranks)
+- a ranked first-cause spike suspect with supporting timestamps and deltas
+
+`--visualization` writes a static `cross_rank_timeline.png` plot for multi-rank
+telemetry inputs. Non-telemetry JSON files still fall back to a lightweight file
+summary instead of failing.
+
 ### `diagnose`
 
 ```bash

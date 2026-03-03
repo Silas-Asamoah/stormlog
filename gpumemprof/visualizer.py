@@ -1,5 +1,6 @@
 """Visualization tools for GPU memory profiling data."""
 
+from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Union
 
@@ -14,7 +15,9 @@ import seaborn as sns
 from matplotlib.figure import Figure
 from plotly.subplots import make_subplots
 
+from .distributed_analysis import RankTimelinePoint, analyze_cross_rank_events
 from .profiler import GPUMemoryProfiler, MemorySnapshot, ProfileResult
+from .telemetry import TelemetryEventV2
 
 
 class MemoryVisualizer:
@@ -113,6 +116,105 @@ class MemoryVisualizer:
             return self._create_static_timeline(
                 relative_times, allocated_memory, reserved_memory, labels, save_path
             )
+
+    def plot_cross_rank_timeline(
+        self,
+        events: List[TelemetryEventV2],
+        save_path: Optional[str] = None,
+    ) -> plt.Figure:
+        """Plot a merged, aligned cross-rank device-memory timeline."""
+
+        if not events:
+            raise ValueError("No telemetry events available for cross-rank plotting")
+
+        merge_result, first_cause_result = analyze_cross_rank_events(events)
+        if not merge_result.merged_points:
+            raise ValueError("No timeline points available for cross-rank plotting")
+
+        grouped_points: Dict[int, List[RankTimelinePoint]] = defaultdict(list)
+        for point in merge_result.merged_points:
+            grouped_points[point.rank].append(point)
+
+        first_aligned_timestamp = min(
+            point.aligned_timestamp_ns for point in merge_result.merged_points
+        )
+        fig_obj, ax = plt.subplots(
+            1,
+            1,
+            figsize=self.style_config["figure_size"],
+            dpi=self.style_config["dpi"],
+        )
+        fig: Figure = fig_obj
+
+        for rank in sorted(grouped_points):
+            rank_points = sorted(
+                grouped_points[rank],
+                key=lambda point: (point.aligned_timestamp_ns, point.timestamp_ns),
+            )
+            relative_times = [
+                (point.aligned_timestamp_ns - first_aligned_timestamp) / 1_000_000_000
+                for point in rank_points
+            ]
+            device_used_gb = [point.device_used_bytes / (1024**3) for point in rank_points]
+            ax.plot(relative_times, device_used_gb, linewidth=2, label=f"Rank {rank}")
+
+        top_suspect = first_cause_result.suspects[0] if first_cause_result.suspects else None
+        if top_suspect is not None:
+            spike_relative_time = (
+                top_suspect.aligned_first_spike_timestamp_ns - first_aligned_timestamp
+            ) / 1_000_000_000
+            for point in grouped_points.get(top_suspect.rank, []):
+                if (
+                    point.aligned_timestamp_ns
+                    == top_suspect.aligned_first_spike_timestamp_ns
+                ):
+                    ax.scatter(
+                        [spike_relative_time],
+                        [point.device_used_bytes / (1024**3)],
+                        color="crimson",
+                        s=80,
+                        zorder=5,
+                        label=f"Top suspect rank {top_suspect.rank}",
+                    )
+                    ax.annotate(
+                        f"Rank {top_suspect.rank} first cause",
+                        xy=(spike_relative_time, point.device_used_bytes / (1024**3)),
+                        xytext=(10, 10),
+                        textcoords="offset points",
+                        fontsize=self.style_config["font_size"],
+                        color="crimson",
+                    )
+                    break
+
+        if first_cause_result.cluster_onset_timestamp_ns is not None:
+            cluster_onset_seconds = (
+                first_cause_result.cluster_onset_timestamp_ns - first_aligned_timestamp
+            ) / 1_000_000_000
+            ax.axvline(
+                cluster_onset_seconds,
+                color="black",
+                linestyle="--",
+                linewidth=1.5,
+                label="Cluster onset",
+            )
+
+        title = "Cross-Rank Memory Timeline"
+        if merge_result.job_id:
+            title += f" ({merge_result.job_id})"
+        if top_suspect is not None:
+            title += f" - top suspect rank {top_suspect.rank}"
+
+        ax.set_title(title, fontsize=self.style_config["title_size"])
+        ax.set_xlabel("Aligned Time (seconds)", fontsize=self.style_config["label_size"])
+        ax.set_ylabel("Device Used Memory (GB)", fontsize=self.style_config["label_size"])
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+
+        return fig
 
     def _create_static_timeline(
         self,
