@@ -133,6 +133,46 @@ WELCOME_MESSAGES = [
     "Live Monitoring & Watchdogs",
     "CLI · Docs · Examples",
 ]
+_VIZ_INSTALL_GUIDANCE = (
+    "Visualization dependencies are unavailable. "
+    "Install with `pip install 'stormlog[viz]'`."
+)
+
+
+def _is_visualization_dependency_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    message_tokens = (
+        "matplotlib",
+        "plotly",
+        "seaborn",
+        "pil",
+        "pillow",
+        "_imaging",
+        "stormlog[viz]",
+        "dlopen(",
+    )
+
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, ModuleNotFoundError) and current.name in {
+            "matplotlib",
+            "plotly",
+            "seaborn",
+            "PIL",
+        }:
+            return True
+        if isinstance(current, (ImportError, OSError)):
+            lowered = str(current).lower()
+            if any(token in lowered for token in message_tokens):
+                return True
+
+        next_exc = current.__cause__
+        if next_exc is None and not current.__suppress_context__:
+            next_exc = current.__context__
+        current = next_exc
+
+    return False
 
 
 def _safe_get_gpu_info() -> dict[str, Any]:
@@ -1068,11 +1108,16 @@ class GPUMemoryProfilerTUI(App):
             file_path = await asyncio.to_thread(
                 self._save_timeline_plot, timeline, format
             )
-        except ImportError as exc:
-            self.log_visual_message("Visualizations", f"Error: {exc}")
-            return
         except Exception as exc:
-            self.log_visual_message("Visualizations", f"Export failed: {exc}")
+            if _is_visualization_dependency_error(exc):
+                self.log_visual_message(
+                    "Visualizations",
+                    f"Error: {_VIZ_INSTALL_GUIDANCE}",
+                )
+            elif isinstance(exc, ImportError):
+                self.log_visual_message("Visualizations", f"Error: {exc}")
+            else:
+                self.log_visual_message("Visualizations", f"Export failed: {exc}")
             return
 
         self.log_visual_message(

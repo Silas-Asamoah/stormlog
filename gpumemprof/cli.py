@@ -29,6 +29,10 @@ _TORCH_INSTALL_GUIDANCE = (
     "`pip install 'stormlog[torch]'` "
     "or follow https://pytorch.org/get-started/locally/."
 )
+_VIZ_INSTALL_GUIDANCE = (
+    "Visualization dependencies are unavailable. "
+    "Install with `pip install 'stormlog[viz]'`."
+)
 
 # Stable monkeypatchable runtime hooks for tests/callers.
 MemoryTracker: Any = None
@@ -68,6 +72,42 @@ def _resolve_runtime_symbol(
     (value,) = _import_runtime_symbols(module_name, (symbol_name,), feature)
     globals()[cache_name] = value
     return value
+
+
+def _is_visualization_dependency_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    message_tokens = (
+        "matplotlib",
+        "plotly",
+        "seaborn",
+        "pil",
+        "pillow",
+        "_imaging",
+        "stormlog[viz]",
+        "dlopen(",
+    )
+
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, ModuleNotFoundError) and current.name in {
+            "matplotlib",
+            "plotly",
+            "seaborn",
+            "PIL",
+        }:
+            return True
+        if isinstance(current, (ImportError, OSError)):
+            lowered = str(current).lower()
+            if any(token in lowered for token in message_tokens):
+                return True
+
+        next_exc = current.__cause__
+        if next_exc is None and not current.__suppress_context__:
+            next_exc = current.__context__
+        current = next_exc
+
+    return False
 
 
 def main() -> None:
@@ -858,7 +898,10 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             )
             print(f"Visualization saved to: {plot_path}")
         except Exception as exc:
-            print(f"Visualization skipped: {exc}")
+            if _is_visualization_dependency_error(exc):
+                print(f"Visualization skipped: {_VIZ_INSTALL_GUIDANCE}")
+            else:
+                print(f"Visualization skipped: {exc}")
 
     return 0
 
