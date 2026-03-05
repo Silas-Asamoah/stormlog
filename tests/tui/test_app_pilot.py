@@ -285,6 +285,7 @@ def test_diagnostics_buttons_load_live_apply_filter_and_reset() -> None:
 
 def test_diagnostics_artifact_actions_surface_loader_failures(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     errors = [RuntimeError("load boom"), RuntimeError("refresh boom")]
 
@@ -300,7 +301,7 @@ def test_diagnostics_artifact_actions_surface_loader_failures(
             app.query_one(TabbedContent).active = _tab_id_by_title(app, "Diagnostics")
             await pilot.pause()
 
-            app.diagnostics_path_input.value = "/tmp/broken.json"
+            app.diagnostics_path_input.value = str(tmp_path / "broken.json")
             await app.load_diagnostics_artifacts()
             await pilot.pause()
 

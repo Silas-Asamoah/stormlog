@@ -33,8 +33,17 @@ from textual.widgets import (
 
 from gpumemprof.telemetry import TelemetryEventV2
 from gpumemprof.utils import format_bytes, get_gpu_info, get_system_info
-from tfmemprof.utils import get_gpu_info as get_tf_gpu_info
-from tfmemprof.utils import get_system_info as get_tf_system_info
+
+try:
+    from tfmemprof.utils import get_gpu_info as get_tf_gpu_info
+    from tfmemprof.utils import get_system_info as get_tf_system_info
+except ImportError:
+
+    def get_tf_gpu_info() -> dict[str, Any]:
+        return {}
+
+    def get_tf_system_info() -> dict[str, Any]:
+        return {}
 
 from . import builders as tui_builders
 from .commands import CLICommandRunner
@@ -1300,7 +1309,9 @@ class GPUMemoryProfilerTUI(App):
             for event in self._diagnostics_events
             if event.world_size > 0
         }
-        world_size = max(world_sizes) if world_sizes else len(present_ranks)
+        if not world_sizes:
+            return present_ranks
+        world_size = max(world_sizes)
         if world_size <= 0:
             return present_ranks
         return list(range(world_size))

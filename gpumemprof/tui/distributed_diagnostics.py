@@ -267,8 +267,13 @@ def build_distributed_model(
 
     present_ranks = sorted(grouped.keys())
     expected_world_size = max(world_sizes) if world_sizes else len(present_ranks)
-    expected_ranks = (
-        list(range(expected_world_size)) if expected_world_size > 0 else present_ranks
+    expected_ranks = sorted(
+        set(present_ranks)
+        | (
+            set(range(expected_world_size))
+            if expected_world_size > 0
+            else set(present_ranks)
+        )
     )
 
     warnings: list[str] = []
