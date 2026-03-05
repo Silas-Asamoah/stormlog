@@ -1414,6 +1414,9 @@ class GPUMemoryProfilerTUI(App):
         rel_times = [t - start for t in timestamps]
         allocated_gb = [val / (1024**3) for val in allocated]
         reserved_gb = [val / (1024**3) for val in reserved] if reserved else []
+        single_sample = len(rel_times) == 1
+        line_marker = "o" if single_sample else None
+        line_mode = "lines+markers" if single_sample else "lines"
 
         plots_dir = Path.cwd() / "visualizations"
         plots_dir.mkdir(parents=True, exist_ok=True)
@@ -1426,9 +1429,21 @@ class GPUMemoryProfilerTUI(App):
             fig = Figure(figsize=(10, 5))
             FigureCanvasAgg(fig)
             ax = fig.add_subplot(1, 1, 1)
-            ax.plot(rel_times, allocated_gb, label="Allocated (GB)", color="tab:blue")
+            ax.plot(
+                rel_times,
+                allocated_gb,
+                label="Allocated (GB)",
+                color="tab:blue",
+                marker=line_marker,
+            )
             if reserved_gb:
-                ax.plot(rel_times, reserved_gb, label="Reserved (GB)", color="tab:red")
+                ax.plot(
+                    rel_times,
+                    reserved_gb,
+                    label="Reserved (GB)",
+                    color="tab:red",
+                    marker=line_marker,
+                )
             ax.set_title("GPU Memory Timeline")
             ax.set_xlabel("Time (s)")
             ax.set_ylabel("Memory (GB)")
@@ -1453,7 +1468,7 @@ class GPUMemoryProfilerTUI(App):
                 go.Scatter(
                     x=rel_times,
                     y=allocated_gb,
-                    mode="lines",
+                    mode=line_mode,
                     name="Allocated (GB)",
                 )
             )
@@ -1462,7 +1477,7 @@ class GPUMemoryProfilerTUI(App):
                     go.Scatter(
                         x=rel_times,
                         y=reserved_gb,
-                        mode="lines",
+                        mode=line_mode,
                         name="Reserved (GB)",
                     )
                 )
