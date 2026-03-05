@@ -199,7 +199,9 @@ def cmd_monitor(args: argparse.Namespace) -> int:
                 "alerts": results.alerts_triggered,
             }
 
-            with open(args.output, "w") as f:
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("w", encoding="utf-8") as f:
                 json.dump(output_data, f, indent=2)
 
             print(f"Results saved to {args.output}")
@@ -268,7 +270,9 @@ def cmd_track(args: argparse.Namespace) -> int:
                 ),
             }
 
-            with open(args.output, "w") as f:
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("w", encoding="utf-8") as f:
                 json.dump(output_data, f, indent=2)
 
             print(f"Results saved to {args.output}")
@@ -297,28 +301,28 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     # Create a simple result object for analysis
     class AnalysisResult:
         def __init__(self, data: Dict[str, Any]) -> None:
+            memory_usage = data.get("memory_usage") or []
             self.peak_memory_mb = data.get("peak_memory", 0)
             self.average_memory_mb = data.get("average_memory", 0)
-            self.min_memory_mb = min(data.get("memory_usage", [0]))
+            self.min_memory_mb = min(memory_usage, default=0)
             self.total_allocations = len(
                 [
                     m
-                    for i, m in enumerate(data.get("memory_usage", []))
-                    if i > 0 and m > data["memory_usage"][i - 1]
+                    for i, m in enumerate(memory_usage)
+                    if i > 0 and m > memory_usage[i - 1]
                 ]
             )
             self.total_deallocations = len(
                 [
                     m
-                    for i, m in enumerate(data.get("memory_usage", []))
-                    if i > 0 and m < data["memory_usage"][i - 1]
+                    for i, m in enumerate(memory_usage)
+                    if i > 0 and m < memory_usage[i - 1]
                 ]
             )
             self.duration = data.get("duration", 0)
 
             # Create fake snapshots for analysis
             self.snapshots = []
-            memory_usage = data.get("memory_usage", [])
             timestamps = data.get("timestamps", list(range(len(memory_usage))))
             if len(memory_usage) != len(timestamps):
                 raise ValueError(
