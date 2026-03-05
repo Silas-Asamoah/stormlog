@@ -433,12 +433,12 @@ def analyze_cross_rank_events(
     """Analyze distributed telemetry for merged timelines and first-cause spikes."""
 
     merge_result = merge_cross_rank_timelines(events)
-    analysis_events, _, _ = _select_cross_rank_analysis_events(events)
+    analysis_events, _, selection_notes = _select_cross_rank_analysis_events(events)
     if not analysis_events:
         return merge_result, FirstCauseAnalysisResult(
             cluster_onset_timestamp_ns=None,
             suspects=[],
-            notes=[],
+            notes=selection_notes or list(merge_result.notes),
         )
     grouped = _group_events_by_rank(analysis_events)
     first_cause_result = _detect_first_cause_spikes(grouped, merge_result)
