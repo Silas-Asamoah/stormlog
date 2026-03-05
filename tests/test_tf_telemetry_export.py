@@ -14,6 +14,18 @@ import tfmemprof.tracker as tf_tracker
 from gpumemprof.telemetry import validate_telemetry_record
 
 
+def _wait_until_events(
+    tracker: tf_tracker.MemoryTracker, *, timeout: float = 1.0, interval: float = 0.01
+) -> bool:
+    """Wait until at least one event is collected or timeout elapses."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if tracker.events:
+            return True
+        time.sleep(interval)
+    return bool(tracker.events)
+
+
 def test_tf_tracker_emits_v2_event_records(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tf_tracker, "TF_AVAILABLE", True)
 
@@ -25,7 +37,7 @@ def test_tf_tracker_emits_v2_event_records(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(tracker, "_get_current_memory", lambda: 32.0)
 
     tracker.start_tracking()
-    time.sleep(0.03)
+    assert _wait_until_events(tracker), "tracker did not emit an event before timeout"
     result = tracker.stop_tracking()
 
     assert result.events

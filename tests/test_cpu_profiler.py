@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, List
+from typing import Any, Callable, List
 from unittest.mock import patch
 
 import pytest
@@ -42,6 +42,21 @@ def _make_mock_process(
             return cpu_pct
 
     return _MockProcess()
+
+
+def _wait_until(
+    predicate: Callable[[], bool],
+    *,
+    timeout: float = 1.0,
+    interval: float = 0.01,
+) -> bool:
+    """Poll ``predicate`` until true or timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +178,7 @@ class TestCPUMemoryProfiler:
         profiler = CPUMemoryProfiler()
 
         profiler.start_monitoring(interval=0.05)
-        time.sleep(0.2)
+        assert _wait_until(lambda: len(profiler.snapshots) > 0)
         profiler.stop_monitoring()
 
         assert profiler._monitoring is False
@@ -174,8 +189,13 @@ class TestCPUMemoryProfiler:
         mock_cls.return_value = _make_mock_process()
         profiler = CPUMemoryProfiler()
         profiler.start_monitoring(interval=0.05)
+        first_thread = profiler._monitor_thread
         profiler.start_monitoring(interval=0.05)  # should be a no-op
+        assert profiler._monitor_thread is first_thread
+        assert _wait_until(lambda: len(profiler.snapshots) > 0)
         profiler.stop_monitoring()
+        assert profiler._monitoring is False
+        assert profiler._monitor_thread is None
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
     def test_clear_results(self, mock_cls: Any) -> None:
@@ -242,7 +262,7 @@ class TestCPUMemoryTracker:
 
         tracker.start_tracking()
         assert tracker.is_tracking is True
-        time.sleep(0.15)
+        assert _wait_until(lambda: tracker.stats["total_events"] > 0)
         tracker.stop_tracking()
         assert tracker.is_tracking is False
 
@@ -258,6 +278,9 @@ class TestCPUMemoryTracker:
         tracker.start_tracking()
         tracker.start_tracking()  # should be a no-op
         tracker.stop_tracking()
+        event_types = [event.event_type for event in tracker.get_events()]
+        assert event_types.count("start") == 1
+        assert event_types.count("stop") == 1
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
     def test_stop_tracking_idempotent(self, mock_cls: Any) -> None:
@@ -306,13 +329,11 @@ class TestCPUMemoryTracker:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker()
 
-        # Add events with known timestamps
-        tracker._add_event("a", 0, "old")
-        cutoff = time.time()
-        time.sleep(0.02)
-        tracker._add_event("b", 0, "new")
+        with patch("gpumemprof.cpu_profiler.time.time", side_effect=[100.0, 200.0]):
+            tracker._add_event("a", 0, "old")
+            tracker._add_event("b", 0, "new")
 
-        events = tracker.get_events(since=cutoff)
+        events = tracker.get_events(since=150.0)
         assert len(events) == 1
         assert events[0].context == "new"
 
@@ -359,7 +380,7 @@ class TestCPUMemoryTracker:
         mock_cls.return_value = _make_mock_process()
         tracker = CPUMemoryTracker(sampling_interval=0.05)
         tracker.start_tracking()
-        time.sleep(0.1)
+        assert _wait_until(lambda: tracker.stats["total_events"] > 0)
         tracker.stop_tracking()
 
         stats = tracker.get_statistics()
