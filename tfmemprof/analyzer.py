@@ -123,11 +123,17 @@ class MemoryAnalyzer:
             initial_avg = statistics.mean(initial_memory)
 
             if final_avg > initial_avg * 1.5:  # 50% increase from start
+                growth_factor = (
+                    float("inf") if initial_avg <= 0 else final_avg / initial_avg
+                )
                 leaks.append(
                     {
                         "type": "insufficient_cleanup",
                         "severity": "medium",
-                        "description": f"Final memory {final_avg:.1f}MB is {final_avg/initial_avg:.1f}x initial memory",
+                        "description": (
+                            f"Final memory {final_avg:.1f}MB is "
+                            f"{growth_factor:.1f}x initial memory"
+                        ),
                         "initial_avg": initial_avg,
                         "final_avg": final_avg,
                     }

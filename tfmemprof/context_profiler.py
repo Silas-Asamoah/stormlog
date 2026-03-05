@@ -59,13 +59,18 @@ def profile_function(
     """
 
     def decorator(f: F) -> F:
+        profiled_name = name or f.__name__
+
+        @functools.wraps(f)
+        def profiled_target(*args: Any, **kwargs: Any) -> Any:
+            return f(*args, **kwargs)
+
+        profiled_target.__name__ = profiled_name
+
         @functools.wraps(f)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             prof = profiler or get_global_profiler()
-            _ = name or f.__name__
-
-            # Use the profiler's function profiling
-            return prof.profile_function(f)(*args, **kwargs)
+            return prof.profile_function(profiled_target)(*args, **kwargs)
 
         return cast(F, wrapper)
 
