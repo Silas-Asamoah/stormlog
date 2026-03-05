@@ -123,6 +123,8 @@ class CPUMemoryProfiler:
     def start_monitoring(self, interval: float = 0.1) -> None:
         if self._monitoring:
             return
+        if interval <= 0:
+            raise ValueError("interval must be > 0")
         self._monitoring = True
         self._monitor_interval = interval
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
@@ -221,6 +223,11 @@ class CPUMemoryTracker:
         local_rank: Optional[int] = None,
         world_size: Optional[int] = None,
     ) -> None:
+        if sampling_interval <= 0:
+            raise ValueError("sampling_interval must be > 0")
+        if max_events <= 0:
+            raise ValueError("max_events must be >= 1")
+
         self.process = psutil.Process()
         self.sampling_interval = sampling_interval
         self.events: deque[TrackingEvent] = deque(maxlen=max_events)
