@@ -16,7 +16,7 @@
 
 Stormlog is a memory-profiling toolkit for day-to-day PyTorch and TensorFlow work. It combines Python APIs, CLI commands, and a Textual TUI so you can move from "what is using memory?" to saved artifacts and shareable diagnostics without switching tools.
 
-## Why teams use it
+## Why use this tool
 
 - Catch memory growth before it becomes an OOM.
 - Compare allocated vs reserved usage during training and inference.
