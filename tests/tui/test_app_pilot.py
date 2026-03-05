@@ -357,6 +357,73 @@ def test_save_timeline_plot_png_avoids_pyplot(
     assert file_path.suffix == ".png"
 
 
+def test_save_timeline_plot_png_single_sample_uses_markers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from matplotlib.figure import Figure
+
+    captured: dict[str, Any] = {}
+
+    def _capture_savefig(
+        self: Figure, file_path: str | Path, *args: Any, **kwargs: Any
+    ) -> None:
+        _ = (args, kwargs)
+        captured["markers"] = [line.get_marker() for line in self.axes[0].lines]
+        Path(file_path).write_bytes(b"png")
+
+    monkeypatch.setattr(Figure, "savefig", _capture_savefig)
+    monkeypatch.chdir(tmp_path)
+
+    app = GPUMemoryProfilerTUI()
+    file_path = Path(
+        app._save_timeline_plot(
+            {
+                "timestamps": [1.0],
+                "allocated": [1024**3],
+                "reserved": [int(1.5 * 1024**3)],
+            },
+            "png",
+        )
+    )
+
+    assert file_path.exists()
+    assert captured["markers"] == ["o", "o"]
+
+
+def test_save_timeline_plot_html_single_sample_uses_markers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    go = pytest.importorskip("plotly.graph_objects")
+
+    captured: dict[str, Any] = {}
+
+    def _capture_write_html(
+        self: Any, file_path: str | Path, *args: Any, **kwargs: Any
+    ) -> None:
+        _ = (args, kwargs)
+        figure_json = self.to_plotly_json()
+        captured["modes"] = [trace["mode"] for trace in figure_json["data"]]
+        Path(file_path).write_text("<html></html>", encoding="utf-8")
+
+    monkeypatch.setattr(go.Figure, "write_html", _capture_write_html)
+    monkeypatch.chdir(tmp_path)
+
+    app = GPUMemoryProfilerTUI()
+    file_path = Path(
+        app._save_timeline_plot(
+            {
+                "timestamps": [1.0],
+                "allocated": [1024**3],
+                "reserved": [int(1.5 * 1024**3)],
+            },
+            "html",
+        )
+    )
+
+    assert file_path.exists()
+    assert captured["modes"] == ["lines+markers", "lines+markers"]
+
+
 def test_generate_visual_plot_dependency_error_logs_install_guidance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
