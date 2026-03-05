@@ -132,7 +132,7 @@ def test_tf_memory_tracker_uses_detected_default_device(
 ) -> None:
     calls = {"count": 0}
 
-    def _get_default_device(self: tf_tracker.MemoryTracker) -> str:
+    def _get_default_device(_self: tf_tracker.MemoryTracker) -> str:
         calls["count"] += 1
         return "/CPU:0"
 
