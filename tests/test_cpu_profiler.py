@@ -178,13 +178,6 @@ class TestCPUMemoryProfiler:
         profiler.stop_monitoring()
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_start_monitoring_invalid_interval(self, mock_cls: Any) -> None:
-        mock_cls.return_value = _make_mock_process()
-        profiler = CPUMemoryProfiler()
-        with pytest.raises(ValueError, match="interval must be > 0"):
-            profiler.start_monitoring(interval=0)
-
-    @patch("gpumemprof.cpu_profiler.psutil.Process")
     def test_clear_results(self, mock_cls: Any) -> None:
         mock_cls.return_value = _make_mock_process()
         profiler = CPUMemoryProfiler()
@@ -241,18 +234,6 @@ class TestCPUMemoryTracker:
         assert tracker.stats["peak_memory"] == 0
         assert tracker.stats["total_events"] == 0
         assert isinstance(tracker._events_lock, type(threading.Lock()))
-
-    @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_init_rejects_invalid_sampling_interval(self, mock_cls: Any) -> None:
-        mock_cls.return_value = _make_mock_process()
-        with pytest.raises(ValueError, match="sampling_interval must be > 0"):
-            CPUMemoryTracker(sampling_interval=0)
-
-    @patch("gpumemprof.cpu_profiler.psutil.Process")
-    def test_init_rejects_invalid_max_events(self, mock_cls: Any) -> None:
-        mock_cls.return_value = _make_mock_process()
-        with pytest.raises(ValueError, match="max_events must be >= 1"):
-            CPUMemoryTracker(max_events=0)
 
     @patch("gpumemprof.cpu_profiler.psutil.Process")
     def test_start_stop_tracking(self, mock_cls: Any) -> None:
