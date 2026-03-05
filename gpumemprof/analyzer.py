@@ -165,7 +165,6 @@ class MemoryAnalyzer:
                 and positive_ratio > self.thresholds["memory_leak_ratio"]
                 and total_growth > 100 * 1024 * 1024
             ):  # At least 100MB total growth
-
                 severity = "critical" if total_growth > 1024**3 else "warning"
 
                 patterns.append(
