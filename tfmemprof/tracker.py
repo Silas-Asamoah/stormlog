@@ -84,6 +84,8 @@ class MemoryTracker:
         """
         if not TF_AVAILABLE:
             raise ImportError("TensorFlow not available. Please install TensorFlow.")
+        if sampling_interval <= 0:
+            raise ValueError("sampling_interval must be > 0")
 
         self.sampling_interval = sampling_interval
         self.alert_threshold_mb = alert_threshold_mb
