@@ -11,6 +11,7 @@ from typing import Any, Iterator
 
 import pytest
 
+import tfmemprof.analyzer as tf_analyzer
 import tfmemprof.cli as tf_cli
 import tfmemprof.context_profiler as tf_context
 import tfmemprof.profiler as tf_profiler
@@ -147,3 +148,50 @@ def test_tf_memory_tracker_uses_detected_default_device(
     assert tracker.device == "/CPU:0"
     assert explicit_tracker.device == "/GPU:1"
     assert calls["count"] == 1
+
+
+def test_tf_profile_function_decorator_uses_custom_profile_name() -> None:
+    call_count = {"value": 0}
+    profiled_names: list[str] = []
+
+    class _FakeProfiler:
+        def profile_function(self, func: Any) -> Any:
+            def _wrapped(*args: Any, **kwargs: Any) -> Any:
+                profiled_names.append(func.__name__)
+                return func(*args, **kwargs)
+
+            return _wrapped
+
+    profiler: Any = _FakeProfiler()
+
+    @tf_context.profile_function(  # type: ignore[arg-type, unused-ignore]
+        profiler=profiler, name="custom_step"
+    )
+    def _sample(value: int) -> int:
+        call_count["value"] += 1
+        return value + 1
+
+    assert _sample(4) == 5
+    assert call_count["value"] == 1
+    assert profiled_names == ["custom_step"]
+
+
+def test_tf_detect_memory_leaks_handles_zero_initial_average() -> None:
+    class _TrackingResult:
+        memory_usage = [0.0, 0.0, 0.0, 0.0, 0.0, 32.0, 48.0, 64.0, 80.0, 96.0]
+        timestamps = list(range(10))
+        memory_growth_rate = 9.6
+
+    analyzer = tf_analyzer.MemoryAnalyzer()
+    leaks = analyzer.detect_memory_leaks(_TrackingResult())
+
+    assert any(leak["type"] == "insufficient_cleanup" for leak in leaks)
+
+
+def test_tf_memory_tracker_rejects_non_positive_sampling_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tf_tracker, "TF_AVAILABLE", True)
+
+    with pytest.raises(ValueError, match="sampling_interval"):
+        tf_tracker.MemoryTracker(sampling_interval=0, enable_logging=False)

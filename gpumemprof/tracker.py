@@ -90,6 +90,11 @@ class MemoryTracker:
             oom_max_dumps: Maximum number of retained OOM dump bundles
             oom_max_total_mb: Maximum retained OOM dump storage in MB
         """
+        if sampling_interval <= 0:
+            raise ValueError("sampling_interval must be > 0")
+        if max_events <= 0:
+            raise ValueError("max_events must be >= 1")
+
         self.device = self._setup_device(device)
         self.collector = build_device_memory_collector(self.device)
         self.backend = self.collector.name()
