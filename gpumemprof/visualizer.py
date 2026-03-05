@@ -535,7 +535,7 @@ class MemoryVisualizer:
             raise ValueError("No results available for heatmap")
 
         # Create data matrix
-        functions = list(set(r.function_name for r in results))
+        functions = sorted({r.function_name for r in results})
         metrics = ["execution_time", "memory_allocated", "memory_freed", "peak_memory"]
 
         data_matrix = np.zeros((len(functions), len(metrics)))
