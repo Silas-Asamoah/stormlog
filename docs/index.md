@@ -2,41 +2,70 @@
 
 # Stormlog Documentation
 
-Welcome to the official documentation for Stormlog! Here you'll find everything you need to install, use, and contribute to the project.
+Stormlog ships three surfaces that should be treated as one workflow:
+
+- Python APIs for profiling or tracking inside code
+- CLI commands for telemetry capture and artifact generation
+- a Textual TUI for live monitoring, visualization export, and diagnostics
+
+Use the guides below based on the job you are doing, not based on package internals.
 
 ```{toctree}
 :maxdepth: 2
-:caption: Documentation
+:caption: Guides
 
 installation
 usage
 cli
-api
-reference/index
+tui
 examples
-examples/test_guides/README
+testing
+troubleshooting
 cpu_compatibility
 compatibility_matrix
 benchmark_harness
 telemetry_schema
-testing
-troubleshooting
-architecture
-gpu_setup
-tui
 pytorch_testing_guide
 tensorflow_testing_guide
 article
+architecture
+api
+reference/index
+gpu_setup
+examples/test_guides/README
 ```
 
-## About
+## Suggested reading order
 
-Stormlog is an open source tool for real-time GPU memory monitoring, leak detection, and optimization in deep learning workflows. It supports both PyTorch and TensorFlow, and provides both a Python API and CLI tools.
+### New user
 
-## Additional Links
+1. [Installation](installation.md)
+2. [Usage](usage.md)
+3. [CLI](cli.md)
 
+### Debugging a real run
+
+1. [CLI](cli.md)
+2. [TUI](tui.md)
+3. [Troubleshooting](troubleshooting.md)
+
+### Release or CI validation
+
+1. [Testing](testing.md)
+2. [Examples](examples.md)
+3. [Benchmark Harness](benchmark_harness.md)
+
+### Framework-specific workflows
+
+- [PyTorch guide](pytorch_testing_guide.md)
+- [TensorFlow guide](tensorflow_testing_guide.md)
+
+## Notes
+
+- `docs/_build/` is generated output and not maintained as source documentation.
+- When docs and code disagree, treat the code and `--help` output as the source of truth and update the docs.
+
+## Related links
+
+- [Repository root](../README.md)
 - [Contributing](../CONTRIBUTING.md)
-
----
-
-[← Back to README](../README.md)
