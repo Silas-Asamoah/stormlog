@@ -122,7 +122,9 @@ class DistributedTimelineCanvas(Static):
             sampled_gap = (
                 self._resample([float(value) for value in gaps]) if gaps else []
             )
-            gap_mb = [value / (1024**2) for value in sampled_gap] if sampled_gap else []
+            gap_mb = (
+                [value / (1024**2) for value in sampled_gap] if sampled_gap else []
+            )
             gap_latest = gap_mb[-1] if gap_mb else 0.0
             marker = "*" if rank == active_rank else " "
             lines.append(
