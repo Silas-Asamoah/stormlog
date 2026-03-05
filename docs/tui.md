@@ -1,6 +1,6 @@
 # Terminal UI (Textual) Guide
 
-The Stormlog now ships with a Textual-based TUI that bundles key
+Stormlog now ships with a Textual-based TUI that bundles key
 workflows—system discovery, PyTorch/TensorFlow checklists, and CLI helpers—into
 an interactive terminal experience.
 
