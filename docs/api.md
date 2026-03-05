@@ -2,12 +2,13 @@
 
 # API Reference
 
-This page is the human-first API guide for the package. The canonical function
-and class signatures are generated from source code and docstrings.
+This page is the human-first API guide for the package. The canonical function and class signatures are generated from source code and docstrings during the docs build.
 
 ## Generated Reference
 
 - [Generated API Modules](reference/index.md)
+
+The pages under `docs/reference/generated/` are build output, not hand-maintained source files.
 
 ## Package Surface
 
@@ -28,6 +29,15 @@ Core modules documented in generated pages:
 - `gpumemprof.telemetry`
 - `gpumemprof.cpu_profiler`
 
+Primary exported symbols:
+
+- `GPUMemoryProfiler`
+- `MemoryTracker`
+- `CPUMemoryProfiler`
+- `CPUMemoryTracker`
+- `MemoryVisualizer`
+- `TelemetryEventV2`
+
 ### `tfmemprof` (TensorFlow workflows)
 
 Use this package for:
@@ -41,6 +51,15 @@ Core modules documented in generated pages:
 - `tfmemprof.profiler`
 - `tfmemprof.tracker`
 - `tfmemprof.context_profiler`
+
+Primary exported symbols:
+
+- `TFMemoryProfiler`
+- `TensorFlowProfiler`
+- `TensorFlowMemoryTracker`
+- `TensorFlowVisualizer`
+- `TensorFlowAnalyzer`
+- `TensorFlowGapFinding`
 
 ## Usage Paths
 

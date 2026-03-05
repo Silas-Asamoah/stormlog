@@ -5,12 +5,12 @@
 This matrix reflects the current behavior of the repository and is versioned for the v0.2 documentation refresh.
 
 - Matrix version: `v0.2`
-- Last verified: `2026-02-16`
+- Last verified: `2026-03-05`
 - Source of truth:
   - `pyproject.toml` (`requires-python >=3.10`, framework dependency floors)
   - CLI entry points in `pyproject.toml`
   - Runtime backend detection in `gpumemprof/device_collectors.py` and `tfmemprof/utils.py`
-  - CI smoke checks in `.github/workflows/ci.yml`
+  - CI test/lint/docs/build lanes in `.github/workflows/ci.yml`
 
 ## Runtime + Version Support
 
@@ -52,8 +52,9 @@ This matrix reflects the current behavior of the repository and is versioned for
 
 ## Validation Notes
 
-- The compatibility matrix is linked from `README.md` and `docs/index.md`.
-- CLI examples smoke validation is part of CI (`examples.cli.quickstart`) in `.github/workflows/ci.yml`.
+- The compatibility matrix is linked from `docs/index.md`.
+- The example smoke commands documented elsewhere in the repo are maintained validation paths, but they are not currently a dedicated CI job in `.github/workflows/ci.yml`.
+- CI currently validates framework test matrices, TUI gates, lint, docs, and package build lanes.
 - Backend capability metadata emitted in tracker exports includes:
   - `backend`
   - `supports_device_total`
