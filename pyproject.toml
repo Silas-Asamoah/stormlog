@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel", "setuptools_scm[toml]>=7.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "stormlog"
+name = "gpu-memory-profiler"
 dynamic = ["version"]
-description = "A comprehensive GPU memory profiler for PyTorch and TensorFlow with CLI, visualization, and analytics"
+description = "Deprecated package alias for Stormlog. Install 'stormlog' instead."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [

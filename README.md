@@ -1,5 +1,10 @@
 # Stormlog
 
+> Deprecated PyPI distribution notice:
+> `gpu-memory-profiler` is kept only as a migration alias.
+> Install `stormlog` instead with `pip install stormlog`.
+> Python imports remain `gpumemprof` and `tfmemprof`, and the TUI command remains `stormlog`.
+
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/Silas-Asamoah/stormlog/actions)
 [![PyPI Version](https://img.shields.io/pypi/v/stormlog.svg)](https://pypi.org/project/stormlog/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
