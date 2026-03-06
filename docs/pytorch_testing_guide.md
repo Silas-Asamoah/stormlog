@@ -2,7 +2,9 @@
 
 # PyTorch Guide
 
-This guide is for the current PyTorch-backed Stormlog workflow: profiling CUDA workloads, tracking long-running jobs, and exporting artifacts for later diagnostics.
+This guide is for the current PyTorch-backed Stormlog workflow: profiling
+`torch.cuda` workloads, tracking long-running jobs across supported backends,
+and exporting artifacts for later diagnostics.
 
 ## Before you start
 
@@ -13,7 +15,9 @@ gpumemprof info
 python -m examples.basic.pytorch_demo
 ```
 
-If CUDA is unavailable, the example script will skip the GPU path. In that case, use the CPU-only flows in [cpu_compatibility.md](cpu_compatibility.md).
+If no supported `torch.cuda` backend is available, the example script will skip
+the bounded profiling path. In that case, use the tracker, CLI, or CPU-only
+flows in [cpu_compatibility.md](cpu_compatibility.md).
 
 ## Daily workflow: ML engineer
 
@@ -24,10 +28,11 @@ import torch
 from gpumemprof import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler(track_tensors=True)
-model = torch.nn.Linear(1024, 256).cuda()
+device = profiler.device
+model = torch.nn.Linear(1024, 256).to(device)
 
 def train_step() -> torch.Tensor:
-    x = torch.randn(64, 1024, device="cuda")
+    x = torch.randn(64, 1024, device=device)
     y = model(x)
     return y.sum()
 
@@ -44,14 +49,16 @@ Use `profile_context` when you want one named block rather than one function cal
 from gpumemprof import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler()
+device = profiler.device
 
 with profiler.profile_context("forward_pass"):
-    outputs = model(torch.randn(32, 1024, device="cuda"))
+    outputs = model(torch.randn(32, 1024, device=device))
 ```
 
 ## Daily workflow: debugging growth over time
 
-Use the tracker when one profiled call is not enough.
+Use the tracker when one profiled call is not enough. This is the backend-aware
+PyTorch path for CUDA, ROCm, and MPS telemetry.
 
 ```python
 from gpumemprof import MemoryTracker
@@ -121,9 +128,10 @@ gpumemprof diagnose --duration 0 --output ./diag_bundle
 
 ## Common issues
 
-### `GPUMemoryProfiler` raises because CUDA is unavailable
+### `GPUMemoryProfiler` raises because no `torch.cuda` backend is available
 
-That is expected on non-CUDA hosts. Use the CLI or CPU profiler classes instead.
+That is expected on CPU-only or MPS-only hosts. Use `MemoryTracker`, the CLI,
+or the CPU profiler classes instead.
 
 ### `gpumemprof analyze` rejects `--input`
 

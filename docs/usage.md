@@ -9,13 +9,16 @@ This guide focuses on the workflows that are stable in the current codebase:
 - export telemetry and plots
 - move from runtime data to a diagnose bundle or TUI session
 
+Install the distribution as `stormlog`, but import the Python APIs from
+`gpumemprof` and `tfmemprof`. There is no top-level `stormlog` module today.
+
 ## Choose the right tool
 
 ### `GPUMemoryProfiler`
 
 Use when:
 
-- you have a CUDA-backed PyTorch runtime
+- you have a PyTorch runtime exposed through `torch.cuda` (CUDA or ROCm)
 - you want per-call or per-context profiling
 - you care about allocated vs reserved GPU memory during a bounded operation
 
@@ -31,6 +34,7 @@ Use when:
 Use when:
 
 - you need telemetry over time rather than one profiled call
+- you want backend-aware tracking on CUDA, ROCm, MPS, or CPU fallback paths
 - you want alerts, exported event streams, or diagnose bundles
 
 ### `CPUMemoryProfiler` / `CPUMemoryTracker`
@@ -63,17 +67,21 @@ This gives you:
 
 ## PyTorch profiling
 
-`GPUMemoryProfiler` requires CUDA. If CUDA is not available, move to the CPU-only path below.
+`GPUMemoryProfiler` currently targets `torch.cuda` runtimes. That includes
+NVIDIA CUDA builds and ROCm-backed PyTorch builds surfaced through
+`torch.cuda`. If you are on Apple MPS or CPU-only hardware, move to
+`MemoryTracker`, the CLI, or the CPU-only path below.
 
 ```python
 import torch
 from gpumemprof import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler(track_tensors=True)
-model = torch.nn.Linear(1024, 256).cuda()
+device = profiler.device
+model = torch.nn.Linear(1024, 256).to(device)
 
 def train_step() -> torch.Tensor:
-    inputs = torch.randn(64, 1024, device="cuda")
+    inputs = torch.randn(64, 1024, device=device)
     outputs = model(inputs)
     return outputs.sum()
 
@@ -91,10 +99,11 @@ import torch
 from gpumemprof import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler()
+device = profiler.device
 
 with profiler.profile_context("forward_pass"):
-    x = torch.randn(32, 1024, device="cuda")
-    y = torch.nn.Linear(1024, 128).cuda()(x)
+    x = torch.randn(32, 1024, device=device)
+    y = torch.nn.Linear(1024, 128).to(device)(x)
 ```
 
 ## TensorFlow profiling

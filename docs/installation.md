@@ -6,6 +6,19 @@ Use the smallest install that matches your workflow, then validate the console s
 
 ## Choose an install profile
 
+## Install name vs import names
+
+Install the distribution as `stormlog`, then import the backend modules directly:
+
+| Task | Use |
+| --- | --- |
+| Install from PyPI | `pip install stormlog` |
+| Launch the TUI | `stormlog` |
+| Import PyTorch APIs | `from gpumemprof import GPUMemoryProfiler, MemoryTracker` |
+| Import TensorFlow APIs | `from tfmemprof import TFMemoryProfiler` |
+
+There is no top-level `import stormlog` module in the current package layout.
+
 ### Core package
 
 ```bash
@@ -102,11 +115,14 @@ You do not need CUDA to use Stormlog. The CLI, TUI monitoring flows, and CPU pro
 
 ### macOS and MPS
 
-The TUI and CLI support Apple Silicon workflows. Use the CLI or TUI monitoring and diagnostics flows even when CUDA-specific PyTorch profiling is unavailable.
+The TUI and CLI support Apple Silicon workflows. Use the CLI or TUI monitoring
+and diagnostics flows even when `GPUMemoryProfiler` is unavailable on MPS.
 
 ### Linux and CUDA
 
-Install the correct framework build for your CUDA toolchain before using `GPUMemoryProfiler`. See [gpu_setup.md](gpu_setup.md) for the full checklist.
+Install the correct framework build for your `torch.cuda` runtime before using
+`GPUMemoryProfiler`. For NVIDIA systems that means matching the CUDA toolchain.
+See [gpu_setup.md](gpu_setup.md) for the full checklist.
 
 ## Common install failures
 

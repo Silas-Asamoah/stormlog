@@ -40,17 +40,20 @@ This is the workflow for answering:
 
 ### PyTorch path
 
-`GPUMemoryProfiler` is the right tool when the question is local to one CUDA-backed operation.
+`GPUMemoryProfiler` is the right tool when the question is local to one
+`torch.cuda`-backed operation. In practice that means NVIDIA CUDA builds and
+ROCm-backed PyTorch builds surfaced through `torch.cuda`.
 
 ```python
 import torch
 from gpumemprof import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler(track_tensors=True)
-model = torch.nn.Linear(1024, 256).cuda()
+device = profiler.device
+model = torch.nn.Linear(1024, 256).to(device)
 
 def train_step() -> torch.Tensor:
-    x = torch.randn(64, 1024, device="cuda")
+    x = torch.randn(64, 1024, device=device)
     y = model(x)
     return y.sum()
 
@@ -60,6 +63,9 @@ summary = profiler.get_summary()
 print(profile.function_name)
 print(f"Peak memory: {summary['peak_memory_usage'] / (1024**3):.2f} GB")
 ```
+
+If you are on Apple MPS or a CPU-only host, switch to `MemoryTracker`, the
+CLI, or the TUI monitoring flows instead of `GPUMemoryProfiler`.
 
 ### TensorFlow path
 
@@ -194,11 +200,10 @@ Use it when you want:
 
 ## Distributed diagnostics
 
-Distributed issues are usually not visible from a single rank summary. The Diagnostics tab is designed for that gap: it can load live telemetry or merged artifacts and rebuild a rank-level model with filters and anomaly indicators.
-
-Deterministic workflow reference:
-
-![Distributed diagnostics workflow](tui-distributed-diagnostics-workflow.svg)
+Distributed issues are usually not visible from a single rank summary. The
+current Diagnostics tab can load live telemetry or merged artifacts and rebuild
+rank-level summaries with filters and anomaly indicators inside the shipped UI
+shown earlier in this article.
 
 ## Choosing the right surface
 

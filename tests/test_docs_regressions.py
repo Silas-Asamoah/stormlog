@@ -7,7 +7,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DOC_ROOT = REPO_ROOT / "docs"
 DOC_SOURCE_FILES = [
     REPO_ROOT / "README.md",
-    *sorted(DOC_ROOT.glob("*.md")),
+    REPO_ROOT / "CONTRIBUTING.md",
+    REPO_ROOT / "RELEASE_CHECKLIST.md",
+    *sorted(
+        path
+        for path in DOC_ROOT.rglob("*.md")
+        if "_build" not in path.parts and path.parts[-2:] != ("reference", "generated")
+    ),
 ]
 
 _BANNED_DOC_SNIPPETS = {
@@ -18,6 +24,7 @@ _BANNED_DOC_SNIPPETS = {
     "docs/article.md": [
         "MemoryTracker(alert_threshold_mb=",
         "results = tracker.stop_tracking()",
+        "tui-distributed-diagnostics-workflow.svg",
     ],
     "docs/tensorflow_testing_guide.md": [
         "from tfmemprof import MemoryTracker",
@@ -35,6 +42,16 @@ _BANNED_DOC_SNIPPETS = {
         "python -m gpumemprof.cli",
         "python -m tfmemprof.cli",
     ],
+    "docs/tui.md": [
+        "tui-distributed-diagnostics-workflow.svg",
+        "tui-distributed-diagnostics-workflow.png",
+    ],
+    "docs/examples/test_guides/README.md": [
+        'pip install "stormlog[tui]"',
+    ],
+    "CONTRIBUTING.md": [
+        "gpu-memory-profiler.git",
+    ],
 }
 
 _PARAMS = [
@@ -44,7 +61,9 @@ _PARAMS = [
 ]
 
 
-@pytest.mark.parametrize(("relative_path", "snippet"), _PARAMS)  # type: ignore[misc, unused-ignore]
+@pytest.mark.parametrize(
+    ("relative_path", "snippet"), _PARAMS
+)  # type: ignore[misc, unused-ignore]
 def test_docs_do_not_reintroduce_known_stale_api_snippets(
     relative_path: str, snippet: str
 ) -> None:

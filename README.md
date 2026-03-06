@@ -37,6 +37,20 @@ pip install "stormlog[tf]"
 pip install "stormlog[all]"
 ```
 
+### Package and import names
+
+`stormlog` is the distribution name on PyPI. The installed Python modules remain
+backend-specific:
+
+| Task | Use |
+| --- | --- |
+| Install the package | `pip install stormlog` |
+| Launch the TUI | `stormlog` |
+| Import PyTorch APIs | `from gpumemprof import GPUMemoryProfiler, MemoryTracker` |
+| Import TensorFlow APIs | `from tfmemprof import TFMemoryProfiler` |
+
+There is no top-level `stormlog` Python module today.
+
 ### From source
 
 ```bash
@@ -70,17 +84,20 @@ tfmemprof diagnose --duration 0 --output /tmp/tf_diag
 
 ### PyTorch API workflow
 
-`GPUMemoryProfiler` requires a CUDA-capable PyTorch runtime. On CPU-only systems, use the CLI or `CPUMemoryProfiler` instead.
+`GPUMemoryProfiler` currently targets PyTorch runtimes exposed through
+`torch.cuda`, which covers NVIDIA CUDA and ROCm-backed builds. On Apple MPS or
+CPU-only systems, use `MemoryTracker`, the CLI, or `CPUMemoryProfiler` instead.
 
 ```python
 import torch
 from gpumemprof import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler()
-model = torch.nn.Linear(1024, 128).cuda()
+device = profiler.device
+model = torch.nn.Linear(1024, 128).to(device)
 
 def train_step() -> torch.Tensor:
-    x = torch.randn(64, 1024, device="cuda")
+    x = torch.randn(64, 1024, device=device)
     y = model(x)
     return y.sum()
 
@@ -158,7 +175,7 @@ The current TUI tabs are:
 <p align="center">
   <img src="docs/tui-diagnostics-current.png" alt="Stormlog diagnostics tab" width="700">
   <br/>
-  <em>Diagnostics tab with distributed rank tables, anomaly indicators, and timeline comparisons.</em>
+  <em>Diagnostics tab with the current artifact loader, rank table, and timeline panes.</em>
 </p>
 
 Use the Monitoring tab to start live tracking, export CSV or JSON events to `./exports`, and tune warning or critical thresholds. Use the Visualizations tab to refresh the live timeline and save PNG or HTML exports under `./visualizations`. Use the Diagnostics tab to load live telemetry or artifact paths and rebuild rank-level diagnostics without leaving the terminal.

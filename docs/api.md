@@ -4,6 +4,9 @@
 
 This page is the human-first API guide for the package. The canonical function and class signatures are generated from source code and docstrings during the docs build.
 
+Install the distribution as `stormlog`, then import the Python APIs from
+`gpumemprof` or `tfmemprof`. There is no top-level `stormlog` module today.
+
 ## Generated Reference
 
 - [Generated API Modules](reference/index.md)

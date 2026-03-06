@@ -221,7 +221,7 @@ def build_cli_markdown() -> str:
         stormlog
 
         # Ensure pip shows progress
-        pip install --progress-bar on "stormlog[tui]"
+        pip install --progress-bar on "stormlog[tui,torch]"
         ```
 
         Use the buttons below to log summaries or copy commands.

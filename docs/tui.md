@@ -124,15 +124,9 @@ Use this tab when you want to kick off a CLI flow and keep the output attached t
 3. Review the inline log output.
 4. If you need more detail, rerun the same command in a normal shell and archive the artifacts.
 
-## Distributed diagnostics reference image
-
-Deterministic workflow render:
-
-![Distributed diagnostics workflow](tui-distributed-diagnostics-workflow.svg)
-
-PNG copy for environments that prefer raster images:
-
-![Distributed diagnostics workflow PNG](tui-distributed-diagnostics-workflow.png)
+The screenshot above reflects the shipped Diagnostics tab. Older distributed
+diagnostics mockups have been removed from the docs because they no longer
+match the current product surface.
 
 ## Keyboard shortcuts
 
