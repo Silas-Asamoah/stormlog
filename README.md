@@ -2,14 +2,14 @@
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/Silas-Asamoah/stormlog/actions)
 [![PyPI Version](https://img.shields.io/pypi/v/stormlog.svg)](https://pypi.org/project/stormlog/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Silas-Asamoah/stormlog/blob/main/LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.8+-red.svg)](https://pytorch.org/)
 [![TensorFlow](https://img.shields.io/badge/TensorFlow-2.4+-orange.svg)](https://tensorflow.org/)
-[![Textual TUI](https://img.shields.io/badge/TUI-Textual-blueviolet)](docs/tui.md)
+[![Textual TUI](https://img.shields.io/badge/TUI-Textual-blueviolet)](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/tui.md)
 
 <p align="center">
-  <img src="docs/gpu-profiler-overview.gif" alt="Stormlog terminal UI overview" width="900">
+  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/gpu-profiler-overview.gif" alt="Stormlog terminal UI overview" width="900">
   <br/>
   <em>Current Textual workflow: monitoring, visualization export, diagnostics, and CLI actions.</em>
 </p>
@@ -167,32 +167,32 @@ The current TUI tabs are:
 - `CLI & Actions`
 
 <p align="center">
-  <img src="docs/tui-overview-current.png" alt="Stormlog overview tab" width="700">
+  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/tui-overview-current.png" alt="Stormlog overview tab" width="700">
   <br/>
   <em>Overview tab with current system summary and navigation guidance.</em>
 </p>
 
 <p align="center">
-  <img src="docs/tui-diagnostics-current.png" alt="Stormlog diagnostics tab" width="700">
+  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/tui-diagnostics-current.png" alt="Stormlog diagnostics tab" width="700">
   <br/>
   <em>Diagnostics tab with the current artifact loader, rank table, and timeline panes.</em>
 </p>
 
 Use the Monitoring tab to start live tracking, export CSV or JSON events to `./exports`, and tune warning or critical thresholds. In Visualizations, refresh the live timeline and save PNG or HTML exports under `./visualizations`. In Diagnostics, load live telemetry or artifact paths and rebuild rank-level diagnostics without leaving the terminal.
 
-For screen-by-screen details, see [docs/tui.md](docs/tui.md).
+For screen-by-screen details, see [docs/tui.md](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/tui.md).
 
 ## Examples and walkthroughs
 
-- [Documentation home](docs/index.md)
-- [Installation guide](docs/installation.md)
-- [Usage guide](docs/usage.md)
-- [CLI guide](docs/cli.md)
-- [Examples guide](docs/examples.md)
-- [Testing guide](docs/testing.md)
-- [PyTorch guide](docs/pytorch_testing_guide.md)
-- [TensorFlow guide](docs/tensorflow_testing_guide.md)
-- [Long-form article](docs/article.md)
+- [Documentation home](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/index.md)
+- [Installation guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/installation.md)
+- [Usage guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/usage.md)
+- [CLI guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/cli.md)
+- [Examples guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/examples.md)
+- [Testing guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/testing.md)
+- [PyTorch guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/pytorch_testing_guide.md)
+- [TensorFlow guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/tensorflow_testing_guide.md)
+- [Long-form article](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/article.md)
 
 ## Launch QA scenarios
 
@@ -214,12 +214,12 @@ If CUDA is not available, Stormlog still supports:
 - `CPUMemoryTracker`
 - the TUI overview, monitoring, diagnostics, and CLI tabs
 
-See [docs/cpu_compatibility.md](docs/cpu_compatibility.md) for the CPU-only path.
+See [docs/cpu_compatibility.md](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/cpu_compatibility.md) for the CPU-only path.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+See [CONTRIBUTING.md](https://github.com/Silas-Asamoah/stormlog/blob/main/CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](https://github.com/Silas-Asamoah/stormlog/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
-[MIT License](LICENSE)
+[MIT License](https://github.com/Silas-Asamoah/stormlog/blob/main/LICENSE)

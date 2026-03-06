@@ -105,3 +105,11 @@ def test_doc_links_and_media_targets_exist(doc_path: Path) -> None:
         assert (
             resolved.exists()
         ), f"{doc_path.relative_to(REPO_ROOT)} references missing path: {target}"
+
+
+def test_readme_uses_absolute_urls_for_pypi_rendering() -> None:
+    readme_links = _iter_local_doc_links(REPO_ROOT / "README.md")
+    assert not readme_links, (
+        "README.md contains repo-relative links or media targets that break on PyPI: "
+        f"{readme_links}"
+    )
