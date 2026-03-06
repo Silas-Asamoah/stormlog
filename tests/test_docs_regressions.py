@@ -113,3 +113,10 @@ def test_readme_uses_absolute_urls_for_pypi_rendering() -> None:
         "README.md contains repo-relative links or media targets that break on PyPI: "
         f"{readme_links}"
     )
+
+
+def test_readme_uses_json_backed_pypi_badge() -> None:
+    content = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "https://img.shields.io/badge/dynamic/json" in content
+    assert "https%3A%2F%2Fpypi.org%2Fpypi%2Fstormlog%2Fjson" in content
+    assert "https://img.shields.io/pypi/v/stormlog.svg" not in content

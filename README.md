@@ -1,7 +1,7 @@
 # Stormlog
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/Silas-Asamoah/stormlog/actions)
-[![PyPI Version](https://img.shields.io/pypi/v/stormlog.svg)](https://pypi.org/project/stormlog/)
+[![PyPI Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fpypi.org%2Fpypi%2Fstormlog%2Fjson&query=%24.info.version&label=pypi)](https://pypi.org/project/stormlog/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Silas-Asamoah/stormlog/blob/main/LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.8+-red.svg)](https://pytorch.org/)
