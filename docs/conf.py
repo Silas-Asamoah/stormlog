@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -69,3 +70,6 @@ suppress_warnings = [
 html_theme = "sphinx_rtd_theme"
 html_static_path: list[str] = []
 html_title = "Stormlog Docs"
+html_baseurl = os.environ.get(
+    "READTHEDOCS_CANONICAL_URL", "https://stormlog.readthedocs.io/en/latest/"
+)

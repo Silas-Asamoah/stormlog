@@ -121,3 +121,9 @@ def test_readme_uses_json_backed_pypi_badge() -> None:
     assert "https://img.shields.io/badge/dynamic/json" in content
     assert "https%3A%2F%2Fpypi.org%2Fpypi%2Fstormlog%2Fjson" in content
     assert "https://img.shields.io/pypi/v/stormlog.svg" not in content
+
+
+def test_docs_conf_uses_stormlog_canonical_baseurl() -> None:
+    content = (DOC_ROOT / "conf.py").read_text(encoding="utf-8")
+    assert "https://stormlog.readthedocs.io/en/latest/" in content
+    assert "https://gpu-memory-profiler.readthedocs.io/" not in content
