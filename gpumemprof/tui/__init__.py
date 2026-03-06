@@ -11,7 +11,7 @@ def run_app() -> None:
         ):
             raise SystemExit(
                 "The Stormlog TUI requires optional dependencies. "
-                "Install with `pip install 'stormlog[tui]'`."
+                "Install with `pip install 'stormlog[tui,torch]'`."
             ) from exc
         raise
 

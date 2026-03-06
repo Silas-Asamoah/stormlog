@@ -1,6 +1,7 @@
-# Contributing to GPU Memory Profiler
+# Contributing to Stormlog
 
-Thank you for your interest in contributing to GPU Memory Profiler! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to Stormlog. This document provides
+guidelines and information for contributors.
 
 ## Table of Contents
 
@@ -57,8 +58,8 @@ This project and everyone participating in it is governed by our [Code of Conduc
 
 ```bash
 # Clone the repository
-git clone https://github.com/Silas-Asamoah/gpu-memory-profiler.git
-cd gpu-memory-profiler
+git clone https://github.com/Silas-Asamoah/stormlog.git
+cd stormlog
 
 # Create a virtual environment
 python3 -m venv venv

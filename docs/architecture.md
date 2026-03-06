@@ -2,431 +2,298 @@
 
 # Architecture Guide
 
-This document describes the architecture and design principles of Stormlog.
+This page describes the current code-level architecture of Stormlog. It is a source-of-truth guide for how the repo is organized today, not a roadmap.
 
-## Overview
+## Repository surfaces
 
-Stormlog is designed with a modular, extensible architecture that supports both PyTorch and TensorFlow while maintaining clean separation of concerns.
+Stormlog has three user-facing surfaces that share the same core data model:
 
-## High-Level Architecture
+- Python APIs for bounded profiling and background tracking
+- CLI entrypoints for capture, analysis, and diagnose flows
+- a Textual TUI for live monitoring, visualization export, and artifact review
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Stormlog                      │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │   PyTorch   │  │ TensorFlow  │  │     CLI     │         │
-│  │  Profiler   │  │  Profiler   │  │   Tools     │         │
-│  │ (gpumemprof)│  │(tfmemprof)  │  │             │         │
-│  └─────────────┘  └─────────────┘  └─────────────┘         │
-├─────────────────────────────────────────────────────────────┤
-│                    Core Components                          │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │   Profiler  │  │  Tracker    │  │ Visualizer  │         │
-│  │             │  │             │  │             │         │
-│  └─────────────┘  └─────────────┘  └─────────────┘         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │  Analyzer   │  │   Utils     │  │   Context   │         │
-│  │             │  │             │  │  Profiler   │         │
-│  └─────────────┘  └─────────────┘  └─────────────┘         │
-├─────────────────────────────────────────────────────────────┤
-│                    Framework Layer                          │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │   PyTorch   │  │ TensorFlow  │  │    CPU      │         │
-│  │   Memory    │  │   Memory    │  │   Memory    │         │
-│  │  Interface  │  │  Interface  │  │  Interface  │         │
-│  └─────────────┘  └─────────────┘  └─────────────┘         │
-└─────────────────────────────────────────────────────────────┘
-```
+Those surfaces are implemented across two packages:
 
-## Core Components
+- `gpumemprof` for PyTorch, CPU fallback utilities, telemetry normalization, and the TUI
+- `tfmemprof` for TensorFlow profiling, tracking, and TensorFlow-specific analysis helpers
 
-### 1. Profiler (`profiler.py`)
+## Package boundaries
 
-The main profiling engine that coordinates memory monitoring and data collection.
+### `gpumemprof`
 
-**Responsibilities:**
+The `gpumemprof` package owns:
 
-- Initialize profiling sessions
-- Coordinate data collection from framework layers
-- Manage profiling state and configuration
-- Provide high-level API for users
+- `GPUMemoryProfiler` for bounded PyTorch profiling
+- `MemoryTracker` for time-based tracking on CUDA, ROCm, MPS, or CPU fallback paths
+- `CPUMemoryProfiler` and `CPUMemoryTracker` for CPU-only workflows
+- `MemoryVisualizer` for PNG, HTML, heatmap, and dashboard-style exports
+- `MemoryAnalyzer`, `GapFinding`, and collective-attribution helpers
+- `TelemetryEventV2` plus telemetry conversion and validation utilities
+- device collector abstractions in `device_collectors.py`
+- the Textual TUI under `gpumemprof.tui`
 
-**Key Classes:**
+### `tfmemprof`
 
-- `GPUMemoryProfiler` (PyTorch -- `gpumemprof.profiler`)
-- `TFMemoryProfiler` (TensorFlow -- `tfmemprof.profiler`)
+The `tfmemprof` package owns:
 
-### 2. Tracker (`tracker.py`)
+- `TFMemoryProfiler` for bounded TensorFlow profiling
+- `TensorFlowProfiler` and `ProfiledLayer` in `context_profiler.py`
+- `TensorFlowMemoryTracker` (an exported alias of `tfmemprof.tracker.MemoryTracker`)
+- `TensorFlowVisualizer`
+- `TensorFlowAnalyzer` and `TensorFlowGapFinding`
+- TensorFlow runtime and backend diagnostics in `tfmemprof.utils`
 
-Real-time memory tracking with background monitoring capabilities.
+The TensorFlow package does not ship a separate TUI. The shared terminal UI is the `stormlog` entrypoint implemented in `gpumemprof.tui`.
 
-**Responsibilities:**
+## High-level layering
 
-- Continuous memory monitoring
-- Alert system for memory thresholds
-- Background data collection
-- Memory leak detection
-
-**Key Classes:**
-
-- `MemoryTracker` (exported from both packages)
-- `TrackingEvent` (`gpumemprof`) / `TrackingResult` (`tfmemprof`)
-- `MemoryWatchdog` (internal — not re-exported from package `__init__`)
-
-### 3. Visualizer (`visualizer.py`)
-
-Data visualization and reporting capabilities.
-
-**Responsibilities:**
-
-- Generate memory timeline plots
-- Create heatmaps and charts
-- Interactive dashboards
-- Export visualizations
-
-**Key Classes:**
-
-- `MemoryVisualizer` (requires `[viz]` extra; uses matplotlib, seaborn, plotly internally)
-
-### 4. Analyzer (`analyzer.py`)
-
-Advanced analysis and optimization recommendations.
-
-**Responsibilities:**
-
-- Memory leak detection algorithms
-- Performance analysis
-- Optimization suggestions
-- Pattern recognition
-- Hidden-memory collective communication attribution heuristics
-
-**Key Classes:**
-
-- `MemoryAnalyzer`
-- `GapFinding` (hidden-memory gap analysis)
-- `CollectiveAttributionResult` (communication-attributed hidden-memory spikes)
-
-### 5. Context Profiler (`context_profiler.py`)
-
-Context-aware profiling with decorators and context managers.
-
-**Responsibilities:**
-
-- Function-level profiling
-- Context manager support
-- Decorator implementations
-- Scope-based memory tracking
-
-**Key Classes/Functions:**
-
-- `profile_function` (decorator)
-- `profile_context` (context manager)
-- `MemoryProfiler` / `ProfiledModule` (`gpumemprof`)
-- `TensorFlowProfiler` / `ProfiledLayer` (`tfmemprof`)
-
-### 6. Utils (`utils.py`)
-
-Utility functions and system information gathering.
-
-**Responsibilities:**
-
-- System information collection
-- Memory formatting
-- Framework detection
-- Error handling
-
-**Key Functions:**
-
-- `get_gpu_info()` (`gpumemprof`) / `get_system_info()` (`tfmemprof`)
-- `format_bytes()`, `convert_bytes()`
-- `detect_torch_runtime_backend()` (`gpumemprof`)
-
-### 7. CLI (`cli.py`)
-
-Command-line interface for standalone usage.
-
-**Responsibilities:**
-
-- Command-line argument parsing
-- Real-time monitoring interface
-- Data export and analysis
-- System information display
-
-**Key Commands:**
-
-- `info` - System information
-- `monitor` - Real-time monitoring
-- `track` - Background tracking
-- `analyze` - Results analysis
-- `diagnose` - Diagnostic bundle generation
-
-### 8. OOM Flight Recorder (`oom_flight_recorder.py`)
-
-Captures memory state before out-of-memory crashes for post-mortem analysis.
-
-**Key Classes:**
-
-- `OOMFlightRecorder`
-- `OOMFlightRecorderConfig`
-- `OOMExceptionClassification`
-
-### 9. Device Collectors (`device_collectors.py`)
-
-Backend-aware device memory sampling across CUDA, ROCm, and MPS.
-
-**Key Classes:**
-
-- `DeviceMemoryCollector` (abstract base)
-- `CudaDeviceCollector`, `ROCmDeviceCollector`, `MPSDeviceCollector`
-- `DeviceMemorySample`
-
-### 10. Telemetry (`telemetry.py`)
-
-Structured telemetry event schema for profiling data interchange.
-
-**Key Classes:**
-
-- `TelemetryEventV2`
-
-## Framework-Specific Architecture
-
-### PyTorch Profiler (`gpumemprof`)
-
-```
-┌─────────────────────────────────────────┐
-│              gpumemprof                 │
-├─────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐      │
-│  │   Profiler  │  │  Context    │      │
-│  │             │  │  Profiler   │      │
-│  └─────────────┘  └─────────────┘      │
-│  ┌─────────────┐  ┌─────────────┐      │
-│  │   Tracker   │  │ Visualizer  │      │
-│  │             │  │             │      │
-│  └─────────────┘  └─────────────┘      │
-│  ┌─────────────┐  ┌─────────────┐      │
-│  │  Analyzer   │  │    Utils    │      │
-│  │             │  │             │      │
-│  └─────────────┘  └─────────────┘      │
-├─────────────────────────────────────────┤
-│              PyTorch Layer              │
-│  ┌─────────────┐  ┌─────────────┐      │
-│  │ torch.cuda  │  │   Memory    │      │
-│  │   Memory    │  │  Allocator  │      │
-│  └─────────────┘  └─────────────┘      │
-└─────────────────────────────────────────┘
+```text
+User code / shell
+    |
+    +-- Python APIs
+    |     +-- gpumemprof.GPUMemoryProfiler
+    |     +-- gpumemprof.MemoryTracker / CPUMemoryTracker
+    |     +-- tfmemprof.TFMemoryProfiler
+    |     +-- tfmemprof.TensorFlowMemoryTracker
+    |
+    +-- CLI entrypoints
+    |     +-- gpumemprof
+    |     +-- tfmemprof
+    |     +-- stormlog
+    |
+    +-- Shared artifact layer
+          +-- TelemetryEventV2 JSON/CSV exports
+          +-- diagnose bundles
+          +-- PNG / HTML visualization outputs
 ```
 
-**PyTorch-Specific Features:**
+## Core modules and responsibilities
 
-- Tensor lifecycle tracking
-- CUDA memory management integration
-- PyTorch-specific optimizations
-- Autograd memory profiling
+### Profilers
 
-### TensorFlow Profiler (`tfmemprof`)
+Bounded profilers are for "what happened inside this call or context?" questions.
 
-```
-┌─────────────────────────────────────────┐
-│              tfmemprof                  │
-├─────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐      │
-│  │   Profiler  │  │  Context    │      │
-│  │             │  │  Profiler   │      │
-│  └─────────────┘  └─────────────┘      │
-│  ┌─────────────┐  ┌─────────────┐      │
-│  │   Tracker   │  │ Visualizer  │      │
-│  │             │  │             │      │
-│  └─────────────┘  └─────────────┘      │
-│  ┌─────────────┐  ┌─────────────┐      │
-│  │  Analyzer   │  │    Utils    │      │
-│  │             │  │             │      │
-│  └─────────────┘  └─────────────┘      │
-├─────────────────────────────────────────┤
-│            TensorFlow Layer             │
-│  ┌─────────────┐  ┌─────────────┐      │
-│  │   Session   │  │   Graph     │      │
-│  │  Memory     │  │ Execution   │      │
-│  └─────────────┘  └─────────────┘      │
-└─────────────────────────────────────────┘
-```
+- `gpumemprof.profiler.GPUMemoryProfiler`
+- `gpumemprof.cpu_profiler.CPUMemoryProfiler`
+- `tfmemprof.profiler.TFMemoryProfiler`
 
-**TensorFlow-Specific Features:**
+They expose:
 
-- Session-based memory tracking
-- Graph execution monitoring
-- Keras model profiling
-- Mixed precision support
+- `profile_function(...)`
+- `profile_context(...)`
+- summary/result accessors such as `get_summary()` or `get_results()`
+- optional live monitoring helpers such as `start_monitoring(...)`
 
-## Data Flow
+### Trackers
 
-### 1. Initialization Flow
+Trackers are for "what happened over time?" questions.
 
-```
-User Code → Profiler Init → Framework Detection → System Info → Ready
-```
+- `gpumemprof.tracker.MemoryTracker`
+- `gpumemprof.cpu_profiler.CPUMemoryTracker`
+- `tfmemprof.tracker.MemoryTracker` exported as `TensorFlowMemoryTracker`
 
-### 2. Profiling Flow
+Trackers are responsible for:
 
-```
-User Code → Context/Decorator → Memory Snapshot → Data Collection → Analysis
-```
+- background sampling
+- event generation
+- threshold-triggered alerts
+- timeline aggregation
+- exportable telemetry events
 
-### 3. Monitoring Flow
+### Telemetry
 
-```
-Background Thread → Memory Sampling → Alert Check → Data Storage → Visualization
-```
+`gpumemprof.telemetry` is the shared interchange layer used by trackers, CLI tools, diagnostics, and the TUI.
 
-### 4. Analysis Flow
+Key responsibilities:
 
-```
-Collected Data → Pattern Detection → Leak Analysis → Optimization Suggestions → Reports
-```
+- normalize legacy records into `TelemetryEventV2`
+- validate event shape
+- load saved event streams from disk
+- resolve distributed identity defaults from environment variables or explicit inputs
 
-## Design Principles
+This shared schema is what allows:
 
-### 1. Modularity
+- `gpumemprof` tracker exports
+- TensorFlow tracker exports
+- diagnose bundles
+- TUI diagnostics loading
 
-Each component has a single responsibility and can be used independently:
+to operate on the same underlying event model.
 
-```python
-# Use only the profiler
-from gpumemprof import GPUMemoryProfiler
-profiler = GPUMemoryProfiler()
+### Device collectors
 
-# Use only the tracker
-from gpumemprof import MemoryTracker
-tracker = MemoryTracker()
+`gpumemprof.device_collectors` is the backend-aware abstraction for PyTorch-side device memory sampling.
 
-# Use only the visualizer
-from gpumemprof import MemoryVisualizer
-visualizer = MemoryVisualizer()
-```
+Current collector contract:
 
-### 2. Extensibility
+- `sample()` returns a normalized `DeviceMemorySample`
+- `capabilities()` reports backend metadata such as `supports_device_total`
+- `name()` identifies the runtime backend (`cuda`, `rocm`, `mps`)
 
-The architecture supports easy extension through the device-collector abstraction:
+Current concrete collectors:
 
-```python
-from gpumemprof.device_collectors import DeviceMemoryCollector, DeviceMemorySample
+- `CudaDeviceCollector`
+- `ROCmDeviceCollector`
+- `MPSDeviceCollector`
 
-class NewBackendCollector(DeviceMemoryCollector):
-    def collect(self) -> DeviceMemorySample:
-        # Backend-specific memory sampling
-        pass
-```
+### Analyzers
 
-### 3. Thread Safety
+Analyzers turn raw or normalized memory data into higher-level findings.
 
-All components are designed to be thread-safe for concurrent usage:
+- `gpumemprof.analyzer.MemoryAnalyzer`
+- `tfmemprof.analyzer.MemoryAnalyzer`
+- gap-analysis and collective-attribution helpers in `gpumemprof`
 
-```python
-# Safe to use in multi-threaded environments
-profiler = GPUMemoryProfiler()
-profiler.start_monitoring()  # Background thread
-# Main thread continues...
-```
+These modules power:
 
-### 4. Performance
+- leak and growth heuristics
+- hidden-memory gap analysis
+- distributed diagnostics summaries
+- recommendation text in CLI or artifact flows
 
-Minimal overhead design with configurable sampling:
+### Visualizers
 
-```python
-# Low overhead mode
-profiler = GPUMemoryProfiler()
-profiler.start_monitoring(interval=5.0)
+Visualizers convert profiler or tracker output into human-readable plots.
 
-# High precision mode
-profiler = GPUMemoryProfiler()
-profiler.start_monitoring(interval=0.1)
-```
+- `gpumemprof.visualizer.MemoryVisualizer`
+- `tfmemprof.visualizer.MemoryVisualizer`
 
-## Configuration Management
+The PyTorch-side visualizer also underpins the TUI plot export path for:
 
-Configuration is handled through constructor arguments and CLI flags. There is no
-external configuration file or environment variable interface at this time.
+- PNG timeline plots
+- HTML timeline plots
+- heatmaps
+- multi-panel dashboard exports
 
-## Error Handling
+## TUI architecture
 
-### Graceful Degradation
+The `stormlog` console script points to `gpumemprof.tui:run_app`.
 
-```python
-try:
-    profiler = GPUMemoryProfiler()
-except CUDAError:
-    # Fall back to CPU mode
-    from gpumemprof import CPUMemoryProfiler
+The TUI is assembled from:
 
-    profiler = CPUMemoryProfiler()
+- `gpumemprof.tui.app` for the main Textual application
+- `gpumemprof.tui.monitor.TrackerSession` for adapting tracker data into the UI
+- `gpumemprof.tui.distributed_diagnostics` for artifact loading and rank-level summaries
+- `gpumemprof.tui.widgets.*` for tables, panels, and timeline rendering
+
+Current tabs are:
+
+- `Overview`
+- `PyTorch`
+- `TensorFlow`
+- `Monitoring`
+- `Visualizations`
+- `Diagnostics`
+- `CLI & Actions`
+
+The TUI is not a separate analysis engine. It reuses:
+
+- tracker sessions for live data
+- TelemetryEventV2 records for artifact loading
+- `MemoryVisualizer`-style plot generation for PNG/HTML export
+
+## Main runtime flows
+
+### 1. Bounded profiling flow
+
+```text
+User code
+  -> profiler.profile_function(...) or profiler.profile_context(...)
+  -> framework/runtime-specific snapshots
+  -> in-memory result object
+  -> summary/report accessors
 ```
 
-## Testing Architecture
+### 2. Tracking flow
 
-### Test Structure
-
-Tests live in a flat `tests/` directory with framework-specific prefixes:
-
+```text
+Tracker start
+  -> periodic sampling
+  -> alert evaluation
+  -> event storage
+  -> statistics / timeline / export helpers
 ```
+
+### 3. Diagnose flow
+
+```text
+CLI diagnose
+  -> runtime/system info
+  -> telemetry capture
+  -> artifact bundle on disk
+  -> later reload in TUI Diagnostics or analyzer paths
+```
+
+### 4. TUI flow
+
+```text
+TrackerSession or artifact path input
+  -> normalized telemetry events
+  -> timeline / rank-table rendering
+  -> optional PNG or HTML export
+```
+
+## Configuration model
+
+Stormlog configuration is currently local to:
+
+- constructor arguments
+- method parameters
+- CLI flags
+- distributed identity environment inference inside telemetry helpers
+
+There is no repo-level persistent config file format today.
+
+## Error-handling model
+
+The codebase prefers capability-gated behavior over silent fallback.
+
+Examples:
+
+- PyTorch-specific APIs raise import/runtime errors when `torch` is missing
+- `GPUMemoryProfiler` is for CUDA-backed profiling, while CPU-only workflows use separate CPU profiler classes
+- TUI startup currently hard-imports `torch`, so `stormlog` requires the current TUI plus PyTorch dependency path
+- telemetry loaders collect warnings when artifact payloads are malformed or incomplete
+
+## Test architecture
+
+The repo test layout is split by behavior, not by package alone:
+
+```text
 tests/
-├── test_profiler.py             # Core PyTorch profiler
-├── test_core_profiler.py        # Profiler integration
-├── test_cpu_profiler.py         # CPU-only profiler
-├── test_device_collectors.py    # Backend collectors
-├── test_gap_analysis.py         # PyTorch gap analysis
-├── test_oom_flight_recorder.py  # OOM recorder
-├── test_telemetry_v2.py         # Telemetry schema
-├── test_cli_info.py             # CLI info command
-├── test_cli_diagnose.py         # CLI diagnose command
-├── test_tf_*.py                 # TensorFlow-specific tests
-├── test_utils.py                # Utility tests
-├── test_benchmark_harness.py    # Performance budgets
-├── test_docs_regressions.py     # Doc drift guard
-├── tui/                         # TUI snapshot & pilot tests
-└── e2e/                         # End-to-end tests
+  test_*.py          # core, CLI, telemetry, analyzer, and framework tests
+  tui/               # Textual pilot and snapshot coverage
+  e2e/               # PTY smoke coverage
 ```
 
-**Pytest markers** (defined in `pyproject.toml`): `unit`, `integration`, `slow`, `tui_pilot`, `tui_pty`, `tui_snapshot`.
+Current marker families used in the repo:
 
-### Mock Strategy
+- `slow`
+- `integration`
+- `unit`
+- `tui_pilot`
+- `tui_pty`
+- `tui_snapshot`
 
-```python
-# Mock CUDA for testing
-@pytest.fixture
-def mock_cuda():
-    with patch('torch.cuda.is_available', return_value=True):
-        yield
-```
+The operational guide for running those slices lives in [testing.md](testing.md).
 
-## Future Extensibility
+## Extensibility points that exist today
 
-### Plugin System
+The repo currently exposes a few real extension seams:
 
-```python
-class ProfilerPlugin:
-    def on_memory_snapshot(self, snapshot):
-        pass
+- backend collection through `DeviceMemoryCollector`
+- telemetry normalization through `gpumemprof.telemetry`
+- new CLI/documentation workflows through example modules and diagnose artifacts
+- new TUI tables or views through `gpumemprof.tui.widgets`
 
-    def on_leak_detected(self, leak):
-        pass
-```
+Anything beyond those seams should be treated as new feature work, not assumed architecture.
 
-### Custom Visualizations
+## Related guides
 
-```python
-class CustomVisualizer(MemoryVisualizer):
-    def create_custom_plot(self, data):
-        # Custom visualization logic
-        pass
-```
-
-### Framework Support
-
-```python
-# New frameworks can implement a DeviceMemoryCollector
-# and integrate with the existing profiling pipeline.
-```
+- [usage.md](usage.md)
+- [cli.md](cli.md)
+- [tui.md](tui.md)
+- [api.md](api.md)
 
 ---
 

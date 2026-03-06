@@ -104,7 +104,7 @@ def test_tui_entrypoint_reports_tui_install_guidance_when_textual_is_missing() -
         try:
             gpumemprof_tui.run_app()
         except SystemExit as exc:
-            assert "stormlog[tui]" in str(exc)
+            assert "stormlog[tui,torch]" in str(exc)
         else:
             raise AssertionError("Expected TUI entrypoint to fail with install guidance")
 
