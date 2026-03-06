@@ -17,9 +17,10 @@ gpumemprof --help
 tfmemprof --help
 ```
 
-If you installed the current TUI dependencies:
+Install and launch the TUI with the current dependency set:
 
 ```bash
+pip install "stormlog[tui,torch]"
 stormlog
 ```
 
@@ -133,6 +134,7 @@ tfmemprof diagnose --duration 0 --output ./tf_diag_quick
 ## TUI launch
 
 ```bash
+pip install "stormlog[tui,torch]"
 stormlog
 ```
 

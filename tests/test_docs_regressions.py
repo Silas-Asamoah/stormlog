@@ -12,7 +12,8 @@ DOC_SOURCE_FILES = [
     *sorted(
         path
         for path in DOC_ROOT.rglob("*.md")
-        if "_build" not in path.parts and path.parts[-2:] != ("reference", "generated")
+        if "_build" not in path.parts
+        and path.relative_to(DOC_ROOT).parts[:2] != ("reference", "generated")
     ),
 ]
 
@@ -97,7 +98,10 @@ def _iter_local_doc_links(doc_path: Path) -> list[str]:
 @pytest.mark.parametrize("doc_path", DOC_SOURCE_FILES, ids=lambda path: path.name)
 def test_doc_links_and_media_targets_exist(doc_path: Path) -> None:
     for target in _iter_local_doc_links(doc_path):
-        resolved = (doc_path.parent / target).resolve()
+        if target.startswith("/"):
+            resolved = (REPO_ROOT / target.lstrip("/")).resolve()
+        else:
+            resolved = (doc_path.parent / target).resolve()
         assert (
             resolved.exists()
         ), f"{doc_path.relative_to(REPO_ROOT)} references missing path: {target}"

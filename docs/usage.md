@@ -177,11 +177,18 @@ print(tracker.get_statistics()["total_events"])
 `MemoryVisualizer` is for saved plots and exported data once you already have profiler results or monitoring snapshots.
 
 ```python
+import torch
 from gpumemprof import GPUMemoryProfiler, MemoryVisualizer
 
 profiler = GPUMemoryProfiler()
+device = profiler.device
 
-profile = profiler.profile_function(train_step)
+
+def sample_workload() -> torch.Tensor:
+    x = torch.randn(32, 64, device=device)
+    return x.sum()
+
+profile = profiler.profile_function(sample_workload)
 visualizer = MemoryVisualizer(profiler)
 visualizer.plot_memory_timeline(interactive=False, save_path="timeline.png")
 ```

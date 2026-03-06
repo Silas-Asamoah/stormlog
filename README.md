@@ -178,7 +178,7 @@ The current TUI tabs are:
   <em>Diagnostics tab with the current artifact loader, rank table, and timeline panes.</em>
 </p>
 
-Use the Monitoring tab to start live tracking, export CSV or JSON events to `./exports`, and tune warning or critical thresholds. Use the Visualizations tab to refresh the live timeline and save PNG or HTML exports under `./visualizations`. Use the Diagnostics tab to load live telemetry or artifact paths and rebuild rank-level diagnostics without leaving the terminal.
+Use the Monitoring tab to start live tracking, export CSV or JSON events to `./exports`, and tune warning or critical thresholds. In Visualizations, refresh the live timeline and save PNG or HTML exports under `./visualizations`. In Diagnostics, load live telemetry or artifact paths and rebuild rank-level diagnostics without leaving the terminal.
 
 For screen-by-screen details, see [docs/tui.md](docs/tui.md).
 

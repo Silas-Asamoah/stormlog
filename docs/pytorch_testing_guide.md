@@ -46,10 +46,12 @@ print(f"Peak memory: {summary['peak_memory_usage'] / (1024**3):.2f} GB")
 Use `profile_context` when you want one named block rather than one function call:
 
 ```python
+import torch
 from gpumemprof import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler()
 device = profiler.device
+model = torch.nn.Linear(1024, 256).to(device)
 
 with profiler.profile_context("forward_pass"):
     outputs = model(torch.randn(32, 1024, device=device))
