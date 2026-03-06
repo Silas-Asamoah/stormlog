@@ -34,6 +34,7 @@ _BANNED_DOC_SNIPPETS = {
     "README.md": [
         "python -m gpumemprof.cli",
         "python -m tfmemprof.cli",
+        "gpu-profiler-overview.gif",
     ],
     "docs/cli.md": [
         "python -m gpumemprof.cli",

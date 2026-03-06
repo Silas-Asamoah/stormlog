@@ -9,9 +9,9 @@
 [![Textual TUI](https://img.shields.io/badge/TUI-Textual-blueviolet)](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/tui.md)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/gpu-profiler-overview.gif" alt="Stormlog terminal UI overview" width="900">
+  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/tui-overview-current.png" alt="Stormlog overview tab" width="900">
   <br/>
-  <em>Current Textual workflow: monitoring, visualization export, diagnostics, and CLI actions.</em>
+  <em>Current Overview tab from the shipped Textual interface.</em>
 </p>
 
 Stormlog is a memory-profiling toolkit for day-to-day PyTorch and TensorFlow work. It combines Python APIs, CLI commands, and a Textual TUI so you can move from "what is using memory?" to saved artifacts and shareable diagnostics without switching tools.
