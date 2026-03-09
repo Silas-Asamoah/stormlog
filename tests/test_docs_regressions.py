@@ -32,8 +32,6 @@ _BANNED_DOC_SNIPPETS = {
         "TFCPUMemoryTracker",
     ],
     "README.md": [
-        "python -m stormlog.cli",
-        "python -m stormlog.tensorflow.cli",
         "gpu-profiler-overview.gif",
         "There is no top-level `stormlog` Python module today.",
     ],
