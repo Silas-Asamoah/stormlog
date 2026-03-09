@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import stormlog.utils as gpumemprof_utils
 import stormlog.tensorflow.utils as tfmemprof_utils
+import stormlog.utils as gpumemprof_utils
 
 
 def test_get_system_info_contains_expected_keys() -> None:

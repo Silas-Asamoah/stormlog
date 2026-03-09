@@ -193,18 +193,26 @@ strict_equality = true
 
 [[tool.mypy.overrides]]
 module = [
+    "torch",
     "torch.*",
+    "tensorflow",
     "tensorflow.*",
     "psutil",
     "scipy",
+    "numpy",
     "numpy.*",
+    "pandas",
     "pandas.*",
     "textual",
     "textual.*",
     "pyfiglet",
+    "matplotlib",
     "matplotlib.*",
+    "seaborn",
     "seaborn.*",
+    "plotly",
     "plotly.*",
+    "dash",
     "dash.*",
 ]
 ignore_missing_imports = true

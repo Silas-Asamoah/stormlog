@@ -90,6 +90,7 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "__version__",
     "TensorFlowProfiler",
     "TFMemoryProfiler",
     "TensorFlowMemoryTracker",

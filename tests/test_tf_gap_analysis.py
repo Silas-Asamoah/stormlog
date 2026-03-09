@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from stormlog.telemetry import SCHEMA_VERSION_V2, TelemetryEventV2
-from tests.gap_test_helpers import build_gap_event
 from stormlog.tensorflow.analyzer import MemoryAnalyzer
+from tests.gap_test_helpers import build_gap_event
 
 # ---------------------------------------------------------------------------
 # Helpers
