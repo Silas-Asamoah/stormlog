@@ -1475,8 +1475,8 @@ class GPUMemoryProfilerTUI(App):
                     "Plotly is required for HTML output. Install stormlog[viz]."
                 ) from exc
 
-            fig = go.Figure()
-            fig.add_trace(
+            plotly_fig = go.Figure()
+            plotly_fig.add_trace(
                 go.Scatter(
                     x=rel_times,
                     y=allocated_gb,
@@ -1485,7 +1485,7 @@ class GPUMemoryProfilerTUI(App):
                 )
             )
             if reserved_gb:
-                fig.add_trace(
+                plotly_fig.add_trace(
                     go.Scatter(
                         x=rel_times,
                         y=reserved_gb,
@@ -1494,7 +1494,7 @@ class GPUMemoryProfilerTUI(App):
                     )
                 )
 
-            fig.update_layout(
+            plotly_fig.update_layout(
                 title="GPU Memory Timeline",
                 xaxis_title="Time (s)",
                 yaxis_title="Memory (GB)",
@@ -1502,7 +1502,7 @@ class GPUMemoryProfilerTUI(App):
             )
 
             file_path = plots_dir / f"timeline_{stamp}.html"
-            fig.write_html(file_path)
+            plotly_fig.write_html(file_path)
             return str(file_path)
 
         raise ValueError(f"Unsupported format: {format}")
