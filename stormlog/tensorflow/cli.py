@@ -20,7 +20,7 @@ except ImportError:
     TF_AVAILABLE = False
     tf = None
 
-from gpumemprof.telemetry import telemetry_event_from_record, telemetry_event_to_dict
+from stormlog.telemetry import telemetry_event_from_record, telemetry_event_to_dict
 
 from .analyzer import MemoryAnalyzer
 from .diagnose import run_diagnose
@@ -46,7 +46,7 @@ def _normalize_telemetry_events(
     for record in records:
         event = telemetry_event_from_record(
             record,
-            default_collector="tfmemprof.memory_tracker",
+            default_collector="stormlog.tensorflow.memory_tracker",
             default_sampling_interval_ms=sampling_interval_ms,
         )
         normalized.append(telemetry_event_to_dict(event))

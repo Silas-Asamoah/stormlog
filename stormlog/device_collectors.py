@@ -90,7 +90,7 @@ def _resolve_device(device: Union[str, int, torch.device, None]) -> torch.device
 class CudaDeviceCollector(DeviceMemoryCollector):
     """Collector for NVIDIA CUDA runtime memory counters."""
 
-    telemetry_collector = "gpumemprof.cuda_tracker"
+    telemetry_collector = "stormlog.cuda_tracker"
 
     def __init__(self, device: Union[str, int, torch.device, None] = None) -> None:
         self.device = _resolve_device(device)
@@ -140,7 +140,7 @@ class CudaDeviceCollector(DeviceMemoryCollector):
 class ROCmDeviceCollector(CudaDeviceCollector):
     """Collector for ROCm runtimes surfaced through torch.cuda APIs."""
 
-    telemetry_collector = "gpumemprof.rocm_tracker"
+    telemetry_collector = "stormlog.rocm_tracker"
 
     def name(self) -> str:
         return "rocm"
@@ -163,7 +163,7 @@ class ROCmDeviceCollector(CudaDeviceCollector):
 class MPSDeviceCollector(DeviceMemoryCollector):
     """Collector for Apple Metal (MPS) runtime counters."""
 
-    telemetry_collector = "gpumemprof.mps_tracker"
+    telemetry_collector = "stormlog.mps_tracker"
 
     def __init__(self, device: Union[str, int, torch.device, None] = None) -> None:
         resolved = _resolve_device(device)

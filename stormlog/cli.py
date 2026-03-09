@@ -651,7 +651,7 @@ def cmd_track(args: argparse.Namespace) -> None:
     try:
         with (
             tracker.capture_oom(
-                context="gpumemprof.track",
+                context="stormlog.track",
                 metadata={"command": "track", "runtime_backend": runtime_backend},
             )
             if gpu_runtime

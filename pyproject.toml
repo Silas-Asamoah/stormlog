@@ -115,23 +115,22 @@ Repository = "https://github.com/Silas-Asamoah/stormlog.git"
 "Release Notes" = "https://github.com/Silas-Asamoah/stormlog/blob/main/CHANGELOG.md"
 
 [project.scripts]
-gpumemprof = "gpumemprof.cli:main"
-tfmemprof = "tfmemprof.cli:main"
-stormlog = "gpumemprof.tui:run_app"
+gpumemprof = "stormlog.cli:main"
+tfmemprof = "stormlog.tensorflow.cli:main"
+stormlog = "stormlog.tui:run_app"
 
 [tool.setuptools_scm]
-write_to = "gpumemprof/_version.py"
-fallback_version = "0.2.0"
+fallback_version = "0.0.0"
 local_scheme = "no-local-version"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["gpumemprof*", "tfmemprof*"]
+include = ["stormlog*"]
 exclude = ["tests*", "examples*", "docs*"]
 
 [tool.setuptools.package-data]
-gpumemprof = ["*.txt", "*.md"]
-tfmemprof = ["*.txt", "*.md"]
+stormlog = ["*.txt", "*.md"]
+"stormlog.tensorflow" = ["*.txt", "*.md"]
 
 # Code formatting and linting
 [tool.black]
@@ -160,7 +159,6 @@ include_trailing_comma = true
 force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
-extend_skip_glob = ["gpumemprof/_version.py"]
 
 [tool.flake8]
 max-line-length = 88
@@ -195,18 +193,26 @@ strict_equality = true
 
 [[tool.mypy.overrides]]
 module = [
+    "torch",
     "torch.*",
+    "tensorflow",
     "tensorflow.*",
     "psutil",
     "scipy",
+    "numpy",
     "numpy.*",
+    "pandas",
     "pandas.*",
     "textual",
     "textual.*",
     "pyfiglet",
+    "matplotlib",
     "matplotlib.*",
+    "seaborn",
     "seaborn.*",
+    "plotly",
     "plotly.*",
+    "dash",
     "dash.*",
 ]
 ignore_missing_imports = true
@@ -228,7 +234,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["gpumemprof", "tfmemprof"]
+source = ["stormlog"]
 omit = [
     "*/tests/*",
     "*/test_*",

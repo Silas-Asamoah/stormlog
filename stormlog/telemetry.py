@@ -448,21 +448,19 @@ def _legacy_collector(
     if isinstance(backend_value, str):
         backend = backend_value.strip().lower()
         if backend == "mps":
-            return "gpumemprof.mps_tracker"
+            return "stormlog.mps_tracker"
         if backend == "rocm":
-            return "gpumemprof.rocm_tracker"
+            return "stormlog.rocm_tracker"
         if backend == "cuda":
-            return "gpumemprof.cuda_tracker"
+            return "stormlog.cuda_tracker"
         if backend == "cpu":
-            return "gpumemprof.cpu_tracker"
+            return "stormlog.cpu_tracker"
 
     if "memory_mb" in record:
-        return "tfmemprof.memory_tracker"
+        return "stormlog.tensorflow.memory_tracker"
 
     if "memory_allocated" in record:
-        return (
-            "gpumemprof.cpu_tracker" if device_id == -1 else "gpumemprof.cuda_tracker"
-        )
+        return "stormlog.cpu_tracker" if device_id == -1 else "stormlog.cuda_tracker"
 
     return default_collector
 

@@ -5,12 +5,12 @@ Generated API Modules
    :toctree: generated
    :recursive:
 
-   gpumemprof
-   gpumemprof.profiler
-   gpumemprof.tracker
-   gpumemprof.telemetry
-   gpumemprof.cpu_profiler
-   tfmemprof
-   tfmemprof.profiler
-   tfmemprof.tracker
-   tfmemprof.context_profiler
+   stormlog
+   stormlog.profiler
+   stormlog.tracker
+   stormlog.telemetry
+   stormlog.cpu_profiler
+   stormlog.tensorflow
+   stormlog.tensorflow.profiler
+   stormlog.tensorflow.tracker
+   stormlog.tensorflow.context_profiler

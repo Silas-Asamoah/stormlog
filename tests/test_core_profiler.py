@@ -14,7 +14,7 @@ except ModuleNotFoundError:  # pragma: no cover - environment w/out torch
 TORCH_AVAILABLE = torch is not None
 TORCH_CUDA_AVAILABLE = bool(torch and torch.cuda.is_available())
 
-from gpumemprof import (
+from stormlog import (
     GPUMemoryProfiler,
     MemorySnapshot,
     ProfileResult,

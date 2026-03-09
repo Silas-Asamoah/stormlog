@@ -1,6 +1,6 @@
 """Shared helpers for hidden-memory gap analysis tests."""
 
-from gpumemprof.telemetry import SCHEMA_VERSION_V2, TelemetryEventV2
+from stormlog.telemetry import SCHEMA_VERSION_V2, TelemetryEventV2
 
 BASE_NS = 1_700_000_000_000_000_000
 INTERVAL_NS = 100_000_000  # 100 ms between samples

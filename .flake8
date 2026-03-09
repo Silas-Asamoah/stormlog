@@ -6,12 +6,12 @@ per-file-ignores =
     */__init__.py: F401, E402
     examples/*: E402, F401, F811
     tests/*: E402, F841
-    gpumemprof/tui/app.py: E402
-    gpumemprof/tui/monitor.py: E402
-    gpumemprof/tui/profiles.py: E402
-    gpumemprof/analyzer.py: F841
-    gpumemprof/cli.py: F841
-    gpumemprof/context_profiler.py: F841
-    gpumemprof/cpu_profiler.py: F841
-    gpumemprof/profiler.py: F841
-    tfmemprof/*: E402, F841
+    stormlog/tui/app.py: E402
+    stormlog/tui/monitor.py: E402
+    stormlog/tui/profiles.py: E402
+    stormlog/analyzer.py: F841
+    stormlog/cli.py: F841
+    stormlog/context_profiler.py: F841
+    stormlog/cpu_profiler.py: F841
+    stormlog/profiler.py: F841
+    stormlog/tensorflow/*: E402, F841

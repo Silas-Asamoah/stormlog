@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from gpumemprof.cpu_profiler import CPUMemoryTracker
+from stormlog.cpu_profiler import CPUMemoryTracker
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUDGETS_PATH = REPO_ROOT / "docs" / "benchmarks" / "v0.2_budgets.json"

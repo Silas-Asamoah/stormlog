@@ -8,34 +8,34 @@ import socket
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, cast
 
-from gpumemprof.telemetry import TelemetryEventV2, telemetry_event_from_record
+from stormlog.telemetry import TelemetryEventV2, telemetry_event_from_record
 
 from ..utils import format_bytes
 
 logger = logging.getLogger(__name__)
 
 try:
-    from gpumemprof.tracker import MemoryTracker as _MemoryTracker
-    from gpumemprof.tracker import MemoryWatchdog as _MemoryWatchdog
-    from gpumemprof.tracker import TrackingEvent as _TrackingEvent
+    from stormlog.tracker import MemoryTracker as _MemoryTracker
+    from stormlog.tracker import MemoryWatchdog as _MemoryWatchdog
+    from stormlog.tracker import TrackingEvent as _TrackingEvent
 
     MemoryTracker: Any = _MemoryTracker
     MemoryWatchdog: Any = _MemoryWatchdog
     TrackingEvent: Any = _TrackingEvent
 except ImportError as e:
     raise ImportError(
-        "gpumemprof.tracker is required for TrackerSession. "
-        "Ensure gpumemprof is properly installed."
+        "stormlog.tracker is required for TrackerSession. "
+        "Ensure stormlog is properly installed."
     ) from e
 
 try:
-    from gpumemprof.cpu_profiler import CPUMemoryTracker as _CPUMemoryTracker
+    from stormlog.cpu_profiler import CPUMemoryTracker as _CPUMemoryTracker
 
     CPUMemoryTracker: Any = _CPUMemoryTracker
 except ImportError as e:
     raise ImportError(
         "CPUMemoryTracker is required for TrackerSession. "
-        "Ensure gpumemprof is properly installed."
+        "Ensure stormlog is properly installed."
     ) from e
 
 try:
@@ -206,11 +206,11 @@ class TrackerSession:
         pid = os.getpid()
 
         backend_name = str(getattr(tracker, "backend", self.backend)).lower()
-        collector = f"gpumemprof.{backend_name}_tracker"
+        collector = f"stormlog.{backend_name}_tracker"
         if backend_name == "gpu":
-            collector = "gpumemprof.cuda_tracker"
+            collector = "stormlog.cuda_tracker"
         elif backend_name == "cpu":
-            collector = "gpumemprof.cpu_tracker"
+            collector = "stormlog.cpu_tracker"
 
         raw_events = []
         if hasattr(tracker, "get_events"):

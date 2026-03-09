@@ -9,8 +9,8 @@ pytest.importorskip("textual")
 from textual.widgets import Header as TextualHeader
 from textual.widgets import TabbedContent, TabPane
 
-from gpumemprof.tui import app as appmod
-from gpumemprof.tui.app import GPUMemoryProfilerTUI
+from stormlog.tui import app as appmod
+from stormlog.tui.app import GPUMemoryProfilerTUI
 
 pytestmark = pytest.mark.tui_snapshot
 

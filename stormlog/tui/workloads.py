@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from gpumemprof.utils import format_bytes
+from stormlog.utils import format_bytes
 
 
 def run_pytorch_sample_workload(profiler_cls: Any, torch_module: Any) -> dict[str, Any]:

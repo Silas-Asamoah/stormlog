@@ -7,14 +7,14 @@ from typing import Any, Dict, List, Mapping, Optional, cast
 
 import numpy as np
 
-from gpumemprof.collective_attribution import (
+from stormlog.collective_attribution import (
     CollectiveAttributionConfig,
     CollectiveAttributionResult,
     attribute_collective_memory,
     resolve_collective_attribution_config,
 )
-from gpumemprof.gap_analysis import GapFinding, analyze_hidden_memory_gaps
-from gpumemprof.telemetry import TelemetryEventV2
+from stormlog.gap_analysis import GapFinding, analyze_hidden_memory_gaps
+from stormlog.telemetry import TelemetryEventV2
 
 from .utils import format_memory
 

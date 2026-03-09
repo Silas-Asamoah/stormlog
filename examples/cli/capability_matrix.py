@@ -6,7 +6,7 @@ import argparse
 import importlib
 import os
 import platform
-import shutil
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +21,7 @@ from examples.common.capability_matrix_utils import (
     timed_result,
     write_report,
 )
-from gpumemprof.utils import get_system_info
+from stormlog.utils import get_system_info
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ARTIFACTS_ROOT = REPO_ROOT / "artifacts" / "examples" / "capability_matrix"
@@ -47,6 +47,10 @@ def _load_scenario_runner(module_name: str) -> Any:
     return getattr(module, "run_scenario")
 
 
+def _python_module_cmd(module_name: str, *args: str) -> list[str]:
+    return [sys.executable, "-m", module_name, *args]
+
+
 def _run_optional_scenario(module_name: str, **kwargs: object) -> Dict[str, object]:
     try:
         runner = _load_scenario_runner(module_name)
@@ -59,24 +63,24 @@ def _run_optional_scenario(module_name: str, **kwargs: object) -> Dict[str, obje
     return result
 
 
-def _run_gpumemprof_diagnose(check_dir: Path) -> Dict[str, object]:
-    out_dir = check_dir / "gpumemprof_diagnose"
-    cmd = [
-        "gpumemprof",
+def _run_stormlog_diagnose(check_dir: Path) -> Dict[str, object]:
+    out_dir = (check_dir / "stormlog_diagnose").resolve()
+    cmd = _python_module_cmd(
+        "stormlog.cli",
         "diagnose",
         "--duration",
         "0",
         "--output",
         str(out_dir),
-    ]
-    result = run_command(cmd)
+    )
+    result = run_command(cmd, cwd=REPO_ROOT)
     combined_output = f"{result.stdout}\n{result.stderr}"
     if result.returncode == 0:
         status = "PASS"
         reason = None
     elif "requires PyTorch" in combined_output:
         status = "SKIP"
-        reason = "gpumemprof diagnose requires PyTorch in this environment."
+        reason = "stormlog diagnose requires PyTorch in this environment."
     else:
         status = "FAIL"
         reason = None
@@ -92,11 +96,9 @@ def _run_gpumemprof_diagnose(check_dir: Path) -> Dict[str, object]:
 
 
 def _run_benchmark_check(check_dir: Path, mode: str) -> Dict[str, object]:
-    output = check_dir / "benchmark_report.json"
-    artifact_root = check_dir / "benchmark_scenarios"
-    cmd = [
-        "python",
-        "-m",
+    output = (check_dir / "benchmark_report.json").resolve()
+    artifact_root = (check_dir / "benchmark_scenarios").resolve()
+    cmd = _python_module_cmd(
         "examples.cli.benchmark_harness",
         "--check",
         "--budgets",
@@ -105,10 +107,10 @@ def _run_benchmark_check(check_dir: Path, mode: str) -> Dict[str, object]:
         str(output),
         "--artifact-root",
         str(artifact_root),
-    ]
+    )
     if mode == "smoke":
         cmd.extend(["--iterations", "200"])
-    result = run_command(cmd)
+    result = run_command(cmd, cwd=REPO_ROOT)
     status = "PASS" if result.returncode == 0 else "FAIL"
     return {
         "status": status,
@@ -120,9 +122,13 @@ def _run_benchmark_check(check_dir: Path, mode: str) -> Dict[str, object]:
 
 
 def _run_tui_smoke() -> Dict[str, object]:
-    executable = shutil.which("stormlog")
-    if executable is None:
-        return {"status": "SKIP", "reason": "stormlog entrypoint not found"}
+    def _is_missing_tui_extra(output: str) -> bool:
+        normalized = output.lower()
+        return (
+            "optional dependencies" in normalized
+            or "stormlog[tui,torch]" in normalized
+            or "textual" in normalized
+        )
 
     try:
         import pexpect  # type: ignore[import-untyped, unused-ignore]
@@ -131,11 +137,26 @@ def _run_tui_smoke() -> Dict[str, object]:
 
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
-    child = pexpect.spawn(executable, env=env, encoding="utf-8", timeout=25)
+    env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    child = pexpect.spawn(
+        sys.executable,
+        ["-m", "stormlog.tui"],
+        cwd=str(REPO_ROOT),
+        env=env,
+        encoding="utf-8",
+        timeout=25,
+    )
     try:
         child.expect(["Overview", "PyTorch"])
         child.send("q")
         child.expect(pexpect.EOF, timeout=10)
+        tail = (child.before or "")[-1200:]
+        if _is_missing_tui_extra(tail):
+            return {
+                "status": "SKIP",
+                "reason": "missing TUI extras",
+                "output_tail": tail,
+            }
         return {
             "status": "PASS",
             "exitstatus": child.exitstatus,
@@ -143,6 +164,12 @@ def _run_tui_smoke() -> Dict[str, object]:
         }
     except Exception as exc:  # noqa: BLE001
         tail = (child.before or "")[-1200:]
+        if _is_missing_tui_extra(tail):
+            return {
+                "status": "SKIP",
+                "reason": "missing TUI extras",
+                "output_tail": tail,
+            }
         return {"status": "FAIL", "error": str(exc), "output_tail": tail}
     finally:
         if child.isalive():
@@ -152,15 +179,18 @@ def _run_tui_smoke() -> Dict[str, object]:
 
 def _run_full_extra_examples(check_dir: Path) -> List[CheckResult]:
     commands = [
-        ("quickstart", ["python", "-m", "examples.cli.quickstart"]),
-        ("pytorch_demo", ["python", "-m", "examples.basic.pytorch_demo"]),
-        ("tensorflow_demo", ["python", "-m", "examples.basic.tensorflow_demo"]),
-        ("advanced_tracking_demo", ["python", "-m", "examples.advanced.tracking_demo"]),
+        ("quickstart", _python_module_cmd("examples.cli.quickstart")),
+        ("pytorch_demo", _python_module_cmd("examples.basic.pytorch_demo")),
+        ("tensorflow_demo", _python_module_cmd("examples.basic.tensorflow_demo")),
+        (
+            "advanced_tracking_demo",
+            _python_module_cmd("examples.advanced.tracking_demo"),
+        ),
     ]
     results: List[CheckResult] = []
     for name, cmd in commands:
         started = time.perf_counter()
-        proc = run_command(cmd)
+        proc = run_command(cmd, cwd=REPO_ROOT)
         duration = time.perf_counter() - started
         status = "PASS" if proc.returncode == 0 else "FAIL"
         results.append(
@@ -271,8 +301,8 @@ def run_matrix(
 
     results.append(
         timed_result(
-            "cli:gpumemprof_diagnose",
-            lambda: _run_gpumemprof_diagnose(run_dir),
+            "cli:stormlog_diagnose",
+            lambda: _run_stormlog_diagnose(run_dir),
         )
     )
 

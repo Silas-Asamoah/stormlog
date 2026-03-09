@@ -9,7 +9,7 @@ This matrix reflects the current behavior of the repository and is versioned for
 - Source of truth:
   - `pyproject.toml` (`requires-python >=3.10`, framework dependency floors)
   - CLI entry points in `pyproject.toml`
-  - Runtime backend detection in `gpumemprof/device_collectors.py` and `tfmemprof/utils.py`
+  - Runtime backend detection in `stormlog/device_collectors.py` and `stormlog/tensorflow/utils.py`
   - CI test/lint/docs/build lanes in `.github/workflows/ci.yml`
 
 ## Runtime + Version Support
@@ -32,23 +32,23 @@ This matrix reflects the current behavior of the repository and is versioned for
 
 ## Backend Capability Details
 
-### PyTorch (`gpumemprof`)
+### PyTorch APIs (`stormlog`)
 
 | Runtime backend | Typical platform | Telemetry collector | `device_total/free` support | Notes |
 | --- | --- | --- | --- | --- |
-| `cuda` | NVIDIA + CUDA | `gpumemprof.cuda_tracker` | ✅ | Uses `torch.cuda.memory_*` |
-| `rocm` | AMD + ROCm (Linux) | `gpumemprof.rocm_tracker` | ✅ | Uses HIP-backed `torch.cuda.memory_*` |
-| `mps` | Apple Silicon (macOS) | `gpumemprof.mps_tracker` | Partial | Depends on `torch.mps.recommended_max_memory()` availability |
-| `cpu` | Any host | `gpumemprof.cpu_tracker` | N/A | `CPUMemoryProfiler` / `CPUMemoryTracker` fallback |
+| `cuda` | NVIDIA + CUDA | `stormlog.cuda_tracker` | ✅ | Uses `torch.cuda.memory_*` |
+| `rocm` | AMD + ROCm (Linux) | `stormlog.rocm_tracker` | ✅ | Uses HIP-backed `torch.cuda.memory_*` |
+| `mps` | Apple Silicon (macOS) | `stormlog.mps_tracker` | Partial | Depends on `torch.mps.recommended_max_memory()` availability |
+| `cpu` | Any host | `stormlog.cpu_tracker` | N/A | `CPUMemoryProfiler` / `CPUMemoryTracker` fallback |
 
-### TensorFlow (`tfmemprof`)
+### TensorFlow APIs (`stormlog.tensorflow`)
 
 | Runtime backend | Typical platform | Telemetry collector | Notes |
 | --- | --- | --- | --- |
-| `cuda` | NVIDIA + CUDA | `tfmemprof.memory_tracker` | Build/runtime diagnostics shown in `tfmemprof info` |
-| `rocm` | AMD + ROCm (Linux) | `tfmemprof.memory_tracker` | Build/runtime diagnostics shown in `tfmemprof info` |
-| `metal` | Apple Silicon | `tfmemprof.memory_tracker` | Counters can be runtime-dependent on Metal stack |
-| `cpu` | Any host | `tfmemprof.memory_tracker` | Full CLI surface remains available |
+| `cuda` | NVIDIA + CUDA | `stormlog.tensorflow.memory_tracker` | Build/runtime diagnostics shown in `tfmemprof info` |
+| `rocm` | AMD + ROCm (Linux) | `stormlog.tensorflow.memory_tracker` | Build/runtime diagnostics shown in `tfmemprof info` |
+| `metal` | Apple Silicon | `stormlog.tensorflow.memory_tracker` | Counters can be runtime-dependent on Metal stack |
+| `cpu` | Any host | `stormlog.tensorflow.memory_tracker` | Full CLI surface remains available |
 
 ## Validation Notes
 

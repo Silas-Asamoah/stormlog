@@ -39,17 +39,16 @@ pip install "stormlog[all]"
 
 ### Package and import names
 
-`stormlog` is the distribution name on PyPI. The installed Python modules remain
-backend-specific:
+`stormlog` is the distribution name on PyPI and the primary Python import root.
+TensorFlow-specific APIs live under `stormlog.tensorflow`.
 
 | Task | Use |
 | --- | --- |
 | Install the package | `pip install stormlog` |
 | Launch the TUI | `stormlog` |
-| Import PyTorch APIs | `from gpumemprof import GPUMemoryProfiler, MemoryTracker` |
-| Import TensorFlow APIs | `from tfmemprof import TFMemoryProfiler` |
-
-There is no top-level `stormlog` Python module today.
+| Import PyTorch APIs | `from stormlog import GPUMemoryProfiler, MemoryTracker` |
+| Import TensorFlow APIs | `from stormlog.tensorflow import TFMemoryProfiler` |
+| Run CLI automation | `python -m stormlog.cli` or `python -m stormlog.tensorflow.cli` |
 
 ### From source
 
@@ -73,13 +72,13 @@ pip install -e ".[dev,test,all,tui,viz]"
 This is the fastest path to verify an environment and produce an artifact you can inspect later:
 
 ```bash
-gpumemprof info
-gpumemprof track --duration 2 --interval 0.5 --output /tmp/gpumemprof_track.json --format json
-gpumemprof analyze /tmp/gpumemprof_track.json --format txt --output /tmp/gpumemprof_analysis.txt
-gpumemprof diagnose --duration 0 --output /tmp/gpumemprof_diag
+python -m stormlog.cli info
+python -m stormlog.cli track --duration 2 --interval 0.5 --output /tmp/gpumemprof_track.json --format json
+python -m stormlog.cli analyze /tmp/gpumemprof_track.json --format txt --output /tmp/gpumemprof_analysis.txt
+python -m stormlog.cli diagnose --duration 0 --output /tmp/gpumemprof_diag
 
-tfmemprof info
-tfmemprof diagnose --duration 0 --output /tmp/tf_diag
+python -m stormlog.tensorflow.cli info
+python -m stormlog.tensorflow.cli diagnose --duration 0 --output /tmp/tf_diag
 ```
 
 ### PyTorch API workflow
@@ -90,7 +89,7 @@ CPU-only systems, use `MemoryTracker`, the CLI, or `CPUMemoryProfiler` instead.
 
 ```python
 import torch
-from gpumemprof import GPUMemoryProfiler
+from stormlog import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler()
 device = profiler.device
@@ -113,7 +112,7 @@ print(f"Peak memory: {summary['peak_memory_usage'] / (1024**3):.2f} GB")
 `TFMemoryProfiler` works on GPU or CPU-backed TensorFlow runtimes.
 
 ```python
-from tfmemprof import TFMemoryProfiler
+from stormlog.tensorflow import TFMemoryProfiler
 
 profiler = TFMemoryProfiler(enable_tensor_tracking=True)
 
@@ -207,9 +206,9 @@ python -m examples.scenarios.oom_flight_recorder_scenario --mode simulated
 
 If CUDA is not available, Stormlog still supports:
 
-- `gpumemprof info`
-- `gpumemprof monitor`
-- `gpumemprof track`
+- `python -m stormlog.cli info`
+- `python -m stormlog.cli monitor`
+- `python -m stormlog.cli track`
 - `CPUMemoryProfiler`
 - `CPUMemoryTracker`
 - the TUI overview, monitoring, diagnostics, and CLI tabs

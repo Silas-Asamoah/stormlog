@@ -8,12 +8,12 @@ from typing import cast
 
 import pytest
 
-from gpumemprof.telemetry import (
+from stormlog.telemetry import (
     TelemetryEventV2,
     telemetry_event_from_record,
     telemetry_event_to_dict,
 )
-from gpumemprof.tui.distributed_diagnostics import (
+from stormlog.tui.distributed_diagnostics import (
     build_distributed_model,
     load_distributed_artifacts,
     parse_rank_filter,
@@ -43,7 +43,7 @@ def _make_event(
             "device_used_bytes": used or reserved,
             "device_total_bytes": total,
             "device_id": 0,
-            "collector": "gpumemprof.cuda_tracker",
+            "collector": "stormlog.cuda_tracker",
             "sampling_interval_ms": 100,
             "pid": 1234,
             "host": "test-host",
@@ -55,7 +55,7 @@ def _make_event(
             "metadata": metadata or {},
         },
         permissive_legacy=True,
-        default_collector="gpumemprof.cuda_tracker",
+        default_collector="stormlog.cuda_tracker",
         default_sampling_interval_ms=100,
     )
 

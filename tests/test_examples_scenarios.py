@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,69 @@ def test_mps_telemetry_scenario_passes_or_skips(tmp_path: Path) -> None:
 
     assert summary["status"] in {"PASS", "SKIP"}
     if summary["status"] == "PASS":
-        assert summary["collector"] == "gpumemprof.mps_tracker"
+        assert summary["collector"] == "stormlog.mps_tracker"
+
+
+def test_mps_telemetry_scenario_rejects_unexpected_collectors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from examples.scenarios import mps_telemetry_scenario as scenario
+
+    monkeypatch.setattr(
+        scenario,
+        "get_system_info",
+        lambda: {"detected_backend": "mps"},
+    )
+    monkeypatch.setattr(
+        scenario,
+        "validate_telemetry_record",
+        lambda _record: None,
+    )
+
+    def _fake_run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        telemetry_path = Path(cmd[cmd.index("--output") + 1])
+        telemetry_path.parent.mkdir(parents=True, exist_ok=True)
+        telemetry_path.write_text(
+            '[{"collector":"stormlog.mps_tracker"},{"collector":"stormlog.cpu_tracker"}]',
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(scenario, "_run_command", _fake_run_command)
+
+    with pytest.raises(RuntimeError, match="Unexpected collectors"):
+        scenario.run_scenario(
+            output_dir=tmp_path / "mps",
+            duration_s=1.0,
+            interval_s=0.5,
+        )
+
+
+def test_mps_telemetry_scenario_rejects_empty_exports(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from examples.scenarios import mps_telemetry_scenario as scenario
+
+    monkeypatch.setattr(
+        scenario,
+        "get_system_info",
+        lambda: {"detected_backend": "mps"},
+    )
+
+    def _fake_run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        telemetry_path = Path(cmd[cmd.index("--output") + 1])
+        telemetry_path.parent.mkdir(parents=True, exist_ok=True)
+        telemetry_path.write_text("[]", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(scenario, "_run_command", _fake_run_command)
+
+    with pytest.raises(RuntimeError, match="No telemetry events found"):
+        scenario.run_scenario(
+            output_dir=tmp_path / "mps",
+            duration_s=1.0,
+            interval_s=0.5,
+        )
 
 
 def test_oom_flight_recorder_scenario_simulated_passes_or_skips(tmp_path: Path) -> None:

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import tensorflow as tf
 
-    from tfmemprof import TFMemoryProfiler
+    from stormlog.tensorflow import TFMemoryProfiler
 
 try:
     import tensorflow as tf
@@ -71,7 +71,7 @@ def main() -> None:
         print("TensorFlow is not installed. Skipping TensorFlow demo.")
         return
 
-    from tfmemprof import TFMemoryProfiler
+    from stormlog.tensorflow import TFMemoryProfiler
 
     env = describe_tf_environment()
     print_section("Environment")

@@ -39,7 +39,7 @@ On Windows, clear `CUDA_VISIBLE_DEVICES` with the shell-appropriate syntax befor
 ## CPU profiling in Python
 
 ```python
-from gpumemprof import CPUMemoryProfiler
+from stormlog import CPUMemoryProfiler
 
 profiler = CPUMemoryProfiler()
 
@@ -55,7 +55,7 @@ print(summary["peak_memory_usage"])
 ## CPU tracking over time
 
 ```python
-from gpumemprof import CPUMemoryTracker
+from stormlog import CPUMemoryTracker
 
 tracker = CPUMemoryTracker(sampling_interval=0.5)
 tracker.start_tracking()

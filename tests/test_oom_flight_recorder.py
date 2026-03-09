@@ -8,13 +8,13 @@ from typing import Any
 
 import pytest
 
-from gpumemprof.device_collectors import DeviceMemorySample
-from gpumemprof.oom_flight_recorder import (
+from stormlog.device_collectors import DeviceMemorySample
+from stormlog.oom_flight_recorder import (
     OOMFlightRecorder,
     OOMFlightRecorderConfig,
     classify_oom_exception,
 )
-from gpumemprof.tracker import MemoryTracker
+from stormlog.tracker import MemoryTracker
 
 
 class _ResourceExhaustedError(RuntimeError):
@@ -28,7 +28,7 @@ class _TrackerHarness:
         self, dump_dir: Path, *, enabled: bool = True, buffer_size: int = 8
     ) -> None:
         self.backend = "cuda"
-        self.collector_capabilities = {"telemetry_collector": "gpumemprof.cuda_tracker"}
+        self.collector_capabilities = {"telemetry_collector": "stormlog.cuda_tracker"}
         self.total_memory = 1024 * 1024 * 1024
         self.sampling_interval = 0.1
         self.last_oom_dump_path = None

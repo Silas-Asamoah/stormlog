@@ -9,7 +9,7 @@ from pathlib import Path
 import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
 
-from gpumemprof.telemetry import (
+from stormlog.telemetry import (
     SCHEMA_VERSION_V2,
     UNKNOWN_HOST,
     UNKNOWN_PID,
@@ -38,7 +38,7 @@ def _make_valid_event() -> TelemetryEventV2:
         schema_version=SCHEMA_VERSION_V2,
         timestamp_ns=1_700_000_000_000_000_000,
         event_type="sample",
-        collector="gpumemprof.cuda_tracker",
+        collector="stormlog.cuda_tracker",
         sampling_interval_ms=100,
         pid=1234,
         host="host-a",
@@ -114,13 +114,13 @@ def test_legacy_gpumemprof_record_converts_to_v2() -> None:
 
     event = telemetry_event_from_record(
         legacy,
-        default_collector="gpumemprof.cuda_tracker",
+        default_collector="stormlog.cuda_tracker",
         default_sampling_interval_ms=100,
     )
     record = telemetry_event_to_dict(event)
 
     assert record["schema_version"] == 2
-    assert record["collector"] == "gpumemprof.cuda_tracker"
+    assert record["collector"] == "stormlog.cuda_tracker"
     assert record["allocator_allocated_bytes"] == 10_000
     assert record["allocator_reserved_bytes"] == 15_000
     assert record["allocator_change_bytes"] == 512
@@ -139,12 +139,12 @@ def test_legacy_cpu_record_converts_with_defaults() -> None:
 
     event = telemetry_event_from_record(
         legacy,
-        default_collector="gpumemprof.cpu_tracker",
+        default_collector="stormlog.cpu_tracker",
         default_sampling_interval_ms=200,
     )
     record = telemetry_event_to_dict(event)
 
-    assert record["collector"] == "gpumemprof.cpu_tracker"
+    assert record["collector"] == "stormlog.cpu_tracker"
     assert record["device_id"] == -1
     assert record["allocator_reserved_bytes"] == record["allocator_allocated_bytes"]
     assert record["device_total_bytes"] is None
@@ -174,7 +174,7 @@ def test_legacy_record_uses_backend_metadata_for_collector() -> None:
     )
     record = telemetry_event_to_dict(event)
 
-    assert record["collector"] == "gpumemprof.mps_tracker"
+    assert record["collector"] == "stormlog.mps_tracker"
 
 
 def test_legacy_tf_record_converts_with_defaults() -> None:
@@ -192,7 +192,7 @@ def test_legacy_tf_record_converts_with_defaults() -> None:
     )
     record = telemetry_event_to_dict(event)
 
-    assert record["collector"] == "tfmemprof.memory_tracker"
+    assert record["collector"] == "stormlog.tensorflow.memory_tracker"
     assert record["device_id"] == 0
     assert record["allocator_allocated_bytes"] == 2 * 1024 * 1024
     assert record["device_used_bytes"] == 2 * 1024 * 1024
@@ -442,7 +442,7 @@ def test_legacy_total_memory_null_is_accepted() -> None:
 
     event = telemetry_event_from_record(
         legacy,
-        default_collector="gpumemprof.cuda_tracker",
+        default_collector="stormlog.cuda_tracker",
         default_sampling_interval_ms=100,
     )
     record = telemetry_event_to_dict(event)

@@ -9,9 +9,9 @@ pytest.importorskip("textual")
 
 from textual.widgets import RichLog, TabbedContent, TabPane
 
-import gpumemprof.tui.app as appmod
-from gpumemprof.telemetry import telemetry_event_from_record
-from gpumemprof.tui.app import GPUMemoryProfilerTUI
+import stormlog.tui.app as appmod
+from stormlog.telemetry import telemetry_event_from_record
+from stormlog.tui.app import GPUMemoryProfilerTUI
 
 pytestmark = pytest.mark.tui_pilot
 
@@ -136,7 +136,7 @@ def _make_event(rank: int, timestamp_s: float = 1.0) -> Any:
             "device_used_bytes": 1300 + rank,
             "device_total_bytes": 10000,
             "device_id": rank,
-            "collector": "gpumemprof.cuda_tracker",
+            "collector": "stormlog.cuda_tracker",
             "sampling_interval_ms": 100,
             "pid": 1,
             "host": "host",
@@ -148,7 +148,7 @@ def _make_event(rank: int, timestamp_s: float = 1.0) -> Any:
             "metadata": {},
         },
         permissive_legacy=True,
-        default_collector="gpumemprof.cuda_tracker",
+        default_collector="stormlog.cuda_tracker",
         default_sampling_interval_ms=100,
     )
 

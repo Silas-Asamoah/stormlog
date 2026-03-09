@@ -8,13 +8,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
 from examples.common.formatting import print_header, print_kv, print_section
-from gpumemprof.oom_flight_recorder import classify_oom_exception
-from gpumemprof.utils import get_system_info
+from stormlog.oom_flight_recorder import classify_oom_exception
+from stormlog.utils import get_system_info
 
 if TYPE_CHECKING:
     import torch
 
-    from gpumemprof.tracker import MemoryTracker
+    from stormlog.tracker import MemoryTracker
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -118,7 +118,7 @@ def run_scenario(
         return summary
 
     try:
-        from gpumemprof.tracker import MemoryTracker
+        from stormlog.tracker import MemoryTracker
     except ImportError as exc:
         summary = {
             "status": "SKIP",

@@ -1,5 +1,6 @@
 import os
-import shutil
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -11,21 +12,21 @@ pytestmark = [
     pytest.mark.skipif(os.name == "nt", reason="PTY tests require a POSIX terminal."),
 ]
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _spawn_tui() -> pexpect.spawn:
-    executable = shutil.which("stormlog")
-    if executable is None:
-        pytest.skip("stormlog entrypoint is unavailable in this environment.")
-
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
     env.setdefault("COLORTERM", "truecolor")
     env.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
     env.setdefault("CUDA_VISIBLE_DEVICES", "")
     env.setdefault("PYTHONUNBUFFERED", "1")
+    env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
 
     return pexpect.spawn(
-        executable,
+        sys.executable,
+        ["-m", "stormlog.tui"],
         env=env,
         encoding="utf-8",
         timeout=20,
