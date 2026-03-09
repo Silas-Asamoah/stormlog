@@ -1,4 +1,4 @@
-"""Tests for gpumemprof diagnose command."""
+"""Tests for the Stormlog diagnose command."""
 
 import json
 from datetime import datetime as real_datetime

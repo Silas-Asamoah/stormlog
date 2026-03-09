@@ -121,3 +121,37 @@ def test_tui_entrypoint_reports_tui_install_guidance_when_textual_is_missing() -
 
     assert completed.returncode == 0, completed.stderr
     assert "ok" in completed.stdout
+
+
+def test_pytorch_demo_import_is_hardened_when_torch_is_missing() -> None:
+    code = textwrap.dedent(
+        """
+        import builtins
+
+        original_import = builtins.__import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "torch" or name.startswith("torch."):
+                raise ModuleNotFoundError("No module named 'torch'", name="torch")
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = blocked_import
+
+        import examples.basic.pytorch_demo as pytorch_demo
+
+        pytorch_demo.main()
+
+        print("ok")
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "PyTorch is not installed. Skipping PyTorch demo." in completed.stdout
+    assert "ok" in completed.stdout

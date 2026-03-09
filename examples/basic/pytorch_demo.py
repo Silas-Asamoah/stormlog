@@ -8,6 +8,8 @@ if TYPE_CHECKING:
     import torch
     import torch.nn as nn
 
+    from stormlog import GPUMemoryProfiler
+
 try:
     import torch
     import torch.nn as nn
@@ -27,7 +29,6 @@ from examples.common import (
     run_torch_train_step,
     seed_everything,
 )
-from stormlog import GPUMemoryProfiler
 
 
 def _allocate_tensor_mb(size_mb: int, device: torch.device) -> torch.Tensor:
@@ -99,6 +100,8 @@ def main() -> None:
     if not torch.cuda.is_available():
         print("CUDA is not available on this machine. Skipping GPU demo.")
         return
+
+    from stormlog import GPUMemoryProfiler
 
     profiler = GPUMemoryProfiler(track_tensors=True)
 
