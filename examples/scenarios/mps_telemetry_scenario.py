@@ -29,7 +29,7 @@ def _run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _gpumemprof_cmd(*args: str) -> list[str]:
+def _stormlog_cli_cmd(*args: str) -> list[str]:
     """Run the Stormlog CLI via the current interpreter for env consistency."""
     return [sys.executable, "-m", "stormlog.cli", *args]
 
@@ -62,7 +62,7 @@ def run_scenario(
         return summary
 
     print_section("Track")
-    track_cmd = _gpumemprof_cmd(
+    track_cmd = _stormlog_cli_cmd(
         "track",
         "--duration",
         str(duration_s),
@@ -82,13 +82,18 @@ def run_scenario(
     payload = json.loads(telemetry_path.read_text(encoding="utf-8"))
     for record in payload:
         validate_telemetry_record(record)
-    if payload and payload[0]["collector"] != "stormlog.mps_tracker":
+    unexpected_collectors = {
+        record["collector"]
+        for record in payload
+        if record["collector"] != "stormlog.mps_tracker"
+    }
+    if unexpected_collectors:
         raise RuntimeError(
-            f"Unexpected collector for MPS run: {payload[0]['collector']}"
+            f"Unexpected collectors for MPS run: {sorted(unexpected_collectors)}"
         )
 
     print_section("Analyze")
-    analyze_cmd = _gpumemprof_cmd(
+    analyze_cmd = _stormlog_cli_cmd(
         "analyze",
         str(telemetry_path),
         "--format",
