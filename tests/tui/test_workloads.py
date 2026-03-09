@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from gpumemprof.tui.workloads import (
+from stormlog.tui.workloads import (
     format_cpu_summary,
     format_pytorch_summary,
     format_tensorflow_results,

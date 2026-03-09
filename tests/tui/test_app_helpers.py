@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("textual")
 
-from gpumemprof.tui import app as appmod
+from stormlog.tui import app as appmod
 
 
 def test_build_system_markdown_uses_system_info_fallback_on_error(

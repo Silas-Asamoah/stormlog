@@ -6,12 +6,12 @@ from typing import Any
 
 import pytest
 
-import gpumemprof.profiler as profiler_module
-from gpumemprof.context_profiler import profile_function
-from gpumemprof.profiler import GPUMemoryProfiler, MemorySnapshot, TensorTracker
+import stormlog.profiler as profiler_module
+from stormlog.context_profiler import profile_function
+from stormlog.profiler import GPUMemoryProfiler, MemorySnapshot, TensorTracker
 
 
-def test_gpumemprof_import_and_star_import_succeed_when_viz_imports_blocked() -> None:
+def test_stormlog_import_and_star_import_succeed_when_viz_imports_blocked() -> None:
     code = textwrap.dedent(
         """
         import builtins
@@ -26,15 +26,15 @@ def test_gpumemprof_import_and_star_import_succeed_when_viz_imports_blocked() ->
 
         builtins.__import__ = blocked_import
 
-        import gpumemprof
-        from gpumemprof import *  # noqa: F403,F401
+        import stormlog
+        from stormlog import *  # noqa: F403,F401
 
-        assert hasattr(gpumemprof, "GPUMemoryProfiler")
+        assert hasattr(stormlog, "GPUMemoryProfiler")
         assert "GPUMemoryProfiler" in globals()
-        assert hasattr(gpumemprof, "MemoryVisualizer")
+        assert hasattr(stormlog, "MemoryVisualizer")
         assert "MemoryVisualizer" in globals()
         try:
-            gpumemprof.MemoryVisualizer()
+            stormlog.MemoryVisualizer()
         except ImportError as exc:
             assert "optional visualization dependencies" in str(exc)
         else:

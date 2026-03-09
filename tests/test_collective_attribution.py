@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from gpumemprof.collective_attribution import (
+from stormlog.collective_attribution import (
     attribute_collective_memory,
     resolve_collective_attribution_config,
 )
-from gpumemprof.telemetry import SCHEMA_VERSION_V2, TelemetryEventV2
+from stormlog.telemetry import SCHEMA_VERSION_V2, TelemetryEventV2
 
 BASE_NS = 1_700_000_000_000_000_000
 STEP_NS = 100_000_000
@@ -35,7 +35,7 @@ def _make_event(
         schema_version=SCHEMA_VERSION_V2,
         timestamp_ns=timestamp_ns,
         event_type=event_type,
-        collector="gpumemprof.cuda_tracker",
+        collector="stormlog.cuda_tracker",
         sampling_interval_ms=100,
         pid=1,
         host="test",

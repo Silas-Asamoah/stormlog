@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import tfmemprof.cli as tfmemprof_cli
-import tfmemprof.diagnose as diagnose_module
+import stormlog.tensorflow.cli as tfmemprof_cli
+import stormlog.tensorflow.diagnose as diagnose_module
 
 
 def _patch_tfmemprof_diagnose_env(
@@ -132,7 +132,7 @@ def test_tfmemprof_diagnose_produces_artifact_bundle(
     assert len(dirs) == 1
     artifact_dir = dirs[0]
     assert artifact_dir.is_dir()
-    assert "tfmemprof-diagnose-" in artifact_dir.name
+    assert "stormlog-tensorflow-diagnose-" in artifact_dir.name
 
     assert (artifact_dir / "environment.json").exists()
     assert (artifact_dir / "diagnostic_summary.json").exists()
@@ -241,7 +241,7 @@ def test_tfmemprof_diagnose_stdout_contains_artifact_and_status(
 
     assert "Artifact:" in out
     assert "Status:" in out
-    assert "tfmemprof-diagnose-" in out
+    assert "stormlog-tensorflow-diagnose-" in out
     assert "OK" in out or "MEMORY_RISK" in out or "FAILED" in out
 
 
@@ -264,7 +264,7 @@ def test_tfmemprof_diagnose_default_output_creates_timestamped_dir(
 
     dirs = [d for d in tmp_path.iterdir() if d.is_dir()]
     assert len(dirs) == 1
-    assert dirs[0].name.startswith("tfmemprof-diagnose-")
+    assert dirs[0].name.startswith("stormlog-tensorflow-diagnose-")
 
 
 def test_tfmemprof_diagnose_output_existing_dir_creates_timestamped_subdir(
@@ -287,7 +287,7 @@ def test_tfmemprof_diagnose_output_existing_dir_creates_timestamped_subdir(
 
     subdirs = list(out_dir.iterdir())
     assert len(subdirs) == 1
-    assert subdirs[0].name.startswith("tfmemprof-diagnose-")
+    assert subdirs[0].name.startswith("stormlog-tensorflow-diagnose-")
     assert (subdirs[0] / "manifest.json").exists()
 
 
@@ -377,6 +377,6 @@ def test_tfmemprof_diagnose_same_second_creates_unique_artifact_dirs(
     assert code_one in (0, 2)
     assert code_two in (0, 2)
     assert len(subdirs) == 2
-    assert subdirs[0].startswith("tfmemprof-diagnose-20260215-120000")
-    assert subdirs[1].startswith("tfmemprof-diagnose-20260215-120000")
+    assert subdirs[0].startswith("stormlog-tensorflow-diagnose-20260215-120000")
+    assert subdirs[1].startswith("stormlog-tensorflow-diagnose-20260215-120000")
     assert subdirs[0] != subdirs[1]

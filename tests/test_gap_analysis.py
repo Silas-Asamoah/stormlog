@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from gpumemprof.analyzer import MemoryAnalyzer
-from gpumemprof.telemetry import SCHEMA_VERSION_V2, TelemetryEventV2
+from stormlog.analyzer import MemoryAnalyzer
+from stormlog.telemetry import SCHEMA_VERSION_V2, TelemetryEventV2
 from tests.gap_test_helpers import build_gap_event
 
 # ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ def _make_event(
         allocator_allocated=allocator_allocated,
         allocator_reserved=allocator_reserved,
         device_used=device_used,
-        collector="gpumemprof.cuda_tracker",
+        collector="stormlog.cuda_tracker",
         device_total=device_total,
     )
 
@@ -45,7 +45,7 @@ def _make_collective_event(
         schema_version=SCHEMA_VERSION_V2,
         timestamp_ns=timestamp_ns,
         event_type=event_type,
-        collector="gpumemprof.cuda_tracker",
+        collector="stormlog.cuda_tracker",
         sampling_interval_ms=100,
         pid=1,
         host="test",

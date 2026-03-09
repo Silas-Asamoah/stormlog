@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-import tfmemprof.cli as tf_cli
-import tfmemprof.tracker as tf_tracker
-from gpumemprof.telemetry import validate_telemetry_record
+import stormlog.tensorflow.cli as tf_cli
+import stormlog.tensorflow.tracker as tf_tracker
+from stormlog.telemetry import validate_telemetry_record
 
 
 def _wait_until_events(
@@ -43,7 +43,7 @@ def test_tf_tracker_emits_v2_event_records(monkeypatch: pytest.MonkeyPatch) -> N
     assert result.events
     first = result.events[0]
     assert first["schema_version"] == 2
-    assert first["collector"] == "tfmemprof.memory_tracker"
+    assert first["collector"] == "stormlog.tensorflow.memory_tracker"
     assert first["job_id"] is None
     assert first["rank"] == 0
     assert first["local_rank"] == 0
@@ -110,7 +110,7 @@ def test_tf_cli_track_output_normalizes_legacy_events(
     assert payload["events"]
     event = payload["events"][0]
     assert event["schema_version"] == 2
-    assert event["collector"] == "tfmemprof.memory_tracker"
+    assert event["collector"] == "stormlog.tensorflow.memory_tracker"
     validate_telemetry_record(event)
 
 

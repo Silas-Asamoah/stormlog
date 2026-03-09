@@ -37,7 +37,7 @@ def test_mps_telemetry_scenario_passes_or_skips(tmp_path: Path) -> None:
 
     assert summary["status"] in {"PASS", "SKIP"}
     if summary["status"] == "PASS":
-        assert summary["collector"] == "gpumemprof.mps_tracker"
+        assert summary["collector"] == "stormlog.mps_tracker"
 
 
 def test_oom_flight_recorder_scenario_simulated_passes_or_skips(tmp_path: Path) -> None:

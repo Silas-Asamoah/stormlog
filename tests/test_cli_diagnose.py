@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import gpumemprof.cli as gpumemprof_cli
-import gpumemprof.diagnose as diagnose_module
-import gpumemprof.tracker as tracker_module
+import stormlog.cli as gpumemprof_cli
+import stormlog.diagnose as diagnose_module
+import stormlog.tracker as tracker_module
 
 
 def _patch_diagnose_env(
@@ -113,7 +113,7 @@ def test_diagnose_produces_artifact_bundle_with_duration_zero(
     assert len(dirs) == 1
     artifact_dir = dirs[0]
     assert artifact_dir.is_dir()
-    assert "gpumemprof-diagnose-" in artifact_dir.name
+    assert "stormlog-diagnose-" in artifact_dir.name
 
     assert (artifact_dir / "environment.json").exists()
     assert (artifact_dir / "diagnostic_summary.json").exists()
@@ -247,7 +247,7 @@ def test_diagnose_stdout_contains_artifact_path_and_status(
 
     assert "Artifact:" in out
     assert "Status:" in out
-    assert "gpumemprof-diagnose-" in out
+    assert "stormlog-diagnose-" in out
     assert "OK" in out or "MEMORY_RISK" in out or "FAILED" in out
 
 
@@ -289,7 +289,7 @@ def test_diagnose_default_output_creates_timestamped_dir_in_cwd(
 
     dirs = [d for d in tmp_path.iterdir() if d.is_dir()]
     assert len(dirs) == 1
-    assert dirs[0].name.startswith("gpumemprof-diagnose-")
+    assert dirs[0].name.startswith("stormlog-diagnose-")
 
 
 def test_diagnose_output_existing_dir_creates_timestamped_subdir(
@@ -311,7 +311,7 @@ def test_diagnose_output_existing_dir_creates_timestamped_subdir(
 
     subdirs = list(out_dir.iterdir())
     assert len(subdirs) == 1
-    assert subdirs[0].name.startswith("gpumemprof-diagnose-")
+    assert subdirs[0].name.startswith("stormlog-diagnose-")
     assert (subdirs[0] / "manifest.json").exists()
 
 
@@ -436,6 +436,6 @@ def test_diagnose_same_second_creates_unique_artifact_dirs(
     assert code_one in (0, 2)
     assert code_two in (0, 2)
     assert len(subdirs) == 2
-    assert subdirs[0].startswith("gpumemprof-diagnose-20260215-120000")
-    assert subdirs[1].startswith("gpumemprof-diagnose-20260215-120000")
+    assert subdirs[0].startswith("stormlog-diagnose-20260215-120000")
+    assert subdirs[1].startswith("stormlog-diagnose-20260215-120000")
     assert subdirs[0] != subdirs[1]

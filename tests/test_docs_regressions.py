@@ -28,21 +28,29 @@ _BANNED_DOC_SNIPPETS = {
         "tui-distributed-diagnostics-workflow.svg",
     ],
     "docs/tensorflow_testing_guide.md": [
-        "from tfmemprof import MemoryTracker",
+        "from stormlog.tensorflow import MemoryTracker",
         "TFCPUMemoryTracker",
     ],
     "README.md": [
-        "python -m gpumemprof.cli",
-        "python -m tfmemprof.cli",
+        "python -m stormlog.cli",
+        "python -m stormlog.tensorflow.cli",
         "gpu-profiler-overview.gif",
+        "There is no top-level `stormlog` Python module today.",
     ],
     "docs/cli.md": [
-        "python -m gpumemprof.cli",
-        "python -m tfmemprof.cli",
+        "python -m stormlog.cli",
+        "python -m stormlog.tensorflow.cli",
     ],
     "docs/usage.md": [
-        "python -m gpumemprof.cli",
-        "python -m tfmemprof.cli",
+        "python -m stormlog.cli",
+        "python -m stormlog.tensorflow.cli",
+        "There is no top-level `stormlog` module today.",
+    ],
+    "docs/installation.md": [
+        "There is no top-level `import stormlog` module in the current package layout.",
+    ],
+    "docs/api.md": [
+        "There is no top-level `stormlog` module today.",
     ],
     "docs/tui.md": [
         "tui-distributed-diagnostics-workflow.svg",
