@@ -8,16 +8,16 @@ Use the smallest install that matches your workflow, then validate the console s
 
 ## Install name vs import names
 
-Install the distribution as `stormlog`, then import the backend modules directly:
+Install the distribution as `stormlog`, then import the Python APIs from
+`stormlog` or `stormlog.tensorflow`:
 
 | Task | Use |
 | --- | --- |
 | Install from PyPI | `pip install stormlog` |
 | Launch the TUI | `stormlog` |
-| Import PyTorch APIs | `from gpumemprof import GPUMemoryProfiler, MemoryTracker` |
-| Import TensorFlow APIs | `from tfmemprof import TFMemoryProfiler` |
-
-There is no top-level `import stormlog` module in the current package layout.
+| Import PyTorch APIs | `from stormlog import GPUMemoryProfiler, MemoryTracker` |
+| Import TensorFlow APIs | `from stormlog.tensorflow import TFMemoryProfiler` |
+| Run CLI automation | `gpumemprof` or `tfmemprof` |
 
 ### Core package
 
@@ -27,7 +27,8 @@ pip install stormlog
 
 Includes:
 
-- `gpumemprof`
+- `stormlog`
+- `stormlog.tensorflow`
 - core telemetry and analysis utilities
 - CPU-compatible monitoring and tracking
 
@@ -79,7 +80,7 @@ pre-commit install
 ### Core verification
 
 ```bash
-python3 -c "import gpumemprof; print(gpumemprof.__version__)"
+python3 -c "import stormlog; print(stormlog.__version__)"
 gpumemprof --help
 gpumemprof info
 ```

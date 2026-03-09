@@ -9,8 +9,9 @@ This guide focuses on the workflows that are stable in the current codebase:
 - export telemetry and plots
 - move from runtime data to a diagnose bundle or TUI session
 
-Install the distribution as `stormlog`, but import the Python APIs from
-`gpumemprof` and `tfmemprof`. There is no top-level `stormlog` module today.
+Install the distribution as `stormlog`, then import the Python APIs from
+`stormlog` or `stormlog.tensorflow`. The CLI automation commands remain
+`gpumemprof` and `tfmemprof`.
 
 ## Choose the right tool
 
@@ -74,7 +75,7 @@ NVIDIA CUDA builds and ROCm-backed PyTorch builds surfaced through
 
 ```python
 import torch
-from gpumemprof import GPUMemoryProfiler
+from stormlog import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler(track_tensors=True)
 device = profiler.device
@@ -96,7 +97,7 @@ print(f"Peak memory: {summary['peak_memory_usage'] / (1024**3):.2f} GB")
 
 ```python
 import torch
-from gpumemprof import GPUMemoryProfiler
+from stormlog import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler()
 device = profiler.device
@@ -109,7 +110,7 @@ with profiler.profile_context("forward_pass"):
 ## TensorFlow profiling
 
 ```python
-from tfmemprof import TFMemoryProfiler
+from stormlog.tensorflow import TFMemoryProfiler
 
 profiler = TFMemoryProfiler(enable_tensor_tracking=True)
 
@@ -126,7 +127,7 @@ print(f"Snapshots captured: {len(results.snapshots)}")
 Use this when PyTorch CUDA profiling is unavailable but you still want a local validation path:
 
 ```python
-from gpumemprof import CPUMemoryProfiler
+from stormlog import CPUMemoryProfiler
 
 profiler = CPUMemoryProfiler()
 
@@ -144,7 +145,7 @@ print(summary["snapshots_collected"])
 ### PyTorch tracker
 
 ```python
-from gpumemprof import MemoryTracker
+from stormlog import MemoryTracker
 
 tracker = MemoryTracker(
     sampling_interval=0.5,
@@ -163,7 +164,7 @@ print(f"Events: {stats.get('total_events', 0)}")
 ### CPU tracker
 
 ```python
-from gpumemprof import CPUMemoryTracker
+from stormlog import CPUMemoryTracker
 
 tracker = CPUMemoryTracker(sampling_interval=0.5)
 tracker.start_tracking()
@@ -178,7 +179,7 @@ print(tracker.get_statistics()["total_events"])
 
 ```python
 import torch
-from gpumemprof import GPUMemoryProfiler, MemoryVisualizer
+from stormlog import GPUMemoryProfiler, MemoryVisualizer
 
 profiler = GPUMemoryProfiler()
 device = profiler.device

@@ -39,17 +39,16 @@ pip install "stormlog[all]"
 
 ### Package and import names
 
-`stormlog` is the distribution name on PyPI. The installed Python modules remain
-backend-specific:
+`stormlog` is the distribution name on PyPI and the primary Python import root.
+TensorFlow-specific APIs live under `stormlog.tensorflow`.
 
 | Task | Use |
 | --- | --- |
 | Install the package | `pip install stormlog` |
 | Launch the TUI | `stormlog` |
-| Import PyTorch APIs | `from gpumemprof import GPUMemoryProfiler, MemoryTracker` |
-| Import TensorFlow APIs | `from tfmemprof import TFMemoryProfiler` |
-
-There is no top-level `stormlog` Python module today.
+| Import PyTorch APIs | `from stormlog import GPUMemoryProfiler, MemoryTracker` |
+| Import TensorFlow APIs | `from stormlog.tensorflow import TFMemoryProfiler` |
+| Run CLI automation | `gpumemprof` or `tfmemprof` |
 
 ### From source
 
@@ -90,7 +89,7 @@ CPU-only systems, use `MemoryTracker`, the CLI, or `CPUMemoryProfiler` instead.
 
 ```python
 import torch
-from gpumemprof import GPUMemoryProfiler
+from stormlog import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler()
 device = profiler.device
@@ -113,7 +112,7 @@ print(f"Peak memory: {summary['peak_memory_usage'] / (1024**3):.2f} GB")
 `TFMemoryProfiler` works on GPU or CPU-backed TensorFlow runtimes.
 
 ```python
-from tfmemprof import TFMemoryProfiler
+from stormlog.tensorflow import TFMemoryProfiler
 
 profiler = TFMemoryProfiler(enable_tensor_tracking=True)
 

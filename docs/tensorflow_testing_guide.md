@@ -20,7 +20,7 @@ These checks work on CPU-backed TensorFlow installs as well as GPU-backed ones.
 Use `TFMemoryProfiler` when you want snapshots and aggregate results around a real TensorFlow workload.
 
 ```python
-from tfmemprof import TFMemoryProfiler
+from stormlog.tensorflow import TFMemoryProfiler
 
 profiler = TFMemoryProfiler(enable_tensor_tracking=True)
 

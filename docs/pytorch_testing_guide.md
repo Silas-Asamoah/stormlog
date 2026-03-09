@@ -25,7 +25,7 @@ Use this when you want to understand the memory cost of a training or inference 
 
 ```python
 import torch
-from gpumemprof import GPUMemoryProfiler
+from stormlog import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler(track_tensors=True)
 device = profiler.device
@@ -47,7 +47,7 @@ Use `profile_context` when you want one named block rather than one function cal
 
 ```python
 import torch
-from gpumemprof import GPUMemoryProfiler
+from stormlog import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler()
 device = profiler.device
@@ -63,7 +63,7 @@ Use the tracker when one profiled call is not enough. This is the backend-aware
 PyTorch path for CUDA, ROCm, and MPS telemetry.
 
 ```python
-from gpumemprof import MemoryTracker
+from stormlog import MemoryTracker
 
 tracker = MemoryTracker(
     sampling_interval=0.5,

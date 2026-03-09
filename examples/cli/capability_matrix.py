@@ -21,7 +21,7 @@ from examples.common.capability_matrix_utils import (
     timed_result,
     write_report,
 )
-from gpumemprof.utils import get_system_info
+from stormlog.utils import get_system_info
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ARTIFACTS_ROOT = REPO_ROOT / "artifacts" / "examples" / "capability_matrix"

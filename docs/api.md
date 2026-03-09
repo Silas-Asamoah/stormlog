@@ -5,7 +5,7 @@
 This page is the human-first API guide for the package. The canonical function and class signatures are generated from source code and docstrings during the docs build.
 
 Install the distribution as `stormlog`, then import the Python APIs from
-`gpumemprof` or `tfmemprof`. There is no top-level `stormlog` module today.
+`stormlog` or `stormlog.tensorflow`.
 
 ## Generated Reference
 
@@ -15,7 +15,7 @@ The pages under `docs/reference/generated/` are build output, not hand-maintaine
 
 ## Package Surface
 
-### `gpumemprof` (PyTorch + backend collectors)
+### `stormlog` (PyTorch + shared collectors)
 
 Use this package for:
 
@@ -26,11 +26,11 @@ Use this package for:
 
 Core modules documented in generated pages:
 
-- `gpumemprof`
-- `gpumemprof.profiler`
-- `gpumemprof.tracker`
-- `gpumemprof.telemetry`
-- `gpumemprof.cpu_profiler`
+- `stormlog`
+- `stormlog.profiler`
+- `stormlog.tracker`
+- `stormlog.telemetry`
+- `stormlog.cpu_profiler`
 
 Primary exported symbols:
 
@@ -41,7 +41,7 @@ Primary exported symbols:
 - `MemoryVisualizer`
 - `TelemetryEventV2`
 
-### `tfmemprof` (TensorFlow workflows)
+### `stormlog.tensorflow` (TensorFlow workflows)
 
 Use this package for:
 
@@ -50,10 +50,10 @@ Use this package for:
 
 Core modules documented in generated pages:
 
-- `tfmemprof`
-- `tfmemprof.profiler`
-- `tfmemprof.tracker`
-- `tfmemprof.context_profiler`
+- `stormlog.tensorflow`
+- `stormlog.tensorflow.profiler`
+- `stormlog.tensorflow.tracker`
+- `stormlog.tensorflow.context_profiler`
 
 Primary exported symbols:
 

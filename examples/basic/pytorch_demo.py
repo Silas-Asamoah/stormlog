@@ -27,7 +27,7 @@ from examples.common import (
     run_torch_train_step,
     seed_everything,
 )
-from gpumemprof import GPUMemoryProfiler
+from stormlog import GPUMemoryProfiler
 
 
 def _allocate_tensor_mb(size_mb: int, device: torch.device) -> torch.Tensor:

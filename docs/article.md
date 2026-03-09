@@ -46,7 +46,7 @@ ROCm-backed PyTorch builds surfaced through `torch.cuda`.
 
 ```python
 import torch
-from gpumemprof import GPUMemoryProfiler
+from stormlog import GPUMemoryProfiler
 
 profiler = GPUMemoryProfiler(track_tensors=True)
 device = profiler.device
@@ -72,7 +72,7 @@ CLI, or the TUI monitoring flows instead of `GPUMemoryProfiler`.
 For TensorFlow, the context-manager flow is the clearest equivalent:
 
 ```python
-from tfmemprof import TFMemoryProfiler
+from stormlog.tensorflow import TFMemoryProfiler
 
 profiler = TFMemoryProfiler(enable_tensor_tracking=True)
 

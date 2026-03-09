@@ -54,11 +54,11 @@ New exports always emit these fields. For single-process runs, the defaults are:
 
 ## Collector values
 
-- `gpumemprof.cuda_tracker`
-- `gpumemprof.rocm_tracker`
-- `gpumemprof.mps_tracker`
-- `gpumemprof.cpu_tracker`
-- `tfmemprof.memory_tracker`
+- `stormlog.cuda_tracker`
+- `stormlog.rocm_tracker`
+- `stormlog.mps_tracker`
+- `stormlog.cpu_tracker`
+- `stormlog.tensorflow.memory_tracker`
 
 ## Backend capability metadata
 
@@ -71,7 +71,7 @@ Tracker exports may include backend capability hints under `metadata`:
 
 ## Legacy v1 to v2 conversion defaults
 
-Conversion is permissive by default in `gpumemprof.telemetry.telemetry_event_from_record`.
+Conversion is permissive by default in `stormlog.telemetry.telemetry_event_from_record`.
 Legacy conversion is attempted only when `schema_version` is absent.
 
 If `schema_version` is present:
@@ -104,10 +104,10 @@ CLI and Python API callers can override these values explicitly.
 
 ## Python API
 
-Use the public conversion/validation helpers in `gpumemprof.telemetry`:
+Use the public conversion/validation helpers in `stormlog.telemetry`:
 
 ```python
-from gpumemprof.telemetry import (
+from stormlog.telemetry import (
     load_telemetry_events,
     telemetry_event_from_record,
     telemetry_event_to_dict,

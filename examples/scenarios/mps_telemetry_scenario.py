@@ -5,12 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Sequence
 
 from examples.common.formatting import print_header, print_kv, print_section
-from gpumemprof.telemetry import validate_telemetry_record
-from gpumemprof.utils import get_system_info
+from stormlog.telemetry import validate_telemetry_record
+from stormlog.utils import get_system_info
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = (
@@ -21,10 +22,16 @@ DEFAULT_OUTPUT_DIR = (
 def _run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
+        cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def _gpumemprof_cmd(*args: str) -> list[str]:
+    """Run the Stormlog CLI via the current interpreter for env consistency."""
+    return [sys.executable, "-m", "stormlog.cli", *args]
 
 
 def run_scenario(
@@ -55,8 +62,7 @@ def run_scenario(
         return summary
 
     print_section("Track")
-    track_cmd = [
-        "gpumemprof",
+    track_cmd = _gpumemprof_cmd(
         "track",
         "--duration",
         str(duration_s),
@@ -66,7 +72,7 @@ def run_scenario(
         "json",
         "--output",
         str(telemetry_path),
-    ]
+    )
     track_result = _run_command(track_cmd)
     if track_result.returncode != 0:
         raise RuntimeError(
@@ -76,21 +82,20 @@ def run_scenario(
     payload = json.loads(telemetry_path.read_text(encoding="utf-8"))
     for record in payload:
         validate_telemetry_record(record)
-    if payload and payload[0]["collector"] != "gpumemprof.mps_tracker":
+    if payload and payload[0]["collector"] != "stormlog.mps_tracker":
         raise RuntimeError(
             f"Unexpected collector for MPS run: {payload[0]['collector']}"
         )
 
     print_section("Analyze")
-    analyze_cmd = [
-        "gpumemprof",
+    analyze_cmd = _gpumemprof_cmd(
         "analyze",
         str(telemetry_path),
         "--format",
         "txt",
         "--output",
         str(analysis_path),
-    ]
+    )
     analyze_result = _run_command(analyze_cmd)
     if analyze_result.returncode != 0:
         raise RuntimeError(

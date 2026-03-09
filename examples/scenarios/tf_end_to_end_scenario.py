@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Sequence
 
 from examples.common.formatting import print_header, print_kv, print_section
-from gpumemprof.telemetry import validate_telemetry_record
+from stormlog.telemetry import validate_telemetry_record
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = (
@@ -32,7 +32,7 @@ def _run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
 def _tfmemprof_cmd(*args: str) -> list[str]:
     """Run tfmemprof via the current Python interpreter for env consistency."""
-    return [sys.executable, "-m", "tfmemprof.cli", *args]
+    return [sys.executable, "-m", "stormlog.tensorflow.cli", *args]
 
 
 def _run_track_with_sigint(cmd: list[str], interrupt_after_s: float) -> int:

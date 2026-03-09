@@ -12,16 +12,16 @@ Stormlog has three user-facing surfaces that share the same core data model:
 - CLI entrypoints for capture, analysis, and diagnose flows
 - a Textual TUI for live monitoring, visualization export, and artifact review
 
-Those surfaces are implemented across two packages:
+Those surfaces are implemented under one package root:
 
-- `gpumemprof` for PyTorch, CPU fallback utilities, telemetry normalization, and the TUI
-- `tfmemprof` for TensorFlow profiling, tracking, and TensorFlow-specific analysis helpers
+- `stormlog` for PyTorch, CPU fallback utilities, telemetry normalization, and the TUI
+- `stormlog.tensorflow` for TensorFlow profiling, tracking, and TensorFlow-specific analysis helpers
 
 ## Package boundaries
 
-### `gpumemprof`
+### `stormlog`
 
-The `gpumemprof` package owns:
+The `stormlog` package owns:
 
 - `GPUMemoryProfiler` for bounded PyTorch profiling
 - `MemoryTracker` for time-based tracking on CUDA, ROCm, MPS, or CPU fallback paths
@@ -30,20 +30,20 @@ The `gpumemprof` package owns:
 - `MemoryAnalyzer`, `GapFinding`, and collective-attribution helpers
 - `TelemetryEventV2` plus telemetry conversion and validation utilities
 - device collector abstractions in `device_collectors.py`
-- the Textual TUI under `gpumemprof.tui`
+- the Textual TUI under `stormlog.tui`
 
-### `tfmemprof`
+### `stormlog.tensorflow`
 
-The `tfmemprof` package owns:
+The `stormlog.tensorflow` subpackage owns:
 
 - `TFMemoryProfiler` for bounded TensorFlow profiling
 - `TensorFlowProfiler` and `ProfiledLayer` in `context_profiler.py`
-- `TensorFlowMemoryTracker` (an exported alias of `tfmemprof.tracker.MemoryTracker`)
+- `TensorFlowMemoryTracker` (an exported alias of `stormlog.tensorflow.tracker.MemoryTracker`)
 - `TensorFlowVisualizer`
 - `TensorFlowAnalyzer` and `TensorFlowGapFinding`
-- TensorFlow runtime and backend diagnostics in `tfmemprof.utils`
+- TensorFlow runtime and backend diagnostics in `stormlog.tensorflow.utils`
 
-The TensorFlow package does not ship a separate TUI. The shared terminal UI is the `stormlog` entrypoint implemented in `gpumemprof.tui`.
+The TensorFlow package does not ship a separate TUI. The shared terminal UI is the `stormlog` entrypoint implemented in `stormlog.tui`.
 
 ## High-level layering
 
@@ -51,10 +51,10 @@ The TensorFlow package does not ship a separate TUI. The shared terminal UI is t
 User code / shell
     |
     +-- Python APIs
-    |     +-- gpumemprof.GPUMemoryProfiler
-    |     +-- gpumemprof.MemoryTracker / CPUMemoryTracker
-    |     +-- tfmemprof.TFMemoryProfiler
-    |     +-- tfmemprof.TensorFlowMemoryTracker
+    |     +-- stormlog.GPUMemoryProfiler
+    |     +-- stormlog.MemoryTracker / CPUMemoryTracker
+    |     +-- stormlog.tensorflow.TFMemoryProfiler
+    |     +-- stormlog.tensorflow.TensorFlowMemoryTracker
     |
     +-- CLI entrypoints
     |     +-- gpumemprof
@@ -73,9 +73,9 @@ User code / shell
 
 Bounded profilers are for "what happened inside this call or context?" questions.
 
-- `gpumemprof.profiler.GPUMemoryProfiler`
-- `gpumemprof.cpu_profiler.CPUMemoryProfiler`
-- `tfmemprof.profiler.TFMemoryProfiler`
+- `stormlog.profiler.GPUMemoryProfiler`
+- `stormlog.cpu_profiler.CPUMemoryProfiler`
+- `stormlog.tensorflow.profiler.TFMemoryProfiler`
 
 They expose:
 
@@ -88,9 +88,9 @@ They expose:
 
 Trackers are for "what happened over time?" questions.
 
-- `gpumemprof.tracker.MemoryTracker`
-- `gpumemprof.cpu_profiler.CPUMemoryTracker`
-- `tfmemprof.tracker.MemoryTracker` exported as `TensorFlowMemoryTracker`
+- `stormlog.tracker.MemoryTracker`
+- `stormlog.cpu_profiler.CPUMemoryTracker`
+- `stormlog.tensorflow.tracker.MemoryTracker` exported as `TensorFlowMemoryTracker`
 
 Trackers are responsible for:
 
@@ -102,7 +102,7 @@ Trackers are responsible for:
 
 ### Telemetry
 
-`gpumemprof.telemetry` is the shared interchange layer used by trackers, CLI tools, diagnostics, and the TUI.
+`stormlog.telemetry` is the shared interchange layer used by trackers, CLI tools, diagnostics, and the TUI.
 
 Key responsibilities:
 
@@ -111,18 +111,13 @@ Key responsibilities:
 - load saved event streams from disk
 - resolve distributed identity defaults from environment variables or explicit inputs
 
-This shared schema is what allows:
-
-- `gpumemprof` tracker exports
-- TensorFlow tracker exports
-- diagnose bundles
-- TUI diagnostics loading
-
-to operate on the same underlying event model.
+This shared schema is what allows Stormlog tracker exports, TensorFlow tracker
+exports, diagnose bundles, and TUI diagnostics loading to operate on the same
+underlying event model.
 
 ### Device collectors
 
-`gpumemprof.device_collectors` is the backend-aware abstraction for PyTorch-side device memory sampling.
+`stormlog.device_collectors` is the backend-aware abstraction for PyTorch-side device memory sampling.
 
 Current collector contract:
 
@@ -140,9 +135,9 @@ Current concrete collectors:
 
 Analyzers turn raw or normalized memory data into higher-level findings.
 
-- `gpumemprof.analyzer.MemoryAnalyzer`
-- `tfmemprof.analyzer.MemoryAnalyzer`
-- gap-analysis and collective-attribution helpers in `gpumemprof`
+- `stormlog.analyzer.MemoryAnalyzer`
+- `stormlog.tensorflow.analyzer.MemoryAnalyzer`
+- gap-analysis and collective-attribution helpers in `stormlog`
 
 These modules power:
 
@@ -155,8 +150,8 @@ These modules power:
 
 Visualizers convert profiler or tracker output into human-readable plots.
 
-- `gpumemprof.visualizer.MemoryVisualizer`
-- `tfmemprof.visualizer.MemoryVisualizer`
+- `stormlog.visualizer.MemoryVisualizer`
+- `stormlog.tensorflow.visualizer.MemoryVisualizer`
 
 The PyTorch-side visualizer also underpins the TUI plot export path for:
 
@@ -167,14 +162,14 @@ The PyTorch-side visualizer also underpins the TUI plot export path for:
 
 ## TUI architecture
 
-The `stormlog` console script points to `gpumemprof.tui:run_app`.
+The `stormlog` console script points to `stormlog.tui:run_app`.
 
 The TUI is assembled from:
 
-- `gpumemprof.tui.app` for the main Textual application
-- `gpumemprof.tui.monitor.TrackerSession` for adapting tracker data into the UI
-- `gpumemprof.tui.distributed_diagnostics` for artifact loading and rank-level summaries
-- `gpumemprof.tui.widgets.*` for tables, panels, and timeline rendering
+- `stormlog.tui.app` for the main Textual application
+- `stormlog.tui.monitor.TrackerSession` for adapting tracker data into the UI
+- `stormlog.tui.distributed_diagnostics` for artifact loading and rank-level summaries
+- `stormlog.tui.widgets.*` for tables, panels, and timeline rendering
 
 Current tabs are:
 
@@ -282,9 +277,9 @@ The operational guide for running those slices lives in [testing.md](testing.md)
 The repo currently exposes a few real extension seams:
 
 - backend collection through `DeviceMemoryCollector`
-- telemetry normalization through `gpumemprof.telemetry`
+- telemetry normalization through `stormlog.telemetry`
 - new CLI/documentation workflows through example modules and diagnose artifacts
-- new TUI tables or views through `gpumemprof.tui.widgets`
+- new TUI tables or views through `stormlog.tui.widgets`
 
 Anything beyond those seams should be treated as new feature work, not assumed architecture.
 
