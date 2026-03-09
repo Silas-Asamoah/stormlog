@@ -48,7 +48,7 @@ TensorFlow-specific APIs live under `stormlog.tensorflow`.
 | Launch the TUI | `stormlog` |
 | Import PyTorch APIs | `from stormlog import GPUMemoryProfiler, MemoryTracker` |
 | Import TensorFlow APIs | `from stormlog.tensorflow import TFMemoryProfiler` |
-| Run CLI automation | `gpumemprof` or `tfmemprof` |
+| Run CLI automation | `python -m stormlog.cli` or `python -m stormlog.tensorflow.cli` |
 
 ### From source
 
