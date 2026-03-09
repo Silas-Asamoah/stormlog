@@ -54,7 +54,7 @@ def test_mps_telemetry_scenario_rejects_unexpected_collectors(
     monkeypatch.setattr(
         scenario,
         "validate_telemetry_record",
-        lambda record: None,
+        lambda _record: None,
     )
 
     def _fake_run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -69,6 +69,33 @@ def test_mps_telemetry_scenario_rejects_unexpected_collectors(
     monkeypatch.setattr(scenario, "_run_command", _fake_run_command)
 
     with pytest.raises(RuntimeError, match="Unexpected collectors"):
+        scenario.run_scenario(
+            output_dir=tmp_path / "mps",
+            duration_s=1.0,
+            interval_s=0.5,
+        )
+
+
+def test_mps_telemetry_scenario_rejects_empty_exports(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from examples.scenarios import mps_telemetry_scenario as scenario
+
+    monkeypatch.setattr(
+        scenario,
+        "get_system_info",
+        lambda: {"detected_backend": "mps"},
+    )
+
+    def _fake_run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        telemetry_path = Path(cmd[cmd.index("--output") + 1])
+        telemetry_path.parent.mkdir(parents=True, exist_ok=True)
+        telemetry_path.write_text("[]", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(scenario, "_run_command", _fake_run_command)
+
+    with pytest.raises(RuntimeError, match="No telemetry events found"):
         scenario.run_scenario(
             output_dir=tmp_path / "mps",
             duration_s=1.0,

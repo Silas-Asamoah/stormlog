@@ -64,7 +64,7 @@ def _run_optional_scenario(module_name: str, **kwargs: object) -> Dict[str, obje
 
 
 def _run_stormlog_diagnose(check_dir: Path) -> Dict[str, object]:
-    out_dir = check_dir / "stormlog_diagnose"
+    out_dir = (check_dir / "stormlog_diagnose").resolve()
     cmd = _python_module_cmd(
         "stormlog.cli",
         "diagnose",
@@ -96,8 +96,8 @@ def _run_stormlog_diagnose(check_dir: Path) -> Dict[str, object]:
 
 
 def _run_benchmark_check(check_dir: Path, mode: str) -> Dict[str, object]:
-    output = check_dir / "benchmark_report.json"
-    artifact_root = check_dir / "benchmark_scenarios"
+    output = (check_dir / "benchmark_report.json").resolve()
+    artifact_root = (check_dir / "benchmark_scenarios").resolve()
     cmd = _python_module_cmd(
         "examples.cli.benchmark_harness",
         "--check",
@@ -122,6 +122,14 @@ def _run_benchmark_check(check_dir: Path, mode: str) -> Dict[str, object]:
 
 
 def _run_tui_smoke() -> Dict[str, object]:
+    def _is_missing_tui_extra(output: str) -> bool:
+        normalized = output.lower()
+        return (
+            "optional dependencies" in normalized
+            or "stormlog[tui,torch]" in normalized
+            or "textual" in normalized
+        )
+
     try:
         import pexpect  # type: ignore[import-untyped, unused-ignore]
     except ModuleNotFoundError:
@@ -142,6 +150,13 @@ def _run_tui_smoke() -> Dict[str, object]:
         child.expect(["Overview", "PyTorch"])
         child.send("q")
         child.expect(pexpect.EOF, timeout=10)
+        tail = (child.before or "")[-1200:]
+        if _is_missing_tui_extra(tail):
+            return {
+                "status": "SKIP",
+                "reason": "missing TUI extras",
+                "output_tail": tail,
+            }
         return {
             "status": "PASS",
             "exitstatus": child.exitstatus,
@@ -149,6 +164,12 @@ def _run_tui_smoke() -> Dict[str, object]:
         }
     except Exception as exc:  # noqa: BLE001
         tail = (child.before or "")[-1200:]
+        if _is_missing_tui_extra(tail):
+            return {
+                "status": "SKIP",
+                "reason": "missing TUI extras",
+                "output_tail": tail,
+            }
         return {"status": "FAIL", "error": str(exc), "output_tail": tail}
     finally:
         if child.isalive():

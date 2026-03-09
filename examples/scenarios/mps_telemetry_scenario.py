@@ -80,6 +80,8 @@ def run_scenario(
         )
 
     payload = json.loads(telemetry_path.read_text(encoding="utf-8"))
+    if not payload:
+        raise RuntimeError("No telemetry events found for MPS tracking run")
     for record in payload:
         validate_telemetry_record(record)
     unexpected_collectors = {
