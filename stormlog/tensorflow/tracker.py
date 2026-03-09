@@ -25,7 +25,7 @@ except ImportError:
     TF_AVAILABLE = False
     tf = None
 
-from gpumemprof.telemetry import (
+from stormlog.telemetry import (
     resolve_distributed_identity,
     telemetry_event_from_record,
     telemetry_event_to_dict,
@@ -147,7 +147,7 @@ class MemoryTracker:
             "device_id": self._device_id(),
             "context": context,
             "metadata": metadata or {},
-            "collector": "tfmemprof.memory_tracker",
+            "collector": "stormlog.tensorflow.memory_tracker",
             "sampling_interval_ms": sampling_interval_ms,
             "pid": os.getpid(),
             "host": socket.gethostname(),
@@ -158,7 +158,7 @@ class MemoryTracker:
         }
         event = telemetry_event_from_record(
             legacy,
-            default_collector="tfmemprof.memory_tracker",
+            default_collector="stormlog.tensorflow.memory_tracker",
             default_sampling_interval_ms=sampling_interval_ms,
         )
         return telemetry_event_to_dict(event)

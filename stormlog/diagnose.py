@@ -1,4 +1,4 @@
-"""Diagnostic bundle builder for tfmemprof diagnose command."""
+"""Diagnostic bundle builder for the Stormlog diagnose command."""
 
 import json
 import sys
@@ -7,10 +7,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .utils import get_backend_info, get_gpu_info, get_system_info
+from .device_collectors import (
+    build_device_memory_collector,
+    detect_torch_runtime_backend,
+)
+from .utils import (
+    check_memory_fragmentation,
+    get_gpu_info,
+    get_system_info,
+    suggest_memory_optimization,
+)
 
-# Risk thresholds (same semantics as gpumemprof)
+# Risk thresholds (align with suggest_memory_optimization where applicable)
 HIGH_UTILIZATION_RATIO = 0.85
+FRAGMENTATION_WARNING_RATIO = 0.3
 MANIFEST_VERSION = 1
 
 
@@ -21,14 +31,23 @@ def _default_str(obj: Any) -> str:
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-def _device_index(device: Optional[str]) -> int:
-    """Parse device string (e.g. /GPU:0) to GPU index."""
-    if not device or "/GPU:" not in device:
-        return 0
+def _collect_backend_sample(
+    device: Optional[int],
+) -> Tuple[Optional[str], Optional[Any]]:
+    """Collect one backend-aware sample when a GPU runtime is available."""
+    runtime_backend = detect_torch_runtime_backend()
+    if runtime_backend not in {"cuda", "rocm", "mps"}:
+        return None, None
     try:
-        return int(device.split(":")[-1])
-    except (ValueError, IndexError):
-        return 0
+        collector_device: Optional[Any]
+        if runtime_backend == "mps":
+            collector_device = "mps"
+        else:
+            collector_device = device
+        collector = build_device_memory_collector(collector_device)
+        return runtime_backend, collector.sample()
+    except Exception:
+        return runtime_backend, None
 
 
 def _create_artifact_dir(output: Optional[str], prefix: str) -> Path:
@@ -57,20 +76,39 @@ def _create_artifact_dir(output: Optional[str], prefix: str) -> Path:
             suffix += 1
 
 
-def collect_environment(device: Optional[str] = None) -> Dict[str, Any]:
-    """Collect system and GPU data for the diagnostic bundle."""
+def collect_environment(device: Optional[int] = None) -> Dict[str, Any]:
+    """Collect system, GPU, and fragmentation data for the diagnostic bundle."""
     env: Dict[str, Any] = {}
-    env["system"] = get_system_info()
-    env["gpu"] = get_gpu_info()
-    # TensorFlow does not expose fragmentation like PyTorch; omit or empty
-    env["fragmentation"] = {
-        "note": "TensorFlow does not expose fragmentation in this build"
-    }
+    system_info = get_system_info()
+    env["system"] = system_info
+    runtime_backend = str(system_info.get("detected_backend", "cpu"))
+
+    gpu_info = get_gpu_info(device)
+    if runtime_backend == "mps":
+        _, sample = _collect_backend_sample(device)
+        if sample is not None:
+            gpu_info = {
+                "backend": "mps",
+                "device_id": sample.device_id,
+                "allocated_memory": sample.allocated_bytes,
+                "reserved_memory": sample.reserved_bytes,
+                "total_memory": sample.total_bytes,
+            }
+    env["gpu"] = gpu_info
+
+    if runtime_backend in {"cuda", "rocm"} and not gpu_info.get("error"):
+        frag = check_memory_fragmentation(device)
+    elif runtime_backend == "mps":
+        frag = {"note": "MPS fragmentation metrics are not available"}
+    else:
+        frag = {"error": "CUDA is not available"}
+    env["fragmentation"] = frag
+
     return env
 
 
 def run_timeline_capture(
-    device: Optional[str],
+    device: Optional[int],
     duration_seconds: float,
     interval: float,
 ) -> Dict[str, List[float]]:
@@ -82,110 +120,99 @@ def run_timeline_capture(
         return {"timestamps": [], "allocated": [], "reserved": []}
 
     try:
-        from .tracker import MemoryTracker
+        runtime_backend = detect_torch_runtime_backend()
+        if runtime_backend in {"cuda", "rocm", "mps"}:
+            from .tracker import MemoryTracker
 
-        tracker = MemoryTracker(
-            device=device or "/GPU:0",
-            sampling_interval=interval,
-            alert_threshold_mb=None,
-            enable_logging=False,
-        )
+            tracker_device = "mps" if runtime_backend == "mps" else device
+            tracker: Any = MemoryTracker(
+                device=tracker_device,
+                sampling_interval=interval,
+                enable_alerts=False,
+            )
+        else:
+            from .cpu_profiler import CPUMemoryTracker
+
+            tracker = CPUMemoryTracker(sampling_interval=interval)
+
         tracker.start_tracking()
         try:
             time.sleep(duration_seconds)
         finally:
-            result = tracker.stop_tracking()
+            tracker.stop_tracking()
 
-        # Build timeline in same shape as gpumemprof: timestamps, allocated, reserved (bytes)
-        timestamps = list(result.timestamps)
-        # memory_usage is in MB; convert to bytes for allocated and reserved (TF uses same value)
-        mb_to_bytes = 1024 * 1024
-        allocated = [float(m) * mb_to_bytes for m in result.memory_usage]
-        reserved = allocated.copy()
+        timeline = tracker.get_memory_timeline(interval=interval)
         return {
-            "timestamps": timestamps,
-            "allocated": allocated,
-            "reserved": reserved,
+            "timestamps": list(timeline.get("timestamps", [])),
+            "allocated": list(timeline.get("allocated", [])),
+            "reserved": list(timeline.get("reserved", [])),
         }
     except Exception:
         return {"timestamps": [], "allocated": [], "reserved": []}
 
 
-def _suggest_tf_optimizations(utilization_ratio: float) -> List[str]:
-    """Return TensorFlow-oriented suggestions for diagnostic summary."""
-    suggestions: List[str] = []
-    if utilization_ratio >= 0.9:
-        suggestions.append(
-            "Very high GPU memory utilization. Consider reducing batch size, "
-            "using gradient checkpointing (tf.recompute_grad), or model parallelism."
-        )
-    if utilization_ratio >= HIGH_UTILIZATION_RATIO:
-        suggestions.append(
-            "Enable mixed precision with tf.keras.mixed_precision.Policy('mixed_float16') "
-            "to reduce memory footprint."
-        )
-    suggestions.extend(
-        [
-            "Use tf.data for efficient input pipelines and memory use.",
-            "Profile memory at different points in training to find bottlenecks.",
-            "Consider clearing the session or limiting GPU growth with tf.config.experimental.set_memory_growth.",
-        ]
-    )
-    return suggestions
-
-
 def build_diagnostic_summary(
-    device: Optional[str] = None,
+    device: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], bool]:
     """
     Build diagnostic summary and risk flags from current state.
     Returns (summary_dict, risk_detected).
     """
-    _system_info = get_system_info()
-    backend_info = get_backend_info()
-    backend = backend_info.get("runtime_backend", "cpu")
-    gpu_info = get_gpu_info()
+    system_info = get_system_info()
+    backend = system_info.get("detected_backend", "cpu")
+    gpu_info = get_gpu_info(device)
+    frag_info: Dict[str, Any] = {}
 
-    # TensorFlow does not expose num_ooms or fragmentation; use 0
+    # Current memory state
+    allocated = 0
+    reserved = 0
+    total = 0
+    peak = 0
+
+    if backend in {"cuda", "rocm"} and not gpu_info.get("error"):
+        frag_info = check_memory_fragmentation(device)
+        allocated = gpu_info.get("allocated_memory", 0) or 0
+        reserved = gpu_info.get("reserved_memory", 0) or 0
+        total = gpu_info.get("total_memory") or 0
+        peak = gpu_info.get("max_memory_allocated", 0) or allocated
+    elif backend == "mps":
+        _, sample = _collect_backend_sample(device)
+        if sample is not None:
+            allocated = sample.allocated_bytes
+            reserved = sample.reserved_bytes
+            total = sample.total_bytes or 0
+            peak = max(allocated, reserved)
+
+    utilization_ratio = float(allocated / total) if total else 0.0
+    fragmentation_ratio = float(frag_info.get("fragmentation_ratio", 0))
     num_ooms = 0
-    fragmentation_ratio = 0.0
+    if (
+        backend in {"cuda", "rocm"}
+        and "memory_stats" in gpu_info
+        and isinstance(gpu_info["memory_stats"], dict)
+    ):
+        num_ooms = gpu_info["memory_stats"].get("num_ooms", 0) or 0
 
-    # Per-device memory (TF reports in MB)
-    devices = gpu_info.get("devices") or []
-    idx = _device_index(device) if device else 0
-    if devices and idx < len(devices):
-        d = devices[idx]
-        current_mb = d.get("current_memory_mb", 0) or 0
-        peak_mb = d.get("peak_memory_mb", 0) or 0
-        allocated = int(current_mb * 1024 * 1024)
-        peak = int(peak_mb * 1024 * 1024)
-        total_memory_mb = d.get("total_memory_mb")
-        if isinstance(total_memory_mb, (int, float)) and total_memory_mb > 0:
-            total_bytes = int(total_memory_mb * 1024 * 1024)
-            utilization_ratio = float(current_mb / total_memory_mb)
-        else:
-            total_bytes = 0
-            utilization_ratio = 0.0
-    else:
-        allocated = 0
-        peak = 0
-        total_bytes = 0
-        utilization_ratio = 0.0
-
-    # Risk flags (no OOM/fragmentation from TF API)
+    # Risk flags
     oom_occurred = num_ooms > 0
-    high_utilization = total_bytes > 0 and utilization_ratio >= HIGH_UTILIZATION_RATIO
-    fragmentation_warning = False  # TF does not expose
+    high_utilization = total > 0 and utilization_ratio >= HIGH_UTILIZATION_RATIO
+    fragmentation_warning = fragmentation_ratio >= FRAGMENTATION_WARNING_RATIO
     risk_detected = oom_occurred or high_utilization or fragmentation_warning
 
-    suggestions = _suggest_tf_optimizations(utilization_ratio)
+    suggestions: List[str] = []
+    if backend in {"cuda", "rocm"} and not gpu_info.get("error"):
+        suggestions = suggest_memory_optimization(frag_info)
+    elif backend == "mps" and high_utilization:
+        suggestions = [
+            "High MPS memory utilization detected. Consider reducing batch size or using mixed precision."
+        ]
 
     summary: Dict[str, Any] = {
         "backend": backend,
         "allocated_bytes": allocated,
-        "reserved_bytes": allocated,
+        "reserved_bytes": reserved,
         "peak_bytes": peak,
-        "total_bytes": total_bytes,
+        "total_bytes": total,
         "utilization_ratio": utilization_ratio,
         "fragmentation_ratio": fragmentation_ratio,
         "num_ooms": num_ooms,
@@ -201,7 +228,7 @@ def build_diagnostic_summary(
 
 def run_diagnose(
     output: Optional[str],
-    device: Optional[str],
+    device: Optional[int],
     duration: float,
     interval: float,
     command_line: str,
@@ -212,7 +239,7 @@ def run_diagnose(
     exit_code: 0 = success no risk, 1 = failure, 2 = success with memory risk.
     """
     try:
-        artifact_dir = _create_artifact_dir(output, "tfmemprof-diagnose")
+        artifact_dir = _create_artifact_dir(output, "stormlog-diagnose")
     except OSError as e:
         target = Path(output).resolve() if output else Path.cwd().resolve()
         print(f"Error: Cannot create output directory {target}: {e}", file=sys.stderr)
@@ -246,7 +273,7 @@ def run_diagnose(
 
         exit_code = 2 if risk_detected else 0
 
-        # 4. Manifest
+        # 4. Manifest (last, so it can include exit_code and risk_detected)
         files_written.append("manifest.json")
         manifest = {
             "version": MANIFEST_VERSION,
@@ -259,6 +286,7 @@ def run_diagnose(
         manifest_path = artifact_dir / "manifest.json"
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
+
     except OSError as e:
         print(f"Error: Failed to write diagnostic artifact: {e}", file=sys.stderr)
         exit_code = 1

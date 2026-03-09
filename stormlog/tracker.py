@@ -659,7 +659,7 @@ class MemoryTracker:
         sampling_interval_ms = int(round(self.sampling_interval * 1000))
         default_collector = str(
             self.collector_capabilities.get(
-                "telemetry_collector", "gpumemprof.cuda_tracker"
+                "telemetry_collector", "stormlog.cuda_tracker"
             )
         )
         capability_metadata = {

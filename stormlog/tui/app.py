@@ -31,12 +31,12 @@ from textual.widgets import (
     TabPane,
 )
 
-from gpumemprof.telemetry import TelemetryEventV2
-from gpumemprof.utils import format_bytes, get_gpu_info, get_system_info
+from stormlog.telemetry import TelemetryEventV2
+from stormlog.utils import format_bytes, get_gpu_info, get_system_info
 
 try:
-    from tfmemprof.utils import get_gpu_info as get_tf_gpu_info
-    from tfmemprof.utils import get_system_info as get_tf_system_info
+    from stormlog.tensorflow.utils import get_gpu_info as get_tf_gpu_info
+    from stormlog.tensorflow.utils import get_system_info as get_tf_system_info
 except ImportError:
 
     def get_tf_gpu_info() -> dict[str, Any]:
@@ -111,27 +111,27 @@ except ImportError:
     Figlet = None
 
 try:
-    from gpumemprof import GPUMemoryProfiler as _GPUMemoryProfiler
+    from stormlog import GPUMemoryProfiler as _GPUMemoryProfiler
 
     GPUMemoryProfiler: Optional[Any] = _GPUMemoryProfiler
 except ImportError as e:
     raise ImportError(
         "GPUMemoryProfiler is required for the TUI application. "
-        "Ensure gpumemprof is properly installed."
+        "Ensure stormlog is properly installed."
     ) from e
 
 try:
-    from gpumemprof.cpu_profiler import CPUMemoryProfiler as _CPUMemoryProfiler
+    from stormlog.cpu_profiler import CPUMemoryProfiler as _CPUMemoryProfiler
 
     CPUMemoryProfiler: Optional[Any] = _CPUMemoryProfiler
 except ImportError as e:
     raise ImportError(
         "CPUMemoryProfiler is required for the TUI application. "
-        "Ensure gpumemprof is properly installed."
+        "Ensure stormlog is properly installed."
     ) from e
 
 try:
-    from tfmemprof.profiler import TFMemoryProfiler as _TFMemoryProfiler
+    from stormlog.tensorflow.profiler import TFMemoryProfiler as _TFMemoryProfiler
 
     TFMemoryProfiler: Optional[Any] = _TFMemoryProfiler
 except ImportError:
@@ -719,8 +719,8 @@ class GPUMemoryProfilerTUI(App):
         if TFMemoryProfiler is None or tf is None:
             self.log_message(
                 "TensorFlow Sample",
-                "TensorFlow profiler is unavailable. Install tensorflow and tfmemprof: "
-                "pip install tensorflow tfmemprof",
+                "TensorFlow profiler is unavailable. Install TensorFlow support with: "
+                "pip install 'stormlog[tf]'",
             )
             return
         await self._execute_task(
@@ -1537,8 +1537,8 @@ class GPUMemoryProfilerTUI(App):
     def _tensorflow_sample_workload() -> Any:
         if TFMemoryProfiler is None or tf is None:
             raise RuntimeError(
-                "TensorFlow profiler is unavailable. Install tensorflow and tfmemprof: "
-                "pip install tensorflow tfmemprof"
+                "TensorFlow profiler is unavailable. Install TensorFlow support with: "
+                "pip install 'stormlog[tf]'"
             )
         return run_tensorflow_sample_workload(TFMemoryProfiler, tf)
 

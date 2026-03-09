@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import psutil
 
-from gpumemprof.telemetry import (
+from stormlog.telemetry import (
     resolve_distributed_identity,
     telemetry_event_from_record,
     telemetry_event_to_dict,
@@ -25,10 +25,10 @@ from gpumemprof.telemetry import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from gpumemprof.tracker import TrackingEvent
+    from stormlog.tracker import TrackingEvent
 else:
     try:
-        from gpumemprof.tracker import TrackingEvent
+        from stormlog.tracker import TrackingEvent
     except ImportError:
 
         @dataclass
@@ -430,12 +430,12 @@ class CPUMemoryTracker:
                         "rank": event.rank,
                         "local_rank": event.local_rank,
                         "world_size": event.world_size,
-                        "collector": "gpumemprof.cpu_tracker",
+                        "collector": "stormlog.cpu_tracker",
                         "sampling_interval_ms": sampling_interval_ms,
                         "pid": pid,
                         "host": host,
                     },
-                    default_collector="gpumemprof.cpu_tracker",
+                    default_collector="stormlog.cpu_tracker",
                     default_sampling_interval_ms=sampling_interval_ms,
                 )
             )

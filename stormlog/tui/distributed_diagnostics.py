@@ -10,18 +10,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from gpumemprof.collective_attribution import (
+from stormlog.collective_attribution import (
     CollectiveAttributionResult,
     attribute_collective_memory,
     resolve_collective_attribution_config,
 )
-from gpumemprof.gap_analysis import analyze_hidden_memory_gaps
-from gpumemprof.telemetry import (
+from stormlog.gap_analysis import analyze_hidden_memory_gaps
+from stormlog.telemetry import (
     TelemetryEventV2,
     load_telemetry_events,
     telemetry_event_from_record,
 )
-from gpumemprof.utils import format_bytes
+from stormlog.utils import format_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -727,7 +727,7 @@ def _synthesize_events_from_timeline(
         record = {
             "timestamp": timestamp,
             "event_type": "sample",
-            "collector": "gpumemprof.diagnose.timeline",
+            "collector": "stormlog.diagnose.timeline",
             "sampling_interval_ms": max(0, interval_ms),
             "pid": -1,
             "host": "unknown",
@@ -747,7 +747,7 @@ def _synthesize_events_from_timeline(
         event = telemetry_event_from_record(
             record,
             permissive_legacy=True,
-            default_collector="gpumemprof.diagnose.timeline",
+            default_collector="stormlog.diagnose.timeline",
             default_sampling_interval_ms=max(0, interval_ms),
         )
         events.append(event)

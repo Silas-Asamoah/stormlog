@@ -1,12 +1,17 @@
-"""Stormlog - A comprehensive memory profiling tool for PyTorch."""
+"""Stormlog - A comprehensive memory profiling tool."""
 
 from __future__ import annotations
 
 import importlib
+from importlib.metadata import PackageNotFoundError, version as package_version
 from typing import Any
 
-__version__ = "0.2.0"
 __author__ = "Stormlog Team"
+
+try:
+    __version__ = package_version("stormlog")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
 
 _TORCH_INSTALL_GUIDANCE = (
     "PyTorch is required for this feature. Install with "
