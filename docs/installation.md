@@ -109,12 +109,13 @@ python3 -c "from gpumemprof._version import __version__; print(__version__)"
 
 # Test CLI tools
 gpumemprof --help
+gpumemprof info
 # Requires the TensorFlow extra (`.[tf]` or `.[all]`)
 tfmemprof --help
-
-# Run basic tests
-python3 -m pytest tests/ -v
+tfmemprof info
 ```
+
+If you installed from a source checkout, you can also run `python3 -m pytest tests/ -v`.
 
 ## Troubleshooting
 
@@ -179,7 +180,18 @@ After installation:
 2. Read the [Quick Start Guide](usage.md).
 3. Explore the [CLI Usage](cli.md).
 4. Review the [API Documentation](api.md).
-5. Check out the [Examples](../examples/).
+5. Review the [Examples Guide](examples.md).
+
+### About the examples
+
+The documentation references example modules such as
+`examples.cli.quickstart` and `examples.basic.pytorch_demo`. These are
+**only available when you install from a source checkout** (`git clone` +
+`pip install -e .`). The PyPI package does not include them.
+
+All CLI and Python API features work with a pip install. Use the CLI commands
+and Python snippets throughout this documentation, especially in
+[Usage](usage.md), [CLI](cli.md), and [Examples](examples.md).
 
 ## Support
 

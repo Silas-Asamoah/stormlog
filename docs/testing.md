@@ -82,6 +82,9 @@ python3 -m pytest -n 4
 Use the benchmark harness to measure profiling overhead and artifact-size growth
 with explicit budgets:
 
+> **Source checkout only.** `python -m examples.cli.benchmark_harness` requires
+> the repository `examples/` package.
+
 ```bash
 python -m examples.cli.benchmark_harness --check --iterations 200 --budgets docs/benchmarks/v0.2_budgets.json
 ```
@@ -182,43 +185,47 @@ tests/
 For manual smoke tests (CPU-only, PyTorch GPU, TensorFlow GPU, CLI) see
 `docs/examples/test_guides/README.md`.
 
-CI also validates the documented CLI examples directly. In `.github/workflows/ci.yml`,
-the `cli-test` job runs the step `Run documented CLI examples smoke test`, which executes:
+## Example and scenario validation
+
+> **Pip users**: The source-checkout commands in this section require the
+> `examples/` and `tests/` packages from a repository clone. If you installed
+> via `pip install stormlog`, use the CLI-only validation below instead.
+
+Source checkout CI still validates the documented example-module smoke path. In
+`.github/workflows/ci.yml`, the `cli-test` job runs the step `Run documented CLI
+examples smoke test`, which executes:
 
 ```bash
 python3 -m examples.cli.quickstart
 ```
 
-### CPU Smoke Test (No CUDA)
+### CLI-only validation (pip install)
 
-Need a fast signal on CPU-only machines? Run both steps below:
+For environments where `examples/` and `tests/` are not available:
 
-1. Force CPU execution and exercise the CLI walkthrough:
+```bash
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag
+tfmemprof info
+tfmemprof diagnose --duration 0 --output ./tf_diag
+```
 
-    ```bash
-    # Windows (PowerShell/CMD)
-    set CUDA_VISIBLE_DEVICES=
-    python -m examples.cli.quickstart
+## CPU-only validation
 
-    # macOS/Linux
-    export CUDA_VISIBLE_DEVICES=
-    python -m examples.cli.quickstart
-    ```
+For laptop or CI environments without CUDA:
 
-    The quickstart script runs `gpumemprof --help`, `gpumemprof info`, and (if
-    installed) the TensorFlow CLI without touching CUDA.
+```bash
+export CUDA_VISIBLE_DEVICES=
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json
+gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
+gpumemprof diagnose --duration 0 --output ./cpu_diag
+```
 
-2. Validate the system-info fallbacks:
-
-    ```bash
-    pytest tests/test_utils.py
-    ```
-
-    This ensures `gpumemprof.utils.get_system_info()` still reports sensible
-    metadata when GPUs are absent.
-
-Add these steps to CPU-only CI jobs or use them locally before installing
-CUDA.
+If you have a source checkout, you can also run `pytest tests/test_utils.py -v`.
+Pip users do not have the `tests/` package.
 
 ### Enabling the CUDA Path
 

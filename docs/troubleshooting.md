@@ -465,22 +465,11 @@ tfmemprof info
 tfmemprof diagnose --duration 0 --output ./tf_diag_bundle
 ```
 
-3. **Test with minimal example:**
+3. **Reproduce with the smallest matching example:**
 
-```python
-from gpumemprof import GPUMemoryProfiler
-import torch
-
-profiler = GPUMemoryProfiler()
-
-def test():
-    return torch.randn(100, 100).cuda()
-
-profile = profiler.profile_function(test)
-summary = profiler.get_summary()
-print(profile.to_dict())
-print(summary)
-```
+   Use the CLI commands and Python snippets from the [Usage Guide](usage.md).
+   If you have a source checkout, you can also run the example modules under
+   `examples/`.
 
 ### Reporting Issues
 

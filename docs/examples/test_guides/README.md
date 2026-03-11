@@ -2,7 +2,11 @@
 
 These guides replace the legacy Python scripts that used to live in
 `examples/test_guides/`. Instead of running massive ad-hoc scripts, you can now
-follow these concise workflows and reuse the curated example modules.
+follow these concise workflows.
+
+Example modules such as `examples.cli.quickstart` and
+`examples.basic.pytorch_demo` are available only in a source checkout. Pip
+users should use the CLI validation flows below.
 
 ## CPU-Only Sanity Check
 
@@ -13,8 +17,10 @@ exercise the CLI.
 # Show system + GPU summary (falls back to CPU)
 gpumemprof info
 
-# Run the CLI quickstart (also part of CI)
-python -m examples.cli.quickstart
+# Run the CLI validation (pip users: this works; source users can also run python -m examples.cli.quickstart)
+gpumemprof track --duration 2 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag
 ```
 
 For more CPU-focused tips, see `docs/cpu_compatibility.md`.
@@ -24,18 +30,25 @@ For more CPU-focused tips, see `docs/cpu_compatibility.md`.
 Use this duo whenever CUDA isn’t available:
 
 ```bash
-# Step 1: force CPU mode and run the CLI walkthrough
+# Step 1: force CPU mode and run the CLI validation
 set CUDA_VISIBLE_DEVICES=    # PowerShell/CMD
 # or: export CUDA_VISIBLE_DEVICES=   # macOS/Linux shells
-python -m examples.cli.quickstart
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag
 
-# Step 2: verify system-info fallbacks
+# Step 2: verify system-info fallbacks (source checkout only)
 pytest tests/test_utils.py
 ```
 
 Both steps run quickly and unblock CI jobs that lack GPUs.
 
 ## Launch Matrix (Recommended)
+
+> **Source checkout only.** `python -m examples.cli.capability_matrix`
+> requires the `examples/` package. Pip users should use the CLI validation in
+> the CPU smoke test above.
 
 Run one command to validate current launch capabilities:
 
@@ -51,6 +64,9 @@ On macOS, `--target both` exercises CPU + MPS paths together.
 
 ## PyTorch GPU Checklist
 
+> **Source checkout only.** Pip users should use the CLI commands and Python
+> snippets from the [Usage Guide](../usage.md).
+
 ```bash
 # Basic profiling walkthrough
 python -m examples.basic.pytorch_demo
@@ -64,6 +80,9 @@ Both scripts emit summaries, alert counts, and export artifacts under
 
 ## TensorFlow GPU Checklist
 
+> **Source checkout only.** Pip users should use the CLI commands and Python
+> snippets from the [Usage Guide](../usage.md).
+
 ```bash
 # Minimal TensorFlow profiling run
 python -m examples.basic.tensorflow_demo
@@ -74,6 +93,9 @@ statistics gathered via `TFMemoryProfiler`.
 
 ## CLI Smoke Test (PyTorch + TensorFlow)
 
+> **Source checkout only.** Pip users should use the CLI validation in the
+> CPU-only sanity check above.
+
 ```bash
 python -m examples.cli.quickstart
 ```
@@ -82,6 +104,9 @@ This runs the same commands exercised in CI (`gpumemprof --help`, `info`,
 optional `monitor`, and the equivalent `tfmemprof` commands).
 
 ### Scenario Modules (Telemetry + OOM + Diagnose)
+
+> **Source checkout only.** Pip users should use the CLI commands and Python
+> snippets from the [Usage Guide](../usage.md).
 
 ```bash
 python -m examples.scenarios.cpu_telemetry_scenario
@@ -106,12 +131,15 @@ it to a real GPU) and rerun the PyTorch/TensorFlow checklists above.
 
 ## Automation Tips
 
-- Integrate the demos into your workflow by adding `python -m examples.basic.*`
-  steps to release or pre-commit scripts.
+- Source checkout users can integrate the demos into release or pre-commit
+  scripts with `python -m examples.basic.*`.
+- Pip users can automate the CLI validation flows from the CPU-only sanity
+  check instead.
 - Use `pytest tests/test_utils.py` for a lightweight regression check when GPUs
   are not available.
-- On CI, we already run `examples.cli.quickstart`; feel free to add extra jobs
-  that execute the PyTorch/TensorFlow demos on GPU-enabled runners.
+- On source-checkout CI, we already run `examples.cli.quickstart`; feel free to
+  add extra jobs that execute the PyTorch/TensorFlow demos on GPU-enabled
+  runners.
 
 ## Related Documentation
 

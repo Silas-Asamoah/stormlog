@@ -2,209 +2,96 @@
 
 # Examples Guide
 
-This guide provides comprehensive examples for using Stormlog with both PyTorch and TensorFlow.
+This guide shows the fastest safe validation paths for both pip installs and
+source checkouts.
 
-## PyTorch Examples
+> **Note for pip users**: The example modules
+> (`examples.cli.quickstart`, `examples.basic.pytorch_demo`, and related
+> scripts) are **only available when you install from a source checkout**.
+> If you installed via `pip install stormlog`, these commands will raise
+> `ModuleNotFoundError`. Use the
+> [CLI-only validation](#cli-only-validation-for-pip-users) and
+> [Python snippets for pip users](#python-snippets-for-pip-users) below
+> instead, or clone the repository for full example coverage.
 
-### Basic Profiling
+## CLI-only validation for pip users
 
-```python
-import torch
-import torch.nn as nn
-from gpumemprof import GPUMemoryProfiler
-
-# Create a simple model
-model = nn.Sequential(
-    nn.Linear(1000, 500),
-    nn.ReLU(),
-    nn.Linear(500, 100)
-)
-
-# Initialize profiler
-profiler = GPUMemoryProfiler()
-
-# Profile training step
-def train_step(model, data, target):
-    model.train()
-    optimizer.zero_grad()
-    output = model(data)
-    loss = nn.functional.cross_entropy(output, target)
-    loss.backward()
-    optimizer.step()
-    return loss
-
-# Run training
-for epoch in range(5):
-    for batch_idx, (data, target) in enumerate(dataloader):
-        profile = profiler.profile_function(train_step, model, data, target)
-
-# Get summary
-summary = profiler.get_summary()
-print(f"Peak memory: {summary['peak_memory_usage'] / (1024**3):.2f} GB")
-```
-
-### Advanced Monitoring
-
-```python
-from gpumemprof import GPUMemoryProfiler, MemoryVisualizer
-
-profiler = GPUMemoryProfiler()
-
-# Start monitoring
-profiler.start_monitoring(interval=0.5)
-
-# Your training loop
-for epoch in range(10):
-    for batch in dataloader:
-        profiler.profile_function(train_step, model, batch[0], batch[1])
-
-# Stop monitoring
-profiler.stop_monitoring()
-
-# Generate visualizations
-visualizer = MemoryVisualizer(profiler)
-visualizer.plot_memory_timeline(interactive=False, save_path="timeline.png")
-visualizer.export_data(format="json", save_path="training_profile")
-```
-
-### Context Profiling
-
-```python
-from gpumemprof import profile_context
-
-# Profile different phases
-with profile_context("data_loading"):
-    train_data = load_dataset()
-    val_data = load_validation_data()
-
-with profile_context("model_creation"):
-    model = create_model()
-
-with profile_context("training"):
-    for epoch in range(10):
-        train_epoch(model, train_data)
-
-with profile_context("validation"):
-    validate_model(model, val_data)
-```
-
-## TensorFlow Examples
-
-### Basic TensorFlow Profiling
-
-```python
-import tensorflow as tf
-from tfmemprof import TFMemoryProfiler
-
-# Create model
-model = tf.keras.Sequential([
-    tf.keras.layers.Dense(1000, activation='relu'),
-    tf.keras.layers.Dense(500, activation='relu'),
-    tf.keras.layers.Dense(10, activation='softmax')
-])
-
-# Initialize profiler
-profiler = TFMemoryProfiler()
-
-# Profile training
-with profiler.profile_context("training"):
-    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy')
-    model.fit(x_train, y_train, epochs=5, batch_size=32)
-
-# Get results
-results = profiler.get_results()
-print(f"Peak memory: {results.peak_memory_mb:.2f} MB")
-```
-
-### Keras Model Profiling
-
-```python
-from tfmemprof import TFMemoryProfiler
-
-profiler = TFMemoryProfiler()
-
-# Profile model creation
-with profiler.profile_context("model_creation"):
-    model = create_complex_model()
-
-# Profile data preprocessing
-with profiler.profile_context("data_preprocessing"):
-    x_train, y_train = preprocess_data()
-
-# Profile training
-with profiler.profile_context("training"):
-    history = model.fit(
-        x_train, y_train,
-        epochs=10,
-        batch_size=64,
-        validation_split=0.2
-    )
-
-# Profile evaluation
-with profiler.profile_context("evaluation"):
-    test_loss, test_acc = model.evaluate(x_test, y_test)
-
-# Analyze results
-results = profiler.get_results()
-print(f"Peak memory: {results.peak_memory_mb:.2f} MB")
-```
-
-### Custom Training Loop
-
-```python
-import tensorflow as tf
-from tfmemprof import TFMemoryProfiler
-
-profiler = TFMemoryProfiler()
-
-@tf.function
-def train_step(model, optimizer, x, y):
-    with tf.GradientTape() as tape:
-        predictions = model(x, training=True)
-        loss = loss_object(y, predictions)
-
-    gradients = tape.gradient(loss, model.trainable_variables)
-    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-    return loss
-
-# Profile custom training
-with profiler.profile_context("custom_training"):
-    for epoch in range(10):
-        for batch_x, batch_y in train_dataset:
-            loss = train_step(model, optimizer, batch_x, batch_y)
-```
-
-## CLI Examples
-
-### Real-time Monitoring
+If you installed Stormlog from PyPI, use this sequence instead of
+`examples.cli.quickstart`:
 
 ```bash
-# Monitor for 5 minutes
-gpumemprof monitor --duration 300 --output monitoring.json
+gpumemprof info
+gpumemprof track --duration 2 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag
 
-# Monitor with alerts
-gpumemprof track --warning-threshold 75 --critical-threshold 90 --output tracking.json
-
-# Analyze results
-gpumemprof analyze monitoring.json --visualization
-```
-
-### TensorFlow CLI
-
-```bash
-# Get system info
 tfmemprof info
-
-# Monitor TensorFlow training
-tfmemprof monitor --duration 600 --output tf_monitoring.json
-
-# Track with alerts
-tfmemprof track --threshold 3000 --output tf_tracking.json
+tfmemprof diagnose --duration 0 --output ./tf_diag
 ```
 
-## Launch QA Scenario Matrix
+This validates the installed CLI and produces artifacts you can load in the
+TUI Diagnostics tab.
 
-For v0.2 launch validation, use the scenario matrix orchestrator:
+## Python snippets for pip users
+
+If you do not have the example modules, use these snippets in place of the
+source-only demos.
+
+### CPU profiling
+
+```python
+from gpumemprof import CPUMemoryProfiler
+
+profiler = CPUMemoryProfiler()
+with profiler.profile_context("cpu_step"):
+    values = [i * i for i in range(100_000)]
+    values.reverse()
+print(profiler.get_summary())
+```
+
+### CPU tracking
+
+```python
+from gpumemprof import CPUMemoryTracker
+
+tracker = CPUMemoryTracker(sampling_interval=0.5)
+tracker.start_tracking()
+# Run workload here.
+tracker.stop_tracking()
+print(tracker.get_statistics()["total_events"])
+```
+
+### MPS tracking
+
+```python
+from gpumemprof import MemoryTracker
+
+tracker = MemoryTracker(sampling_interval=0.5, enable_alerts=True)
+tracker.start_tracking()
+# Run workload here.
+tracker.stop_tracking()
+print(tracker.get_statistics())
+```
+
+### TensorFlow
+
+```python
+from tfmemprof import TFMemoryProfiler
+
+profiler = TFMemoryProfiler(device="/CPU:0", enable_tensor_tracking=True)
+with profiler.profile_context("training"):
+    # Your model.fit() or TensorFlow ops go here.
+    pass
+print(profiler.get_results())
+```
+
+## Source-checkout examples
+
+The workflows below require a repository clone plus `pip install -e .`.
+
+### Launch QA scenario matrix
+
+Source checkout only.
 
 ```bash
 python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
@@ -212,13 +99,13 @@ python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode s
 
 This command runs:
 
-- CPU telemetry export + schema validation
-- MPS telemetry export + analyze roundtrip (when MPS is available)
-- OOM flight-recorder scenario (safe simulated mode by default)
-- TensorFlow monitor/track/analyze/diagnose end-to-end scenario
-- `gpumemprof diagnose` artifact check
-- benchmark harness budget gate
-- optional TUI PTY smoke (skip with `--skip-tui`)
+- CPU telemetry export and schema validation
+- MPS telemetry export and analyze roundtrip when MPS is available
+- OOM flight-recorder scenario in safe simulated mode
+- TensorFlow monitor, track, analyze, and diagnose end-to-end coverage
+- `gpumemprof diagnose` artifact checks
+- benchmark harness budget gates
+- optional TUI PTY smoke when `--skip-tui` is omitted
 
 Switch to full mode to include extra demos:
 
@@ -226,7 +113,9 @@ Switch to full mode to include extra demos:
 python -m examples.cli.capability_matrix --mode full --target both --oom-mode simulated
 ```
 
-### Individual Scenario Modules
+### Individual scenario modules
+
+Source checkout only.
 
 ```bash
 python -m examples.scenarios.cpu_telemetry_scenario
@@ -235,27 +124,23 @@ python -m examples.scenarios.oom_flight_recorder_scenario --mode simulated
 python -m examples.scenarios.tf_end_to_end_scenario
 ```
 
-## Complete Working Examples
+### Repository example scripts
 
-### PyTorch Training Example
+These scripts are available in the source repository only, not in the pip
+package:
 
-See [examples/basic/pytorch_demo.py](../examples/basic/pytorch_demo.py) for a complete PyTorch training example with profiling.
+- `examples/basic/pytorch_demo.py`
+- `examples/advanced/tracking_demo.py`
+- `examples/basic/tensorflow_demo.py`
+- `examples/cli/quickstart.py`
 
-### Advanced Tracking Example
+### Markdown test guides
 
-See [examples/advanced/tracking_demo.py](../examples/advanced/tracking_demo.py) for advanced memory tracking with alerts and visualization.
-
-### CLI Quickstart
-
-See [examples/cli/quickstart.py](../examples/cli/quickstart.py) for runnable samples of the `gpumemprof` and `tfmemprof` command-line interfaces.
-
-### Testing Guides
-
-Legacy testing flows have been migrated to Markdown. See [docs/examples/test_guides/README.md](examples/test_guides/README.md) for CPU-only, PyTorch, TensorFlow, and CLI smoke-test checklists.
-
-### TensorFlow Example
-
-See [examples/basic/tensorflow_demo.py](../examples/basic/tensorflow_demo.py) for a complete TensorFlow example.
+The Markdown test guides are in the source repository at
+`docs/examples/test_guides/README.md`. They are not shipped with the pip
+package. If you have a source checkout, use them for manual checklists. Pip
+users should follow the CLI-only validation and Python snippets above plus the
+[Usage Guide](usage.md).
 
 ## Best Practices
 

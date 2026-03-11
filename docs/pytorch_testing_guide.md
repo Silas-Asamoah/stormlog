@@ -25,9 +25,10 @@
 ---
 
 > **Note:** Legacy scripts under `examples/test_guides/` have been
-> replaced by curated Markdown workflows.
-> Use `docs/examples/test_guides/README.md` plus the modules in
-> `examples/basic`, `examples/advanced`, and `examples/cli` for hands-on tests.
+> replaced by curated Markdown workflows. The modules in `examples/basic`,
+> `examples/advanced`, and `examples/cli` are available only in a source
+> checkout. Pip users should use the CLI and Python snippets in
+> `docs/usage.md`, `docs/examples.md`, and `docs/cpu_compatibility.md`.
 
 ## Overview
 
@@ -135,11 +136,32 @@ python -c "from gpumemprof import GPUMemoryProfiler; print('Profiler installed s
 
 ## Quick Start
 
+### Before you start
+
+Validate the environment:
+
+```bash
+gpumemprof info
+```
+
+If you have a **source checkout**, you can also run:
+
+```bash
+python -m examples.basic.pytorch_demo
+```
+
+If no supported `torch.cuda` backend is available, that script skips the
+bounded profiling path. **Pip users** should use `CPUMemoryProfiler` or
+`MemoryTracker` as shown in the [Usage Guide](usage.md) and
+[CPU Compatibility Guide](cpu_compatibility.md).
+
 ### 🚀 Ultra-Quick Test (30 seconds)
 
 Choose your scenario:
 
 #### With GPU:
+
+Source checkout only.
 
 ```bash
 python -m examples.basic.pytorch_demo
@@ -150,7 +172,10 @@ python -m examples.advanced.tracking_demo
 #### CPU Only:
 
 ```bash
-python -m examples.cli.quickstart
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag_bundle
 ```
 
 ### Expected Output:
@@ -186,7 +211,8 @@ nvidia-smi
 
 ### Testing the Stormlog
 
-Run the curated demos (these are the same ones exercised in CI):
+Run the curated demos if you have a source checkout (these are the same ones
+exercised in CI):
 
 ```bash
 python -m examples.basic.pytorch_demo
@@ -314,15 +340,17 @@ python -m gpumemprof.cli analyze gpu_results.json --visualization
 
 ### Testing the CPU Profiler
 
-Use the CLI and basic demo to validate CPU-only environments:
+Use the CLI to validate CPU-only environments:
 
 ```bash
 CUDA_VISIBLE_DEVICES="" gpumemprof info
-python -m examples.cli.quickstart
+gpumemprof track --duration 10 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag_bundle
 ```
 
-For deeper CPU scenarios, follow the CPU section in
-`docs/examples/test_guides/README.md`.
+If you have a source checkout, you can also run `pytest tests/test_utils.py -v`
+for the system-info fallback checks.
 
 ### Basic CPU Profiling Usage
 
@@ -482,7 +510,7 @@ Both test suites provide comprehensive validation:
 #### GPU & CPU Checklists
 
 See `docs/examples/test_guides/README.md` for the full set of scenarios. Each
-checklist maps to the curated modules:
+checklist maps to the following **source-repository-only** modules:
 
 - `examples/basic/pytorch_demo.py`
 - `examples/advanced/tracking_demo.py`
@@ -490,6 +518,9 @@ checklist maps to the curated modules:
 
 These replace the monolithic `pytorch_profiler_test_guide.py` and
 `cpu_profiler_test_guide.py` scripts.
+
+Pip users should use the [Usage Guide](usage.md) snippets and the CPU-only
+validation steps in [CPU Compatibility](cpu_compatibility.md).
 
 ### Expected Test Results
 
@@ -1299,18 +1330,20 @@ This comprehensive guide provides everything you need to test and use the PyTorc
 
 ### Quick Reference
 
-**GPU Users:**
+**Source checkout:**
 
 ```bash
 python -m examples.basic.pytorch_demo          # Quick test
 python -m examples.advanced.tracking_demo      # Tracker/watchdog demo
 ```
 
-**CPU Users:**
+**Pip install:**
 
 ```bash
-python -m examples.cli.quickstart      # Quick test
 gpumemprof info                        # System summary
+gpumemprof track --duration 10 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag_bundle
 ```
 
 **Getting Help:**

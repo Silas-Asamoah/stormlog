@@ -2,6 +2,11 @@
 
 # Benchmark Harness (v0.2)
 
+> **Source checkout only.** The benchmark harness
+> (`python -m examples.cli.benchmark_harness`) requires the `examples/` package
+> and `docs/benchmarks/` from the repository. It is not available in the pip
+> package.
+
 This benchmark harness measures profiler overhead and artifact growth with explicit pass/fail budgets.
 
 ## Run the Harness

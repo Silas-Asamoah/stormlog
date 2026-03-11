@@ -10,11 +10,14 @@ This guide covers the current v0.2 command flows for:
 ## Install and Verify
 
 ```bash
-pip install -e .
+pip install stormlog
 
 gpumemprof --help
 tfmemprof --help
 ```
+
+If you are working from a repository clone, `pip install -e .` also exposes the
+source-only `examples/` package used in a few release-validation flows.
 
 ## Canonical CLI Workflow
 
@@ -114,6 +117,13 @@ tfmemprof info
 tfmemprof monitor --interval 0.5 --duration 30 --output tf_monitor.json
 ```
 
+For CPU-only TensorFlow or when the GPU is unavailable, use `--device /CPU:0`:
+
+```bash
+tfmemprof monitor --interval 0.5 --duration 30 --device /CPU:0 --output tf_monitor.json
+tfmemprof track --interval 0.5 --output tf_track.json --device /CPU:0
+```
+
 ### `track`
 
 ```bash
@@ -135,14 +145,27 @@ tfmemprof diagnose --duration 5 --interval 0.5 --output ./tf_diag
 tfmemprof diagnose --duration 0 --output ./tf_diag_quick
 ```
 
-## Launch QA Commands
+## Release-validation shortcuts
+
+**Source checkout only.** These commands require the `examples/` package from a
+repository clone:
 
 ```bash
 python -m examples.cli.quickstart
 python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
 ```
 
-Use `--mode full` for exhaustive examples coverage.
+**Pip users** should use this CLI-only sequence instead:
+
+```bash
+gpumemprof info
+gpumemprof track --duration 2 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag
+
+tfmemprof info
+tfmemprof diagnose --duration 0 --output ./tf_diag
+```
 
 ---
 

@@ -31,19 +31,24 @@ gpumemprof diagnose --duration 0 --output /tmp/gpumemprof_diag
 tfmemprof diagnose --duration 0 --output /tmp/tf_diag
 ```
 
-4. Run curated examples:
+4. Optional source-checkout smoke tests:
 
 ```bash
 python -m examples.cli.quickstart
 python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
 ```
 
-This sequence works for CPU-only and MPS/CUDA systems; unsupported checks are
-reported as explicit `SKIP` instead of silent failures.
+Steps 1 through 3 work for pip installs on CPU-only, MPS, CUDA, and ROCm
+systems. Step 4 requires a source checkout because the `examples/` package is
+not included in the PyPI distribution.
 
 ## Quick Start
 
 ### PyTorch Usage
+
+> **MPS and CPU-only users**: `GPUMemoryProfiler` requires CUDA or ROCm. On
+> Apple MPS or CPU-only systems, it raises `RuntimeError: CUDA is not
+> available`. Use the CPU-only and tracking snippets below instead.
 
 ```python
 from gpumemprof import GPUMemoryProfiler
@@ -65,6 +70,18 @@ print(f"Profiled: {profile.function_name}")
 print(f"Peak memory: {summary['peak_memory_usage'] / (1024**3):.2f} GB")
 ```
 
+### CPU-only workflow
+
+```python
+from gpumemprof import CPUMemoryProfiler
+
+profiler = CPUMemoryProfiler()
+with profiler.profile_context("cpu_step"):
+    values = [i * i for i in range(100_000)]
+    values.reverse()
+print(profiler.get_summary())
+```
+
 ### TensorFlow Usage
 
 ```python
@@ -81,6 +98,9 @@ with profiler.profile_context("training"):
 results = profiler.get_results()
 print(f"Peak memory: {results.peak_memory_mb:.2f} MB")
 ```
+
+For CPU-only TensorFlow or when the GPU backend is unavailable, initialize the
+profiler with `TFMemoryProfiler(device="/CPU:0")`.
 
 ## Advanced Usage
 
@@ -104,7 +124,26 @@ profiler.stop_monitoring()
 results = profiler.get_summary()
 ```
 
-### Memory Leak Detection
+### Tracking over time
+
+```python
+from gpumemprof import CPUMemoryTracker, MemoryTracker
+
+cpu_tracker = CPUMemoryTracker(sampling_interval=0.5)
+cpu_tracker.start_tracking()
+# Run a CPU-only workload here.
+cpu_tracker.stop_tracking()
+print(cpu_tracker.get_statistics()["total_events"])
+
+# On Apple Silicon with PyTorch MPS, use MemoryTracker instead.
+mps_tracker = MemoryTracker(sampling_interval=0.5, enable_alerts=True)
+mps_tracker.start_tracking()
+# Run an MPS workload here.
+mps_tracker.stop_tracking()
+print(mps_tracker.get_statistics())
+```
+
+### Memory leak detection
 
 ```python
 from gpumemprof import MemoryTracker
@@ -126,6 +165,11 @@ print(f"Peak memory: {stats.get('peak_memory', 0) / (1024**3):.2f} GB")
 ```
 
 ### Visualization
+
+> **Note**: `MemoryVisualizer` requires `GPUMemoryProfiler`, which is
+> CUDA/ROCm-only. On MPS or CPU, use the TUI Visualizations tab with live
+> tracking instead, or run `gpumemprof analyze --visualization` on saved
+> telemetry from `gpumemprof track`.
 
 ```python
 from gpumemprof import GPUMemoryProfiler, MemoryVisualizer
@@ -202,14 +246,19 @@ with profile_context("my_context"):
 4. **Set Alerts**: Configure appropriate thresholds
 5. **Export Data**: Save results for later analysis
 
-## Examples
+## Related examples
 
-See the [examples directory](../examples/) for complete working examples:
+The following example scripts are available in the **source repository** only,
+not in the pip package:
 
-- [Basic PyTorch profiling](../examples/basic/pytorch_demo.py)
-- [Advanced tracking](../examples/advanced/tracking_demo.py)
-- [TensorFlow profiling](../examples/basic/tensorflow_demo.py)
-- [CLI quickstart](../examples/cli/quickstart.py)
+- `examples/basic/pytorch_demo.py` for CUDA-gated `GPUMemoryProfiler` usage
+- `examples/basic/tensorflow_demo.py` for `TFMemoryProfiler` context profiling
+- `examples/advanced/tracking_demo.py` for `MemoryTracker` with alerts and export
+- `examples/cli/quickstart.py` for CLI smoke validation
+
+Pip users should use the [CPU-only workflow](#cpu-only-workflow), the
+[Tracking over time](#tracking-over-time) snippets above, and the
+[Examples Guide](examples.md) for equivalent Python and CLI commands.
 
 ---
 

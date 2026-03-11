@@ -53,7 +53,8 @@ This matrix reflects the current behavior of the repository and is versioned for
 ## Validation Notes
 
 - The compatibility matrix is linked from `README.md` and `docs/index.md`.
-- CLI examples smoke validation is part of CI (`examples.cli.quickstart`) in `.github/workflows/ci.yml`.
+- Source-checkout CLI smoke validation is part of CI
+  (`python -m examples.cli.quickstart`) in `.github/workflows/ci.yml`.
 - Backend capability metadata emitted in tracker exports includes:
   - `backend`
   - `supports_device_total`

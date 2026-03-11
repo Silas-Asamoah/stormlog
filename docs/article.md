@@ -595,6 +595,14 @@ tfmemprof monitor --device /GPU:0 --duration 3600
 tfmemprof analyze --input tf_results.json --optimize --report report.md
 ```
 
+For CPU-only TensorFlow or when the GPU backend is unavailable, use
+`--device /CPU:0` instead:
+
+```bash
+tfmemprof monitor --interval 0.5 --duration 30 --device /CPU:0 --output tf_monitor.json
+tfmemprof track --interval 0.5 --output tf_track.json --device /CPU:0
+```
+
 ### Automation Examples
 
 ```bash
@@ -710,23 +718,25 @@ _[Image Placeholder: Analysis dashboard showing efficiency scores, correlation p
 
 ### Installation
 
-1. **Clone the Repository**
+1. **Install from PyPI (recommended for most users)**
+
+```bash
+pip install stormlog
+```
+
+2. **Optional source checkout**
 
 ```bash
 git clone https://github.com/Silas-Asamoah/stormlog.git
 cd stormlog
-```
-
-2. **Install Dependencies**
-
-```bash
-pip install -r requirements.txt
-```
-
-3. **Install the Package**
-
-```bash
 pip install -e .
+```
+
+3. **Install framework extras as needed**
+
+```bash
+pip install "stormlog[torch]"
+pip install "stormlog[tf]"
 ```
 
 ### Quick Start Guide
@@ -770,6 +780,27 @@ with profiler.profile_context("training"):
 # 4. Get results
 results = profiler.get_results()
 print(f"Peak memory: {results.peak_memory_mb} MB")
+```
+
+### Practical starting point
+
+**Pip install** is the recommended path for most users:
+
+```bash
+gpumemprof info
+gpumemprof track --duration 2 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag
+tfmemprof info
+tfmemprof diagnose --duration 0 --output ./tf_diag
+stormlog
+```
+
+**Source checkout** users can optionally add:
+
+```bash
+python -m examples.cli.quickstart
+python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
 ```
 
 ### Your First Memory Analysis
