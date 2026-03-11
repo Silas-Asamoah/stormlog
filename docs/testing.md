@@ -224,6 +224,10 @@ gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
 gpumemprof diagnose --duration 0 --output ./cpu_diag
 ```
 
+On Apple Silicon, clearing `CUDA_VISIBLE_DEVICES` disables CUDA but
+`gpumemprof info` may still report the `mps` backend. Treat this as a non-CUDA
+smoke test rather than a strict CPU-only force.
+
 If you have a source checkout, you can also run `pytest tests/test_utils.py -v`.
 Pip users do not have the `tests/` package.
 

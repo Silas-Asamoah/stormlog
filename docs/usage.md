@@ -127,15 +127,21 @@ results = profiler.get_summary()
 ### Tracking over time
 
 ```python
-from gpumemprof import CPUMemoryTracker, MemoryTracker
+from gpumemprof import CPUMemoryTracker
 
 cpu_tracker = CPUMemoryTracker(sampling_interval=0.5)
 cpu_tracker.start_tracking()
 # Run a CPU-only workload here.
 cpu_tracker.stop_tracking()
 print(cpu_tracker.get_statistics()["total_events"])
+```
 
-# On Apple Silicon with PyTorch MPS, use MemoryTracker instead.
+If you installed the PyTorch extra (`pip install "stormlog[torch]"`) and want
+Apple Silicon MPS telemetry, use `MemoryTracker` instead:
+
+```python
+from gpumemprof import MemoryTracker
+
 mps_tracker = MemoryTracker(sampling_interval=0.5, enable_alerts=True)
 mps_tracker.start_tracking()
 # Run an MPS workload here.
@@ -144,6 +150,9 @@ print(mps_tracker.get_statistics())
 ```
 
 ### Memory leak detection
+
+> **Requires the PyTorch extra**: `MemoryTracker` follows the PyTorch tracker
+> stack. Install `stormlog[torch]` before using this example.
 
 ```python
 from gpumemprof import MemoryTracker

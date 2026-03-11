@@ -37,6 +37,10 @@ gpumemprof diagnose --duration 0 --output ./cpu_diag
 On Windows, clear `CUDA_VISIBLE_DEVICES` with the shell-appropriate syntax
 before running the same steps.
 
+On Apple Silicon, clearing `CUDA_VISIBLE_DEVICES` disables CUDA but
+`gpumemprof info` may still report the `mps` backend. Treat this as a
+non-CUDA smoke test rather than a strict CPU-only force.
+
 ## Recommended CPU-only checklist
 
 1. Verify the install with `gpumemprof info`.

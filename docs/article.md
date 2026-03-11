@@ -793,6 +793,9 @@ gpumemprof analyze track.json --format txt --output analysis.txt
 gpumemprof diagnose --duration 0 --output ./diag
 tfmemprof info
 tfmemprof diagnose --duration 0 --output ./tf_diag
+
+# Optional TUI (requires the textual extra)
+pip install "stormlog[tui]"
 stormlog
 ```
 

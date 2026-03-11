@@ -30,7 +30,7 @@ For more CPU-focused tips, see `docs/cpu_compatibility.md`.
 Use this duo whenever CUDA isn’t available:
 
 ```bash
-# Step 1: force CPU mode and run the CLI validation
+# Step 1: disable CUDA and run the CLI validation
 set CUDA_VISIBLE_DEVICES=    # PowerShell/CMD
 # or: export CUDA_VISIBLE_DEVICES=   # macOS/Linux shells
 gpumemprof info
@@ -41,6 +41,10 @@ gpumemprof diagnose --duration 0 --output ./diag
 # Step 2: verify system-info fallbacks (source checkout only)
 pytest tests/test_utils.py
 ```
+
+On Apple Silicon, clearing `CUDA_VISIBLE_DEVICES` disables CUDA but
+`gpumemprof info` may still report the `mps` backend. Treat this as a non-CUDA
+smoke test rather than a strict CPU-only force.
 
 Both steps run quickly and unblock CI jobs that lack GPUs.
 

@@ -16,6 +16,7 @@ _BANNED_DOC_SNIPPETS = {
     "docs/article.md": [
         "MemoryTracker(alert_threshold_mb=",
         "results = tracker.stop_tracking()",
+        "tfmemprof diagnose --duration 0 --output ./tf_diag\nstormlog",
     ],
     "docs/tensorflow_testing_guide.md": [
         "from tfmemprof import MemoryTracker",
@@ -39,6 +40,9 @@ _BANNED_DOC_SNIPPETS = {
         "# Run the CLI quickstart (also part of CI)",
         "# Step 1: force CPU mode and run the CLI walkthrough",
     ],
+    "docs/usage.md": [
+        "from gpumemprof import CPUMemoryTracker, MemoryTracker",
+    ],
 }
 
 _REQUIRED_DOC_SNIPPETS = {
@@ -60,6 +64,15 @@ _REQUIRED_DOC_SNIPPETS = {
         "### Capability Matrix or OOM scenario button fails with `ModuleNotFoundError`",
         "python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated --skip-tui",
         "python -m examples.scenarios.oom_flight_recorder_scenario --mode simulated",
+    ],
+    "docs/examples/test_guides/README.md": [
+        "Treat this as a non-CUDA\nsmoke test rather than a strict CPU-only force.",
+    ],
+    "docs/usage.md": [
+        'If you installed the PyTorch extra (`pip install "stormlog[torch]"`)',
+    ],
+    "docs/article.md": [
+        '# Optional TUI (requires the textual extra)\npip install "stormlog[tui]"',
     ],
 }
 

@@ -74,6 +74,10 @@ PY
   gpumemprof diagnose --duration 0 --output ./diag
   ```
 
+  On Apple Silicon, clearing `CUDA_VISIBLE_DEVICES` disables CUDA but
+  `gpumemprof info` may still report the `mps` backend. Treat this as a
+  non-CUDA smoke test rather than a strict CPU-only force.
+
   If you have a source checkout, you can also run `pytest tests/test_utils.py -v`.
 
 - **GPU path:** unset `CUDA_VISIBLE_DEVICES` (or set it to a GPU index) and run
