@@ -25,8 +25,10 @@
 ---
 
 > **Note:** Legacy scripts under `examples/test_guides/` have been replaced by
-> Markdown workflows. Use `examples/basic/tensorflow_demo.py`, the CLI quickstart,
-> and `docs/examples/test_guides/README.md` for manual testing.
+> Markdown workflows. `examples/basic/tensorflow_demo.py` and
+> `examples/cli/quickstart.py` are available only in a source checkout. Pip
+> users should use the CLI and Python snippets in `docs/usage.md`,
+> `docs/examples.md`, and `docs/testing.md`.
 
 ## Overview
 
@@ -141,11 +143,30 @@ python -c "import tensorflow as tf; print('GPU Available:', tf.config.list_physi
 
 ## Quick Start
 
+### Before you start
+
+Validate the environment:
+
+```bash
+tfmemprof info
+```
+
+If you have a **source checkout**, you can also run:
+
+```bash
+python -m examples.basic.tensorflow_demo
+```
+
+**Pip users** should use the `TFMemoryProfiler` snippet in the
+[Usage Guide](usage.md) and set `device="/CPU:0"` when needed.
+
 ### 🚀 Ultra-Quick Test (30 seconds)
 
 Choose your scenario:
 
 #### With GPU:
+
+Source checkout only.
 
 ```bash
 python -m examples.basic.tensorflow_demo
@@ -154,7 +175,9 @@ python -m examples.basic.tensorflow_demo
 #### CPU Only:
 
 ```bash
-python -m examples.cli.quickstart
+tfmemprof info
+tfmemprof monitor --interval 0.5 --duration 15 --device /CPU:0 --output tf_monitor.json
+tfmemprof diagnose --duration 0 --output ./tf_diag
 ```
 
 ### Expected Output:
@@ -193,7 +216,7 @@ nvidia-smi
 
 ### Testing the TensorFlow Stormlog
 
-Run the curated demo:
+Run the curated demo if you have a source checkout:
 
 ```bash
 python -m examples.basic.tensorflow_demo
@@ -325,15 +348,17 @@ python -m tfmemprof.cli analyze --input tf_results.json --detect-leaks --visuali
 
 ### Testing the TensorFlow CPU Profiler
 
-Use the CLI and basic demo to validate CPU environments:
+Use the CLI to validate CPU environments:
 
 ```bash
 CUDA_VISIBLE_DEVICES="" tfmemprof info
-python -m examples.cli.quickstart
+tfmemprof monitor --interval 0.5 --duration 15 --device /CPU:0 --output tf_monitor.json
+tfmemprof analyze --input tf_monitor.json --detect-leaks --optimize --report tf_report.txt
+tfmemprof diagnose --duration 0 --output ./tf_diag
 ```
 
-For more CPU-oriented exercises, see the CPU section of
-`docs/examples/test_guides/README.md`.
+If you have a source checkout, you can also use the CPU section of
+`docs/examples/test_guides/README.md` for additional manual coverage.
 
 ### Basic TensorFlow CPU Profiling Usage
 
@@ -445,12 +470,16 @@ Both test suites provide comprehensive TensorFlow validation:
 #### GPU & CPU Checklists
 
 Detailed, copy-paste-ready checklists now live in
-`docs/examples/test_guides/README.md`. They cover:
+`docs/examples/test_guides/README.md`. The source-checkout modules they cover
+include:
 
 - Basic TensorFlow profiling (`examples/basic/tensorflow_demo.py`)
 - CLI workflows (`examples/cli/quickstart.py`)
 - CPU-only sanity checks
 - Optional advanced scenarios (mixed precision, watchdog, exports)
+
+Pip users should use the CLI validation in [Testing](testing.md) and the Python
+snippets in [Usage](usage.md).
 
 ---
 
@@ -677,6 +706,13 @@ tfmemprof analyze --input tf_results.json --detect-leaks --optimize --report tf_
 # Analyze with TensorFlow-specific optimizations
 ```
 
+For CPU-only TensorFlow, add `--device /CPU:0`:
+
+```bash
+tfmemprof monitor --interval 0.5 --duration 30 --device /CPU:0 --output tf_monitor.json
+tfmemprof track --interval 0.5 --output tf_track.json --device /CPU:0
+```
+
 ### CPU CLI Alternative
 
 ```bash
@@ -858,17 +894,18 @@ This comprehensive guide provides everything needed to test and use the TensorFl
 
 ### Quick Reference
 
-**TensorFlow GPU Users:**
+**Source checkout:**
 
 ```bash
 python -m examples.basic.tensorflow_demo          # Quick test
 ```
 
-**TensorFlow CPU Users:**
+**Pip install:**
 
 ```bash
-python -m examples.cli.quickstart                 # Quick test
 tfmemprof info                                    # System summary
+tfmemprof monitor --interval 0.5 --duration 15 --device /CPU:0 --output tf_monitor.json
+tfmemprof diagnose --duration 0 --output ./tf_diag
 ```
 
 **TensorFlow-Specific Features:**

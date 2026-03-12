@@ -43,13 +43,22 @@ stormlog
   artifacts, compare per-rank deltas/gaps, inspect first-cause indicators
   (earliest + most severe), review collective-memory attribution confidence and
   reason codes, and focus timeline comparisons by rank.
-- **CLI & Actions tab** – Rich instructions plus quick-run buttons that execute
-  `gpumemprof` / `tfmemprof` commands directly inside the TUI. Dedicated launch
-  helpers include buttons for `gpumemprof diagnose`, the OOM scenario runner,
-  and the capability-matrix smoke command. A command input box (with Run/Cancel
-  controls) lets you stream any shell command into the inline log. When CUDA
-  isn’t present, those commands automatically switch to CPU/MPS-compatible paths
-  so you can still prototype workflows locally.
+- **CLI & Actions tab** – Rich instructions plus quick-run buttons for common
+  `gpumemprof` and `tfmemprof` commands, sample workloads, and an inline shell
+  command runner.
+
+### CLI & Actions
+
+- Runs common `gpumemprof` and `tfmemprof` commands
+- Runs sample workloads
+- **Capability Matrix** and **OOM Scenario** buttons run
+  `python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated --skip-tui`
+  and
+  `python -m examples.scenarios.oom_flight_recorder_scenario --mode simulated`
+  respectively. These example modules are **not** included in the pip package.
+  If you get `ModuleNotFoundError`, use the inline command runner instead and
+  paste the equivalent CLI commands from the docs.
+- Lets you enter any shell command into the inline runner
 
 When you click **Start Live Tracking** in the Monitoring tab, the TUI spins up
 `gpumemprof.tracker.MemoryTracker` in the background, pipes every event into the
@@ -108,9 +117,11 @@ Command** terminates long-running jobs.
 For release QA, use these CLI tab quick actions:
 
 - **gpumemprof diagnose**: writes a fresh diagnostic artifact bundle.
-- **OOM Scenario**: runs the safe simulated OOM flight-recorder workflow.
-- **Capability Matrix**: launches the smoke matrix with `--skip-tui` so it can
-  run from inside the dashboard without nesting PTY sessions.
+- **OOM Scenario**: runs the safe simulated OOM flight-recorder workflow from
+  the source-only `examples.scenarios` package.
+- **Capability Matrix**: launches the smoke matrix with `--skip-tui` from the
+  source-only `examples.cli` package so it can run from inside the dashboard
+  without nesting PTY sessions.
 
 Watching for leaks? The monitoring tab now includes a live alert history plus
 sliders for warning/critical thresholds (GPU mode) so you can tune signal/noise
@@ -156,6 +167,18 @@ designed to accommodate this future addition without breaking compatibility.
   `python3 -m pip install --no-cache-dir --force-reinstall --only-binary=:all: pillow`.
 - **Terminal too small** – Textual adapts to smaller windows, but a minimum of
   ~100x30 characters makes the tabs most readable.
+
+### Capability Matrix or OOM scenario button fails with `ModuleNotFoundError`
+
+Those buttons run example modules that are only available in a source checkout.
+If you installed via `pip install stormlog`, use the inline command runner in
+the same tab and run:
+
+```bash
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output track.json --format json
+gpumemprof diagnose --duration 0 --output ./diag
+```
 
 For more sample commands, see the Markdown test guides under
 `docs/examples/test_guides/README.md`.

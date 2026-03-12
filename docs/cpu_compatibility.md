@@ -21,6 +21,34 @@ commands just switch to RSS-based metrics:
 If you only care about CPU memory, simply run the normal CLI/TUI commands and
 they will do the right thing.
 
+## Fast local validation
+
+Use the CLI first. Do **not** use `examples.cli.quickstart` for pip installs,
+because the `examples/` package is not included in the PyPI distribution.
+
+```bash
+export CUDA_VISIBLE_DEVICES=
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json
+gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
+gpumemprof diagnose --duration 0 --output ./cpu_diag
+```
+
+On Windows, clear `CUDA_VISIBLE_DEVICES` with the shell-appropriate syntax
+before running the same steps.
+
+On Apple Silicon, clearing `CUDA_VISIBLE_DEVICES` disables CUDA but
+`gpumemprof info` may still report the `mps` backend. Treat this as a
+non-CUDA smoke test rather than a strict CPU-only force.
+
+## Recommended CPU-only checklist
+
+1. Verify the install with `gpumemprof info`.
+2. Run the CLI validation with `gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json`, then `gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt`.
+3. Run `gpumemprof diagnose --duration 0 --output ./cpu_diag`.
+4. Capture a short `track` output as in step 2.
+5. Load the result into the TUI if you need an interactive review.
+
 ## 🚫 No CUDA? Still Want Custom Tweaks?
 
 If you need lower-level control (or are using an older version), the sections
@@ -50,11 +78,14 @@ below show how to roll your own CPU profilers or integrate other tooling.
 
 ### Option 1: Run the Markdown-Based Checklists
 
-Follow the steps in `docs/examples/test_guides/README.md`:
+Use the same pip-safe CLI validation flow from this guide:
 
 ```bash
-CUDA_VISIBLE_DEVICES="" gpumemprof info
-python -m examples.cli.quickstart
+export CUDA_VISIBLE_DEVICES=
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json
+gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
+gpumemprof diagnose --duration 0 --output ./cpu_diag
 ```
 
 ### Option 2: Modify Existing Code for CPU (Legacy Approach)
@@ -357,8 +388,11 @@ pip install -e .
 ## Command Line Usage (CPU Mode)
 
 ```bash
-# Run CPU-compatible tests
-python -m examples.cli.quickstart
+# Validate the install with CPU-compatible CLI commands
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json
+gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
+gpumemprof diagnose --duration 0 --output ./cpu_diag
 
 # Profile existing Python script
 python -m memory_profiler your_script.py
@@ -407,18 +441,29 @@ Even without GPU profiling, you still get:
 1. **Quick Start:**
 
 ```bash
-python -m examples.cli.quickstart
 gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json
+gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
+gpumemprof diagnose --duration 0 --output ./cpu_diag
 ```
 
 2. **Full Test Suite:**
 
-Follow the CPU checklist in `docs/examples/test_guides/README.md`.
+Follow the CPU checklist in `docs/examples/test_guides/README.md` or the
+CLI-only validation flow above.
 
 3. **Specific Tests:**
 
 Use the snippets in this guide (or the Markdown checklists) to build targeted
 CPU profiling scenarios.
+
+### Why does the PyTorch demo skip itself?
+
+`examples.basic.pytorch_demo` (source checkout only) intentionally requires
+CUDA because it demonstrates `GPUMemoryProfiler`.
+
+Pip users should use the CPU-only Python snippets in [Usage](usage.md) or the
+CLI commands in this guide instead.
 
 ## Conclusion
 
