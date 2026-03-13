@@ -23,7 +23,7 @@ gpumemprof analyze track.json --format txt --output analysis.txt
 gpumemprof diagnose --duration 0 --output ./diag
 ```
 
-For more CPU-focused tips, see `docs/cpu_compatibility.md`.
+For more CPU-focused tips, see the [CPU Compatibility Guide](../../cpu_compatibility.md).
 
 ### CPU Smoke Test (Automated)
 
@@ -128,7 +128,7 @@ stormlog
 
 ## Enabling the CUDA Path
 
-Ready to profile on GPUs? Follow `docs/gpu_setup.md` for driver + framework
+Ready to profile on GPUs? Follow the [GPU Setup Guide](../../gpu_setup.md) for driver + framework
 installation instructions (PyTorch CUDA wheels, TensorFlow GPU wheel, and
 verification commands). Once complete, unset `CUDA_VISIBLE_DEVICES` (or point
 it to a real GPU) and rerun the PyTorch/TensorFlow checklists above.
@@ -147,6 +147,6 @@ it to a real GPU) and rerun the PyTorch/TensorFlow checklists above.
 
 ## Related Documentation
 
-- `docs/pytorch_testing_guide.md`
-- `docs/tensorflow_testing_guide.md`
-- `docs/testing.md`
+- [PyTorch Guide](../../pytorch_testing_guide.md)
+- [TensorFlow Guide](../../tensorflow_testing_guide.md)
+- [Testing and Validation Guide](../../testing.md)

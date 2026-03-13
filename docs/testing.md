@@ -170,9 +170,9 @@ python3 -m sphinx -W --keep-going -b html docs docs/_build/html
 
 ## Related guides
 
-- [examples.md](examples.md)
-- [troubleshooting.md](troubleshooting.md)
-- [docs/examples/test_guides/README.md](examples/test_guides/README.md)
+- [Examples Guide](examples.md)
+- [Troubleshooting Guide](troubleshooting.md)
+- [Example Test Guides](examples/test_guides/README.md)
 
 ---
 

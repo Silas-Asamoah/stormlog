@@ -17,11 +17,11 @@ python -m examples.basic.pytorch_demo
 
 `python -m examples.basic.pytorch_demo` is source-checkout only. If you
 installed from PyPI, use `gpumemprof info`, `gpumemprof track`, and the Python
-snippets in [usage.md](usage.md) instead.
+snippets in the [Usage Guide](usage.md) instead.
 
 If no supported `torch.cuda` backend is available, the example script will skip
 the bounded profiling path. In that case, use the tracker, CLI, or CPU-only
-flows in [cpu_compatibility.md](cpu_compatibility.md).
+flows in the [CPU Compatibility Guide](cpu_compatibility.md).
 
 ## Daily workflow: ML engineer
 
@@ -127,7 +127,7 @@ stormlog
 Use this when changing PyTorch behavior or reviewing a regression:
 
 > **Source checkout only.** Replace the example-module steps below with the
-> CLI-only validation from [cli.md](cli.md) if you installed from PyPI.
+> CLI-only validation from the [CLI Guide](cli.md) if you installed from PyPI.
 
 ```bash
 gpumemprof info
@@ -163,10 +163,10 @@ pip install "stormlog[viz]"
 
 ## Related docs
 
-- [usage.md](usage.md)
-- [cli.md](cli.md)
-- [tui.md](tui.md)
-- [troubleshooting.md](troubleshooting.md)
+- [Usage Guide](usage.md)
+- [CLI Guide](cli.md)
+- [TUI Guide](tui.md)
+- [Troubleshooting Guide](troubleshooting.md)
 
 ---
 

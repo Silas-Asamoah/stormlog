@@ -22,7 +22,7 @@ Stormlog is still useful on machines without CUDA. The main difference is that G
 - CUDA memory allocator statistics
 - CUDA-specific PyTorch sample workloads
 
-If you need the CUDA path, see [gpu_setup.md](gpu_setup.md).
+If you need the CUDA path, see the [GPU Setup Guide](gpu_setup.md).
 
 ## Fast local validation
 

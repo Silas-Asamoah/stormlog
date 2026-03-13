@@ -271,10 +271,10 @@ That sequence gives you:
 
 ## Next steps
 
-- Read [usage.md](usage.md) for the Python API path.
-- Read [cli.md](cli.md) for the automation path.
-- Read [tui.md](tui.md) for the terminal workflow.
-- Read [testing.md](testing.md) if you are attaching this to CI or release validation.
+- Read the [Usage Guide](usage.md) for the Python API path.
+- Read the [CLI Guide](cli.md) for the automation path.
+- Read the [TUI Guide](tui.md) for the terminal workflow.
+- Read the [Testing and Validation Guide](testing.md) if you are attaching this to CI or release validation.
 
 ---
 

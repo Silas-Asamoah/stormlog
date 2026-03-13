@@ -71,7 +71,7 @@ That class is for CUDA-backed PyTorch profiling. On CPU-only or MPS-only systems
 - `CPUMemoryProfiler`
 - `CPUMemoryTracker`
 
-If you need setup guidance for real CUDA profiling, see [gpu_setup.md](gpu_setup.md).
+If you need setup guidance for real CUDA profiling, see the [GPU Setup Guide](gpu_setup.md).
 
 ### TensorFlow CLI is installed but reports no GPU
 
@@ -183,8 +183,8 @@ If you are unsure where a failure belongs:
 5. inspect the result in the TUI or analyzer
 
 If you installed from PyPI and do not have the `examples/` package, use the
-CLI-first validation paths in [usage.md](usage.md), [examples.md](examples.md),
-or [cli.md](cli.md) instead.
+CLI-first validation paths in the [Usage Guide](usage.md), [Examples Guide](examples.md),
+or [CLI Guide](cli.md) instead.
 
 ---
 

@@ -7,7 +7,7 @@ This page maps documented workflows to the example modules that are actually mai
 > **Source checkout only below.** The example modules on this page live under
 > `examples/` and are not included in the PyPI distribution. If you installed
 > with `pip install stormlog`, use the CLI-only validation below and the Python
-> snippets in [usage.md](usage.md) instead.
+> snippets in the [Usage Guide](usage.md) instead.
 
 ## CLI-only validation for pip users
 
@@ -114,7 +114,7 @@ python -m examples.basic.pytorch_demo
 python -m examples.basic.tensorflow_demo
 ```
 
-Then move to [usage.md](usage.md) if you want the same patterns embedded inside your own code.
+Then move to the [Usage Guide](usage.md) if you want the same patterns embedded inside your own code.
 
 ### Researcher or debugger
 
@@ -125,7 +125,7 @@ python -m examples.advanced.tracking_demo
 python -m examples.scenarios.oom_flight_recorder_scenario --mode simulated
 ```
 
-Then move to [tui.md](tui.md) and [troubleshooting.md](troubleshooting.md).
+Then move to the [TUI Guide](tui.md) and [Troubleshooting Guide](troubleshooting.md).
 
 ### CI or release owner
 
@@ -136,16 +136,16 @@ python -m examples.cli.quickstart
 python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
 ```
 
-Then move to [testing.md](testing.md) for the current CI mapping.
+Then move to the [Testing and Validation Guide](testing.md) for the current CI mapping.
 
 ## Markdown-only test guides
 
 The old executable guides were replaced by Markdown checklists:
 
-- [docs/examples/test_guides/README.md](examples/test_guides/README.md)
+- [Example Test Guides](examples/test_guides/README.md)
 
 Those Markdown guides are also source-checkout only. Pip users should follow
-the CLI-only validation above and the Python API snippets in [usage.md](usage.md).
+the CLI-only validation above and the Python API snippets in the [Usage Guide](usage.md).
 
 ## Notes
 
