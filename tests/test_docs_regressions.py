@@ -42,7 +42,7 @@ _BANNED_DOC_SNIPPETS = {
         "export CUDA_VISIBLE_DEVICES=\npython3 -m examples.cli.quickstart",
     ],
     "docs/examples/test_guides/README.md": [
-        '# Run the CLI quickstart (also part of CI)',
+        "# Run the CLI quickstart (also part of CI)",
         "# Step 1: force CPU mode and run the CLI walkthrough",
         'pip install "stormlog[tui]"',
     ],
