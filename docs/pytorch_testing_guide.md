@@ -15,6 +15,10 @@ gpumemprof info
 python -m examples.basic.pytorch_demo
 ```
 
+`python -m examples.basic.pytorch_demo` is source-checkout only. If you
+installed from PyPI, use `gpumemprof info`, `gpumemprof track`, and the Python
+snippets in [usage.md](usage.md) instead.
+
 If no supported `torch.cuda` backend is available, the example script will skip
 the bounded profiling path. In that case, use the tracker, CLI, or CPU-only
 flows in [cpu_compatibility.md](cpu_compatibility.md).
@@ -92,6 +96,9 @@ gpumemprof diagnose --duration 0 --output ./diag_bundle
 
 Use these commands when you need a reproducible signal rather than an ad hoc notebook session:
 
+> **Source checkout only.** These commands require the repository `examples/`
+> package.
+
 ```bash
 python -m examples.cli.quickstart
 python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
@@ -118,6 +125,9 @@ stormlog
 ## Recommended validation sequence
 
 Use this when changing PyTorch behavior or reviewing a regression:
+
+> **Source checkout only.** Replace the example-module steps below with the
+> CLI-only validation from [cli.md](cli.md) if you installed from PyPI.
 
 ```bash
 gpumemprof info

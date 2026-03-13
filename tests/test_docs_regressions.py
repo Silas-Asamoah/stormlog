@@ -21,28 +21,48 @@ _BANNED_DOC_SNIPPETS = {
     "docs/pytorch_testing_guide.md": [
         "tracker.get_tracking_results()",
         "results['memory_samples']",
+        "python -m gpumemprof.cli analyze --input",
+        "--detect-leaks --visualize",
     ],
     "docs/article.md": [
         "MemoryTracker(alert_threshold_mb=",
         "results = tracker.stop_tracking()",
         "tui-distributed-diagnostics-workflow.svg",
+        'pip install "stormlog[tui]"',
     ],
     "docs/tensorflow_testing_guide.md": [
         "from stormlog.tensorflow import MemoryTracker",
         "TFCPUMemoryTracker",
+        "from tfmemprof import MemoryTracker",
+    ],
+    "docs/index.md": [
+        "The `gpumemprof` and `tfmemprof` CLIs, the `stormlog` TUI entrypoint, and the public Python APIs work with a pip install.",
+    ],
+    "docs/cpu_compatibility.md": [
+        "python -m examples.cli.quickstart",
+    ],
+    "docs/testing.md": [
+        "export CUDA_VISIBLE_DEVICES=\npython3 -m examples.cli.quickstart",
+    ],
+    "docs/examples/test_guides/README.md": [
+        "# Run the CLI quickstart (also part of CI)",
+        "# Step 1: force CPU mode and run the CLI walkthrough",
+        'pip install "stormlog[tui]"',
+    ],
+    "docs/usage.md": [
+        "from gpumemprof import CPUMemoryTracker, MemoryTracker",
+        "python -m stormlog.cli",
+        "python -m stormlog.tensorflow.cli",
     ],
     "README.md": [
         "gpu-profiler-overview.gif",
+        "python -m stormlog.cli",
+        "python -m stormlog.tensorflow.cli",
         "There is no top-level `stormlog` Python module today.",
     ],
     "docs/cli.md": [
         "python -m stormlog.cli",
         "python -m stormlog.tensorflow.cli",
-    ],
-    "docs/usage.md": [
-        "python -m stormlog.cli",
-        "python -m stormlog.tensorflow.cli",
-        "There is no top-level `stormlog` module today.",
     ],
     "docs/installation.md": [
         "There is no top-level `import stormlog` module in the current package layout.",
@@ -53,8 +73,6 @@ _BANNED_DOC_SNIPPETS = {
     "docs/tui.md": [
         "tui-distributed-diagnostics-workflow.svg",
         "tui-distributed-diagnostics-workflow.png",
-    ],
-    "docs/examples/test_guides/README.md": [
         'pip install "stormlog[tui]"',
     ],
     "CONTRIBUTING.md": [
@@ -62,9 +80,73 @@ _BANNED_DOC_SNIPPETS = {
     ],
 }
 
+_REQUIRED_DOC_SNIPPETS = {
+    "docs/index.md": [
+        "## Important: Pip vs Source Checkout",
+        "The `examples/` package is **not** included.",
+        "Install `stormlog[tui,torch]` if you want the `stormlog` TUI entrypoint from a pip install.",
+    ],
+    "README.md": [
+        "source-checkout only",
+        "gpumemprof info",
+        "tfmemprof info",
+    ],
+    "docs/article.md": [
+        'pip install "stormlog[tui,torch]"',
+        "If you are working from a source checkout, you can optionally add:",
+    ],
+    "docs/cli.md": [
+        "**Pip users** should use this CLI-only sequence instead:",
+        "`--device /CPU:0`",
+    ],
+    "docs/cpu_compatibility.md": [
+        "Do **not** use `examples.cli.quickstart` for pip installs",
+        "non-CUDA smoke test rather than a strict CPU-only force.",
+    ],
+    "docs/examples.md": [
+        "CLI-only validation for pip users",
+        "not included in the PyPI distribution",
+    ],
+    "docs/examples/test_guides/README.md": [
+        "Treat this as a non-CUDA",
+        "strict CPU-only force.",
+        'pip install "stormlog[tui,torch]"',
+    ],
+    "docs/installation.md": [
+        "Source-only examples and guides",
+        "A plain `pip install stormlog` does not include them.",
+    ],
+    "docs/pytorch_testing_guide.md": [
+        "source-checkout only",
+        "installed from PyPI",
+    ],
+    "docs/tensorflow_testing_guide.md": [
+        "source-checkout only",
+        "`--device /CPU:0`",
+    ],
+    "docs/testing.md": [
+        "CLI-only validation (pip install)",
+        "non-CUDA smoke test rather than a strict CPU-only force.",
+    ],
+    "docs/tui.md": [
+        "`Capability Matrix` or `OOM Scenario` fails with `ModuleNotFoundError`",
+        'pip install -e ".[tui,torch]"',
+    ],
+    "docs/usage.md": [
+        "The `examples/` package is not included in the PyPI distribution.",
+        "stormlog[torch]",
+    ],
+}
+
 _PARAMS = [
     (relative_path, snippet)
     for relative_path, snippets in _BANNED_DOC_SNIPPETS.items()
+    for snippet in snippets
+]
+
+_REQUIRED_PARAMS = [
+    (relative_path, snippet)
+    for relative_path, snippets in _REQUIRED_DOC_SNIPPETS.items()
     for snippet in snippets
 ]
 
@@ -79,6 +161,18 @@ def test_docs_do_not_reintroduce_known_stale_api_snippets(
     assert (
         snippet not in content
     ), f"{relative_path} contains stale docs snippet: {snippet!r}"
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "snippet"), _REQUIRED_PARAMS
+)  # type: ignore[misc, unused-ignore]
+def test_docs_keep_current_pip_vs_source_and_runtime_caveats(
+    relative_path: str, snippet: str
+) -> None:
+    content = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+    assert (
+        snippet in content
+    ), f"{relative_path} is missing required docs snippet: {snippet!r}"
 
 
 _MARKDOWN_LINK_RE = re.compile(

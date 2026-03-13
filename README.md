@@ -48,7 +48,7 @@ TensorFlow-specific APIs live under `stormlog.tensorflow`.
 | Launch the TUI | `stormlog` |
 | Import PyTorch APIs | `from stormlog import GPUMemoryProfiler, MemoryTracker` |
 | Import TensorFlow APIs | `from stormlog.tensorflow import TFMemoryProfiler` |
-| Run CLI automation | `python -m stormlog.cli` or `python -m stormlog.tensorflow.cli` |
+| Run CLI automation | `gpumemprof` or `tfmemprof` |
 
 ### From source
 
@@ -65,6 +65,9 @@ If you want both framework extras in a development checkout:
 pip install -e ".[dev,test,all,tui,viz]"
 ```
 
+The `examples/` package and Markdown test guides are source-checkout only. A
+plain `pip install stormlog` does not include them.
+
 ## Quick start
 
 ### CLI-first workflow
@@ -72,13 +75,13 @@ pip install -e ".[dev,test,all,tui,viz]"
 This is the fastest path to verify an environment and produce an artifact you can inspect later:
 
 ```bash
-python -m stormlog.cli info
-python -m stormlog.cli track --duration 2 --interval 0.5 --output /tmp/gpumemprof_track.json --format json
-python -m stormlog.cli analyze /tmp/gpumemprof_track.json --format txt --output /tmp/gpumemprof_analysis.txt
-python -m stormlog.cli diagnose --duration 0 --output /tmp/gpumemprof_diag
+gpumemprof info
+gpumemprof track --duration 2 --interval 0.5 --output /tmp/gpumemprof_track.json --format json
+gpumemprof analyze /tmp/gpumemprof_track.json --format txt --output /tmp/gpumemprof_analysis.txt
+gpumemprof diagnose --duration 0 --output /tmp/gpumemprof_diag
 
-python -m stormlog.tensorflow.cli info
-python -m stormlog.tensorflow.cli diagnose --duration 0 --output /tmp/tf_diag
+tfmemprof info
+tfmemprof diagnose --duration 0 --output /tmp/tf_diag
 ```
 
 ### PyTorch API workflow
@@ -140,6 +143,8 @@ print(f"Snapshots captured: {len(results.snapshots)}")
 
 ### CI or release owner
 
+These example-module commands require a source checkout plus `pip install -e .`.
+
 - run `python -m examples.cli.quickstart`
 - run `python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated`
 - archive the emitted artifacts for later triage in the TUI
@@ -195,6 +200,8 @@ For screen-by-screen details, see [docs/tui.md](https://github.com/Silas-Asamoah
 
 ## Launch QA scenarios
 
+These commands require a source checkout:
+
 ```bash
 python -m examples.cli.quickstart
 python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
@@ -206,9 +213,9 @@ python -m examples.scenarios.oom_flight_recorder_scenario --mode simulated
 
 If CUDA is not available, Stormlog still supports:
 
-- `python -m stormlog.cli info`
-- `python -m stormlog.cli monitor`
-- `python -m stormlog.cli track`
+- `gpumemprof info`
+- `gpumemprof monitor`
+- `gpumemprof track`
 - `CPUMemoryProfiler`
 - `CPUMemoryTracker`
 - the TUI overview, monitoring, diagnostics, and CLI tabs

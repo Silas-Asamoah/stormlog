@@ -13,6 +13,10 @@ tfmemprof info
 python -m examples.basic.tensorflow_demo
 ```
 
+`python -m examples.basic.tensorflow_demo` is source-checkout only. If you
+installed from PyPI, validate with `tfmemprof info`, the CLI commands below,
+and the TensorFlow snippets in [usage.md](usage.md).
+
 These checks work on CPU-backed TensorFlow installs as well as GPU-backed ones.
 
 ## Daily workflow: ML engineer
@@ -45,6 +49,9 @@ tfmemprof analyze --input tf_monitor.json --detect-leaks --optimize --report tf_
 tfmemprof diagnose --duration 0 --output ./tf_diag
 ```
 
+For CPU-backed TensorFlow or when the GPU backend is unavailable, add
+`--device /CPU:0` to `monitor` and `track`.
+
 Key difference from `gpumemprof`:
 
 - TensorFlow analysis uses `--input`
@@ -53,6 +60,9 @@ Key difference from `gpumemprof`:
 ## Daily workflow: release or CI triage
 
 Use the maintained example and scenario modules instead of inventing a one-off shell script:
+
+> **Source checkout only.** These commands require the repository `examples/`
+> package.
 
 ```bash
 python -m examples.cli.quickstart
@@ -84,6 +94,10 @@ The current TUI startup path imports PyTorch immediately, so TensorFlow-only env
 ## Recommended validation sequence
 
 Use this when you need a compact TensorFlow confidence pass:
+
+> **Source checkout only.** Replace `python -m examples.basic.tensorflow_demo`
+> with `tfmemprof monitor --interval 0.5 --duration 15 --device /CPU:0 --output tf_monitor.json`
+> if you installed from PyPI on a CPU-backed TensorFlow setup.
 
 ```bash
 tfmemprof info

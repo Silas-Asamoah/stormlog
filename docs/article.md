@@ -146,6 +146,10 @@ This is the workflow for answering:
 
 ### Use the maintained examples and scenario runners
 
+> **Source checkout only.** These commands require the repository `examples/`
+> package. Pip users should start with the CLI sequence in the practical
+> starting point below.
+
 ```bash
 python -m examples.cli.quickstart
 python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
@@ -235,13 +239,27 @@ shown earlier in this article.
 
 If you are unsure where to begin, use this order:
 
-Install `stormlog[tui,torch]` first if you want the final `stormlog` step to work in the current codebase.
+Start with the pip-safe CLI path:
 
 ```bash
 gpumemprof info
+gpumemprof track --duration 2 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag
+
+tfmemprof info
+tfmemprof diagnose --duration 0 --output ./tf_diag
+
+# Optional TUI
+pip install "stormlog[tui,torch]"
+stormlog
+```
+
+If you are working from a source checkout, you can optionally add:
+
+```bash
 python -m examples.cli.quickstart
 python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
-stormlog
 ```
 
 That sequence gives you:

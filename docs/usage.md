@@ -66,6 +66,16 @@ This gives you:
 - a readable analysis artifact
 - a portable diagnose bundle you can load later
 
+If you are working from a source checkout, you can optionally add the maintained
+example smoke paths:
+
+```bash
+python -m examples.cli.quickstart
+python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
+```
+
+The `examples/` package is not included in the PyPI distribution.
+
 ## PyTorch profiling
 
 `GPUMemoryProfiler` currently targets `torch.cuda` runtimes. That includes
@@ -122,6 +132,9 @@ print(f"Peak memory: {results.peak_memory_mb:.2f} MB")
 print(f"Snapshots captured: {len(results.snapshots)}")
 ```
 
+For CPU-only TensorFlow or when the GPU backend is unavailable, initialize the
+profiler with `TFMemoryProfiler(device="/CPU:0")`.
+
 ## CPU-only workflow
 
 Use this when PyTorch CUDA profiling is unavailable but you still want a local validation path:
@@ -143,6 +156,10 @@ print(summary["snapshots_collected"])
 ## Tracking over time
 
 ### PyTorch tracker
+
+`MemoryTracker` follows the PyTorch tracker stack. Install
+`stormlog[torch]` before using this example. On Apple Silicon, this is the
+MPS-aware tracker path once the PyTorch extra is installed.
 
 ```python
 from stormlog import MemoryTracker
@@ -208,6 +225,9 @@ Use the TUI when you want:
 See [tui.md](tui.md) for the TUI flow and [cli.md](cli.md) for scriptable automation.
 
 ## Related examples
+
+The example modules below are available in the source repository only, not in
+the pip package. Pip users should use the snippets above.
 
 - [examples/basic/pytorch_demo.py](../examples/basic/pytorch_demo.py)
 - [examples/basic/tensorflow_demo.py](../examples/basic/tensorflow_demo.py)

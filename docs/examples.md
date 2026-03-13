@@ -4,6 +4,28 @@
 
 This page maps documented workflows to the example modules that are actually maintained in the repo.
 
+> **Source checkout only below.** The example modules on this page live under
+> `examples/` and are not included in the PyPI distribution. If you installed
+> with `pip install stormlog`, use the CLI-only validation below and the Python
+> snippets in [usage.md](usage.md) instead.
+
+## CLI-only validation for pip users
+
+Use this when you installed from PyPI and do not have the `examples/` package:
+
+```bash
+gpumemprof info
+gpumemprof track --duration 2 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag
+
+tfmemprof info
+tfmemprof diagnose --duration 0 --output ./tf_diag
+```
+
+This validates the installed CLI and produces artifacts you can load in the TUI
+Diagnostics tab.
+
 ## Start here
 
 ### CLI smoke and environment validation
@@ -122,7 +144,8 @@ The old executable guides were replaced by Markdown checklists:
 
 - [docs/examples/test_guides/README.md](examples/test_guides/README.md)
 
-Use those guides when you want a manual checklist instead of a Python example module.
+Those Markdown guides are also source-checkout only. Pip users should follow
+the CLI-only validation above and the Python API snippets in [usage.md](usage.md).
 
 ## Notes
 

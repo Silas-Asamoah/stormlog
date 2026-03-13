@@ -65,11 +65,23 @@ PY
 
 ## 4. Switching Between CPU and GPU Runs
 
-- **CPU-only smoke test:** clear `CUDA_VISIBLE_DEVICES` and run
-  `python -m examples.cli.quickstart` plus `pytest tests/test_utils.py` (see
-  `docs/testing.md`).
+- **CPU-only smoke test:** clear `CUDA_VISIBLE_DEVICES` and run:
+
+  ```bash
+  gpumemprof info
+  gpumemprof track --duration 10 --interval 0.5 --output track.json --format json
+  gpumemprof analyze track.json --format txt --output analysis.txt
+  gpumemprof diagnose --duration 0 --output ./diag
+  ```
+
+  On Apple Silicon, clearing `CUDA_VISIBLE_DEVICES` disables CUDA but
+  `gpumemprof info` may still report the `mps` backend. Treat this as a
+  non-CUDA smoke test rather than a strict CPU-only force.
+
+  If you have a source checkout, you can also run `pytest tests/test_utils.py -v`.
+
 - **GPU path:** unset `CUDA_VISIBLE_DEVICES` (or set it to a GPU index) and run
-  the PyTorch/TensorFlow demos:
+  the source-checkout PyTorch/TensorFlow demos:
 
   ```bash
   python -m examples.basic.pytorch_demo

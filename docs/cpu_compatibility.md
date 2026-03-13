@@ -26,15 +26,22 @@ If you need the CUDA path, see [gpu_setup.md](gpu_setup.md).
 
 ## Fast local validation
 
-Use the CLI first:
+Use the CLI first. Do **not** use `examples.cli.quickstart` for pip installs,
+because the `examples/` package is not included in the PyPI distribution.
 
 ```bash
 export CUDA_VISIBLE_DEVICES=
 gpumemprof info
-python -m examples.cli.quickstart
+gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json
+gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
+gpumemprof diagnose --duration 0 --output ./cpu_diag
 ```
 
 On Windows, clear `CUDA_VISIBLE_DEVICES` with the shell-appropriate syntax before running the same steps.
+
+On Apple Silicon, clearing `CUDA_VISIBLE_DEVICES` disables CUDA but
+`gpumemprof info` may still report the `mps` backend. Treat this as a
+non-CUDA smoke test rather than a strict CPU-only force.
 
 ## CPU profiling in Python
 
@@ -110,16 +117,19 @@ The current TUI startup path still imports PyTorch immediately, even if you only
 ## Recommended CPU-only checklist
 
 1. verify the install with `gpumemprof info`
-2. run `python -m examples.cli.quickstart`
-3. run `python -m examples.scenarios.cpu_telemetry_scenario`
-4. capture a short `track` output
-5. load the result into the TUI if you need an interactive review
+2. run `gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json`
+3. run `gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt`
+4. run `gpumemprof diagnose --duration 0 --output ./cpu_diag`
+5. if you have a source checkout, optionally run `python -m examples.scenarios.cpu_telemetry_scenario`
+6. load the result into the TUI if you need an interactive review
 
 ## Common confusion points
 
 ### "Why does the PyTorch demo skip itself?"
 
-`examples.basic.pytorch_demo` intentionally requires CUDA because it demonstrates `GPUMemoryProfiler`. Use the CLI quickstart or `CPUMemoryProfiler` on CPU-only hosts.
+`examples.basic.pytorch_demo` intentionally requires CUDA because it
+demonstrates `GPUMemoryProfiler`. It is also source-checkout only. On CPU-only
+hosts, use the CLI sequence above or `CPUMemoryProfiler` instead.
 
 ### "Why do I still see `gpumemprof` on a CPU machine?"
 

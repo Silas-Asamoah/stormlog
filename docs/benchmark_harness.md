@@ -2,6 +2,10 @@
 
 # Benchmark Harness (v0.2)
 
+> **Source checkout only.** `python -m examples.cli.benchmark_harness` requires
+> the repository `examples/` package and `docs/benchmarks/`. It is not shipped
+> in the PyPI package.
+
 This benchmark harness measures current CPU tracker overhead and artifact growth with explicit pass/fail budgets.
 
 ## Run the Harness

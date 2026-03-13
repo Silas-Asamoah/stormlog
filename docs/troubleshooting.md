@@ -182,6 +182,10 @@ If you are unsure where a failure belongs:
 4. capture telemetry or a diagnose bundle
 5. inspect the result in the TUI or analyzer
 
+If you installed from PyPI and do not have the `examples/` package, use the
+CLI-first validation paths in [usage.md](usage.md), [examples.md](examples.md),
+or [cli.md](cli.md) instead.
+
 ---
 
 [← Back to main docs](index.md)

@@ -75,6 +75,12 @@ pip install -e ".[dev,test,all,tui,viz]"
 pre-commit install
 ```
 
+### Source-only examples and guides
+
+The `examples/` package and the Markdown test guides under
+`docs/examples/test_guides/README.md` are only available from a repository
+checkout. A plain `pip install stormlog` does not include them.
+
 ## Verification
 
 ### Core verification

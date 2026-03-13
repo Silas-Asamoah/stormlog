@@ -17,6 +17,9 @@ gpumemprof --help
 tfmemprof --help
 ```
 
+If you are working from a repository checkout, `pip install -e .` also exposes
+the source-only `examples/` package used in a few release-validation flows.
+
 Install and launch the TUI with the current dependency set:
 
 ```bash
@@ -108,6 +111,14 @@ tfmemprof monitor --interval 0.5 --duration 30 --output tf_monitor.json
 tfmemprof monitor --interval 0.5 --duration 30 --threshold 4096 --device /GPU:0 --output tf_monitor_threshold.json
 ```
 
+For CPU-only TensorFlow or when the GPU backend is unavailable, use
+`--device /CPU:0`:
+
+```bash
+tfmemprof monitor --interval 0.5 --duration 30 --device /CPU:0 --output tf_monitor.json
+tfmemprof track --interval 0.5 --threshold 4096 --device /CPU:0 --output tf_track.json
+```
+
 ### Track TensorFlow memory usage
 
 ```bash
@@ -150,9 +161,24 @@ Inside the TUI, the `CLI & Actions` tab exposes quick actions for:
 
 ## Release-validation shortcuts
 
+**Source checkout only.** These commands require the `examples/` package from a
+repository clone:
+
 ```bash
 python -m examples.cli.quickstart
 python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
+```
+
+**Pip users** should use this CLI-only sequence instead:
+
+```bash
+gpumemprof info
+gpumemprof track --duration 2 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag
+
+tfmemprof info
+tfmemprof diagnose --duration 0 --output ./tf_diag
 ```
 
 ## Choosing the right command

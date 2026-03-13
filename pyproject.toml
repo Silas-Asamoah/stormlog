@@ -214,6 +214,8 @@ module = [
     "plotly.*",
     "dash",
     "dash.*",
+    "rich",
+    "rich.*",
 ]
 ignore_missing_imports = true
 

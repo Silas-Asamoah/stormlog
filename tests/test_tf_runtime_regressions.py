@@ -7,7 +7,7 @@ from argparse import Namespace
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator, cast
 
 import pytest
 
@@ -163,10 +163,12 @@ def test_tf_profile_function_decorator_uses_custom_profile_name() -> None:
             return _wrapped
 
     profiler: Any = _FakeProfiler()
-
-    @tf_context.profile_function(  # type: ignore[arg-type, unused-ignore]
-        profiler=profiler, name="custom_step"
+    decorator = cast(
+        Callable[[Callable[[int], int]], Callable[[int], int]],
+        tf_context.profile_function(profiler=profiler, name="custom_step"),
     )
+
+    @decorator
     def _sample(value: int) -> int:
         call_count["value"] += 1
         return value + 1

@@ -148,6 +148,23 @@ Install the TUI extra:
 pip install "stormlog[tui,torch]"
 ```
 
+### `Capability Matrix` or `OOM Scenario` fails with `ModuleNotFoundError`
+
+Those quick actions run source-only `examples.*` modules. If you installed from
+PyPI, use the inline command runner with the equivalent CLI-safe flow instead:
+
+```bash
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output track.json --format json
+gpumemprof diagnose --duration 0 --output ./diag
+```
+
+For full button coverage, use a source checkout with:
+
+```bash
+pip install -e ".[tui,torch]"
+```
+
 ### PNG or HTML export fails
 
 - install `stormlog[viz]`

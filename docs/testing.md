@@ -62,6 +62,9 @@ python3 -m pytest tests/e2e/test_tui_pty.py -m tui_pty -v
 
 ## Example and scenario validation
 
+> **Source checkout only.** The commands in this section require the repository
+> `examples/` package.
+
 ### CLI smoke
 
 ```bash
@@ -81,6 +84,20 @@ python3 -m examples.scenarios.cpu_telemetry_scenario
 python3 -m examples.scenarios.mps_telemetry_scenario
 python3 -m examples.scenarios.oom_flight_recorder_scenario --mode simulated
 python3 -m examples.scenarios.tf_end_to_end_scenario
+```
+
+### CLI-only validation (pip install)
+
+If you installed from PyPI and do not have the `examples/` package, use this
+sequence instead:
+
+```bash
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output track.json --format json
+gpumemprof analyze track.json --format txt --output analysis.txt
+gpumemprof diagnose --duration 0 --output ./diag
+tfmemprof info
+tfmemprof diagnose --duration 0 --output ./tf_diag
 ```
 
 ## CI behavior in this repo
@@ -124,11 +141,20 @@ For laptop or CI environments without CUDA:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=
-python3 -m examples.cli.quickstart
-python3 -m pytest tests/test_utils.py -v
+gpumemprof info
+gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json
+gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
+gpumemprof diagnose --duration 0 --output ./cpu_diag
 ```
 
 On Windows shells, clear `CUDA_VISIBLE_DEVICES` with the platform-appropriate syntax before running the same commands.
+
+On Apple Silicon, clearing `CUDA_VISIBLE_DEVICES` disables CUDA but
+`gpumemprof info` may still report the `mps` backend. Treat this as a
+non-CUDA smoke test rather than a strict CPU-only force.
+
+If you have a source checkout, you can also run `python3 -m pytest tests/test_utils.py -v`.
+Pip installs do not include the `tests/` package.
 
 ## Recommended release-validation sequence
 
