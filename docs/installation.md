@@ -78,8 +78,8 @@ pre-commit install
 ### Source-only examples and guides
 
 The `examples/` package and the Markdown test guides under
-`docs/examples/test_guides/README.md` are only available from a repository
-checkout. A plain `pip install stormlog` does not include them.
+the [Example Test Guides](examples/test_guides/README.md) are only available
+from a repository checkout. A plain `pip install stormlog` does not include them.
 
 ## Verification
 
@@ -118,7 +118,7 @@ pip install -e ".[tui,torch]"
 
 ### CPU-only systems
 
-You do not need CUDA to use Stormlog. The CLI, TUI monitoring flows, and CPU profiler helpers remain usable on CPU-only machines. See [cpu_compatibility.md](cpu_compatibility.md).
+You do not need CUDA to use Stormlog. The CLI, TUI monitoring flows, and CPU profiler helpers remain usable on CPU-only machines. See the [CPU Compatibility Guide](cpu_compatibility.md).
 
 ### macOS and MPS
 
@@ -129,7 +129,7 @@ and diagnostics flows even when `GPUMemoryProfiler` is unavailable on MPS.
 
 Install the correct framework build for your `torch.cuda` runtime before using
 `GPUMemoryProfiler`. For NVIDIA systems that means matching the CUDA toolchain.
-See [gpu_setup.md](gpu_setup.md) for the full checklist.
+See the [GPU Setup Guide](gpu_setup.md) for the full checklist.
 
 ## Common install failures
 
@@ -160,9 +160,9 @@ pip install "stormlog[tf]"
 
 ## Next steps
 
-1. Read [usage.md](usage.md) for the Python API and CLI-first workflow.
-2. Read [cli.md](cli.md) if you need telemetry, plots, or diagnose bundles.
-3. Read [tui.md](tui.md) if you want an interactive terminal workflow.
+1. Read the [Usage Guide](usage.md) for the Python API and CLI-first workflow.
+2. Read the [CLI Guide](cli.md) if you need telemetry, plots, or diagnose bundles.
+3. Read the [TUI Guide](tui.md) if you want an interactive terminal workflow.
 
 ---
 

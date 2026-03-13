@@ -15,7 +15,7 @@ python -m examples.basic.tensorflow_demo
 
 `python -m examples.basic.tensorflow_demo` is source-checkout only. If you
 installed from PyPI, validate with `tfmemprof info`, the CLI commands below,
-and the TensorFlow snippets in [usage.md](usage.md).
+and the TensorFlow snippets in the [Usage Guide](usage.md).
 
 These checks work on CPU-backed TensorFlow installs as well as GPU-backed ones.
 
@@ -137,10 +137,10 @@ pip install "stormlog[viz]"
 
 ## Related docs
 
-- [usage.md](usage.md)
-- [cli.md](cli.md)
-- [tui.md](tui.md)
-- [troubleshooting.md](troubleshooting.md)
+- [Usage Guide](usage.md)
+- [CLI Guide](cli.md)
+- [TUI Guide](tui.md)
+- [Troubleshooting Guide](troubleshooting.md)
 
 ---
 

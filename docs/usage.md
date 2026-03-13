@@ -222,7 +222,7 @@ Use the TUI when you want:
 - PNG or HTML timeline export from the current session
 - artifact loading and distributed diagnostics in one place
 
-See [tui.md](tui.md) for the TUI flow and [cli.md](cli.md) for scriptable automation.
+See the [TUI Guide](tui.md) for the TUI flow and the [CLI Guide](cli.md) for scriptable automation.
 
 ## Related examples
 

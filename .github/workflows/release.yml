@@ -1,15 +1,29 @@
 name: Release
 
 on:
-    release:
-        types: [published]
+    workflow_run:
+        workflows: ["CI"]
+        branches: [main]
+        types: [completed]
+
+permissions:
+    contents: write
+
+concurrency:
+    group: release-main
+    cancel-in-progress: false
 
 jobs:
     deploy:
+        if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'
         runs-on: ubuntu-latest
+        env:
+            GH_TOKEN: ${{ github.token }}
+
         steps:
             - uses: actions/checkout@v4
               with:
+                  ref: ${{ github.event.workflow_run.head_sha }}
                   fetch-depth: 0
                   fetch-tags: true
 
@@ -18,16 +32,74 @@ jobs:
               with:
                   python-version: "3.10"
 
-            - name: Resolve package version from release tag
+            - name: Resolve release version
+              id: version
               run: |
-                  VERSION="${GITHUB_REF_NAME#v}"
-                  if [ -z "$VERSION" ] || echo "$VERSION" | grep -Eq '(\.dev|[+])'; then
-                      echo "Invalid release tag for PyPI: ${GITHUB_REF_NAME}" >&2
-                      exit 1
+                  git fetch --force --tags origin
+
+                  EXISTING_TAG="$(git tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+
+                  if [ -n "$EXISTING_TAG" ]; then
+                      VERSION="${EXISTING_TAG#v}"
+                  else
+                      VERSION="$(python3 - <<'PY'
+                  import re
+                  import subprocess
+
+                  tags = subprocess.check_output(
+                      ["git", "tag", "--list", "v*"],
+                      text=True,
+                  ).splitlines()
+
+                  stable_versions = []
+                  prerelease_bases = []
+                  for tag in tags:
+                      stable_match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag)
+                      if stable_match:
+                          stable_versions.append(
+                              tuple(int(part) for part in stable_match.groups())
+                          )
+                          continue
+
+                      prerelease_match = re.fullmatch(
+                          r"v(\d+)\.(\d+)\.(\d+)(?:[A-Za-z0-9.+-].*)",
+                          tag,
+                      )
+                      if prerelease_match:
+                          prerelease_bases.append(
+                              tuple(int(part) for part in prerelease_match.groups())
+                          )
+
+                  if stable_versions:
+                      major, minor, patch = max(stable_versions)
+                      print(f"{major}.{minor}.{patch + 1}")
+                  elif prerelease_bases:
+                      major, minor, patch = max(prerelease_bases)
+                      print(f"{major}.{minor}.{patch}")
+                  else:
+                      print("0.1.0")
+                  PY
+                      )"
+                      EXISTING_TAG="v${VERSION}"
+
+                      if git rev-parse "${EXISTING_TAG}" >/dev/null 2>&1; then
+                          TAG_SHA="$(git rev-list -n 1 "${EXISTING_TAG}")"
+                          HEAD_SHA="$(git rev-parse HEAD)"
+                          if [ "${TAG_SHA}" != "${HEAD_SHA}" ]; then
+                              echo "Tag ${EXISTING_TAG} already points to ${TAG_SHA}, not ${HEAD_SHA}." >&2
+                              exit 1
+                          fi
+                      else
+                          git tag "${EXISTING_TAG}" HEAD
+                          git push origin "${EXISTING_TAG}"
+                      fi
                   fi
+
+                  echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+                  echo "tag=${EXISTING_TAG}" >> "$GITHUB_OUTPUT"
                   echo "SETUPTOOLS_SCM_PRETEND_VERSION=${VERSION}" >> "$GITHUB_ENV"
-                  echo "Release tag: ${GITHUB_REF_NAME}"
-                  echo "Package version: ${VERSION}"
+                  echo "Resolved release tag: ${EXISTING_TAG}"
+                  echo "Resolved package version: ${VERSION}"
 
             - name: Install build dependencies
               run: |
@@ -36,11 +108,29 @@ jobs:
 
             - name: Build package
               run: |
+                  rm -rf build dist
                   python3 -m build
 
             - name: Check package
               run: |
                   twine check dist/*
+
+            - name: Verify artifact versions
+              run: |
+                  python3 - <<'PY'
+                  from pathlib import Path
+
+                  expected = "${{ steps.version.outputs.version }}"
+                  dist_files = sorted(Path("dist").glob("*"))
+                  if not dist_files:
+                      raise SystemExit("No build artifacts were produced.")
+
+                  for path in dist_files:
+                      if expected not in path.name:
+                          raise SystemExit(
+                              f"Artifact {path.name} does not contain expected version {expected}."
+                          )
+                  PY
 
             - name: Enforce release artifact version policy
               run: |
@@ -56,3 +146,14 @@ jobs:
                   TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
               run: |
                   twine upload --skip-existing dist/*
+
+            - name: Create or update GitHub release
+              run: |
+                  if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+                      gh release upload "${{ steps.version.outputs.tag }}" dist/* --clobber
+                  else
+                      gh release create "${{ steps.version.outputs.tag }}" dist/* \
+                          --target "${{ github.event.workflow_run.head_sha }}" \
+                          --title "${{ steps.version.outputs.tag }}" \
+                          --generate-notes
+                  fi

@@ -270,7 +270,7 @@ Current marker families used in the repo:
 - `tui_pty`
 - `tui_snapshot`
 
-The operational guide for running those slices lives in [testing.md](testing.md).
+The operational guide for running those slices lives in the [Testing and Validation Guide](testing.md).
 
 ## Extensibility points that exist today
 
@@ -285,10 +285,10 @@ Anything beyond those seams should be treated as new feature work, not assumed a
 
 ## Related guides
 
-- [usage.md](usage.md)
-- [cli.md](cli.md)
-- [tui.md](tui.md)
-- [api.md](api.md)
+- [Usage Guide](usage.md)
+- [CLI Guide](cli.md)
+- [TUI Guide](tui.md)
+- [API Reference](api.md)
 
 ---
 

@@ -6,9 +6,15 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DOC_ROOT = REPO_ROOT / "docs"
 DOC_SOURCE_FILES = [
-    REPO_ROOT / "README.md",
-    REPO_ROOT / "CONTRIBUTING.md",
-    REPO_ROOT / "RELEASE_CHECKLIST.md",
+    *[
+        path
+        for path in (
+            REPO_ROOT / "README.md",
+            REPO_ROOT / "CONTRIBUTING.md",
+            REPO_ROOT / "RELEASE_CHECKLIST.md",
+        )
+        if path.exists()
+    ],
     *sorted(
         path
         for path in DOC_ROOT.rglob("*.md")
@@ -208,6 +214,17 @@ def test_doc_links_and_media_targets_exist(doc_path: Path) -> None:
         ), f"{doc_path.relative_to(REPO_ROOT)} references missing path: {target}"
 
 
+def test_docs_use_human_readable_markdown_link_labels() -> None:
+    label_pattern = re.compile(r"\[[^\]]+\.md\]\(")
+
+    for doc_path in DOC_SOURCE_FILES:
+        content = doc_path.read_text(encoding="utf-8")
+        assert not label_pattern.search(content), (
+            f"{doc_path.relative_to(REPO_ROOT)} contains a markdown link label "
+            "that exposes a .md filename"
+        )
+
+
 def test_readme_uses_absolute_urls_for_pypi_rendering() -> None:
     readme_links = _iter_local_doc_links(REPO_ROOT / "README.md")
     assert not readme_links, (
@@ -221,6 +238,15 @@ def test_readme_uses_json_backed_pypi_badge() -> None:
     assert "https://img.shields.io/badge/dynamic/json" in content
     assert "https%3A%2F%2Fpypi.org%2Fpypi%2Fstormlog%2Fjson" in content
     assert "https://img.shields.io/pypi/v/stormlog.svg" not in content
+
+
+def test_readme_uses_live_github_actions_badge() -> None:
+    content = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert (
+        "https://github.com/Silas-Asamoah/stormlog/actions/workflows/ci.yml/badge.svg?branch=main"
+        in content
+    )
+    assert "https://img.shields.io/badge/build-passing-brightgreen" not in content
 
 
 def test_docs_conf_uses_stormlog_canonical_baseurl() -> None:

@@ -1,6 +1,6 @@
 # Stormlog
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/Silas-Asamoah/stormlog/actions)
+[![CI](https://github.com/Silas-Asamoah/stormlog/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Silas-Asamoah/stormlog/actions/workflows/ci.yml)
 [![PyPI Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fpypi.org%2Fpypi%2Fstormlog%2Fjson&query=%24.info.version&label=pypi)](https://pypi.org/project/stormlog/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Silas-Asamoah/stormlog/blob/main/LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -184,7 +184,7 @@ The current TUI tabs are:
 
 Use the Monitoring tab to start live tracking, export CSV or JSON events to `./exports`, and tune warning or critical thresholds. In Visualizations, refresh the live timeline and save PNG or HTML exports under `./visualizations`. In Diagnostics, load live telemetry or artifact paths and rebuild rank-level diagnostics without leaving the terminal.
 
-For screen-by-screen details, see [docs/tui.md](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/tui.md).
+For screen-by-screen details, see the [TUI Guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/tui.md).
 
 ## Examples and walkthroughs
 
@@ -220,11 +220,11 @@ If CUDA is not available, Stormlog still supports:
 - `CPUMemoryTracker`
 - the TUI overview, monitoring, diagnostics, and CLI tabs
 
-See [docs/cpu_compatibility.md](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/cpu_compatibility.md) for the CPU-only path.
+See the [CPU Compatibility Guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/cpu_compatibility.md) for the CPU-only path.
 
 ## Contributing
 
-See [CONTRIBUTING.md](https://github.com/Silas-Asamoah/stormlog/blob/main/CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](https://github.com/Silas-Asamoah/stormlog/blob/main/CODE_OF_CONDUCT.md).
+See the [Contributing Guide](https://github.com/Silas-Asamoah/stormlog/blob/main/CONTRIBUTING.md) and [Code of Conduct](https://github.com/Silas-Asamoah/stormlog/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
