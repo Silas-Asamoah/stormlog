@@ -52,20 +52,32 @@ jobs:
                   ).splitlines()
 
                   stable_versions = []
+                  prerelease_bases = []
                   for tag in tags:
-                      match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag)
-                      if match:
+                      stable_match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag)
+                      if stable_match:
                           stable_versions.append(
-                              tuple(int(part) for part in match.groups())
+                              tuple(int(part) for part in stable_match.groups())
+                          )
+                          continue
+
+                      prerelease_match = re.fullmatch(
+                          r"v(\d+)\.(\d+)\.(\d+)(?:[A-Za-z0-9.+-].*)",
+                          tag,
+                      )
+                      if prerelease_match:
+                          prerelease_bases.append(
+                              tuple(int(part) for part in prerelease_match.groups())
                           )
 
-                  if not stable_versions:
-                      raise SystemExit(
-                          "No stable release tags found; cannot infer next version."
-                      )
-
-                  major, minor, patch = max(stable_versions)
-                  print(f"{major}.{minor}.{patch + 1}")
+                  if stable_versions:
+                      major, minor, patch = max(stable_versions)
+                      print(f"{major}.{minor}.{patch + 1}")
+                  elif prerelease_bases:
+                      major, minor, patch = max(prerelease_bases)
+                      print(f"{major}.{minor}.{patch}")
+                  else:
+                      print("0.1.0")
                   PY
                       )"
                       EXISTING_TAG="v${VERSION}"
