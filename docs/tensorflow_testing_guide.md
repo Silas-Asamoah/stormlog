@@ -1,933 +1,147 @@
 [← Back to main docs](index.md)
 
-# TensorFlow Testing & Usage Guide
+# TensorFlow Guide
 
-**Authors:** Prince Agyei Tuffour and Silas Bempong
-**Last Updated:** June 2025
+This guide covers the current TensorFlow workflow in Stormlog: profiling TensorFlow code directly, tracking TensorFlow memory usage from the CLI, and exporting artifacts for later review.
 
----
-
-## Table of Contents
-
-1. [Overview](#overview)
-2. [System Requirements](#system-requirements)
-3. [Installation Guide](#installation-guide)
-4. [Quick Start](#quick-start)
-5. [GPU Profiling (CUDA Available)](#gpu-profiling-cuda-available)
-6. [CPU Profiling (No GPU Required)](#cpu-profiling-no-gpu-required)
-7. [Testing Framework](#testing-framework)
-8. [Usage Examples](#usage-examples)
-9. [Command Line Interface](#command-line-interface)
-10. [TensorFlow-Specific Features](#tensorflow-specific-features)
-11. [Troubleshooting](#troubleshooting)
-12. [Performance Benchmarks](#performance-benchmarks)
-
----
-
-> **Note:** Legacy scripts under `examples/test_guides/` have been replaced by
-> Markdown workflows. `examples/basic/tensorflow_demo.py` and
-> `examples/cli/quickstart.py` are available only in a source checkout. Pip
-> users should use the CLI and Python snippets in `docs/usage.md`,
-> `docs/examples.md`, and `docs/testing.md`.
-
-## Overview
-
-The TensorFlow Stormlog is a comprehensive tool for monitoring and optimizing memory usage during TensorFlow model training and inference. This guide provides complete instructions for testing and using the profiler in both GPU and CPU environments with TensorFlow-specific optimizations.
-
-### Key Features
-
-✅ **TensorFlow GPU Profiling** (CUDA required)
-
--   Real-time GPU memory tracking with `tf.config.experimental.get_memory_info()`
--   TensorFlow session management
--   Graph execution monitoring
--   Mixed precision profiling
--   Keras integration
-
-✅ **TensorFlow CPU Profiling** (No GPU required)
-
--   System RAM usage monitoring
--   TensorFlow CPU operation tracking
--   Keras model profiling
--   Cross-platform compatibility
-
-✅ **TensorFlow-Specific Features**
-
--   Automatic memory growth configuration
--   Graph vs Eager execution analysis
--   tf.function profiling
--   TensorFlow Lite optimization
--   Multi-GPU strategy profiling
-
----
-
-## System Requirements
-
-### Minimum Requirements
-
--   **Python**: 3.10 or higher
--   **TensorFlow**: 2.4.0 or higher
--   **System Memory**: 4GB RAM
--   **Storage**: 200MB free space
-
-### For GPU Profiling
-
--   **CUDA**: 11.2 or higher
--   **cuDNN**: 8.1 or higher
--   **GPU**: NVIDIA GPU with CUDA support
--   **GPU Memory**: 4GB or higher recommended
--   **TensorFlow-GPU**: Properly configured
-
-### For CPU-Only Profiling
-
--   **CPU**: Any modern CPU (4+ cores recommended)
--   **RAM**: 8GB or higher
--   **TensorFlow-CPU**: Any installation
-
----
-
-## Installation Guide
-
-### Step 1: Clone the Repository
-
-```bash
-git clone https://github.com/Silas-Asamoah/stormlog.git
-cd stormlog
-```
-
-### Step 2: Choose Your TensorFlow Installation
-
-#### For GPU Systems (CUDA Available)
-
-```bash
-# Install TensorFlow with GPU support
-pip install tensorflow[and-cuda]
-
-# Or specific version
-pip install tensorflow-gpu==2.12.0
-
-# Install profiler dependencies
-pip install -r requirements.txt
-
-# Install the profiler package
-pip install -e .
-```
-
-#### For CPU-Only Systems
-
-```bash
-# Install CPU-only TensorFlow
-pip install tensorflow-cpu
-
-# Install profiler dependencies
-pip install psutil matplotlib numpy
-
-# Install the profiler package
-pip install -e .
-```
-
-### Step 3: Verify TensorFlow Installation
-
-```bash
-# Check TensorFlow installation
-python -c "import tensorflow as tf; print(f'TensorFlow: {tf.__version__}, GPU: {len(tf.config.list_physical_devices(\"GPU\"))}')"
-
-# Check profiler installation
-python -c "from tfmemprof import TFMemoryProfiler; print('TensorFlow Profiler installed successfully!')"
-
-# Test GPU setup (if available)
-python -c "import tensorflow as tf; print('GPU Available:', tf.config.list_physical_devices('GPU'))"
-```
-
----
-
-## Quick Start
-
-### Before you start
+## Before you start
 
 Validate the environment:
 
 ```bash
 tfmemprof info
-```
-
-If you have a **source checkout**, you can also run:
-
-```bash
 python -m examples.basic.tensorflow_demo
 ```
 
-**Pip users** should use the `TFMemoryProfiler` snippet in the
-[Usage Guide](usage.md) and set `device="/CPU:0"` when needed.
+`python -m examples.basic.tensorflow_demo` is source-checkout only. If you
+installed from PyPI, validate with `tfmemprof info`, the CLI commands below,
+and the TensorFlow snippets in [usage.md](usage.md).
 
-### 🚀 Ultra-Quick Test (30 seconds)
+These checks work on CPU-backed TensorFlow installs as well as GPU-backed ones.
 
-Choose your scenario:
+## Daily workflow: ML engineer
 
-#### With GPU:
-
-Source checkout only.
-
-```bash
-python -m examples.basic.tensorflow_demo
-```
-
-#### CPU Only:
-
-```bash
-tfmemprof info
-tfmemprof monitor --interval 0.5 --duration 15 --device /CPU:0 --output tf_monitor.json
-tfmemprof diagnose --duration 0 --output ./tf_diag
-```
-
-### Expected Output:
-
-```
-⚡ Quick TensorFlow Test - Basic Profiler Functionality
-✅ Quick TensorFlow test passed!
-✅ Result: 0.15
-✅ Peak memory: 128.45 MB
-✅ Functions profiled: 1
-```
-
-If you see ✅ indicators, you're ready to go!
-
----
-
-## GPU Profiling (CUDA Available)
-
-### Prerequisites Check
-
-First, verify your TensorFlow GPU setup:
-
-```bash
-# Check TensorFlow GPU availability
-python -c "
-import tensorflow as tf
-print('TensorFlow version:', tf.__version__)
-print('GPU devices:', tf.config.list_physical_devices('GPU'))
-print('CUDA built:', tf.test.is_built_with_cuda())
-print('GPU support:', tf.test.is_built_with_gpu_support())
-"
-
-# Check CUDA compatibility
-nvidia-smi
-```
-
-### Testing the TensorFlow Stormlog
-
-Run the curated demo if you have a source checkout:
-
-```bash
-python -m examples.basic.tensorflow_demo
-```
-
-For additional scenarios (mixed precision, CLI usage, watchdog flows), see
-`docs/examples/test_guides/README.md#tensorflow-gpu-checklist`.
-
-### Basic TensorFlow GPU Profiling Usage
-
-#### Function Profiling
+Use `TFMemoryProfiler` when you want snapshots and aggregate results around a real TensorFlow workload.
 
 ```python
-import tensorflow as tf
-from tfmemprof import TFMemoryProfiler
+from stormlog.tensorflow import TFMemoryProfiler
 
-# Initialize profiler
-profiler = TFMemoryProfiler()
+profiler = TFMemoryProfiler(enable_tensor_tracking=True)
 
-@profiler.profile_function
-def tf_gpu_operation():
-    with tf.device('/GPU:0'):
-        x = tf.random.normal((2000, 2000))
-        y = tf.linalg.matmul(x, x, transpose_b=True)
-        return tf.reduce_mean(y)
+with profiler.profile_context("training"):
+    model.fit(x_train, y_train, epochs=1, batch_size=32)
 
-# Run profiled function
-result = tf_gpu_operation()
-
-# Get results
 results = profiler.get_results()
-print(f"Peak GPU memory: {results.peak_memory_mb:.2f} MB")
-print(f"Execution time: {results.duration:.4f} seconds")
-```
-
-#### Context Profiling with Keras
-
-```python
-import tensorflow as tf
-from tfmemprof import TFMemoryProfiler
-
-profiler = TFMemoryProfiler()
-
-with profiler.profile_context("model_training"):
-    # Create Keras model
-    model = tf.keras.Sequential([
-        tf.keras.layers.Dense(512, activation='relu', input_shape=(784,)),
-        tf.keras.layers.Dropout(0.2),
-        tf.keras.layers.Dense(256, activation='relu'),
-        tf.keras.layers.Dense(10, activation='softmax')
-    ])
-
-    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy')
-
-    # Training data
-    x_train = tf.random.normal((1000, 784))
-    y_train = tf.random.uniform((1000,), maxval=10, dtype=tf.int32)
-
-    # Train model
-    model.fit(x_train, y_train, epochs=3, batch_size=64, verbose=1)
-
-# View results
-results = profiler.get_results()
-for context, stats in results.function_profiles.items():
-    print(f"{context}: {stats['total_duration']:.3f}s, {stats['total_memory_used']:.2f} MB")
-```
-
-#### Real-Time Monitoring
-
-```python
-from tfmemprof.tracker import MemoryTracker
-
-# Setup tracker with TensorFlow-specific alerts
-tracker = MemoryTracker(
-    sampling_interval=0.1,     # Sample every 100ms
-    alert_threshold_mb=3000,   # Alert at 3GB
-    enable_logging=True
-)
-
-# Start tracking
-tracker.start_tracking()
-
-try:
-    # Your TensorFlow operations here
-    for i in range(10):
-        with tf.device('/GPU:0'):
-            x = tf.random.normal((1000, 1000))
-            y = tf.nn.conv2d(
-                tf.reshape(x, (1, 1000, 1000, 1)),
-                tf.random.normal((3, 3, 1, 32)),
-                strides=1, padding='SAME'
-            )
-        print(f"TensorFlow iteration {i+1}/10")
-finally:
-    results = tracker.stop_tracking()
-
-# Analyze results
 print(f"Peak memory: {results.peak_memory_mb:.2f} MB")
+print(f"Snapshots captured: {len(results.snapshots)}")
 ```
 
-### TensorFlow Command Line Tools
+Decorator-style profiling also exists through the TensorFlow profiler API, but the context-manager flow above is the clearest daily-workflow path.
+
+## Daily workflow: investigate sustained growth
+
+The current TensorFlow CLI is the simplest way to capture longer-running telemetry:
 
 ```bash
-# Show TensorFlow GPU information
-python -m tfmemprof.cli info
-
-# Real-time TensorFlow monitoring
-python -m tfmemprof.cli monitor --interval 1.0 --duration 30
-
-# Background TensorFlow tracking
-python -m tfmemprof.cli track --output tf_results.json --duration 60
-
-# Analyze TensorFlow results
-python -m tfmemprof.cli analyze --input tf_results.json --detect-leaks --visualize
-```
-
----
-
-## CPU Profiling (No GPU Required)
-
-### When to Use TensorFlow CPU Profiling
-
--   GPU not available
--   Development and testing
--   TensorFlow Lite optimization
--   CPU inference optimization
--   Educational purposes
--   CI/CD pipelines
-
-### Testing the TensorFlow CPU Profiler
-
-Use the CLI to validate CPU environments:
-
-```bash
-CUDA_VISIBLE_DEVICES="" tfmemprof info
-tfmemprof monitor --interval 0.5 --duration 15 --device /CPU:0 --output tf_monitor.json
+tfmemprof monitor --interval 0.5 --duration 30 --output tf_monitor.json
+tfmemprof track --interval 0.5 --threshold 4096 --output tf_track.json
 tfmemprof analyze --input tf_monitor.json --detect-leaks --optimize --report tf_report.txt
 tfmemprof diagnose --duration 0 --output ./tf_diag
 ```
 
-If you have a source checkout, you can also use the CPU section of
-`docs/examples/test_guides/README.md` for additional manual coverage.
+For CPU-backed TensorFlow or when the GPU backend is unavailable, add
+`--device /CPU:0` to `monitor` and `track`.
 
-### Basic TensorFlow CPU Profiling Usage
+Key difference from `gpumemprof`:
 
-#### Simple CPU Profiler
+- TensorFlow analysis uses `--input`
+- PyTorch analysis uses a positional file argument
 
-```python
-import tensorflow as tf
-import psutil
-import time
+## Daily workflow: release or CI triage
 
-class TFCPUMemoryProfiler:
-    def __init__(self):
-        self.process = psutil.Process()
-        self.results = []
+Use the maintained example and scenario modules instead of inventing a one-off shell script:
 
-        # Configure TensorFlow for CPU
-        tf.config.set_visible_devices([], 'GPU')
-
-    def profile_function(self, func):
-        def wrapper(*args, **kwargs):
-            before_mem = self.process.memory_info().rss / (1024 * 1024)  # MB
-            start_time = time.time()
-
-            result = func(*args, **kwargs)
-
-            after_mem = self.process.memory_info().rss / (1024 * 1024)  # MB
-            duration = time.time() - start_time
-
-            self.results.append({
-                'function': func.__name__,
-                'memory_used_mb': after_mem - before_mem,
-                'duration_s': duration
-            })
-
-            return result
-        return wrapper
-
-    def get_summary(self):
-        for result in self.results:
-            print(f"{result['function']}: {result['duration_s']:.4f}s, {result['memory_used_mb']:.2f}MB")
-
-# Usage
-profiler = TFCPUMemoryProfiler()
-
-@profiler.profile_function
-def tf_cpu_operation():
-    with tf.device('/CPU:0'):
-        x = tf.random.normal((1000, 1000))
-        y = tf.linalg.matmul(x, x, transpose_b=True)
-        return tf.reduce_mean(y)
-
-result = tf_cpu_operation()
-profiler.get_summary()
-```
-
-#### TensorFlow CPU Model Training
-
-```python
-import tensorflow as tf
-
-def train_tf_cpu_model():
-    # Configure for CPU
-    tf.config.set_visible_devices([], 'GPU')
-
-    # Create CPU model
-    with tf.device('/CPU:0'):
-        model = tf.keras.Sequential([
-            tf.keras.layers.Dense(256, activation='relu', input_shape=(784,)),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(128, activation='relu'),
-            tf.keras.layers.Dense(10, activation='softmax')
-        ])
-
-        model.compile(
-            optimizer='adam',
-            loss='sparse_categorical_crossentropy',
-            metrics=['accuracy']
-        )
-
-    print("Training TensorFlow model on CPU...")
-    for epoch in range(5):
-        # Generate batch data (CPU)
-        x_batch = tf.random.normal((64, 784))
-        y_batch = tf.random.uniform((64,), maxval=10, dtype=tf.int32)
-
-        # Training step
-        with tf.GradientTape() as tape:
-            predictions = model(x_batch, training=True)
-            loss = tf.keras.losses.sparse_categorical_crossentropy(y_batch, predictions)
-            loss = tf.reduce_mean(loss)
-
-        gradients = tape.gradient(loss, model.trainable_variables)
-        optimizer = tf.keras.optimizers.Adam()
-        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-
-        print(f"Epoch {epoch+1}/5, Loss: {loss.numpy():.4f}")
-
-train_tf_cpu_model()
-```
-
----
-
-## Testing Framework
-
-### Automated Test Execution
-
-Both test suites provide comprehensive TensorFlow validation:
-
-#### GPU & CPU Checklists
-
-Detailed, copy-paste-ready checklists now live in
-`docs/examples/test_guides/README.md`. The source-checkout modules they cover
-include:
-
-- Basic TensorFlow profiling (`examples/basic/tensorflow_demo.py`)
-- CLI workflows (`examples/cli/quickstart.py`)
-- CPU-only sanity checks
-- Optional advanced scenarios (mixed precision, watchdog, exports)
-
-Pip users should use the CLI validation in [Testing](testing.md) and the Python
-snippets in [Usage](usage.md).
-
----
-
-## Usage Examples
-
-### Example 1: TensorFlow Model Training Profiling
-
-#### GPU Version
-
-```python
-import tensorflow as tf
-from tfmemprof import TFMemoryProfiler, MemoryVisualizer
-
-# Initialize profiler
-profiler = TFMemoryProfiler(enable_tensor_tracking=True)
-
-# Create model
-with profiler.profile_context("model_setup"):
-    model = tf.keras.Sequential([
-        tf.keras.layers.Conv2D(32, 3, activation='relu', input_shape=(224, 224, 3)),
-        tf.keras.layers.MaxPooling2D(),
-        tf.keras.layers.Conv2D(64, 3, activation='relu'),
-        tf.keras.layers.MaxPooling2D(),
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dense(10, activation='softmax')
-    ])
-
-    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy')
-
-# Training loop
-for epoch in range(5):
-    with profiler.profile_context(f"epoch_{epoch}"):
-
-        # Data generation
-        with profiler.profile_context("data_gen"):
-            x_batch = tf.random.normal((32, 224, 224, 3))
-            y_batch = tf.random.uniform((32,), maxval=10, dtype=tf.int32)
-
-        # Training step
-        with profiler.profile_context("train_step"):
-            with tf.GradientTape() as tape:
-                predictions = model(x_batch, training=True)
-                loss = tf.keras.losses.sparse_categorical_crossentropy(y_batch, predictions)
-                loss = tf.reduce_mean(loss)
-
-            gradients = tape.gradient(loss, model.trainable_variables)
-            optimizer = tf.keras.optimizers.Adam()
-            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-
-        print(f"Epoch {epoch+1}/5, Loss: {loss.numpy():.4f}")
-
-# Generate report
-results = profiler.get_results()
-print(f"\nTensorFlow training completed!")
-print(f"Peak GPU memory: {results.peak_memory_mb:.2f} MB")
-
-# Create visualizations
-visualizer = MemoryVisualizer()
-visualizer.plot_memory_timeline(results, save_path='tf_training_memory.png')
-```
-
-### Example 2: TensorFlow Mixed Precision Profiling
-
-```python
-import tensorflow as tf
-from tfmemprof import TFMemoryProfiler
-
-# Enable mixed precision
-policy = tf.keras.mixed_precision.Policy('mixed_float16')
-tf.keras.mixed_precision.set_global_policy(policy)
-
-profiler = TFMemoryProfiler()
-
-with profiler.profile_context("mixed_precision_training"):
-    # Create model with mixed precision
-    model = tf.keras.Sequential([
-        tf.keras.layers.Dense(1024, activation='relu', input_shape=(784,)),
-        tf.keras.layers.Dense(512, activation='relu'),
-        tf.keras.layers.Dense(10, activation='softmax', dtype='float32')  # Output in float32
-    ])
-
-    optimizer = tf.keras.optimizers.Adam()
-
-    # Training with loss scaling
-    x = tf.random.normal((128, 784))
-    y = tf.random.uniform((128,), maxval=10, dtype=tf.int32)
-
-    with tf.GradientTape() as tape:
-        predictions = model(x, training=True)
-        loss = tf.keras.losses.sparse_categorical_crossentropy(y, predictions)
-        loss = tf.reduce_mean(loss)
-
-        # Scale loss for mixed precision
-        scaled_loss = optimizer.get_scaled_loss(loss)
-
-    # Get scaled gradients and unscale
-    scaled_gradients = tape.gradient(scaled_loss, model.trainable_variables)
-    gradients = optimizer.get_unscaled_gradients(scaled_gradients)
-    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-
-results = profiler.get_results()
-print(f"Mixed precision memory usage: {results.peak_memory_mb:.2f} MB")
-
-# Reset policy
-tf.keras.mixed_precision.set_global_policy('float32')
-```
-
----
-
-## TensorFlow-Specific Features
-
-### 1. Graph vs Eager Execution Profiling
-
-```python
-import tensorflow as tf
-from tfmemprof import TFMemoryProfiler
-
-profiler = TFMemoryProfiler()
-
-# Eager execution (default)
-with profiler.profile_context("eager_execution"):
-    @tf.function
-    def eager_operation():
-        x = tf.random.normal((1000, 1000))
-        return tf.reduce_mean(tf.square(x))
-
-    result = eager_operation()
-
-# Graph execution
-with profiler.profile_context("graph_execution"):
-    @tf.function
-    def graph_operation():
-        x = tf.random.normal((1000, 1000))
-        return tf.reduce_mean(tf.square(x))
-
-    result = graph_operation()
-
-# Compare results
-results = profiler.get_results()
-for context, stats in results.function_profiles.items():
-    print(f"{context}: {stats['total_duration']:.4f}s, {stats['total_memory_used']:.2f}MB")
-```
-
-### 2. TensorFlow Data Pipeline Profiling
-
-```python
-import tensorflow as tf
-from tfmemprof import TFMemoryProfiler
-
-profiler = TFMemoryProfiler()
-
-with profiler.profile_context("data_pipeline"):
-    # Create efficient data pipeline
-    def create_dataset():
-        dataset = tf.data.Dataset.from_tensor_slices(tf.random.normal((10000, 784)))
-        dataset = dataset.batch(64)
-        dataset = dataset.prefetch(tf.data.AUTOTUNE)
-        dataset = dataset.cache()
-        return dataset
-
-    train_dataset = create_dataset()
-
-    # Consume dataset
-    for batch in train_dataset.take(10):
-        processed = tf.nn.relu(batch)
-
-results = profiler.get_results()
-print(f"Data pipeline memory: {results.peak_memory_mb:.2f} MB")
-```
-
-### 3. Multi-GPU Strategy Profiling
-
-```python
-import tensorflow as tf
-from tfmemprof import TFMemoryProfiler
-
-if len(tf.config.list_physical_devices('GPU')) > 1:
-    # Multi-GPU strategy
-    strategy = tf.distribute.MirroredStrategy()
-
-    profiler = TFMemoryProfiler()
-
-    with profiler.profile_context("multi_gpu_training"):
-        with strategy.scope():
-            model = tf.keras.Sequential([
-                tf.keras.layers.Dense(512, activation='relu', input_shape=(784,)),
-                tf.keras.layers.Dense(10, activation='softmax')
-            ])
-
-            model.compile(optimizer='adam', loss='sparse_categorical_crossentropy')
-
-            # Distributed training
-            x = tf.random.normal((128, 784))
-            y = tf.random.uniform((128,), maxval=10, dtype=tf.int32)
-
-            model.fit(x, y, epochs=1, batch_size=64)
-
-    results = profiler.get_results()
-    print(f"Multi-GPU memory: {results.peak_memory_mb:.2f} MB")
-```
-
----
-
-## Command Line Interface
-
-### TensorFlow CLI Commands
+> **Source checkout only.** These commands require the repository `examples/`
+> package.
 
 ```bash
-# System information
+python -m examples.cli.quickstart
+python -m examples.scenarios.tf_end_to_end_scenario
+python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
+```
+
+This is the fastest route to a reproducible TensorFlow artifact set.
+
+## TUI-assisted TensorFlow workflow
+
+The current TUI can help after or during a TensorFlow run:
+
+- `TensorFlow` tab for sample workloads and collected summaries
+- `Monitoring` for live tracking
+- `Visualizations` for plot export
+- `Diagnostics` for artifact review
+- `CLI & Actions` for command-driven flows
+
+Launch:
+
+```bash
+pip install "stormlog[tui,torch]"
+stormlog
+```
+
+The current TUI startup path imports PyTorch immediately, so TensorFlow-only environments still need the `torch` extra for `stormlog` to launch.
+
+## Recommended validation sequence
+
+Use this when you need a compact TensorFlow confidence pass:
+
+> **Source checkout only.** Replace `python -m examples.basic.tensorflow_demo`
+> with `tfmemprof monitor --interval 0.5 --duration 15 --device /CPU:0 --output tf_monitor.json`
+> if you installed from PyPI on a CPU-backed TensorFlow setup.
+
+```bash
 tfmemprof info
-# Output: TensorFlow version, GPU details, CUDA info
-
-# Real-time monitoring
-tfmemprof monitor --interval 1.0 --duration 30 --device /GPU:0
-# Monitor specific GPU for 30 seconds
-
-# Background tracking
-tfmemprof track --output tf_results.json --threshold 4096
-# Track with 4GB alert threshold
-
-# Analysis with TensorFlow optimizations
-tfmemprof analyze --input tf_results.json --detect-leaks --optimize --report tf_report.md
-# Analyze with TensorFlow-specific optimizations
-```
-
-For CPU-only TensorFlow, add `--device /CPU:0`:
-
-```bash
-tfmemprof monitor --interval 0.5 --duration 30 --device /CPU:0 --output tf_monitor.json
-tfmemprof track --interval 0.5 --output tf_track.json --device /CPU:0
-```
-
-### CPU CLI Alternative
-
-```bash
-# For TensorFlow CPU monitoring:
-
-# Monitor TensorFlow CPU usage
-python -c "
-import tensorflow as tf
-import psutil
-import time
-tf.config.set_visible_devices([], 'GPU')
-for i in range(30):
-    mem = psutil.virtual_memory()
-    print(f'TensorFlow CPU Memory: {mem.used/1e9:.1f}GB ({mem.percent:.1f}%)')
-    time.sleep(1)
-"
-
-# Profile TensorFlow script
-python -m memory_profiler your_tf_script.py
-```
-
----
-
-## Troubleshooting
-
-### Common TensorFlow Issues
-
-#### Issue 1: TensorFlow GPU Out of Memory
-
-**Symptoms:**
-
-```
-ResourceExhaustedError: OOM when allocating tensor
-```
-
-**Solutions:**
-
-```python
-# 1. Enable memory growth
-gpus = tf.config.list_physical_devices('GPU')
-if gpus:
-    for gpu in gpus:
-        tf.config.experimental.set_memory_growth(gpu, True)
-
-# 2. Limit GPU memory
-tf.config.experimental.set_memory_growth(gpus[0], True)
-tf.config.experimental.set_virtual_device_configuration(
-    gpus[0],
-    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=4096)]
-)
-
-# 3. Use mixed precision
-policy = tf.keras.mixed_precision.Policy('mixed_float16')
-tf.keras.mixed_precision.set_global_policy(policy)
-
-# 4. Clear session regularly
-tf.keras.backend.clear_session()
-```
-
-#### Issue 2: TensorFlow Import Errors
-
-**Symptoms:**
-
-```
-ImportError: No module named 'tfmemprof'
-```
-
-**Solutions:**
-
-```bash
-# Reinstall package
-pip install -e . --force-reinstall
-
-# Check TensorFlow installation
-python -c "import tensorflow as tf; print(tf.__version__)"
-
-# Verify profiler installation
-pip list | grep tfmemprof
-```
-
-#### Issue 3: TensorFlow CUDA Compatibility
-
-**Symptoms:**
-
-```
-Could not load dynamic library 'libcudart.so.11.0'
-```
-
-**Solutions:**
-
-```bash
-# Check CUDA version compatibility
-python -c "import tensorflow as tf; print(tf.test.is_built_with_cuda())"
-
-# Install compatible TensorFlow version
-pip install tensorflow==2.12.0  # For CUDA 11.8
-
-# Check cuDNN
-python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
-```
-
----
-
-## Performance Benchmarks
-
-### Expected TensorFlow Performance
-
-#### GPU Profiling Overhead
-
-| Operation                   | Baseline | With Profiling | Overhead |
-| --------------------------- | -------- | -------------- | -------- |
-| Matrix Multiply (2000x2000) | 0.008s   | 0.009s         | 12%      |
-| CNN Forward Pass            | 0.025s   | 0.028s         | 12%      |
-| Keras Model Training        | 1.250s   | 1.350s         | 8%       |
-| Memory Tracking             | -        | 0.001s         | Minimal  |
-
-#### TensorFlow CPU Profiling Overhead
-
-| Operation                   | Baseline | With Profiling | Overhead |
-| --------------------------- | -------- | -------------- | -------- |
-| Matrix Multiply (1000x1000) | 0.150s   | 0.153s         | 2%       |
-| Model Forward Pass          | 0.800s   | 0.816s         | 2%       |
-| Memory Tracking             | -        | 0.001s         | Minimal  |
-
-### TensorFlow Optimization Tips
-
-#### For GPU:
-
-```python
-# 1. Use tf.function for graph optimization
-@tf.function
-def optimized_training_step(x, y):
-    with tf.GradientTape() as tape:
-        predictions = model(x, training=True)
-        loss = loss_fn(y, predictions)
-    gradients = tape.gradient(loss, model.trainable_variables)
-    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-
-# 2. Enable mixed precision
-tf.keras.mixed_precision.set_global_policy('mixed_float16')
-
-# 3. Use efficient data loading
-dataset = dataset.prefetch(tf.data.AUTOTUNE).cache()
-
-# 4. Reduce profiling overhead
-profiler = TFMemoryProfiler(enable_tensor_tracking=False)
-```
-
-#### For CPU:
-
-```python
-# 1. Set CPU threads
-tf.config.threading.set_inter_op_parallelism_threads(4)
-tf.config.threading.set_intra_op_parallelism_threads(4)
-
-# 2. Use smaller models for CPU
-model = tf.keras.Sequential([
-    tf.keras.layers.Dense(64, activation='relu'),  # Smaller layers
-    tf.keras.layers.Dense(32, activation='relu'),
-    tf.keras.layers.Dense(10, activation='softmax')
-])
-
-# 3. Batch size optimization for CPU
-batch_size = 16  # Smaller batches for CPU
-
-# 4. Increase sampling interval
-tracker = MemoryTracker(
-    sampling_interval=1.0,
-    device='/CPU:0',
-    enable_logging=False,
-)
-```
-
----
-
-## Conclusion
-
-This comprehensive guide provides everything needed to test and use the TensorFlow Stormlog in both GPU and CPU environments. The profiler offers TensorFlow-specific optimizations and insights that help optimize deep learning workflows.
-
-### Quick Reference
-
-**Source checkout:**
-
-```bash
-python -m examples.basic.tensorflow_demo          # Quick test
-```
-
-**Pip install:**
-
-```bash
-tfmemprof info                                    # System summary
-tfmemprof monitor --interval 0.5 --duration 15 --device /CPU:0 --output tf_monitor.json
+python -m examples.basic.tensorflow_demo
+tfmemprof monitor --interval 0.5 --duration 15 --output tf_monitor.json
+tfmemprof analyze --input tf_monitor.json --detect-leaks --optimize --report tf_report.txt
 tfmemprof diagnose --duration 0 --output ./tf_diag
 ```
 
-**TensorFlow-Specific Features:**
+## Common issues
 
--   Mixed precision profiling
--   Graph vs Eager execution analysis
--   Keras integration
--   Multi-GPU strategy profiling
--   TensorFlow Lite optimization
+### `tfmemprof` is installed but no GPU devices appear
 
-### Next Steps
+Run:
 
-1. **Start Testing**: Run the appropriate test suite for your TensorFlow setup
-2. **Explore Features**: Try TensorFlow-specific profiling features
-3. **Integrate**: Add profiling to your existing TensorFlow projects
-4. **Optimize**: Use insights to improve TensorFlow memory efficiency
-5. **Contribute**: Share improvements with the TensorFlow community
+```bash
+tfmemprof info
+```
 
-For questions, issues, or contributions, visit our [GitHub repository](https://github.com/Silas-Asamoah/stormlog).
+If it still shows no GPU devices, treat it as an environment issue first. The TensorFlow flow still supports CPU-backed runs.
+
+### `tfmemprof analyze` rejects positional input
+
+That is expected. Use:
+
+```bash
+tfmemprof analyze --input tf_monitor.json --detect-leaks --optimize
+```
+
+### Plot export fails
+
+Install the visualization extra:
+
+```bash
+pip install "stormlog[viz]"
+```
+
+## Related docs
+
+- [usage.md](usage.md)
+- [cli.md](cli.md)
+- [tui.md](tui.md)
+- [troubleshooting.md](troubleshooting.md)
 
 ---
 
-**Happy TensorFlow Profiling!** 🚀
-
-_Authors: Prince Agyei Tuffour and Silas Bempong_
+[← Back to main docs](index.md)

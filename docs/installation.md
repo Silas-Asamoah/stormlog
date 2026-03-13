@@ -2,204 +2,167 @@
 
 # Installation Guide
 
-This guide covers different installation methods for Stormlog.
+Use the smallest install that matches your workflow, then validate the console scripts you plan to use.
 
-## Prerequisites
+## Choose an install profile
 
--   Python 3.10 or higher
--   pip (Python package installer)
--   Git (for source installation)
+## Install name vs import names
 
-## Installation Methods
+Install the distribution as `stormlog`, then import the Python APIs from
+`stormlog` or `stormlog.tensorflow`:
 
-### 1. From PyPI
+| Task | Use |
+| --- | --- |
+| Install from PyPI | `pip install stormlog` |
+| Launch the TUI | `stormlog` |
+| Import PyTorch APIs | `from stormlog import GPUMemoryProfiler, MemoryTracker` |
+| Import TensorFlow APIs | `from stormlog.tensorflow import TFMemoryProfiler` |
+| Run CLI automation | `gpumemprof` or `tfmemprof` |
 
-Package page: <https://pypi.org/project/stormlog/>
+### Core package
 
 ```bash
-# Basic installation (core dependencies only)
 pip install stormlog
-
-# With visualization support (matplotlib, plotly, dash)
-pip install stormlog[viz]
-
-# With interactive TUI dashboard (textual)
-pip install stormlog[tui]
-
-# With optional dependencies
-pip install stormlog[torch]  # PyTorch support
-pip install stormlog[tf]     # TensorFlow support
-pip install stormlog[all]    # Both frameworks
-pip install stormlog[dev]    # Development tools
-pip install stormlog[test]   # Testing dependencies
-pip install stormlog[docs]   # Documentation tools (sphinx)
 ```
 
-### 2. From Source
+Includes:
 
-For development or if you need the latest features:
+- `stormlog`
+- `stormlog.tensorflow`
+- core telemetry and analysis utilities
+- CPU-compatible monitoring and tracking
+
+### Visualization extras
 
 ```bash
-# Clone the repository
+pip install "stormlog[viz]"
+```
+
+Adds the dependencies used by:
+
+- `MemoryVisualizer`
+- TUI HTML export from the Visualizations tab
+- richer plot generation in example scripts
+
+### TUI extras
+
+```bash
+pip install "stormlog[tui,torch]"
+```
+
+Installs the Textual stack plus the current PyTorch runtime dependency required by TUI startup. The `stormlog` console script is declared by the package; these extras make the app runnable.
+
+### Framework extras
+
+```bash
+pip install "stormlog[torch]"
+pip install "stormlog[tf]"
+pip install "stormlog[all]"
+```
+
+## Source checkout
+
+```bash
 git clone https://github.com/Silas-Asamoah/stormlog.git
 cd stormlog
-
-# Install in development mode
 pip install -e .
-
-# Install framework extras
-pip install -e ".[torch]"
-pip install -e ".[tf]"
-pip install -e ".[all]"
-
-# Install with development dependencies
-pip install -e ".[dev]"
-
-# Install with testing dependencies
-pip install -e ".[test]"
 ```
 
-### 3. Development Setup
-
-For contributors and developers:
+For a contributor setup with all common extras:
 
 ```bash
-# Clone the repository
-git clone https://github.com/Silas-Asamoah/stormlog.git
-cd stormlog
-
-# Create virtual environment
-python3 -m venv venv
-
-# Activate virtual environment
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install with all development dependencies
-pip install -e ".[dev,test]"
-# Optional: include framework extras for integration tests
-pip install -e ".[dev,test,all]"
-
-# Install pre-commit hooks
+pip install -e ".[dev,test,all,tui,viz]"
 pre-commit install
 ```
 
-## Dependency Notes
+### Source-only examples and guides
 
-The base installation includes core profiler dependencies only.
-Install framework support via extras:
-
-- `.[torch]` for PyTorch (`torch>=1.8.0`)
-- `.[tf]` for TensorFlow (`tensorflow>=2.4.0`)
-- `.[all]` for both frameworks
-
-### CPU-Only Mode
-
-For systems without GPU support, no extra steps are needed. The profiler
-automatically detects the available hardware and falls back to CPU-based
-memory tracking (RSS via psutil). See the
-[CPU Compatibility Guide](cpu_compatibility.md) for details.
+The `examples/` package and the Markdown test guides under
+`docs/examples/test_guides/README.md` are only available from a repository
+checkout. A plain `pip install stormlog` does not include them.
 
 ## Verification
 
-After installation, verify that everything is working:
+### Core verification
 
 ```bash
-# Check version
-python3 -c "from gpumemprof._version import __version__; print(__version__)"
-
-# Test CLI tools
+python3 -c "import stormlog; print(stormlog.__version__)"
 gpumemprof --help
 gpumemprof info
-# Requires the TensorFlow extra (`.[tf]` or `.[all]`)
+```
+
+### TensorFlow verification
+
+If you installed the TensorFlow extra:
+
+```bash
 tfmemprof --help
 tfmemprof info
 ```
 
-If you installed from a source checkout, you can also run `python3 -m pytest tests/ -v`.
+### TUI verification
 
-## Troubleshooting
+If you installed the TUI dependencies:
 
-### Common Issues
+```bash
+stormlog
+```
 
-1. **Import Errors**
+If TUI dependencies are missing after a source checkout, reinstall with:
 
-    ```bash
-    # Ensure you're using Python 3
-    python3 --version
+```bash
+pip install -e ".[tui,torch]"
+```
 
-    # Reinstall in development mode
-    pip install -e . --force-reinstall
-    ```
+## Platform notes
 
-2. **Missing Dependencies**
+### CPU-only systems
 
-    ```bash
-    # Install all dependencies
-    pip install -r requirements.txt
-    pip install -r requirements-dev.txt
-    pip install -e ".[all]"
-    ```
+You do not need CUDA to use Stormlog. The CLI, TUI monitoring flows, and CPU profiler helpers remain usable on CPU-only machines. See [cpu_compatibility.md](cpu_compatibility.md).
 
-3. **Permission Issues**
+### macOS and MPS
 
-    ```bash
-    # Use user installation
-    pip install --user stormlog
-    ```
+The TUI and CLI support Apple Silicon workflows. Use the CLI or TUI monitoring
+and diagnostics flows even when `GPUMemoryProfiler` is unavailable on MPS.
 
-4. **Virtual Environment Issues**
-    ```bash
-    # Create fresh virtual environment
-    python3 -m venv venv_new
-    source venv_new/bin/activate
-    pip install -e .
-    ```
+### Linux and CUDA
 
-### Platform-Specific Notes
+Install the correct framework build for your `torch.cuda` runtime before using
+`GPUMemoryProfiler`. For NVIDIA systems that means matching the CUDA toolchain.
+See [gpu_setup.md](gpu_setup.md) for the full checklist.
 
-#### macOS
+## Common install failures
 
--   Use `python3` instead of `python`
--   Install Xcode command line tools if needed
+### `gpumemprof: command not found`
 
-#### Windows
+```bash
+pip install -e .
+hash -r
+gpumemprof --help
+```
 
--   Use `python` (if Python 3 is default) or `python3`
--   Install Visual C++ build tools if needed
+### `stormlog: command not found`
 
-#### Linux
+```bash
+pip install -e ".[tui,torch]"
+hash -r
+stormlog
+```
 
--   Use `python3` instead of `python`
--   Install system dependencies: `sudo apt-get install python3-dev`
+### Missing framework imports
 
-## Next Steps
+Install the matching extra instead of trying to work around import errors manually:
 
-After installation:
+```bash
+pip install "stormlog[torch]"
+pip install "stormlog[tf]"
+```
 
-1. Open the [Documentation Home](index.md) for the full docs navigation.
-2. Read the [Quick Start Guide](usage.md).
-3. Explore the [CLI Usage](cli.md).
-4. Review the [API Documentation](api.md).
-5. Review the [Examples Guide](examples.md).
+## Next steps
 
-### About the examples
-
-The documentation references example modules such as
-`examples.cli.quickstart` and `examples.basic.pytorch_demo`. These are
-**only available when you install from a source checkout** (`git clone` +
-`pip install -e .`). The PyPI package does not include them.
-
-All CLI and Python API features work with a pip install. Use the CLI commands
-and Python snippets throughout this documentation, especially in
-[Usage](usage.md), [CLI](cli.md), and [Examples](examples.md).
-
-## Support
-
-If you encounter issues:
-
-1. Check the [Troubleshooting Guide](troubleshooting.md)
-2. Search existing [GitHub Issues](https://github.com/Silas-Asamoah/stormlog/issues)
-3. Create a new issue with detailed information
+1. Read [usage.md](usage.md) for the Python API and CLI-first workflow.
+2. Read [cli.md](cli.md) if you need telemetry, plots, or diagnose bundles.
+3. Read [tui.md](tui.md) if you want an interactive terminal workflow.
 
 ---
 

@@ -1,7 +1,7 @@
 import pytest
 
-from gpumemprof.cpu_profiler import CPUMemoryProfiler, CPUMemoryTracker
-from gpumemprof.tracker import MemoryTracker
+from stormlog.cpu_profiler import CPUMemoryProfiler, CPUMemoryTracker
+from stormlog.tracker import MemoryTracker
 
 
 def test_cpu_profiler_rejects_non_positive_monitor_interval() -> None:

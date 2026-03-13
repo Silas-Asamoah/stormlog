@@ -6,8 +6,9 @@ import json
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
+from os import PathLike
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
 
 @dataclass
@@ -21,11 +22,17 @@ class CheckResult:
 
 
 def run_command(
-    cmd: Sequence[str], timeout_s: Optional[float] = None
+    cmd: Sequence[str],
+    timeout_s: Optional[float] = None,
+    *,
+    cwd: str | PathLike[str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a subprocess command and capture stdout/stderr."""
     return subprocess.run(
         list(cmd),
+        cwd=cwd,
+        env=dict(env) if env is not None else None,
         capture_output=True,
         text=True,
         check=False,

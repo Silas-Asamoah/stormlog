@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from tfmemprof.tf_env import configure_tensorflow_logging
+from stormlog.tensorflow.tf_env import configure_tensorflow_logging
 
 
 def test_configure_tensorflow_logging_sets_default(

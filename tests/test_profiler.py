@@ -16,7 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover - environment w/out tf
 GPUMemoryProfiler: Any = None
 if torch is not None:
     try:
-        from gpumemprof import (  # type: ignore[no-redef, unused-ignore]  # noqa: F811
+        from stormlog import (  # type: ignore[no-redef, unused-ignore]  # noqa: F811
             GPUMemoryProfiler,
         )
     except ImportError:  # pragma: no cover - torch installed but import still fails

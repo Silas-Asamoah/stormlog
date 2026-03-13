@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import gpumemprof.device_collectors as collectors
+import stormlog.device_collectors as collectors
 
 
 def test_detect_torch_runtime_backend_reports_rocm(

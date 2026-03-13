@@ -86,5 +86,5 @@ git push origin v0.2.0
 ```
 
 - [ ] GitHub release created with v0.2 notes
-- [ ] PyPI publication completed
-- [ ] Post-release smoke install verified
+- [ ] PyPI publication completed under distribution name `stormlog`
+- [ ] Post-release smoke install verified with `pip install stormlog`

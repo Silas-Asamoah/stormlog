@@ -2,12 +2,11 @@
 
 # Benchmark Harness (v0.2)
 
-> **Source checkout only.** The benchmark harness
-> (`python -m examples.cli.benchmark_harness`) requires the `examples/` package
-> and `docs/benchmarks/` from the repository. It is not available in the pip
-> package.
+> **Source checkout only.** `python -m examples.cli.benchmark_harness` requires
+> the repository `examples/` package and `docs/benchmarks/`. It is not shipped
+> in the PyPI package.
 
-This benchmark harness measures profiler overhead and artifact growth with explicit pass/fail budgets.
+This benchmark harness measures current CPU tracker overhead and artifact growth with explicit pass/fail budgets.
 
 ## Run the Harness
 
@@ -33,10 +32,12 @@ unless you are intentionally profiling harness variability.
 
 ## What It Measures
 
-- `runtime_overhead_pct`: wall-time overhead of tracked run vs unprofiled run.
-- `cpu_overhead_pct`: CPU-time overhead of tracked run vs unprofiled run.
+- `runtime_overhead_pct`: wall-time overhead of a tracked run vs an unprofiled run.
+- `cpu_overhead_pct`: CPU-time overhead of a tracked run vs an unprofiled run.
 - `sampling_impact_pct`: extra wall-time cost of default sampling vs lower-frequency sampling.
-- `artifact_growth_bytes`: additional artifact size from tracked run vs unprofiled run.
+- `artifact_growth_bytes`: additional artifact size from the tracked run vs the unprofiled run.
+
+The current implementation uses `CPUMemoryTracker` and a deterministic CPU workload in `examples/cli/benchmark_harness.py`. Treat it as a budget harness for tracking overhead, not as a full-framework performance benchmark.
 
 ## Output Format
 

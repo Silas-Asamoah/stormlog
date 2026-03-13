@@ -1,256 +1,231 @@
 # Stormlog
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/Silas-Asamoah/stormlog/actions)
-[![PyPI Version](https://img.shields.io/pypi/v/stormlog.svg)](https://pypi.org/project/stormlog/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PyPI Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fpypi.org%2Fpypi%2Fstormlog%2Fjson&query=%24.info.version&label=pypi)](https://pypi.org/project/stormlog/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Silas-Asamoah/stormlog/blob/main/LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.8+-red.svg)](https://pytorch.org/)
 [![TensorFlow](https://img.shields.io/badge/TensorFlow-2.4+-orange.svg)](https://tensorflow.org/)
-[![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat)](CONTRIBUTING.md)
-[![Textual TUI](https://img.shields.io/badge/TUI-Textual-blueviolet)](docs/tui.md)
-[![Prompt%20Toolkit](https://img.shields.io/badge/Prompt--toolkit-roadmap-lightgrey)](docs/tui.md#prompt-toolkit-roadmap)
+[![Textual TUI](https://img.shields.io/badge/TUI-Textual-blueviolet)](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/tui.md)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/gpu-profiler-overview.gif" alt="Stormlog TUI Demo" width="900">
+  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/tui-overview-current.png" alt="Stormlog overview tab" width="900">
   <br/>
-  <em>Interactive Textual dashboard with live monitoring, visualizations, and CLI automation.</em>
+  <em>Current Overview tab from the shipped Textual interface.</em>
 </p>
 
-A production-ready, open source tool for real-time GPU memory profiling, leak detection, and optimization in PyTorch and TensorFlow deep learning workflows.
+Stormlog is a memory-profiling toolkit for day-to-day PyTorch and TensorFlow work. It combines Python APIs, CLI commands, and a Textual TUI so you can move from "what is using memory?" to saved artifacts and shareable diagnostics without switching tools.
 
-## Why use Stormlog?
+## Why use this tool
 
--   **Prevent Out-of-Memory Crashes**: Catch memory leaks and inefficiencies before they crash your training.
--   **Optimize Model Performance**: Get actionable insights and recommendations for memory usage.
--   **Works with PyTorch & TensorFlow**: Unified interface for both major frameworks.
--   **Beautiful Visualizations**: Timeline plots, heatmaps, and interactive dashboards.
--   **CLI & API**: Use from Python or the command line.
-
-## Features
-
--   Real-time GPU memory monitoring
--   Memory leak detection & alerts
--   Interactive and static visualizations
--   Context-aware profiling (decorators, context managers)
--   CLI tools for automation
--   Data export (CSV, JSON)
--   CPU compatibility mode
+- Catch memory growth before it becomes an OOM.
+- Compare allocated vs reserved usage during training and inference.
+- Export telemetry and diagnose bundles for CI or release triage.
+- Load the same artifacts into a terminal UI for faster debugging.
+- Keep workflows available on CPU-only and MPS systems, not just CUDA boxes.
 
 ## Installation
 
 ### From PyPI
 
-Package page: <https://pypi.org/project/stormlog/>
-
 ```bash
-# Basic installation
 pip install stormlog
-
-# With visualization support
-pip install stormlog[viz]
-
-# With optional dependencies
-pip install stormlog[torch]  # PyTorch support
-pip install stormlog[tf]     # TensorFlow support
-pip install stormlog[all]    # Both frameworks
-pip install stormlog[dev]    # Development tools
-pip install stormlog[test]   # Testing dependencies
-pip install stormlog[docs]   # Documentation tools
+pip install "stormlog[viz]"
+pip install "stormlog[tui,torch]"
+pip install "stormlog[torch]"
+pip install "stormlog[tf]"
+pip install "stormlog[all]"
 ```
 
-### From Source
+### Package and import names
+
+`stormlog` is the distribution name on PyPI and the primary Python import root.
+TensorFlow-specific APIs live under `stormlog.tensorflow`.
+
+| Task | Use |
+| --- | --- |
+| Install the package | `pip install stormlog` |
+| Launch the TUI | `stormlog` |
+| Import PyTorch APIs | `from stormlog import GPUMemoryProfiler, MemoryTracker` |
+| Import TensorFlow APIs | `from stormlog.tensorflow import TFMemoryProfiler` |
+| Run CLI automation | `gpumemprof` or `tfmemprof` |
+
+### From source
 
 ```bash
 git clone https://github.com/Silas-Asamoah/stormlog.git
 cd stormlog
-
-# Install in development mode
 pip install -e .
-
-# Install with visualization support
-pip install -e .[viz]
-
-# Install framework extras
-pip install -e .[torch]
-pip install -e .[tf]
-pip install -e .[all]
-
-# Install with development dependencies
-pip install -e .[dev]
-
-# Install with testing dependencies
-pip install -e .[test]
+pip install -e ".[viz,tui,torch]"
 ```
 
-### Development Setup
+If you want both framework extras in a development checkout:
 
 ```bash
-# Clone and setup development environment
-git clone https://github.com/Silas-Asamoah/stormlog.git
-cd stormlog
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -e .[dev,test]
-# Optional: include framework extras for integration tests
-pip install -e .[dev,test,all]
-pre-commit install
+pip install -e ".[dev,test,all,tui,viz]"
 ```
 
-**Note**: Black formatting check is temporarily disabled in CI. Code formatting will be addressed in a separate PR.
+The `examples/` package and Markdown test guides are source-checkout only. A
+plain `pip install stormlog` does not include them.
 
-## Quick Start
+## Quick start
 
-### PyTorch Example
+### CLI-first workflow
+
+This is the fastest path to verify an environment and produce an artifact you can inspect later:
+
+```bash
+gpumemprof info
+gpumemprof track --duration 2 --interval 0.5 --output /tmp/gpumemprof_track.json --format json
+gpumemprof analyze /tmp/gpumemprof_track.json --format txt --output /tmp/gpumemprof_analysis.txt
+gpumemprof diagnose --duration 0 --output /tmp/gpumemprof_diag
+
+tfmemprof info
+tfmemprof diagnose --duration 0 --output /tmp/tf_diag
+```
+
+### PyTorch API workflow
+
+`GPUMemoryProfiler` currently targets PyTorch runtimes exposed through
+`torch.cuda`, which covers NVIDIA CUDA and ROCm-backed builds. On Apple MPS or
+CPU-only systems, use `MemoryTracker`, the CLI, or `CPUMemoryProfiler` instead.
 
 ```python
-from gpumemprof import GPUMemoryProfiler
+import torch
+from stormlog import GPUMemoryProfiler
+
 profiler = GPUMemoryProfiler()
+device = profiler.device
+model = torch.nn.Linear(1024, 128).to(device)
 
-def train_step(model, data, target):
-    output = model(data)
-    loss = ...
-    loss.backward()
-    return loss
+def train_step() -> torch.Tensor:
+    x = torch.randn(64, 1024, device=device)
+    y = model(x)
+    return y.sum()
 
-profile = profiler.profile_function(train_step, model, data, target)
+profile = profiler.profile_function(train_step)
 summary = profiler.get_summary()
-print(f"Profiled call: {profile.function_name}")
+
+print(profile.function_name)
 print(f"Peak memory: {summary['peak_memory_usage'] / (1024**3):.2f} GB")
 ```
 
-### TensorFlow Example
+### TensorFlow API workflow
+
+`TFMemoryProfiler` works on GPU or CPU-backed TensorFlow runtimes.
 
 ```python
-from tfmemprof import TFMemoryProfiler
-profiler = TFMemoryProfiler()
+from stormlog.tensorflow import TFMemoryProfiler
+
+profiler = TFMemoryProfiler(enable_tensor_tracking=True)
+
 with profiler.profile_context("training"):
-    model.fit(x_train, y_train, epochs=5)
+    model.fit(x_train, y_train, epochs=1, batch_size=32)
+
 results = profiler.get_results()
 print(f"Peak memory: {results.peak_memory_mb:.2f} MB")
+print(f"Snapshots captured: {len(results.snapshots)}")
 ```
 
-## Documentation
+## Daily workflows
 
-Start at the docs home page and follow the same structure locally or when hosted:
+### ML engineer
 
--   **[Documentation Home (local)](docs/index.md)**
--   **[Documentation Home (hosted)](https://stormlog.readthedocs.io/en/latest/)**
+- instrument a training step with `GPUMemoryProfiler` or `TFMemoryProfiler`
+- switch to `track` when you need telemetry over time
+- export plots or analyze saved telemetry later
 
-Key guides:
--   [CLI Usage](docs/cli.md)
--   [CPU Compatibility](docs/cpu_compatibility.md)
--   [Compatibility Matrix (v0.2)](docs/compatibility_matrix.md)
--   [GPU Setup (drivers + frameworks)](docs/gpu_setup.md)
--   [Testing Guides](docs/pytorch_testing_guide.md), [TensorFlow](docs/tensorflow_testing_guide.md)
--   [Example Test Guides (Markdown)](docs/examples/test_guides/README.md)
--   [Terminal UI (Textual)](docs/tui.md)
--   [In-depth Article](docs/article.md)
--   [Example scripts](examples/basic)
--   [Launch scenario scripts](examples/scenarios)
+### Researcher debugging regressions
 
-## Launch QA Scenarios (CPU + MPS + Telemetry + OOM)
+- capture `track` output or a `diagnose` bundle
+- open the same artifacts in the TUI diagnostics and visualizations tabs
+- compare growth, gaps, and per-rank behavior before changing model code
 
-Run the capability matrix for a launch-oriented smoke pass:
+### CI or release owner
 
-```bash
-python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
-```
+These example-module commands require a source checkout plus `pip install -e .`.
 
-Run the full matrix (includes extra demos):
-
-```bash
-python -m examples.cli.capability_matrix --mode full --target both --oom-mode simulated
-```
-
-Key scenario modules:
-
-```bash
-python -m examples.scenarios.cpu_telemetry_scenario
-python -m examples.scenarios.mps_telemetry_scenario
-python -m examples.scenarios.oom_flight_recorder_scenario --mode simulated
-python -m examples.scenarios.tf_end_to_end_scenario
-```
+- run `python -m examples.cli.quickstart`
+- run `python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated`
+- archive the emitted artifacts for later triage in the TUI
 
 ## Terminal UI
 
-Prefer an interactive dashboard? Install the optional TUI dependencies and
-launch the Textual interface:
+Install the optional TUI dependencies and launch:
 
 ```bash
-pip install "stormlog[tui]"
+pip install "stormlog[tui,torch]"
 stormlog
 ```
 
-The TUI surfaces system info, PyTorch/TensorFlow quick actions, and CLI tips.
-Future prompt_toolkit enhancements will add a command palette for advanced
-workflows—see [docs/tui.md](docs/tui.md) for details.
+The current TUI startup path imports PyTorch immediately, so `stormlog[tui]` alone is not enough yet.
+
+The current TUI tabs are:
+
+- `Overview`
+- `PyTorch`
+- `TensorFlow`
+- `Monitoring`
+- `Visualizations`
+- `Diagnostics`
+- `CLI & Actions`
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/gpu-profiler-1.png" alt="Stormlog Overview" width="700">
+  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/tui-overview-current.png" alt="Stormlog overview tab" width="700">
   <br/>
-  <em>Overview, PyTorch, and TensorFlow tabs inside the Textual dashboard.</em>
+  <em>Overview tab with current system summary and navigation guidance.</em>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/gpu-profiler-2.png" alt="Stormlog CLI Actions" width="700">
+  <img src="https://raw.githubusercontent.com/Silas-Asamoah/stormlog/main/docs/tui-diagnostics-current.png" alt="Stormlog diagnostics tab" width="700">
   <br/>
-  <em>CLI & Actions tab with quick commands, loaders, and log output.</em>
+  <em>Diagnostics tab with the current artifact loader, rank table, and timeline panes.</em>
 </p>
 
-Need charts without leaving the terminal? The new **Visualizations** tab renders
-an ASCII timeline from the live tracker and can export the same data to PNG
-(Matplotlib) or HTML (Plotly) under `./visualizations` for deeper inspection.
-Just start tracking, refresh the tab, and hit the export buttons.
+Use the Monitoring tab to start live tracking, export CSV or JSON events to `./exports`, and tune warning or critical thresholds. In Visualizations, refresh the live timeline and save PNG or HTML exports under `./visualizations`. In Diagnostics, load live telemetry or artifact paths and rebuild rank-level diagnostics without leaving the terminal.
 
-Need fast distributed triage? The **Diagnostics** tab loads live telemetry or
-merged artifacts (`JSON`, `CSV`, diagnose directories), then renders per-rank
-delta/gap diagnostics, timeline comparisons, and first-cause indicators
-(earliest + most severe). It also handles partial rank availability and
-supports rank filters like `0,2,4-7`.
+For screen-by-screen details, see [docs/tui.md](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/tui.md).
 
-<p align=\"center\">
-  <img src=\"docs/tui-distributed-diagnostics-workflow.png\" alt=\"Stormlog distributed diagnostics workflow\" width=\"900\">
-  <br/>
-  <em>Distributed Diagnostics tab workflow (live + artifact inputs, rank table, timeline compare, anomaly summary).</em>
-</p>
+## Examples and walkthroughs
 
-The PyTorch and TensorFlow tabs now surface recent decorator/context profiling
-results as live tables—with refresh/clear controls—so you can review peak
-memory, deltas, and durations gathered via `gpumemprof.context_profiler` or
-`tfmemprof.context_profiler` without leaving the dashboard.
+- [Documentation home](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/index.md)
+- [Installation guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/installation.md)
+- [Usage guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/usage.md)
+- [CLI guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/cli.md)
+- [Examples guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/examples.md)
+- [Testing guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/testing.md)
+- [PyTorch guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/pytorch_testing_guide.md)
+- [TensorFlow guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/tensorflow_testing_guide.md)
+- [Long-form article](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/article.md)
 
-When the monitoring session is running you can also dump every tracked event to
-`./exports/tracker_events_<timestamp>.{csv,json}` directly from the Monitoring
-tab, making it easy to feed the same data into pandas, spreadsheets, or external
-dashboards.
+## Launch QA scenarios
 
-Need tighter leak warnings? Adjust the warning/critical sliders in the same tab
-to update GPU `MemoryTracker` thresholds on the fly, and use the inline alert
-history to review exactly when spikes occurred.
+These commands require a source checkout:
 
-Need to run automation without opening another terminal? Use the CLI tab’s
-command input (or quick action buttons) to execute `gpumemprof` /
-`tfmemprof` commands in-place, trigger `gpumemprof diagnose`, run the OOM
-flight-recorder scenario, and launch the capability-matrix smoke checks with a
-single click.
+```bash
+python -m examples.cli.quickstart
+python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated
+python -m examples.scenarios.cpu_telemetry_scenario
+python -m examples.scenarios.oom_flight_recorder_scenario --mode simulated
+```
 
-## CPU Compatibility
+## CPU-only and laptop workflows
 
-Working on a laptop or CI agent without CUDA? The CLI, Python API, and TUI now
-fall back to a psutil-powered `CPUMemoryProfiler`/`CPUMemoryTracker`. Run the
-same `gpumemprof monitor` / `gpumemprof track` commands and you’ll see RSS data
-instead of GPU VRAM, exportable to CSV/JSON and viewable inside the monitoring
-tab. PyTorch sample workloads automatically switch to CPU tensors when CUDA
-isn’t present, so every workflow stays accessible regardless of hardware.
+If CUDA is not available, Stormlog still supports:
+
+- `gpumemprof info`
+- `gpumemprof monitor`
+- `gpumemprof track`
+- `CPUMemoryProfiler`
+- `CPUMemoryTracker`
+- the TUI overview, monitoring, diagnostics, and CLI tabs
+
+See [docs/cpu_compatibility.md](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/cpu_compatibility.md) for the CPU-only path.
 
 ## Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+See [CONTRIBUTING.md](https://github.com/Silas-Asamoah/stormlog/blob/main/CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](https://github.com/Silas-Asamoah/stormlog/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
-[MIT License](LICENSE)
-
----
-
-**Version:** 0.2.0 (launch candidate)
+[MIT License](https://github.com/Silas-Asamoah/stormlog/blob/main/LICENSE)

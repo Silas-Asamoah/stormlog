@@ -69,7 +69,7 @@ On macOS, `--target both` exercises CPU + MPS paths together.
 ## PyTorch GPU Checklist
 
 > **Source checkout only.** Pip users should use the CLI commands and Python
-> snippets from the [Usage Guide](../usage.md).
+> snippets from the [Usage Guide](../../usage.md).
 
 ```bash
 # Basic profiling walkthrough
@@ -85,7 +85,7 @@ Both scripts emit summaries, alert counts, and export artifacts under
 ## TensorFlow GPU Checklist
 
 > **Source checkout only.** Pip users should use the CLI commands and Python
-> snippets from the [Usage Guide](../usage.md).
+> snippets from the [Usage Guide](../../usage.md).
 
 ```bash
 # Minimal TensorFlow profiling run
@@ -110,7 +110,7 @@ optional `monitor`, and the equivalent `tfmemprof` commands).
 ### Scenario Modules (Telemetry + OOM + Diagnose)
 
 > **Source checkout only.** Pip users should use the CLI commands and Python
-> snippets from the [Usage Guide](../usage.md).
+> snippets from the [Usage Guide](../../usage.md).
 
 ```bash
 python -m examples.scenarios.cpu_telemetry_scenario
@@ -122,7 +122,7 @@ python -m examples.scenarios.tf_end_to_end_scenario
 Prefer an interactive dashboard? Launch the Textual TUI:
 
 ```bash
-pip install "stormlog[tui]"
+pip install "stormlog[tui,torch]"
 stormlog
 ```
 

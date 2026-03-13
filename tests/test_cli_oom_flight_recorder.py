@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-import gpumemprof.cli as gpumemprof_cli
+import stormlog.cli as gpumemprof_cli
 
 
 def test_main_parses_oom_track_flags(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -145,6 +145,6 @@ def test_cmd_track_passes_oom_config_to_memorytracker(
     assert created["rank"] == 2
     assert created["local_rank"] == 0
     assert created["world_size"] == 8
-    assert created["capture_context"] == "gpumemprof.track"
+    assert created["capture_context"] == "stormlog.track"
     assert created["capture_metadata"]["command"] == "track"
     assert created["capture_metadata"]["runtime_backend"] == "cuda"

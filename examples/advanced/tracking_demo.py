@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, List
 if TYPE_CHECKING:
     import torch
 
-    from gpumemprof.tracker import MemoryTracker, MemoryWatchdog
+    from stormlog.tracker import MemoryTracker, MemoryWatchdog
 
 try:
     import torch
@@ -25,7 +25,7 @@ from examples.common import (
     print_section,
     seed_everything,
 )
-from gpumemprof import get_gpu_info
+from stormlog import get_gpu_info
 
 LEAK_BUCKET: List[object] = []
 
@@ -42,7 +42,7 @@ def alert_handler(event: object) -> None:
 
 
 def setup_tracker() -> tuple[MemoryTracker, MemoryWatchdog]:
-    from gpumemprof.tracker import MemoryTracker, MemoryWatchdog
+    from stormlog.tracker import MemoryTracker, MemoryWatchdog
 
     tracker = MemoryTracker(
         sampling_interval=0.2,

@@ -2,505 +2,189 @@
 
 # Troubleshooting Guide
 
-This guide helps you resolve common issues with Stormlog.
+This guide focuses on the failure modes that show up in the current codebase and workflows.
 
-## Common Issues
+## Installation and entrypoints
 
-### Import Errors
+### `gpumemprof: command not found`
 
-#### Problem: `ModuleNotFoundError: No module named 'gpumemprof'`
-
-**Solution:**
+Reinstall the package into the active environment:
 
 ```bash
-# Install the package
 pip install -e .
-
-# Or install from PyPI
-pip install stormlog
+hash -r
+gpumemprof --help
 ```
 
-#### Problem: `ModuleNotFoundError: No module named 'torch'`
+### `tfmemprof: command not found`
 
-**Solution:**
+Install the TensorFlow extra:
 
 ```bash
-# Install PyTorch
-pip install torch
-
-# Or install with CUDA support
-pip install torch --index-url https://download.pytorch.org/whl/cu118
+pip install -e ".[tf]"
+hash -r
+tfmemprof --help
 ```
 
-#### Problem: `ModuleNotFoundError: No module named 'tensorflow'`
+### `stormlog: command not found`
 
-**Solution:**
+Install the TUI dependencies:
 
 ```bash
-# Install TensorFlow (GPU support is included automatically)
-pip install tensorflow
+pip install -e ".[tui,torch]"
+hash -r
+stormlog
 ```
 
-#### Problem: `ModuleNotFoundError: No module named 'jsonschema'`
+## Missing dependencies
 
-**Solution:**
+### `ModuleNotFoundError: No module named 'torch'`
+
+Install the PyTorch extra instead of trying to use CUDA-specific profiling without the framework:
 
 ```bash
-# Install test dependencies (includes jsonschema)
-pip install -r requirements-test.txt
-
-# Or install the broader dev toolchain
-pip install -r requirements-dev.txt
+pip install "stormlog[torch]"
 ```
 
-### CUDA Issues
-
-#### Problem: `CUDA not available`
-
-**Symptoms:**
-
-- Error: `CUDA not available`
-- Profiler falls back to CPU mode
-
-**Solutions:**
-
-1. **Check CUDA installation:**
+### `ModuleNotFoundError: No module named 'tensorflow'`
 
 ```bash
-nvidia-smi
-nvcc --version
+pip install "stormlog[tf]"
 ```
 
-2. **Verify PyTorch CUDA:**
+### Visualization export errors
 
-```python
-import torch
-print(f"CUDA available: {torch.cuda.is_available()}")
-print(f"CUDA version: {torch.version.cuda}")
-```
-
-3. **Verify TensorFlow CUDA:**
-
-```python
-import tensorflow as tf
-print(f"GPU devices: {tf.config.list_physical_devices('GPU')}")
-```
-
-4. **Install CUDA-compatible versions:**
+PNG and HTML exports depend on the visualization stack:
 
 ```bash
-# PyTorch with CUDA
-pip install torch --index-url https://download.pytorch.org/whl/cu118
-
-# TensorFlow (GPU support is included automatically)
-pip install tensorflow
+pip install "stormlog[viz]"
 ```
 
-#### Problem: `CUDA out of memory`
+## Runtime mismatches
 
-**Symptoms:**
+### `GPUMemoryProfiler` fails on a non-CUDA machine
 
-- Error: `CUDA out of memory`
-- Training crashes
+That class is for CUDA-backed PyTorch profiling. On CPU-only or MPS-only systems, use:
 
-**Solutions:**
+- `gpumemprof monitor`
+- `gpumemprof track`
+- `CPUMemoryProfiler`
+- `CPUMemoryTracker`
 
-1. **Reduce batch size:**
+If you need setup guidance for real CUDA profiling, see [gpu_setup.md](gpu_setup.md).
 
-```python
-# Reduce batch size
-dataloader = DataLoader(dataset, batch_size=16)  # Instead of 64
-```
+### TensorFlow CLI is installed but reports no GPU
 
-2. **Clear cache:**
-
-```python
-import torch
-torch.cuda.empty_cache()
-```
-
-3. **Use gradient checkpointing:**
-
-```python
-from torch.utils.checkpoint import checkpoint
-# Wrap memory-heavy layers with checkpoint()
-```
-
-4. **Monitor memory usage:**
-
-```python
-from gpumemprof import GPUMemoryProfiler
-
-profiler = GPUMemoryProfiler()
-profiler.start_monitoring(interval=0.5)
-
-# Your training code here
-profiler.stop_monitoring()
-```
-
-### Memory Leak Issues
-
-#### Problem: Memory usage keeps increasing
-
-**Symptoms:**
-
-- Memory usage grows over time
-- Profiler detects memory leaks
-
-**Solutions:**
-
-1. **Check for unreleased tensors:**
-
-```python
-# Ensure tensors are properly deleted
-del tensor
-torch.cuda.empty_cache()
-```
-
-2. **Use context managers:**
-
-```python
-with torch.no_grad():
-    # Inference code here
-    pass
-```
-
-3. **Monitor with profiler:**
-
-```python
-from gpumemprof import GPUMemoryProfiler
-
-profiler = GPUMemoryProfiler()
-profiler.start_monitoring(interval=0.5)
-
-# Your code here
-with profiler.profile_context("training_step"):
-    train_step()
-
-profiler.stop_monitoring()
-summary = profiler.get_summary()
-print(f"Peak memory: {summary['peak_memory_usage'] / (1024**3):.2f} GB")
-print(f"Memory change: {summary['memory_change_from_baseline'] / (1024**3):.2f} GB")
-```
-
-### CLI Issues
-
-#### Problem: `gpumemprof: command not found`
-
-**Solution:**
+Start with:
 
 ```bash
-# Reinstall the package
-pip install -e .
-
-# Check if entry points are installed
-pip show stormlog
-```
-
-#### Problem: CLI commands fail
-
-**Solutions:**
-
-1. **Check Python path:**
-
-```bash
-which python
-which gpumemprof
-```
-
-2. **Reinstall with entry points:**
-
-```bash
-pip uninstall stormlog
-pip install -e .
-```
-
-3. **Use Python module directly:**
-
-```bash
-python -m gpumemprof.cli info
-python -m tfmemprof.cli info
-```
-
-### Visualization Issues
-
-#### Problem: Plots don't display
-
-**Symptoms:**
-
-- No plots appear
-- Error: `No display name and no $DISPLAY environment variable`
-
-**Solutions:**
-
-1. **Use non-interactive backend:**
-
-```python
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-```
-
-2. **Save plots to files:**
-
-```python
-from gpumemprof import MemoryVisualizer
-
-visualizer = MemoryVisualizer(profiler)
-visualizer.plot_memory_timeline(interactive=False, save_path='timeline.png')
-```
-
-3. **Use Plotly for web-based plots:**
-
-```python
-from gpumemprof import MemoryVisualizer
-
-visualizer = MemoryVisualizer(profiler)
-visualizer.export_data(format='json', save_path='dashboard_data')
-```
-
-#### Problem: Dash visualization fails
-
-**Symptoms:**
-
-- Error: `ImportError: No module named 'dash'`
-
-**Solution:**
-
-```bash
-pip install dash
-```
-
-#### Problem: Matplotlib/Pillow import fails on macOS arm64
-
-**Symptoms:**
-
-- Error mentions `PIL/_imaging` incompatible architecture
-- TUI/CLI PNG export is skipped or fails during `matplotlib` import
-
-**Solutions:**
-
-1. **Reinstall Pillow as arm64 wheel:**
-
-```bash
-python3 -m pip install --no-cache-dir --force-reinstall --only-binary=:all: pillow
-```
-
-2. **Verify the loaded binary architecture:**
-
-```bash
-python3 -c "import PIL._imaging as m; print(m.__file__)"
-file $(python3 -c "import PIL._imaging as m; print(m.__file__)")
-```
-
-3. **If you still see mixed-architecture packages, recreate a clean virtualenv:**
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
-python -m pip install -e ".[viz]"
-```
-
-### Performance Issues
-
-#### Problem: Profiler adds too much overhead
-
-**Symptoms:**
-
-- Training is significantly slower
-- High CPU usage
-
-**Solutions:**
-
-1. **Increase sampling interval:**
-
-```python
-profiler = GPUMemoryProfiler()
-profiler.start_monitoring(interval=2.0)  # Sample every 2 seconds
-```
-
-2. **Disable visualization during training:**
-
-```python
-profiler = GPUMemoryProfiler(track_tensors=False)
-```
-
-3. **Use context profiling selectively:**
-
-```python
-# Only profile specific functions
-from gpumemprof import profile_function
-
-@profile_function
-def critical_function():
-    pass
-```
-
-### Dependency Conflicts
-
-#### Problem: `typing_extensions` version conflict
-
-**Symptoms:**
-
-- Error with TensorFlow CLI
-- Version conflicts between packages
-
-**Solutions:**
-
-1. **Check versions:**
-
-```bash
-pip list | grep typing
-```
-
-2. **Install compatible version:**
-
-```bash
-pip install typing-extensions==4.5.0
-```
-
-3. **Use virtual environment:**
-
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -e .
-```
-
-### Platform-Specific Issues
-
-#### macOS Issues
-
-**Problem: CUDA not available on macOS**
-
-**Solution:**
-
-- Use CPU mode or MPS (Metal Performance Shaders)
-- Install PyTorch with MPS support
-
-**Problem: TensorFlow issues on Apple Silicon**
-
-**Solution:**
-
-```bash
-# Install TensorFlow (Apple Silicon is supported natively since TF 2.13)
-pip install tensorflow
-
-# For Metal GPU acceleration, also install:
-pip install tensorflow-metal
-```
-
-#### Windows Issues
-
-**Problem: Path issues**
-
-**Solution:**
-
-```bash
-# Use forward slashes or raw strings
-python -m gpumemprof.cli info
-```
-
-**Problem: Permission issues**
-
-**Solution:**
-
-```bash
-# Run as administrator or use --user flag
-pip install --user -e .
-```
-
-## Debug Mode
-
-### Enable Debug Logging
-
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-
-from gpumemprof import GPUMemoryProfiler
-profiler = GPUMemoryProfiler()
-```
-
-### Verbose CLI Output
-
-```bash
-# Use detailed/system output commands
-gpumemprof info --detailed
-gpumemprof monitor --duration 10
-```
-
-### Check System Information
-
-```bash
-# Quickest way to check environment health
-gpumemprof info --detailed
 tfmemprof info
 ```
 
-Or from Python:
+If it still reports no GPU devices, treat it as an environment problem first:
 
-```python
-from gpumemprof import get_gpu_info
-info = get_gpu_info()  # Returns GPU details, or {"error": ...} on non-CUDA hosts
-print(info)
-```
+- TensorFlow build may be CPU-only
+- device visibility may be restricted
+- the current host may genuinely be CPU-only
 
-## Getting Help
+The profiler still supports CPU-backed TensorFlow runs.
 
-### Before Asking for Help
+## TUI issues
 
-1. **Check the documentation:**
+### Monitoring starts but Visualizations stays empty
 
-   - [Installation guide](installation.md)
-   - [Usage guide](usage.md)
-   - [API reference](api.md)
+The Visualizations tab only renders after timeline samples exist.
 
-2. **Run diagnostics:**
+Use this sequence:
+
+1. open `Monitoring`
+2. click `Start Live Tracking`
+3. let the workload run long enough to create samples
+4. open `Visualizations`
+5. click `Refresh Timeline`
+
+### Diagnostics loads but shows no rank data
+
+Check the source you loaded:
+
+- live diagnostics require an active tracker session with telemetry events
+- artifact diagnostics require real JSON, CSV, or diagnose paths
+- after changing artifact paths, click `Refresh`
+
+### PNG or HTML export appears blank
+
+This usually means there were no timeline samples, not that the export code failed.
+
+Validate in order:
+
+1. start tracking
+2. confirm the monitoring log is receiving events
+3. refresh the Visualizations tab
+4. export again
+
+### The TUI layout looks broken
+
+The app can run in a small terminal, but it is easier to use with a wider window. The deterministic snapshot coverage uses roughly `140x44`.
+
+## CLI workflow issues
+
+### `gpumemprof analyze` rejects `--input`
+
+That is expected. The current PyTorch CLI uses a positional input file:
 
 ```bash
-gpumemprof info --detailed
+gpumemprof analyze track.json --format txt --output analysis.txt
+```
+
+### `tfmemprof analyze` rejects the positional input style
+
+That is also expected. The current TensorFlow CLI uses `--input`:
+
+```bash
+tfmemprof analyze --input tf_monitor.json --detect-leaks --optimize
+```
+
+### Diagnose bundle feels too slow
+
+Use `--duration 0` when you only need the bundle structure and not a new sampling window:
+
+```bash
 gpumemprof diagnose --duration 0 --output ./diag_bundle
-tfmemprof info
-tfmemprof diagnose --duration 0 --output ./tf_diag_bundle
+tfmemprof diagnose --duration 0 --output ./tf_diag
 ```
 
-3. **Reproduce with the smallest matching example:**
+## CI and docs issues
 
-   Use the CLI commands and Python snippets from the [Usage Guide](usage.md).
-   If you have a source checkout, you can also run the example modules under
-   `examples/`.
+### Sphinx build fails locally
 
-### Reporting Issues
+Install the docs extra and rebuild:
 
-When reporting issues, include:
+```bash
+pip install -e ".[docs]"
+python3 -m sphinx -W --keep-going -b html docs docs/_build/html
+```
 
-1. **System information:**
+### A docs snippet looks suspicious
 
-   - OS and version
-   - Python version
-   - PyTorch/TensorFlow versions
-   - CUDA version (if applicable)
+Use the code and `--help` output as the source of truth, then run:
 
-2. **Error messages:**
+```bash
+python3 -m pytest tests/test_docs_regressions.py -v
+```
 
-   - Full error traceback
-   - Any warning messages
+## Recommended debugging path
 
-3. **Reproduction steps:**
+If you are unsure where a failure belongs:
 
-   - Minimal code example
-   - Expected vs actual behavior
+1. verify installation and entrypoints
+2. verify framework availability with `info`
+3. reproduce with the smallest matching example under `examples/`
+4. capture telemetry or a diagnose bundle
+5. inspect the result in the TUI or analyzer
 
-4. **Environment:**
-   - Virtual environment details
-   - Package versions (`pip freeze`)
-
-### Community Support
-
-- **GitHub Issues**: [Create an issue](https://github.com/Silas-Asamoah/stormlog/issues)
-- **Documentation**: Check the [docs](index.md)
-- **Examples**: See the [examples directory](../examples/)
+If you installed from PyPI and do not have the `examples/` package, use the
+CLI-first validation paths in [usage.md](usage.md), [examples.md](examples.md),
+or [cli.md](cli.md) instead.
 
 ---
 

@@ -54,9 +54,9 @@ jobs:
             - name: Run tests
               run: |
                   if [ "${{ matrix.framework }}" = "pytorch" ]; then
-                      python3 -m pytest tests/ --ignore-glob="tests/test_tf*.py" -v -m "not tui_pilot and not tui_snapshot and not tui_pty" --cov=gpumemprof --cov=tfmemprof --cov-report=xml
+                      python3 -m pytest tests/ --ignore-glob="tests/test_tf*.py" -v -m "not tui_pilot and not tui_snapshot and not tui_pty" --cov=stormlog --cov-report=xml
                   else
-                      python3 -m pytest tests/ -o "python_files=test_tf*.py" -v -m "not tui_pilot and not tui_snapshot and not tui_pty" --cov=gpumemprof --cov=tfmemprof --cov-report=xml
+                      python3 -m pytest tests/ -o "python_files=test_tf*.py" -v -m "not tui_pilot and not tui_snapshot and not tui_pty" --cov=stormlog --cov-report=xml
                   fi
 
             - name: Upload coverage to Codecov
@@ -152,19 +152,19 @@ jobs:
 
             - name: Run isort
               run: |
-                  python3 -m isort --check --diff gpumemprof/ tfmemprof/ tests/ examples/
+                  python3 -m isort --check --diff stormlog/ tests/ examples/
 
             - name: Run black
               run: |
-                  python3 -m black --check gpumemprof/ tfmemprof/ tests/ examples/
+                  python3 -m black --check stormlog/ tests/ examples/
 
             - name: Run flake8
               run: |
-                  python3 -m flake8 gpumemprof/ tfmemprof/ tests/ examples/ --show-source --statistics
+                  python3 -m flake8 stormlog/ tests/ examples/ --show-source --statistics
 
             - name: Run mypy
               run: |
-                  python3 -m mypy gpumemprof/ tfmemprof/
+                  python3 -m mypy stormlog/
 
     docs:
         if: github.event_name != 'schedule'

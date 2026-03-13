@@ -8,7 +8,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-from gpumemprof.visualizer import MemoryVisualizer
+from stormlog.visualizer import MemoryVisualizer
 from tests.gap_test_helpers import BASE_NS, INTERVAL_NS, build_gap_event
 
 _GB = 1024**3
@@ -30,7 +30,7 @@ def _build_cross_rank_events() -> list:
                     allocator_allocated=allocator_allocated,
                     allocator_reserved=allocator_reserved,
                     device_used=device_used,
-                    collector="gpumemprof.cuda_tracker",
+                    collector="stormlog.cuda_tracker",
                     rank=rank,
                     local_rank=rank,
                     world_size=3,

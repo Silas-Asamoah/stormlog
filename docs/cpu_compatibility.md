@@ -2,24 +2,27 @@
 
 # CPU Compatibility Guide
 
-This guide explains how to use Stormlog on systems without CUDA/GPU support.
+Stormlog is still useful on machines without CUDA. The main difference is that GPU-specific PyTorch profiling is replaced by CPU-backed monitoring and profiling helpers.
 
-## Built-in CPU Mode
+## What still works on CPU-only machines
 
-As of the latest release, the CLI, Python API, and Textual TUI automatically
-fallback to a psutil-powered `CPUMemoryProfiler`/`CPUMemoryTracker` whenever
-`torch.cuda.is_available()` returns `False`. No extra flags are required—the same
-commands just switch to RSS-based metrics:
+- `gpumemprof info`
+- `gpumemprof monitor`
+- `gpumemprof track`
+- `gpumemprof analyze`
+- `gpumemprof diagnose`
+- `CPUMemoryProfiler`
+- `CPUMemoryTracker`
+- the TUI overview, monitoring, diagnostics, and CLI tabs
+- TensorFlow flows when you have a CPU-backed TensorFlow install
 
-- `gpumemprof monitor` and `gpumemprof track` display CPU RSS data (MB) and can
-  still export CSV/JSON logs.
-- The TUI monitoring tab starts a CPU tracker so you can stream events/exports
-  without a GPU.
-- PyTorch sample workloads automatically run on CPU tensors and display RSS
-  deltas in the log.
+## What does not work without CUDA
 
-If you only care about CPU memory, simply run the normal CLI/TUI commands and
-they will do the right thing.
+- `GPUMemoryProfiler`
+- CUDA memory allocator statistics
+- CUDA-specific PyTorch sample workloads
+
+If you need the CUDA path, see [gpu_setup.md](gpu_setup.md).
 
 ## Fast local validation
 
@@ -34,445 +37,108 @@ gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
 gpumemprof diagnose --duration 0 --output ./cpu_diag
 ```
 
-On Windows, clear `CUDA_VISIBLE_DEVICES` with the shell-appropriate syntax
-before running the same steps.
+On Windows, clear `CUDA_VISIBLE_DEVICES` with the shell-appropriate syntax before running the same steps.
 
 On Apple Silicon, clearing `CUDA_VISIBLE_DEVICES` disables CUDA but
 `gpumemprof info` may still report the `mps` backend. Treat this as a
 non-CUDA smoke test rather than a strict CPU-only force.
 
-## Recommended CPU-only checklist
-
-1. Verify the install with `gpumemprof info`.
-2. Run the CLI validation with `gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json`, then `gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt`.
-3. Run `gpumemprof diagnose --duration 0 --output ./cpu_diag`.
-4. Capture a short `track` output as in step 2.
-5. Load the result into the TUI if you need an interactive review.
-
-## 🚫 No CUDA? Still Want Custom Tweaks?
-
-If you need lower-level control (or are using an older version), the sections
-below show how to roll your own CPU profilers or integrate other tooling.
-
-## What Works Without CUDA
-
-✅ **Available Features:**
-
-- CPU memory profiling
-- Function execution timing
-- Context-based profiling
-- Real-time memory tracking
-- Memory leak detection (for CPU memory)
-- Basic visualization
-- Data export functionality
-- Command-line interface (modified)
-
-❌ **Limited Features:**
-
-- GPU memory tracking (obviously)
-- CUDA-specific optimizations
-- GPU tensor lifecycle tracking
-- GPU memory fragmentation analysis
-
-## Quick Solutions
-
-### Option 1: Run the Markdown-Based Checklists
-
-Use the same pip-safe CLI validation flow from this guide:
-
-```bash
-export CUDA_VISIBLE_DEVICES=
-gpumemprof info
-gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json
-gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
-gpumemprof diagnose --duration 0 --output ./cpu_diag
-```
-
-### Option 2: Modify Existing Code for CPU (Legacy Approach)
-
-If you want to customize the CPU profiler beyond the built-in behavior, here are
-some patterns you can borrow:
-
-The built-in `gpumemprof.CPUMemoryProfiler` now exposes `get_summary()` for
-aggregate CPU-memory metrics and is recommended for most workflows.
-
-#### Modify the PyTorch Profiler for CPU
+## CPU profiling in Python
 
 ```python
-# Replace CUDA device setup with CPU
-import torch
-from gpumemprof import GPUMemoryProfiler
+from stormlog import CPUMemoryProfiler
 
-# Option 1: Mock GPU profiler for CPU
-class CPUMemoryProfiler:
-    def __init__(self):
-        self.results = []
-        self.function_profiles = {}
-        self.snapshots = []
-        import psutil
-        self.process = psutil.Process()
-
-    def _get_memory_usage(self):
-        """Get CPU memory usage in MB."""
-        return self.process.memory_info().rss / (1024 * 1024)
-
-    def profile_function(self, func):
-        """Profile function CPU memory usage."""
-        def wrapper(*args, **kwargs):
-            before_mem = self._get_memory_usage()
-            start_time = time.time()
-
-            result = func(*args, **kwargs)
-
-            end_time = time.time()
-            after_mem = self._get_memory_usage()
-
-            # Store results
-            func_name = func.__name__
-            if func_name not in self.function_profiles:
-                self.function_profiles[func_name] = {
-                    'calls': 0,
-                    'total_duration': 0.0,
-                    'total_memory_used': 0.0
-                }
-
-            profile = self.function_profiles[func_name]
-            profile['calls'] += 1
-            profile['total_duration'] += (end_time - start_time)
-            profile['total_memory_used'] += (after_mem - before_mem)
-
-            return result
-        return wrapper
-
-    def get_results(self):
-        """Get profiling results."""
-        return {
-            'function_profiles': self.function_profiles,
-            'peak_memory_mb': max([self._get_memory_usage()]),
-            'snapshots': self.snapshots
-        }
-
-# Usage
 profiler = CPUMemoryProfiler()
 
-@profiler.profile_function
-def cpu_test():
-    x = torch.randn(1000, 1000)  # CPU tensor
-    y = torch.matmul(x, x.T)
-    return y.sum()
+with profiler.profile_context("cpu_task"):
+    values = [i * i for i in range(250_000)]
+    values.reverse()
 
-result = cpu_test()
-print(f"CPU Memory Usage: {profiler.get_results()}")
+summary = profiler.get_summary()
+print(summary["mode"])
+print(summary["peak_memory_usage"])
 ```
 
-#### Modify PyTorch Operations for CPU
+## CPU tracking over time
 
 ```python
-# Instead of .cuda(), use CPU tensors
-x = torch.randn(1000, 1000)  # CPU tensor
-y = torch.randn(1000, 1000)  # CPU tensor
+from stormlog import CPUMemoryTracker
 
-# Model on CPU
-model = nn.Sequential(
-    nn.Linear(1000, 500),
-    nn.ReLU(),
-    nn.Linear(500, 100)
-)  # No .cuda() call
+tracker = CPUMemoryTracker(sampling_interval=0.5)
+tracker.start_tracking()
 
-# Training on CPU
-optimizer = torch.optim.Adam(model.parameters())
-criterion = nn.CrossEntropyLoss()
+# run workload here
 
-for epoch in range(10):
-    inputs = torch.randn(32, 1000)  # CPU
-    targets = torch.randint(0, 100, (32,))  # CPU
-
-    outputs = model(inputs)
-    loss = criterion(outputs, targets)
-
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+tracker.stop_tracking()
+stats = tracker.get_statistics()
+print(stats["total_events"])
 ```
 
-### Option 3: Use Alternative Memory Profiling
+## CLI workflows on CPU-only hosts
 
-```python
-import psutil
-import time
-import matplotlib.pyplot as plt
-from memory_profiler import profile
-
-# Simple memory tracking
-def track_memory(func):
-    def wrapper(*args, **kwargs):
-        process = psutil.Process()
-
-        before = process.memory_info().rss / 1024 / 1024  # MB
-        start_time = time.time()
-
-        result = func(*args, **kwargs)
-
-        after = process.memory_info().rss / 1024 / 1024  # MB
-        duration = time.time() - start_time
-
-        print(f"Function: {func.__name__}")
-        print(f"Memory before: {before:.2f} MB")
-        print(f"Memory after: {after:.2f} MB")
-        print(f"Memory diff: {after - before:.2f} MB")
-        print(f"Duration: {duration:.4f} seconds")
-
-        return result
-    return wrapper
-
-# Usage
-@track_memory
-def memory_intensive_function():
-    # Large tensor operations
-    data = torch.randn(2000, 2000)
-    result = torch.matmul(data, data.T)
-    return torch.mean(result)
-
-memory_intensive_function()
-```
-
-## Running Tests Without CUDA
-
-### Method 1: Skip CUDA Tests
-
-```python
-import torch
-
-def run_tests():
-    if torch.cuda.is_available():
-        print("Running GPU tests...")
-        # GPU test code
-    else:
-        print("CUDA not available, running CPU tests...")
-        # CPU test code
-
-run_tests()
-```
-
-### Method 2: Mock CUDA Functions
-
-```python
-# Create mock CUDA functions
-class MockCUDA:
-    @staticmethod
-    def is_available():
-        return False
-
-    @staticmethod
-    def memory_allocated(device=None):
-        return 0
-
-    @staticmethod
-    def memory_reserved(device=None):
-        return 0
-
-    @staticmethod
-    def empty_cache():
-        pass
-
-# Replace torch.cuda with mock if needed
-if not torch.cuda.is_available():
-    torch.cuda = MockCUDA()
-```
-
-## Working Examples
-
-### Example 1: Basic CPU Profiling
-
-```python
-import torch
-import time
-import psutil
-
-class SimpleCPUProfiler:
-    def __init__(self):
-        self.results = []
-
-    def profile(self, name, func, *args, **kwargs):
-        process = psutil.Process()
-
-        before_mem = process.memory_info().rss
-        start_time = time.time()
-
-        result = func(*args, **kwargs)
-
-        end_time = time.time()
-        after_mem = process.memory_info().rss
-
-        self.results.append({
-            'name': name,
-            'duration': end_time - start_time,
-            'memory_diff_mb': (after_mem - before_mem) / 1024 / 1024,
-            'memory_before_mb': before_mem / 1024 / 1024,
-            'memory_after_mb': after_mem / 1024 / 1024
-        })
-
-        return result
-
-    def summary(self):
-        for result in self.results:
-            print(f"{result['name']}: {result['duration']:.4f}s, {result['memory_diff_mb']:.2f}MB")
-
-# Usage
-profiler = SimpleCPUProfiler()
-
-# Profile tensor operations
-result1 = profiler.profile("create_tensor", torch.randn, 1000, 1000)
-result2 = profiler.profile("matrix_multiply", torch.matmul, result1, result1)
-
-profiler.summary()
-```
-
-### Example 2: PyTorch Model Training on CPU
-
-```python
-import torch
-import torch.nn as nn
-import torch.optim as optim
-
-# CPU-only model training with profiling
-def train_cpu_model():
-    # Create model (CPU)
-    model = nn.Sequential(
-        nn.Linear(784, 256),
-        nn.ReLU(),
-        nn.Dropout(0.2),
-        nn.Linear(256, 128),
-        nn.ReLU(),
-        nn.Linear(128, 10)
-    )
-
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.CrossEntropyLoss()
-
-    # Training data (CPU)
-    batch_size = 64
-
-    for epoch in range(5):
-        # Generate random batch
-        inputs = torch.randn(batch_size, 784)
-        targets = torch.randint(0, 10, (batch_size,))
-
-        # Forward pass
-        outputs = model(inputs)
-        loss = criterion(outputs, targets)
-
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        print(f"Epoch {epoch+1}/5, Loss: {loss.item():.4f}")
-
-train_cpu_model()
-```
-
-## Installation for CPU-Only
+### Bounded monitoring
 
 ```bash
-# Install PyTorch CPU version
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# Install profiler dependencies
-pip install psutil matplotlib numpy
-
-# Install the profiler
-pip install -e .
+gpumemprof monitor --duration 30 --interval 0.5 --output cpu_monitor.json --format json
 ```
 
-## Command Line Usage (CPU Mode)
+### Event tracking
 
 ```bash
-# Validate the install with CPU-compatible CLI commands
-gpumemprof info
-gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json
-gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
-gpumemprof diagnose --duration 0 --output ./cpu_diag
-
-# Profile existing Python script
-python -m memory_profiler your_script.py
-
-# Monitor system memory
-watch -n 1 'free -h'
+gpumemprof track --duration 30 --interval 0.5 --output cpu_track.json --format json
 ```
 
-## Benefits of CPU Profiling
-
-Even without GPU profiling, you still get:
-
-1. **Memory Usage Tracking**: Monitor how much system RAM your models use
-2. **Performance Profiling**: Measure execution time of different operations
-3. **Memory Leak Detection**: Find CPU memory leaks in your code
-4. **Resource Optimization**: Optimize CPU usage and memory allocation
-5. **Educational Value**: Learn memory management concepts
-
-## Performance Expectations
-
-| Operation                   | CPU (16 cores) | Notes                |
-| --------------------------- | -------------- | -------------------- |
-| Matrix Multiply (1000x1000) | ~0.1s          | Using optimized BLAS |
-| CNN Forward Pass            | ~0.5s          | Small models only    |
-| Memory Tracking             | ~0.01s         | Very fast            |
-| Data Export                 | ~0.1s          | JSON/CSV export      |
-
-## Limitations and Alternatives
-
-### Limitations:
-
-- No GPU memory insights
-- Slower training/inference
-- Limited model sizes
-- No CUDA-specific optimizations
-
-### Alternatives:
-
-- Use Google Colab (free GPU)
-- AWS EC2 with GPU instances
-- Local GPU rental services
-- CPU-optimized model architectures
-
-## Getting Started (CPU Only)
-
-1. **Quick Start:**
+### Analysis and artifact capture
 
 ```bash
-gpumemprof info
-gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json
 gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt
 gpumemprof diagnose --duration 0 --output ./cpu_diag
 ```
 
-2. **Full Test Suite:**
+## TUI workflows on CPU-only hosts
 
-Follow the CPU checklist in `docs/examples/test_guides/README.md` or the
-CLI-only validation flow above.
+The TUI remains useful even when CUDA is not available:
 
-3. **Specific Tests:**
+- `Overview` still shows system information
+- `Monitoring` still runs the CPU tracker
+- `Visualizations` can export plots once tracking has collected samples
+- `Diagnostics` can load saved telemetry or diagnose bundles
+- `CLI & Actions` remains available for quick commands
 
-Use the snippets in this guide (or the Markdown checklists) to build targeted
-CPU profiling scenarios.
+Launch it with:
 
-### Why does the PyTorch demo skip itself?
+```bash
+pip install "stormlog[tui,torch]"
+stormlog
+```
 
-`examples.basic.pytorch_demo` (source checkout only) intentionally requires
-CUDA because it demonstrates `GPUMemoryProfiler`.
+The current TUI startup path still imports PyTorch immediately, even if you only plan to use CPU monitoring and diagnostics flows once the app is open.
 
-Pip users should use the CPU-only Python snippets in [Usage](usage.md) or the
-CLI commands in this guide instead.
+## Recommended CPU-only checklist
 
-## Conclusion
+1. verify the install with `gpumemprof info`
+2. run `gpumemprof track --duration 10 --interval 0.5 --output cpu_track.json --format json`
+3. run `gpumemprof analyze cpu_track.json --format txt --output cpu_analysis.txt`
+4. run `gpumemprof diagnose --duration 0 --output ./cpu_diag`
+5. if you have a source checkout, optionally run `python -m examples.scenarios.cpu_telemetry_scenario`
+6. load the result into the TUI if you need an interactive review
 
-While GPU profiling provides the most insights for deep learning, CPU profiling is still valuable for:
+## Common confusion points
 
-- Development and testing
-- Understanding memory patterns
-- Learning profiling concepts
-- Debugging memory issues
-- CPU-based inference optimization
+### "Why does the PyTorch demo skip itself?"
 
-The CPU-compatible version gives you ~70% of the profiler's functionality and is perfect for learning and development!
+`examples.basic.pytorch_demo` intentionally requires CUDA because it
+demonstrates `GPUMemoryProfiler`. It is also source-checkout only. On CPU-only
+hosts, use the CLI sequence above or `CPUMemoryProfiler` instead.
+
+### "Why do I still see `gpumemprof` on a CPU machine?"
+
+The CLI is broader than CUDA-only profiling. It still supports CPU-backed monitoring, tracking, analysis, and diagnose flows.
+
+### "Can I still use TensorFlow?"
+
+Yes, as long as TensorFlow itself is installed. `TFMemoryProfiler` works on CPU-backed TensorFlow environments too.
+
+---
+
+[← Back to main docs](index.md)

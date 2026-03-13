@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import gpumemprof.cli as gpumemprof_cli
-import tfmemprof.cli as tfmemprof_cli
+import stormlog.cli as gpumemprof_cli
+import stormlog.tensorflow.cli as tfmemprof_cli
 
 
 def _patch_cpu_process(monkeypatch: pytest.MonkeyPatch) -> None:

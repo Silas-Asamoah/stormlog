@@ -103,7 +103,7 @@ PY
 Once the GPU stack is working, run the Textual TUI for an interactive check:
 
 ```bash
-pip install "stormlog[tui]"
+pip install "stormlog[tui,torch]"
 stormlog
 ```
 

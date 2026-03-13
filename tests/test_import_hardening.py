@@ -18,12 +18,12 @@ def test_imports_are_hardened_when_torch_is_missing() -> None:
 
         builtins.__import__ = blocked_import
 
-        import gpumemprof
-        import gpumemprof.cli as gpumemprof_cli
-        import gpumemprof.utils as gpumemprof_utils
+        import stormlog
+        import stormlog.cli as gpumemprof_cli
+        import stormlog.utils as gpumemprof_utils
 
         # Import should remain usable for non-torch helpers.
-        assert gpumemprof.format_bytes(1024) == "1.00 KB"
+        assert stormlog.format_bytes(1024) == "1.00 KB"
         system_info = gpumemprof_utils.get_system_info()
         assert system_info["cuda_available"] is False
         assert system_info["detected_backend"] == "cpu"
@@ -64,7 +64,7 @@ def test_imports_are_hardened_when_torch_is_missing() -> None:
             raise AssertionError("Expected get_gpu_info to fail lazily without torch")
 
         try:
-            _ = gpumemprof.GPUMemoryProfiler
+            _ = stormlog.GPUMemoryProfiler
         except ImportError as exc:
             assert "stormlog[torch]" in str(exc)
         else:
@@ -99,12 +99,12 @@ def test_tui_entrypoint_reports_tui_install_guidance_when_textual_is_missing() -
 
         builtins.__import__ = blocked_import
 
-        import gpumemprof.tui as gpumemprof_tui
+        import stormlog.tui as gpumemprof_tui
 
         try:
             gpumemprof_tui.run_app()
         except SystemExit as exc:
-            assert "stormlog[tui]" in str(exc)
+            assert "stormlog[tui,torch]" in str(exc)
         else:
             raise AssertionError("Expected TUI entrypoint to fail with install guidance")
 
@@ -120,4 +120,38 @@ def test_tui_entrypoint_reports_tui_install_guidance_when_textual_is_missing() -
     )
 
     assert completed.returncode == 0, completed.stderr
+    assert "ok" in completed.stdout
+
+
+def test_pytorch_demo_import_is_hardened_when_torch_is_missing() -> None:
+    code = textwrap.dedent(
+        """
+        import builtins
+
+        original_import = builtins.__import__
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "torch" or name.startswith("torch."):
+                raise ModuleNotFoundError("No module named 'torch'", name="torch")
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = blocked_import
+
+        import examples.basic.pytorch_demo as pytorch_demo
+
+        pytorch_demo.main()
+
+        print("ok")
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "PyTorch is not installed. Skipping PyTorch demo." in completed.stdout
     assert "ok" in completed.stdout

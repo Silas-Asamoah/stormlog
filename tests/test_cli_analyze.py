@@ -10,9 +10,9 @@ from typing import Any
 import matplotlib
 import pytest
 
-import gpumemprof.cli as gpumemprof_cli
-from gpumemprof.cli import cmd_analyze
-from gpumemprof.telemetry import telemetry_event_to_dict
+import stormlog.cli as gpumemprof_cli
+from stormlog.cli import cmd_analyze
+from stormlog.telemetry import telemetry_event_to_dict
 from tests.gap_test_helpers import BASE_NS, INTERVAL_NS, build_gap_event
 
 matplotlib.use("Agg")
@@ -36,7 +36,7 @@ def _build_cross_rank_events() -> list:
                     allocator_allocated=allocator_allocated,
                     allocator_reserved=allocator_reserved,
                     device_used=device_used,
-                    collector="gpumemprof.cuda_tracker",
+                    collector="stormlog.cuda_tracker",
                     rank=rank,
                     local_rank=rank,
                     world_size=3,

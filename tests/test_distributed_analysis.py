@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from gpumemprof.analyzer import MemoryAnalyzer
-from gpumemprof.distributed_analysis import (
+from stormlog.analyzer import MemoryAnalyzer
+from stormlog.distributed_analysis import (
     analyze_cross_rank_events,
     merge_cross_rank_timelines,
 )
@@ -32,7 +32,7 @@ def _build_rank_series(
                 allocator_allocated=allocator_allocated,
                 allocator_reserved=allocator_reserved,
                 device_used=device_used,
-                collector="gpumemprof.cuda_tracker",
+                collector="stormlog.cuda_tracker",
                 rank=rank,
                 local_rank=rank % 2,
                 world_size=world_size,

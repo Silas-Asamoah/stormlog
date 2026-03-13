@@ -2,7 +2,7 @@ import types
 
 import pytest
 
-from gpumemprof.tui import monitor
+from stormlog.tui import monitor
 
 
 class DummyCPUTracker:
@@ -137,7 +137,7 @@ def test_tracker_session_get_telemetry_events_normalizes_cpu_events(
     assert len(telemetry_events) == 1
     first = telemetry_events[0]
     assert first.schema_version == 2
-    assert first.collector == "gpumemprof.cpu_tracker"
+    assert first.collector == "stormlog.cpu_tracker"
     assert first.event_type == "warning"
     assert first.rank == 2
     assert first.local_rank == 0

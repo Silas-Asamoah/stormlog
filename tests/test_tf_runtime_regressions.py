@@ -11,11 +11,11 @@ from typing import Any, Callable, Iterator, cast
 
 import pytest
 
-import tfmemprof.analyzer as tf_analyzer
-import tfmemprof.cli as tf_cli
-import tfmemprof.context_profiler as tf_context
-import tfmemprof.profiler as tf_profiler
-import tfmemprof.tracker as tf_tracker
+import stormlog.tensorflow.analyzer as tf_analyzer
+import stormlog.tensorflow.cli as tf_cli
+import stormlog.tensorflow.context_profiler as tf_context
+import stormlog.tensorflow.profiler as tf_profiler
+import stormlog.tensorflow.tracker as tf_tracker
 
 
 def test_tf_cmd_analyze_rejects_mismatched_timestamps(
