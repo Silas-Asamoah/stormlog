@@ -37,6 +37,8 @@ pip install "stormlog[tf]"
 pip install "stormlog[all]"
 ```
 
+`stormlog[all]` installs every runtime extra: visualization, TUI, PyTorch, and TensorFlow dependencies.
+
 ### Package and import names
 
 `stormlog` is the distribution name on PyPI and the primary Python import root.
@@ -62,7 +64,7 @@ pip install -e ".[viz,tui,torch]"
 If you want both framework extras in a development checkout:
 
 ```bash
-pip install -e ".[dev,test,all,tui,viz]"
+pip install -e ".[dev,test,all]"
 ```
 
 The `examples/` package and Markdown test guides are source-checkout only. A

@@ -228,7 +228,57 @@ jobs:
                   name: dist
                   path: dist/
 
-    cli-test:
+    artifact-cli-smoke:
+        if: github.event_name != 'schedule'
+        runs-on: ubuntu-latest
+        needs: [build]
+
+        steps:
+            - name: Set up Python
+              uses: actions/setup-python@v4
+              with:
+                  python-version: "3.10"
+
+            - name: Download build artifact
+              uses: actions/download-artifact@v4
+              with:
+                  name: dist
+                  path: dist
+
+            - name: Install built wheel in a fresh environment
+              run: |
+                  python3 -m venv .venv-wheel-smoke
+                  . .venv-wheel-smoke/bin/activate
+                  python -m pip install --upgrade pip
+                  WHEEL_PATH="$(python3 - <<'PY'
+                  from pathlib import Path
+
+                  wheels = sorted(Path("dist").glob("stormlog-*.whl"))
+                  if len(wheels) != 1:
+                      raise SystemExit(
+                          f"Expected exactly one wheel in dist/, found {len(wheels)}."
+                      )
+                  print(wheels[0].resolve())
+                  PY
+                  )"
+                  pip install "$WHEEL_PATH"
+                  pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
+
+            - name: Smoke test documented CLI workflow from the wheel
+              env:
+                  CUDA_VISIBLE_DEVICES: ""
+              run: |
+                  . .venv-wheel-smoke/bin/activate
+                  mkdir -p smoke
+                  cd smoke
+                  gpumemprof --help
+                  gpumemprof info
+                  gpumemprof track --duration 1 --interval 0.2 --output track.json --format json
+                  gpumemprof analyze track.json --format txt --output analysis.txt
+                  test -s track.json
+                  test -s analysis.txt
+
+    examples-smoke:
         if: github.event_name != 'schedule'
         runs-on: ubuntu-latest
         needs: [test, lint, docs]
@@ -241,26 +291,13 @@ jobs:
               with:
                   python-version: "3.10"
 
-            - name: Install package
+            - name: Install source-checkout example dependencies
               run: |
                   python3 -m pip install --upgrade pip
-                  pip install -e .
+                  pip install -e . --no-deps
+                  pip install -r requirements-ci-base.txt
 
-            - name: Test CLI tools
-              run: |
-                  gpumemprof --help
-                  tfmemprof --help
-                  gpumemprof info
-                  tfmemprof info
-
-            - name: Run documented CLI examples smoke test
-              env:
-                  CUDA_VISIBLE_DEVICES: ""
+            - name: Run source-checkout example smoke tests
               run: |
                   python3 -m examples.cli.quickstart
-
-            - name: Run capability matrix smoke test
-              env:
-                  CUDA_VISIBLE_DEVICES: ""
-              run: |
                   python3 -m examples.cli.capability_matrix --mode smoke --target auto --oom-mode simulated --skip-tui
