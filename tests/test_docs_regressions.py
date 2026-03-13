@@ -108,7 +108,8 @@ _REQUIRED_DOC_SNIPPETS = {
         "not included in the PyPI distribution",
     ],
     "docs/examples/test_guides/README.md": [
-        "Treat this as a non-CUDA\nsmoke test rather than a strict CPU-only force.",
+        "Treat this as a non-CUDA",
+        "strict CPU-only force.",
         'pip install "stormlog[tui,torch]"',
     ],
     "docs/installation.md": [
