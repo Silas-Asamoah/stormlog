@@ -141,7 +141,7 @@ it to a real GPU) and rerun the PyTorch/TensorFlow checklists above.
   check instead.
 - Use `pytest tests/test_utils.py` for a lightweight regression check when GPUs
   are not available.
-- CI now splits built-wheel CLI smoke from source-checkout example smoke; feel
+- CI splits built-wheel CLI smoke from source-checkout example smoke; feel
   free to add extra jobs that execute the PyTorch/TensorFlow demos on
   GPU-enabled runners.
 
