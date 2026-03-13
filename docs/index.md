@@ -15,7 +15,8 @@ Use the guides below based on the job you are doing, not based on package intern
 **If you installed Stormlog via `pip install stormlog`** (from PyPI):
 
 - The `examples/` package is **not** included. Commands like `python -m examples.cli.quickstart` will fail with `ModuleNotFoundError`.
-- Use the CLI commands and Python snippets in this documentation instead. The `gpumemprof` and `tfmemprof` CLIs, the `stormlog` TUI entrypoint, and the public Python APIs work with a pip install.
+- Use the CLI commands and Python snippets in this documentation instead. The `gpumemprof` and `tfmemprof` CLIs and the public Python APIs work with a pip install.
+- Install `stormlog[tui,torch]` if you want the `stormlog` TUI entrypoint from a pip install.
 - The TUI **Capability Matrix** and **OOM scenario** buttons run example modules. If those fail, use the inline command runner in the TUI with the equivalent CLI commands from this guide.
 
 **If you cloned the repository** and installed with `pip install -e .`:

@@ -35,6 +35,9 @@ _BANNED_DOC_SNIPPETS = {
         "TFCPUMemoryTracker",
         "from tfmemprof import MemoryTracker",
     ],
+    "docs/index.md": [
+        "The `gpumemprof` and `tfmemprof` CLIs, the `stormlog` TUI entrypoint, and the public Python APIs work with a pip install.",
+    ],
     "docs/cpu_compatibility.md": [
         "python -m examples.cli.quickstart",
     ],
@@ -81,6 +84,7 @@ _REQUIRED_DOC_SNIPPETS = {
     "docs/index.md": [
         "## Important: Pip vs Source Checkout",
         "The `examples/` package is **not** included.",
+        "Install `stormlog[tui,torch]` if you want the `stormlog` TUI entrypoint from a pip install.",
     ],
     "README.md": [
         "source-checkout only",
