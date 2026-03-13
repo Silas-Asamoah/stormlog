@@ -18,6 +18,9 @@ python3 -m pip install -e ".[tf]"
 python3 -m pip install -e ".[all]"
 ```
 
+`.[all]` now includes every runtime extra: PyTorch, TensorFlow, visualization,
+and TUI dependencies.
+
 If you plan to build the Sphinx docs locally, install the docs extra as well:
 
 ```bash
@@ -111,6 +114,8 @@ The current CI workflow at `.github/workflows/ci.yml` runs:
 ### Current CI lanes
 
 - framework matrix tests across supported Python versions
+- built-wheel CLI smoke in a fresh environment
+- source-checkout example smoke for `examples/` modules
 - TUI pilot and snapshot tests on pull requests and `develop`
 - TUI PTY smoke on `main` pushes and scheduled runs
 - lint, docs, and package build checks in separate jobs

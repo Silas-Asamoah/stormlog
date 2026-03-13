@@ -53,8 +53,9 @@ This matrix reflects the current behavior of the repository and is versioned for
 ## Validation Notes
 
 - The compatibility matrix is linked from the documentation home page.
-- The example smoke commands documented elsewhere in the repo are maintained validation paths and are exercised by the dedicated `cli-test` GitHub Actions job in `.github/workflows/ci.yml`.
-- CI currently validates framework test matrices, TUI gates, lint, docs, and package build lanes.
+- The documented CLI-only pip workflow is exercised from the built wheel in a fresh environment by the `artifact-cli-smoke` job in `.github/workflows/ci.yml`.
+- Source-only example-module smoke remains covered by the `examples-smoke` job in `.github/workflows/ci.yml`.
+- CI currently validates framework test matrices, wheel smoke, source example smoke, TUI gates, lint, docs, and package build lanes.
 - Backend capability metadata emitted in tracker exports includes:
   - `backend`
   - `supports_device_total`

@@ -60,6 +60,8 @@ pip install "stormlog[tf]"
 pip install "stormlog[all]"
 ```
 
+`stormlog[all]` installs every runtime extra: `viz`, `tui`, `torch`, and `tf`.
+
 ## Source checkout
 
 ```bash
@@ -71,7 +73,7 @@ pip install -e .
 For a contributor setup with all common extras:
 
 ```bash
-pip install -e ".[dev,test,all,tui,viz]"
+pip install -e ".[dev,test,all]"
 pre-commit install
 ```
 
