@@ -4,13 +4,13 @@
 #
 #    pip-compile --output-file=requirements-ci-lint.txt requirements-ci-lint.in
 #
-black==24.3.0
+black==26.5.1
     # via -r requirements-ci-lint.in
 click==8.3.1
     # via black
 flake8==7.3.0
     # via -r requirements-ci-lint.in
-isort==8.0.1
+isort==9.0.1
     # via -r requirements-ci-lint.in
 markdown-it-py==4.0.0
     # via rich
@@ -23,6 +23,7 @@ mypy==1.8.0
 mypy-extensions==1.1.0
     # via
     #   black
+    #   isort
     #   mypy
 packaging==26.0
     # via black
@@ -36,6 +37,8 @@ pyflakes==3.4.0
     # via flake8
 pygments==2.20.0
     # via rich
+pytokens==0.4.1
+    # via black
 rich==15.0.0
     # via -r requirements-ci-lint.in
 tomli==2.4.0
