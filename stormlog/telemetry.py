@@ -826,8 +826,9 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
     )
 
 
-def _validate_telemetry_shape(record: Mapping[str, Any]) -> int:
-    schema_version = _coerce_int(record.get("schema_version"), "schema_version")
+def _telemetry_schema_fields(
+    schema_version: int,
+) -> tuple[tuple[str, ...], frozenset[str], bool]:
     required_fields: tuple[str, ...]
     known_fields: frozenset[str]
     if schema_version == SCHEMA_VERSION_V4:
@@ -844,6 +845,15 @@ def _validate_telemetry_shape(record: Mapping[str, Any]) -> int:
         require_session_id = False
     else:
         raise ValueError(f"Unsupported schema_version: {schema_version}")
+
+    return required_fields, known_fields, require_session_id
+
+
+def _validate_telemetry_shape(record: Mapping[str, Any]) -> int:
+    schema_version = _coerce_int(record.get("schema_version"), "schema_version")
+    required_fields, known_fields, require_session_id = _telemetry_schema_fields(
+        schema_version
+    )
 
     missing = [name for name in required_fields if name not in record]
     if missing:
@@ -893,6 +903,11 @@ def _validate_telemetry_identity_fields(record: Mapping[str, Any]) -> None:
         _coerce_positive_int(record["world_size"], "world_size")
 
 
+def _validate_counter_range(value: int | None, error: str) -> None:
+    if value is not None and value < 0:
+        raise ValueError(error)
+
+
 def _validate_allocator_counters(
     record: Mapping[str, Any], *, nullable_core_counters: bool
 ) -> None:
@@ -924,14 +939,18 @@ def _validate_allocator_counters(
         else _coerce_int(record["allocator_change_bytes"], "allocator_change_bytes")
     )
 
-    if allocator_allocated_bytes is not None and allocator_allocated_bytes < 0:
-        raise ValueError("allocator_allocated_bytes must be >= 0")
-    if allocator_reserved_bytes is not None and allocator_reserved_bytes < 0:
-        raise ValueError("allocator_reserved_bytes must be >= 0")
-    if allocator_active_bytes is not None and allocator_active_bytes < 0:
-        raise ValueError("allocator_active_bytes must be >= 0 when provided")
-    if allocator_inactive_bytes is not None and allocator_inactive_bytes < 0:
-        raise ValueError("allocator_inactive_bytes must be >= 0 when provided")
+    _validate_counter_range(
+        allocator_allocated_bytes, "allocator_allocated_bytes must be >= 0"
+    )
+    _validate_counter_range(
+        allocator_reserved_bytes, "allocator_reserved_bytes must be >= 0"
+    )
+    _validate_counter_range(
+        allocator_active_bytes, "allocator_active_bytes must be >= 0 when provided"
+    )
+    _validate_counter_range(
+        allocator_inactive_bytes, "allocator_inactive_bytes must be >= 0 when provided"
+    )
     if allocator_change_bytes is not None and not _is_int(allocator_change_bytes):
         raise ValueError("allocator_change_bytes must be an integer when provided")
 
@@ -951,12 +970,13 @@ def _validate_device_counters(
         record["device_total_bytes"], "device_total_bytes"
     )
 
-    if device_used_bytes is not None and device_used_bytes < 0:
-        raise ValueError("device_used_bytes must be >= 0")
-    if device_free_bytes is not None and device_free_bytes < 0:
-        raise ValueError("device_free_bytes must be >= 0 when provided")
-    if device_total_bytes is not None and device_total_bytes < 0:
-        raise ValueError("device_total_bytes must be >= 0 when provided")
+    _validate_counter_range(device_used_bytes, "device_used_bytes must be >= 0")
+    _validate_counter_range(
+        device_free_bytes, "device_free_bytes must be >= 0 when provided"
+    )
+    _validate_counter_range(
+        device_total_bytes, "device_total_bytes must be >= 0 when provided"
+    )
 
     if device_total_bytes is None:
         return

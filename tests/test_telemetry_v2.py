@@ -186,7 +186,9 @@ def test_v4_rejects_counter_declared_unsupported() -> None:
         validate_telemetry_record(record)
 
 
-@pytest.mark.parametrize("schema_version", [SCHEMA_VERSION_V2, SCHEMA_VERSION_V3])
+@pytest.mark.parametrize(
+    "schema_version", [SCHEMA_VERSION_V2, SCHEMA_VERSION_V3, SCHEMA_VERSION_V4]
+)
 @pytest.mark.parametrize(
     ("updates", "message"),
     [
@@ -237,7 +239,7 @@ def test_telemetry_validation_preserves_error_order(
 ) -> None:
     record = telemetry_event_to_dict(_make_valid_event())
     record.update(schema_version=schema_version, **updates)
-    if schema_version == SCHEMA_VERSION_V3:
+    if schema_version in {SCHEMA_VERSION_V3, SCHEMA_VERSION_V4}:
         record["session_id"] = "validation-session"
 
     with pytest.raises(ValueError) as exc_info:

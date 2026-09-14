@@ -189,6 +189,42 @@ _SAMPLE_CAPABILITY_FIELDS = {
 }
 
 
+_SAMPLE_TELEMETRY_FIELDS = {
+    "allocated_bytes": "allocator_allocated_bytes",
+    "reserved_bytes": "allocator_reserved_bytes",
+    "active_bytes": "allocator_active_bytes",
+    "inactive_bytes": "allocator_inactive_bytes",
+    "used_bytes": "device_used_bytes",
+    "free_bytes": "device_free_bytes",
+    "total_bytes": "device_total_bytes",
+}
+
+
+def _validate_sample_value(
+    value: int | None, supported: bool, telemetry_field: str, partial: set[str]
+) -> bool:
+    if value is not None:
+        if value < 0:
+            raise ValueError(f"{telemetry_field} must be >= 0 when provided")
+        if not supported:
+            raise ValueError(
+                f"{telemetry_field} was provided by a collector that declares "
+                "it unsupported"
+            )
+        if telemetry_field in partial:
+            raise ValueError(f"{telemetry_field} is populated but marked partial")
+        return True
+    if supported and telemetry_field not in partial:
+        raise ValueError(
+            f"{telemetry_field} is missing without a partial-field diagnostic"
+        )
+    if not supported and telemetry_field in partial:
+        raise ValueError(
+            f"{telemetry_field} is unsupported and must not be marked partial"
+        )
+    return False
+
+
 def validate_device_memory_sample(
     sample: DeviceMemorySample,
     capabilities: DeviceMemoryCapabilities,
@@ -197,15 +233,7 @@ def validate_device_memory_sample(
 ) -> None:
     """Validate a sample against its collector's declared capabilities."""
     partial = set(partial_fields)
-    known_telemetry_fields = {
-        "allocator_allocated_bytes",
-        "allocator_reserved_bytes",
-        "allocator_active_bytes",
-        "allocator_inactive_bytes",
-        "device_used_bytes",
-        "device_free_bytes",
-        "device_total_bytes",
-    }
+    known_telemetry_fields = set(_SAMPLE_TELEMETRY_FIELDS.values())
     unknown_partial_fields = sorted(partial - known_telemetry_fields)
     if unknown_partial_fields:
         raise ValueError(
@@ -215,34 +243,9 @@ def validate_device_memory_sample(
     for sample_field, capability_field in _SAMPLE_CAPABILITY_FIELDS.items():
         value = getattr(sample, sample_field)
         supported = bool(getattr(capabilities, capability_field))
-        telemetry_field = {
-            "allocated_bytes": "allocator_allocated_bytes",
-            "reserved_bytes": "allocator_reserved_bytes",
-            "active_bytes": "allocator_active_bytes",
-            "inactive_bytes": "allocator_inactive_bytes",
-            "used_bytes": "device_used_bytes",
-            "free_bytes": "device_free_bytes",
-            "total_bytes": "device_total_bytes",
-        }[sample_field]
-        if value is not None:
-            if value < 0:
-                raise ValueError(f"{telemetry_field} must be >= 0 when provided")
-            if not supported:
-                raise ValueError(
-                    f"{telemetry_field} was provided by a collector that declares "
-                    "it unsupported"
-                )
-            if telemetry_field in partial:
-                raise ValueError(f"{telemetry_field} is populated but marked partial")
+        telemetry_field = _SAMPLE_TELEMETRY_FIELDS[sample_field]
+        if _validate_sample_value(value, supported, telemetry_field, partial):
             available_values += 1
-        elif supported and telemetry_field not in partial:
-            raise ValueError(
-                f"{telemetry_field} is missing without a partial-field diagnostic"
-            )
-        elif not supported and telemetry_field in partial:
-            raise ValueError(
-                f"{telemetry_field} is unsupported and must not be marked partial"
-            )
 
     if available_values == 0:
         raise ValueError("device memory sample contains no supported measurements")
