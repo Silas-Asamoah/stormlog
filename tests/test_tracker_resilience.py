@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from collections import deque
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Iterator, cast
@@ -322,6 +323,65 @@ def test_memory_tracker_rejects_device_and_collector_together() -> None:
             device="cuda:0",
             collector=_DeviceOnlyCollector(_device_only_sample()),
         )
+
+
+@pytest.mark.parametrize("initial_state", ["failure", "partial", "known"])
+def test_device_only_tracker_refreshes_capacity_after_initial_sample(
+    monkeypatch: pytest.MonkeyPatch, initial_state: str
+) -> None:
+    recovered = _device_only_sample(used=3960)
+    initial = {
+        "failure": DeviceMemorySampleResult(
+            sample=None, core_error="initial collection failed"
+        ),
+        "partial": DeviceMemorySampleResult(
+            sample=replace(recovered, total_bytes=None, free_bytes=None),
+            partial_fields=("device_total_bytes", "device_free_bytes"),
+        ),
+        "known": DeviceMemorySampleResult(
+            sample=replace(recovered, total_bytes=8000, free_bytes=4040)
+        ),
+    }[initial_state]
+    results = iter([initial, DeviceMemorySampleResult(sample=recovered)])
+    collector = _DeviceOnlyCollector(recovered)
+    monkeypatch.setattr(collector, "sample_with_diagnostics", lambda: next(results))
+    tracker = tracker_mod.MemoryTracker(collector=collector)
+
+    tracker._run_tracking_iteration(0)
+
+    stats = tracker.get_statistics()
+    assert tracker.total_memory == 4000
+    assert stats["device_total"] == 4000
+    assert stats["memory_utilization_percent"] == 99.0
+    assert stats["collector_health_status"] == COLLECTOR_HEALTH_HEALTHY
+    alerts = tracker.get_alerts()
+    assert any(
+        event.event_type == "critical" and "99.0%" in (event.context or "")
+        for event in alerts
+    )
+
+
+def test_device_only_tracker_keeps_capacity_when_sample_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample = _device_only_sample()
+    invalid = replace(sample, allocated_bytes=1, total_bytes=8000, free_bytes=4500)
+    results = iter(
+        [
+            DeviceMemorySampleResult(sample=sample),
+            DeviceMemorySampleResult(sample=invalid),
+        ]
+    )
+    collector = _DeviceOnlyCollector(sample)
+    monkeypatch.setattr(collector, "sample_with_diagnostics", lambda: next(results))
+    tracker = tracker_mod.MemoryTracker(collector=collector)
+
+    tracker._run_tracking_iteration(0)
+
+    assert tracker.total_memory == 4000
+    assert tracker.get_statistics()["collector_health_status"] == (
+        COLLECTOR_HEALTH_UNHEALTHY
+    )
 
 
 def test_memory_tracker_degrades_on_capability_sample_mismatch() -> None:

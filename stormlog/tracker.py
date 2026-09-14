@@ -624,6 +624,9 @@ class MemoryTracker:
         current_allocated: Optional[int],
         memory_change: Optional[int],
     ) -> None:
+        if sample.total_bytes is not None:
+            self.total_memory = sample.total_bytes
+
         if sample.used_bytes is not None:
             self.stats["peak_device_used"] = max(
                 self.stats["peak_device_used"], sample.used_bytes
