@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterator, cast
 import pytest
 
 import stormlog.tracker as tracker_mod
+from stormlog.cli import _tracker_monitor_summary
 from stormlog.collector_health import (
     COLLECTOR_HEALTH_DEGRADED,
     COLLECTOR_HEALTH_HEALTHY,
@@ -314,6 +315,37 @@ def test_memory_tracker_accepts_injected_device_only_collector() -> None:
     assert (
         record["metadata"]["memory_capabilities"]["supports_fragmentation_analysis"]
         is False
+    )
+
+
+@pytest.mark.parametrize("device_only", [False, True])
+def test_monitor_summary_handles_nullable_tracker_lifecycle(
+    monkeypatch: pytest.MonkeyPatch, device_only: bool
+) -> None:
+    monkeypatch.setattr(tracker_mod.threading, "Thread", _NoOpThread)
+    if device_only:
+        tracker = tracker_mod.MemoryTracker(
+            collector=_DeviceOnlyCollector(_device_only_sample()), enable_alerts=False
+        )
+    else:
+        collector = _SequencedCollector(
+            [
+                DeviceMemorySampleResult(sample=_sample(allocated=64, reserved=256)),
+                DeviceMemorySampleResult(sample=_sample(allocated=100, reserved=256)),
+                DeviceMemorySampleResult(sample=_sample(allocated=150, reserved=256)),
+            ]
+        )
+        tracker = _build_tracker(monkeypatch, collector)
+    tracker.start_tracking()
+    try:
+        last_allocated = tracker._run_tracking_iteration(0)
+        tracker._run_tracking_iteration(last_allocated)
+    finally:
+        tracker.stop_tracking()
+
+    assert tracker.get_events()[0].memory_allocated is None
+    assert _tracker_monitor_summary(tracker)["memory_change_from_baseline"] == (
+        None if device_only else 50
     )
 
 

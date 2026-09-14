@@ -642,13 +642,12 @@ def _monitor_memory_text(runtime_backend: str, profiler: Any, tracker: Any) -> s
 def _tracker_monitor_summary(tracker: Any) -> dict[str, Any]:
     stats = tracker.get_statistics()
     events = tracker.get_events()
-    first_alloc = events[0].memory_allocated if events else None
-    last_alloc = events[-1].memory_allocated if events else None
-    allocator_change = (
-        last_alloc - first_alloc
-        if last_alloc is not None and first_alloc is not None
-        else None
-    )
+    allocations = [
+        event.memory_allocated
+        for event in events
+        if event.event_type == "sample" and event.memory_allocated is not None
+    ]
+    allocator_change = allocations[-1] - allocations[0] if allocations else None
     return {
         "snapshots_collected": len(events),
         "peak_memory_usage": stats.get("peak_memory"),
