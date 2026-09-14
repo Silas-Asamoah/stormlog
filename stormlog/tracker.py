@@ -138,31 +138,7 @@ class MemoryTracker:
         if native_history_max_entries <= 0:
             raise ValueError("native_history_max_entries must be >= 1")
 
-        if collector is not None and device is not None:
-            raise ValueError("device and collector cannot be provided together")
-        self.device = self._setup_device(device) if collector is None else None
-        self.collector = (
-            build_device_memory_collector(self.device)
-            if collector is None
-            else collector
-        )
-        self.backend = self.collector.name()
-        raw_capabilities = self.collector.capabilities()
-        self.collector_capabilities = (
-            raw_capabilities
-            if isinstance(raw_capabilities, DeviceMemoryCapabilities)
-            else DeviceMemoryCapabilities.from_mapping(
-                cast(Mapping[str, Any], raw_capabilities)
-            )
-        )
-        if (
-            enable_native_cuda_history
-            and not self.collector_capabilities.supports_native_allocator_history
-        ):
-            raise ValueError(
-                "native allocator history is unavailable for backend "
-                f"{self.backend!r}"
-            )
+        self._initialize_collector(device, collector, enable_native_cuda_history)
         self.sampling_interval = sampling_interval
         self.max_events = max_events
         self.enable_alerts = enable_alerts
@@ -240,6 +216,38 @@ class MemoryTracker:
         }
 
         self._initialize_memory_limits()
+
+    def _initialize_collector(
+        self,
+        device: Optional[Union[str, int, torch.device]],
+        collector: Optional[DeviceMemoryCollector],
+        enable_native_cuda_history: bool,
+    ) -> None:
+        if collector is not None and device is not None:
+            raise ValueError("device and collector cannot be provided together")
+        self.device = self._setup_device(device) if collector is None else None
+        self.collector = (
+            build_device_memory_collector(self.device)
+            if collector is None
+            else collector
+        )
+        self.backend = self.collector.name()
+        raw_capabilities = self.collector.capabilities()
+        self.collector_capabilities = (
+            raw_capabilities
+            if isinstance(raw_capabilities, DeviceMemoryCapabilities)
+            else DeviceMemoryCapabilities.from_mapping(
+                cast(Mapping[str, Any], raw_capabilities)
+            )
+        )
+        if (
+            enable_native_cuda_history
+            and not self.collector_capabilities.supports_native_allocator_history
+        ):
+            raise ValueError(
+                "native allocator history is unavailable for backend "
+                f"{self.backend!r}"
+            )
 
     def _initialize_memory_limits(self) -> None:
         # Get memory limits with backend-aware fallback.
@@ -590,6 +598,32 @@ class MemoryTracker:
 
         self.stats["last_memory_check"] = now
 
+        self._record_sample_memory_changes(sample, current_allocated, memory_change)
+
+        if self.enable_alerts:
+            self._check_alerts(memory_change, sample=sample)
+
+        partial_fields = ", ".join(result.partial_fields)
+        sample_context = (
+            f"Collected partial telemetry sample ({partial_fields})."
+            if is_partial
+            else "Collected telemetry sample."
+        )
+        self._add_event(
+            "sample",
+            memory_change,
+            sample_context,
+            sample=sample,
+        )
+
+        return current_allocated if current_allocated is not None else last_allocated
+
+    def _record_sample_memory_changes(
+        self,
+        sample: DeviceMemorySample,
+        current_allocated: Optional[int],
+        memory_change: Optional[int],
+    ) -> None:
         if sample.used_bytes is not None:
             self.stats["peak_device_used"] = max(
                 self.stats["peak_device_used"], sample.used_bytes
@@ -625,24 +659,6 @@ class MemoryTracker:
                 f"Memory freed: {format_bytes(abs(memory_change))}",
                 sample=sample,
             )
-
-        if self.enable_alerts:
-            self._check_alerts(memory_change, sample=sample)
-
-        partial_fields = ", ".join(result.partial_fields)
-        sample_context = (
-            f"Collected partial telemetry sample ({partial_fields})."
-            if is_partial
-            else "Collected telemetry sample."
-        )
-        self._add_event(
-            "sample",
-            memory_change,
-            sample_context,
-            sample=sample,
-        )
-
-        return current_allocated if current_allocated is not None else last_allocated
 
     def start_tracking(self) -> None:
         """Start real-time memory tracking."""
@@ -871,6 +887,19 @@ class MemoryTracker:
             )
             emitted = True
 
+        fragmentation_emitted = self._check_fragmentation_alert(
+            change, sample=sample, allocated=allocated, reserved=reserved
+        )
+        return emitted or fragmentation_emitted
+
+    def _check_fragmentation_alert(
+        self,
+        change: Optional[int],
+        *,
+        sample: DeviceMemorySample,
+        allocated: Optional[int],
+        reserved: Optional[int],
+    ) -> bool:
         # Fragmentation warning
         if (
             self.collector_capabilities.supports_fragmentation_analysis
@@ -887,9 +916,9 @@ class MemoryTracker:
                     {"fragmentation": fragmentation},
                     sample=sample,
                 )
-                emitted = True
+                return True
 
-        return emitted
+        return False
 
     @staticmethod
     def _tracking_event_payload(event: TrackingEvent) -> Dict[str, Any]:
@@ -1378,6 +1407,11 @@ class MemoryTracker:
                 }
             )
 
+        self._add_tracking_rates(current_stats)
+
+        return current_stats
+
+    def _add_tracking_rates(self, current_stats: Dict[str, Any]) -> None:
         if self.stats["tracking_start_time"]:
             tracking_duration = time.time() - self.stats["tracking_start_time"]
             current_stats.update(
@@ -1395,8 +1429,6 @@ class MemoryTracker:
                     ),
                 }
             )
-
-        return current_stats
 
     def export_events(self, filename: str, format: str = "csv") -> None:
         """

@@ -257,6 +257,14 @@ def _find_rank_spike_candidate(
             * 0.10
         ),
     )
+    return _find_device_spike_candidate(device_events, offset_ns, spike_threshold)
+
+
+def _find_device_spike_candidate(
+    device_events: Sequence[TelemetryEventLike],
+    offset_ns: int,
+    spike_threshold: int,
+) -> _RankSpikeCandidate | None:
     window_start_index: int | None = None
     cumulative_delta = 0
     spike_window_samples = 0

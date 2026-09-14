@@ -852,6 +852,17 @@ class MemoryAnalyzer:
             _serialize_collective_attribution(result)
             for result in collective_attribution
         ]
+        self._add_analysis_availability(report, events)
+        if len({event.rank for event in events}) > 1:
+            report["cross_rank_analysis"] = self.analyze_cross_rank_timeline(
+                events,
+                phase_resolver=phase_resolver,
+            )
+
+    @staticmethod
+    def _add_analysis_availability(
+        report: Dict[str, Any], events: Sequence[TelemetryEventLike]
+    ) -> None:
         allocator_samples = [
             event
             for event in events
@@ -876,11 +887,6 @@ class MemoryAnalyzer:
                     "reason": reason,
                 },
             }
-        if len({event.rank for event in events}) > 1:
-            report["cross_rank_analysis"] = self.analyze_cross_rank_timeline(
-                events,
-                phase_resolver=phase_resolver,
-            )
 
     def _generate_priority_recommendations(
         self, patterns: List[MemoryPattern], insights: List[PerformanceInsight]

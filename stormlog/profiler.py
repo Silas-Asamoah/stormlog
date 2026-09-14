@@ -166,6 +166,10 @@ class GPUMemoryProfiler:
         else:
             resolved_device = device
 
+        return self._validate_profiling_device(resolved_device)
+
+    @staticmethod
+    def _validate_profiling_device(resolved_device: torch.device) -> torch.device:
         if resolved_device.type == "mps":
             if detect_torch_runtime_backend() != "mps":
                 raise RuntimeError("MPS backend is not available in this runtime")

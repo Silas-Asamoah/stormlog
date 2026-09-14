@@ -259,23 +259,19 @@ def _collect_marker_timestamps_by_rank(
     return {rank: tuple(sorted(values)) for rank, values in grouped.items()}
 
 
-def _detect_rank_spikes(
-    *,
-    rank: int,
+def _allocator_gap_events(
     rank_events: Sequence[TelemetryEventLike],
-    marker_timestamps: Sequence[int],
-    config: CollectiveAttributionConfig,
-) -> list[_RankSpike]:
-    gap_events = [
+) -> list[TelemetryEventLike]:
+    return [
         event
         for event in rank_events
         if event.device_used_bytes is not None
         and event.allocator_reserved_bytes is not None
     ]
-    if len(gap_events) < config.min_samples_per_rank:
-        return []
 
-    positive_gaps = np.asarray(
+
+def _positive_gap_values(gap_events: Sequence[TelemetryEventLike]) -> np.ndarray:
+    return np.asarray(
         [
             max(0, event.device_used_bytes - event.allocator_reserved_bytes)
             for event in gap_events
@@ -284,6 +280,20 @@ def _detect_rank_spikes(
         ],
         dtype=float,
     )
+
+
+def _detect_rank_spikes(
+    *,
+    rank: int,
+    rank_events: Sequence[TelemetryEventLike],
+    marker_timestamps: Sequence[int],
+    config: CollectiveAttributionConfig,
+) -> list[_RankSpike]:
+    gap_events = _allocator_gap_events(rank_events)
+    if len(gap_events) < config.min_samples_per_rank:
+        return []
+
+    positive_gaps = _positive_gap_values(gap_events)
     if positive_gaps.size < config.min_samples_per_rank:
         return []
 
