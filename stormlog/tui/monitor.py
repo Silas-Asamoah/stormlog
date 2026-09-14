@@ -240,25 +240,16 @@ class TrackerSession:
         pid = os.getpid()
 
         backend_name = str(getattr(tracker, "backend", self.backend)).lower()
-        collector = f"stormlog.{backend_name}_tracker"
-        if backend_name == "gpu":
-            collector = "stormlog.cuda_tracker"
-        elif backend_name == "cpu":
-            collector = "stormlog.cpu_tracker"
+        collector = self._tracker_collector_name(backend_name)
 
         raw_events = self._read_tracker_events(tracker)
 
         normalized: list[TelemetryEvent] = []
         for raw_event in raw_events:
-            if hasattr(tracker, "_telemetry_record_from_event"):
-                try:
-                    record = tracker._telemetry_record_from_event(raw_event)
-                    normalized.append(telemetry_event_from_record(record))
-                    continue
-                except Exception as exc:
-                    logger.debug(
-                        "TrackerSession canonical event conversion failed: %s", exc
-                    )
+            canonical_event = self._canonical_tracker_event(tracker, raw_event)
+            if canonical_event is not None:
+                normalized.append(canonical_event)
+                continue
             timestamp = getattr(raw_event, "timestamp", None)
             if timestamp is None:
                 continue
@@ -319,6 +310,28 @@ class TrackerSession:
                 )
 
         return normalized
+
+    @staticmethod
+    def _tracker_collector_name(backend_name: str) -> str:
+        collector = f"stormlog.{backend_name}_tracker"
+        if backend_name == "gpu":
+            collector = "stormlog.cuda_tracker"
+        elif backend_name == "cpu":
+            collector = "stormlog.cpu_tracker"
+
+        return collector
+
+    @staticmethod
+    def _canonical_tracker_event(tracker: Any, raw_event: Any) -> TelemetryEvent | None:
+        if hasattr(tracker, "_telemetry_record_from_event"):
+            try:
+                record = tracker._telemetry_record_from_event(raw_event)
+                return telemetry_event_from_record(record)
+            except Exception as exc:
+                logger.debug(
+                    "TrackerSession canonical event conversion failed: %s", exc
+                )
+        return None
 
     def _event_session_id(self, raw_event: Any) -> Optional[str]:
         session_id = getattr(raw_event, "session_id", None)

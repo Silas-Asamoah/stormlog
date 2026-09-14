@@ -639,25 +639,29 @@ def _monitor_memory_text(runtime_backend: str, profiler: Any, tracker: Any) -> s
     return f"{current_mem:.2f} MB"
 
 
+def _tracker_monitor_summary(tracker: Any) -> dict[str, Any]:
+    stats = tracker.get_statistics()
+    events = tracker.get_events()
+    first_alloc = events[0].memory_allocated if events else None
+    last_alloc = events[-1].memory_allocated if events else None
+    allocator_change = (
+        last_alloc - first_alloc
+        if last_alloc is not None and first_alloc is not None
+        else None
+    )
+    return {
+        "snapshots_collected": len(events),
+        "peak_memory_usage": stats.get("peak_memory"),
+        "memory_change_from_baseline": allocator_change,
+        "peak_device_usage": stats.get("peak_device_used"),
+    }
+
+
 def _print_monitor_summary(profiler: Any, tracker: Any, gpu_runtime: bool) -> None:
     print("\nMonitoring Summary:")
     print("-" * 30)
     if tracker is not None:
-        stats = tracker.get_statistics()
-        events = tracker.get_events()
-        first_alloc = events[0].memory_allocated if events else None
-        last_alloc = events[-1].memory_allocated if events else None
-        allocator_change = (
-            last_alloc - first_alloc
-            if last_alloc is not None and first_alloc is not None
-            else None
-        )
-        summary = {
-            "snapshots_collected": len(events),
-            "peak_memory_usage": stats.get("peak_memory"),
-            "memory_change_from_baseline": allocator_change,
-            "peak_device_usage": stats.get("peak_device_used"),
-        }
+        summary = _tracker_monitor_summary(tracker)
         unit = "GB"
         divisor = 1024**3
     else:

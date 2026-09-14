@@ -711,45 +711,77 @@ def _filter_ranks(ranks: list[int], selected_ranks: set[int] | None) -> list[int
 def _build_rank_timeline(
     samples: Sequence[TelemetryCompatibleEvent],
 ) -> dict[str, list[int]]:
-    allocator_samples = [
+    allocator_samples = _allocator_complete_events(samples)
+    if allocator_samples:
+        return _allocator_rank_timeline(allocator_samples)
+    return _device_rank_timeline(samples)
+
+
+def _allocator_complete_events(
+    samples: Sequence[TelemetryCompatibleEvent],
+) -> list[TelemetryCompatibleEvent]:
+    return [
         event
         for event in samples
         if event.allocator_allocated_bytes is not None
         and event.allocator_reserved_bytes is not None
         and event.device_used_bytes is not None
     ]
-    if allocator_samples:
-        return {
-            "timestamps_ns": [event.timestamp_ns for event in allocator_samples],
-            "allocated": [
-                event.allocator_allocated_bytes
-                for event in allocator_samples
-                if event.allocator_allocated_bytes is not None
-            ],
-            "reserved": [
-                event.allocator_reserved_bytes
-                for event in allocator_samples
-                if event.allocator_reserved_bytes is not None
-            ],
-            "gap": [
-                event.device_used_bytes - event.allocator_reserved_bytes
-                for event in allocator_samples
-                if event.device_used_bytes is not None
-                and event.allocator_reserved_bytes is not None
-            ],
-        }
-    else:
-        device_samples = [
-            event for event in samples if event.device_used_bytes is not None
-        ]
-        return {
-            "timestamps_ns": [event.timestamp_ns for event in device_samples],
-            "device_used": [
-                event.device_used_bytes
-                for event in device_samples
-                if event.device_used_bytes is not None
-            ],
-        }
+
+
+def _allocator_rank_timeline(
+    allocator_samples: Sequence[TelemetryCompatibleEvent],
+) -> dict[str, list[int]]:
+    return {
+        "timestamps_ns": [event.timestamp_ns for event in allocator_samples],
+        "allocated": [
+            event.allocator_allocated_bytes
+            for event in allocator_samples
+            if event.allocator_allocated_bytes is not None
+        ],
+        "reserved": [
+            event.allocator_reserved_bytes
+            for event in allocator_samples
+            if event.allocator_reserved_bytes is not None
+        ],
+        "gap": [
+            event.device_used_bytes - event.allocator_reserved_bytes
+            for event in allocator_samples
+            if event.device_used_bytes is not None
+            and event.allocator_reserved_bytes is not None
+        ],
+    }
+
+
+def _device_rank_timeline(
+    samples: Sequence[TelemetryCompatibleEvent],
+) -> dict[str, list[int]]:
+    device_samples = [event for event in samples if event.device_used_bytes is not None]
+    return {
+        "timestamps_ns": [event.timestamp_ns for event in device_samples],
+        "device_used": [
+            event.device_used_bytes
+            for event in device_samples
+            if event.device_used_bytes is not None
+        ],
+    }
+
+
+def _append_allocator_capability_warning(
+    sample_grouped: dict[int, list[TelemetryCompatibleEvent]], warnings: list[str]
+) -> None:
+    allocator_samples = [
+        event
+        for rank_samples in sample_grouped.values()
+        for event in rank_samples
+        if event.allocator_allocated_bytes is not None
+        and event.allocator_reserved_bytes is not None
+    ]
+    if sample_grouped and not allocator_samples:
+        warnings.append(
+            "Allocator-native diagnostics are unavailable; showing device memory "
+            "usage only."
+        )
 
 
 def build_distributed_model(
@@ -782,18 +814,7 @@ def build_distributed_model(
         warnings.append(
             "Inconsistent world_size values detected; using max observed world_size."
         )
-    allocator_samples = [
-        event
-        for rank_samples in sample_grouped.values()
-        for event in rank_samples
-        if event.allocator_allocated_bytes is not None
-        and event.allocator_reserved_bytes is not None
-    ]
-    if sample_grouped and not allocator_samples:
-        warnings.append(
-            "Allocator-native diagnostics are unavailable; showing device memory "
-            "usage only."
-        )
+    _append_allocator_capability_warning(sample_grouped, warnings)
 
     selected = set(selected_ranks) if selected_ranks is not None else None
     filtered_expected = _filter_ranks(expected_ranks, selected)
@@ -934,13 +955,7 @@ def _derive_rank_anomaly_candidates(
         rank, rank_samples, candidates, phase_resolver
     )
 
-    allocator_events = [
-        event
-        for event in rank_events
-        if event.allocator_allocated_bytes is not None
-        and event.allocator_reserved_bytes is not None
-        and event.device_used_bytes is not None
-    ]
+    allocator_events = _allocator_complete_events(rank_events)
     gap_findings = analyze_hidden_memory_gaps(
         events=cast(Sequence[TelemetryEventV2], allocator_events),
         thresholds=_GAP_THRESHOLDS,

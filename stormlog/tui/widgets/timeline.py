@@ -18,14 +18,7 @@ class TimelineCanvas(Static):
         self.canvas_height = height
 
     def render_timeline(self, timeline: dict[str, Any]) -> None:
-        allocated = timeline.get("allocated") if timeline else None
-        reserved = timeline.get("reserved") if timeline else None
-        device_used = timeline.get("device_used") if timeline else None
-        values = (
-            allocated
-            if allocated and any(v is not None for v in allocated)
-            else device_used
-        )
+        allocated, reserved, values = self._timeline_usage_series(timeline)
         if not values:
             self.render_placeholder(
                 "No timeline data yet. Start live tracking and press Refresh."
@@ -35,19 +28,34 @@ class TimelineCanvas(Static):
         label = "Allocated" if values is allocated else "Device Used"
         numeric_values = [float(value) for value in values if value is not None]
         allocated_lines = self._build_chart_lines(label, numeric_values)
-        reserved_lines = (
-            self._build_chart_lines(
-                "Reserved", [float(value) for value in reserved if value is not None]
-            )
-            if reserved and any(value is not None for value in reserved)
-            else []
-        )
+        reserved_lines = self._reserved_chart_lines(reserved)
         text = (
             "\n".join(allocated_lines + [""] + reserved_lines)
             if reserved_lines
             else "\n".join(allocated_lines)
         )
         self.update(text)
+
+    @staticmethod
+    def _timeline_usage_series(timeline: dict[str, Any]) -> tuple[Any, Any, Any]:
+        allocated = timeline.get("allocated") if timeline else None
+        reserved = timeline.get("reserved") if timeline else None
+        device_used = timeline.get("device_used") if timeline else None
+        values = (
+            allocated
+            if allocated and any(v is not None for v in allocated)
+            else device_used
+        )
+        return allocated, reserved, values
+
+    def _reserved_chart_lines(self, reserved: Any) -> list[str]:
+        return (
+            self._build_chart_lines(
+                "Reserved", [float(value) for value in reserved if value is not None]
+            )
+            if reserved and any(value is not None for value in reserved)
+            else []
+        )
 
     def render_placeholder(self, message: str) -> None:
         self.update(message)
