@@ -16,6 +16,7 @@ from stormlog.collective_attribution import (
     attribute_collective_memory,
     resolve_collective_attribution_config,
 )
+from stormlog.derived_fields import fragmentation_unavailable_reason
 from stormlog.gap_analysis import analyze_hidden_memory_gaps
 
 try:
@@ -782,6 +783,9 @@ def _append_allocator_capability_warning(
             "Allocator-native diagnostics are unavailable; showing device memory "
             "usage only."
         )
+    reason = fragmentation_unavailable_reason(allocator_samples)
+    if reason is not None:
+        warnings.append(reason)
 
 
 def build_distributed_model(
@@ -1641,7 +1645,7 @@ def _append_gap_ratio_candidates(
 
 
 def _timeline_identity_hints(
-    payload: Mapping[str, Any]
+    payload: Mapping[str, Any],
 ) -> tuple[int | None, int | None, int | None]:
     metadata = payload.get("metadata") if isinstance(payload, Mapping) else None
     identity = (

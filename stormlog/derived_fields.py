@@ -136,6 +136,29 @@ def _event_get(event: Any, key: str, default: Any = None) -> Any:
     return getattr(event, key, default)
 
 
+def memory_feature_enabled(event: Any, feature: str) -> bool:
+    """Honor explicit capability flags while preserving unannotated legacy events."""
+    metadata = _event_get(event, "metadata", {})
+    capabilities = (
+        metadata.get("memory_capabilities", {})
+        if isinstance(metadata, MappingABC)
+        else {}
+    )
+    return not (
+        isinstance(capabilities, MappingABC) and capabilities.get(feature) is False
+    )
+
+
+def fragmentation_unavailable_reason(events: Sequence[Any]) -> str | None:
+    """Explain when every supplied sample explicitly disables fragmentation."""
+    if events and not any(
+        memory_feature_enabled(event, "supports_fragmentation_analysis")
+        for event in events
+    ):
+        return "Collector capabilities disable fragmentation analysis."
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -163,15 +186,8 @@ def compute_event_fields(event: Any) -> DerivedFields:
     allocated = int(raw_allocated) if raw_allocated is not None else None
     reserved = int(raw_reserved) if raw_reserved is not None else None
     device_used = int(raw_device_used) if raw_device_used is not None else allocated
-    metadata = _event_get(event, "metadata", {})
-    capabilities = (
-        metadata.get("memory_capabilities", {})
-        if isinstance(metadata, MappingABC)
-        else {}
-    )
-    use_device_utilization = allocated is None or (
-        isinstance(capabilities, MappingABC)
-        and not capabilities.get("supports_allocator_allocated", True)
+    use_device_utilization = allocated is None or not memory_feature_enabled(
+        event, "supports_allocator_allocated"
     )
     device_total: None | int = _event_get(event, "device_total_bytes")
     collector: None | str = _event_get(event, "collector")
@@ -182,7 +198,11 @@ def compute_event_fields(event: Any) -> DerivedFields:
             device_used if use_device_utilization else allocated,
             device_total,
         ),
-        "fragmentation_ratio": _compute_fragmentation_ratio(allocated, reserved),
+        "fragmentation_ratio": (
+            _compute_fragmentation_ratio(allocated, reserved)
+            if memory_feature_enabled(event, "supports_fragmentation_analysis")
+            else None
+        ),
         "is_degraded_collector": _collector_is_degraded(collector),
     }
     return result

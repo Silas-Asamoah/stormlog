@@ -14,6 +14,7 @@ from .collective_attribution import (
     attribute_collective_memory,
     resolve_collective_attribution_config,
 )
+from .derived_fields import fragmentation_unavailable_reason
 from .distributed_analysis import summarize_cross_rank_analysis
 from .gap_analysis import GapFinding, analyze_hidden_memory_gaps
 
@@ -886,6 +887,15 @@ class MemoryAnalyzer:
                     "available": False,
                     "reason": reason,
                 },
+            }
+            return
+        fragmentation_reason = fragmentation_unavailable_reason(allocator_samples)
+        if fragmentation_reason is not None:
+            report["analysis_availability"] = {
+                "fragmentation_analysis": {
+                    "available": False,
+                    "reason": fragmentation_reason,
+                }
             }
 
     def _generate_priority_recommendations(

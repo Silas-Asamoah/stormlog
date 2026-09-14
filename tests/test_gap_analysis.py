@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from stormlog.analyzer import MemoryAnalyzer
+from stormlog.cli import _build_analyze_summary
 from stormlog.phases import PhaseReplayIndex
 from stormlog.telemetry import (
     SCHEMA_VERSION_V2,
@@ -12,6 +13,7 @@ from stormlog.telemetry import (
     TelemetryEvent,
     TelemetryEventV2,
     telemetry_event_from_record,
+    telemetry_event_to_dict,
 )
 from tests.gap_test_helpers import build_gap_event
 
@@ -288,6 +290,32 @@ class TestTransientSpike:
 
 
 class TestFragmentationLike:
+    def test_disabled_fragmentation_is_not_reported_or_recommended(self) -> None:
+        events = [
+            telemetry_event_from_record(
+                telemetry_event_to_dict(
+                    _make_event(i, 100_000_000, 1_000_000_000, 2_500_000_000)
+                )
+            )
+            for i in range(12)
+        ]
+        for event in events:
+            event.metadata["memory_capabilities"][
+                "supports_fragmentation_analysis"
+            ] = False
+
+        report = MemoryAnalyzer().generate_optimization_report(events=events)
+
+        assert report["gap_analysis"] == []
+        availability = report["analysis_availability"]["fragmentation_analysis"]
+        assert availability["available"] is False
+        assert "capabilities disable fragmentation analysis" in availability["reason"]
+        summary = _build_analyze_summary("events.json", 0, report)
+        assert "Capability warning:" in summary
+        assert availability["reason"] in summary
+        assert "empty_cache" not in str(report)
+        assert "PYTORCH_CUDA_ALLOC_CONF" not in str(report)
+
     def test_fragmentation_like_detected(self) -> None:
         """High (reserved - allocated) / reserved ratio -> fragmentation_like."""
         events = []

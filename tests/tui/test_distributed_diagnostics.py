@@ -276,6 +276,31 @@ def test_build_distributed_model_degrades_to_device_only_diagnostics() -> None:
     ]
 
 
+def test_build_distributed_model_explains_disabled_fragmentation() -> None:
+    events = [
+        _make_event(
+            timestamp=float(index),
+            rank=0,
+            world_size=1,
+            allocated=100_000_000,
+            reserved=1_000_000_000,
+            used=2_500_000_000,
+            total=16 * 1024**3,
+        )
+        for index in range(12)
+    ]
+    for event in events:
+        event.metadata["memory_capabilities"]["supports_fragmentation_analysis"] = False
+
+    model = build_distributed_model(events)
+
+    assert all(
+        "fragmentation" not in indicator.signal for indicator in model.indicators
+    )
+    assert model.per_rank_timelines[0]["allocated"] == [100_000_000] * 12
+    assert model.warnings == ["Collector capabilities disable fragmentation analysis."]
+
+
 def test_build_distributed_model_includes_earliest_and_most_severe_indicators() -> None:
     events = [
         _make_event(
