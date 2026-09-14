@@ -473,6 +473,43 @@ def test_read_telemetry_sink_manifest_tolerates_malformed_root_fields(
     assert manifest.segments == []
 
 
+def test_manifest_parsing_skips_bad_entries_and_coerces_segment_counters(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "sessions": [None, {"session_id": "missing-fields"}],
+                "segments": [
+                    None,
+                    {"filename": 12},
+                    {
+                        "filename": "segment-000001.jsonl",
+                        "event_count": "3",
+                        "size_bytes": -1,
+                        "closed": "yes",
+                        "session_id": 12,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = read_telemetry_sink_manifest(tmp_path)
+    assert manifest is not None
+    assert manifest.sessions == []
+    assert len(manifest.segments) == 1
+    segment = manifest.segments[0]
+    assert (segment.filename, segment.event_count, segment.size_bytes) == (
+        "segment-000001.jsonl",
+        3,
+        0,
+    )
+    assert segment.closed is True
+    assert segment.session_id is None
+
+
 def test_append_only_sink_close_stops_flush_thread_after_manifest_failure(
     tmp_path: Path,
 ) -> None:

@@ -115,22 +115,15 @@ class MemoryAnalyzer:
                 }
             )
 
-        # Check for sudden spikes
-        if len(memory_data) > 5:
-            mean_memory = statistics.mean(memory_data)
-            std_memory = statistics.stdev(memory_data)
+        self._append_spike_leaks(memory_data, leaks)
 
-            spikes = [m for m in memory_data if m > mean_memory + 3 * std_memory]
-            if spikes:
-                leaks.append(
-                    {
-                        "type": "memory_spikes",
-                        "severity": "medium",
-                        "description": f"Detected {len(spikes)} memory spikes above 3σ",
-                        "spike_values": spikes,
-                    }
-                )
+        self._append_cleanup_leak(memory_data, leaks)
 
+        return leaks
+
+    def _append_cleanup_leak(
+        self, memory_data: List[float], leaks: List[Dict[str, Any]]
+    ) -> None:
         # Check for lack of cleanup
         final_memory = memory_data[-5:]  # Last 5 samples
         initial_memory = memory_data[:5]  # First 5 samples
@@ -156,7 +149,24 @@ class MemoryAnalyzer:
                     }
                 )
 
-        return leaks
+    def _append_spike_leaks(
+        self, memory_data: List[float], leaks: List[Dict[str, Any]]
+    ) -> None:
+        # Check for sudden spikes
+        if len(memory_data) > 5:
+            mean_memory = statistics.mean(memory_data)
+            std_memory = statistics.stdev(memory_data)
+
+            spikes = [m for m in memory_data if m > mean_memory + 3 * std_memory]
+            if spikes:
+                leaks.append(
+                    {
+                        "type": "memory_spikes",
+                        "severity": "medium",
+                        "description": f"Detected {len(spikes)} memory spikes above 3σ",
+                        "spike_values": spikes,
+                    }
+                )
 
     def analyze_fragmentation(self, profile_result: Any) -> Dict[str, float]:
         """Analyze memory fragmentation patterns."""
@@ -205,6 +215,29 @@ class MemoryAnalyzer:
         memory_data = tracking_results.memory_usage
         patterns: List[Dict[str, Any]] = []
 
+        self._append_periodic_pattern(memory_data, patterns)
+
+        # Detect step patterns
+        if len(memory_data) > 10:
+            step_increases = 0
+            for i in range(1, len(memory_data)):
+                if memory_data[i] > memory_data[i - 1] * 1.2:  # 20% sudden increase
+                    step_increases += 1
+
+            if step_increases > len(memory_data) * 0.1:  # More than 10% of samples
+                patterns.append(
+                    {
+                        "type": "step_pattern",
+                        "step_count": step_increases,
+                        "description": f"Detected {step_increases} sudden memory increases (step pattern)",
+                    }
+                )
+
+        return patterns
+
+    def _append_periodic_pattern(
+        self, memory_data: List[float], patterns: List[Dict[str, Any]]
+    ) -> None:
         # Detect periodic patterns
         try:
             # Simple autocorrelation for periodic detection
@@ -237,24 +270,6 @@ class MemoryAnalyzer:
         except Exception as exc:
             logging.debug("Periodic pattern detection failed: %s", exc)
 
-        # Detect step patterns
-        if len(memory_data) > 10:
-            step_increases = 0
-            for i in range(1, len(memory_data)):
-                if memory_data[i] > memory_data[i - 1] * 1.2:  # 20% sudden increase
-                    step_increases += 1
-
-            if step_increases > len(memory_data) * 0.1:  # More than 10% of samples
-                patterns.append(
-                    {
-                        "type": "step_pattern",
-                        "step_count": step_increases,
-                        "description": f"Detected {step_increases} sudden memory increases (step pattern)",
-                    }
-                )
-
-        return patterns
-
     def analyze_efficiency(self, profile_result: Any) -> float:
         """Analyze memory usage efficiency (0-10 scale)."""
         if not hasattr(profile_result, "peak_memory_mb"):
@@ -283,6 +298,11 @@ class MemoryAnalyzer:
             elif frag_info["fragmentation_score"] > 0.3:
                 score -= 1.0
 
+        score = self._apply_leak_penalty(profile_result, score)
+
+        return max(0.0, min(10.0, score))
+
+    def _apply_leak_penalty(self, profile_result: Any, score: float) -> float:
         # Penalize memory leaks
         if hasattr(profile_result, "memory_usage"):
             # Create a simple tracking result for leak detection
@@ -304,8 +324,7 @@ class MemoryAnalyzer:
                 score -= 3.0
             elif leaks:
                 score -= 1.5
-
-        return max(0.0, min(10.0, score))
+        return score
 
     def correlate_with_performance(self, profile_result: Any) -> Dict[str, Any]:
         """Correlate memory usage with performance metrics."""
@@ -469,28 +488,32 @@ class MemoryAnalyzer:
 
         # Hidden-memory gap analysis (only when telemetry events are supplied).
         if events is not None:
-            phase_resolver = (
-                PhaseReplayIndex.from_events(events)
-                if hasattr(PhaseReplayIndex, "from_events")
-                else None
-            )
-            gap_findings = self.analyze_memory_gaps(
-                events,
-                phase_resolver=phase_resolver,
-            )
-            collective_attribution = self.analyze_collective_attribution(
-                events,
-                phase_resolver=phase_resolver,
-            )
-            optimization_score["gap_analysis"] = [
-                _serialize_gap_finding(f) for f in gap_findings
-            ]
-            optimization_score["collective_attribution"] = [
-                _serialize_collective_attribution(result)
-                for result in collective_attribution
-            ]
+            optimization_score.update(self._telemetry_analysis(events))
 
         return optimization_score
+
+    def _telemetry_analysis(self, events: List[TelemetryEventV2]) -> Dict[str, Any]:
+        analysis: Dict[str, Any] = {}
+        phase_resolver = (
+            PhaseReplayIndex.from_events(events)
+            if hasattr(PhaseReplayIndex, "from_events")
+            else None
+        )
+        gap_findings = self.analyze_memory_gaps(
+            events,
+            phase_resolver=phase_resolver,
+        )
+        collective_attribution = self.analyze_collective_attribution(
+            events,
+            phase_resolver=phase_resolver,
+        )
+        analysis["gap_analysis"] = [_serialize_gap_finding(f) for f in gap_findings]
+        analysis["collective_attribution"] = [
+            _serialize_collective_attribution(result)
+            for result in collective_attribution
+        ]
+
+        return analysis
 
 
 def _serialize_gap_finding(finding: GapFinding) -> dict[str, Any]:

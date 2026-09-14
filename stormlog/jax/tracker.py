@@ -190,38 +190,7 @@ class MemoryTracker:
         )
         self._last_oom_dump_path: Optional[str] = None
 
-        self._device = None
-        self._device_bytes_limit: Optional[int] = None
-        self._last_reserved_bytes: Optional[int] = None
-        self._device_memory_available = False
-        self._device_memory_unavailable_reason: Optional[str] = (
-            "No JAX device was selected"
-        )
-        try:
-            if isinstance(device_index, int):
-                devices = jax.local_devices()
-                if device_index < 0 or device_index >= len(devices):
-                    raise ValueError(f"JAX device index {device_index} is out of range")
-                self._device = devices[device_index]
-            else:
-                self._device, self.device_index = resolve_jax_device(device_index)
-            capability = get_device_memory_capability(self._device)
-            self._device_memory_available = bool(capability["memory_stats_available"])
-            self._device_memory_unavailable_reason = capability["memory_stats_error"]
-            stats = capability["memory_stats"]
-            if self._device_memory_available and "bytes_limit" in stats:
-                self._device_bytes_limit = int(stats["bytes_limit"])
-        except Exception as exc:
-            logger.debug("Could not resolve JAX device %s: %s", device_index, exc)
-
-        # Cache a scalar sentinel for sync barriers — avoids re-allocating
-        # a device array on every sample.
-        self._sync_sentinel: Any = None
-        if self._device is not None:
-            try:
-                self._sync_sentinel = _device_zero(self._device)
-            except Exception:
-                pass
+        self._initialize_device(device_index)
 
         # Cache invariant per-process values used in every telemetry record.
         self._cached_pid = os.getpid()
@@ -284,6 +253,40 @@ class MemoryTracker:
             logger.info(
                 "JAX Memory Tracker initialized for device selector %r", device_index
             )
+
+    def _initialize_device(self, device_index: Union[int, str]) -> None:
+        self._device = None
+        self._device_bytes_limit: Optional[int] = None
+        self._last_reserved_bytes: Optional[int] = None
+        self._device_memory_available = False
+        self._device_memory_unavailable_reason: Optional[str] = (
+            "No JAX device was selected"
+        )
+        try:
+            if isinstance(device_index, int):
+                devices = jax.local_devices()
+                if device_index < 0 or device_index >= len(devices):
+                    raise ValueError(f"JAX device index {device_index} is out of range")
+                self._device = devices[device_index]
+            else:
+                self._device, self.device_index = resolve_jax_device(device_index)
+            capability = get_device_memory_capability(self._device)
+            self._device_memory_available = bool(capability["memory_stats_available"])
+            self._device_memory_unavailable_reason = capability["memory_stats_error"]
+            stats = capability["memory_stats"]
+            if self._device_memory_available and "bytes_limit" in stats:
+                self._device_bytes_limit = int(stats["bytes_limit"])
+        except Exception as exc:
+            logger.debug("Could not resolve JAX device %s: %s", device_index, exc)
+
+        # Cache a scalar sentinel for sync barriers — avoids re-allocating
+        # a device array on every sample.
+        self._sync_sentinel: Any = None
+        if self._device is not None:
+            try:
+                self._sync_sentinel = _device_zero(self._device)
+            except Exception:
+                pass
 
     @staticmethod
     def _empty_sink_diagnostics() -> Dict[str, Any]:
@@ -597,19 +600,8 @@ class MemoryTracker:
         current_time = time.time()
         if not self._retry_collection_due(current_time):
             return
-        if not self._device_memory_available:
-            capability = get_device_memory_capability(self._device)
-            self._device_memory_available = bool(capability["memory_stats_available"])
-            self._device_memory_unavailable_reason = capability["memory_stats_error"]
-            if not self._device_memory_available:
-                self._transition_to_failure(
-                    current_time,
-                    RuntimeError(self._device_memory_unavailable_reason),
-                )
-                return
-            stats = capability["memory_stats"]
-            if "bytes_limit" in stats:
-                self._device_bytes_limit = int(stats["bytes_limit"])
+        if not self._ensure_device_memory_available(current_time):
+            return
 
         try:
             current_memory = self._get_current_memory_bytes()
@@ -645,6 +637,23 @@ class MemoryTracker:
             current_memory_mb = current_memory / (1024 * 1024)
             if current_memory_mb > self.alert_threshold_mb:
                 self._trigger_alert(current_memory_mb, current_time)
+
+    def _ensure_device_memory_available(self, current_time: float) -> bool:
+        if not self._device_memory_available:
+            capability = get_device_memory_capability(self._device)
+            self._device_memory_available = bool(capability["memory_stats_available"])
+            self._device_memory_unavailable_reason = capability["memory_stats_error"]
+            if not self._device_memory_available:
+                self._transition_to_failure(
+                    current_time,
+                    RuntimeError(self._device_memory_unavailable_reason),
+                )
+                return False
+            stats = capability["memory_stats"]
+            if "bytes_limit" in stats:
+                self._device_bytes_limit = int(stats["bytes_limit"])
+
+        return True
 
     def _tracking_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -802,17 +811,7 @@ class MemoryTracker:
             retained_events = len(self._events)
             retained_samples = len(self._memory_usage)
             retained_alerts = len(self._alerts)
-            peak_memory = self._peak_memory_bytes if self._total_samples_observed else 0
-            average_memory = (
-                self._sum_memory_bytes / self._total_samples_observed
-                if self._total_samples_observed
-                else 0
-            )
-            min_memory = (
-                self._min_memory_bytes
-                if self._min_memory_bytes is not None and self._total_samples_observed
-                else 0
-            )
+            peak_memory, average_memory, min_memory = self._memory_statistics_locked()
             collector_failure_event_count = self._collector_failure_event_count
             dropped_samples = self._history_dropped_samples
             dropped_events = self._history_dropped_events
@@ -862,6 +861,20 @@ class MemoryTracker:
             "last_oom_dump_path": self._last_oom_dump_path,
         }
 
+    def _memory_statistics_locked(self) -> tuple[int, float, int]:
+        peak_memory = self._peak_memory_bytes if self._total_samples_observed else 0
+        average_memory = (
+            self._sum_memory_bytes / self._total_samples_observed
+            if self._total_samples_observed
+            else 0
+        )
+        min_memory = (
+            self._min_memory_bytes
+            if self._min_memory_bytes is not None and self._total_samples_observed
+            else 0
+        )
+        return peak_memory, average_memory, min_memory
+
     def get_tracking_results(self) -> TrackingResult:
         """Get current tracking results without stopping."""
         return self._create_tracking_result()
@@ -876,20 +889,9 @@ class MemoryTracker:
             ):
                 return self._create_empty_result()
 
-            session_start = self._session_start_time
-            session_end = self._session_end_time
-            if session_start is None:
-                session_start = (
-                    result_data.retained_timestamps[0]
-                    if result_data.retained_timestamps
-                    else time.time()
-                )
-            if session_end is None:
-                session_end = (
-                    result_data.retained_timestamps[-1]
-                    if result_data.retained_timestamps
-                    else time.time()
-                )
+            session_start, session_end = self._result_time_range(
+                result_data.retained_timestamps
+            )
 
             return TrackingResult(
                 start_time=session_start,
@@ -928,6 +930,16 @@ class MemoryTracker:
                 device_memory_unavailable_reason=self._device_memory_unavailable_reason,
                 process_memory_bytes=self._get_current_cpu_memory(),
             )
+
+    def _result_time_range(self, timestamps: List[float]) -> tuple[float, float]:
+        session_start = self._session_start_time
+        session_end = self._session_end_time
+        if session_start is None:
+            session_start = timestamps[0] if timestamps else time.time()
+        if session_end is None:
+            session_end = timestamps[-1] if timestamps else time.time()
+
+        return session_start, session_end
 
     def _create_empty_result(self) -> TrackingResult:
         current_time = time.time()
@@ -1158,6 +1170,12 @@ class MemoryTracker:
             logger.debug("OOM flight recorder dump failed: %s", dump_exc)
             return None
 
+        self._enrich_oom_dump(dump_path)
+
+        self._last_oom_dump_path = dump_path
+        return dump_path
+
+    def _enrich_oom_dump(self, dump_path: Optional[str]) -> None:
         # Enrich the dump with a JAX device memory profile artifact
         if dump_path is not None:
             profile_path = self.save_device_memory_profile_to_dir(
@@ -1204,9 +1222,6 @@ class MemoryTracker:
                         "Could not enrich OOM manifest with profile: %s",
                         enrich_exc,
                     )
-
-        self._last_oom_dump_path = dump_path
-        return dump_path
 
     @contextmanager
     def capture_oom(

@@ -261,27 +261,7 @@ class MemoryAnalyzer:
         """Detect inefficient memory allocation patterns."""
         patterns: List[MemoryPattern] = []
 
-        # Look for functions that allocate much more than they actually use
-        inefficient_functions: List[Dict[str, Any]] = []
-
-        for result in results:
-            allocated = result.memory_allocated
-            peak_usage = (
-                result.peak_memory_usage() - result.memory_before.allocated_memory
-            )
-
-            if allocated > 0 and peak_usage > 0:
-                efficiency_ratio = peak_usage / allocated
-
-                if efficiency_ratio < self.thresholds["inefficient_allocation_ratio"]:
-                    inefficient_functions.append(
-                        {
-                            "function": result.function_name,
-                            "efficiency_ratio": efficiency_ratio,
-                            "allocated": allocated,
-                            "peak_usage": peak_usage,
-                        }
-                    )
+        inefficient_functions = self._inefficient_allocation_samples(results)
 
         if inefficient_functions:
             # Group by function name
@@ -325,6 +305,33 @@ class MemoryAnalyzer:
                 )
 
         return patterns
+
+    def _inefficient_allocation_samples(
+        self, results: List[ProfileResult]
+    ) -> List[Dict[str, Any]]:
+        # Look for functions that allocate much more than they actually use
+        inefficient_functions: List[Dict[str, Any]] = []
+
+        for result in results:
+            allocated = result.memory_allocated
+            peak_usage = (
+                result.peak_memory_usage() - result.memory_before.allocated_memory
+            )
+
+            if allocated > 0 and peak_usage > 0:
+                efficiency_ratio = peak_usage / allocated
+
+                if efficiency_ratio < self.thresholds["inefficient_allocation_ratio"]:
+                    inefficient_functions.append(
+                        {
+                            "function": result.function_name,
+                            "efficiency_ratio": efficiency_ratio,
+                            "allocated": allocated,
+                            "peak_usage": peak_usage,
+                        }
+                    )
+
+        return inefficient_functions
 
     def _detect_memory_spikes(
         self, results: List[ProfileResult]
@@ -527,6 +534,14 @@ class MemoryAnalyzer:
                     )
                 )
 
+        insights.extend(self._execution_time_variance_insights(function_times))
+
+        return insights
+
+    def _execution_time_variance_insights(
+        self, function_times: Mapping[str, List[float]]
+    ) -> List[PerformanceInsight]:
+        insights = []
         # Analyze execution time variance
         high_variance_functions = []
         for func_name, times in function_times.items():
@@ -784,30 +799,28 @@ class MemoryAnalyzer:
 
         patterns = self.analyze_memory_patterns(effective_results)
         insights = self.generate_performance_insights(effective_results)
+        report = self._build_profile_report(effective_results, patterns, insights)
 
-        # Categorize findings by severity/impact
-        critical_issues = [p for p in patterns if p.severity == "critical"]
-        high_impact_insights = [i for i in insights if i.impact == "high"]
+        # Hidden-memory gap analysis (only when telemetry events are supplied).
+        if events is not None:
+            self._add_telemetry_analysis(report, events)
 
-        # Generate summary statistics
-        total_memory_allocated = sum(r.memory_allocated for r in effective_results)
-        total_execution_time = sum(r.execution_time for r in effective_results)
-        unique_functions = len(set(r.function_name for r in effective_results))
+        return report
 
-        report: Dict[str, Any] = {
-            "summary": {
-                "total_functions_analyzed": unique_functions,
-                "total_function_calls": len(effective_results),
-                "total_memory_allocated": total_memory_allocated,
-                "total_execution_time": total_execution_time,
-                "analysis_timestamp": (
-                    effective_results[-1].memory_after.timestamp
-                    if effective_results
-                    else None
-                ),
-            },
-            "critical_issues": [p.__dict__ for p in critical_issues],
-            "high_impact_insights": [i.__dict__ for i in high_impact_insights],
+    def _build_profile_report(
+        self,
+        results: List[ProfileResult],
+        patterns: List[MemoryPattern],
+        insights: List[PerformanceInsight],
+    ) -> Dict[str, Any]:
+        return {
+            "summary": _summarize_profile_results(results),
+            "critical_issues": [
+                p.__dict__ for p in patterns if p.severity == "critical"
+            ],
+            "high_impact_insights": [
+                i.__dict__ for i in insights if i.impact == "high"
+            ],
             "all_patterns": [p.__dict__ for p in patterns],
             "all_insights": [i.__dict__ for i in insights],
             "recommendations": self._generate_priority_recommendations(
@@ -818,57 +831,56 @@ class MemoryAnalyzer:
             ),
         }
 
-        # Hidden-memory gap analysis (only when telemetry events are supplied).
-        if events is not None:
-            phase_resolver = (
-                PhaseReplayIndex.from_events(events)
-                if hasattr(PhaseReplayIndex, "from_events")
-                else None
+    def _add_telemetry_analysis(
+        self, report: Dict[str, Any], events: Sequence[TelemetryEventLike]
+    ) -> None:
+        phase_resolver = (
+            PhaseReplayIndex.from_events(events)
+            if hasattr(PhaseReplayIndex, "from_events")
+            else None
+        )
+        gap_findings = self.analyze_memory_gaps(
+            events,
+            phase_resolver=phase_resolver,
+        )
+        collective_attribution = self.analyze_collective_attribution(
+            events,
+            phase_resolver=phase_resolver,
+        )
+        report["gap_analysis"] = [_serialize_gap_finding(f) for f in gap_findings]
+        report["collective_attribution"] = [
+            _serialize_collective_attribution(result)
+            for result in collective_attribution
+        ]
+        allocator_samples = [
+            event
+            for event in events
+            if event.event_type.casefold() == "sample"
+            and event.allocator_allocated_bytes is not None
+            and event.allocator_reserved_bytes is not None
+            and event.device_used_bytes is not None
+        ]
+        if not allocator_samples:
+            reason = (
+                "Allocator-native analysis is unavailable because this "
+                "telemetry session does not expose allocator counters."
             )
-            gap_findings = self.analyze_memory_gaps(
+            report["analysis_availability"] = {
+                "gap_analysis": {"available": False, "reason": reason},
+                "collective_attribution": {
+                    "available": False,
+                    "reason": reason,
+                },
+                "fragmentation_analysis": {
+                    "available": False,
+                    "reason": reason,
+                },
+            }
+        if len({event.rank for event in events}) > 1:
+            report["cross_rank_analysis"] = self.analyze_cross_rank_timeline(
                 events,
                 phase_resolver=phase_resolver,
             )
-            collective_attribution = self.analyze_collective_attribution(
-                events,
-                phase_resolver=phase_resolver,
-            )
-            report["gap_analysis"] = [_serialize_gap_finding(f) for f in gap_findings]
-            report["collective_attribution"] = [
-                _serialize_collective_attribution(result)
-                for result in collective_attribution
-            ]
-            allocator_samples = [
-                event
-                for event in events
-                if event.event_type.casefold() == "sample"
-                and event.allocator_allocated_bytes is not None
-                and event.allocator_reserved_bytes is not None
-                and event.device_used_bytes is not None
-            ]
-            if not allocator_samples:
-                reason = (
-                    "Allocator-native analysis is unavailable because this "
-                    "telemetry session does not expose allocator counters."
-                )
-                report["analysis_availability"] = {
-                    "gap_analysis": {"available": False, "reason": reason},
-                    "collective_attribution": {
-                        "available": False,
-                        "reason": reason,
-                    },
-                    "fragmentation_analysis": {
-                        "available": False,
-                        "reason": reason,
-                    },
-                }
-            if len({event.rank for event in events}) > 1:
-                report["cross_rank_analysis"] = self.analyze_cross_rank_timeline(
-                    events,
-                    phase_resolver=phase_resolver,
-                )
-
-        return report
 
     def _generate_priority_recommendations(
         self, patterns: List[MemoryPattern], insights: List[PerformanceInsight]
@@ -939,21 +951,7 @@ class MemoryAnalyzer:
 
         score = max(0, base_score)
 
-        if score >= 90:
-            grade = "A"
-            description = "Excellent memory usage patterns"
-        elif score >= 80:
-            grade = "B"
-            description = "Good memory usage with minor issues"
-        elif score >= 70:
-            grade = "C"
-            description = "Acceptable memory usage with some optimization potential"
-        elif score >= 60:
-            grade = "D"
-            description = "Poor memory usage patterns requiring attention"
-        else:
-            grade = "F"
-            description = "Critical memory usage issues requiring immediate attention"
+        grade, description = _optimization_grade(score)
 
         return {
             "score": score,
@@ -961,6 +959,16 @@ class MemoryAnalyzer:
             "description": description,
             "issues_found": len(patterns) + len(insights),
         }
+
+
+def _summarize_profile_results(results: List[ProfileResult]) -> Dict[str, Any]:
+    return {
+        "total_functions_analyzed": len(set(r.function_name for r in results)),
+        "total_function_calls": len(results),
+        "total_memory_allocated": sum(r.memory_allocated for r in results),
+        "total_execution_time": sum(r.execution_time for r in results),
+        "analysis_timestamp": results[-1].memory_after.timestamp if results else None,
+    }
 
 
 def _serialize_gap_finding(finding: GapFinding) -> dict[str, Any]:
@@ -979,3 +987,23 @@ def _serialize_collective_attribution(
         result.phase_attribution
     )
     return payload
+
+
+def _optimization_grade(score: int) -> tuple[str, str]:
+    if score >= 90:
+        grade = "A"
+        description = "Excellent memory usage patterns"
+    elif score >= 80:
+        grade = "B"
+        description = "Good memory usage with minor issues"
+    elif score >= 70:
+        grade = "C"
+        description = "Acceptable memory usage with some optimization potential"
+    elif score >= 60:
+        grade = "D"
+        description = "Poor memory usage patterns requiring attention"
+    else:
+        grade = "F"
+        description = "Critical memory usage issues requiring immediate attention"
+
+    return grade, description

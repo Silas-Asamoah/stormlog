@@ -6,8 +6,9 @@ import asyncio
 import logging
 import os
 from datetime import datetime
+from functools import partial
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any, Awaitable, Callable, List, Optional
 
 # Suppress TensorFlow oneDNN warnings
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
@@ -611,80 +612,66 @@ class GPUMemoryProfilerTUI(App):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
-        if button_id == "btn-refresh-overview":
-            self.action_refresh_overview()
-        elif button_id == "btn-log-system":
-            await self.run_cli_command("gpumemprof info")
-        elif button_id == "btn-log-pytorch":
-            await self.run_cli_command(
-                "gpumemprof monitor --duration 30 --interval 0.5"
-            )
-        elif button_id == "btn-log-tensorflow":
-            await self.run_cli_command("tfmemprof monitor --duration 30 --interval 0.5")
-        elif button_id == "btn-log-diagnose":
-            await self.run_cli_command(
-                "gpumemprof diagnose --duration 0 --output artifacts/tui_diagnose"
-            )
-        elif button_id == "btn-run-pytorch":
-            await self.run_pytorch_sample()
-        elif button_id == "btn-run-tf":
-            await self.run_tensorflow_sample()
-        elif button_id == "btn-run-oom-scenario":
-            await self.run_cli_command(
-                "python -m examples.scenarios.oom_flight_recorder_scenario --mode simulated"
-            )
-        elif button_id == "btn-run-cap-matrix":
-            await self.run_cli_command(
-                "python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated --skip-tui"
-            )
-        elif button_id == "btn-cli-run":
-            await self.run_cli_command(self.cli_command_input.value)
-        elif button_id == "btn-cli-cancel":
-            await self.cancel_cli_command()
-        elif button_id == "btn-start-tracking":
-            await self.start_live_tracking()
-        elif button_id == "btn-stop-tracking":
-            self.stop_live_tracking()
-        elif button_id == "btn-toggle-watchdog":
-            self.toggle_auto_cleanup()
-        elif button_id == "btn-force-cleanup":
-            self.force_cleanup()
-        elif button_id == "btn-force-cleanup-aggressive":
-            self.force_cleanup(aggressive=True)
-        elif button_id == "btn-export-csv":
-            await self.export_tracker_events("csv")
-        elif button_id == "btn-export-json":
-            await self.export_tracker_events("json")
-        elif button_id == "btn-apply-thresholds":
-            self.apply_thresholds()
-        elif button_id == "btn-clear-monitor-log":
-            self.clear_monitor_log()
-        elif button_id == "btn-refresh-visual":
-            await self.refresh_visualizations()
-        elif button_id == "btn-visual-png":
-            await self.generate_visual_plot("png")
-        elif button_id == "btn-visual-html":
-            await self.generate_visual_plot("html")
-        elif button_id == "btn-diag-load-live":
-            await self.load_diagnostics_live()
-        elif button_id == "btn-diag-load-artifacts":
-            await self.load_diagnostics_artifacts()
-        elif button_id == "btn-diag-refresh":
-            await self.refresh_diagnostics()
-        elif button_id == "btn-diag-apply-session":
-            await self.apply_diagnostics_session_selection()
-        elif button_id == "btn-diag-apply-filter":
-            self.apply_diagnostics_rank_filter()
-        elif button_id == "btn-diag-reset-filter":
-            self.reset_diagnostics_rank_filter()
-        elif button_id == "btn-refresh-pt-profiles":
-            await self.refresh_pytorch_profiles()
-        elif button_id == "btn-clear-pt-profiles":
-            await self.clear_pytorch_profiles()
-        elif button_id == "btn-refresh-tf-profiles":
-            await self.refresh_tensorflow_profiles()
-        elif button_id == "btn-clear-tf-profiles":
-            await self.clear_tensorflow_profiles()
+        sync_handlers: dict[str, Callable[[], None]] = {
+            "btn-refresh-overview": self.action_refresh_overview,
+            "btn-stop-tracking": self.stop_live_tracking,
+            "btn-toggle-watchdog": self.toggle_auto_cleanup,
+            "btn-force-cleanup": self.force_cleanup,
+            "btn-force-cleanup-aggressive": partial(
+                self.force_cleanup, aggressive=True
+            ),
+            "btn-apply-thresholds": self.apply_thresholds,
+            "btn-clear-monitor-log": self.clear_monitor_log,
+            "btn-diag-apply-filter": self.apply_diagnostics_rank_filter,
+            "btn-diag-reset-filter": self.reset_diagnostics_rank_filter,
+        }
+        sync_handler = sync_handlers.get(button_id)
+        if sync_handler is not None:
+            sync_handler()
+            return
+
+        async_handlers: dict[str, Callable[[], Awaitable[None]]] = {
+            "btn-log-system": partial(self.run_cli_command, "gpumemprof info"),
+            "btn-log-pytorch": partial(
+                self.run_cli_command, "gpumemprof monitor --duration 30 --interval 0.5"
+            ),
+            "btn-log-tensorflow": partial(
+                self.run_cli_command, "tfmemprof monitor --duration 30 --interval 0.5"
+            ),
+            "btn-log-diagnose": partial(
+                self.run_cli_command,
+                "gpumemprof diagnose --duration 0 --output artifacts/tui_diagnose",
+            ),
+            "btn-run-pytorch": self.run_pytorch_sample,
+            "btn-run-tf": self.run_tensorflow_sample,
+            "btn-run-oom-scenario": partial(
+                self.run_cli_command,
+                "python -m examples.scenarios.oom_flight_recorder_scenario --mode simulated",
+            ),
+            "btn-run-cap-matrix": partial(
+                self.run_cli_command,
+                "python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated --skip-tui",
+            ),
+            "btn-cli-run": lambda: self.run_cli_command(self.cli_command_input.value),
+            "btn-cli-cancel": self.cancel_cli_command,
+            "btn-start-tracking": self.start_live_tracking,
+            "btn-export-csv": partial(self.export_tracker_events, "csv"),
+            "btn-export-json": partial(self.export_tracker_events, "json"),
+            "btn-refresh-visual": self.refresh_visualizations,
+            "btn-visual-png": partial(self.generate_visual_plot, "png"),
+            "btn-visual-html": partial(self.generate_visual_plot, "html"),
+            "btn-diag-load-live": self.load_diagnostics_live,
+            "btn-diag-load-artifacts": self.load_diagnostics_artifacts,
+            "btn-diag-refresh": self.refresh_diagnostics,
+            "btn-diag-apply-session": self.apply_diagnostics_session_selection,
+            "btn-refresh-pt-profiles": self.refresh_pytorch_profiles,
+            "btn-clear-pt-profiles": self.clear_pytorch_profiles,
+            "btn-refresh-tf-profiles": self.refresh_tensorflow_profiles,
+            "btn-clear-tf-profiles": self.clear_tensorflow_profiles,
+        }
+        async_handler = async_handlers.get(button_id)
+        if async_handler is not None:
+            await async_handler()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table is not self.diagnostics_rank_table:
@@ -1039,6 +1026,17 @@ class GPUMemoryProfilerTUI(App):
         table.add_row("Total Events", str(stats.get("total_events", 0)))
         table.add_row("Duration (s)", f"{duration:.1f}")
         table.add_row("Cleanups", str(cleanup_count))
+        self._append_monitor_health_details(
+            table, partial_fields, collector_error, retry_at
+        )
+
+    @staticmethod
+    def _append_monitor_health_details(
+        table: DataTable,
+        partial_fields: list[Any],
+        collector_error: Any,
+        retry_at: Any,
+    ) -> None:
         if partial_fields:
             table.add_row(
                 "Partial Fields",
@@ -1120,28 +1118,14 @@ class GPUMemoryProfilerTUI(App):
 
         if session and session.is_active:
             device_label = session.get_device_label() or "current CUDA device"
-            if collector_health == "healthy":
-                message = (
-                    f"Live tracking on **{device_label}**.\n"
-                    f"Auto cleanup is {cleanup_state}."
-                )
-            elif collector_health == "degraded":
-                message = (
-                    f"Live tracking on **{device_label}** with **partial telemetry**.\n"
-                    f"Auto cleanup is {cleanup_state}."
-                )
-            else:
-                message = (
-                    f"Live tracking on **{device_label}** while the collector is **unhealthy**.\n"
-                    f"Telemetry samples are paused until recovery. Auto cleanup is {cleanup_state}."
-                )
-            if telemetry_partial and collector_error:
-                message += f"\nCollector detail: {collector_error}"
-            if retry_at is not None:
-                retry_text = datetime.fromtimestamp(float(retry_at)).strftime(
-                    "%H:%M:%S"
-                )
-                message += f"\nNext retry at **{retry_text}**."
+            message = self._active_monitor_message(
+                device_label,
+                cleanup_state,
+                collector_health,
+                telemetry_partial,
+                collector_error,
+                retry_at,
+            )
         else:
             message = (
                 "Tracker idle. Start a session to stream GPU allocation events.\n"
@@ -1149,6 +1133,37 @@ class GPUMemoryProfilerTUI(App):
             )
 
         self.monitor_status.update(message)
+
+    @staticmethod
+    def _active_monitor_message(
+        device_label: str,
+        cleanup_state: str,
+        collector_health: str,
+        telemetry_partial: bool,
+        collector_error: Any,
+        retry_at: Any,
+    ) -> str:
+        if collector_health == "healthy":
+            message = (
+                f"Live tracking on **{device_label}**.\n"
+                f"Auto cleanup is {cleanup_state}."
+            )
+        elif collector_health == "degraded":
+            message = (
+                f"Live tracking on **{device_label}** with **partial telemetry**.\n"
+                f"Auto cleanup is {cleanup_state}."
+            )
+        else:
+            message = (
+                f"Live tracking on **{device_label}** while the collector is **unhealthy**.\n"
+                f"Telemetry samples are paused until recovery. Auto cleanup is {cleanup_state}."
+            )
+        if telemetry_partial and collector_error:
+            message += f"\nCollector detail: {collector_error}"
+        if retry_at is not None:
+            retry_text = datetime.fromtimestamp(float(retry_at)).strftime("%H:%M:%S")
+            message += f"\nNext retry at **{retry_text}**."
+        return message
 
     def _update_watchdog_button_label(self) -> None:
         label = "Auto Cleanup: ON" if self.monitor_auto_cleanup else "Auto Cleanup: OFF"
@@ -1533,6 +1548,27 @@ class GPUMemoryProfilerTUI(App):
     ) -> None:
         self._diagnostics_source = source
         self._diagnostics_sessions = list(sessions)
+        selected, extra_warnings = self._select_diagnostics_session(
+            sessions, selected_session_id, extra_warnings
+        )
+        self._diagnostics_selected_session_id = (
+            selected.summary.session_id if selected is not None else None
+        )
+        self._diagnostics_events = list(selected.events) if selected is not None else []
+        self.diagnostics_session_input.value = (
+            self._diagnostics_selected_session_id or ""
+        )
+        if reset_filter:
+            self._diagnostics_selected_ranks = None
+            self.diagnostics_rank_filter_input.value = "all"
+        self._refresh_diagnostics_model(extra_warnings=extra_warnings)
+
+    def _select_diagnostics_session(
+        self,
+        sessions: list[LoadedTelemetrySession],
+        selected_session_id: str | None,
+        extra_warnings: list[str] | None,
+    ) -> tuple[LoadedTelemetrySession | None, list[str] | None]:
         selected: LoadedTelemetrySession | None = None
         if sessions:
             requested = (
@@ -1555,17 +1591,7 @@ class GPUMemoryProfilerTUI(App):
                     ]
             if selected is None:
                 selected = select_default_loaded_session(sessions)
-        self._diagnostics_selected_session_id = (
-            selected.summary.session_id if selected is not None else None
-        )
-        self._diagnostics_events = list(selected.events) if selected is not None else []
-        self.diagnostics_session_input.value = (
-            self._diagnostics_selected_session_id or ""
-        )
-        if reset_filter:
-            self._diagnostics_selected_ranks = None
-            self.diagnostics_rank_filter_input.value = "all"
-        self._refresh_diagnostics_model(extra_warnings=extra_warnings)
+        return selected, extra_warnings
 
     def _diagnostics_available_ranks(self) -> list[int]:
         if not self._diagnostics_events:
@@ -1660,9 +1686,9 @@ class GPUMemoryProfilerTUI(App):
         duration = (
             max(0.0, timestamps[-1] - timestamps[0]) if len(timestamps) > 1 else 0.0
         )
-        alloc_max = max(allocated) if allocated else 0
+        alloc_max = max(allocated)
         reserv_max = max(reserved) if reserved else 0
-        alloc_latest = allocated[-1] if allocated else 0
+        alloc_latest = allocated[-1]
         reserv_latest = reserved[-1] if reserved else 0
 
         table.add_row("Samples", str(sample_count))
@@ -1683,17 +1709,7 @@ class GPUMemoryProfilerTUI(App):
         table.add_row("Reserved Latest", "-")
 
     def _save_timeline_plot(self, timeline: dict, format: str) -> str:
-        timestamps = timeline.get("timestamps") or []
-        allocated = timeline.get("allocated") or []
-        reserved = timeline.get("reserved") or []
-
-        if not timestamps or not allocated:
-            raise ValueError("Timeline data is empty.")
-
-        start = timestamps[0]
-        rel_times = [t - start for t in timestamps]
-        allocated_gb = [val / (1024**3) for val in allocated]
-        reserved_gb = [val / (1024**3) for val in reserved] if reserved else []
+        rel_times, allocated_gb, reserved_gb = self._timeline_plot_data(timeline)
         single_sample = len(rel_times) == 1
         line_marker = "o" if single_sample else None
         line_mode = "lines+markers" if single_sample else "lines"
@@ -1791,6 +1807,23 @@ class GPUMemoryProfilerTUI(App):
             self.log_message(title, f"Error: {exc}")
         finally:
             self._set_loader(False)
+
+    @staticmethod
+    def _timeline_plot_data(
+        timeline: dict,
+    ) -> tuple[list[float], list[float], list[float]]:
+        timestamps = timeline.get("timestamps") or []
+        allocated = timeline.get("allocated") or []
+        reserved = timeline.get("reserved") or []
+
+        if not timestamps or not allocated:
+            raise ValueError("Timeline data is empty.")
+
+        start = timestamps[0]
+        rel_times = [t - start for t in timestamps]
+        allocated_gb = [val / (1024**3) for val in allocated]
+        reserved_gb = [val / (1024**3) for val in reserved] if reserved else []
+        return rel_times, allocated_gb, reserved_gb
 
     def _set_loader(self, visible: bool) -> None:
         self.loader.display = visible

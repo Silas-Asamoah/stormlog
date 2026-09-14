@@ -128,3 +128,18 @@ def test_ci_runs_zizmor_workflow_audit() -> None:
     assert "pip install zizmor" in job_block
     assert "zizmor .github/workflows/*.yml" in job_block
     assert "persist-credentials: false" in job_block
+
+
+def test_ci_enforces_radon_complexity_without_framework_dependencies() -> None:
+    content = _ci_workflow_content()
+    start = content.index("    complexity:")
+    end = content.index("    workflow-audit:", start)
+    job_block = content[start:end]
+
+    assert "requirements-complexity.txt" in job_block
+    assert 'python-version: ["3.10", "3.12", "3.13", "3.14"]' in job_block
+    assert "python-version: ${{ matrix.python-version }}" in job_block
+    assert "python3 -m pytest tests/test_complexity_gate.py" in job_block
+    assert "python3 scripts/check_complexity.py --json" in job_block
+    assert "continue-on-error" not in job_block
+    assert "pip install -e" not in job_block

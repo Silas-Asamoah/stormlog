@@ -75,7 +75,7 @@ def test_memory_timeline_reads_each_timestamp_once() -> None:
     assert timestamp_reads[0] <= len(events) + 1
 
 
-@pytest.mark.parametrize("interval", [0.0, -1.0])  # type: ignore[misc]
+@pytest.mark.parametrize("interval", [0.0, -1.0])
 def test_memory_timeline_rejects_non_positive_interval(interval: float) -> None:
     tracker = _make_tracker([_make_event(0.0, 10)])
 

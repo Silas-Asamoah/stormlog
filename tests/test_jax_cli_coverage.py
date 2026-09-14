@@ -260,6 +260,63 @@ def test_cmd_track_stats_and_wandb(capsys: Any, tmp_path: Any) -> None:
         mock_wandb.assert_called_once()
 
 
+@pytest.mark.parametrize("failure_stage", ["start", "sampling"])
+def test_cmd_track_saves_and_exports_before_propagating_runtime_failure(
+    tmp_path: Any, failure_stage: str
+) -> None:
+    output_path = tmp_path / "tracking.json"
+    args = argparse.Namespace(
+        interval=1.0,
+        threshold=100,
+        device=0,
+        profile=False,
+        output=str(output_path),
+    )
+    config = SimpleNamespace(enabled=True)
+    completion_order: list[str] = []
+
+    def export_wandb(*args: Any, **kwargs: Any) -> None:
+        assert output_path.exists()
+        completion_order.append("wandb")
+
+    def export_mlflow(*args: Any, **kwargs: Any) -> None:
+        completion_order.append("mlflow")
+
+    with (
+        mock.patch.object(cli, "JAX_AVAILABLE", True),
+        mock.patch.object(cli, "WANDB_AVAILABLE", True),
+        mock.patch.object(cli, "MLFLOW_AVAILABLE", True),
+        mock.patch.object(cli, "_resolve_wandb_config", return_value=config),
+        mock.patch.object(cli, "_resolve_mlflow_config", return_value=config),
+        mock.patch.object(cli, "_load_memory_tracker") as mock_loader,
+        mock.patch.object(
+            cli.time, "sleep", side_effect=RuntimeError("sampling failed")
+        ),
+        mock.patch.object(
+            cli, "export_tracking_run_to_wandb", side_effect=export_wandb
+        ),
+        mock.patch.object(
+            cli, "export_tracking_run_to_mlflow", side_effect=export_mlflow
+        ),
+    ):
+        tracker = _configure_tracker_loader(mock_loader)
+        results = tracker.stop_tracking.return_value
+
+        def stop_tracking() -> Any:
+            completion_order.append("stop")
+            return results
+
+        tracker.stop_tracking.side_effect = stop_tracking
+        if failure_stage == "start":
+            tracker.start_tracking.side_effect = RuntimeError("start failed")
+
+        with pytest.raises(RuntimeError, match=f"{failure_stage} failed"):
+            cli.cmd_track(args)
+
+    assert completion_order == ["stop", "wandb", "mlflow"]
+    assert json.loads(output_path.read_text())["events"] == []
+
+
 def test_cmd_monitor_jax_not_available(capsys: Any) -> None:
     args = argparse.Namespace()
     with (

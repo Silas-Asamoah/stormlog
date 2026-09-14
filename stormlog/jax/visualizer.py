@@ -59,23 +59,10 @@ class MemoryVisualizer:
         self, results: Any, interactive: bool = False, save_path: Optional[str] = None
     ) -> None:
         """Plot device memory usage timeline."""
-        if hasattr(results, "snapshots") and results.snapshots:
-            snapshots = [
-                snapshot
-                for snapshot in results.snapshots
-                if getattr(snapshot, "device_memory_available", True)
-            ]
-            timestamps = [s.timestamp for s in snapshots]
-            memory_usage = [s.device_memory_mb for s in snapshots]
-        elif hasattr(results, "memory_usage") and results.memory_usage:
-            # Fallback for simple track results
-            memory_usage = [
-                float(value) / (1024.0 * 1024.0) for value in results.memory_usage
-            ]
-            timestamps = getattr(results, "timestamps", list(range(len(memory_usage))))
-        else:
-            logging.warning("No memory data available for plotting")
+        timeline = _timeline_samples(results)
+        if timeline is None:
             return
+        timestamps, memory_usage = timeline
 
         if interactive and PLOTLY_AVAILABLE:
             fig = go.Figure()
@@ -156,17 +143,7 @@ class MemoryVisualizer:
         if not MATPLOTLIB_AVAILABLE:
             logging.error("Matplotlib is required for heatmaps")
             return
-        if hasattr(results, "snapshots"):
-            samples = [
-                snapshot.device_memory_mb
-                for snapshot in results.snapshots
-                if getattr(snapshot, "device_memory_available", True)
-            ]
-        else:
-            samples = [
-                float(value) / (1024 * 1024)
-                for value in getattr(results, "memory_usage", [])
-            ]
+        samples = _heatmap_samples(results)
         if len(samples) < 10:
             logging.warning("Insufficient device-memory samples for heatmap")
             return
@@ -257,3 +234,40 @@ class MemoryVisualizer:
                 strict=True,
             )
         ]
+
+
+def _timeline_samples(results: Any) -> Optional[Tuple[List[float], List[float]]]:
+    if hasattr(results, "snapshots") and results.snapshots:
+        snapshots = [
+            snapshot
+            for snapshot in results.snapshots
+            if getattr(snapshot, "device_memory_available", True)
+        ]
+        timestamps = [s.timestamp for s in snapshots]
+        memory_usage = [s.device_memory_mb for s in snapshots]
+    elif hasattr(results, "memory_usage") and results.memory_usage:
+        # Fallback for simple track results
+        memory_usage = [
+            float(value) / (1024.0 * 1024.0) for value in results.memory_usage
+        ]
+        timestamps = getattr(results, "timestamps", list(range(len(memory_usage))))
+    else:
+        logging.warning("No memory data available for plotting")
+        return None
+
+    return timestamps, memory_usage
+
+
+def _heatmap_samples(results: Any) -> List[float]:
+    if hasattr(results, "snapshots"):
+        samples = [
+            snapshot.device_memory_mb
+            for snapshot in results.snapshots
+            if getattr(snapshot, "device_memory_available", True)
+        ]
+    else:
+        samples = [
+            float(value) / (1024 * 1024)
+            for value in getattr(results, "memory_usage", [])
+        ]
+    return samples

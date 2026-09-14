@@ -1,6 +1,7 @@
 """Tests for JAX analyzer module."""
 
 from dataclasses import make_dataclass
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -90,6 +91,40 @@ def test_analyze_efficiency_with_data() -> None:
     res.memory_usage = [100, 500, 100]
     score = analyzer.analyze_efficiency(res)
     assert score < 1.0
+
+
+@pytest.mark.parametrize(
+    "peak,growth,fragmentation,leaks,expected",
+    [
+        (4000, 100, 0.3, [], 1.0),
+        (4001, 101, 0.31, [], 0.65),
+        (8000, 200, 0.5, [{"severity": "low"}], 0.5),
+        (8001, 201, 0.51, [{"severity": "high"}], 0.0),
+    ],
+)
+def test_efficiency_preserves_thresholds_and_penalty_order(
+    peak: float,
+    growth: float,
+    fragmentation: float,
+    leaks: list[dict[str, str]],
+    expected: float,
+) -> None:
+    analyzer = MemoryAnalyzer()
+    result = SimpleNamespace(
+        peak_memory_mb=peak,
+        memory_growth_rate=growth,
+        snapshots=[],
+        memory_usage=[1, 2, 3],
+    )
+    with (
+        mock.patch.object(
+            analyzer,
+            "analyze_fragmentation",
+            return_value={"fragmentation_score": fragmentation},
+        ),
+        mock.patch.object(analyzer, "detect_memory_leaks", return_value=leaks),
+    ):
+        assert analyzer.analyze_efficiency(result) == pytest.approx(expected)
 
 
 def test_analyze_fragmentation() -> None:

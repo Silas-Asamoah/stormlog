@@ -114,21 +114,9 @@ class TrackerSession:
         tracker_kwargs.setdefault("enable_alerts", True)
         tracker_kwargs.setdefault("telemetry_sink_config", self.telemetry_sink_config)
 
-        tracker: Optional[Any] = None
         backend = "gpu"
 
-        # Try GPU tracker first, fall back to CPU tracker if initialization fails
-        if MemoryTracker is not None and torch is not None:
-            try:
-                tracker = MemoryTracker(**tracker_kwargs)
-            except Exception as exc:
-                logger.debug(
-                    "GPU MemoryTracker init failed, falling back to CPU: %s", exc
-                )
-        elif MemoryTracker is None:
-            logger.debug("GPU MemoryTracker import unavailable, falling back to CPU.")
-        else:
-            logger.debug("torch is unavailable, falling back to CPU tracking.")
+        tracker = self._try_gpu_tracker(tracker_kwargs)
 
         if tracker is None and CPUMemoryTracker is not None:
             backend = "cpu"
@@ -153,6 +141,24 @@ class TrackerSession:
             self._watchdog = MemoryWatchdog(tracker, auto_cleanup=self.auto_cleanup)
         else:
             self._watchdog = None
+
+    @staticmethod
+    def _try_gpu_tracker(tracker_kwargs: dict[str, Any]) -> Optional[Any]:
+        tracker: Optional[Any] = None
+        # Try GPU tracker first, fall back to CPU tracker if initialization fails
+        if MemoryTracker is not None and torch is not None:
+            try:
+                tracker = MemoryTracker(**tracker_kwargs)
+            except Exception as exc:
+                logger.debug(
+                    "GPU MemoryTracker init failed, falling back to CPU: %s", exc
+                )
+        elif MemoryTracker is None:
+            logger.debug("GPU MemoryTracker import unavailable, falling back to CPU.")
+        else:
+            logger.debug("torch is unavailable, falling back to CPU tracking.")
+
+        return tracker
 
     def stop(self) -> None:
         """Stop tracking and release state."""
@@ -240,17 +246,7 @@ class TrackerSession:
         elif backend_name == "cpu":
             collector = "stormlog.cpu_tracker"
 
-        raw_events = []
-        if hasattr(tracker, "get_events"):
-            try:
-                raw_events = list(tracker.get_events())
-            except Exception as exc:
-                logger.debug(
-                    "TrackerSession.get_telemetry_events get_events failed: %s", exc
-                )
-                raw_events = []
-        elif hasattr(tracker, "events"):
-            raw_events = list(getattr(tracker, "events", []))
+        raw_events = self._read_tracker_events(tracker)
 
         normalized: list[TelemetryEvent] = []
         for raw_event in raw_events:
@@ -278,17 +274,9 @@ class TrackerSession:
             metadata = dict(getattr(raw_event, "metadata", {}) or {})
             metadata.setdefault("backend", backend_name)
             partial_fields = set(metadata.get("collector_partial_fields", []) or [])
-            session_id = getattr(raw_event, "session_id", None)
-            if session_id is None:
-                session_summary = self.get_session_summary()
-                session_id = (
-                    session_summary.session_id if session_summary is not None else None
-                )
+            session_id = self._event_session_id(raw_event)
 
-            device_total = getattr(raw_event, "device_total", None)
-            if device_total is None and "device_total_bytes" not in partial_fields:
-                tracker_total = getattr(tracker, "total_memory", None)
-                device_total = int(tracker_total) if tracker_total is not None else None
+            device_total = self._event_device_total(raw_event, tracker, partial_fields)
 
             record = {
                 "session_id": session_id,
@@ -331,6 +319,43 @@ class TrackerSession:
                 )
 
         return normalized
+
+    def _event_session_id(self, raw_event: Any) -> Optional[str]:
+        session_id = getattr(raw_event, "session_id", None)
+        if session_id is None:
+            session_summary = self.get_session_summary()
+            session_id = (
+                session_summary.session_id if session_summary is not None else None
+            )
+
+        return cast(Optional[str], session_id)
+
+    @staticmethod
+    def _event_device_total(
+        raw_event: Any, tracker: Any, partial_fields: set[str]
+    ) -> Any:
+        device_total = getattr(raw_event, "device_total", None)
+        if device_total is None and "device_total_bytes" not in partial_fields:
+            tracker_total = getattr(tracker, "total_memory", None)
+            device_total = int(tracker_total) if tracker_total is not None else None
+
+        return device_total
+
+    @staticmethod
+    def _read_tracker_events(tracker: Any) -> list[Any]:
+        raw_events = []
+        if hasattr(tracker, "get_events"):
+            try:
+                raw_events = list(tracker.get_events())
+            except Exception as exc:
+                logger.debug(
+                    "TrackerSession.get_telemetry_events get_events failed: %s", exc
+                )
+                raw_events = []
+        elif hasattr(tracker, "events"):
+            raw_events = list(getattr(tracker, "events", []))
+
+        return raw_events
 
     def telemetry_records(self) -> list[ProjectedTelemetryRecord]:
         """Return backend-neutral projected telemetry records from the live tracker."""

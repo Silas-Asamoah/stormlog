@@ -160,13 +160,20 @@ def _is_valid_run_envelope_payload(payload: Mapping[str, Any]) -> bool:
         return False
     if not _valid_time_range(payload, "started_at_ns", "ended_at_ns"):
         return False
+    return _valid_envelope_collections(payload)
 
-    tags = payload.get("tags", [])
+
+def _valid_envelope_tags(tags: Any) -> bool:
     if not isinstance(tags, list):
         return False
     if any(not _is_nonempty_string(item) for item in tags):
         return False
-    if len(tags) != len(set(cast(list[str], tags))):
+    return len(tags) == len(set(cast(list[str], tags)))
+
+
+def _valid_envelope_collections(payload: Mapping[str, Any]) -> bool:
+    tags = payload.get("tags", [])
+    if not _valid_envelope_tags(tags):
         return False
 
     sessions = payload.get("sessions", [])
@@ -223,12 +230,22 @@ def _is_valid_attachment_payload(payload: Mapping[str, Any]) -> bool:
         return False
     if not isinstance(payload["metadata"], Mapping):
         return False
+    if not _valid_attachment_location(payload):
+        return False
+    return _valid_attachment_optional_fields(payload)
+
+
+def _valid_attachment_location(payload: Mapping[str, Any]) -> bool:
     if "url" not in payload and "path" not in payload:
         return False
     if "url" in payload and not _is_nonempty_string(payload["url"]):
         return False
     if "path" in payload and not _is_nonempty_string(payload["path"]):
         return False
+    return True
+
+
+def _valid_attachment_optional_fields(payload: Mapping[str, Any]) -> bool:
     if not _valid_nullable_string_fields(
         payload,
         (

@@ -8,6 +8,7 @@ import json
 import sys
 import time
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union, cast
 
@@ -501,60 +502,11 @@ def cmd_info(args: argparse.Namespace) -> None:
             print(
                 "CUDA is not available. MPS backend is available for supported PyTorch workloads."
             )
-        process = psutil.Process()
-        with process.oneshot():
-            mem = process.memory_info()
-        print(f"Process RSS: {format_bytes(mem.rss)}")
-        print(f"Process VMS: {format_bytes(mem.vms)}")
-        print(
-            f"CPU Count: {psutil.cpu_count(logical=False)} physical / {psutil.cpu_count()} logical"
-        )
+        _print_process_memory_info()
         return
 
     if not system_info.get("cuda_available", False):
-        print(f"MPS Built: {system_info.get('mps_built', False)}")
-        print(f"MPS Available: {system_info.get('mps_available', False)}")
-        hardware_info = _detect_gpu_hardware()
-        devices = hardware_info.get("devices", [])
-
-        print(
-            "GPU Hardware Detected: "
-            f"{'Yes' if hardware_info.get('hardware_gpu_detected', False) else 'No'}"
-        )
-        if args.device is not None:
-            print(
-                "Ignoring --device because no supported PyTorch GPU runtime is active."
-            )
-
-        if devices:
-            print("Detected GPU Hardware:")
-            for device in devices:
-                print(f"  {device.get('name', 'Unknown')}")
-        print("GPU Available to PyTorch Runtime: No")
-
-        if devices:
-            print(
-                "Supported PyTorch GPU runtimes: NVIDIA CUDA, AMD ROCm-backed "
-                "PyTorch on Linux, Apple MPS."
-            )
-            if args.detailed:
-                print("\nHardware Probe Details:")
-                print("-" * 30)
-                for index, device in enumerate(devices):
-                    print(f"  Device {index}: {device.get('name', 'Unknown')}")
-                    print(f"    Vendor: {device.get('vendor', 'unknown')}")
-                    print(f"    Source: {device.get('source', 'unknown')}")
-        else:
-            print("CUDA is not available. Falling back to CPU-only profiling.")
-
-        process = psutil.Process()
-        with process.oneshot():
-            mem = process.memory_info()
-        print(f"Process RSS: {format_bytes(mem.rss)}")
-        print(f"Process VMS: {format_bytes(mem.vms)}")
-        print(
-            f"CPU Count: {psutil.cpu_count(logical=False)} physical / {psutil.cpu_count()} logical"
-        )
+        _print_cpu_runtime_info(args, system_info)
         return
 
     print(f"CUDA Version: {system_info.get('cuda_version', 'Unknown')}")
@@ -611,6 +563,35 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     print("Press Ctrl+C to stop early")
     print()
 
+    profiler, tracker = _start_monitor(runtime_backend, device, interval)
+
+    start_time = time.time()
+    try:
+        while time.time() - start_time < duration:
+            # Print current status every 5 seconds
+            if int((time.time() - start_time)) % 5 == 0:
+                current_mem_text = _monitor_memory_text(
+                    runtime_backend, profiler, tracker
+                )
+                elapsed = time.time() - start_time
+                print(f"Elapsed: {elapsed:.1f}s, Current Memory: {current_mem_text}")
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nMonitoring stopped by user")
+    finally:
+        if tracker is not None:
+            tracker.stop_tracking()
+        elif profiler is not None:
+            profiler.stop_monitoring()
+
+    _print_monitor_summary(profiler, tracker, gpu_runtime)
+    if args.output:
+        _export_monitor_data(args, runtime_backend, profiler, tracker)
+
+
+def _start_monitor(
+    runtime_backend: str, device: Any, interval: float
+) -> tuple[Any, Any]:
     profiler: Optional[Any] = None
     tracker: Optional[Any] = None
     if runtime_backend in {"cuda", "rocm"}:
@@ -638,44 +619,27 @@ def cmd_monitor(args: argparse.Namespace) -> None:
         profiler = CPUMemoryProfiler()
         profiler.start_monitoring(interval)
 
-    start_time = time.time()
-    try:
-        while time.time() - start_time < duration:
-            # Print current status every 5 seconds
-            if int((time.time() - start_time)) % 5 == 0:
-                if runtime_backend in {"cuda", "rocm"} and profiler is not None:
-                    torch_module = _require_torch("GPU monitoring")
-                    current_mem = torch_module.cuda.memory_allocated(
-                        profiler.device
-                    ) / (1024**3)
-                    current_mem_text = f"{current_mem:.2f} GB"
-                elif tracker is not None:
-                    stats = tracker.get_statistics()
-                    current_allocated = stats.get("current_memory_allocated")
-                    current_mem_text = (
-                        f"{float(current_allocated) / (1024**3):.2f} GB"
-                        if isinstance(current_allocated, (int, float))
-                        else "-"
-                    )
-                else:
-                    current_mem = (
-                        profiler._take_snapshot().rss / (1024**2) if profiler else 0.0
-                    )
-                    current_mem_text = f"{current_mem:.2f} MB"
-                elapsed = time.time() - start_time
-                print(f"Elapsed: {elapsed:.1f}s, Current Memory: {current_mem_text}")
-            time.sleep(1)
+    return profiler, tracker
 
-    except KeyboardInterrupt:
-        print("\nMonitoring stopped by user")
 
-    finally:
-        if tracker is not None:
-            tracker.stop_tracking()
-        elif profiler is not None:
-            profiler.stop_monitoring()
+def _monitor_memory_text(runtime_backend: str, profiler: Any, tracker: Any) -> str:
+    if runtime_backend in {"cuda", "rocm"} and profiler is not None:
+        torch_module = _require_torch("GPU monitoring")
+        current_mem = torch_module.cuda.memory_allocated(profiler.device) / (1024**3)
+        return f"{current_mem:.2f} GB"
+    if tracker is not None:
+        stats = tracker.get_statistics()
+        current_allocated = stats.get("current_memory_allocated")
+        return (
+            f"{float(current_allocated) / (1024**3):.2f} GB"
+            if isinstance(current_allocated, (int, float))
+            else "-"
+        )
+    current_mem = profiler._take_snapshot().rss / (1024**2) if profiler else 0.0
+    return f"{current_mem:.2f} MB"
 
-    # Show summary
+
+def _print_monitor_summary(profiler: Any, tracker: Any, gpu_runtime: bool) -> None:
     print("\nMonitoring Summary:")
     print("-" * 30)
     if tracker is not None:
@@ -720,41 +684,56 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     if isinstance(peak_device, (int, float)):
         print(f"Peak device usage: {peak_device / divisor:.2f} {unit}")
 
-    # Save data if requested
-    if args.output:
-        if runtime_backend in {"cuda", "rocm"} and profiler is not None:
-            try:
-                from .visualizer import MemoryVisualizer
-            except ImportError:
-                print(
-                    "Visualization export requires optional dependencies. "
-                    "Install with `pip install stormlog[viz]`."
-                )
-                return
 
-            visualizer = MemoryVisualizer(profiler)
-            output_path = visualizer.export_data(
-                snapshots=list(profiler.snapshots),
-                format=args.format,
-                save_path=Path(args.output).stem,
-            )
-            print(f"Data saved to: {output_path}")
-        elif tracker is not None:
-            tracker.export_events(args.output, args.format)
-            print(f"Events saved to: {args.output}")
-        else:
+def _export_monitor_data(
+    args: argparse.Namespace, runtime_backend: str, profiler: Any, tracker: Any
+) -> None:
+    if runtime_backend in {"cuda", "rocm"} and profiler is not None:
+        try:
+            from .visualizer import MemoryVisualizer
+        except ImportError:
             print(
-                "Skipping visualization export: CPU monitoring snapshots are not supported by MemoryVisualizer."
+                "Visualization export requires optional dependencies. "
+                "Install with `pip install stormlog[viz]`."
             )
+            return
+
+        visualizer = MemoryVisualizer(profiler)
+        output_path = visualizer.export_data(
+            snapshots=list(profiler.snapshots),
+            format=args.format,
+            save_path=Path(args.output).stem,
+        )
+        print(f"Data saved to: {output_path}")
+    elif tracker is not None:
+        tracker.export_events(args.output, args.format)
+        print(f"Events saved to: {args.output}")
+    else:
+        print(
+            "Skipping visualization export: CPU monitoring snapshots are not supported by MemoryVisualizer."
+        )
 
 
 def cmd_track(args: argparse.Namespace) -> None:
     """Handle track command."""
+    wandb_config = _resolve_wandb_config_or_exit(args)
+    mlflow_config = _resolve_mlflow_config_or_exit(args)
+    tracker, watchdog, runtime_backend = _build_tracking_runtime(args)
+    gpu_runtime = runtime_backend in {"cuda", "rocm", "mps"}
+    _run_tracking_loop(tracker, args.duration, runtime_backend)
+    stats = _print_tracking_summary(tracker, watchdog, gpu_runtime)
+
+    if args.output:
+        tracker.export_events(args.output, args.format)
+        print(f"Events saved to: {args.output}")
+
+    _export_tracking_integrations(args, tracker, stats, wandb_config, mlflow_config)
+
+
+def _build_tracking_runtime(args: argparse.Namespace) -> tuple[Any, Any, str]:
     device = args.device
     duration = args.duration
     interval = args.interval
-    wandb_config = _resolve_wandb_config_or_exit(args)
-    mlflow_config = _resolve_mlflow_config_or_exit(args)
     job_id = getattr(args, "job_id", None)
     rank = getattr(args, "rank", None)
     local_rank = getattr(args, "local_rank", None)
@@ -850,7 +829,13 @@ def cmd_track(args: argparse.Namespace) -> None:
         )
         print("Running CPU memory tracker (no GPU backend available).")
 
-    # Start tracking
+    return tracker, watchdog, runtime_backend
+
+
+def _run_tracking_loop(
+    tracker: Any, duration: float | None, runtime_backend: str
+) -> None:
+    gpu_runtime = runtime_backend in {"cuda", "rocm", "mps"}
     tracker.start_tracking()
 
     start_time = time.time()
@@ -872,40 +857,7 @@ def cmd_track(args: argparse.Namespace) -> None:
 
                 # Print status every 10 seconds
                 if int(elapsed) % 10 == 0:
-                    stats = tracker.get_statistics()
-                    divisor = 1024**3 if gpu_runtime else 1024**2
-                    unit = "GB" if gpu_runtime else "MB"
-                    current_allocated = stats.get("current_memory_allocated")
-                    peak_memory = stats.get("peak_memory")
-                    utilization = stats.get("memory_utilization_percent")
-                    collector_health = str(
-                        stats.get("collector_health_status", "healthy")
-                    )
-                    retry_at = stats.get("collector_next_retry_epoch_s")
-                    current_mem_text = (
-                        f"{float(current_allocated) / divisor:.2f} {unit}"
-                        if isinstance(current_allocated, (int, float))
-                        else "-"
-                    )
-                    peak_mem_text = (
-                        f"{float(peak_memory) / divisor:.2f} {unit}"
-                        if isinstance(peak_memory, (int, float))
-                        else "N/A"
-                    )
-                    utilization_text = (
-                        f"{float(utilization):.1f}%"
-                        if isinstance(utilization, (int, float))
-                        else "-"
-                    )
-                    status_line = (
-                        f"Elapsed: {elapsed:.1f}s, Memory: {current_mem_text} "
-                        f"({utilization_text}), Peak: {peak_mem_text}, "
-                        f"Health: {collector_health}"
-                    )
-                    if isinstance(retry_at, (int, float)):
-                        retry_in = max(float(retry_at) - time.time(), 0.0)
-                        status_line += f", Retry In: {retry_in:.1f}s"
-                    print(status_line)
+                    _print_tracking_status(tracker, elapsed, gpu_runtime)
 
                 time.sleep(1)
 
@@ -917,7 +869,43 @@ def cmd_track(args: argparse.Namespace) -> None:
         if gpu_runtime and tracker.last_oom_dump_path:
             print(f"OOM flight recorder dump saved to: {tracker.last_oom_dump_path}")
 
-    # Show final statistics
+
+def _print_tracking_status(tracker: Any, elapsed: float, gpu_runtime: bool) -> None:
+    stats = tracker.get_statistics()
+    divisor = 1024**3 if gpu_runtime else 1024**2
+    unit = "GB" if gpu_runtime else "MB"
+    current_allocated = stats.get("current_memory_allocated")
+    peak_memory = stats.get("peak_memory")
+    utilization = stats.get("memory_utilization_percent")
+    collector_health = str(stats.get("collector_health_status", "healthy"))
+    retry_at = stats.get("collector_next_retry_epoch_s")
+    current_mem_text = (
+        f"{float(current_allocated) / divisor:.2f} {unit}"
+        if isinstance(current_allocated, (int, float))
+        else "-"
+    )
+    peak_mem_text = (
+        f"{float(peak_memory) / divisor:.2f} {unit}"
+        if isinstance(peak_memory, (int, float))
+        else "N/A"
+    )
+    utilization_text = (
+        f"{float(utilization):.1f}%" if isinstance(utilization, (int, float)) else "-"
+    )
+    status_line = (
+        f"Elapsed: {elapsed:.1f}s, Memory: {current_mem_text} "
+        f"({utilization_text}), Peak: {peak_mem_text}, "
+        f"Health: {collector_health}"
+    )
+    if isinstance(retry_at, (int, float)):
+        retry_in = max(float(retry_at) - time.time(), 0.0)
+        status_line += f", Retry In: {retry_in:.1f}s"
+    print(status_line)
+
+
+def _print_tracking_summary(
+    tracker: Any, watchdog: Any, gpu_runtime: bool
+) -> dict[str, Any]:
     print("\nTracking Summary:")
     print("-" * 30)
     stats = tracker.get_statistics()
@@ -943,11 +931,16 @@ def cmd_track(args: argparse.Namespace) -> None:
         cleanup_stats = watchdog.get_cleanup_stats()
         print(f"Automatic cleanups: {cleanup_stats.get('cleanup_count', 0)}")
 
-    # Save events if requested
-    if args.output:
-        tracker.export_events(args.output, args.format)
-        print(f"Events saved to: {args.output}")
+    return cast(dict[str, Any], stats)
 
+
+def _export_tracking_integrations(
+    args: argparse.Namespace,
+    tracker: Any,
+    stats: dict[str, Any],
+    wandb_config: Any,
+    mlflow_config: Any,
+) -> None:
     if wandb_config.enabled:
         try:
             export_tracking_run_to_wandb(
@@ -1002,14 +995,9 @@ def _input_artifact_size_bytes(path: Path) -> int:
 def _phase_summary_from_payload(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
-    phase_summary = payload.get("phase_summary")
-    if isinstance(phase_summary, dict):
-        summary_path = phase_summary.get("phase_path")
-        summary_source = phase_summary.get("source")
-        if isinstance(summary_path, str) and summary_path:
-            if summary_source == "heuristic":
-                return f"(likely) {summary_path}"
-            return summary_path
+    explicit_summary = _explicit_phase_summary(payload.get("phase_summary"))
+    if explicit_summary is not None:
+        return explicit_summary
     if summarize_phase_resolution is None:
         return None  # type: ignore[unreachable]
     phase_path = payload.get("phase_path")
@@ -1040,20 +1028,7 @@ def _build_analyze_summary(
         f"File size: {file_size_bytes} bytes",
     ]
 
-    if "gap_analysis" in report:
-        lines.append(f"Gap findings: {len(report['gap_analysis'])}")
-        if report["gap_analysis"]:
-            top_gap_phase = next(
-                (
-                    _phase_summary_from_payload(item.get("phase_attribution"))
-                    for item in report["gap_analysis"]
-                    if isinstance(item, dict)
-                    and _phase_summary_from_payload(item.get("phase_attribution"))
-                ),
-                None,
-            )
-            if top_gap_phase:
-                lines.append(f"Top gap phase: {top_gap_phase}")
+    lines.extend(_gap_summary_lines(report))
 
     availability = report.get("analysis_availability")
     if isinstance(availability, dict):
@@ -1069,48 +1044,7 @@ def _build_analyze_summary(
 
     cross_rank_analysis = report.get("cross_rank_analysis")
     if isinstance(cross_rank_analysis, dict):
-        participating_ranks = cross_rank_analysis.get("participating_ranks", [])
-        missing_ranks = cross_rank_analysis.get("missing_ranks", [])
-        suspects = cross_rank_analysis.get("first_cause_suspects", [])
-        lines.extend(
-            [
-                "",
-                "Distributed Analysis:",
-                "Participating ranks: "
-                + (", ".join(str(rank) for rank in participating_ranks) or "none"),
-                "Missing ranks: "
-                + (", ".join(str(rank) for rank in missing_ranks) or "none"),
-            ]
-        )
-
-        cluster_onset = cross_rank_analysis.get("cluster_onset_timestamp_ns")
-        if cluster_onset is not None:
-            lines.append(f"Cluster onset (aligned ns): {cluster_onset}")
-
-        if suspects:
-            top_suspect = suspects[0]
-            lines.extend(
-                [
-                    "Top first-cause suspect: "
-                    f"rank {top_suspect['rank']} ({top_suspect['confidence']})",
-                    "Evidence: "
-                    f"timestamp_ns={top_suspect['first_spike_timestamp_ns']}, "
-                    f"aligned_timestamp_ns={top_suspect['aligned_first_spike_timestamp_ns']}, "
-                    f"lead_ns={top_suspect['lead_over_cluster_onset_ns']}, "
-                    f"delta={format_bytes(int(top_suspect['peak_delta_bytes']))}",
-                ]
-            )
-            top_suspect_phase = _phase_summary_from_payload(
-                top_suspect.get("phase_attribution")
-            )
-            if top_suspect_phase:
-                lines.append(f"Suspect phase: {top_suspect_phase}")
-        else:
-            lines.append("No qualifying first-cause suspect identified.")
-
-        notes = cross_rank_analysis.get("notes", [])
-        if notes:
-            lines.append("Notes: " + " ".join(str(note) for note in notes))
+        lines.extend(_cross_rank_summary_lines(cross_rank_analysis))
     else:
         notes = report.get("notes", [])
         if notes:
@@ -1147,45 +1081,29 @@ def _json_payload_looks_like_telemetry(payload: Any) -> bool:
     return False
 
 
-def cmd_analyze(args: argparse.Namespace) -> int:
-    """Handle analyze command."""
-    input_file = args.input_file
-    input_path = Path(input_file)
+@dataclass(frozen=True)
+class _AnalysisInput:
+    events: list[Any] | None
+    sessions: list[Any]
+    session_note: str | None = None
+    data: Any = None
 
-    if not input_path.exists():
-        print(f"Error: Input file '{input_file}' not found")
-        return 1
 
+def _load_analysis_input(
+    input_path: Path, requested_session_id: str | None
+) -> _AnalysisInput | None:
     (load_telemetry_sessions,) = _import_runtime_symbols(
         ".telemetry", ("load_telemetry_sessions",), "The analyze command"
     )
 
-    events: list[Any] | None = None
-    telemetry_note: str | None = None
-    session_note: str | None = None
-    data: Any = None
-    requested_session_id = getattr(args, "session_id", None)
     try:
         loaded_sessions = load_telemetry_sessions(input_path, permissive_legacy=True)
         if loaded_sessions:
-            selected_session = None
-            if requested_session_id is not None:
-                selected_session = next(
-                    (
-                        loaded
-                        for loaded in loaded_sessions
-                        if loaded.summary.session_id == requested_session_id
-                    ),
-                    None,
-                )
-                if selected_session is None:
-                    print(
-                        "Error parsing telemetry events: Requested session_id not found: "
-                        f"{requested_session_id}"
-                    )
-                    return 1
-            else:
-                selected_session = loaded_sessions[0]
+            selected_session = _select_analysis_session(
+                loaded_sessions, requested_session_id
+            )
+            if selected_session is None:
+                return None
             events = list(selected_session.events)
             session_note = (
                 "Telemetry session selected: "
@@ -1193,60 +1111,77 @@ def cmd_analyze(args: argparse.Namespace) -> int:
                 f"({selected_session.summary.status}, "
                 f"started_at_ns={selected_session.summary.started_at_ns})."
             )
-        else:
-            events = []
-    except ValueError as exc:
-        if input_path.is_dir() or input_path.suffix.lower() == ".jsonl":
-            print(f"Error parsing telemetry events: {exc}")
-            return 1
-        try:
-            with input_path.open("r", encoding="utf-8") as handle:
-                data = json.load(handle)
-        except Exception as error:
-            print(f"Error loading input file: {error}")
-            return 1
-        if not _json_payload_looks_like_telemetry(data):
-            telemetry_note = "JSON payload does not contain telemetry events"
-        else:
-            print(f"Error parsing telemetry events: {exc}")
-            return 1
+            return _AnalysisInput(events, loaded_sessions, session_note)
+        return _AnalysisInput([], loaded_sessions)
     except Exception as exc:
-        if input_path.is_dir() or input_path.suffix.lower() == ".jsonl":
-            print(f"Error parsing telemetry events: {exc}")
-            return 1
-        try:
-            with input_path.open("r", encoding="utf-8") as handle:
-                data = json.load(handle)
-        except Exception as error:
-            print(f"Error loading input file: {error}")
-            return 1
-        if _json_payload_looks_like_telemetry(data):
-            print(f"Error parsing telemetry events: {exc}")
-            return 1
-        telemetry_note = "JSON payload does not contain telemetry events"
+        return _load_analysis_json_fallback(input_path, exc)
 
-    if events is not None:
+
+def _select_analysis_session(
+    loaded_sessions: list[Any], requested_session_id: str | None
+) -> Any:
+    if requested_session_id is None:
+        return loaded_sessions[0]
+    selected_session = next(
+        (
+            loaded
+            for loaded in loaded_sessions
+            if loaded.summary.session_id == requested_session_id
+        ),
+        None,
+    )
+    if selected_session is None:
+        print(
+            "Error parsing telemetry events: Requested session_id not found: "
+            f"{requested_session_id}"
+        )
+    return selected_session
+
+
+def _load_analysis_json_fallback(
+    input_path: Path, telemetry_error: Exception
+) -> _AnalysisInput | None:
+    if input_path.is_dir() or input_path.suffix.lower() == ".jsonl":
+        print(f"Error parsing telemetry events: {telemetry_error}")
+        return None
+    try:
+        with input_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception as error:
+        print(f"Error loading input file: {error}")
+        return None
+    if _json_payload_looks_like_telemetry(data):
+        print(f"Error parsing telemetry events: {telemetry_error}")
+        return None
+    return _AnalysisInput(None, [], data=data)
+
+
+def _generate_analysis_report(
+    analysis_input: _AnalysisInput, requested_session_id: str | None
+) -> dict[str, Any]:
+    if analysis_input.events is not None:
         (MemoryAnalyzer,) = _import_runtime_symbols(
             ".analyzer", ("MemoryAnalyzer",), "The analyze command"
         )
         analyzer = MemoryAnalyzer()
-        report = analyzer.generate_optimization_report(events=events)
-        if session_note:
+        report = analyzer.generate_optimization_report(events=analysis_input.events)
+        if analysis_input.session_note:
             report["session"] = {
                 "selected_session_id": (
                     requested_session_id
                     if requested_session_id is not None
                     else (
-                        loaded_sessions[0].summary.session_id
-                        if loaded_sessions
+                        analysis_input.sessions[0].summary.session_id
+                        if analysis_input.sessions
                         else None
                     )
                 ),
                 "discovered_session_ids": [
-                    loaded.summary.session_id for loaded in loaded_sessions
+                    loaded.summary.session_id for loaded in analysis_input.sessions
                 ],
             }
     else:
+        data = analysis_input.data
         report = {
             "summary": {
                 "analysis_timestamp": None,
@@ -1256,8 +1191,25 @@ def cmd_analyze(args: argparse.Namespace) -> int:
                 "total_execution_time": 0,
             },
             "top_level_keys": sorted(data.keys()) if isinstance(data, dict) else [],
-            "notes": [telemetry_note] if telemetry_note else [],
+            "notes": ["JSON payload does not contain telemetry events"],
         }
+    return cast(dict[str, Any], report)
+
+
+def cmd_analyze(args: argparse.Namespace) -> int:
+    """Handle analyze command."""
+    input_file = args.input_file
+    input_path = Path(input_file)
+
+    if not input_path.exists():
+        print(f"Error: Input file '{input_file}' not found")
+        return 1
+
+    requested_session_id = getattr(args, "session_id", None)
+    analysis_input = _load_analysis_input(input_path, requested_session_id)
+    if analysis_input is None:
+        return 1
+    report = _generate_analysis_report(analysis_input, requested_session_id)
 
     summary_text = _build_analyze_summary(
         input_file=input_file,
@@ -1265,8 +1217,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         report=report,
     )
     print(summary_text)
-    if session_note:
-        print(session_note)
+    if analysis_input.session_note:
+        print(analysis_input.session_note)
 
     if args.output:
         output_path = Path(args.output)
@@ -1281,42 +1233,40 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         print(f"Analysis report saved to: {output_path}")
 
     if args.visualization:
-        if events is None or "cross_rank_analysis" not in report:
-            print(
-                "Visualization skipped: cross-rank plots require multi-rank telemetry input."
-            )
-            return 0
-
-        try:
-            (MemoryVisualizer,) = _import_runtime_symbols(
-                ".visualizer", ("MemoryVisualizer",), "The analyze command"
-            )
-            plot_dir = Path(args.plot_dir)
-            plot_dir.mkdir(parents=True, exist_ok=True)
-            plot_path = plot_dir / "cross_rank_timeline.png"
-            MemoryVisualizer().plot_cross_rank_timeline(
-                events=events, save_path=str(plot_path)
-            )
-            print(f"Visualization saved to: {plot_path}")
-        except Exception as exc:
-            if _is_visualization_dependency_error(exc):
-                print(f"Visualization skipped: {_VIZ_INSTALL_GUIDANCE}")
-            else:
-                print(f"Visualization skipped: {exc}")
+        _render_analysis_visualization(args, analysis_input.events, report)
 
     return 0
 
 
+def _render_analysis_visualization(
+    args: argparse.Namespace, events: list[Any] | None, report: dict[str, Any]
+) -> None:
+    if events is None or "cross_rank_analysis" not in report:
+        print(
+            "Visualization skipped: cross-rank plots require multi-rank telemetry input."
+        )
+        return
+    try:
+        (MemoryVisualizer,) = _import_runtime_symbols(
+            ".visualizer", ("MemoryVisualizer",), "The analyze command"
+        )
+        plot_dir = Path(args.plot_dir)
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plot_path = plot_dir / "cross_rank_timeline.png"
+        MemoryVisualizer().plot_cross_rank_timeline(
+            events=events, save_path=str(plot_path)
+        )
+        print(f"Visualization saved to: {plot_path}")
+    except Exception as exc:
+        if _is_visualization_dependency_error(exc):
+            print(f"Visualization skipped: {_VIZ_INSTALL_GUIDANCE}")
+        else:
+            print(f"Visualization skipped: {exc}")
+
+
 def cmd_diagnose(args: argparse.Namespace) -> int:
     """Produce a portable diagnostic bundle. Returns 0 (OK), 1 (failure), or 2 (memory risk)."""
-    if args.duration < 0:
-        print("Error: --duration must be >= 0", file=sys.stderr)
-        return 1
-    if args.interval <= 0:
-        print("Error: --interval must be > 0", file=sys.stderr)
-        return 1
-    if getattr(args, "native_history_max_entries", 100000) <= 0:
-        print("Error: --native-history-max-entries must be > 0", file=sys.stderr)
+    if not _valid_diagnose_arguments(args):
         return 1
 
     wandb_config = _resolve_wandb_config_or_exit(args)
@@ -1353,25 +1303,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
         status = "FAILED"
     print(f"Status: {status} (exit_code={exit_code})")
 
-    # One-line findings from manifest/summary
-    try:
-        manifest_path = artifact_dir / "manifest.json"
-        if manifest_path.exists():
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-            if manifest.get("risk_detected"):
-                summary_path = artifact_dir / "diagnostic_summary.json"
-                if summary_path.exists():
-                    with open(summary_path) as f:
-                        summary = json.load(f)
-                    flags = summary.get("risk_flags", {})
-                    parts = [k for k, v in flags.items() if v]
-                    if parts:
-                        print(f"Findings: {', '.join(parts)}")
-        if exit_code == 0 and status == "OK":
-            print("Findings: no memory risk detected")
-    except (OSError, json.JSONDecodeError):
-        pass
+    _print_diagnostic_findings(artifact_dir, exit_code, status)
 
     if wandb_config.enabled:
         try:
@@ -1396,6 +1328,170 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             _warn_mlflow_export_failure("gpumemprof diagnose", exc)
 
     return int(exit_code)
+
+
+def _print_cpu_runtime_info(
+    args: argparse.Namespace, system_info: dict[str, Any]
+) -> None:
+    print(f"MPS Built: {system_info.get('mps_built', False)}")
+    print(f"MPS Available: {system_info.get('mps_available', False)}")
+    hardware_info = _detect_gpu_hardware()
+    devices = hardware_info.get("devices", [])
+
+    print(
+        "GPU Hardware Detected: "
+        f"{'Yes' if hardware_info.get('hardware_gpu_detected', False) else 'No'}"
+    )
+    if args.device is not None:
+        print("Ignoring --device because no supported PyTorch GPU runtime is active.")
+
+    if devices:
+        print("Detected GPU Hardware:")
+        for device in devices:
+            print(f"  {device.get('name', 'Unknown')}")
+    print("GPU Available to PyTorch Runtime: No")
+
+    if devices:
+        print(
+            "Supported PyTorch GPU runtimes: NVIDIA CUDA, AMD ROCm-backed "
+            "PyTorch on Linux, Apple MPS."
+        )
+        if args.detailed:
+            print("\nHardware Probe Details:")
+            print("-" * 30)
+            for index, device in enumerate(devices):
+                print(f"  Device {index}: {device.get('name', 'Unknown')}")
+                print(f"    Vendor: {device.get('vendor', 'unknown')}")
+                print(f"    Source: {device.get('source', 'unknown')}")
+    else:
+        print("CUDA is not available. Falling back to CPU-only profiling.")
+
+    _print_process_memory_info()
+
+
+def _explicit_phase_summary(phase_summary: Any) -> str | None:
+    if isinstance(phase_summary, dict):
+        summary_path = phase_summary.get("phase_path")
+        summary_source = phase_summary.get("source")
+        if isinstance(summary_path, str) and summary_path:
+            if summary_source == "heuristic":
+                return f"(likely) {summary_path}"
+            return summary_path
+    return None
+
+
+def _gap_summary_lines(report: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    if "gap_analysis" in report:
+        lines.append(f"Gap findings: {len(report['gap_analysis'])}")
+        if report["gap_analysis"]:
+            top_gap_phase = next(
+                (
+                    _phase_summary_from_payload(item.get("phase_attribution"))
+                    for item in report["gap_analysis"]
+                    if isinstance(item, dict)
+                    and _phase_summary_from_payload(item.get("phase_attribution"))
+                ),
+                None,
+            )
+            if top_gap_phase:
+                lines.append(f"Top gap phase: {top_gap_phase}")
+
+    return lines
+
+
+def _cross_rank_summary_lines(cross_rank_analysis: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    participating_ranks = cross_rank_analysis.get("participating_ranks", [])
+    missing_ranks = cross_rank_analysis.get("missing_ranks", [])
+    suspects = cross_rank_analysis.get("first_cause_suspects", [])
+    lines.extend(
+        [
+            "",
+            "Distributed Analysis:",
+            "Participating ranks: "
+            + (", ".join(str(rank) for rank in participating_ranks) or "none"),
+            "Missing ranks: "
+            + (", ".join(str(rank) for rank in missing_ranks) or "none"),
+        ]
+    )
+
+    cluster_onset = cross_rank_analysis.get("cluster_onset_timestamp_ns")
+    if cluster_onset is not None:
+        lines.append(f"Cluster onset (aligned ns): {cluster_onset}")
+
+    if suspects:
+        top_suspect = suspects[0]
+        lines.extend(
+            [
+                "Top first-cause suspect: "
+                f"rank {top_suspect['rank']} ({top_suspect['confidence']})",
+                "Evidence: "
+                f"timestamp_ns={top_suspect['first_spike_timestamp_ns']}, "
+                f"aligned_timestamp_ns={top_suspect['aligned_first_spike_timestamp_ns']}, "
+                f"lead_ns={top_suspect['lead_over_cluster_onset_ns']}, "
+                f"delta={format_bytes(int(top_suspect['peak_delta_bytes']))}",
+            ]
+        )
+        top_suspect_phase = _phase_summary_from_payload(
+            top_suspect.get("phase_attribution")
+        )
+        if top_suspect_phase:
+            lines.append(f"Suspect phase: {top_suspect_phase}")
+    else:
+        lines.append("No qualifying first-cause suspect identified.")
+
+    notes = cross_rank_analysis.get("notes", [])
+    if notes:
+        lines.append("Notes: " + " ".join(str(note) for note in notes))
+    return lines
+
+
+def _valid_diagnose_arguments(args: argparse.Namespace) -> bool:
+    if args.duration < 0:
+        print("Error: --duration must be >= 0", file=sys.stderr)
+        return False
+    if args.interval <= 0:
+        print("Error: --interval must be > 0", file=sys.stderr)
+        return False
+    if getattr(args, "native_history_max_entries", 100000) <= 0:
+        print("Error: --native-history-max-entries must be > 0", file=sys.stderr)
+        return False
+
+    return True
+
+
+def _print_diagnostic_findings(artifact_dir: Path, exit_code: int, status: str) -> None:
+    # One-line findings from manifest/summary
+    try:
+        manifest_path = artifact_dir / "manifest.json"
+        if manifest_path.exists():
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            if manifest.get("risk_detected"):
+                summary_path = artifact_dir / "diagnostic_summary.json"
+                if summary_path.exists():
+                    with open(summary_path) as f:
+                        summary = json.load(f)
+                    flags = summary.get("risk_flags", {})
+                    parts = [k for k, v in flags.items() if v]
+                    if parts:
+                        print(f"Findings: {', '.join(parts)}")
+        if exit_code == 0 and status == "OK":
+            print("Findings: no memory risk detected")
+    except (OSError, json.JSONDecodeError):
+        pass
+
+
+def _print_process_memory_info() -> None:
+    process = psutil.Process()
+    with process.oneshot():
+        mem = process.memory_info()
+    print(f"Process RSS: {format_bytes(mem.rss)}")
+    print(f"Process VMS: {format_bytes(mem.vms)}")
+    print(
+        f"CPU Count: {psutil.cpu_count(logical=False)} physical / {psutil.cpu_count()} logical"
+    )
 
 
 if __name__ == "__main__":

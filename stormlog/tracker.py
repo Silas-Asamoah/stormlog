@@ -239,6 +239,9 @@ class MemoryTracker:
             "last_memory_check": 0,
         }
 
+        self._initialize_memory_limits()
+
+    def _initialize_memory_limits(self) -> None:
         # Get memory limits with backend-aware fallback.
         self.gpu_info = (
             get_gpu_info(self.device)
@@ -1156,22 +1159,7 @@ class MemoryTracker:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Capture OOM diagnostic bundle if a tracked block raises OOM."""
-        native_history_recorded = False
-        if (
-            self.enable_native_cuda_history
-            and self._oom_flight_recorder.config.enabled
-            and self.backend == "cuda"
-            and self.device is not None
-            and cuda_memory_history_supported()
-        ):
-            try:
-                start_cuda_memory_history(
-                    device=self.device,
-                    trace_alloc_max_entries=self.native_history_max_entries,
-                )
-                native_history_recorded = True
-            except Exception as exc:
-                logger.debug("Could not start CUDA native history recording: %s", exc)
+        native_history_recorded = MemoryTracker._start_oom_native_history(self)
         try:
             yield
         except Exception as exc:
@@ -1193,6 +1181,25 @@ class MemoryTracker:
                         "Could not stop CUDA native history recording: %s",
                         exc,
                     )
+
+    def _start_oom_native_history(self) -> bool:
+        native_history_recorded = False
+        if (
+            self.enable_native_cuda_history
+            and self._oom_flight_recorder.config.enabled
+            and self.backend == "cuda"
+            and self.device is not None
+            and cuda_memory_history_supported()
+        ):
+            try:
+                start_cuda_memory_history(
+                    device=self.device,
+                    trace_alloc_max_entries=self.native_history_max_entries,
+                )
+                native_history_recorded = True
+            except Exception as exc:
+                logger.debug("Could not start CUDA native history recording: %s", exc)
+        return native_history_recorded
 
     def add_alert_callback(self, callback: Callable[[TrackingEvent], None]) -> None:
         """Add a callback function to be called on alerts."""
@@ -1339,27 +1346,8 @@ class MemoryTracker:
                     if self._session_summary is not None
                     else None
                 ),
-                "current_memory_allocated": (
-                    sample.allocated_bytes if sample is not None else None
-                ),
-                "current_memory_reserved": (
-                    sample.reserved_bytes if sample is not None else None
-                ),
-                "current_device_used": (
-                    sample.used_bytes if sample is not None else None
-                ),
-                "current_device_free": (
-                    sample.free_bytes if sample is not None else None
-                ),
-                "device_total": sample.total_bytes if sample is not None else None,
+                **_sample_memory_statistics(sample, self.total_memory),
                 "memory_capabilities": self.collector_capabilities.to_metadata(),
-                "memory_utilization_percent": (
-                    (sample.used_bytes / self.total_memory * 100)
-                    if sample is not None
-                    and sample.used_bytes is not None
-                    and self.total_memory > 0
-                    else None
-                ),
                 "average_allocation_size": (
                     self.stats["total_allocation_bytes"]
                     / max(self.stats["total_allocations"], 1)
@@ -1599,3 +1587,24 @@ class MemoryWatchdog:
             "cleanup_threshold": self.cleanup_threshold,
             "aggressive_cleanup_threshold": self.aggressive_cleanup_threshold,
         }
+
+
+def _sample_memory_statistics(
+    sample: DeviceMemorySample | None, total_memory: int
+) -> Dict[str, Any]:
+    return {
+        "current_memory_allocated": (
+            sample.allocated_bytes if sample is not None else None
+        ),
+        "current_memory_reserved": (
+            sample.reserved_bytes if sample is not None else None
+        ),
+        "current_device_used": sample.used_bytes if sample is not None else None,
+        "current_device_free": sample.free_bytes if sample is not None else None,
+        "device_total": sample.total_bytes if sample is not None else None,
+        "memory_utilization_percent": (
+            (sample.used_bytes / total_memory * 100)
+            if sample is not None and sample.used_bytes is not None and total_memory > 0
+            else None
+        ),
+    }

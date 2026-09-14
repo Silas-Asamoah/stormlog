@@ -339,24 +339,9 @@ class JAXProfiler:
 
             for epoch in range(epochs):
                 with self.profiler.profile_context(f"epoch_{epoch}"):
-                    step_count = 0
-                    epoch_dataset = dataset_factory() if dataset_factory else dataset
-                    batch_iter = _iter_training_batches(
-                        epoch_dataset,
-                        "dataset factory result" if dataset_factory else "dataset",
+                    step_count = self._profile_training_epoch(
+                        train_step_fn, dataset, dataset_factory, steps_per_epoch
                     )
-
-                    for batch in batch_iter:
-                        if (
-                            steps_per_epoch is not None
-                            and step_count >= steps_per_epoch
-                        ):
-                            break
-
-                        with self.profiler.profile_context(f"step_{step_count}"):
-                            train_step_fn(batch)
-
-                        step_count += 1
 
                     if epoch == 0:
                         first_epoch_steps = step_count
@@ -367,6 +352,31 @@ class JAXProfiler:
                             "finite one-shot iterator, or a zero-argument "
                             "dataset factory for multi-epoch profiling"
                         )
+
+    def _profile_training_epoch(
+        self,
+        train_step_fn: Callable[..., Any],
+        dataset: Any,
+        dataset_factory: Optional[Callable[[], Any]],
+        steps_per_epoch: Optional[int],
+    ) -> int:
+        step_count = 0
+        epoch_dataset = dataset_factory() if dataset_factory else dataset
+        batch_iter = _iter_training_batches(
+            epoch_dataset,
+            "dataset factory result" if dataset_factory else "dataset",
+        )
+
+        for batch in batch_iter:
+            if steps_per_epoch is not None and step_count >= steps_per_epoch:
+                break
+
+            with self.profiler.profile_context(f"step_{step_count}"):
+                train_step_fn(batch)
+
+            step_count += 1
+
+        return step_count
 
     # -- Inference profiling -----------------------------------------------
 

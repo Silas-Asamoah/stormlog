@@ -465,6 +465,63 @@ def test_run_tracked_scenario_finalizes_session_on_emit_failure(
     assert session.finish_calls == 1
 
 
+@pytest.mark.parametrize(
+    ("rss_delta_bytes", "expected_daily_growth", "budget_passed"),
+    [
+        pytest.param(-16_384, -3_538_944_000.0, True, id="decreasing-rss"),
+        pytest.param(0, 0.0, True, id="stable-rss"),
+        pytest.param(16_384, 3_538_944_000.0, False, id="growth-exceeds-budget"),
+    ],
+)
+def test_run_soak_scenario_normalizes_rss_growth_and_enforces_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    rss_delta_bytes: int,
+    expected_daily_growth: float,
+    budget_passed: bool,
+) -> None:
+    monkeypatch.setitem(benchmark_harness.PROFILE_EQUIVALENT_HOURS, "pr", 0.0001)
+    baseline_rss = 128 * 1024 * 1024
+    # Baseline, four checkpoints (including a transient peak), then final RSS.
+    rss_readings = iter(
+        [
+            baseline_rss,
+            baseline_rss,
+            baseline_rss + 65_536,
+            baseline_rss,
+            baseline_rss,
+            baseline_rss + rss_delta_bytes,
+        ]
+    )
+    monkeypatch.setattr(
+        benchmark_harness, "_process_rss_bytes", lambda: next(rss_readings)
+    )
+    spec = benchmark_harness.RuntimeSpec(
+        name="gpumemprof_cpu",
+        default_interval=0.1,
+        factory=lambda artifact_dir, interval, sink_overrides: _UnusedRuntimeSession(),
+    )
+
+    summary = benchmark_harness._run_soak_scenario(
+        spec, tmp_path / "soak", profile="pr"
+    )
+
+    assert summary["sample_count"] == 4
+    assert summary["equivalent_seconds"] == pytest.approx(0.4)
+    assert summary["rss_baseline_bytes"] == baseline_rss
+    assert summary["rss_final_bytes"] == baseline_rss + rss_delta_bytes
+    assert summary["rss_delta_bytes"] == rss_delta_bytes
+    assert summary["max_rss_delta_bytes"] == 65_536.0
+    assert summary["rss_growth_per_24h_equiv"] == pytest.approx(expected_daily_growth)
+
+    metric = "gpumemprof_cpu.rss_growth_per_24h_equiv"
+    checks = benchmark_harness.evaluate_budgets(
+        {metric: summary["rss_growth_per_24h_equiv"]},
+        {metric: 1_000_000_000.0},
+    )
+    assert checks[metric]["passed"] is budget_passed
+
+
 def test_run_soak_scenario_finalizes_session_on_emit_failure(tmp_path: Path) -> None:
     session = _FailingRuntimeSession()
     spec = benchmark_harness.RuntimeSpec(
@@ -1137,6 +1194,11 @@ def test_run_benchmark_harness_cpu_runtime_integration(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setitem(benchmark_harness.PROFILE_EQUIVALENT_HOURS, "pr", 0.0001)
+    # Four samples amplify small allocator changes into GB/day. Keep this
+    # integration check deterministic; RSS math and rejection are tested above.
+    monkeypatch.setattr(
+        benchmark_harness, "_process_rss_bytes", lambda: 128 * 1024 * 1024
+    )
     monkeypatch.setattr(
         benchmark_harness,
         "DEFAULT_RETENTION_VALIDATION",
@@ -1187,7 +1249,8 @@ def test_run_benchmark_harness_cpu_runtime_integration(
     )
 
     soak = report["runtimes"]["gpumemprof_cpu"]["soak"]
-    assert report["passed"] is True
+    assert report["passed"] is True, report["failure_diagnostics"]
+    assert soak["rss_growth_per_24h_equiv"] == 0.0
     assert soak["sample_count"] == 4
     assert soak["retention_validation"]["passed"] is True
     assert soak["retention_validation"]["checks"]["rollover_observed"] is True

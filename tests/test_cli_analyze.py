@@ -616,6 +616,66 @@ def test_cmd_analyze_malformed_telemetry_returns_failure(
     assert "Error parsing telemetry events:" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    "load_error", [ValueError("bad events"), RuntimeError("bad events")]
+)
+@pytest.mark.parametrize(
+    ("filename", "payload", "expected_code", "expected_message"),
+    [
+        (
+            "results.json",
+            '{"results": []}',
+            0,
+            "Notes: JSON payload does not contain telemetry events",
+        ),
+        (
+            "events.json",
+            '{"events": []}',
+            1,
+            "Error parsing telemetry events: bad events",
+        ),
+        (
+            "events.jsonl",
+            '{"results": []}',
+            1,
+            "Error parsing telemetry events: bad events",
+        ),
+        ("broken.json", "{", 1, "Error loading input file:"),
+    ],
+)
+def test_cmd_analyze_loader_failure_preserves_json_fallback_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    load_error: Exception,
+    filename: str,
+    payload: str,
+    expected_code: int,
+    expected_message: str,
+) -> None:
+    input_path = tmp_path / filename
+    input_path.write_text(payload, encoding="utf-8")
+
+    def fail_to_load(*args: Any, **kwargs: Any) -> Any:
+        raise load_error
+
+    monkeypatch.setattr(
+        gpumemprof_cli, "_import_runtime_symbols", lambda *args: (fail_to_load,)
+    )
+    exit_code = cmd_analyze(
+        argparse.Namespace(
+            input_file=str(input_path),
+            output=None,
+            format="json",
+            visualization=False,
+            plot_dir=str(tmp_path / "plots"),
+        )
+    )
+
+    assert exit_code == expected_code
+    assert expected_message in capsys.readouterr().out
+
+
 def test_main_exits_nonzero_for_analyze_failures(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

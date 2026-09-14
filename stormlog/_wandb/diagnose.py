@@ -106,13 +106,7 @@ def diagnose_metrics(
             if isinstance(value, bool):
                 metrics[f"stormlog_risk_{key}"] = value
 
-    if isinstance(manifest, Mapping):
-        risk_detected = manifest.get("risk_detected")
-        exit_code = manifest.get("exit_code")
-        if isinstance(risk_detected, bool):
-            metrics["stormlog_risk_detected"] = risk_detected
-        if isinstance(exit_code, int):
-            metrics["stormlog_exit_code"] = exit_code
+    metrics.update(_manifest_metrics(manifest))
 
     return metrics
 
@@ -155,3 +149,16 @@ def log_suggestions_table(
             )
         }
     )
+
+
+def _manifest_metrics(manifest: Mapping[str, Any] | None) -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
+    if isinstance(manifest, Mapping):
+        risk_detected = manifest.get("risk_detected")
+        exit_code = manifest.get("exit_code")
+        if isinstance(risk_detected, bool):
+            metrics["stormlog_risk_detected"] = risk_detected
+        if isinstance(exit_code, int):
+            metrics["stormlog_exit_code"] = exit_code
+
+    return metrics

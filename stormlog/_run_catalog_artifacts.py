@@ -22,7 +22,7 @@ from ._run_catalog_parser import attachment_storage_or_default
 from .correlation import ExternalAttachment
 from .session import SessionSummary
 from .telemetry_rollups import ROLLUP_FILENAME
-from .telemetry_sink import TelemetrySinkManifest
+from .telemetry_sink import TelemetrySinkManifest, TelemetrySinkSegment
 
 
 def envelope_attachment_rows(
@@ -177,28 +177,35 @@ def sink_segment_attachment_rows(
         )
         if run_id is None:
             continue
-        rows.append(
-            local_attachment_row(
-                run_id=run_id,
-                title=segment.filename,
-                kind="telemetry_sink_segment",
-                path=str(source.path / segment.filename),
-                session_id=segment.session_id,
-                job_id=summary.job_id if summary is not None else None,
-                rank=summary.rank if summary is not None else None,
-                local_rank=summary.local_rank if summary is not None else None,
-                world_size=summary.world_size if summary is not None else None,
-                start_ns=summary.started_at_ns if summary is not None else None,
-                end_ns=summary.ended_at_ns if summary is not None else None,
-                source_kind="sink_segment",
-                metadata={
-                    "event_count": segment.event_count,
-                    "size_bytes": segment.size_bytes,
-                    "closed": segment.closed,
-                },
-            )
-        )
+        rows.append(_sink_segment_attachment_row(source, segment, summary, run_id))
     return rows
+
+
+def _sink_segment_attachment_row(
+    source: CatalogSourceLike,
+    segment: TelemetrySinkSegment,
+    summary: SessionSummary | None,
+    run_id: str,
+) -> RunAttachmentRow:
+    return local_attachment_row(
+        run_id=run_id,
+        title=segment.filename,
+        kind="telemetry_sink_segment",
+        path=str(source.path / segment.filename),
+        session_id=segment.session_id,
+        job_id=summary.job_id if summary is not None else None,
+        rank=summary.rank if summary is not None else None,
+        local_rank=summary.local_rank if summary is not None else None,
+        world_size=summary.world_size if summary is not None else None,
+        start_ns=summary.started_at_ns if summary is not None else None,
+        end_ns=summary.ended_at_ns if summary is not None else None,
+        source_kind="sink_segment",
+        metadata={
+            "event_count": segment.event_count,
+            "size_bytes": segment.size_bytes,
+            "closed": segment.closed,
+        },
+    )
 
 
 def rollup_attachment_rows(

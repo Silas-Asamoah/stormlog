@@ -638,20 +638,9 @@ class MemoryTracker:
             ):
                 return self._create_empty_result()
 
-            session_start = self._session_start_time
-            session_end = self._session_end_time
-            if session_start is None:
-                session_start = (
-                    result_data.retained_timestamps[0]
-                    if result_data.retained_timestamps
-                    else time.time()
-                )
-            if session_end is None:
-                session_end = (
-                    result_data.retained_timestamps[-1]
-                    if result_data.retained_timestamps
-                    else time.time()
-                )
+            session_start, session_end = self._result_time_range(
+                result_data.retained_timestamps
+            )
 
             return TrackingResult(
                 start_time=session_start,
@@ -683,6 +672,16 @@ class MemoryTracker:
                 history_retained_alerts=len(result_data.retained_alerts),
                 history_dropped_alerts=result_data.dropped_alerts,
             )
+
+    def _result_time_range(self, timestamps: List[float]) -> tuple[float, float]:
+        session_start = self._session_start_time
+        session_end = self._session_end_time
+        if session_start is None:
+            session_start = timestamps[0] if timestamps else time.time()
+        if session_end is None:
+            session_end = timestamps[-1] if timestamps else time.time()
+
+        return session_start, session_end
 
     def _create_empty_result(self) -> TrackingResult:
         """Create empty tracking result."""

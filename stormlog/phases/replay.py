@@ -61,42 +61,7 @@ class PhaseReplayIndex:
     @classmethod
     def from_events(cls, events: Sequence[Any]) -> "PhaseReplayIndex":
         """Build a replay index from telemetry events."""
-        session_end_by_group: dict[tuple[str, int], int] = {}
-        boundaries: list[tuple[int, int, str, int, PhaseBoundaryRecord]] = []
-        for event in events:
-            session_id = _event_field(event, "session_id")
-            timestamp_ns = _event_field(event, "timestamp_ns")
-            if not isinstance(session_id, str) or not isinstance(timestamp_ns, int):
-                continue
-            rank = _coerce_rank(_event_field(event, "rank", 0))
-            if rank is not None:
-                group_key = (session_id, rank)
-                previous_end = session_end_by_group.get(group_key)
-                if previous_end is None or timestamp_ns > previous_end:
-                    session_end_by_group[group_key] = timestamp_ns
-
-            event_type = _event_field(event, "event_type", "")
-            if event_type not in {PHASE_ENTER_EVENT, PHASE_EXIT_EVENT}:
-                continue
-            if rank is None:
-                continue
-
-            scope = parse_phase_boundary(event)
-            if scope is None:
-                continue
-            boundaries.append(
-                (
-                    timestamp_ns,
-                    scope.sequence,
-                    scope.scope_id,
-                    rank,
-                    scope,
-                )
-            )
-
-        boundaries.sort(
-            key=lambda item: (item[4].session_id, item[3], item[0], item[1], item[2])
-        )
+        boundaries, session_end_by_group = _replay_boundaries(events)
 
         active_by_thread: dict[tuple[str, int, int], list[PhaseBoundaryRecord]] = {}
         intervals_by_group: dict[tuple[str, int], list[PhaseSpan]] = {}
@@ -222,6 +187,31 @@ class PhaseReplayIndex:
 def parse_phase_boundary(event: Any) -> PhaseBoundaryRecord | None:
     """Extract one normalized phase payload from an event-like object."""
     event_type = _event_field(event, "event_type", "")
+    raw_scope = _phase_scope_metadata(event, event_type)
+    if raw_scope is None:
+        return None
+    session_id = _event_field(event, "session_id")
+    timestamp_ns = _event_field(event, "timestamp_ns")
+    if not isinstance(session_id, str) or not isinstance(timestamp_ns, int):
+        return None
+    if not _valid_phase_scope_labels(raw_scope, event_type):
+        return None
+    normalized_path = tuple(
+        str(part) for part in raw_scope["path"] if isinstance(part, str) and part
+    )
+    if not normalized_path:
+        return None
+    if not _valid_phase_scope_position(raw_scope):
+        return None
+    return _build_phase_boundary_record(
+        raw_scope,
+        normalized_path=normalized_path,
+        session_id=session_id,
+        timestamp_ns=timestamp_ns,
+    )
+
+
+def _phase_scope_metadata(event: Any, event_type: str) -> Mapping[str, Any] | None:
     if event_type not in {PHASE_ENTER_EVENT, PHASE_EXIT_EVENT}:
         return None
     metadata = _event_field(event, "metadata", {})
@@ -230,10 +220,10 @@ def parse_phase_boundary(event: Any) -> PhaseBoundaryRecord | None:
     raw_scope = metadata.get(PHASE_SCOPE_METADATA_KEY)
     if not isinstance(raw_scope, Mapping):
         return None
-    session_id = _event_field(event, "session_id")
-    timestamp_ns = _event_field(event, "timestamp_ns")
-    if not isinstance(session_id, str) or not isinstance(timestamp_ns, int):
-        return None
+    return raw_scope
+
+
+def _valid_phase_scope_labels(raw_scope: Mapping[str, Any], event_type: str) -> bool:
     action = raw_scope.get("action")
     name = raw_scope.get("name")
     scope_id = raw_scope.get("scope_id")
@@ -247,39 +237,46 @@ def parse_phase_boundary(event: Any) -> PhaseBoundaryRecord | None:
         or not isinstance(thread_name, str)
         or not isinstance(path, list)
     ):
-        return None
+        return False
     expected_action = "enter" if event_type == PHASE_ENTER_EVENT else "exit"
-    if action != expected_action:
-        return None
-    normalized_path = tuple(
-        str(part) for part in path if isinstance(part, str) and part
-    )
-    if not normalized_path:
-        return None
-    depth_value = raw_scope.get("depth")
+    return action == expected_action
+
+
+def _valid_phase_scope_position(raw_scope: Mapping[str, Any]) -> bool:
     sequence_value = raw_scope.get("sequence")
     thread_id_value = raw_scope.get("thread_id")
     parent_scope_id_value = raw_scope.get("parent_scope_id")
+    if not isinstance(sequence_value, int):
+        return False
+    if not isinstance(thread_id_value, int):
+        return False
+    if parent_scope_id_value is not None and not isinstance(parent_scope_id_value, str):
+        return False
+    return True
+
+
+def _build_phase_boundary_record(
+    raw_scope: Mapping[str, Any],
+    *,
+    normalized_path: tuple[str, ...],
+    session_id: str,
+    timestamp_ns: int,
+) -> PhaseBoundaryRecord:
+    depth_value = raw_scope.get("depth")
     if not isinstance(depth_value, int) or depth_value != len(normalized_path):
         depth_value = len(normalized_path)
-    if not isinstance(sequence_value, int):
-        return None
-    if not isinstance(thread_id_value, int):
-        return None
-    if parent_scope_id_value is not None and not isinstance(parent_scope_id_value, str):
-        return None
     raw_attributes = raw_scope.get(PHASE_SCOPE_ATTRIBUTES_KEY, {})
     attributes = dict(raw_attributes) if isinstance(raw_attributes, Mapping) else {}
     return PhaseBoundaryRecord(
-        action=action,
-        name=name.strip(),
+        action=raw_scope["action"],
+        name=raw_scope["name"].strip(),
         path=normalized_path,
         depth=depth_value,
-        scope_id=scope_id,
-        parent_scope_id=parent_scope_id_value,
-        thread_id=thread_id_value,
-        thread_name=thread_name,
-        sequence=sequence_value,
+        scope_id=raw_scope["scope_id"],
+        parent_scope_id=raw_scope.get("parent_scope_id"),
+        thread_id=raw_scope["thread_id"],
+        thread_name=raw_scope["thread_name"],
+        sequence=raw_scope["sequence"],
         session_id=session_id,
         timestamp_ns=timestamp_ns,
         attributes=attributes,
@@ -314,6 +311,52 @@ def _coerce_rank(value: Any) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _replay_boundaries(
+    events: Sequence[Any],
+) -> tuple[
+    list[tuple[int, int, str, int, PhaseBoundaryRecord]],
+    dict[tuple[str, int], int],
+]:
+    session_end_by_group: dict[tuple[str, int], int] = {}
+    boundaries: list[tuple[int, int, str, int, PhaseBoundaryRecord]] = []
+    for event in events:
+        session_id = _event_field(event, "session_id")
+        timestamp_ns = _event_field(event, "timestamp_ns")
+        if not isinstance(session_id, str) or not isinstance(timestamp_ns, int):
+            continue
+        rank = _coerce_rank(_event_field(event, "rank", 0))
+        if rank is not None:
+            group_key = (session_id, rank)
+            previous_end = session_end_by_group.get(group_key)
+            if previous_end is None or timestamp_ns > previous_end:
+                session_end_by_group[group_key] = timestamp_ns
+
+        event_type = _event_field(event, "event_type", "")
+        if event_type not in {PHASE_ENTER_EVENT, PHASE_EXIT_EVENT}:
+            continue
+        if rank is None:
+            continue
+
+        scope = parse_phase_boundary(event)
+        if scope is None:
+            continue
+        boundaries.append(
+            (
+                timestamp_ns,
+                scope.sequence,
+                scope.scope_id,
+                rank,
+                scope,
+            )
+        )
+
+    boundaries.sort(
+        key=lambda item: (item[4].session_id, item[3], item[0], item[1], item[2])
+    )
+
+    return boundaries, session_end_by_group
 
 
 __all__ = [

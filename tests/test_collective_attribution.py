@@ -7,6 +7,8 @@ from typing import Any, cast
 import pytest
 
 from stormlog.collective_attribution import (
+    _RankSpike,
+    _score_spike,
     attribute_collective_memory,
     resolve_collective_attribution_config,
 )
@@ -27,6 +29,66 @@ from stormlog.telemetry import (
 BASE_NS = 1_700_000_000_000_000_000
 STEP_NS = 100_000_000
 DEVICE_TOTAL_BYTES = 16 * 1024**3
+
+
+@pytest.mark.parametrize(
+    ("markers", "world_size", "ranks", "gap_ratio", "confidence", "classification"),
+    [
+        ((100, 120), 4, {0, 1, 2, 3}, 0.04, 1.0, "collective_confident"),
+        ((), 4, {0, 1, 2, 3}, 0.04, 0.51, "collective_suspect"),
+        ((100,), 1, {0}, 0.04, 0.51, "collective_suspect"),
+        ((100,), 4, {0, 1, 2, 3}, None, 0.95, "collective_confident"),
+        ((100,), 4, {0, 1}, 0.04, 0.773, "collective_likely"),
+        ((), 1, set(), None, None, None),
+    ],
+)
+def test_spike_scoring_preserves_confidence_penalties_and_evidence(
+    markers: tuple[int, ...],
+    world_size: int,
+    ranks: set[int],
+    gap_ratio: float | None,
+    confidence: float | None,
+    classification: str | None,
+) -> None:
+    config = resolve_collective_attribution_config(
+        overrides={"interval_padding_ns": 30}
+    )
+    spike = _RankSpike(
+        key=(0, 0, 110),
+        rank=0,
+        session_id=None,
+        timestamp_ns=110,
+        peak_gap_bytes=config.min_gap_bytes,
+        peak_gap_ratio=gap_ratio,
+        robust_zscore=config.robust_zscore_threshold,
+        marker_times=markers,
+    )
+
+    result = _score_spike(
+        spike=spike,
+        synchronized_ranks=ranks,
+        expected_world_size=world_size,
+        trace_start_ns=95,
+        config=config,
+        phase_resolver=None,
+    )
+
+    if confidence is None:
+        assert result is None
+        return
+    assert result is not None
+    assert result.confidence == confidence
+    assert result.classification == classification
+    assert result.interval_start_ns == 95
+    assert result.interval_end_ns == max((110, *markers)) + 30
+    assert result.reason_codes == sorted(set(result.reason_codes))
+    assert ("weak_marker_signal" in result.reason_codes) == (not markers)
+    assert ("single_rank_only" in result.reason_codes) == (world_size == 1)
+    assert result.evidence is not None
+    assert result.evidence.marker_hits == len(markers)
+    assert result.evidence.synchronized_ranks == max(len(ranks), 1)
+    assert result.evidence.peak_gap_ratio == gap_ratio
+    assert result.evidence.robust_zscore == config.robust_zscore_threshold
 
 
 def _make_event(

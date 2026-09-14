@@ -502,7 +502,7 @@ class TestCPUMemoryTracker:
             "reserved": [330.0],
         }
 
-    @pytest.mark.parametrize("interval", [0.0, -1.0])  # type: ignore[misc]
+    @pytest.mark.parametrize("interval", [0.0, -1.0])
     @patch("stormlog.cpu_profiler.psutil.Process")
     def test_get_memory_timeline_rejects_nonpositive_interval(
         self, mock_cls: Any, interval: float

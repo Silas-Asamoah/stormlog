@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 
 pytest.importorskip("textual")
@@ -62,3 +64,52 @@ def test_marker_summary_keeps_recent_marker_within_severity() -> None:
     summary = canvas._format_marker_summary(markers)
 
     assert summary == "! Critical event | ~ Newer warning | ~ Older warning"
+
+
+def test_rank_timeline_rendering_preserves_focus_gaps_and_marker_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canvas = DistributedTimelineCanvas(width=3, max_ranks=2)
+    update = Mock()
+    monkeypatch.setattr(canvas, "update", update)
+    mb = 1024**2
+
+    canvas.render_rank_timelines(
+        {
+            0: {"allocated": [mb], "gap": []},
+            1: {"allocated": [mb, 2 * mb, 3 * mb], "gap": [-mb, 0, mb]},
+            2: {"allocated": [4 * mb]},
+        },
+        active_rank=1,
+        markers_by_rank={1: [_marker(start_ns=1, severity="warning", label="Spike")]},
+    )
+
+    update.assert_called_once_with(
+        "*r01 alloc(max=3.0MB latest=3.0MB) gap_latest=1.0MB\n"
+        "    [-*@]\n"
+        "    markers: ~ Spike\n"
+        " r00 alloc(max=1.0MB latest=1.0MB) gap_latest=0.0MB\n"
+        "    [@]\n"
+        "... showing 2/3 ranks (apply filter for more)."
+    )
+
+
+@pytest.mark.parametrize(
+    ("timelines", "expected"),
+    [
+        ({}, "No distributed timelines yet. Load live or artifact data."),
+        ({0: {"allocated": []}}, "No timeline samples to render."),
+    ],
+)
+def test_rank_timeline_empty_rendering(
+    monkeypatch: pytest.MonkeyPatch,
+    timelines: dict[int, dict[str, list[int]]],
+    expected: str,
+) -> None:
+    canvas = DistributedTimelineCanvas()
+    update = Mock()
+    monkeypatch.setattr(canvas, "update", update)
+
+    canvas.render_rank_timelines(timelines, active_rank=7)
+
+    update.assert_called_once_with(expected)

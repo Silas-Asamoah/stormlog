@@ -10,17 +10,7 @@ from typing import Any, Iterable, TypeGuard
 def analyze_inference_events(path: str | Path) -> dict[str, Any]:
     """Analyze an inference profiling JSONL artifact."""
     records = _load_jsonl(path)
-    requests = [
-        record
-        for record in records
-        if record.get("event_type") == "infer.request"
-        and record.get("phase") == "measured"
-    ]
-    samples = [
-        record
-        for record in records
-        if record.get("event_type") == "infer.system_sample"
-    ]
+    requests, samples = _partition_inference_records(records)
     ok_requests = [record for record in requests if record.get("status") == "ok"]
 
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -226,3 +216,20 @@ def _fmt(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f"{float(value):.2f}"
     return "-"
+
+
+def _partition_inference_records(
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    requests = [
+        record
+        for record in records
+        if record.get("event_type") == "infer.request"
+        and record.get("phase") == "measured"
+    ]
+    samples = [
+        record
+        for record in records
+        if record.get("event_type") == "infer.system_sample"
+    ]
+    return requests, samples

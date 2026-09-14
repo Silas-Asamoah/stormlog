@@ -12,10 +12,15 @@ import pandas as pd
 # Interactive plotting
 import plotly.graph_objects as go
 import seaborn as sns
+from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from plotly.subplots import make_subplots
 
-from .distributed_analysis import RankTimelinePoint, analyze_cross_rank_events
+from .distributed_analysis import (
+    FirstCauseSuspect,
+    RankTimelinePoint,
+    analyze_cross_rank_events,
+)
 from .profiler import GPUMemoryProfiler, MemorySnapshot, ProfileResult
 from .telemetry import TelemetryEventLike
 
@@ -72,56 +77,15 @@ class MemoryVisualizer:
         if not results and not snapshots:
             raise ValueError("No data available for plotting")
 
-        # Prepare data
-        timestamps = []
-        allocated_memory = []
-        reserved_memory = []
-        labels = []
-
-        # Add snapshot data
-        if snapshots:
-            for snapshot in snapshots:
-                timestamps.append(snapshot.timestamp)
-                allocated_memory.append(snapshot.allocated_memory)
-                reserved_memory.append(snapshot.reserved_memory)
-                labels.append(snapshot.operation or "monitor")
-
-        # Add result data
-        if results:
-            for result in results:
-                # Before snapshot
-                timestamps.append(result.memory_before.timestamp)
-                allocated_memory.append(result.memory_before.allocated_memory)
-                reserved_memory.append(result.memory_before.reserved_memory)
-                labels.append(f"before_{result.function_name}")
-
-                # After snapshot
-                timestamps.append(result.memory_after.timestamp)
-                allocated_memory.append(result.memory_after.allocated_memory)
-                reserved_memory.append(result.memory_after.reserved_memory)
-                labels.append(f"after_{result.function_name}")
-
-        if not timestamps:
-            raise ValueError("No timestamp data available")
-
-        timeline_points = sorted(
-            zip(
-                timestamps,
-                allocated_memory,
-                reserved_memory,
-                labels,
-                strict=True,
-            ),
-            key=lambda point: point[0],
+        timestamps, allocated_memory, reserved_memory, labels = (
+            self._collect_timeline_data(results, snapshots)
         )
-        timestamps = [point[0] for point in timeline_points]
-        allocated_memory = [point[1] for point in timeline_points]
-        reserved_memory = [point[2] for point in timeline_points]
-        labels = [point[3] for point in timeline_points]
 
-        # Convert to relative time (seconds from start)
-        start_time = timestamps[0]
-        relative_times = [(t - start_time) for t in timestamps]
+        relative_times, allocated_memory, reserved_memory, labels = (
+            self._ordered_timeline_data(
+                timestamps, allocated_memory, reserved_memory, labels
+            )
+        )
 
         if interactive:
             return self._create_interactive_timeline(
@@ -161,49 +125,12 @@ class MemoryVisualizer:
         )
         fig: Figure = fig_obj
 
-        for rank in sorted(grouped_points):
-            rank_points = sorted(
-                grouped_points[rank],
-                key=lambda point: (point.aligned_timestamp_ns, point.timestamp_ns),
-            )
-            relative_times = [
-                (point.aligned_timestamp_ns - first_aligned_timestamp) / 1_000_000_000
-                for point in rank_points
-            ]
-            device_used_gb = [
-                point.device_used_bytes / (1024**3) for point in rank_points
-            ]
-            ax.plot(relative_times, device_used_gb, linewidth=2, label=f"Rank {rank}")
+        self._plot_rank_lines(ax, grouped_points, first_aligned_timestamp)
 
         top_suspect = (
             first_cause_result.suspects[0] if first_cause_result.suspects else None
         )
-        if top_suspect is not None:
-            spike_relative_time = (
-                top_suspect.aligned_first_spike_timestamp_ns - first_aligned_timestamp
-            ) / 1_000_000_000
-            for point in grouped_points.get(top_suspect.rank, []):
-                if (
-                    point.aligned_timestamp_ns
-                    == top_suspect.aligned_first_spike_timestamp_ns
-                ):
-                    ax.scatter(
-                        [spike_relative_time],
-                        [point.device_used_bytes / (1024**3)],
-                        color="crimson",
-                        s=80,
-                        zorder=5,
-                        label=f"Top suspect rank {top_suspect.rank}",
-                    )
-                    ax.annotate(
-                        f"Rank {top_suspect.rank} first cause",
-                        xy=(spike_relative_time, point.device_used_bytes / (1024**3)),
-                        xytext=(10, 10),
-                        textcoords="offset points",
-                        fontsize=self.style_config["font_size"],
-                        color="crimson",
-                    )
-                    break
+        self._mark_first_cause(ax, grouped_points, first_aligned_timestamp, top_suspect)
 
         if first_cause_result.cluster_onset_timestamp_ns is not None:
             cluster_onset_seconds = (
@@ -402,45 +329,9 @@ class MemoryVisualizer:
         if not results:
             raise ValueError("No results available for comparison")
 
-        # Aggregate data by function name
-        function_memory_allocated: Dict[str, List[float]] = {}
-        function_execution_time: Dict[str, List[float]] = {}
-        function_peak_memory: Dict[str, List[float]] = {}
-        for result in results:
-            func_name = result.function_name
-            function_memory_allocated.setdefault(func_name, []).append(
-                float(result.memory_allocated)
-            )
-            function_execution_time.setdefault(func_name, []).append(
-                float(result.execution_time)
-            )
-            function_peak_memory.setdefault(func_name, []).append(
-                float(result.peak_memory_usage())
-            )
-
-        # Prepare plot data
-        functions = list(function_memory_allocated.keys())
-
-        if metric == "memory_allocated":
-            values = [
-                float(np.mean(function_memory_allocated[func])) for func in functions
-            ]
-            ylabel = "Average Memory Allocated (GB)"
-            title = "Average Memory Allocation by Function"
-            values = [v / (1024**3) for v in values]  # Convert to GB
-        elif metric == "execution_time":
-            values = [
-                float(np.mean(function_execution_time[func])) for func in functions
-            ]
-            ylabel = "Average Execution Time (seconds)"
-            title = "Average Execution Time by Function"
-        elif metric == "peak_memory":
-            values = [float(np.max(function_peak_memory[func])) for func in functions]
-            ylabel = "Peak Memory Usage (GB)"
-            title = "Peak Memory Usage by Function"
-            values = [v / (1024**3) for v in values]  # Convert to GB
-        else:
-            raise ValueError(f"Unknown metric: {metric}")
+        functions, values, ylabel, title = self._function_comparison_data(
+            results, metric
+        )
 
         if interactive:
             return self._create_interactive_bar_chart(
@@ -549,28 +440,7 @@ class MemoryVisualizer:
         if not results:
             raise ValueError("No results available for heatmap")
 
-        # Create data matrix
-        functions = sorted({r.function_name for r in results})
-        metrics = ["execution_time", "memory_allocated", "memory_freed", "peak_memory"]
-
-        data_matrix = np.zeros((len(functions), len(metrics)))
-
-        for i, func in enumerate(functions):
-            func_results = [r for r in results if r.function_name == func]
-
-            # Calculate average metrics
-            data_matrix[i, 0] = np.mean([r.execution_time for r in func_results])
-            data_matrix[i, 1] = np.mean([r.memory_allocated for r in func_results]) / (
-                1024**3
-            )  # GB
-            data_matrix[i, 2] = np.mean([r.memory_freed for r in func_results]) / (
-                1024**3
-            )  # GB
-            data_matrix[i, 3] = np.mean(
-                [r.peak_memory_usage() for r in func_results]
-            ) / (
-                1024**3
-            )  # GB
+        functions, metrics, data_matrix = self._heatmap_matrix(results)
 
         # Create heatmap
         fig_obj, ax = plt.subplots(
@@ -676,45 +546,7 @@ class MemoryVisualizer:
                 col=1,
             )
 
-        # Function comparison (top right)
-        if results:
-            func_memory: Dict[str, List[float]] = {}
-            for result in results:
-                if result.function_name not in func_memory:
-                    func_memory[result.function_name] = []
-                func_memory[result.function_name].append(
-                    result.memory_allocated / (1024**3)
-                )
-
-            functions = list(func_memory.keys())
-            avg_memory = [np.mean(func_memory[f]) for f in functions]
-
-            fig.add_trace(
-                go.Bar(x=functions, y=avg_memory, name="Avg Memory"), row=1, col=2
-            )
-
-        # Memory distribution (bottom left)
-        if results:
-            memory_values = [r.memory_allocated / (1024**3) for r in results]
-            fig.add_trace(
-                go.Histogram(x=memory_values, name="Memory Distribution"), row=2, col=1
-            )
-
-        # Peak memory scatter (bottom right)
-        if results:
-            exec_times = [r.execution_time for r in results]
-            peak_memory = [r.peak_memory_usage() / (1024**3) for r in results]
-
-            fig.add_trace(
-                go.Scatter(
-                    x=exec_times,
-                    y=peak_memory,
-                    mode="markers",
-                    name="Execution Time vs Peak Memory",
-                ),
-                row=2,
-                col=2,
-            )
+        self._add_dashboard_result_panels(fig, results)
 
         # Update layout
         fig.update_layout(
@@ -766,74 +598,328 @@ class MemoryVisualizer:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         if format == "csv":
-            # Export results
-            if results:
-                results_data = []
-                for r in results:
-                    results_data.append(
-                        {
-                            "function_name": r.function_name,
-                            "execution_time": r.execution_time,
-                            "memory_allocated": r.memory_allocated,
-                            "memory_freed": r.memory_freed,
-                            "peak_memory": r.peak_memory_usage(),
-                            "memory_diff": r.memory_diff(),
-                            "tensors_created": r.tensors_created,
-                            "tensors_deleted": r.tensors_deleted,
-                        }
-                    )
-
-                results_df = pd.DataFrame(results_data)
-                results_path = f"{save_path}_results_{timestamp}.csv"
-                results_df.to_csv(results_path, index=False)
-
-            # Export snapshots
-            if snapshots:
-                snapshots_data = []
-                for s in snapshots:
-                    snapshots_data.append(
-                        {
-                            "timestamp": s.timestamp,
-                            "operation": s.operation,
-                            "allocated_memory": s.allocated_memory,
-                            "reserved_memory": s.reserved_memory,
-                            "active_memory": s.active_memory,
-                            "inactive_memory": s.inactive_memory,
-                            "device_id": s.device_id,
-                        }
-                    )
-
-                snapshots_df = pd.DataFrame(snapshots_data)
-                snapshots_path = f"{save_path}_snapshots_{timestamp}.csv"
-                snapshots_df.to_csv(snapshots_path, index=False)
-
-            if results:
-                return results_path
-            if snapshots:
-                return snapshots_path
-            raise ValueError("No data available for CSV export")
+            return self._export_csv(results, snapshots, save_path, timestamp)
 
         elif format == "json":
-            import json
-
-            export_data = {
-                "metadata": {
-                    "export_time": timestamp,
-                    "num_results": len(results) if results else 0,
-                    "num_snapshots": len(snapshots) if snapshots else 0,
-                },
-                "results": [r.to_dict() for r in results] if results else [],
-                "snapshots": [s.to_dict() for s in snapshots] if snapshots else [],
-            }
-
-            json_path = f"{save_path}_{timestamp}.json"
-            with open(json_path, "w") as f:
-                json.dump(export_data, f, indent=2, default=str)
-
-            return json_path
+            return self._export_json(results, snapshots, save_path, timestamp)
 
         else:
             raise ValueError(f"Unsupported format: {format}")
+
+    @staticmethod
+    def _collect_timeline_data(
+        results: Optional[List[ProfileResult]],
+        snapshots: Optional[List[MemorySnapshot]],
+    ) -> tuple[List[float], List[int], List[int], List[str]]:
+        # Prepare data
+        timestamps = []
+        allocated_memory = []
+        reserved_memory = []
+        labels = []
+
+        # Add snapshot data
+        if snapshots:
+            for snapshot in snapshots:
+                timestamps.append(snapshot.timestamp)
+                allocated_memory.append(snapshot.allocated_memory)
+                reserved_memory.append(snapshot.reserved_memory)
+                labels.append(snapshot.operation or "monitor")
+
+        # Add result data
+        if results:
+            for result in results:
+                # Before snapshot
+                timestamps.append(result.memory_before.timestamp)
+                allocated_memory.append(result.memory_before.allocated_memory)
+                reserved_memory.append(result.memory_before.reserved_memory)
+                labels.append(f"before_{result.function_name}")
+
+                # After snapshot
+                timestamps.append(result.memory_after.timestamp)
+                allocated_memory.append(result.memory_after.allocated_memory)
+                reserved_memory.append(result.memory_after.reserved_memory)
+                labels.append(f"after_{result.function_name}")
+        return timestamps, allocated_memory, reserved_memory, labels
+
+    @staticmethod
+    def _ordered_timeline_data(
+        timestamps: List[float],
+        allocated_memory: List[int],
+        reserved_memory: List[int],
+        labels: List[str],
+    ) -> tuple[List[float], List[int], List[int], List[str]]:
+        if not timestamps:
+            raise ValueError("No timestamp data available")
+
+        timeline_points = sorted(
+            zip(
+                timestamps,
+                allocated_memory,
+                reserved_memory,
+                labels,
+                strict=True,
+            ),
+            key=lambda point: point[0],
+        )
+        timestamps = [point[0] for point in timeline_points]
+        allocated_memory = [point[1] for point in timeline_points]
+        reserved_memory = [point[2] for point in timeline_points]
+        labels = [point[3] for point in timeline_points]
+
+        # Convert to relative time (seconds from start)
+        start_time = timestamps[0]
+        relative_times = [(t - start_time) for t in timestamps]
+        return relative_times, allocated_memory, reserved_memory, labels
+
+    @staticmethod
+    def _plot_rank_lines(
+        ax: Axes,
+        grouped_points: Dict[int, List[RankTimelinePoint]],
+        first_aligned_timestamp: int,
+    ) -> None:
+        for rank in sorted(grouped_points):
+            rank_points = sorted(
+                grouped_points[rank],
+                key=lambda point: (point.aligned_timestamp_ns, point.timestamp_ns),
+            )
+            relative_times = [
+                (point.aligned_timestamp_ns - first_aligned_timestamp) / 1_000_000_000
+                for point in rank_points
+            ]
+            device_used_gb = [
+                point.device_used_bytes / (1024**3) for point in rank_points
+            ]
+            ax.plot(relative_times, device_used_gb, linewidth=2, label=f"Rank {rank}")
+
+    def _mark_first_cause(
+        self,
+        ax: Axes,
+        grouped_points: Dict[int, List[RankTimelinePoint]],
+        first_aligned_timestamp: int,
+        top_suspect: Optional[FirstCauseSuspect],
+    ) -> None:
+        if top_suspect is not None:
+            spike_relative_time = (
+                top_suspect.aligned_first_spike_timestamp_ns - first_aligned_timestamp
+            ) / 1_000_000_000
+            for point in grouped_points.get(top_suspect.rank, []):
+                if (
+                    point.aligned_timestamp_ns
+                    == top_suspect.aligned_first_spike_timestamp_ns
+                ):
+                    ax.scatter(
+                        [spike_relative_time],
+                        [point.device_used_bytes / (1024**3)],
+                        color="crimson",
+                        s=80,
+                        zorder=5,
+                        label=f"Top suspect rank {top_suspect.rank}",
+                    )
+                    ax.annotate(
+                        f"Rank {top_suspect.rank} first cause",
+                        xy=(spike_relative_time, point.device_used_bytes / (1024**3)),
+                        xytext=(10, 10),
+                        textcoords="offset points",
+                        fontsize=self.style_config["font_size"],
+                        color="crimson",
+                    )
+                    break
+
+    @staticmethod
+    def _function_comparison_data(
+        results: List[ProfileResult], metric: str
+    ) -> tuple[List[str], List[float], str, str]:
+        # Aggregate data by function name
+        function_memory_allocated: Dict[str, List[float]] = {}
+        function_execution_time: Dict[str, List[float]] = {}
+        function_peak_memory: Dict[str, List[float]] = {}
+        for result in results:
+            func_name = result.function_name
+            function_memory_allocated.setdefault(func_name, []).append(
+                float(result.memory_allocated)
+            )
+            function_execution_time.setdefault(func_name, []).append(
+                float(result.execution_time)
+            )
+            function_peak_memory.setdefault(func_name, []).append(
+                float(result.peak_memory_usage())
+            )
+
+        # Prepare plot data
+        functions = list(function_memory_allocated.keys())
+
+        if metric == "memory_allocated":
+            values = [
+                float(np.mean(function_memory_allocated[func])) for func in functions
+            ]
+            ylabel = "Average Memory Allocated (GB)"
+            title = "Average Memory Allocation by Function"
+            values = [v / (1024**3) for v in values]  # Convert to GB
+        elif metric == "execution_time":
+            values = [
+                float(np.mean(function_execution_time[func])) for func in functions
+            ]
+            ylabel = "Average Execution Time (seconds)"
+            title = "Average Execution Time by Function"
+        elif metric == "peak_memory":
+            values = [float(np.max(function_peak_memory[func])) for func in functions]
+            ylabel = "Peak Memory Usage (GB)"
+            title = "Peak Memory Usage by Function"
+            values = [v / (1024**3) for v in values]  # Convert to GB
+        else:
+            raise ValueError(f"Unknown metric: {metric}")
+        return functions, values, ylabel, title
+
+    @staticmethod
+    def _heatmap_matrix(
+        results: List[ProfileResult],
+    ) -> tuple[List[str], List[str], np.ndarray]:
+        # Create data matrix
+        functions = sorted({r.function_name for r in results})
+        metrics = ["execution_time", "memory_allocated", "memory_freed", "peak_memory"]
+
+        data_matrix = np.zeros((len(functions), len(metrics)))
+
+        for i, func in enumerate(functions):
+            func_results = [r for r in results if r.function_name == func]
+
+            # Calculate average metrics
+            data_matrix[i, 0] = np.mean([r.execution_time for r in func_results])
+            data_matrix[i, 1] = np.mean([r.memory_allocated for r in func_results]) / (
+                1024**3
+            )  # GB
+            data_matrix[i, 2] = np.mean([r.memory_freed for r in func_results]) / (
+                1024**3
+            )  # GB
+            data_matrix[i, 3] = np.mean(
+                [r.peak_memory_usage() for r in func_results]
+            ) / (
+                1024**3
+            )  # GB
+        return functions, metrics, data_matrix
+
+    @staticmethod
+    def _add_dashboard_result_panels(
+        fig: go.Figure, results: Optional[List[ProfileResult]]
+    ) -> None:
+        # Function comparison (top right)
+        if results:
+            func_memory: Dict[str, List[float]] = {}
+            for result in results:
+                if result.function_name not in func_memory:
+                    func_memory[result.function_name] = []
+                func_memory[result.function_name].append(
+                    result.memory_allocated / (1024**3)
+                )
+
+            functions = list(func_memory.keys())
+            avg_memory = [np.mean(func_memory[f]) for f in functions]
+
+            fig.add_trace(
+                go.Bar(x=functions, y=avg_memory, name="Avg Memory"), row=1, col=2
+            )
+
+        # Memory distribution (bottom left)
+        if results:
+            memory_values = [r.memory_allocated / (1024**3) for r in results]
+            fig.add_trace(
+                go.Histogram(x=memory_values, name="Memory Distribution"), row=2, col=1
+            )
+
+        # Peak memory scatter (bottom right)
+        if results:
+            exec_times = [r.execution_time for r in results]
+            peak_memory = [r.peak_memory_usage() / (1024**3) for r in results]
+
+            fig.add_trace(
+                go.Scatter(
+                    x=exec_times,
+                    y=peak_memory,
+                    mode="markers",
+                    name="Execution Time vs Peak Memory",
+                ),
+                row=2,
+                col=2,
+            )
+
+    @staticmethod
+    def _export_csv(
+        results: Optional[List[ProfileResult]],
+        snapshots: Optional[List[MemorySnapshot]],
+        save_path: str,
+        timestamp: str,
+    ) -> str:
+        # Export results
+        if results:
+            results_data = []
+            for r in results:
+                results_data.append(
+                    {
+                        "function_name": r.function_name,
+                        "execution_time": r.execution_time,
+                        "memory_allocated": r.memory_allocated,
+                        "memory_freed": r.memory_freed,
+                        "peak_memory": r.peak_memory_usage(),
+                        "memory_diff": r.memory_diff(),
+                        "tensors_created": r.tensors_created,
+                        "tensors_deleted": r.tensors_deleted,
+                    }
+                )
+
+            results_df = pd.DataFrame(results_data)
+            results_path = f"{save_path}_results_{timestamp}.csv"
+            results_df.to_csv(results_path, index=False)
+
+        # Export snapshots
+        if snapshots:
+            snapshots_data = []
+            for s in snapshots:
+                snapshots_data.append(
+                    {
+                        "timestamp": s.timestamp,
+                        "operation": s.operation,
+                        "allocated_memory": s.allocated_memory,
+                        "reserved_memory": s.reserved_memory,
+                        "active_memory": s.active_memory,
+                        "inactive_memory": s.inactive_memory,
+                        "device_id": s.device_id,
+                    }
+                )
+
+            snapshots_df = pd.DataFrame(snapshots_data)
+            snapshots_path = f"{save_path}_snapshots_{timestamp}.csv"
+            snapshots_df.to_csv(snapshots_path, index=False)
+
+        if results:
+            return results_path
+        if snapshots:
+            return snapshots_path
+        raise ValueError("No data available for CSV export")
+
+    @staticmethod
+    def _export_json(
+        results: Optional[List[ProfileResult]],
+        snapshots: Optional[List[MemorySnapshot]],
+        save_path: str,
+        timestamp: str,
+    ) -> str:
+        import json
+
+        export_data = {
+            "metadata": {
+                "export_time": timestamp,
+                "num_results": len(results) if results else 0,
+                "num_snapshots": len(snapshots) if snapshots else 0,
+            },
+            "results": [r.to_dict() for r in results] if results else [],
+            "snapshots": [s.to_dict() for s in snapshots] if snapshots else [],
+        }
+
+        json_path = f"{save_path}_{timestamp}.json"
+        with open(json_path, "w") as f:
+            json.dump(export_data, f, indent=2, default=str)
+
+        return json_path
 
     def show(self, fig: Union[plt.Figure, go.Figure]) -> None:
         """Display a figure."""

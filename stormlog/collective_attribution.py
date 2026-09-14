@@ -184,16 +184,9 @@ def attribute_collective_memory(
     if not grouped_samples:
         return []
 
-    spikes_by_rank: dict[int, list[_RankSpike]] = {}
-    for rank, rank_samples in grouped_samples.items():
-        spikes = _detect_rank_spikes(
-            rank=rank,
-            rank_events=rank_samples,
-            marker_timestamps=marker_timestamps_by_rank.get(rank, ()),
-            config=resolved,
-        )
-        if spikes:
-            spikes_by_rank[rank] = spikes
+    spikes_by_rank = _detect_grouped_spikes(
+        grouped_samples, marker_timestamps_by_rank, resolved
+    )
 
     if not spikes_by_rank:
         return []
@@ -402,24 +395,9 @@ def _build_synchrony_lookup(
     return lookup
 
 
-def _score_spike(
-    *,
-    spike: _RankSpike,
-    synchronized_ranks: set[int],
-    expected_world_size: int,
-    trace_start_ns: int,
-    config: CollectiveAttributionConfig,
-    phase_resolver: PhaseReplayIndex | None,
-) -> CollectiveAttributionResult | None:
-    marker_overlap = bool(spike.marker_times)
-    synchronized_count = max(len(synchronized_ranks), 1)
-
-    if expected_world_size <= 1:
-        synchrony_ratio = 0.0
-    else:
-        synchrony_ratio = min(1.0, (synchronized_count - 1) / (expected_world_size - 1))
-
-    zscore_strength = min(1.0, spike.robust_zscore / config.robust_zscore_threshold)
+def _spike_divergence_strength(
+    spike: _RankSpike, config: CollectiveAttributionConfig
+) -> float:
     bytes_strength = (
         min(1.0, spike.peak_gap_bytes / config.min_gap_bytes)
         if config.min_gap_bytes > 0
@@ -430,7 +408,21 @@ def _score_spike(
         if config.min_gap_ratio > 0
         else 1.0
     )
-    divergence_strength = max(bytes_strength, ratio_strength)
+    return max(bytes_strength, ratio_strength)
+
+
+def _spike_confidence(
+    spike: _RankSpike,
+    *,
+    synchronized_count: int,
+    expected_world_size: int,
+    synchrony_ratio: float,
+    config: CollectiveAttributionConfig,
+) -> tuple[float, list[str]]:
+    """Combine statistical, marker, and synchrony evidence with its penalties."""
+    marker_overlap = bool(spike.marker_times)
+    zscore_strength = min(1.0, spike.robust_zscore / config.robust_zscore_threshold)
+    divergence_strength = _spike_divergence_strength(spike, config)
 
     confidence = 0.0
     confidence += 0.34 if marker_overlap else 0.0
@@ -459,7 +451,39 @@ def _score_spike(
     if spike.peak_gap_ratio is None:
         confidence -= 0.05
 
-    confidence = max(0.0, min(1.0, confidence))
+    return max(0.0, min(1.0, confidence)), reason_codes
+
+
+def _classify_collective_confidence(confidence: float) -> str:
+    if confidence >= 0.8:
+        return "collective_confident"
+    if confidence >= 0.6:
+        return "collective_likely"
+    return "collective_suspect"
+
+
+def _score_spike(
+    *,
+    spike: _RankSpike,
+    synchronized_ranks: set[int],
+    expected_world_size: int,
+    trace_start_ns: int,
+    config: CollectiveAttributionConfig,
+    phase_resolver: PhaseReplayIndex | None,
+) -> CollectiveAttributionResult | None:
+    synchronized_count = max(len(synchronized_ranks), 1)
+    if expected_world_size <= 1:
+        synchrony_ratio = 0.0
+    else:
+        synchrony_ratio = min(1.0, (synchronized_count - 1) / (expected_world_size - 1))
+
+    confidence, reason_codes = _spike_confidence(
+        spike,
+        synchronized_count=synchronized_count,
+        expected_world_size=expected_world_size,
+        synchrony_ratio=synchrony_ratio,
+        config=config,
+    )
 
     if confidence <= 0:
         return None
@@ -484,13 +508,6 @@ def _score_spike(
         robust_zscore=round(float(spike.robust_zscore), 4),
     )
 
-    if confidence >= 0.8:
-        classification = "collective_confident"
-    elif confidence >= 0.6:
-        classification = "collective_likely"
-    else:
-        classification = "collective_suspect"
-
     phase_attribution = None
     if (
         phase_resolver is not None
@@ -507,7 +524,7 @@ def _score_spike(
         rank=spike.rank,
         interval_start_ns=interval_start,
         interval_end_ns=interval_end,
-        classification=classification,
+        classification=_classify_collective_confidence(confidence),
         confidence=round(float(confidence), 3),
         reason_codes=sorted(set(reason_codes)),
         evidence=evidence,
@@ -640,6 +657,25 @@ def _contains_collective_token(text: str) -> bool:
         token in normalized or token.replace("_", "") in collapsed
         for token in _COLLECTIVE_TOKENS
     )
+
+
+def _detect_grouped_spikes(
+    grouped_samples: Mapping[int, list[TelemetryEventLike]],
+    marker_timestamps_by_rank: Mapping[int, tuple[int, ...]],
+    config: CollectiveAttributionConfig,
+) -> dict[int, list[_RankSpike]]:
+    spikes_by_rank: dict[int, list[_RankSpike]] = {}
+    for rank, rank_samples in grouped_samples.items():
+        spikes = _detect_rank_spikes(
+            rank=rank,
+            rank_events=rank_samples,
+            marker_timestamps=marker_timestamps_by_rank.get(rank, ()),
+            config=config,
+        )
+        if spikes:
+            spikes_by_rank[rank] = spikes
+
+    return spikes_by_rank
 
 
 __all__ = [

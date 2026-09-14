@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,13 +14,16 @@ try:
 except ImportError:  # pragma: no cover - phase package may land in another slice
     _stormlog_phases = None
 
+from stormlog.session import create_session_summary, stable_legacy_session_id
 from stormlog.telemetry import (
+    LoadedTelemetrySession,
     TelemetryEvent,
     TelemetryEventV2,
     telemetry_event_from_record,
     telemetry_event_to_dict,
 )
 from stormlog.timeline_markers import MARKER_KIND_ALERT, MARKER_KIND_PHASE
+from stormlog.tui import distributed_diagnostics as diagnostics
 from stormlog.tui.distributed_diagnostics import (
     build_distributed_model,
     load_distributed_artifacts,
@@ -178,6 +181,27 @@ def test_parse_rank_filter_supports_all_lists_and_ranges() -> None:
 def test_parse_rank_filter_rejects_invalid_ranges() -> None:
     with pytest.raises(ValueError, match="start>end"):
         parse_rank_filter("5-2", [0, 1, 2, 3, 4, 5])
+
+
+@pytest.mark.parametrize(
+    ("expression", "available", "expected"),
+    [
+        (" , 0, 0, 2-4, 99, ", [0, 2, 4], {0, 2, 4}),
+        (" * ", [1, 3], {1, 3}),
+        ("", [1], {1}),
+        ("bad-range", [], set()),
+    ],
+)
+def test_rank_filter_preserves_empty_and_unavailable_rank_semantics(
+    expression: str, available: list[int], expected: set[int]
+) -> None:
+    assert parse_rank_filter(expression, available) == expected
+
+
+@pytest.mark.parametrize("expression", ["-2", "2-", "4-2", "2-x", "x"])
+def test_rank_filter_rejects_malformed_tokens(expression: str) -> None:
+    with pytest.raises(ValueError):
+        parse_rank_filter(expression, [0, 1, 2])
 
 
 def test_build_distributed_model_computes_rank_metrics_and_missing_ranks() -> None:
@@ -594,6 +618,118 @@ def test_load_distributed_artifacts_adds_merged_session_for_multi_rank_job_input
     assert explicit.selected_session_id == "session-a"
     assert len(explicit.events) == 1
     assert explicit.events[0].rank == 0
+
+
+@pytest.mark.parametrize("distributed", [False, True])
+@pytest.mark.parametrize("second_status", ["completed", "incomplete"])
+def test_session_merge_preserves_summary_identity_order_and_deduplication(
+    distributed: bool,
+    second_status: str,
+) -> None:
+    early = _make_event(timestamp=1, rank=0, world_size=2, session_id="session-a")
+    late = _make_event(timestamp=2, rank=1, world_size=2, session_id="session-b")
+    first = LoadedTelemetrySession(
+        summary=create_session_summary(
+            source="rank-a",
+            status="completed",
+            session_id="session-a",
+            started_at_ns=10,
+            ended_at_ns=30,
+            host="host-a",
+            pid=1,
+            job_id="job-1",
+            rank=0,
+            local_rank=1,
+            world_size=2,
+        ),
+        events=[late, early],
+        sources_loaded=["b.json", "a.json"],
+        warnings=["first warning", "shared warning"],
+    )
+    second = LoadedTelemetrySession(
+        summary=create_session_summary(
+            source="rank-b",
+            status=second_status,
+            session_id="session-b",
+            started_at_ns=20,
+            ended_at_ns=40,
+            host="host-b",
+            pid=2,
+            job_id="job-1",
+            rank=1,
+            local_rank=0,
+            world_size=2,
+        ),
+        events=[replace(early, session_id="session-b"), late],
+        sources_loaded=["b.json"],
+        warnings=["shared warning", "last warning"],
+    )
+
+    if distributed:
+        merged = diagnostics._merge_distributed_path_sessions([first, second])
+        expected_id = stable_legacy_session_id(
+            "distributed.rank_group", "job-1", 2, "session-a", "session-b"
+        )
+        expected_source = "stormlog.diagnostics.distributed"
+    else:
+        merged = diagnostics._merge_legacy_flat_sessions([first, second])
+        expected_id = stable_legacy_session_id("distributed.legacy", "a.json", "b.json")
+        expected_source = "stormlog.diagnostics.legacy"
+
+    assert merged.summary == create_session_summary(
+        source=expected_source,
+        status=second_status,
+        session_id=expected_id,
+        started_at_ns=10,
+        ended_at_ns=40 if second_status == "completed" else None,
+        host="multiple",
+        pid=-1,
+        job_id="job-1",
+        rank=0,
+        local_rank=0,
+        world_size=2,
+    )
+    assert merged.events == [
+        replace(early, session_id=expected_id),
+        replace(late, session_id=expected_id),
+    ]
+    assert merged.sources_loaded == ["a.json", "b.json"]
+    assert merged.warnings == ["first warning", "shared warning", "last warning"]
+
+
+def test_artifact_loader_empty_inputs_and_missing_selection(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.json"
+    result = load_distributed_artifacts([missing])
+
+    assert result.events == []
+    assert result.sessions == []
+    assert result.markers == []
+    assert result.sources_loaded == []
+    assert result.selected_session_id is None
+    assert result.warnings == [f"Path does not exist: {missing}"]
+    with pytest.raises(ValueError, match="Requested session_id not found: absent"):
+        load_distributed_artifacts([], session_id="absent")
+
+
+def test_distributed_model_filters_missing_ranks_and_orders_samples() -> None:
+    events = [
+        _make_event(timestamp=3, rank=0, world_size=3, allocated=30),
+        _make_event(timestamp=2, rank=1, world_size=2, event_type="warning"),
+        _make_event(timestamp=1, rank=0, world_size=3, allocated=10),
+    ]
+
+    model = build_distributed_model(events, selected_ranks={0, 2, 8})
+
+    assert model.expected_ranks == [0, 2]
+    assert model.present_ranks == [0]
+    assert model.missing_ranks == [2]
+    assert [row.rank for row in model.rows] == [0, 2]
+    assert model.rows[0].allocated_delta_bytes == 20
+    assert model.per_rank_timelines[0]["allocated"] == [10, 30]
+    assert model.indicators == []
+    assert model.warnings == [
+        "Inconsistent world_size values detected; using max observed world_size."
+    ]
 
 
 def test_load_distributed_artifacts_reads_directory_event_payloads(

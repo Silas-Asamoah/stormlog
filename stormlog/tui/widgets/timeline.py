@@ -123,43 +123,14 @@ class DistributedTimelineCanvas(Static):
         chosen_ranks = ordered[: self.max_ranks]
         lines: list[str] = []
         for rank in chosen_ranks:
-            rank_payload = timelines.get(rank, {})
-            allocated = rank_payload.get("allocated", [])
-            device_used = rank_payload.get("device_used", [])
-            gaps = rank_payload.get("gap", [])
-            values = allocated or device_used
-            if not values:
-                continue
-
-            sampled_allocated = self._resample([float(value) for value in values])
-            alloc_mb = [value / (1024**2) for value in sampled_allocated]
-            alloc_latest = alloc_mb[-1] if alloc_mb else 0.0
-            alloc_max = max(alloc_mb) if alloc_mb else 0.0
-
-            sampled_gap = (
-                self._resample([float(value) for value in gaps]) if gaps else []
+            lines.extend(
+                self._build_rank_lines(
+                    rank,
+                    timelines.get(rank, {}),
+                    is_active=rank == active_rank,
+                    markers=markers_by_rank.get(rank, []) if markers_by_rank else [],
+                )
             )
-            gap_mb = [value / (1024**2) for value in sampled_gap] if sampled_gap else []
-            gap_latest = gap_mb[-1] if gap_mb else 0.0
-            marker = "*" if rank == active_rank else " "
-            if allocated:
-                lines.append(
-                    f"{marker}r{rank:02d} alloc(max={alloc_max:.1f}MB "
-                    f"latest={alloc_latest:.1f}MB) gap_latest={gap_latest:.1f}MB"
-                )
-            else:
-                lines.append(
-                    f"{marker}r{rank:02d} device-used(max={alloc_max:.1f}MB "
-                    f"latest={alloc_latest:.1f}MB) allocator=N/A"
-                )
-            lines.append(f"    [{self._generate_sparkline(alloc_mb)}]")
-            rank_markers = (
-                list(markers_by_rank.get(rank, [])) if markers_by_rank else []
-            )
-            if rank_markers:
-                lines.append(
-                    f"    markers: {self._format_marker_summary(rank_markers)}"
-                )
 
         if len(ordered) > self.max_ranks:
             lines.append(
@@ -167,6 +138,45 @@ class DistributedTimelineCanvas(Static):
             )
 
         self.update("\n".join(lines) if lines else "No timeline samples to render.")
+
+    def _build_rank_lines(
+        self,
+        rank: int,
+        payload: Mapping[str, list[int]],
+        *,
+        is_active: bool,
+        markers: Sequence[TimelineMarker],
+    ) -> list[str]:
+        allocated = payload.get("allocated", [])
+        values = allocated or payload.get("device_used", [])
+        if not values:
+            return []
+
+        alloc_mb = self._sample_megabytes(values)
+        alloc_latest = alloc_mb[-1] if alloc_mb else 0.0
+        alloc_max = max(alloc_mb) if alloc_mb else 0.0
+        gap_mb = self._sample_megabytes(payload.get("gap", []) or [])
+        gap_latest = gap_mb[-1] if gap_mb else 0.0
+        marker = "*" if is_active else " "
+        if allocated:
+            heading = (
+                f"{marker}r{rank:02d} alloc(max={alloc_max:.1f}MB "
+                f"latest={alloc_latest:.1f}MB) gap_latest={gap_latest:.1f}MB"
+            )
+        else:
+            heading = (
+                f"{marker}r{rank:02d} device-used(max={alloc_max:.1f}MB "
+                f"latest={alloc_latest:.1f}MB) allocator=N/A"
+            )
+        lines = [heading, f"    [{self._generate_sparkline(alloc_mb)}]"]
+        if markers:
+            lines.append(f"    markers: {self._format_marker_summary(markers)}")
+        return lines
+
+    def _sample_megabytes(self, values: Sequence[int]) -> list[float]:
+        return [
+            value / (1024**2) for value in self._resample([float(v) for v in values])
+        ]
 
     def render_placeholder(self, message: str) -> None:
         self.update(message)

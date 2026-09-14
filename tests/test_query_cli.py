@@ -51,6 +51,30 @@ def _write_json_events(path: Path, records: list[dict[str, Any]]) -> None:
     path.write_text(json.dumps(records), encoding="utf-8")
 
 
+@pytest.mark.parametrize("error", [BrokenPipeError(), RuntimeError("output failed")])
+def test_query_output_failure_returns_status_without_leaking_broken_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    error: Exception,
+) -> None:
+    import stormlog.query_cli as query_cli
+
+    path = tmp_path / "track.json"
+    _write_json_events(path, [_event_record()])
+
+    def fail_to_emit(*args: Any, **kwargs: Any) -> None:
+        raise error
+
+    monkeypatch.setattr(query_cli, "_emit_rows", fail_to_emit)
+    assert query_main(["events", str(path), "--json"]) == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == (
+        "" if isinstance(error, BrokenPipeError) else "Error: output failed\n"
+    )
+
+
 def _write_attachment_sidecar(path: Path) -> None:
     path.write_text(
         json.dumps(

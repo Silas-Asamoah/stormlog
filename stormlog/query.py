@@ -7,7 +7,7 @@ import csv
 import hashlib
 import json
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -418,59 +418,13 @@ class ArtifactCatalog:
         self._discover_run_envelope(directory / RUN_ENVELOPE_FILENAME)
         self._discover_attachment_sidecar(directory / ATTACHMENTS_FILENAME)
         manifest_path = directory / MANIFEST_FILENAME
-        manifest_payload = _read_json_object(manifest_path)
-        if manifest_payload is not None:
-            if _is_oom_manifest(manifest_payload):
-                self._add_oom_bundle(directory, manifest_path, manifest_payload)
-                return
-            if _is_diagnose_manifest(manifest_payload):
-                self._add_source(
-                    CatalogSource(
-                        path=directory,
-                        source_kind="diagnose_bundle",
-                        manifest_path=manifest_path,
-                    )
-                )
-            if _is_sink_manifest(manifest_payload):
-                segment_paths = tuple(resolve_telemetry_sink_segment_paths(directory))
-                self._covered_event_paths.update(segment_paths)
-                self._add_source(
-                    CatalogSource(
-                        path=directory,
-                        source_kind="sink",
-                        event_paths=segment_paths,
-                        manifest_path=manifest_path,
-                    )
-                )
+        if self._discover_directory_manifest(manifest_path):
+            return
 
         for nested_manifest in sorted(directory.rglob(MANIFEST_FILENAME)):
             if nested_manifest == manifest_path:
                 continue
-            payload = _read_json_object(nested_manifest)
-            if payload is None:
-                continue
-            parent = nested_manifest.parent
-            if _is_oom_manifest(payload):
-                self._add_oom_bundle(parent, nested_manifest, payload)
-            elif _is_diagnose_manifest(payload):
-                self._add_source(
-                    CatalogSource(
-                        path=parent,
-                        source_kind="diagnose_bundle",
-                        manifest_path=nested_manifest,
-                    )
-                )
-            elif _is_sink_manifest(payload):
-                segment_paths = tuple(resolve_telemetry_sink_segment_paths(parent))
-                self._covered_event_paths.update(segment_paths)
-                self._add_source(
-                    CatalogSource(
-                        path=parent,
-                        source_kind="sink",
-                        event_paths=segment_paths,
-                        manifest_path=nested_manifest,
-                    )
-                )
+            self._discover_manifest(nested_manifest)
 
         for attachment_sidecar in sorted(directory.rglob(ATTACHMENTS_FILENAME)):
             self._discover_attachment_sidecar(attachment_sidecar)
@@ -483,6 +437,58 @@ class ArtifactCatalog:
                 continue
             self._discover_file(candidate)
 
+    def _discover_directory_manifest(self, path: Path) -> bool:
+        """Register the root manifest, returning whether it is an opaque OOM bundle."""
+        payload = _read_json_object(path)
+        if payload is None:
+            return False
+        if _is_oom_manifest(payload):
+            self._add_oom_bundle(path.parent, path, payload)
+            return True
+        if _is_diagnose_manifest(payload):
+            self._add_diagnose_source(path)
+        if _is_sink_manifest(payload):
+            self._add_sink_source(path)
+        return False
+
+    def _discover_manifest(self, path: Path, *, warn: bool = False) -> None:
+        """Resolve one manifest using OOM, diagnose, then sink precedence."""
+        payload = _read_json_object(path)
+        if payload is None:
+            if warn:
+                self._warn(path, "manifest is not a JSON object")
+            return
+        if _is_oom_manifest(payload):
+            self._add_oom_bundle(path.parent, path, payload)
+        elif _is_diagnose_manifest(payload):
+            self._add_diagnose_source(path)
+        elif _is_sink_manifest(payload):
+            self._add_sink_source(path)
+        elif warn:
+            self._warn(path, "unrecognized manifest shape")
+
+    def _add_diagnose_source(self, manifest_path: Path) -> None:
+        self._add_source(
+            CatalogSource(
+                path=manifest_path.parent,
+                source_kind="diagnose_bundle",
+                manifest_path=manifest_path,
+            )
+        )
+
+    def _add_sink_source(self, manifest_path: Path) -> None:
+        directory = manifest_path.parent
+        segment_paths = tuple(resolve_telemetry_sink_segment_paths(directory))
+        self._covered_event_paths.update(segment_paths)
+        self._add_source(
+            CatalogSource(
+                path=directory,
+                source_kind="sink",
+                event_paths=segment_paths,
+                manifest_path=manifest_path,
+            )
+        )
+
     def _discover_file(self, path: Path) -> None:
         if path.name == RUN_ENVELOPE_FILENAME:
             self._discover_run_envelope(path)
@@ -491,35 +497,7 @@ class ArtifactCatalog:
             self._discover_attachment_sidecar(path)
             return
         if path.name == MANIFEST_FILENAME:
-            payload = _read_json_object(path)
-            if payload is None:
-                self._warn(path, "manifest is not a JSON object")
-                return
-            if _is_oom_manifest(payload):
-                self._add_oom_bundle(path.parent, path, payload)
-                return
-            if _is_diagnose_manifest(payload):
-                self._add_source(
-                    CatalogSource(
-                        path=path.parent,
-                        source_kind="diagnose_bundle",
-                        manifest_path=path,
-                    )
-                )
-                return
-            if _is_sink_manifest(payload):
-                segment_paths = tuple(resolve_telemetry_sink_segment_paths(path.parent))
-                self._covered_event_paths.update(segment_paths)
-                self._add_source(
-                    CatalogSource(
-                        path=path.parent,
-                        source_kind="sink",
-                        event_paths=segment_paths,
-                        manifest_path=path,
-                    )
-                )
-                return
-            self._warn(path, "unrecognized manifest shape")
+            self._discover_manifest(path, warn=True)
             return
 
         suffix = path.suffix.lower()
@@ -620,6 +598,9 @@ class ArtifactCatalog:
         if not isinstance(attachments, Sequence) or isinstance(attachments, str):
             self._warn(path, "attachment sidecar attachments must be a list")
             return
+        self._add_sidecar_attachments(path, attachments)
+
+    def _add_sidecar_attachments(self, path: Path, attachments: Sequence[Any]) -> None:
         for index, item in enumerate(attachments):
             if not isinstance(item, Mapping):
                 self._warn(path, f"attachment {index} is not an object")
@@ -745,22 +726,7 @@ class QueryStore:
             if source.source_kind in {"diagnose_bundle", "oom_bundle"}:
                 continue
             for loaded in self._load_sessions_for_source(source):
-                summary = loaded.summary
-                if filters.session_id is not None and (
-                    summary.session_id != filters.session_id
-                ):
-                    continue
-                if filters.status is not None and summary.status != filters.status:
-                    continue
-                for event in loaded.events:
-                    row = EventRow(
-                        event=event,
-                        source_path=_event_source_path(loaded, source),
-                        source_kind=source.source_kind,
-                        session_status=summary.status,
-                    )
-                    if _event_matches(row, filters):
-                        rows.append(row)
+                rows.extend(_query_session_events(loaded, source, filters))
 
         rows.sort(key=lambda row: (row.event.timestamp_ns, row.event.session_id))
         if filters.limit is not None:
@@ -847,13 +813,7 @@ class QueryStore:
             _accumulate_oom_bundle_issue(accumulator, oom_row)
 
         event_rows = self.query_events(EventFilter())
-        for event_row in event_rows:
-            if is_oom_event(event_row.event):
-                _accumulate_oom_event_issue(accumulator, event_row)
-            elif is_collector_degradation_event(event_row.event):
-                _accumulate_collector_issue(accumulator, event_row)
-            elif is_alert_event(event_row.event):
-                _accumulate_alert_issue(accumulator, event_row)
+        _accumulate_event_issues(accumulator, event_rows)
 
         for source in self.catalog.sources:
             for loaded in self._load_sessions_for_source(source):
@@ -908,30 +868,7 @@ class QueryStore:
             return rollup_rows
 
         events = self.query_events(EventFilter())
-        if metric in {
-            "peak_allocator_allocated_bytes",
-            "peak_allocator_reserved_bytes",
-            "peak_device_used_bytes",
-        }:
-            field_name = {
-                "peak_allocator_allocated_bytes": "allocator_allocated_bytes",
-                "peak_allocator_reserved_bytes": "allocator_reserved_bytes",
-                "peak_device_used_bytes": "device_used_bytes",
-            }[metric]
-            return _summarize_peak(events, metric, field_name, resolved_group_by)
-        if metric == "alert_count":
-            alert_events = [row for row in events if is_alert_event(row.event)]
-            return _summarize_count(alert_events, metric, resolved_group_by)
-        if metric == "collector_degradation_transitions":
-            transition_events = [
-                row
-                for row in events
-                if row.event.event_type in COLLECTOR_TRANSITION_TYPES
-            ]
-            return _summarize_count(transition_events, metric, resolved_group_by)
-        if metric == "hidden_memory_gap_growth":
-            return _summarize_hidden_memory_gap_growth(events, resolved_group_by)
-        raise ValueError(f"unsupported summary metric: {metric}")
+        return _summarize_events(events, metric, resolved_group_by)
 
     def _run_contexts(self) -> dict[str, RunContext]:
         return build_run_contexts(
@@ -1438,12 +1375,7 @@ def _attachment_from_payload(
     raw_path = _string_or_none(payload.get("path"))
     if url is None and raw_path is None:
         return None
-    resolved_path: str | None = None
-    if raw_path is not None:
-        path = Path(raw_path)
-        if not path.is_absolute():
-            path = sidecar_path.parent / path
-        resolved_path = str(path.resolve())
+    resolved_path = _resolve_sidecar_attachment_path(raw_path, sidecar_path)
     start_ns = _int_or_none(payload.get("start_ns"))
     end_ns = _int_or_none(payload.get("end_ns"))
     if start_ns is not None and end_ns is not None and end_ns < start_ns:
@@ -1469,6 +1401,17 @@ def _attachment_from_payload(
         source_namespace=_string_or_none(payload.get("source_namespace")),
         source_ref=_string_or_none(payload.get("source_ref")),
     )
+
+
+def _resolve_sidecar_attachment_path(
+    raw_path: str | None, sidecar_path: Path
+) -> str | None:
+    if raw_path is None:
+        return None
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = sidecar_path.parent / path
+    return str(path.resolve())
 
 
 def _diagnose_session_summary(manifest_path: Path | None) -> SessionSummary | None:
@@ -1637,11 +1580,7 @@ def _normalize_csv_record(row: Mapping[str, str]) -> dict[str, Any]:
         if value == "":
             normalized[key] = None
         elif key == "metadata" and isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except json.JSONDecodeError:
-                parsed = {}
-            normalized[key] = parsed if isinstance(parsed, dict) else {}
+            normalized[key] = _parse_csv_metadata(value)
         elif key in int_fields:
             text_value = str(value).strip()
             try:
@@ -1653,6 +1592,14 @@ def _normalize_csv_record(row: Mapping[str, str]) -> dict[str, Any]:
         else:
             normalized[key] = value
     return normalized
+
+
+def _parse_csv_metadata(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _count_oom_bundles_by_session(
@@ -1672,6 +1619,12 @@ def _session_matches(row: SessionRow, filters: SessionFilter) -> bool:
         return False
     if filters.job_id is not None and row.job_id != filters.job_id:
         return False
+    return _session_topology_and_artifacts_match(row, filters)
+
+
+def _session_topology_and_artifacts_match(
+    row: SessionRow, filters: SessionFilter
+) -> bool:
     if filters.rank is not None and row.rank != filters.rank:
         return False
     if filters.world_size is not None and row.world_size != filters.world_size:
@@ -1693,12 +1646,14 @@ def _event_matches(row: EventRow, filters: EventFilter) -> bool:
         return False
     if filters.collector is not None and event.collector != filters.collector:
         return False
-    if filters.time_start_ns is not None and event.timestamp_ns < filters.time_start_ns:
+    if not _event_time_and_alert_match(event, filters):
         return False
-    if filters.time_end_ns is not None and event.timestamp_ns > filters.time_end_ns:
-        return False
-    if filters.has_alert is not None and (is_alert_event(event) != filters.has_alert):
-        return False
+    return _event_collector_metadata_matches(event, filters)
+
+
+def _event_collector_metadata_matches(
+    event: TelemetryEvent, filters: EventFilter
+) -> bool:
     metadata = event.metadata
     if filters.collector_health_status is not None and (
         metadata.get("collector_health_status") != filters.collector_health_status
@@ -1709,6 +1664,37 @@ def _event_matches(row: EventRow, filters: EventFilter) -> bool:
     return True
 
 
+def _event_time_and_alert_match(event: TelemetryEvent, filters: EventFilter) -> bool:
+    if filters.time_start_ns is not None and event.timestamp_ns < filters.time_start_ns:
+        return False
+    if filters.time_end_ns is not None and event.timestamp_ns > filters.time_end_ns:
+        return False
+    if filters.has_alert is not None and (is_alert_event(event) != filters.has_alert):
+        return False
+    return True
+
+
+def _query_session_events(
+    loaded: LoadedTelemetrySession,
+    source: CatalogSource,
+    filters: EventFilter,
+) -> Iterator[EventRow]:
+    summary = loaded.summary
+    if filters.session_id is not None and summary.session_id != filters.session_id:
+        return
+    if filters.status is not None and summary.status != filters.status:
+        return
+    for event in loaded.events:
+        row = EventRow(
+            event=event,
+            source_path=_event_source_path(loaded, source),
+            source_kind=source.source_kind,
+            session_status=summary.status,
+        )
+        if _event_matches(row, filters):
+            yield row
+
+
 def _oom_matches(row: OOMBundleRow, filters: OOMBundleFilter) -> bool:
     if filters.session_id is not None and row.session_id != filters.session_id:
         return False
@@ -1716,6 +1702,10 @@ def _oom_matches(row: OOMBundleRow, filters: OOMBundleFilter) -> bool:
         return False
     if filters.reason is not None and row.reason != filters.reason:
         return False
+    return _oom_creation_time_matches(row, filters)
+
+
+def _oom_creation_time_matches(row: OOMBundleRow, filters: OOMBundleFilter) -> bool:
     created = _parse_datetime(row.created_at_utc)
     after = _parse_datetime(filters.created_after)
     before = _parse_datetime(filters.created_before)
@@ -1874,11 +1864,9 @@ def _match_correlation_evidence(
         else False
     )
     identity_match = _identity_match(evidence, anchor, filters.scope)
-    if has_time and not time_matches:
-        return None
-    if identity_match is None and not time_matches:
-        return None
-    if _has_identity_conflict(evidence, anchor, filters.scope):
+    if not _correlation_context_matches(
+        evidence, anchor, filters.scope, identity_match, has_time, time_matches
+    ):
         return None
 
     confidence, reasons = _correlation_confidence(
@@ -1889,6 +1877,21 @@ def _match_correlation_evidence(
         time_matches,
     )
     return replace(evidence, confidence=confidence, reasons=tuple(reasons))
+
+
+def _correlation_context_matches(
+    evidence: CorrelationEvidence,
+    anchor: Mapping[str, Any],
+    scope: str,
+    identity_match: str | None,
+    has_time: bool,
+    time_matches: bool,
+) -> bool:
+    if has_time and not time_matches:
+        return False
+    if identity_match is None and not time_matches:
+        return False
+    return not _has_identity_conflict(evidence, anchor, scope)
 
 
 def _explicit_correlation_filters_match(
@@ -1959,21 +1962,20 @@ def _has_identity_conflict(
         and evidence.job_id is not None
         and evidence.job_id == anchor_job
     )
-    if (
-        anchor_session is not None
-        and evidence.session_id is not None
-        and evidence.session_id != anchor_session
-        and not (scope == "distributed" and same_job)
+    if _known_identifiers_differ(anchor_session, evidence.session_id) and not (
+        scope == "distributed" and same_job
     ):
         return True
     if (
-        anchor_job is not None
-        and evidence.job_id is not None
-        and evidence.job_id != anchor_job
+        _known_identifiers_differ(anchor_job, evidence.job_id)
         and evidence.session_id != anchor_session
     ):
         return True
     return False
+
+
+def _known_identifiers_differ(first: str | None, second: str | None) -> bool:
+    return first is not None and second is not None and first != second
 
 
 def _correlation_confidence(
@@ -2334,6 +2336,18 @@ def _accumulate_oom_bundle_issue(
     )
 
 
+def _accumulate_event_issues(
+    accumulator: dict[str, _IssueAccumulator], rows: Sequence[EventRow]
+) -> None:
+    for row in rows:
+        if is_oom_event(row.event):
+            _accumulate_oom_event_issue(accumulator, row)
+        elif is_collector_degradation_event(row.event):
+            _accumulate_collector_issue(accumulator, row)
+        elif is_alert_event(row.event):
+            _accumulate_alert_issue(accumulator, row)
+
+
 def _accumulate_oom_event_issue(
     accumulator: dict[str, _IssueAccumulator],
     row: EventRow,
@@ -2571,6 +2585,16 @@ def _max_severity(first: str, second: str) -> str:
 
 
 def _issue_matches(issue: StormlogIssue, filters: IssueFilter) -> bool:
+    if not _issue_classification_matches(issue, filters):
+        return False
+    if filters.session_id is not None and (
+        filters.session_id not in issue.affected_sessions
+    ):
+        return False
+    return True
+
+
+def _issue_classification_matches(issue: StormlogIssue, filters: IssueFilter) -> bool:
     if filters.fingerprint_id is not None and (
         issue.fingerprint_id != filters.fingerprint_id
     ):
@@ -2580,10 +2604,6 @@ def _issue_matches(issue: StormlogIssue, filters: IssueFilter) -> bool:
     if filters.state is not None and issue.state != filters.state:
         return False
     if filters.severity is not None and issue.severity != filters.severity:
-        return False
-    if filters.session_id is not None and (
-        filters.session_id not in issue.affected_sessions
-    ):
         return False
     return True
 
@@ -2595,6 +2615,30 @@ def _issue_sort_key(issue: StormlogIssue) -> tuple[int, int, str]:
         -last_seen,
         issue.fingerprint_id,
     )
+
+
+def _summarize_events(
+    events: Sequence[EventRow], metric: SummaryMetric, group_by: SummaryGroupBy
+) -> list[SummaryRow]:
+    peak_fields = {
+        "peak_allocator_allocated_bytes": "allocator_allocated_bytes",
+        "peak_allocator_reserved_bytes": "allocator_reserved_bytes",
+        "peak_device_used_bytes": "device_used_bytes",
+    }
+    if metric in peak_fields:
+        field_name = peak_fields[metric]
+        return _summarize_peak(events, metric, field_name, group_by)
+    if metric == "alert_count":
+        alert_events = [row for row in events if is_alert_event(row.event)]
+        return _summarize_count(alert_events, metric, group_by)
+    if metric == "collector_degradation_transitions":
+        transition_events = [
+            row for row in events if row.event.event_type in COLLECTOR_TRANSITION_TYPES
+        ]
+        return _summarize_count(transition_events, metric, group_by)
+    if metric == "hidden_memory_gap_growth":
+        return _summarize_hidden_memory_gap_growth(events, group_by)
+    raise ValueError(f"unsupported summary metric: {metric}")
 
 
 def _summarize_peak(

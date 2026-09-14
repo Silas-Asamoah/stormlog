@@ -186,6 +186,83 @@ def test_v4_rejects_counter_declared_unsupported() -> None:
         validate_telemetry_record(record)
 
 
+@pytest.mark.parametrize("schema_version", [SCHEMA_VERSION_V2, SCHEMA_VERSION_V3])
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"timestamp_ns": -1}, "timestamp_ns must be >= 0"),
+        ({"sampling_interval_ms": -1}, "sampling_interval_ms must be >= 0"),
+        ({"pid": -2}, "pid must be >= -1"),
+        ({"allocator_reserved_bytes": -1}, "allocator_reserved_bytes must be >= 0"),
+        (
+            {"allocator_active_bytes": -1},
+            "allocator_active_bytes must be >= 0 when provided",
+        ),
+        (
+            {"allocator_inactive_bytes": -1},
+            "allocator_inactive_bytes must be >= 0 when provided",
+        ),
+        ({"device_used_bytes": -1}, "device_used_bytes must be >= 0"),
+        ({"device_free_bytes": -1}, "device_free_bytes must be >= 0 when provided"),
+        ({"device_total_bytes": -1}, "device_total_bytes must be >= 0 when provided"),
+        (
+            {"device_used_bytes": 6145},
+            "device_used_bytes cannot exceed device_total_bytes",
+        ),
+        (
+            {"device_free_bytes": 6145},
+            "device_free_bytes cannot exceed device_total_bytes",
+        ),
+        # Coercion precedes range checks within each group of memory counters.
+        (
+            {"allocator_allocated_bytes": -1, "allocator_reserved_bytes": "bad"},
+            "allocator_reserved_bytes must be an integer",
+        ),
+        (
+            {"device_used_bytes": -1, "device_total_bytes": "bad"},
+            "device_total_bytes must be an integer",
+        ),
+        (
+            {"rank": -1, "device_id": "bad"},
+            "rank must be >= 0",
+        ),
+        (
+            {"rank": 8, "metadata": []},
+            "metadata must be an object",
+        ),
+    ],
+)
+def test_telemetry_validation_preserves_error_order(
+    schema_version: int, updates: dict[str, object], message: str
+) -> None:
+    record = telemetry_event_to_dict(_make_valid_event())
+    record.update(schema_version=schema_version, **updates)
+    if schema_version == SCHEMA_VERSION_V3:
+        record["session_id"] = "validation-session"
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_telemetry_record(record)
+
+    assert str(exc_info.value) == message
+
+
+def test_telemetry_validation_accepts_nullable_counters_and_unknown_pid() -> None:
+    record = telemetry_event_to_dict(_make_valid_event())
+    record.update(
+        pid=-1,
+        allocator_active_bytes=None,
+        allocator_inactive_bytes=None,
+        allocator_change_bytes=-1024,
+        device_free_bytes=None,
+        device_total_bytes=None,
+    )
+    original = dict(record)
+
+    validate_telemetry_record(record)
+
+    assert record == original
+
+
 def test_legacy_gpumemprof_record_converts_to_v4() -> None:
     legacy = {
         "timestamp": 1700000000.25,

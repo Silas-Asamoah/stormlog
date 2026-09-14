@@ -445,18 +445,7 @@ class GPUMemoryProfiler:
         total_memory_freed = sum(r.memory_freed for r in self.results)
         peak_memory = max(r.peak_memory_usage() for r in self.results)
 
-        # Function statistics
-        function_summaries = {}
-        for func_name, results in self.function_stats.items():
-            function_summaries[func_name] = {
-                "call_count": len(results),
-                "total_time": sum(r.execution_time for r in results),
-                "avg_time": sum(r.execution_time for r in results) / len(results),
-                "total_memory_allocated": sum(r.memory_allocated for r in results),
-                "avg_memory_allocated": sum(r.memory_allocated for r in results)
-                / len(results),
-                "peak_memory": max(r.peak_memory_usage() for r in results),
-            }
+        function_summaries = self._function_summaries()
 
         # Current memory state
         current_snapshot = self._take_snapshot("current")
@@ -478,6 +467,22 @@ class GPUMemoryProfiler:
             "monitoring_active": self._monitoring,
             "snapshots_collected": len(self.snapshots),
         }
+
+    def _function_summaries(self) -> Dict[str, Any]:
+        # Function statistics
+        function_summaries = {}
+        for func_name, results in self.function_stats.items():
+            function_summaries[func_name] = {
+                "call_count": len(results),
+                "total_time": sum(r.execution_time for r in results),
+                "avg_time": sum(r.execution_time for r in results) / len(results),
+                "total_memory_allocated": sum(r.memory_allocated for r in results),
+                "avg_memory_allocated": sum(r.memory_allocated for r in results)
+                / len(results),
+                "peak_memory": max(r.peak_memory_usage() for r in results),
+            }
+
+        return function_summaries
 
     def clear_results(self) -> None:
         """Clear all profiling results and reset state."""

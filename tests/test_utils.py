@@ -3,6 +3,7 @@ import os
 import platform
 import subprocess
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -138,6 +139,53 @@ def test_check_memory_fragmentation_adds_formatted_keys_without_mutation_error(
     assert fragmentation["reserved_memory"] == 3 * 1024**3
     assert fragmentation["allocated_memory_formatted"] == "2.00 GB"
     assert fragmentation["reserved_memory_formatted"] == "3.00 GB"
+
+
+class _CudaDevice:
+    def __init__(self, index: int | None) -> None:
+        self.index = index
+
+
+@pytest.mark.parametrize(
+    "device,expected",
+    [
+        (None, 3),
+        (2, 2),
+        ("cuda:4", 4),
+        ("cuda", 0),
+        (_CudaDevice(None), 0),
+        (_CudaDevice(5), 5),
+        (SimpleNamespace(index=7), 7),
+        (SimpleNamespace(), 0),
+    ],
+)
+def test_gpu_queries_preserve_device_index_resolution(
+    monkeypatch: pytest.MonkeyPatch, device: Any, expected: int
+) -> None:
+    cuda = SimpleNamespace(
+        is_available=lambda: True,
+        current_device=lambda: 3,
+        get_device_name=lambda index: "GPU",
+        get_device_capability=lambda index: (8, 0),
+        get_device_properties=lambda index: SimpleNamespace(
+            total_memory=1024, multi_processor_count=8
+        ),
+        memory_allocated=lambda index: 0,
+        memory_reserved=lambda index: 0,
+        max_memory_allocated=lambda index: 0,
+        max_memory_reserved=lambda index: 0,
+        memory_stats=lambda index: {},
+    )
+    fake_torch = SimpleNamespace(
+        device=_CudaDevice,
+        cuda=cuda,
+        version=SimpleNamespace(cuda="12"),
+        __version__="2",
+    )
+    monkeypatch.setattr(gpumemprof_utils, "torch", fake_torch)
+    monkeypatch.setattr(gpumemprof_utils, "_get_nvidia_smi_info", lambda index: {})
+    assert gpumemprof_utils.get_gpu_info(device)["device_id"] == expected
+    assert gpumemprof_utils.check_memory_fragmentation(device)["device_id"] == expected
 
 
 def test_detect_gpu_hardware_windows_prefers_powershell_output(

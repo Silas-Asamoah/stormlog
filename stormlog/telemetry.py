@@ -33,6 +33,13 @@ SCHEMA_VERSION_LATEST: Literal[4] = SCHEMA_VERSION_V4
 UNKNOWN_PID = -1
 UNKNOWN_HOST = "unknown"
 
+_LEGACY_BACKEND_COLLECTORS = {
+    "mps": "stormlog.mps_tracker",
+    "rocm": "stormlog.rocm_tracker",
+    "cuda": "stormlog.cuda_tracker",
+    "cpu": "stormlog.cpu_tracker",
+}
+
 REQUIRED_V3_FIELDS = (
     "schema_version",
     "session_id",
@@ -473,40 +480,47 @@ def resolve_distributed_identity(
 ) -> dict[str, Any]:
     """Normalize distributed identity fields from explicit, metadata, or env inputs."""
     metadata_values = dict(metadata or {})
-    raw_job_id = job_id if job_id is not None else metadata_values.get("job_id")
-    raw_rank = rank if rank is not None else metadata_values.get("rank")
-    raw_local_rank = (
-        local_rank if local_rank is not None else metadata_values.get("local_rank")
-    )
-    raw_world_size = (
-        world_size if world_size is not None else metadata_values.get("world_size")
-    )
+    raw = {
+        "job_id": job_id,
+        "rank": rank,
+        "local_rank": local_rank,
+        "world_size": world_size,
+    }
+    for name, value in raw.items():
+        if value is None:
+            raw[name] = metadata_values.get(name)
+    _fill_identity_from_env(raw, env)
+    return _normalize_distributed_identity(raw)
 
-    needs_rank_env = (
-        raw_rank is None or raw_local_rank is None or raw_world_size is None
+
+def _fill_identity_from_env(
+    raw: dict[str, Any], env: Optional[Mapping[str, str]]
+) -> None:
+    """Fill only missing fields, without parsing rank env for complete identities."""
+    needs_rank_env = any(
+        raw[name] is None for name in ("rank", "local_rank", "world_size")
     )
     if needs_rank_env:
         inferred = _infer_distributed_identity_from_env(env)
-        if raw_rank is None:
-            raw_rank = inferred["rank"]
-        if raw_local_rank is None:
-            raw_local_rank = inferred["local_rank"]
-        if raw_world_size is None:
-            raw_world_size = inferred["world_size"]
-        if raw_job_id is None:
-            raw_job_id = inferred["job_id"]
-    elif raw_job_id is None and env is not None:
-        raw_job_id = _first_env_value(env, _JOB_ID_ENV_KEYS)
+        for name, value in raw.items():
+            if value is None:
+                raw[name] = inferred[name]
+    elif raw["job_id"] is None and env is not None:
+        raw["job_id"] = _first_env_value(env, _JOB_ID_ENV_KEYS)
 
+
+def _normalize_distributed_identity(raw: Mapping[str, Any]) -> dict[str, Any]:
+    raw_rank = raw["rank"]
+    raw_local_rank = raw["local_rank"]
+    raw_world_size = raw["world_size"]
     if raw_world_size is None:
         raw_world_size = 1
     if raw_rank is None:
         raw_rank = 0
-
-    if raw_rank is not None and raw_local_rank is None:
+    if raw_local_rank is None:
         raw_local_rank = raw_rank
 
-    normalized_job_id = _coerce_optional_non_empty_string(raw_job_id, "job_id")
+    normalized_job_id = _coerce_optional_non_empty_string(raw["job_id"], "job_id")
     normalized_rank = _coerce_non_negative_int(raw_rank, "rank")
     normalized_local_rank = _coerce_non_negative_int(raw_local_rank, "local_rank")
     normalized_world_size = _coerce_positive_int(raw_world_size, "world_size")
@@ -717,14 +731,8 @@ def _legacy_collector(
     backend_value = record.get("backend", metadata.get("backend"))
     if isinstance(backend_value, str):
         backend = backend_value.strip().lower()
-        if backend == "mps":
-            return "stormlog.mps_tracker"
-        if backend == "rocm":
-            return "stormlog.rocm_tracker"
-        if backend == "cuda":
-            return "stormlog.cuda_tracker"
-        if backend == "cpu":
-            return "stormlog.cpu_tracker"
+        if backend in _LEGACY_BACKEND_COLLECTORS:
+            return _LEGACY_BACKEND_COLLECTORS[backend]
 
     if "memory_mb" in record:
         return "stormlog.tensorflow.memory_tracker"
@@ -798,10 +806,30 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
         ValueError: if the record is invalid or partial.
     """
 
+    schema_version = _validate_telemetry_shape(record)
+    nullable_core_counters = schema_version == SCHEMA_VERSION_V4
+    _validate_telemetry_process(record)
+    _validate_telemetry_identity_fields(record)
+    _coerce_int(record["device_id"], "device_id")
+    _validate_allocator_counters(record, nullable_core_counters=nullable_core_counters)
+    _validate_device_counters(record, nullable_core_counters=nullable_core_counters)
+    _coerce_string(record["context"], "context", allow_none=True)
+    metadata = _coerce_metadata_dict(record["metadata"])
+    if schema_version == SCHEMA_VERSION_V4:
+        _validate_memory_capabilities(metadata)
+        _validate_capability_counter_consistency(record, metadata)
+    resolve_distributed_identity(
+        job_id=record.get("job_id"),
+        rank=record.get("rank"),
+        local_rank=record.get("local_rank"),
+        world_size=record.get("world_size"),
+    )
+
+
+def _validate_telemetry_shape(record: Mapping[str, Any]) -> int:
     schema_version = _coerce_int(record.get("schema_version"), "schema_version")
     required_fields: tuple[str, ...]
     known_fields: frozenset[str]
-    nullable_core_counters = schema_version == SCHEMA_VERSION_V4
     if schema_version == SCHEMA_VERSION_V4:
         required_fields = REQUIRED_V4_FIELDS
         known_fields = KNOWN_V4_FIELD_SET
@@ -827,7 +855,10 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
 
     if require_session_id:
         _coerce_required_string(record["session_id"], "session_id")
+    return schema_version
 
+
+def _validate_telemetry_process(record: Mapping[str, Any]) -> None:
     timestamp_ns = _coerce_int(record["timestamp_ns"], "timestamp_ns")
     if timestamp_ns < 0:
         raise ValueError("timestamp_ns must be >= 0")
@@ -847,6 +878,8 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
 
     _coerce_required_string(record["host"], "host")
 
+
+def _validate_telemetry_identity_fields(record: Mapping[str, Any]) -> None:
     if "job_id" in record:
         _coerce_optional_non_empty_string(record["job_id"], "job_id")
 
@@ -859,8 +892,10 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
     if "world_size" in record:
         _coerce_positive_int(record["world_size"], "world_size")
 
-    _coerce_int(record["device_id"], "device_id")
 
+def _validate_allocator_counters(
+    record: Mapping[str, Any], *, nullable_core_counters: bool
+) -> None:
     allocator_allocated_bytes = (
         _coerce_optional_int(
             record["allocator_allocated_bytes"], "allocator_allocated_bytes"
@@ -900,6 +935,10 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
     if allocator_change_bytes is not None and not _is_int(allocator_change_bytes):
         raise ValueError("allocator_change_bytes must be an integer when provided")
 
+
+def _validate_device_counters(
+    record: Mapping[str, Any], *, nullable_core_counters: bool
+) -> None:
     device_used_bytes = (
         _coerce_optional_int(record["device_used_bytes"], "device_used_bytes")
         if nullable_core_counters
@@ -919,31 +958,12 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
     if device_total_bytes is not None and device_total_bytes < 0:
         raise ValueError("device_total_bytes must be >= 0 when provided")
 
-    if (
-        device_total_bytes is not None
-        and device_used_bytes is not None
-        and device_used_bytes > device_total_bytes
-    ):
+    if device_total_bytes is None:
+        return
+    if device_used_bytes is not None and device_used_bytes > device_total_bytes:
         raise ValueError("device_used_bytes cannot exceed device_total_bytes")
-    if (
-        device_total_bytes is not None
-        and device_free_bytes is not None
-        and device_free_bytes > device_total_bytes
-    ):
+    if device_free_bytes is not None and device_free_bytes > device_total_bytes:
         raise ValueError("device_free_bytes cannot exceed device_total_bytes")
-
-    _coerce_string(record["context"], "context", allow_none=True)
-
-    metadata = _coerce_metadata_dict(record["metadata"])
-    if schema_version == SCHEMA_VERSION_V4:
-        _validate_memory_capabilities(metadata)
-        _validate_capability_counter_consistency(record, metadata)
-    resolve_distributed_identity(
-        job_id=record.get("job_id"),
-        rank=record.get("rank"),
-        local_rank=record.get("local_rank"),
-        world_size=record.get("world_size"),
-    )
 
 
 def telemetry_event_from_record(
@@ -1284,32 +1304,14 @@ def load_telemetry_sessions(
     manifest = read_telemetry_sink_manifest(payload_path)
     segment_paths = resolve_telemetry_sink_segment_paths(payload_path)
     if segment_paths:
-        grouped_events: dict[str, list[TelemetryEvent]] = {}
-        sources_by_session: dict[str, set[str]] = {}
         segment_session_ids = {
             segment.filename: segment.session_id
             for segment in (manifest.segments if manifest is not None else [])
         }
         fallback_session_id = stable_legacy_session_id(default_source_path, "sink")
-        for segment_path in segment_paths:
-            hint_session_id = (
-                segment_session_ids.get(segment_path.name) or fallback_session_id
-            )
-            segment_events = _load_jsonl_events(
-                segment_path,
-                permissive_legacy=permissive_legacy,
-                default_session_id=hint_session_id,
-            )
-            session_groups = _group_session_events(segment_events)
-            for session_id, events in session_groups.items():
-                grouped_events.setdefault(session_id, []).extend(events)
-                sources_by_session.setdefault(session_id, set()).add(str(segment_path))
-            if not segment_events and hint_session_id:
-                sources_by_session.setdefault(hint_session_id, set()).add(
-                    str(segment_path)
-                )
-        for events in grouped_events.values():
-            events.sort(key=lambda event: event.timestamp_ns)
+        grouped_events, sources_by_session = _group_sink_events(
+            segment_paths, segment_session_ids, fallback_session_id, permissive_legacy
+        )
         return _assemble_loaded_sessions(
             grouped_events=grouped_events,
             manifest_summaries=manifest.sessions if manifest is not None else None,
@@ -1386,6 +1388,34 @@ def project_telemetry_events(
     """Project existing telemetry events into backend-neutral records."""
 
     return [project_telemetry_event(event) for event in events]
+
+
+def _group_sink_events(
+    segment_paths: list[Path],
+    segment_session_ids: Mapping[str, str | None],
+    fallback_session_id: str,
+    permissive_legacy: bool,
+) -> tuple[dict[str, list[TelemetryEvent]], dict[str, set[str]]]:
+    grouped_events: dict[str, list[TelemetryEvent]] = {}
+    sources_by_session: dict[str, set[str]] = {}
+    for segment_path in segment_paths:
+        hint_session_id = (
+            segment_session_ids.get(segment_path.name) or fallback_session_id
+        )
+        segment_events = _load_jsonl_events(
+            segment_path,
+            permissive_legacy=permissive_legacy,
+            default_session_id=hint_session_id,
+        )
+        session_groups = _group_session_events(segment_events)
+        for session_id, events in session_groups.items():
+            grouped_events.setdefault(session_id, []).extend(events)
+            sources_by_session.setdefault(session_id, set()).add(str(segment_path))
+        if not segment_events and hint_session_id:
+            sources_by_session.setdefault(hint_session_id, set()).add(str(segment_path))
+    for events in grouped_events.values():
+        events.sort(key=lambda event: event.timestamp_ns)
+    return grouped_events, sources_by_session
 
 
 __all__ = [

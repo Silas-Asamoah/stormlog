@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from statistics import median
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 try:
     from .phases import PhaseAttribution, PhaseReplayIndex, phase_attribution_to_payload
@@ -129,13 +129,7 @@ def _select_cross_rank_analysis_events(
         )
         return [], None, notes
 
-    job_id = _select_job_id(sample_events)
-    observed_job_ids = {event.job_id for event in sample_events if event.job_id}
-    if len(observed_job_ids) > 1 and job_id is not None:
-        notes.append(
-            "Multiple job_id values were observed; filtering to the most common value."
-        )
-        sample_events = [event for event in sample_events if event.job_id == job_id]
+    sample_events, job_id = _select_job_samples(sample_events, notes)
 
     return sample_events, job_id, notes
 
@@ -224,42 +218,8 @@ def merge_cross_rank_timelines(
             + "."
         )
 
-    anchor_rank = 0 if 0 in grouped else participating_ranks[0]
-    anchor_timestamp = grouped[anchor_rank][0].timestamp_ns
-    alignment_offsets_ns: dict[int, int] = {}
-    merged_points: list[RankTimelinePoint] = []
-    median_interval_ns = _median_sampling_interval_ns(grouped)
-
-    for rank in participating_ranks:
-        offset_ns = grouped[rank][0].timestamp_ns - anchor_timestamp
-        alignment_offsets_ns[rank] = offset_ns
-        if (
-            median_interval_ns > 0
-            and abs(offset_ns) > _SKEW_NOTE_MULTIPLIER * median_interval_ns
-        ):
-            notes.append(
-                "Rank "
-                f"{rank} starts {offset_ns} ns from the anchor; "
-                "first-sample alignment may be approximate."
-            )
-        for event in grouped[rank]:
-            device_used = event.device_used_bytes
-            if device_used is None:
-                continue
-            merged_points.append(
-                RankTimelinePoint(
-                    rank=rank,
-                    timestamp_ns=event.timestamp_ns,
-                    aligned_timestamp_ns=event.timestamp_ns - offset_ns,
-                    device_used_bytes=device_used,
-                    allocator_reserved_bytes=event.allocator_reserved_bytes,
-                    allocator_allocated_bytes=event.allocator_allocated_bytes,
-                    allocator_change_bytes=event.allocator_change_bytes,
-                )
-            )
-
-    merged_points.sort(
-        key=lambda point: (point.aligned_timestamp_ns, point.rank, point.timestamp_ns)
+    alignment_offsets_ns, merged_points = _align_rank_streams(
+        grouped, participating_ranks, notes
     )
 
     return CrossRankMergeResult(
@@ -357,18 +317,9 @@ def _detect_first_cause_spikes(
             ],
         )
 
-    candidates: list[_RankSpikeCandidate] = []
-    insufficient_sample_ranks = [
-        rank for rank, rank_events in grouped.items() if len(rank_events) < 2
-    ]
-    for rank, rank_events in grouped.items():
-        candidate = _find_rank_spike_candidate(
-            rank_events,
-            merge_result.alignment_offsets_ns.get(rank, 0),
-        )
-        if candidate is not None:
-            candidates.append(candidate)
-
+    candidates, insufficient_sample_ranks = _collect_rank_spike_candidates(
+        grouped, merge_result.alignment_offsets_ns
+    )
     notes: list[str] = []
     if insufficient_sample_ranks:
         notes.append(
@@ -385,6 +336,50 @@ def _detect_first_cause_spikes(
             notes=notes,
         )
 
+    ranked_suspects, cluster_onset_timestamp_ns = _select_first_cause_candidates(
+        candidates
+    )
+    if cluster_onset_timestamp_ns is None:
+        notes.append(
+            "Only one rank produced a qualifying spike; confidence is limited."
+        )
+
+    suspects = _build_first_cause_suspects(
+        ranked_suspects,
+        cluster_onset_timestamp_ns=cluster_onset_timestamp_ns,
+        candidate_count=len(candidates),
+        median_interval_ns=_median_sampling_interval_ns(grouped),
+        sparse_evidence=bool(merge_result.missing_ranks or insufficient_sample_ranks),
+        phase_resolver=phase_resolver,
+    )
+    return FirstCauseAnalysisResult(
+        cluster_onset_timestamp_ns=cluster_onset_timestamp_ns,
+        suspects=suspects,
+        notes=notes,
+    )
+
+
+def _collect_rank_spike_candidates(
+    grouped: dict[int, list[TelemetryEventLike]],
+    alignment_offsets_ns: dict[int, int],
+) -> tuple[list[_RankSpikeCandidate], list[int]]:
+    insufficient_sample_ranks = [
+        rank for rank, rank_events in grouped.items() if len(rank_events) < 2
+    ]
+    candidates: list[_RankSpikeCandidate] = []
+    for rank, rank_events in grouped.items():
+        candidate = _find_rank_spike_candidate(
+            rank_events, alignment_offsets_ns.get(rank, 0)
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates, insufficient_sample_ranks
+
+
+def _select_first_cause_candidates(
+    candidates: list[_RankSpikeCandidate],
+) -> tuple[list[_RankSpikeCandidate], int | None]:
+    """Order candidates and include every rank at or before the second spike."""
     candidates.sort(
         key=lambda candidate: (
             candidate.aligned_first_spike_timestamp_ns,
@@ -396,11 +391,6 @@ def _detect_first_cause_spikes(
     cluster_onset_timestamp_ns: int | None = None
     if len(candidates) >= 2:
         cluster_onset_timestamp_ns = candidates[1].aligned_first_spike_timestamp_ns
-    else:
-        notes.append(
-            "Only one rank produced a qualifying spike; confidence is limited."
-        )
-
     suspect_cutoff = (
         cluster_onset_timestamp_ns
         if cluster_onset_timestamp_ns is not None
@@ -412,13 +402,65 @@ def _detect_first_cause_spikes(
         if candidate.aligned_first_spike_timestamp_ns <= suspect_cutoff
     ]
 
-    median_interval_ns = _median_sampling_interval_ns(grouped)
+    return ranked_suspects, cluster_onset_timestamp_ns
+
+
+def _first_cause_confidence(
+    candidate: _RankSpikeCandidate,
+    *,
+    candidate_count: int,
+    earliest_aligned_timestamp: int,
+    earliest_count: int,
+    sparse_evidence: bool,
+    median_interval_ns: int,
+    lead_over_cluster_onset_ns: int,
+) -> str:
+    if (
+        candidate_count < 2
+        or sparse_evidence
+        or candidate.aligned_first_spike_timestamp_ns != earliest_aligned_timestamp
+    ):
+        return "low"
+    if earliest_count == 1 and (
+        median_interval_ns <= 0 or lead_over_cluster_onset_ns >= median_interval_ns
+    ):
+        return "high"
+    return "medium"
+
+
+def _resolve_candidate_phase(
+    candidate: _RankSpikeCandidate, phase_resolver: PhaseReplayIndex | None
+) -> PhaseAttribution | None:
+    if (
+        phase_resolver is not None
+        and candidate.session_id is not None
+        and hasattr(phase_resolver, "resolve")
+    ):
+        return cast(
+            PhaseAttribution | None,
+            phase_resolver.resolve(
+                timestamp_ns=candidate.first_spike_timestamp_ns,
+                session_id=candidate.session_id,
+                rank=candidate.rank,
+            ),
+        )
+    return None
+
+
+def _build_first_cause_suspects(
+    ranked_suspects: list[_RankSpikeCandidate],
+    *,
+    cluster_onset_timestamp_ns: int | None,
+    candidate_count: int,
+    median_interval_ns: int,
+    sparse_evidence: bool,
+    phase_resolver: PhaseReplayIndex | None,
+) -> list[FirstCauseSuspect]:
     earliest_aligned_timestamp = ranked_suspects[0].aligned_first_spike_timestamp_ns
     earliest_count = sum(
         candidate.aligned_first_spike_timestamp_ns == earliest_aligned_timestamp
         for candidate in ranked_suspects
     )
-    sparse_evidence = bool(merge_result.missing_ranks or insufficient_sample_ranks)
     support_count = len(ranked_suspects)
 
     suspects: list[FirstCauseSuspect] = []
@@ -429,22 +471,15 @@ def _detect_first_cause_spikes(
             else cluster_onset_timestamp_ns - candidate.aligned_first_spike_timestamp_ns
         )
 
-        confidence = "low"
-        if len(candidates) >= 2:
-            if (
-                candidate.aligned_first_spike_timestamp_ns == earliest_aligned_timestamp
-                and earliest_count == 1
-                and not sparse_evidence
-                and (
-                    median_interval_ns <= 0
-                    or lead_over_cluster_onset_ns >= median_interval_ns
-                )
-            ):
-                confidence = "high"
-            elif (
-                candidate.aligned_first_spike_timestamp_ns == earliest_aligned_timestamp
-            ):
-                confidence = "medium" if not sparse_evidence else "low"
+        confidence = _first_cause_confidence(
+            candidate,
+            candidate_count=candidate_count,
+            earliest_aligned_timestamp=earliest_aligned_timestamp,
+            earliest_count=earliest_count,
+            sparse_evidence=sparse_evidence,
+            median_interval_ns=median_interval_ns,
+            lead_over_cluster_onset_ns=lead_over_cluster_onset_ns,
+        )
 
         suspects.append(
             FirstCauseSuspect(
@@ -459,25 +494,11 @@ def _detect_first_cause_spikes(
                     "device_used_delta_bytes": candidate.peak_delta_bytes,
                     "supporting_ranks_at_or_before_onset": support_count,
                 },
-                phase_attribution=(
-                    phase_resolver.resolve(
-                        timestamp_ns=candidate.first_spike_timestamp_ns,
-                        session_id=candidate.session_id,
-                        rank=candidate.rank,
-                    )
-                    if phase_resolver is not None
-                    and candidate.session_id is not None
-                    and hasattr(phase_resolver, "resolve")
-                    else None
-                ),
+                phase_attribution=_resolve_candidate_phase(candidate, phase_resolver),
             )
         )
 
-    return FirstCauseAnalysisResult(
-        cluster_onset_timestamp_ns=cluster_onset_timestamp_ns,
-        suspects=suspects,
-        notes=notes,
-    )
+    return suspects
 
 
 def analyze_cross_rank_events(
@@ -543,6 +564,66 @@ def _serialize_first_cause_suspect(suspect: FirstCauseSuspect) -> dict[str, Any]
         suspect.phase_attribution
     )
     return payload
+
+
+def _select_job_samples(
+    sample_events: list[TelemetryEventLike], notes: list[str]
+) -> tuple[list[TelemetryEventLike], str | None]:
+    job_id = _select_job_id(sample_events)
+    observed_job_ids = {event.job_id for event in sample_events if event.job_id}
+    if len(observed_job_ids) > 1 and job_id is not None:
+        notes.append(
+            "Multiple job_id values were observed; filtering to the most common value."
+        )
+        sample_events = [event for event in sample_events if event.job_id == job_id]
+
+    return sample_events, job_id
+
+
+def _align_rank_streams(
+    grouped: dict[int, list[TelemetryEventLike]],
+    participating_ranks: list[int],
+    notes: list[str],
+) -> tuple[dict[int, int], list[RankTimelinePoint]]:
+    anchor_rank = 0 if 0 in grouped else participating_ranks[0]
+    anchor_timestamp = grouped[anchor_rank][0].timestamp_ns
+    alignment_offsets_ns: dict[int, int] = {}
+    merged_points: list[RankTimelinePoint] = []
+    median_interval_ns = _median_sampling_interval_ns(grouped)
+
+    for rank in participating_ranks:
+        offset_ns = grouped[rank][0].timestamp_ns - anchor_timestamp
+        alignment_offsets_ns[rank] = offset_ns
+        if (
+            median_interval_ns > 0
+            and abs(offset_ns) > _SKEW_NOTE_MULTIPLIER * median_interval_ns
+        ):
+            notes.append(
+                "Rank "
+                f"{rank} starts {offset_ns} ns from the anchor; "
+                "first-sample alignment may be approximate."
+            )
+        for event in grouped[rank]:
+            device_used = event.device_used_bytes
+            if device_used is None:
+                continue
+            merged_points.append(
+                RankTimelinePoint(
+                    rank=rank,
+                    timestamp_ns=event.timestamp_ns,
+                    aligned_timestamp_ns=event.timestamp_ns - offset_ns,
+                    device_used_bytes=device_used,
+                    allocator_reserved_bytes=event.allocator_reserved_bytes,
+                    allocator_allocated_bytes=event.allocator_allocated_bytes,
+                    allocator_change_bytes=event.allocator_change_bytes,
+                )
+            )
+
+    merged_points.sort(
+        key=lambda point: (point.aligned_timestamp_ns, point.rank, point.timestamp_ns)
+    )
+
+    return alignment_offsets_ns, merged_points
 
 
 __all__ = [

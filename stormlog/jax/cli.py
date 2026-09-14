@@ -329,54 +329,7 @@ def cmd_monitor(args: argparse.Namespace) -> int:
     finally:
         results = tracker.stop_tracking()
 
-        print("\nMonitoring Results:")
-        print("-" * 20)
-        capability = _tracking_memory_capability(results)
-        device_memory_available = capability["device_memory_available"]
-        if device_memory_available:
-            print(f"Peak Memory: {results.peak_memory_bytes / (1024 * 1024):.1f} MB")
-            print(
-                f"Average Memory: {results.average_memory_bytes / (1024 * 1024):.1f} MB"
-            )
-        else:
-            print("Device Memory: unavailable")
-            print(
-                f"Process RSS: {(capability['process_memory_bytes'] or 0) / (1024 * 1024):.1f} MB"
-            )
-        print(f"Duration: {results.duration:.1f} seconds")
-        print(f"Samples Collected: {len(results.memory_usage)}")
-        dropped_samples = getattr(results, "history_dropped_samples", 0)
-        if dropped_samples:
-            print(f"Dropped Samples: {dropped_samples}")
-
-        if results.alert_count:
-            print(f"Alerts Triggered: {results.alert_count}")
-
-        if args.output:
-            # Save results
-            output_data = {
-                "peak_memory": results.peak_memory_bytes / (1024 * 1024),
-                "average_memory": results.average_memory_bytes / (1024 * 1024),
-                "duration": results.duration,
-                "memory_usage": results.memory_usage,
-                "timestamps": results.timestamps,
-                "alerts": results.alert_count,
-                "history_window_limit": getattr(results, "history_window_limit", 0),
-                "history_retained_samples": getattr(
-                    results, "history_retained_samples", 0
-                ),
-                "history_dropped_samples": getattr(
-                    results, "history_dropped_samples", 0
-                ),
-                **capability,
-            }
-
-            output_path = Path(args.output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2)
-
-            print(f"Results saved to {args.output}")
+        _report_monitor_results(results, args.output)
 
     return 0
 
@@ -393,6 +346,37 @@ def cmd_track(args: argparse.Namespace) -> int:
     if mlflow_config is None:
         return 1
 
+    tracker = _build_tracking_runtime(args)
+
+    try:
+        tracker.start_tracking()
+        print("Tracking started. Press Ctrl+C to stop and save results.")
+
+        with tracker.capture_oom(
+            context="jaxmemprof.track",
+            metadata={"command": "track", "runtime_backend": "jax"},
+        ):
+            while True:
+                time.sleep(5.0)
+
+                _print_tracking_status(tracker)
+
+    except KeyboardInterrupt:
+        print("\nStopping tracking...")
+
+    finally:
+        results = tracker.stop_tracking()
+
+        _save_tracking_results(args, results)
+        final_stats = _print_tracking_results(tracker, results)
+        _export_tracking_integrations(
+            args, tracker, results, final_stats, wandb_config, mlflow_config
+        )
+
+    return 0
+
+
+def _build_tracking_runtime(args: argparse.Namespace) -> MemoryTracker:
     print("Starting background memory tracking...")
     job_id = getattr(args, "job_id", None)
     rank = getattr(args, "rank", None)
@@ -438,145 +422,130 @@ def cmd_track(args: argparse.Namespace) -> int:
         print(f"\n⚠️  MEMORY ALERT: {alert['message']}")
 
     tracker.add_alert_callback(alert_callback)
+    return tracker
 
-    try:
-        tracker.start_tracking()
-        print("Tracking started. Press Ctrl+C to stop and save results.")
 
-        with tracker.capture_oom(
-            context="jaxmemprof.track",
-            metadata={"command": "track", "runtime_backend": "jax"},
-        ):
-            while True:
-                time.sleep(5.0)
+def _print_tracking_status(tracker: MemoryTracker) -> None:
+    stats = tracker.get_statistics()
+    current_memory = stats.get("current_memory_mb")
+    collector_health = str(stats.get("collector_health_status", "healthy"))
+    if isinstance(current_memory, (int, float)):
+        status_line = f"Current memory: {float(current_memory):.1f} MB"
+    else:
+        status_line = "Current memory: unavailable"
+    status_line += f" | Health: {collector_health}"
+    retry_at = stats.get("collector_next_retry_epoch_s")
+    if isinstance(retry_at, (int, float)):
+        retry_in = max(float(retry_at) - time.time(), 0.0)
+        status_line += f" | Retry In: {retry_in:.1f}s"
+    print(status_line)
 
-                stats = tracker.get_statistics()
-                current_memory = stats.get("current_memory_mb")
-                collector_health = str(stats.get("collector_health_status", "healthy"))
-                if isinstance(current_memory, (int, float)):
-                    status_line = f"Current memory: {float(current_memory):.1f} MB"
-                else:
-                    status_line = "Current memory: unavailable"
-                status_line += f" | Health: {collector_health}"
-                retry_at = stats.get("collector_next_retry_epoch_s")
-                if isinstance(retry_at, (int, float)):
-                    retry_in = max(float(retry_at) - time.time(), 0.0)
-                    status_line += f" | Retry In: {retry_in:.1f}s"
-                print(status_line)
 
-    except KeyboardInterrupt:
-        print("\nStopping tracking...")
+def _save_tracking_results(args: argparse.Namespace, results: Any) -> None:
+    if args.output:
+        sampling_interval_ms = int(round(args.interval * 1000))
+        capability = _tracking_memory_capability(results)
+        output_data = {
+            "peak_memory": results.peak_memory_bytes / (1024 * 1024),
+            "average_memory": results.average_memory_bytes / (1024 * 1024),
+            "duration": results.duration,
+            "memory_usage": results.memory_usage,
+            "timestamps": results.timestamps,
+            "alerts": results.alert_count,
+            "events": _normalize_telemetry_events(
+                results.telemetry_events,
+                sampling_interval_ms=sampling_interval_ms,
+            ),
+            "history_window_limit": getattr(results, "history_window_limit", 0),
+            "history_retained_samples": getattr(results, "history_retained_samples", 0),
+            "history_dropped_samples": getattr(results, "history_dropped_samples", 0),
+            "history_retained_events": getattr(results, "history_retained_events", 0),
+            "history_dropped_events": getattr(results, "history_dropped_events", 0),
+            "history_retained_alerts": getattr(results, "history_retained_alerts", 0),
+            "history_dropped_alerts": getattr(results, "history_dropped_alerts", 0),
+            **capability,
+        }
 
-    finally:
-        results = tracker.stop_tracking()
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(output_data, f, indent=2)
 
-        if args.output:
-            sampling_interval_ms = int(round(args.interval * 1000))
-            capability = _tracking_memory_capability(results)
-            output_data = {
-                "peak_memory": results.peak_memory_bytes / (1024 * 1024),
-                "average_memory": results.average_memory_bytes / (1024 * 1024),
-                "duration": results.duration,
-                "memory_usage": results.memory_usage,
-                "timestamps": results.timestamps,
-                "alerts": results.alert_count,
-                "events": _normalize_telemetry_events(
-                    results.telemetry_events,
-                    sampling_interval_ms=sampling_interval_ms,
-                ),
-                "history_window_limit": getattr(results, "history_window_limit", 0),
-                "history_retained_samples": getattr(
-                    results, "history_retained_samples", 0
-                ),
-                "history_dropped_samples": getattr(
-                    results, "history_dropped_samples", 0
-                ),
-                "history_retained_events": getattr(
-                    results, "history_retained_events", 0
-                ),
-                "history_dropped_events": getattr(results, "history_dropped_events", 0),
-                "history_retained_alerts": getattr(
-                    results, "history_retained_alerts", 0
-                ),
-                "history_dropped_alerts": getattr(results, "history_dropped_alerts", 0),
-                **capability,
-            }
+        print(f"Results saved to {args.output}")
 
-            output_path = Path(args.output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2)
 
-            print(f"Results saved to {args.output}")
+def _print_tracking_results(tracker: MemoryTracker, results: Any) -> Dict[str, Any]:
+    final_stats = tracker.get_statistics()
+    if _tracking_memory_capability(results)["device_memory_available"]:
+        print(
+            f"\nTracking completed. Peak memory: {results.peak_memory_bytes / (1024 * 1024):.1f} MB"
+        )
+    else:
+        print("\nTracking completed. Device memory was unavailable on this backend.")
+    dropped_samples = int(final_stats.get("history_dropped_samples", 0))
+    dropped_events = int(final_stats.get("history_dropped_events", 0))
+    if dropped_samples or dropped_events:
+        print(
+            "History truncation: " f"samples={dropped_samples}, events={dropped_events}"
+        )
+    if "collector_health_status" in final_stats:
+        print(
+            "Collector health: "
+            f"{final_stats.get('collector_health_status', 'healthy')}"
+        )
+    if final_stats.get("collector_last_error"):
+        print(f"Last collector error: {final_stats.get('collector_last_error')}")
 
-        final_stats = tracker.get_statistics()
-        if _tracking_memory_capability(results)["device_memory_available"]:
-            print(
-                f"\nTracking completed. Peak memory: {results.peak_memory_bytes / (1024 * 1024):.1f} MB"
+    if getattr(results, "device_memory_profile_path", None):
+        print(f"Device memory profile saved to: {results.device_memory_profile_path}")
+    if tracker.last_oom_dump_path:
+        print(f"OOM flight recorder dump saved to: {tracker.last_oom_dump_path}")
+    return final_stats
+
+
+def _export_tracking_integrations(
+    args: argparse.Namespace,
+    tracker: MemoryTracker,
+    results: Any,
+    final_stats: Dict[str, Any],
+    wandb_config: Any,
+    mlflow_config: Any,
+) -> None:
+    if WANDB_AVAILABLE and wandb_config.enabled:
+        try:
+            export_tracking_run_to_wandb(
+                wandb_config,
+                command_name="jaxmemprof-track",
+                session_summary=tracker.get_session_summary(),
+                stats=final_stats,
+                events=results.telemetry_events,
+                output_path=args.output,
+                telemetry_sink_dir=getattr(args, "telemetry_sink_dir", None),
+                oom_dump_path=tracker.last_oom_dump_path,
             )
-        else:
-            print(
-                "\nTracking completed. Device memory was unavailable on this backend."
-            )
-        dropped_samples = int(final_stats.get("history_dropped_samples", 0))
-        dropped_events = int(final_stats.get("history_dropped_events", 0))
-        if dropped_samples or dropped_events:
-            print(
-                "History truncation: "
-                f"samples={dropped_samples}, events={dropped_events}"
-            )
-        if "collector_health_status" in final_stats:
-            print(
-                "Collector health: "
-                f"{final_stats.get('collector_health_status', 'healthy')}"
-            )
-        if final_stats.get("collector_last_error"):
-            print(f"Last collector error: {final_stats.get('collector_last_error')}")
+            print("W&B export completed.")
+        except Exception as exc:
+            _warn_wandb_export_failure("jaxmemprof track", exc)
+    elif wandb_config.enabled:
+        print("Warning: W&B is not available.", file=sys.stderr)
 
-        if getattr(results, "device_memory_profile_path", None):
-            print(
-                f"Device memory profile saved to: {results.device_memory_profile_path}"
+    if MLFLOW_AVAILABLE and mlflow_config.enabled:
+        try:
+            export_tracking_run_to_mlflow(
+                mlflow_config,
+                command_name="jaxmemprof-track",
+                session_summary=tracker.get_session_summary(),
+                stats=final_stats,
+                events=results.telemetry_events,
+                output_path=args.output,
+                telemetry_sink_dir=getattr(args, "telemetry_sink_dir", None),
+                oom_dump_path=tracker.last_oom_dump_path,
             )
-        if tracker.last_oom_dump_path:
-            print(f"OOM flight recorder dump saved to: {tracker.last_oom_dump_path}")
-
-        if WANDB_AVAILABLE and wandb_config.enabled:
-            try:
-                export_tracking_run_to_wandb(
-                    wandb_config,
-                    command_name="jaxmemprof-track",
-                    session_summary=tracker.get_session_summary(),
-                    stats=final_stats,
-                    events=results.telemetry_events,
-                    output_path=args.output,
-                    telemetry_sink_dir=getattr(args, "telemetry_sink_dir", None),
-                    oom_dump_path=tracker.last_oom_dump_path,
-                )
-                print("W&B export completed.")
-            except Exception as exc:
-                _warn_wandb_export_failure("jaxmemprof track", exc)
-        elif wandb_config.enabled:
-            print("Warning: W&B is not available.", file=sys.stderr)
-
-        if MLFLOW_AVAILABLE and mlflow_config.enabled:
-            try:
-                export_tracking_run_to_mlflow(
-                    mlflow_config,
-                    command_name="jaxmemprof-track",
-                    session_summary=tracker.get_session_summary(),
-                    stats=final_stats,
-                    events=results.telemetry_events,
-                    output_path=args.output,
-                    telemetry_sink_dir=getattr(args, "telemetry_sink_dir", None),
-                    oom_dump_path=tracker.last_oom_dump_path,
-                )
-                print("MLflow export completed.")
-            except Exception as exc:
-                _warn_mlflow_export_failure("jaxmemprof track", exc)
-        elif mlflow_config.enabled:
-            print("Warning: MLflow is not available.", file=sys.stderr)
-
-    return 0
+            print("MLflow export completed.")
+        except Exception as exc:
+            _warn_mlflow_export_failure("jaxmemprof track", exc)
+    elif mlflow_config.enabled:
+        print("Warning: MLflow is not available.", file=sys.stderr)
 
 
 def cmd_diagnose(args: argparse.Namespace) -> int:
@@ -612,6 +581,13 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    _print_diagnose_summary(artifact_dir, exit_code)
+    _export_diagnose_integrations(artifact_dir, wandb_config, mlflow_config)
+
+    return exit_code
+
+
+def _print_diagnose_summary(artifact_dir: Path, exit_code: int) -> None:
     # Structured stdout summary
     print(f"Artifact: {artifact_dir}")
     if exit_code == 0:
@@ -621,7 +597,10 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     else:
         status = "FAILED"
     print(f"Status: {status} (exit_code={exit_code})")
+    _print_diagnose_findings(artifact_dir, exit_code, status)
 
+
+def _print_diagnose_findings(artifact_dir: Path, exit_code: int, status: str) -> None:
     try:
         manifest_path = artifact_dir / "manifest.json"
         if manifest_path.exists():
@@ -641,6 +620,10 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     except (OSError, json.JSONDecodeError):
         pass
 
+
+def _export_diagnose_integrations(
+    artifact_dir: Path, wandb_config: Any, mlflow_config: Any
+) -> None:
     if WANDB_AVAILABLE and wandb_config.enabled:
         try:
             export_diagnose_bundle_to_wandb(
@@ -666,8 +649,6 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             _warn_mlflow_export_failure("jaxmemprof diagnose", exc)
     elif mlflow_config.enabled:
         print("Warning: MLflow is not available.", file=sys.stderr)
-
-    return exit_code
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
@@ -717,25 +698,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
     wrapper = ResultWrapper(data)
 
-    if (
-        getattr(args, "plot", None) or getattr(args, "visualize", False)
-    ) and memory_available:
-        from .visualizer import MemoryVisualizer
-
-        visualizer = MemoryVisualizer()
-
-        plot = getattr(args, "plot", None)
-        plot_name = plot if isinstance(plot, str) else "memory_timeline.png"
-
-        if getattr(args, "output", None):
-            output_dir = Path(args.output)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            plot_path = str(output_dir / plot_name)
-        else:
-            plot_path = plot_name
-
-        visualizer.plot_memory_timeline(wrapper, save_path=plot_path)
-        print(f"Memory timeline plot saved to {plot_path}")
+    _plot_analysis_timeline(args, wrapper, memory_available)
 
     if getattr(args, "detect_leaks", False) and memory_available:
         from .analyzer import MemoryAnalyzer
@@ -1002,6 +965,75 @@ Cookbook:
     else:
         print(f"Unknown command: {args.command}")
         return 1
+
+
+def _report_monitor_results(results: Any, output: str | None) -> None:
+    print("\nMonitoring Results:")
+    print("-" * 20)
+    capability = _tracking_memory_capability(results)
+    device_memory_available = capability["device_memory_available"]
+    if device_memory_available:
+        print(f"Peak Memory: {results.peak_memory_bytes / (1024 * 1024):.1f} MB")
+        print(f"Average Memory: {results.average_memory_bytes / (1024 * 1024):.1f} MB")
+    else:
+        print("Device Memory: unavailable")
+        print(
+            f"Process RSS: {(capability['process_memory_bytes'] or 0) / (1024 * 1024):.1f} MB"
+        )
+    print(f"Duration: {results.duration:.1f} seconds")
+    print(f"Samples Collected: {len(results.memory_usage)}")
+    dropped_samples = getattr(results, "history_dropped_samples", 0)
+    if dropped_samples:
+        print(f"Dropped Samples: {dropped_samples}")
+
+    if results.alert_count:
+        print(f"Alerts Triggered: {results.alert_count}")
+
+    if output:
+        # Save results
+        output_data = {
+            "peak_memory": results.peak_memory_bytes / (1024 * 1024),
+            "average_memory": results.average_memory_bytes / (1024 * 1024),
+            "duration": results.duration,
+            "memory_usage": results.memory_usage,
+            "timestamps": results.timestamps,
+            "alerts": results.alert_count,
+            "history_window_limit": getattr(results, "history_window_limit", 0),
+            "history_retained_samples": getattr(results, "history_retained_samples", 0),
+            "history_dropped_samples": getattr(results, "history_dropped_samples", 0),
+            **capability,
+        }
+
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(output_data, f, indent=2)
+
+        print(f"Results saved to {output}")
+
+
+def _plot_analysis_timeline(
+    args: argparse.Namespace, wrapper: Any, memory_available: bool
+) -> None:
+    if (
+        getattr(args, "plot", None) or getattr(args, "visualize", False)
+    ) and memory_available:
+        from .visualizer import MemoryVisualizer
+
+        visualizer = MemoryVisualizer()
+
+        plot = getattr(args, "plot", None)
+        plot_name = plot if isinstance(plot, str) else "memory_timeline.png"
+
+        if getattr(args, "output", None):
+            output_dir = Path(args.output)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            plot_path = str(output_dir / plot_name)
+        else:
+            plot_path = plot_name
+
+        visualizer.plot_memory_timeline(wrapper, save_path=plot_path)
+        print(f"Memory timeline plot saved to {plot_path}")
 
 
 if __name__ == "__main__":

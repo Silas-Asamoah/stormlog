@@ -339,22 +339,7 @@ def validate_jax_environment() -> Dict[str, Any]:
         issues.append("JAX not installed")
         return validation
 
-    # Check JAX version
-    try:
-        version = jax.__version__
-        parts = version.split(".")
-        major = int(parts[0])
-        minor = int(parts[1]) if len(parts) > 1 else 0
-        # Require >= 0.4.0 (pip enforces >=0.4.20 at install time)
-        if major > 0 or (major == 0 and minor >= 4):
-            validation["version_compatible"] = True
-        else:
-            issues.append(
-                f"JAX {version} may not be fully compatible " "(recommend 0.4.20+)"
-            )
-    except Exception as exc:
-        logger.debug("JAX version check failed: %s", exc)
-        issues.append("Could not determine JAX version")
+    _check_jax_version(validation, issues)
 
     # Check device availability
     try:
@@ -383,3 +368,22 @@ def validate_jax_environment() -> Dict[str, Any]:
         issues.append(f"Error checking device availability: {exc}")
 
     return validation
+
+
+def _check_jax_version(validation: Dict[str, Any], issues: List[str]) -> None:
+    # Check JAX version
+    try:
+        version = jax.__version__
+        parts = version.split(".")
+        major = int(parts[0])
+        minor = int(parts[1]) if len(parts) > 1 else 0
+        # Require >= 0.4.0 (pip enforces >=0.4.20 at install time)
+        if major > 0 or (major == 0 and minor >= 4):
+            validation["version_compatible"] = True
+        else:
+            issues.append(
+                f"JAX {version} may not be fully compatible " "(recommend 0.4.20+)"
+            )
+    except Exception as exc:
+        logger.debug("JAX version check failed: %s", exc)
+        issues.append("Could not determine JAX version")

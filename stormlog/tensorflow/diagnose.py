@@ -190,24 +190,7 @@ def build_diagnostic_summary(
     num_ooms = 0
     fragmentation_ratio = 0.0
 
-    # Per-device memory (TF reports in MB)
-    devices = gpu_info.get("devices") or []
-    idx = _device_index(device) if device else 0
-    if devices and idx < len(devices):
-        d = devices[idx]
-        current_mb = d.get("current_memory_mb", 0) or 0
-        peak_mb = d.get("peak_memory_mb", 0) or 0
-        allocated = int(current_mb * 1024 * 1024)
-        peak = int(peak_mb * 1024 * 1024)
-        total_memory_mb = d.get("total_memory_mb")
-        if isinstance(total_memory_mb, (int, float)) and total_memory_mb > 0:
-            total_bytes = int(total_memory_mb * 1024 * 1024)
-        else:
-            total_bytes = 0
-    else:
-        allocated = 0
-        peak = 0
-        total_bytes = 0
+    allocated, peak, total_bytes = _device_memory_bytes(gpu_info, device)
 
     # TensorFlow's Python API (get_gpu_info) reports current_memory_mb and
     # peak_memory_mb — both track *allocated* memory. There is no separate
@@ -256,6 +239,31 @@ def build_diagnostic_summary(
         "suggestions": suggestions,
     }
     return summary, risk_detected
+
+
+def _device_memory_bytes(
+    gpu_info: Dict[str, Any], device: Optional[str]
+) -> Tuple[int, int, int]:
+    # Per-device memory (TF reports in MB)
+    devices = gpu_info.get("devices") or []
+    idx = _device_index(device) if device else 0
+    if devices and idx < len(devices):
+        d = devices[idx]
+        current_mb = d.get("current_memory_mb", 0) or 0
+        peak_mb = d.get("peak_memory_mb", 0) or 0
+        allocated = int(current_mb * 1024 * 1024)
+        peak = int(peak_mb * 1024 * 1024)
+        total_memory_mb = d.get("total_memory_mb")
+        if isinstance(total_memory_mb, (int, float)) and total_memory_mb > 0:
+            total_bytes = int(total_memory_mb * 1024 * 1024)
+        else:
+            total_bytes = 0
+    else:
+        allocated = 0
+        peak = 0
+        total_bytes = 0
+
+    return allocated, peak, total_bytes
 
 
 def run_diagnose(

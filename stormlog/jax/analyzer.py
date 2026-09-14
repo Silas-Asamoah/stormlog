@@ -349,6 +349,11 @@ class MemoryAnalyzer:
             elif frag_info["fragmentation_score"] > 0.3:
                 score -= 0.10
 
+        score = self._apply_leak_penalty(profile_result, score)
+
+        return max(0.0, min(1.0, score))
+
+    def _apply_leak_penalty(self, profile_result: Any, score: float) -> float:
         # Penalise memory leaks
         if hasattr(profile_result, "memory_usage") or hasattr(
             profile_result, "snapshots"
@@ -376,7 +381,7 @@ class MemoryAnalyzer:
             elif leaks:
                 score -= 0.15
 
-        return max(0.0, min(1.0, score))
+        return score
 
     # ------------------------------------------------------------------
     # Performance correlation
@@ -528,32 +533,38 @@ class MemoryAnalyzer:
 
         # Hidden-memory gap analysis (only when telemetry events supplied).
         if events is not None:
-            phase_resolver = (
-                PhaseReplayIndex.from_events(events)
-                if hasattr(PhaseReplayIndex, "from_events")
-                else None
-            )
-            gap_findings = self.analyze_memory_gaps(
-                events,
-                phase_resolver=phase_resolver,
-            )
-            collective_attribution = self.analyze_collective_attribution(
-                events,
-                phase_resolver=phase_resolver,
-            )
-            optimization_score["gap_analysis"] = [
-                _serialize_gap_finding(f) for f in gap_findings
-            ]
-            optimization_score["collective_attribution"] = [
-                _serialize_collective_attribution(result)
-                for result in collective_attribution
-            ]
+            optimization_score.update(self._telemetry_analysis(events))
 
         return optimization_score
 
     # ------------------------------------------------------------------
     # Hidden-memory gap analysis (operates on TelemetryEventV2 series)
     # ------------------------------------------------------------------
+
+    def _telemetry_analysis(self, events: List) -> Dict[str, Any]:
+        optimization_score: Dict[str, Any] = {}
+        phase_resolver = (
+            PhaseReplayIndex.from_events(events)
+            if hasattr(PhaseReplayIndex, "from_events")
+            else None
+        )
+        gap_findings = self.analyze_memory_gaps(
+            events,
+            phase_resolver=phase_resolver,
+        )
+        collective_attribution = self.analyze_collective_attribution(
+            events,
+            phase_resolver=phase_resolver,
+        )
+        optimization_score["gap_analysis"] = [
+            _serialize_gap_finding(f) for f in gap_findings
+        ]
+        optimization_score["collective_attribution"] = [
+            _serialize_collective_attribution(result)
+            for result in collective_attribution
+        ]
+
+        return optimization_score
 
     def analyze_memory_gaps(
         self,

@@ -213,9 +213,7 @@ def build_diagnostic_summary(
     backend = backend_info.get("runtime_backend", "cpu")
     stats = device_info.get("memory_stats", {})
 
-    allocated = int(stats.get("bytes_in_use", 0) or 0)
-    peak = int(stats.get("peak_bytes_in_use", 0) or 0)
-    limit_bytes = int(stats.get("bytes_limit", 0) or 0)
+    allocated, peak, limit_bytes = _allocator_counters(stats)
 
     # Use actual reserved bytes from memory stats when available
     reserved_val = stats.get("bytes_reserved")
@@ -365,3 +363,11 @@ def run_diagnose(
             pass
 
     return artifact_dir, exit_code
+
+
+def _allocator_counters(stats: Dict[str, Any]) -> Tuple[int, int, int]:
+    allocated = int(stats.get("bytes_in_use", 0) or 0)
+    peak = int(stats.get("peak_bytes_in_use", 0) or 0)
+    limit_bytes = int(stats.get("bytes_limit", 0) or 0)
+
+    return allocated, peak, limit_bytes

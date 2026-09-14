@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+import stormlog._wandb.tracking as tracking_export
 import stormlog.cuda_native_debug as native_debug
 from stormlog._wandb.attribution import build_attribution_preview_html
 from stormlog._wandb.core import read_json_if_exists
@@ -98,6 +99,36 @@ class _FakeWandbModule(ModuleType):
         self.created_runs.append(run)
         self.run = run
         return run
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_tracking_artifact_failure_respects_run_ownership(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, managed: bool
+) -> None:
+    fake = _FakeWandbModule()
+    run = fake.init()
+    monkeypatch.setattr(
+        tracking_export, "resolve_run", lambda *a, **kw: (fake, run, managed)
+    )
+    output = tmp_path / "events.json"
+    output.write_text("[]", encoding="utf-8")
+
+    def fail_upload(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("upload failed")
+
+    monkeypatch.setattr(tracking_export, "log_file_artifact", fail_upload)
+    with pytest.raises(RuntimeError, match="upload failed"):
+        export_tracking_run_to_wandb(
+            wandb_config_from_namespace(
+                Namespace(wandb=True, wandb_log_artifacts=True)
+            ),
+            command_name="track",
+            session_summary=None,
+            stats={},
+            events=[],
+            output_path=output,
+        )
+    assert run.finished is managed
 
 
 def test_wandb_config_from_namespace_collects_explicit_values() -> None:

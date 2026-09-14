@@ -341,27 +341,13 @@ class AppendOnlyTelemetrySink:
     def _load_existing_state(self) -> None:
         discovered = _discover_segment_paths(self.root_dir)
         manifest = read_telemetry_sink_manifest(self.root_dir)
-        manifest_needs_rewrite = False
 
         if manifest is not None:
             self._segments = self._merge_segment_state(manifest.segments, discovered)
             self._sessions = {
                 summary.session_id: summary for summary in manifest.sessions
             }
-            for session_id, summary in list(self._sessions.items()):
-                if summary.status == SESSION_STATUS_RUNNING:
-                    self._sessions[session_id] = update_session_summary(
-                        summary,
-                        status=SESSION_STATUS_INTERRUPTED,
-                        ended_at_ns=now_ns(),
-                    )
-                    manifest_needs_rewrite = True
-            for segment in self._segments:
-                if segment.session_id in self._sessions and (
-                    self._sessions[segment.session_id].status
-                    == SESSION_STATUS_INTERRUPTED
-                ):
-                    segment.closed = True
+            manifest_needs_rewrite = self._interrupt_running_sessions()
             self._next_segment_index = self._compute_next_segment_index()
             if manifest.schema_version != SINK_SCHEMA_VERSION:
                 manifest_needs_rewrite = True
@@ -384,6 +370,23 @@ class AppendOnlyTelemetrySink:
             )
         self._next_segment_index = self._compute_next_segment_index()
         self._write_manifest_locked()
+
+    def _interrupt_running_sessions(self) -> bool:
+        manifest_needs_rewrite = False
+        for session_id, summary in list(self._sessions.items()):
+            if summary.status == SESSION_STATUS_RUNNING:
+                self._sessions[session_id] = update_session_summary(
+                    summary,
+                    status=SESSION_STATUS_INTERRUPTED,
+                    ended_at_ns=now_ns(),
+                )
+                manifest_needs_rewrite = True
+        for segment in self._segments:
+            if segment.session_id in self._sessions and (
+                self._sessions[segment.session_id].status == SESSION_STATUS_INTERRUPTED
+            ):
+                segment.closed = True
+        return manifest_needs_rewrite
 
     def _compute_next_segment_index(self) -> int:
         max_index = 0
@@ -537,11 +540,7 @@ def resolve_telemetry_sink_segment_paths(path: str | Path) -> list[Path]:
             return [resolved_path]
         if resolved_path.name == MANIFEST_FILENAME:
             manifest = read_telemetry_sink_manifest(resolved_path)
-            manifest_segments = [
-                resolved_path.parent / segment.filename
-                for segment in (manifest.segments if manifest is not None else [])
-                if (resolved_path.parent / segment.filename).exists()
-            ]
+            manifest_segments = _manifest_segment_paths(resolved_path.parent, manifest)
             return _merge_segment_paths(
                 manifest_segments,
                 _discover_segment_paths(resolved_path.parent),
@@ -553,11 +552,7 @@ def resolve_telemetry_sink_segment_paths(path: str | Path) -> list[Path]:
 
     manifest = read_telemetry_sink_manifest(resolved_path)
     if manifest is not None:
-        manifest_segments = [
-            resolved_path / segment.filename
-            for segment in manifest.segments
-            if (resolved_path / segment.filename).exists()
-        ]
+        manifest_segments = _manifest_segment_paths(resolved_path, manifest)
         return _merge_segment_paths(
             manifest_segments,
             _discover_segment_paths(resolved_path),
@@ -625,6 +620,34 @@ def read_telemetry_sink_manifest(path: str | Path) -> TelemetrySinkManifest | No
         if isinstance(fmt_value, str) and fmt_value
         else "stormlog.append_only_telemetry_sink"
     )
+    sessions = _manifest_sessions(payload, schema_version)
+    segments = _manifest_segments(payload)
+
+    return TelemetrySinkManifest(
+        schema_version=schema_version,
+        format=fmt,
+        sessions=sessions,
+        segments=segments,
+    )
+
+
+def _discover_segment_paths(root_dir: Path) -> list[Path]:
+    return sorted(root_dir.glob(f"{SEGMENT_PREFIX}*{SEGMENT_SUFFIX}"))
+
+
+def _merge_segment_paths(
+    manifest_segments: list[Path],
+    discovered_segments: list[Path],
+) -> list[Path]:
+    merged_by_name = {path.name: path for path in discovered_segments}
+    for path in manifest_segments:
+        merged_by_name[path.name] = path
+    return [merged_by_name[name] for name in sorted(merged_by_name)]
+
+
+def _manifest_sessions(
+    payload: Mapping[str, Any], schema_version: int
+) -> list[SessionSummary]:
     sessions: list[SessionSummary] = []
     if schema_version >= 2:
         for raw_session in _coerce_manifest_entries(payload.get("sessions", [])):
@@ -635,6 +658,10 @@ def read_telemetry_sink_manifest(path: str | Path) -> TelemetrySinkManifest | No
             except Exception:
                 continue
 
+    return sessions
+
+
+def _manifest_segments(payload: Mapping[str, Any]) -> list[TelemetrySinkSegment]:
     segments: list[TelemetrySinkSegment] = []
     for raw_segment in _coerce_manifest_entries(payload.get("segments", [])):
         if not isinstance(raw_segment, Mapping):
@@ -667,26 +694,17 @@ def read_telemetry_sink_manifest(path: str | Path) -> TelemetrySinkManifest | No
         except Exception:
             continue
 
-    return TelemetrySinkManifest(
-        schema_version=schema_version,
-        format=fmt,
-        sessions=sessions,
-        segments=segments,
-    )
+    return segments
 
 
-def _discover_segment_paths(root_dir: Path) -> list[Path]:
-    return sorted(root_dir.glob(f"{SEGMENT_PREFIX}*{SEGMENT_SUFFIX}"))
-
-
-def _merge_segment_paths(
-    manifest_segments: list[Path],
-    discovered_segments: list[Path],
+def _manifest_segment_paths(
+    root: Path, manifest: TelemetrySinkManifest | None
 ) -> list[Path]:
-    merged_by_name = {path.name: path for path in discovered_segments}
-    for path in manifest_segments:
-        merged_by_name[path.name] = path
-    return [merged_by_name[name] for name in sorted(merged_by_name)]
+    return [
+        root / segment.filename
+        for segment in (manifest.segments if manifest is not None else [])
+        if (root / segment.filename).exists()
+    ]
 
 
 __all__ = [

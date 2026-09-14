@@ -201,18 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_profile(args: argparse.Namespace) -> int:
     """Run active inference profiling."""
-    if args.duration is not None and args.duration <= 0:
-        raise ValueError("--duration must be > 0")
-    if args.requests is not None and args.requests <= 0:
-        raise ValueError("--requests must be >= 1")
-    if args.duration is not None and args.requests != 1:
-        raise ValueError("Use either --duration or --requests, not both")
-    if args.timeout <= 0:
-        raise ValueError("--timeout must be > 0")
-    if args.warmup_requests < 0:
-        raise ValueError("--warmup-requests must be >= 0")
-    if args.sample_interval <= 0:
-        raise ValueError("--sample-interval must be > 0")
+    _validate_profile_arguments(args)
 
     endpoint = resolve_endpoint(endpoint=args.endpoint, base_url=args.base_url)
     config = ProfileConfig(
@@ -274,3 +263,18 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     else:
         print(payload, end="")
     return 0
+
+
+def _validate_profile_arguments(args: argparse.Namespace) -> None:
+    if args.duration is not None and args.duration <= 0:
+        raise ValueError("--duration must be > 0")
+    if args.requests is not None and args.requests <= 0:
+        raise ValueError("--requests must be >= 1")
+    if args.duration is not None and args.requests != 1:
+        raise ValueError("Use either --duration or --requests, not both")
+    if args.timeout <= 0:
+        raise ValueError("--timeout must be > 0")
+    if args.warmup_requests < 0:
+        raise ValueError("--warmup-requests must be >= 0")
+    if args.sample_interval <= 0:
+        raise ValueError("--sample-interval must be > 0")

@@ -204,25 +204,9 @@ def project_telemetry_mapping(
         ValueError: If required identity or timestamp fields are missing.
     """
 
-    session_id = record.get("session_id")
-    if not isinstance(session_id, str) or not session_id.strip():
-        raise ValueError("projected telemetry record requires session_id")
+    session_id, timestamp_ns = _projection_identity(record)
 
-    timestamp_ns = record.get("timestamp_ns")
-    if not isinstance(timestamp_ns, int) or isinstance(timestamp_ns, bool):
-        raise ValueError("projected telemetry record requires integer timestamp_ns")
-
-    if observed_timestamp_ns is not None:
-        if not isinstance(observed_timestamp_ns, int) or isinstance(
-            observed_timestamp_ns, bool
-        ):
-            raise ValueError(
-                "projected telemetry record requires integer observed_timestamp_ns"
-            )
-        if observed_timestamp_ns < 0:
-            raise ValueError(
-                "projected telemetry record requires non-negative observed_timestamp_ns"
-            )
+    _validate_observed_timestamp(observed_timestamp_ns)
 
     event_type = record.get("event_type")
     if not isinstance(event_type, str) or not event_type.strip():
@@ -312,6 +296,32 @@ def unique_projected_correlations(
         seen.add(key)
         correlations.append(correlation)
     return correlations
+
+
+def _validate_observed_timestamp(observed_timestamp_ns: int | None) -> None:
+    if observed_timestamp_ns is not None:
+        if not isinstance(observed_timestamp_ns, int) or isinstance(
+            observed_timestamp_ns, bool
+        ):
+            raise ValueError(
+                "projected telemetry record requires integer observed_timestamp_ns"
+            )
+        if observed_timestamp_ns < 0:
+            raise ValueError(
+                "projected telemetry record requires non-negative observed_timestamp_ns"
+            )
+
+
+def _projection_identity(record: Mapping[str, Any]) -> tuple[str, int]:
+    session_id = record.get("session_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise ValueError("projected telemetry record requires session_id")
+
+    timestamp_ns = record.get("timestamp_ns")
+    if not isinstance(timestamp_ns, int) or isinstance(timestamp_ns, bool):
+        raise ValueError("projected telemetry record requires integer timestamp_ns")
+
+    return session_id, timestamp_ns
 
 
 __all__ = [

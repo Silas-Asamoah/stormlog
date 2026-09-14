@@ -153,19 +153,7 @@ class MemoryVisualizer:
         if MATPLOTLIB_AVAILABLE:
             plt.figure(figsize=self.figure_size)
 
-            # Pad chunks to same length
-            max_len = max(len(chunk) for chunk in chunks)
-            padded_chunks = [chunk + [0] * (max_len - len(chunk)) for chunk in chunks]
-
-            heatmap_data = np.array(padded_chunks)
-
-            if "seaborn" in str(self.style).lower() and "sns" in globals():
-                sns.heatmap(
-                    heatmap_data, cmap="viridis", cbar_kws={"label": "Memory (MB)"}
-                )
-            else:
-                plt.imshow(heatmap_data, cmap="viridis", aspect="auto")
-                plt.colorbar(label="Memory (MB)")
+            self._draw_heatmap(chunks)
 
             plt.title("Memory Usage Heatmap")
             plt.xlabel("Time Chunks")
@@ -175,6 +163,19 @@ class MemoryVisualizer:
                 plt.savefig(save_path, dpi=150, bbox_inches="tight")
             else:
                 plt.show()
+
+    def _draw_heatmap(self, chunks: List[List[float]]) -> None:
+        # Pad chunks to same length
+        max_len = max(len(chunk) for chunk in chunks)
+        padded_chunks = [chunk + [0] * (max_len - len(chunk)) for chunk in chunks]
+
+        heatmap_data = np.array(padded_chunks)
+
+        if "seaborn" in str(self.style).lower() and "sns" in globals():
+            sns.heatmap(heatmap_data, cmap="viridis", cbar_kws={"label": "Memory (MB)"})
+        else:
+            plt.imshow(heatmap_data, cmap="viridis", aspect="auto")
+            plt.colorbar(label="Memory (MB)")
 
     def create_interactive_dashboard(self, results: Any, port: int = 8050) -> None:
         """Create interactive Plotly dashboard."""

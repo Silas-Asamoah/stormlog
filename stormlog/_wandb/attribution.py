@@ -27,16 +27,7 @@ def log_attribution_outputs(
     allow_artifact_logging: bool = False,
 ) -> dict[str, Any]:
     summary_fields: dict[str, Any] = {}
-    files_to_attach = [
-        root / TRACE_HTML_ANNOTATED_FILENAME,
-        root / TRACE_HTML_FILENAME,
-        root / TENSOR_ATTRIBUTION_FILENAME,
-        root / ALLOCATION_ATTRIBUTION_FILENAME,
-        root / DEBUG_METADATA_FILENAME,
-    ]
-    existing_files = [
-        path for path in files_to_attach if path.exists() and path.is_file()
-    ]
+    existing_files = attribution_files(root)
 
     if allow_artifact_logging and existing_files:
         artifact = wandb.Artifact(
@@ -191,21 +182,7 @@ def tensor_attribution_rows(path: Path) -> list[list[Any]]:
     for entry in entries:
         if not isinstance(entry, Mapping):
             continue
-        tensors = entry.get("tensors")
-        if not isinstance(tensors, list):
-            tensors = []
-        total_size = 0
-        shape = ""
-        dtype = ""
-        if tensors:
-            first_tensor = tensors[0] if isinstance(tensors[0], Mapping) else {}
-            shape = str(first_tensor.get("shape", ""))
-            dtype = str(first_tensor.get("dtype", ""))
-            for tensor in tensors:
-                if isinstance(tensor, Mapping):
-                    size_bytes = tensor.get("size_bytes", 0)
-                    if isinstance(size_bytes, int):
-                        total_size += size_bytes
+        tensors, total_size, shape, dtype = _tensor_details(entry)
 
         names = entry.get("names")
         name = "<unnamed>"
@@ -224,3 +201,37 @@ def tensor_attribution_rows(path: Path) -> list[list[Any]]:
         )
     rows.sort(key=lambda row: int(row[3]), reverse=True)
     return rows
+
+
+def attribution_files(root: Path) -> list[Path]:
+    """Return existing attribution artifacts in export order."""
+    files_to_attach = [
+        root / TRACE_HTML_ANNOTATED_FILENAME,
+        root / TRACE_HTML_FILENAME,
+        root / TENSOR_ATTRIBUTION_FILENAME,
+        root / ALLOCATION_ATTRIBUTION_FILENAME,
+        root / DEBUG_METADATA_FILENAME,
+    ]
+    return [path for path in files_to_attach if path.exists() and path.is_file()]
+
+
+def _tensor_details(
+    entry: Mapping[str, Any],
+) -> tuple[list[Any], int, str, str]:
+    tensors = entry.get("tensors")
+    if not isinstance(tensors, list):
+        tensors = []
+    total_size = 0
+    shape = ""
+    dtype = ""
+    if tensors:
+        first_tensor = tensors[0] if isinstance(tensors[0], Mapping) else {}
+        shape = str(first_tensor.get("shape", ""))
+        dtype = str(first_tensor.get("dtype", ""))
+        for tensor in tensors:
+            if isinstance(tensor, Mapping):
+                size_bytes = tensor.get("size_bytes", 0)
+                if isinstance(size_bytes, int):
+                    total_size += size_bytes
+
+    return tensors, total_size, shape, dtype

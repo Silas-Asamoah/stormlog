@@ -142,31 +142,7 @@ def cmd_info(args: argparse.Namespace) -> int:
 
     gpu_info = system_info.get("gpu", {})
     backend_info = system_info.get("backend", {})
-    if gpu_info.get("available", False):
-        print("GPU Available: Yes")
-        print(f"GPU Count: {gpu_info['count']}")
-        print(
-            f"Total GPU Memory: {format_memory(gpu_info['total_memory'] * 1024 * 1024)}"
-        )
-
-        for i, device in enumerate(gpu_info.get("devices", [])):
-            print(f"\nGPU {i}:")
-            print(f"  Name: {device.get('name', 'Unknown')}")
-            print(f"  Current Memory: {device.get('current_memory_mb', 0):.1f} MB")
-            print(f"  Peak Memory: {device.get('peak_memory_mb', 0):.1f} MB")
-    else:
-        print(
-            f"GPU Hardware Detected: {'Yes' if backend_info.get('hardware_gpu_detected', False) else 'No'}"
-        )
-        print("GPU Available to TensorFlow Runtime: No")
-        if "error" in gpu_info:
-            print(f"Error: {gpu_info['error']}")
-        if backend_info.get("is_apple_silicon", False) and not backend_info.get(
-            "tensorflow_metal_installed", False
-        ):
-            print(
-                "Hint: install tensorflow-metal to enable Metal GPU runtime on Apple Silicon."
-            )
+    _print_gpu_info(gpu_info, backend_info)
 
     if backend_info:
         print("\nTensorFlow Backend Diagnostics:")
@@ -246,57 +222,7 @@ def cmd_monitor(args: argparse.Namespace) -> int:
     finally:
         results = tracker.stop_tracking()
 
-        print("\nMonitoring Results:")
-        print("-" * 20)
-        print(f"Peak Memory: {results.peak_memory:.1f} MB")
-        print(f"Average Memory: {results.average_memory:.1f} MB")
-        print(f"Duration: {results.duration:.1f} seconds")
-        print(f"Samples Collected: {len(results.memory_usage)}")
-        dropped_samples = int(getattr(results, "history_dropped_samples", 0))
-        if dropped_samples:
-            print(f"Dropped Samples: {dropped_samples}")
-
-        if results.alerts_triggered:
-            print(f"Alerts Triggered: {len(results.alerts_triggered)}")
-
-        if args.output:
-            # Save results
-            output_data = {
-                "peak_memory": results.peak_memory,
-                "average_memory": results.average_memory,
-                "duration": results.duration,
-                "memory_usage": results.memory_usage,
-                "timestamps": results.timestamps,
-                "alerts": results.alerts_triggered,
-                "history_window_limit": int(
-                    getattr(results, "history_window_limit", len(results.memory_usage))
-                ),
-                "history_retained_samples": int(
-                    getattr(
-                        results, "history_retained_samples", len(results.memory_usage)
-                    )
-                ),
-                "history_dropped_samples": int(
-                    getattr(results, "history_dropped_samples", 0)
-                ),
-                "history_retained_alerts": int(
-                    getattr(
-                        results,
-                        "history_retained_alerts",
-                        len(results.alerts_triggered),
-                    )
-                ),
-                "history_dropped_alerts": int(
-                    getattr(results, "history_dropped_alerts", 0)
-                ),
-            }
-
-            output_path = Path(args.output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2)
-
-            print(f"Results saved to {args.output}")
+        _report_monitor_results(results, args)
 
     return 0
 
@@ -349,18 +275,7 @@ def cmd_track(args: argparse.Namespace) -> int:
 
             # Show periodic updates
             stats = tracker.get_statistics()
-            current_memory = stats.get("current_memory_mb")
-            collector_health = str(stats.get("collector_health_status", "healthy"))
-            if isinstance(current_memory, (int, float)):
-                status_line = f"Current memory: {float(current_memory):.1f} MB"
-            else:
-                status_line = "Current memory: unavailable"
-            status_line += f" | Health: {collector_health}"
-            retry_at = stats.get("collector_next_retry_epoch_s")
-            if isinstance(retry_at, (int, float)):
-                retry_in = max(float(retry_at) - time.time(), 0.0)
-                status_line += f" | Retry In: {retry_in:.1f}s"
-            print(status_line)
+            _print_tracking_status(stats)
 
     except KeyboardInterrupt:
         print("\nStopping tracking...")
@@ -418,53 +333,11 @@ def cmd_track(args: argparse.Namespace) -> int:
             print(f"Results saved to {args.output}")
 
         final_stats = tracker.get_statistics()
-        print(f"\nTracking completed. Peak memory: {results.peak_memory:.1f} MB")
-        dropped_samples = int(final_stats.get("history_dropped_samples", 0))
-        dropped_events = int(final_stats.get("history_dropped_events", 0))
-        if dropped_samples or dropped_events:
-            print(
-                "History truncation: "
-                f"samples={dropped_samples}, events={dropped_events}"
-            )
-        if "collector_health_status" in final_stats:
-            print(
-                "Collector health: "
-                f"{final_stats.get('collector_health_status', 'healthy')}"
-            )
-        if final_stats.get("collector_last_error"):
-            print(f"Last collector error: {final_stats.get('collector_last_error')}")
+        _report_tracking_results(results, final_stats)
 
-        if wandb_config.enabled:
-            try:
-                export_tracking_run_to_wandb(
-                    wandb_config,
-                    command_name="tfmemprof-track",
-                    session_summary=tracker.get_session_summary(),
-                    stats=final_stats,
-                    events=results.events,
-                    output_path=args.output,
-                    telemetry_sink_dir=getattr(args, "telemetry_sink_dir", None),
-                    oom_dump_path=None,
-                )
-                print("W&B export completed.")
-            except Exception as exc:
-                _warn_wandb_export_failure("tfmemprof track", exc)
-
-        if mlflow_config.enabled:
-            try:
-                export_tracking_run_to_mlflow(
-                    mlflow_config,
-                    command_name="tfmemprof-track",
-                    session_summary=tracker.get_session_summary(),
-                    stats=final_stats,
-                    events=results.events,
-                    output_path=args.output,
-                    telemetry_sink_dir=getattr(args, "telemetry_sink_dir", None),
-                    oom_dump_path=None,
-                )
-                print("MLflow export completed.")
-            except Exception as exc:
-                _warn_mlflow_export_failure("tfmemprof track", exc)
+        _export_tracking_integrations(
+            args, tracker, results, final_stats, wandb_config, mlflow_config
+        )
 
     return 0
 
@@ -576,22 +449,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         else:
             print("✅ No memory leaks detected")
 
-    if args.optimize:
-        print("\nOptimization Analysis:")
-        print("-" * 22)
-
-        analyzer = MemoryAnalyzer()
-        optimization = analyzer.score_optimization(result)
-
-        print(f"Overall Score: {optimization['overall_score']:.1f}/10")
-        print("\nCategory Scores:")
-        for category, score in optimization["categories"].items():
-            print(f"  {category}: {score:.1f}/10")
-
-        if optimization["top_recommendations"]:
-            print("\nTop Recommendations:")
-            for i, rec in enumerate(optimization["top_recommendations"], 1):
-                print(f"  {i}. {rec}")
+    _report_optimization(args, result)
 
     if args.visualize:
         print("\nGenerating visualizations...")
@@ -645,34 +503,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     except OSError:
         return 1
 
-    # Structured stdout summary
-    print(f"Artifact: {artifact_dir}")
-    if exit_code == 0:
-        status = "OK"
-    elif exit_code == 2:
-        status = "MEMORY_RISK"
-    else:
-        status = "FAILED"
-    print(f"Status: {status} (exit_code={exit_code})")
-
-    try:
-        manifest_path = artifact_dir / "manifest.json"
-        if manifest_path.exists():
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-            if manifest.get("risk_detected"):
-                summary_path = artifact_dir / "diagnostic_summary.json"
-                if summary_path.exists():
-                    with open(summary_path) as f:
-                        summary = json.load(f)
-                    flags = summary.get("risk_flags", {})
-                    parts = [k for k, v in flags.items() if v]
-                    if parts:
-                        print(f"Findings: {', '.join(parts)}")
-        if exit_code == 0 and status == "OK":
-            print("Findings: no memory risk detected")
-    except (OSError, json.JSONDecodeError):
-        pass
+    _print_diagnose_summary(artifact_dir, exit_code)
 
     if wandb_config.enabled:
         try:
@@ -697,6 +528,40 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             _warn_mlflow_export_failure("tfmemprof diagnose", exc)
 
     return exit_code
+
+
+def _print_diagnose_summary(artifact_dir: Path, exit_code: int) -> None:
+    # Structured stdout summary
+    print(f"Artifact: {artifact_dir}")
+    if exit_code == 0:
+        status = "OK"
+    elif exit_code == 2:
+        status = "MEMORY_RISK"
+    else:
+        status = "FAILED"
+    print(f"Status: {status} (exit_code={exit_code})")
+    _print_diagnose_findings(artifact_dir, exit_code, status)
+
+
+def _print_diagnose_findings(artifact_dir: Path, exit_code: int, status: str) -> None:
+    try:
+        manifest_path = artifact_dir / "manifest.json"
+        if manifest_path.exists():
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            if manifest.get("risk_detected"):
+                summary_path = artifact_dir / "diagnostic_summary.json"
+                if summary_path.exists():
+                    with open(summary_path) as f:
+                        summary = json.load(f)
+                    flags = summary.get("risk_flags", {})
+                    parts = [k for k, v in flags.items() if v]
+                    if parts:
+                        print(f"Findings: {', '.join(parts)}")
+        if exit_code == 0 and status == "OK":
+            print("Findings: no memory risk detected")
+    except (OSError, json.JSONDecodeError):
+        pass
 
 
 def main() -> int:
@@ -891,6 +756,178 @@ Cookbook:
     else:
         print(f"Unknown command: {args.command}")
         return 1
+
+
+def _print_gpu_info(gpu_info: Dict[str, Any], backend_info: Dict[str, Any]) -> None:
+    if gpu_info.get("available", False):
+        print("GPU Available: Yes")
+        print(f"GPU Count: {gpu_info['count']}")
+        print(
+            f"Total GPU Memory: {format_memory(gpu_info['total_memory'] * 1024 * 1024)}"
+        )
+
+        for i, device in enumerate(gpu_info.get("devices", [])):
+            print(f"\nGPU {i}:")
+            print(f"  Name: {device.get('name', 'Unknown')}")
+            print(f"  Current Memory: {device.get('current_memory_mb', 0):.1f} MB")
+            print(f"  Peak Memory: {device.get('peak_memory_mb', 0):.1f} MB")
+    else:
+        print(
+            f"GPU Hardware Detected: {'Yes' if backend_info.get('hardware_gpu_detected', False) else 'No'}"
+        )
+        print("GPU Available to TensorFlow Runtime: No")
+        if "error" in gpu_info:
+            print(f"Error: {gpu_info['error']}")
+        if backend_info.get("is_apple_silicon", False) and not backend_info.get(
+            "tensorflow_metal_installed", False
+        ):
+            print(
+                "Hint: install tensorflow-metal to enable Metal GPU runtime on Apple Silicon."
+            )
+
+
+def _report_monitor_results(results: Any, args: argparse.Namespace) -> None:
+    print("\nMonitoring Results:")
+    print("-" * 20)
+    print(f"Peak Memory: {results.peak_memory:.1f} MB")
+    print(f"Average Memory: {results.average_memory:.1f} MB")
+    print(f"Duration: {results.duration:.1f} seconds")
+    print(f"Samples Collected: {len(results.memory_usage)}")
+    dropped_samples = int(getattr(results, "history_dropped_samples", 0))
+    if dropped_samples:
+        print(f"Dropped Samples: {dropped_samples}")
+
+    if results.alerts_triggered:
+        print(f"Alerts Triggered: {len(results.alerts_triggered)}")
+
+    if args.output:
+        # Save results
+        output_data = {
+            "peak_memory": results.peak_memory,
+            "average_memory": results.average_memory,
+            "duration": results.duration,
+            "memory_usage": results.memory_usage,
+            "timestamps": results.timestamps,
+            "alerts": results.alerts_triggered,
+            "history_window_limit": int(
+                getattr(results, "history_window_limit", len(results.memory_usage))
+            ),
+            "history_retained_samples": int(
+                getattr(results, "history_retained_samples", len(results.memory_usage))
+            ),
+            "history_dropped_samples": int(
+                getattr(results, "history_dropped_samples", 0)
+            ),
+            "history_retained_alerts": int(
+                getattr(
+                    results,
+                    "history_retained_alerts",
+                    len(results.alerts_triggered),
+                )
+            ),
+            "history_dropped_alerts": int(
+                getattr(results, "history_dropped_alerts", 0)
+            ),
+        }
+
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(output_data, f, indent=2)
+
+        print(f"Results saved to {args.output}")
+
+
+def _print_tracking_status(stats: Dict[str, Any]) -> None:
+    current_memory = stats.get("current_memory_mb")
+    collector_health = str(stats.get("collector_health_status", "healthy"))
+    if isinstance(current_memory, (int, float)):
+        status_line = f"Current memory: {float(current_memory):.1f} MB"
+    else:
+        status_line = "Current memory: unavailable"
+    status_line += f" | Health: {collector_health}"
+    retry_at = stats.get("collector_next_retry_epoch_s")
+    if isinstance(retry_at, (int, float)):
+        retry_in = max(float(retry_at) - time.time(), 0.0)
+        status_line += f" | Retry In: {retry_in:.1f}s"
+    print(status_line)
+
+
+def _report_tracking_results(results: Any, final_stats: Dict[str, Any]) -> None:
+    print(f"\nTracking completed. Peak memory: {results.peak_memory:.1f} MB")
+    dropped_samples = int(final_stats.get("history_dropped_samples", 0))
+    dropped_events = int(final_stats.get("history_dropped_events", 0))
+    if dropped_samples or dropped_events:
+        print(
+            "History truncation: " f"samples={dropped_samples}, events={dropped_events}"
+        )
+    if "collector_health_status" in final_stats:
+        print(
+            "Collector health: "
+            f"{final_stats.get('collector_health_status', 'healthy')}"
+        )
+    if final_stats.get("collector_last_error"):
+        print(f"Last collector error: {final_stats.get('collector_last_error')}")
+
+
+def _report_optimization(args: argparse.Namespace, result: Any) -> None:
+    if args.optimize:
+        print("\nOptimization Analysis:")
+        print("-" * 22)
+
+        analyzer = MemoryAnalyzer()
+        optimization = analyzer.score_optimization(result)
+
+        print(f"Overall Score: {optimization['overall_score']:.1f}/10")
+        print("\nCategory Scores:")
+        for category, score in optimization["categories"].items():
+            print(f"  {category}: {score:.1f}/10")
+
+        if optimization["top_recommendations"]:
+            print("\nTop Recommendations:")
+            for i, rec in enumerate(optimization["top_recommendations"], 1):
+                print(f"  {i}. {rec}")
+
+
+def _export_tracking_integrations(
+    args: argparse.Namespace,
+    tracker: MemoryTracker,
+    results: Any,
+    final_stats: Dict[str, Any],
+    wandb_config: Any,
+    mlflow_config: Any,
+) -> None:
+    if wandb_config.enabled:
+        try:
+            export_tracking_run_to_wandb(
+                wandb_config,
+                command_name="tfmemprof-track",
+                session_summary=tracker.get_session_summary(),
+                stats=final_stats,
+                events=results.events,
+                output_path=args.output,
+                telemetry_sink_dir=getattr(args, "telemetry_sink_dir", None),
+                oom_dump_path=None,
+            )
+            print("W&B export completed.")
+        except Exception as exc:
+            _warn_wandb_export_failure("tfmemprof track", exc)
+
+    if mlflow_config.enabled:
+        try:
+            export_tracking_run_to_mlflow(
+                mlflow_config,
+                command_name="tfmemprof-track",
+                session_summary=tracker.get_session_summary(),
+                stats=final_stats,
+                events=results.events,
+                output_path=args.output,
+                telemetry_sink_dir=getattr(args, "telemetry_sink_dir", None),
+                oom_dump_path=None,
+            )
+            print("MLflow export completed.")
+        except Exception as exc:
+            _warn_mlflow_export_failure("tfmemprof track", exc)
 
 
 if __name__ == "__main__":

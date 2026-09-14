@@ -110,16 +110,7 @@ def get_gpu_info(
     if not torch_module.cuda.is_available():
         return {"error": "CUDA is not available"}
 
-    if device is None:
-        device_id = torch_module.cuda.current_device()
-    elif isinstance(device, torch_module.device):
-        device_id = device.index if device.index is not None else 0
-    elif isinstance(device, int):
-        device_id = device
-    elif isinstance(device, str):
-        device_id = int(device.split(":")[-1]) if ":" in device else 0
-    else:
-        device_id = int(getattr(device, "index", 0) or 0)
+    device_id = _cuda_device_index(torch_module, device)
 
     # Basic PyTorch GPU info
     gpu_info = {
@@ -479,18 +470,7 @@ def get_system_info() -> Dict[str, Any]:
     }
 
     if cuda_available:
-        cudnn_backend = getattr(torch.backends, "cudnn", None)
-        cudnn_version = None
-        if cudnn_backend is not None and hasattr(cudnn_backend, "version"):
-            cudnn_version = cudnn_backend.version()
-        system_info.update(
-            {
-                "cuda_device_count": torch.cuda.device_count(),
-                "cuda_version": torch.version.cuda,
-                "cudnn_version": cudnn_version,
-                "current_device": torch.cuda.current_device(),
-            }
-        )
+        system_info.update(_cuda_runtime_info())
 
     # CPU and memory info
     try:
@@ -526,16 +506,7 @@ def check_memory_fragmentation(
     if not torch_module.cuda.is_available():
         return {"error": "CUDA is not available"}
 
-    if device is None:
-        device_id = torch_module.cuda.current_device()
-    elif isinstance(device, torch_module.device):
-        device_id = device.index if device.index is not None else 0
-    elif isinstance(device, int):
-        device_id = device
-    elif isinstance(device, str):
-        device_id = int(device.split(":")[-1]) if ":" in device else 0
-    else:
-        device_id = int(getattr(device, "index", 0) or 0)
+    device_id = _cuda_device_index(torch_module, device)
 
     memory_stats = torch_module.cuda.memory_stats(device_id)
 
@@ -741,3 +712,31 @@ class MemoryContext:
                 self.peak_memory - self.start_memory
             ),
         }
+
+
+def _cuda_device_index(torch_module: Any, device: Any) -> int:
+    if device is None:
+        device_id = torch_module.cuda.current_device()
+    elif isinstance(device, torch_module.device):
+        device_id = device.index if device.index is not None else 0
+    elif isinstance(device, int):
+        device_id = device
+    elif isinstance(device, str):
+        device_id = int(device.split(":")[-1]) if ":" in device else 0
+    else:
+        device_id = int(getattr(device, "index", 0) or 0)
+
+    return cast(int, device_id)
+
+
+def _cuda_runtime_info() -> Dict[str, Any]:
+    cudnn_backend = getattr(torch.backends, "cudnn", None)
+    cudnn_version = None
+    if cudnn_backend is not None and hasattr(cudnn_backend, "version"):
+        cudnn_version = cudnn_backend.version()
+    return {
+        "cuda_device_count": torch.cuda.device_count(),
+        "cuda_version": torch.version.cuda,
+        "cudnn_version": cudnn_version,
+        "current_device": torch.cuda.current_device(),
+    }
