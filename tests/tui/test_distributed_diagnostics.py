@@ -14,6 +14,7 @@ try:
 except ImportError:  # pragma: no cover - phase package may land in another slice
     _stormlog_phases = None
 
+from stormlog.device_collectors import DeviceMemoryCapabilities
 from stormlog.session import create_session_summary, stable_legacy_session_id
 from stormlog.telemetry import (
     LoadedTelemetrySession,
@@ -120,6 +121,53 @@ def _write_csv_events(path: Path, events: list[TelemetryEvent]) -> None:
             writer.writerow(row)
 
 
+def _make_device_only_event(*, timestamp: float, used: int) -> TelemetryEvent:
+    return telemetry_event_from_record(
+        {
+            "schema_version": 4,
+            "session_id": "device-only-session",
+            "timestamp_ns": int(timestamp * 1_000_000_000),
+            "event_type": "sample",
+            "collector": "stormlog.future_tracker",
+            "sampling_interval_ms": 100,
+            "pid": 1234,
+            "host": "test-host",
+            "device_id": 0,
+            "allocator_allocated_bytes": None,
+            "allocator_reserved_bytes": None,
+            "allocator_active_bytes": None,
+            "allocator_inactive_bytes": None,
+            "allocator_change_bytes": None,
+            "device_used_bytes": used,
+            "device_free_bytes": 100 - used,
+            "device_total_bytes": 100,
+            "context": "device sample",
+            "job_id": "job-device",
+            "rank": 0,
+            "local_rank": 0,
+            "world_size": 1,
+            "metadata": {
+                "memory_capabilities": {
+                    "backend": "future",
+                    "telemetry_collector": "stormlog.future_tracker",
+                    "sampling_source": "future.device_memory",
+                    "supports_allocator_allocated": False,
+                    "supports_allocator_reserved": False,
+                    "supports_allocator_active": False,
+                    "supports_allocator_inactive": False,
+                    "supports_device_used": True,
+                    "supports_device_free": True,
+                    "supports_device_total": True,
+                    "supports_native_allocator_history": False,
+                    "supports_fragmentation_analysis": False,
+                    "supports_allocator_attribution": False,
+                    "supports_bounded_profiling": False,
+                }
+            },
+        }
+    )
+
+
 def _flatten_result_events(result: object) -> list[TelemetryEvent]:
     sessions = getattr(result, "sessions")
     return [event for session in sessions for event in session.events]
@@ -204,6 +252,111 @@ def test_build_distributed_model_computes_rank_metrics_and_missing_ranks() -> No
     row_rank_1 = next(row for row in model.rows if row.rank == 1)
     assert row_rank_1.availability == "missing"
     assert row_rank_1.samples == 0
+
+
+def test_build_distributed_model_degrades_to_device_only_diagnostics() -> None:
+    model = build_distributed_model(
+        [
+            _make_device_only_event(timestamp=1.0, used=40),
+            _make_device_only_event(timestamp=2.0, used=65),
+        ]
+    )
+
+    assert model.rows[0].allocated_delta_bytes is None
+    assert model.rows[0].reserved_delta_bytes is None
+    assert model.rows[0].device_used_delta_bytes == 25
+    assert model.rows[0].hidden_gap_latest_bytes is None
+    assert model.per_rank_timelines[0] == {
+        "timestamps_ns": [1_000_000_000, 2_000_000_000],
+        "device_used": [40, 65],
+    }
+    assert model.indicators == []
+    assert model.warnings == [
+        "Allocator-native diagnostics are unavailable; showing device memory "
+        "usage only."
+    ]
+
+
+def test_build_distributed_model_explains_disabled_fragmentation() -> None:
+    events = [
+        _make_event(
+            timestamp=float(index),
+            rank=0,
+            world_size=1,
+            allocated=100_000_000,
+            reserved=1_000_000_000,
+            used=2_500_000_000,
+            total=16 * 1024**3,
+        )
+        for index in range(12)
+    ]
+    for event in events:
+        event.metadata["memory_capabilities"]["supports_fragmentation_analysis"] = False
+
+    model = build_distributed_model(events)
+
+    assert all(
+        "fragmentation" not in indicator.signal for indicator in model.indicators
+    )
+    assert model.per_rank_timelines[0]["allocated"] == [100_000_000] * 12
+    assert model.warnings == ["Collector capabilities disable fragmentation analysis."]
+
+
+@pytest.mark.parametrize(
+    ("used_values", "reserved_values", "expected_gaps"),
+    [
+        ([None, None, None], [120, 140, 170], [None, None, None]),
+        ([140, None, 190], [120, 140, 170], [20, None, 20]),
+        ([140, 165, None], [120, 140, 170], [20, 25, None]),
+        ([None, None, None], [None, None, None], [None, None, None]),
+    ],
+)
+def test_allocator_timeline_preserves_partial_counters(
+    used_values: list[int | None],
+    reserved_values: list[int | None],
+    expected_gaps: list[int | None],
+) -> None:
+    capabilities = DeviceMemoryCapabilities(
+        backend="future",
+        telemetry_collector="stormlog.future_tracker",
+        sampling_source="future.memory",
+        supports_allocator_allocated=True,
+        supports_allocator_reserved=any(value is not None for value in reserved_values),
+        supports_device_used=any(value is not None for value in used_values),
+        supports_device_total=True,
+    )
+    events = [
+        replace(
+            _make_event(
+                timestamp=float(index),
+                rank=0,
+                world_size=1,
+                allocated=allocated,
+                total=1000,
+            ),
+            collector="stormlog.future_tracker",
+            allocator_reserved_bytes=reserved,
+            device_used_bytes=used,
+            device_free_bytes=None,
+            metadata={"memory_capabilities": capabilities.to_metadata()},
+        )
+        for index, (allocated, reserved, used) in enumerate(
+            zip([100, 125, 150], reserved_values, used_values), start=1
+        )
+    ]
+
+    model = build_distributed_model(events)
+
+    assert model.per_rank_timelines[0] == {
+        "timestamps_ns": [1_000_000_000, 2_000_000_000, 3_000_000_000],
+        "allocated": [100, 125, 150],
+        "reserved": reserved_values,
+        "gap": expected_gaps,
+    }
+    assert model.rows[0].allocated_delta_bytes == 50
+    assert all(
+        "showing device memory usage only" not in warning for warning in model.warnings
+    )
 
 
 def test_build_distributed_model_includes_earliest_and_most_severe_indicators() -> None:
@@ -797,9 +950,9 @@ def test_load_distributed_artifacts_preserves_rank_identity_across_timeline_bund
 
     rank_to_allocated: dict[int, list[int]] = {}
     for event in all_events:
-        rank_to_allocated.setdefault(event.rank, []).append(
-            event.allocator_allocated_bytes
-        )
+        allocated = event.allocator_allocated_bytes
+        assert allocated is not None
+        rank_to_allocated.setdefault(event.rank, []).append(allocated)
 
     assert sorted(rank_to_allocated.keys()) == [0, 1]
     assert sorted(rank_to_allocated[0]) == [100, 120]

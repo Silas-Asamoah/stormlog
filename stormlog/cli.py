@@ -639,19 +639,28 @@ def _monitor_memory_text(runtime_backend: str, profiler: Any, tracker: Any) -> s
     return f"{current_mem:.2f} MB"
 
 
+def _tracker_monitor_summary(tracker: Any) -> dict[str, Any]:
+    stats = tracker.get_statistics()
+    events = tracker.get_events()
+    allocations = [
+        event.memory_allocated
+        for event in events
+        if event.event_type == "sample" and event.memory_allocated is not None
+    ]
+    allocator_change = allocations[-1] - allocations[0] if allocations else None
+    return {
+        "snapshots_collected": len(events),
+        "peak_memory_usage": stats.get("peak_memory"),
+        "memory_change_from_baseline": allocator_change,
+        "peak_device_usage": stats.get("peak_device_used"),
+    }
+
+
 def _print_monitor_summary(profiler: Any, tracker: Any, gpu_runtime: bool) -> None:
     print("\nMonitoring Summary:")
     print("-" * 30)
     if tracker is not None:
-        stats = tracker.get_statistics()
-        events = tracker.get_events()
-        first_alloc = events[0].memory_allocated if events else 0
-        last_alloc = events[-1].memory_allocated if events else 0
-        summary = {
-            "snapshots_collected": len(events),
-            "peak_memory_usage": stats.get("peak_memory", 0),
-            "memory_change_from_baseline": last_alloc - first_alloc,
-        }
+        summary = _tracker_monitor_summary(tracker)
         unit = "GB"
         divisor = 1024**3
     else:
@@ -660,10 +669,23 @@ def _print_monitor_summary(profiler: Any, tracker: Any, gpu_runtime: bool) -> No
         divisor = 1024**3 if gpu_runtime else 1024**2
 
     print(f"Snapshots collected: {summary.get('snapshots_collected', 0)}")
-    peak = summary.get("peak_memory_usage", 0)
-    change = summary.get("memory_change_from_baseline", 0)
-    print(f"Peak memory usage: {peak / divisor:.2f} {unit}")
-    print(f"Memory change from baseline: {change / divisor:.2f} {unit}")
+    peak = summary.get("peak_memory_usage")
+    change = summary.get("memory_change_from_baseline")
+    print(
+        "Peak memory usage: "
+        + (f"{peak / divisor:.2f} {unit}" if isinstance(peak, (int, float)) else "N/A")
+    )
+    print(
+        "Memory change from baseline: "
+        + (
+            f"{change / divisor:.2f} {unit}"
+            if isinstance(change, (int, float))
+            else "N/A"
+        )
+    )
+    peak_device = summary.get("peak_device_usage")
+    if isinstance(peak_device, (int, float)):
+        print(f"Peak device usage: {peak_device / divisor:.2f} {unit}")
 
 
 def _export_monitor_data(
@@ -856,7 +878,7 @@ def _print_tracking_status(tracker: Any, elapsed: float, gpu_runtime: bool) -> N
     divisor = 1024**3 if gpu_runtime else 1024**2
     unit = "GB" if gpu_runtime else "MB"
     current_allocated = stats.get("current_memory_allocated")
-    peak_mem = stats.get("peak_memory", 0) / divisor
+    peak_memory = stats.get("peak_memory")
     utilization = stats.get("memory_utilization_percent")
     collector_health = str(stats.get("collector_health_status", "healthy"))
     retry_at = stats.get("collector_next_retry_epoch_s")
@@ -865,12 +887,17 @@ def _print_tracking_status(tracker: Any, elapsed: float, gpu_runtime: bool) -> N
         if isinstance(current_allocated, (int, float))
         else "-"
     )
+    peak_mem_text = (
+        f"{float(peak_memory) / divisor:.2f} {unit}"
+        if isinstance(peak_memory, (int, float))
+        else "N/A"
+    )
     utilization_text = (
         f"{float(utilization):.1f}%" if isinstance(utilization, (int, float)) else "-"
     )
     status_line = (
         f"Elapsed: {elapsed:.1f}s, Memory: {current_mem_text} "
-        f"({utilization_text}), Peak: {peak_mem:.2f} {unit}, "
+        f"({utilization_text}), Peak: {peak_mem_text}, "
         f"Health: {collector_health}"
     )
     if isinstance(retry_at, (int, float)):
@@ -888,7 +915,16 @@ def _print_tracking_summary(
     divisor = 1024**3 if gpu_runtime else 1024**2
     unit = "GB" if gpu_runtime else "MB"
     print(f"Total events: {stats.get('total_events', 0)}")
-    print(f"Peak memory: {stats.get('peak_memory', 0) / divisor:.2f} {unit}")
+    peak_memory = stats.get("peak_memory")
+    peak_memory_text = (
+        f"{float(peak_memory) / divisor:.2f} {unit}"
+        if isinstance(peak_memory, (int, float))
+        else "N/A"
+    )
+    print(f"Peak memory: {peak_memory_text}")
+    peak_device = stats.get("peak_device_used")
+    if isinstance(peak_device, (int, float)):
+        print(f"Peak device memory: {peak_device / divisor:.2f} {unit}")
     if "collector_health_status" in stats:
         print(f"Collector health: {stats.get('collector_health_status', 'healthy')}")
     if stats.get("collector_last_error"):
@@ -996,6 +1032,18 @@ def _build_analyze_summary(
     ]
 
     lines.extend(_gap_summary_lines(report))
+
+    availability = report.get("analysis_availability")
+    if isinstance(availability, dict):
+        unavailable_reasons = {
+            str(item.get("reason"))
+            for item in availability.values()
+            if isinstance(item, dict)
+            and item.get("available") is False
+            and item.get("reason")
+        }
+        for reason in sorted(unavailable_reasons):
+            lines.append(f"Capability warning: {reason}")
 
     cross_rank_analysis = report.get("cross_rank_analysis")
     if isinstance(cross_rank_analysis, dict):

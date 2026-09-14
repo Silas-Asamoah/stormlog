@@ -3,7 +3,7 @@
 # Correlation Workflow
 
 Stormlog correlation is a derived investigation view over existing artifacts. It
-does not change `TelemetryEvent v3`; instead, the query layer projects telemetry,
+does not change `TelemetryEvent v4`; instead, the query layer projects telemetry,
 markers, rollups, OOM bundles, diagnose manifests, and external attachments into
 one evidence list around an investigation anchor.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -7,7 +8,7 @@ import pytest
 pytest.importorskip("textual")
 
 from stormlog.timeline_markers import TimelineMarker
-from stormlog.tui.widgets.timeline import DistributedTimelineCanvas
+from stormlog.tui.widgets.timeline import DistributedTimelineCanvas, TimelineCanvas
 
 
 def _marker(
@@ -88,10 +89,26 @@ def test_rank_timeline_rendering_preserves_focus_gaps_and_marker_lines(
         "*r01 alloc(max=3.0MB latest=3.0MB) gap_latest=1.0MB\n"
         "    [-*@]\n"
         "    markers: ~ Spike\n"
-        " r00 alloc(max=1.0MB latest=1.0MB) gap_latest=0.0MB\n"
+        " r00 alloc(max=1.0MB latest=1.0MB) gap_latest=N/A\n"
         "    [@]\n"
         "... showing 2/3 ranks (apply filter for more)."
     )
+
+
+@pytest.mark.parametrize("gaps", [[None, None], [1024**2, None]])
+def test_rank_timeline_does_not_fabricate_missing_latest_gap(
+    monkeypatch: pytest.MonkeyPatch, gaps: list[int | None]
+) -> None:
+    canvas = DistributedTimelineCanvas()
+    update = Mock()
+    monkeypatch.setattr(canvas, "update", update)
+    mb = 1024**2
+
+    canvas.render_rank_timelines({0: {"allocated": [mb, 2 * mb], "gap": gaps}})
+
+    rendered = update.call_args.args[0]
+    assert "alloc(max=2.0MB latest=2.0MB) gap_latest=N/A" in rendered
+    assert "device-used" not in rendered
 
 
 @pytest.mark.parametrize(
@@ -111,5 +128,37 @@ def test_rank_timeline_empty_rendering(
     monkeypatch.setattr(canvas, "update", update)
 
     canvas.render_rank_timelines(timelines, active_rank=7)
+
+    update.assert_called_once_with(expected)
+
+
+@pytest.mark.parametrize(
+    ("timeline", "expected"),
+    [
+        ({}, "No timeline data yet. Start live tracking and press Refresh."),
+        (
+            {"allocated": [None], "device_used": [1048576], "reserved": [None]},
+            "Device Used (max 1.00 MB, latest 1.00 MB)\n[@]",
+        ),
+        (
+            {"allocated": [0], "device_used": [1048576], "reserved": [1048576]},
+            "Allocated (max 0.00 MB, latest 0.00 MB)\n[ ]\n\n"
+            "Reserved (max 1.00 MB, latest 1.00 MB)\n[@]",
+        ),
+        ({"device_used": [None]}, "Device Used: no samples"),
+        (
+            {"allocated": [None]},
+            "No timeline data yet. Start live tracking and press Refresh.",
+        ),
+    ],
+)
+def test_timeline_rendering_preserves_nullable_series(
+    monkeypatch: pytest.MonkeyPatch, timeline: dict[str, Any], expected: str
+) -> None:
+    canvas = TimelineCanvas()
+    update = Mock()
+    monkeypatch.setattr(canvas, "update", update)
+
+    canvas.render_timeline(timeline)
 
     update.assert_called_once_with(expected)

@@ -2713,6 +2713,8 @@ def _summarize_hidden_memory_gap_growth(
         gaps = [
             row.event.device_used_bytes - row.event.allocator_reserved_bytes
             for row in group_rows
+            if row.event.device_used_bytes is not None
+            and row.event.allocator_reserved_bytes is not None
         ]
         if not gaps:
             continue

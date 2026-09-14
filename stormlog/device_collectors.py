@@ -4,18 +4,124 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Mapping, Optional, Union
 
 import torch
+
+
+@dataclass(frozen=True)
+class DeviceMemoryCapabilities:
+    """Immutable description of memory signals exposed by a collector."""
+
+    backend: str
+    telemetry_collector: str
+    sampling_source: str
+    supports_allocator_allocated: bool = False
+    supports_allocator_reserved: bool = False
+    supports_allocator_active: bool = False
+    supports_allocator_inactive: bool = False
+    supports_device_used: bool = False
+    supports_device_free: bool = False
+    supports_device_total: bool = False
+    supports_native_allocator_history: bool = False
+    supports_fragmentation_analysis: bool = False
+    supports_allocator_attribution: bool = False
+    supports_bounded_profiling: bool = False
+
+    def __post_init__(self) -> None:
+        for field_name in ("backend", "telemetry_collector", "sampling_source"):
+            value = getattr(self, field_name)
+            if not value.strip():
+                raise ValueError(f"{field_name} must be a non-empty string")
+        has_allocator_core = (
+            self.supports_allocator_allocated and self.supports_allocator_reserved
+        )
+        allocator_features = {
+            "supports_native_allocator_history": (
+                self.supports_native_allocator_history
+            ),
+            "supports_fragmentation_analysis": self.supports_fragmentation_analysis,
+            "supports_allocator_attribution": self.supports_allocator_attribution,
+            "supports_bounded_profiling": self.supports_bounded_profiling,
+        }
+        invalid_features = [
+            name for name, enabled in allocator_features.items() if enabled
+        ]
+        if invalid_features and not has_allocator_core:
+            raise ValueError(
+                "allocator features require allocated and reserved counters: "
+                + ", ".join(invalid_features)
+            )
+        if not (self.supports_allocator_allocated or self.supports_device_used):
+            raise ValueError(
+                "collector must support allocator allocated or device used memory"
+            )
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "DeviceMemoryCapabilities":
+        """Convert legacy capability mappings into the typed contract."""
+        return cls(
+            backend=str(value.get("backend", "unknown")),
+            telemetry_collector=str(value.get("telemetry_collector", "legacy.unknown")),
+            sampling_source=str(value.get("sampling_source", "unknown")),
+            supports_allocator_allocated=bool(
+                value.get("supports_allocator_allocated", True)
+            ),
+            supports_allocator_reserved=bool(
+                value.get("supports_allocator_reserved", True)
+            ),
+            supports_allocator_active=bool(
+                value.get("supports_allocator_active", True)
+            ),
+            supports_allocator_inactive=bool(
+                value.get("supports_allocator_inactive", True)
+            ),
+            supports_device_used=bool(value.get("supports_device_used", True)),
+            supports_device_free=bool(value.get("supports_device_free", False)),
+            supports_device_total=bool(value.get("supports_device_total", False)),
+            supports_native_allocator_history=bool(
+                value.get("supports_native_allocator_history", False)
+            ),
+            supports_fragmentation_analysis=bool(
+                value.get("supports_fragmentation_analysis", True)
+            ),
+            supports_allocator_attribution=bool(
+                value.get("supports_allocator_attribution", True)
+            ),
+            supports_bounded_profiling=bool(
+                value.get("supports_bounded_profiling", False)
+            ),
+        )
+
+    def to_metadata(self) -> Dict[str, Any]:
+        """Return a JSON-safe capability mapping for telemetry metadata."""
+        return {
+            "backend": self.backend,
+            "telemetry_collector": self.telemetry_collector,
+            "sampling_source": self.sampling_source,
+            "supports_allocator_allocated": self.supports_allocator_allocated,
+            "supports_allocator_reserved": self.supports_allocator_reserved,
+            "supports_allocator_active": self.supports_allocator_active,
+            "supports_allocator_inactive": self.supports_allocator_inactive,
+            "supports_device_used": self.supports_device_used,
+            "supports_device_free": self.supports_device_free,
+            "supports_device_total": self.supports_device_total,
+            "supports_native_allocator_history": (
+                self.supports_native_allocator_history
+            ),
+            "supports_fragmentation_analysis": self.supports_fragmentation_analysis,
+            "supports_allocator_attribution": self.supports_allocator_attribution,
+            "supports_bounded_profiling": self.supports_bounded_profiling,
+        }
 
 
 @dataclass(frozen=True)
 class DeviceMemorySample:
     """Normalized device-memory sample produced by a backend collector."""
 
-    allocated_bytes: int
-    reserved_bytes: int
-    used_bytes: int
+    allocated_bytes: Optional[int]
+    reserved_bytes: Optional[int]
+    used_bytes: Optional[int]
     free_bytes: Optional[int]
     total_bytes: Optional[int]
     active_bytes: Optional[int]
@@ -68,8 +174,86 @@ class DeviceMemoryCollector(ABC):
             )
 
     @abstractmethod
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> DeviceMemoryCapabilities:
         """Describe backend capability signals for telemetry metadata."""
+
+
+_SAMPLE_CAPABILITY_FIELDS = {
+    "allocated_bytes": "supports_allocator_allocated",
+    "reserved_bytes": "supports_allocator_reserved",
+    "active_bytes": "supports_allocator_active",
+    "inactive_bytes": "supports_allocator_inactive",
+    "used_bytes": "supports_device_used",
+    "free_bytes": "supports_device_free",
+    "total_bytes": "supports_device_total",
+}
+
+
+_SAMPLE_TELEMETRY_FIELDS = {
+    "allocated_bytes": "allocator_allocated_bytes",
+    "reserved_bytes": "allocator_reserved_bytes",
+    "active_bytes": "allocator_active_bytes",
+    "inactive_bytes": "allocator_inactive_bytes",
+    "used_bytes": "device_used_bytes",
+    "free_bytes": "device_free_bytes",
+    "total_bytes": "device_total_bytes",
+}
+
+
+def _validate_sample_value(
+    value: int | None, supported: bool, telemetry_field: str, partial: set[str]
+) -> bool:
+    if value is not None:
+        if value < 0:
+            raise ValueError(f"{telemetry_field} must be >= 0 when provided")
+        if not supported:
+            raise ValueError(
+                f"{telemetry_field} was provided by a collector that declares "
+                "it unsupported"
+            )
+        if telemetry_field in partial:
+            raise ValueError(f"{telemetry_field} is populated but marked partial")
+        return True
+    if supported and telemetry_field not in partial:
+        raise ValueError(
+            f"{telemetry_field} is missing without a partial-field diagnostic"
+        )
+    if not supported and telemetry_field in partial:
+        raise ValueError(
+            f"{telemetry_field} is unsupported and must not be marked partial"
+        )
+    return False
+
+
+def validate_device_memory_sample(
+    sample: DeviceMemorySample,
+    capabilities: DeviceMemoryCapabilities,
+    *,
+    partial_fields: tuple[str, ...] = (),
+) -> None:
+    """Validate a sample against its collector's declared capabilities."""
+    partial = set(partial_fields)
+    known_telemetry_fields = set(_SAMPLE_TELEMETRY_FIELDS.values())
+    unknown_partial_fields = sorted(partial - known_telemetry_fields)
+    if unknown_partial_fields:
+        raise ValueError(
+            "unknown partial sample fields: " + ", ".join(unknown_partial_fields)
+        )
+    available_values = 0
+    for sample_field, capability_field in _SAMPLE_CAPABILITY_FIELDS.items():
+        value = getattr(sample, sample_field)
+        supported = bool(getattr(capabilities, capability_field))
+        telemetry_field = _SAMPLE_TELEMETRY_FIELDS[sample_field]
+        if _validate_sample_value(value, supported, telemetry_field, partial):
+            available_values += 1
+
+    if available_values == 0:
+        raise ValueError("device memory sample contains no supported measurements")
+    if sample.total_bytes is not None:
+        if sample.used_bytes is not None and sample.used_bytes > sample.total_bytes:
+            raise ValueError("device_used_bytes cannot exceed device_total_bytes")
+        if sample.free_bytes is not None and sample.free_bytes > sample.total_bytes:
+            raise ValueError("device_free_bytes cannot exceed device_total_bytes")
 
 
 def _is_mps_available() -> bool:
@@ -198,14 +382,23 @@ class CudaDeviceCollector(DeviceMemoryCollector):
             errors=errors,
         )
 
-    def capabilities(self) -> Dict[str, Any]:
-        return {
-            "backend": self.name(),
-            "supports_device_total": True,
-            "supports_device_free": True,
-            "sampling_source": "torch.cuda.memory_allocated/reserved",
-            "telemetry_collector": self.telemetry_collector,
-        }
+    def capabilities(self) -> DeviceMemoryCapabilities:
+        return DeviceMemoryCapabilities(
+            backend=self.name(),
+            telemetry_collector=self.telemetry_collector,
+            sampling_source="torch.cuda.memory_allocated/reserved",
+            supports_allocator_allocated=True,
+            supports_allocator_reserved=True,
+            supports_allocator_active=True,
+            supports_allocator_inactive=True,
+            supports_device_used=True,
+            supports_device_free=True,
+            supports_device_total=True,
+            supports_native_allocator_history=True,
+            supports_fragmentation_analysis=True,
+            supports_allocator_attribution=True,
+            supports_bounded_profiling=True,
+        )
 
 
 class ROCmDeviceCollector(CudaDeviceCollector):
@@ -219,16 +412,15 @@ class ROCmDeviceCollector(CudaDeviceCollector):
     def is_available(self) -> bool:
         return _is_rocm_runtime()
 
-    def capabilities(self) -> Dict[str, Any]:
-        capabilities = super().capabilities()
-        capabilities.update(
-            {
+    def capabilities(self) -> DeviceMemoryCapabilities:
+        return DeviceMemoryCapabilities(
+            **{
+                **super().capabilities().to_metadata(),
                 "backend": self.name(),
                 "sampling_source": "torch.cuda.memory_* (HIP runtime)",
                 "telemetry_collector": self.telemetry_collector,
             }
         )
-        return capabilities
 
 
 class MPSDeviceCollector(DeviceMemoryCollector):
@@ -278,6 +470,8 @@ class MPSDeviceCollector(DeviceMemoryCollector):
                 # best runtime approximation currently available from torch.
                 raw_total = int(torch_mps.recommended_max_memory())
                 total = raw_total if raw_total > 0 else None
+                if total is None:
+                    partial_fields.extend(["device_total_bytes", "device_free_bytes"])
             except Exception as exc:
                 message = str(exc)
                 partial_fields.extend(["device_total_bytes", "device_free_bytes"])
@@ -300,17 +494,23 @@ class MPSDeviceCollector(DeviceMemoryCollector):
             errors=errors,
         )
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> DeviceMemoryCapabilities:
         import torch.mps as torch_mps
 
         supports_total = hasattr(torch_mps, "recommended_max_memory")
-        return {
-            "backend": self.name(),
-            "supports_device_total": supports_total,
-            "supports_device_free": supports_total,
-            "sampling_source": "torch.mps.current_allocated_memory/driver_allocated_memory",
-            "telemetry_collector": self.telemetry_collector,
-        }
+        return DeviceMemoryCapabilities(
+            backend=self.name(),
+            telemetry_collector=self.telemetry_collector,
+            sampling_source=(
+                "torch.mps.current_allocated_memory/driver_allocated_memory"
+            ),
+            supports_allocator_allocated=True,
+            supports_allocator_reserved=True,
+            supports_device_used=True,
+            supports_device_free=supports_total,
+            supports_device_total=supports_total,
+            supports_fragmentation_analysis=True,
+        )
 
 
 def build_device_memory_collector(
@@ -329,6 +529,7 @@ def build_device_memory_collector(
 
 __all__ = [
     "DeviceMemoryCollector",
+    "DeviceMemoryCapabilities",
     "DeviceMemorySample",
     "DeviceMemorySampleResult",
     "CudaDeviceCollector",
@@ -336,4 +537,5 @@ __all__ = [
     "MPSDeviceCollector",
     "build_device_memory_collector",
     "detect_torch_runtime_backend",
+    "validate_device_memory_sample",
 ]

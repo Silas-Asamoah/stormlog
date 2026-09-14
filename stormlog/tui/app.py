@@ -951,6 +951,13 @@ class GPUMemoryProfilerTUI(App):
         self._update_monitor_stats(stats, cleanup_stats)
         self._update_monitor_status()
 
+    def _monitor_session_labels(self) -> tuple[str, str | None]:
+        session = self.tracker_session
+        status_label = "Active" if session and session.is_active else "Idle"
+        device_label = session.get_device_label() if session else "-"
+
+        return status_label, device_label
+
     def _update_monitor_stats(
         self,
         stats: dict[str, Any],
@@ -958,9 +965,7 @@ class GPUMemoryProfilerTUI(App):
     ) -> None:
         table = self.monitor_stats_table
         table.clear()
-        session = self.tracker_session
-        status_label = "Active" if session and session.is_active else "Idle"
-        device_label = session.get_device_label() if session else "-"
+        status_label, device_label = self._monitor_session_labels()
 
         if not stats:
             table.add_row("Status", status_label)
@@ -998,6 +1003,14 @@ class GPUMemoryProfilerTUI(App):
             self._format_bytes_metric(stats.get("peak_memory")),
         )
         table.add_row(
+            "Current Device Used",
+            self._format_bytes_metric(stats.get("current_device_used")),
+        )
+        table.add_row(
+            "Peak Device Used",
+            self._format_bytes_metric(stats.get("peak_device_used")),
+        )
+        table.add_row(
             "Utilization",
             (
                 f"{float(utilization):.1f}%"
@@ -1005,9 +1018,14 @@ class GPUMemoryProfilerTUI(App):
                 else "-"
             ),
         )
+        allocations_per_second = stats.get("allocations_per_second")
         table.add_row(
             "Alloc/sec",
-            f"{stats.get('allocations_per_second', 0.0):.2f}",
+            (
+                f"{float(allocations_per_second):.2f}"
+                if isinstance(allocations_per_second, (int, float))
+                else "N/A"
+            ),
         )
         table.add_row("Alert Count", str(stats.get("alert_count", 0)))
         table.add_row("Total Events", str(stats.get("total_events", 0)))

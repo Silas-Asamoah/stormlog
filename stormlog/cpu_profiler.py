@@ -29,13 +29,31 @@ from stormlog.session import (
     update_session_summary,
 )
 from stormlog.telemetry import (
+    SCHEMA_VERSION_V4,
+    TelemetryEventV4,
     resolve_distributed_identity,
-    telemetry_event_from_record,
     telemetry_event_to_dict,
 )
 from stormlog.telemetry_sink import AppendOnlyTelemetrySink, TelemetrySinkConfig
 
 logger = logging.getLogger(__name__)
+
+_CPU_MEMORY_CAPABILITIES: Dict[str, Any] = {
+    "backend": "cpu",
+    "telemetry_collector": "stormlog.cpu_tracker",
+    "sampling_source": "legacy",
+    "supports_allocator_allocated": True,
+    "supports_allocator_reserved": True,
+    "supports_allocator_active": False,
+    "supports_allocator_inactive": False,
+    "supports_device_used": True,
+    "supports_device_free": False,
+    "supports_device_total": False,
+    "supports_native_allocator_history": False,
+    "supports_fragmentation_analysis": True,
+    "supports_allocator_attribution": True,
+    "supports_bounded_profiling": False,
+}
 
 if TYPE_CHECKING:
     from stormlog.tracker import TrackingEvent
@@ -494,35 +512,38 @@ class CPUMemoryTracker:
         host = socket.gethostname()
         pid = os.getpid()
         sampling_interval_ms = int(round(self.sampling_interval * 1000))
+        session_id = event.session_id or (
+            self._session_summary.session_id
+            if self._session_summary is not None
+            else self._open_session().session_id
+        )
+        metadata = dict(event.metadata or {})
+        metadata["memory_capabilities"] = dict(_CPU_MEMORY_CAPABILITIES)
         return telemetry_event_to_dict(
-            telemetry_event_from_record(
-                {
-                    "session_id": event.session_id
-                    or (
-                        self._session_summary.session_id
-                        if self._session_summary is not None
-                        else self._open_session().session_id
-                    ),
-                    "timestamp": event.timestamp,
-                    "event_type": event.event_type,
-                    "memory_allocated": event.memory_allocated,
-                    "memory_reserved": event.memory_reserved,
-                    "memory_change": event.memory_change,
-                    "device_id": event.device_id,
-                    "context": event.context,
-                    "job_id": event.job_id,
-                    "rank": event.rank,
-                    "local_rank": event.local_rank,
-                    "world_size": event.world_size,
-                    "metadata": dict(event.metadata or {}),
-                    "collector": "stormlog.cpu_tracker",
-                    "sampling_interval_ms": sampling_interval_ms,
-                    "pid": pid,
-                    "host": host,
-                },
-                default_collector="stormlog.cpu_tracker",
-                default_sampling_interval_ms=sampling_interval_ms,
-                default_session_id=event.session_id,
+            TelemetryEventV4(
+                schema_version=SCHEMA_VERSION_V4,
+                session_id=session_id,
+                timestamp_ns=int(event.timestamp * 1_000_000_000),
+                event_type=event.event_type,
+                collector="stormlog.cpu_tracker",
+                sampling_interval_ms=sampling_interval_ms,
+                pid=pid,
+                host=host,
+                device_id=event.device_id,
+                allocator_allocated_bytes=event.memory_allocated,
+                allocator_reserved_bytes=event.memory_reserved,
+                allocator_active_bytes=event.active_memory,
+                allocator_inactive_bytes=event.inactive_memory,
+                allocator_change_bytes=event.memory_change,
+                device_used_bytes=event.memory_allocated,
+                device_free_bytes=event.device_free,
+                device_total_bytes=event.device_total,
+                context=event.context,
+                job_id=event.job_id,
+                rank=event.rank,
+                local_rank=event.local_rank,
+                world_size=event.world_size,
+                metadata=metadata,
             )
         )
 
@@ -683,14 +704,14 @@ class CPUMemoryTracker:
                 continue
 
             timestamps.append(start_time + current_bucket * interval)
-            allocated.append(float(last_event.memory_allocated))
-            reserved.append(float(last_event.memory_reserved))
+            allocated.append(float(last_event.memory_allocated or 0))
+            reserved.append(float(last_event.memory_reserved or 0))
             current_bucket = bucket
             last_event = event
 
         timestamps.append(start_time + current_bucket * interval)
-        allocated.append(float(last_event.memory_allocated))
-        reserved.append(float(last_event.memory_reserved))
+        allocated.append(float(last_event.memory_allocated or 0))
+        reserved.append(float(last_event.memory_reserved or 0))
 
         return {
             "timestamps": timestamps,

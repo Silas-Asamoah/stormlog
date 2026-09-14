@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover - phase package may land in another slic
         return first or second
 
 
-from .telemetry import TelemetryEventV2
+from .telemetry import TelemetryEventLike
 
 _COLLECTIVE_TOKENS = (
     "nccl",
@@ -165,7 +165,7 @@ def resolve_collective_attribution_config(
 
 
 def attribute_collective_memory(
-    events: Sequence[TelemetryEventV2],
+    events: Sequence[TelemetryEventLike],
     *,
     config: CollectiveAttributionConfig | None = None,
     preset: str = "medium",
@@ -237,18 +237,20 @@ def _validate_collective_config(config: CollectiveAttributionConfig) -> None:
 
 
 def _group_sample_events_by_rank(
-    events: Iterable[TelemetryEventV2],
-) -> dict[int, list[TelemetryEventV2]]:
-    grouped: dict[int, list[TelemetryEventV2]] = {}
+    events: Iterable[TelemetryEventLike],
+) -> dict[int, list[TelemetryEventLike]]:
+    grouped: dict[int, list[TelemetryEventLike]] = {}
     for event in events:
         if str(event.event_type).strip().lower() != "sample":
+            continue
+        if event.device_used_bytes is None or event.allocator_reserved_bytes is None:
             continue
         grouped.setdefault(event.rank, []).append(event)
     return grouped
 
 
 def _collect_marker_timestamps_by_rank(
-    events: Iterable[TelemetryEventV2],
+    events: Iterable[TelemetryEventLike],
 ) -> dict[int, tuple[int, ...]]:
     grouped: dict[int, list[int]] = {}
     for event in events:
@@ -257,28 +259,48 @@ def _collect_marker_timestamps_by_rank(
     return {rank: tuple(sorted(values)) for rank, values in grouped.items()}
 
 
-def _detect_rank_spikes(
-    *,
-    rank: int,
-    rank_events: Sequence[TelemetryEventV2],
-    marker_timestamps: Sequence[int],
-    config: CollectiveAttributionConfig,
-) -> list[_RankSpike]:
-    if len(rank_events) < config.min_samples_per_rank:
-        return []
+def _allocator_gap_events(
+    rank_events: Sequence[TelemetryEventLike],
+) -> list[TelemetryEventLike]:
+    return [
+        event
+        for event in rank_events
+        if event.device_used_bytes is not None
+        and event.allocator_reserved_bytes is not None
+    ]
 
-    positive_gaps = np.asarray(
+
+def _positive_gap_values(gap_events: Sequence[TelemetryEventLike]) -> np.ndarray:
+    return np.asarray(
         [
             max(0, event.device_used_bytes - event.allocator_reserved_bytes)
-            for event in rank_events
+            for event in gap_events
+            if event.device_used_bytes is not None
+            and event.allocator_reserved_bytes is not None
         ],
         dtype=float,
     )
+
+
+def _detect_rank_spikes(
+    *,
+    rank: int,
+    rank_events: Sequence[TelemetryEventLike],
+    marker_timestamps: Sequence[int],
+    config: CollectiveAttributionConfig,
+) -> list[_RankSpike]:
+    gap_events = _allocator_gap_events(rank_events)
+    if len(gap_events) < config.min_samples_per_rank:
+        return []
+
+    positive_gaps = _positive_gap_values(gap_events)
     if positive_gaps.size < config.min_samples_per_rank:
         return []
 
     spikes: list[_RankSpike] = []
-    for sample_index, event in enumerate(rank_events):
+    for sample_index, event in enumerate(gap_events):
+        if event.device_used_bytes is None or event.allocator_reserved_bytes is None:
+            continue
         gap_bytes = max(0, event.device_used_bytes - event.allocator_reserved_bytes)
         gap_ratio = _compute_gap_ratio(event, gap_bytes)
         if not _is_significant_gap(
@@ -313,7 +335,7 @@ def _detect_rank_spikes(
     return spikes
 
 
-def _compute_gap_ratio(event: TelemetryEventV2, gap_bytes: int) -> float | None:
+def _compute_gap_ratio(event: TelemetryEventLike, gap_bytes: int) -> float | None:
     if event.device_total_bytes is None or event.device_total_bytes <= 0:
         return None
     return abs(gap_bytes) / event.device_total_bytes
@@ -346,7 +368,7 @@ def _robust_zscore(values: np.ndarray, value: float) -> float:
     return 0.0
 
 
-def _expected_world_size(events: Sequence[TelemetryEventV2]) -> int:
+def _expected_world_size(events: Sequence[TelemetryEventLike]) -> int:
     world_sizes = [event.world_size for event in events if event.world_size > 0]
     if world_sizes:
         return max(world_sizes)
@@ -605,7 +627,7 @@ def _merge_classification(first: str, second: str) -> str:
     return first if order.get(first, -1) >= order.get(second, -1) else second
 
 
-def _event_has_collective_marker(event: TelemetryEventV2) -> bool:
+def _event_has_collective_marker(event: TelemetryEventLike) -> bool:
     event_type = str(getattr(event, "event_type", ""))
     context = getattr(event, "context", None)
     metadata = getattr(event, "metadata", {})
@@ -648,7 +670,7 @@ def _contains_collective_token(text: str) -> bool:
 
 
 def _detect_grouped_spikes(
-    grouped_samples: Mapping[int, list[TelemetryEventV2]],
+    grouped_samples: Mapping[int, list[TelemetryEventLike]],
     marker_timestamps_by_rank: Mapping[int, tuple[int, ...]],
     config: CollectiveAttributionConfig,
 ) -> dict[int, list[_RankSpike]]:

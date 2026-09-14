@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - phase package may land in another slic
         return None
 
 
-from .telemetry import TelemetryEventV2
+from .telemetry import TelemetryEventLike
 
 _SPIKE_MIN_BYTES = 64 * 1024**2
 _SKEW_NOTE_MULTIPLIER = 5
@@ -33,9 +33,9 @@ class RankTimelinePoint:
     timestamp_ns: int
     aligned_timestamp_ns: int
     device_used_bytes: int
-    allocator_reserved_bytes: int
-    allocator_allocated_bytes: int
-    allocator_change_bytes: int
+    allocator_reserved_bytes: int | None
+    allocator_allocated_bytes: int | None
+    allocator_change_bytes: int | None
 
 
 @dataclass
@@ -86,14 +86,14 @@ class _RankSpikeCandidate:
     spike_window_samples: int
 
 
-def _is_sample_event(event: TelemetryEventV2) -> bool:
+def _is_sample_event(event: TelemetryEventLike) -> bool:
     return event.event_type.casefold() == "sample"
 
 
 def _group_events_by_rank(
-    events: Sequence[TelemetryEventV2],
-) -> dict[int, list[TelemetryEventV2]]:
-    grouped: dict[int, list[TelemetryEventV2]] = defaultdict(list)
+    events: Sequence[TelemetryEventLike],
+) -> dict[int, list[TelemetryEventLike]]:
+    grouped: dict[int, list[TelemetryEventLike]] = defaultdict(list)
     for event in events:
         grouped[event.rank].append(event)
     for rank_events in grouped.values():
@@ -101,7 +101,7 @@ def _group_events_by_rank(
     return dict(grouped)
 
 
-def _select_job_id(events: Sequence[TelemetryEventV2]) -> str | None:
+def _select_job_id(events: Sequence[TelemetryEventLike]) -> str | None:
     job_ids = [event.job_id for event in events if event.job_id]
     if not job_ids:
         return None
@@ -110,12 +110,19 @@ def _select_job_id(events: Sequence[TelemetryEventV2]) -> str | None:
 
 
 def _select_cross_rank_analysis_events(
-    events: Sequence[TelemetryEventV2],
-) -> tuple[list[TelemetryEventV2], str | None, list[str]]:
+    events: Sequence[TelemetryEventLike],
+) -> tuple[list[TelemetryEventLike], str | None, list[str]]:
     notes: list[str] = []
-    sample_events = [event for event in events if _is_sample_event(event)]
-    if len(sample_events) != len(events):
+    raw_sample_events = [event for event in events if _is_sample_event(event)]
+    if len(raw_sample_events) != len(events):
         notes.append("Ignored non-sample events during cross-rank analysis.")
+    sample_events = [
+        event for event in raw_sample_events if event.device_used_bytes is not None
+    ]
+    if len(sample_events) != len(raw_sample_events):
+        notes.append(
+            "Ignored samples without device-used memory during cross-rank analysis."
+        )
     if not sample_events:
         notes.append(
             "No sample telemetry events were available for distributed analysis."
@@ -128,7 +135,7 @@ def _select_cross_rank_analysis_events(
 
 
 def _determine_world_size(
-    events: Sequence[TelemetryEventV2], participating_ranks: Sequence[int]
+    events: Sequence[TelemetryEventLike], participating_ranks: Sequence[int]
 ) -> int:
     if not events:
         return 0
@@ -140,7 +147,9 @@ def _determine_world_size(
     return max(declared, observed, 1)
 
 
-def _median_sampling_interval_ns(grouped: dict[int, list[TelemetryEventV2]]) -> int:
+def _median_sampling_interval_ns(
+    grouped: dict[int, list[TelemetryEventLike]],
+) -> int:
     intervals: list[int] = []
     for rank_events in grouped.values():
         for index in range(1, len(rank_events)):
@@ -164,7 +173,7 @@ def _median_sampling_interval_ns(grouped: dict[int, list[TelemetryEventV2]]) -> 
 
 
 def merge_cross_rank_timelines(
-    events: Sequence[TelemetryEventV2],
+    events: Sequence[TelemetryEventLike],
 ) -> CrossRankMergeResult:
     """Merge rank streams into a single aligned timeline."""
 
@@ -226,24 +235,46 @@ def merge_cross_rank_timelines(
 
 
 def _find_rank_spike_candidate(
-    rank_events: Sequence[TelemetryEventV2], offset_ns: int
+    rank_events: Sequence[TelemetryEventLike], offset_ns: int
 ) -> _RankSpikeCandidate | None:
     if len(rank_events) < 2:
         return None
 
+    device_events = [
+        event for event in rank_events if event.device_used_bytes is not None
+    ]
+    if len(device_events) < 2:
+        return None
+
     spike_threshold = max(
         _SPIKE_MIN_BYTES,
-        int(max(event.device_used_bytes for event in rank_events) * 0.10),
+        int(
+            max(
+                event.device_used_bytes
+                for event in device_events
+                if event.device_used_bytes is not None
+            )
+            * 0.10
+        ),
     )
+    return _find_device_spike_candidate(device_events, offset_ns, spike_threshold)
+
+
+def _find_device_spike_candidate(
+    device_events: Sequence[TelemetryEventLike],
+    offset_ns: int,
+    spike_threshold: int,
+) -> _RankSpikeCandidate | None:
     window_start_index: int | None = None
     cumulative_delta = 0
     spike_window_samples = 0
 
-    for index in range(1, len(rank_events)):
-        delta = (
-            rank_events[index].device_used_bytes
-            - rank_events[index - 1].device_used_bytes
-        )
+    for index in range(1, len(device_events)):
+        current_used = device_events[index].device_used_bytes
+        previous_used = device_events[index - 1].device_used_bytes
+        if current_used is None or previous_used is None:
+            continue
+        delta = current_used - previous_used
         if delta <= 0:
             window_start_index = None
             cumulative_delta = 0
@@ -260,7 +291,7 @@ def _find_rank_spike_candidate(
         if cumulative_delta < spike_threshold:
             continue
 
-        spike_event = rank_events[index]
+        spike_event = device_events[index]
         return _RankSpikeCandidate(
             rank=spike_event.rank,
             session_id=getattr(spike_event, "session_id", None),
@@ -274,7 +305,7 @@ def _find_rank_spike_candidate(
 
 
 def _detect_first_cause_spikes(
-    grouped: dict[int, list[TelemetryEventV2]],
+    grouped: dict[int, list[TelemetryEventLike]],
     merge_result: CrossRankMergeResult,
     phase_resolver: PhaseReplayIndex | None = None,
 ) -> FirstCauseAnalysisResult:
@@ -337,7 +368,7 @@ def _detect_first_cause_spikes(
 
 
 def _collect_rank_spike_candidates(
-    grouped: dict[int, list[TelemetryEventV2]],
+    grouped: dict[int, list[TelemetryEventLike]],
     alignment_offsets_ns: dict[int, int],
 ) -> tuple[list[_RankSpikeCandidate], list[int]]:
     insufficient_sample_ranks = [
@@ -479,7 +510,7 @@ def _build_first_cause_suspects(
 
 
 def analyze_cross_rank_events(
-    events: Sequence[TelemetryEventV2],
+    events: Sequence[TelemetryEventLike],
     *,
     phase_resolver: PhaseReplayIndex | None = None,
 ) -> tuple[CrossRankMergeResult, FirstCauseAnalysisResult]:
@@ -503,7 +534,7 @@ def analyze_cross_rank_events(
 
 
 def summarize_cross_rank_analysis(
-    events: Sequence[TelemetryEventV2],
+    events: Sequence[TelemetryEventLike],
     *,
     phase_resolver: PhaseReplayIndex | None = None,
 ) -> dict[str, Any]:
@@ -544,8 +575,8 @@ def _serialize_first_cause_suspect(suspect: FirstCauseSuspect) -> dict[str, Any]
 
 
 def _select_job_samples(
-    sample_events: list[TelemetryEventV2], notes: list[str]
-) -> tuple[list[TelemetryEventV2], str | None]:
+    sample_events: list[TelemetryEventLike], notes: list[str]
+) -> tuple[list[TelemetryEventLike], str | None]:
     job_id = _select_job_id(sample_events)
     observed_job_ids = {event.job_id for event in sample_events if event.job_id}
     if len(observed_job_ids) > 1 and job_id is not None:
@@ -558,7 +589,7 @@ def _select_job_samples(
 
 
 def _align_rank_streams(
-    grouped: dict[int, list[TelemetryEventV2]],
+    grouped: dict[int, list[TelemetryEventLike]],
     participating_ranks: list[int],
     notes: list[str],
 ) -> tuple[dict[int, int], list[RankTimelinePoint]]:
@@ -581,12 +612,15 @@ def _align_rank_streams(
                 "first-sample alignment may be approximate."
             )
         for event in grouped[rank]:
+            device_used = event.device_used_bytes
+            if device_used is None:
+                continue
             merged_points.append(
                 RankTimelinePoint(
                     rank=rank,
                     timestamp_ns=event.timestamp_ns,
                     aligned_timestamp_ns=event.timestamp_ns - offset_ns,
-                    device_used_bytes=event.device_used_bytes,
+                    device_used_bytes=device_used,
                     allocator_reserved_bytes=event.allocator_reserved_bytes,
                     allocator_allocated_bytes=event.allocator_allocated_bytes,
                     allocator_change_bytes=event.allocator_change_bytes,

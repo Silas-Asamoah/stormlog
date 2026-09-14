@@ -14,9 +14,11 @@ from stormlog.phases import parse_phase_boundary
 from stormlog.telemetry import (
     SCHEMA_VERSION_V2,
     SCHEMA_VERSION_V3,
+    SCHEMA_VERSION_V4,
     UNKNOWN_HOST,
     UNKNOWN_PID,
     TelemetryEventV2,
+    TelemetryEventV4,
     load_telemetry_events,
     load_telemetry_sessions,
     resolve_distributed_identity,
@@ -106,7 +108,87 @@ def test_validate_telemetry_record_rejects_non_dict_metadata() -> None:
         validate_telemetry_record(record)
 
 
-@pytest.mark.parametrize("schema_version", [SCHEMA_VERSION_V2, SCHEMA_VERSION_V3])
+def test_v4_accepts_device_only_memory_counters() -> None:
+    capabilities = {
+        "backend": "future",
+        "telemetry_collector": "stormlog.future_tracker",
+        "sampling_source": "future.device_memory",
+        "supports_allocator_allocated": False,
+        "supports_allocator_reserved": False,
+        "supports_allocator_active": False,
+        "supports_allocator_inactive": False,
+        "supports_device_used": True,
+        "supports_device_free": True,
+        "supports_device_total": True,
+        "supports_native_allocator_history": False,
+        "supports_fragmentation_analysis": False,
+        "supports_allocator_attribution": False,
+        "supports_bounded_profiling": False,
+    }
+    event = TelemetryEventV4(
+        schema_version=SCHEMA_VERSION_V4,
+        session_id="device-only",
+        timestamp_ns=1,
+        event_type="sample",
+        collector="stormlog.future_tracker",
+        sampling_interval_ms=100,
+        pid=1,
+        host="host",
+        device_id=0,
+        allocator_allocated_bytes=None,
+        allocator_reserved_bytes=None,
+        allocator_active_bytes=None,
+        allocator_inactive_bytes=None,
+        allocator_change_bytes=None,
+        device_used_bytes=3,
+        device_free_bytes=1,
+        device_total_bytes=4,
+        context=None,
+        metadata={"memory_capabilities": capabilities},
+    )
+
+    record = telemetry_event_to_dict(event)
+
+    validate_telemetry_record(record)
+    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V4))
+
+
+def test_v4_rejects_malformed_capability_metadata() -> None:
+    record = telemetry_event_to_dict(_make_valid_event())
+    record["schema_version"] = SCHEMA_VERSION_V4
+    record["session_id"] = "session"
+    record["metadata"] = {"memory_capabilities": {"backend": "cuda"}}
+
+    with pytest.raises(ValueError, match="Missing memory capability fields"):
+        validate_telemetry_record(record)
+
+
+def test_v4_rejects_unknown_capability_fields() -> None:
+    record = telemetry_event_to_dict(_make_valid_event())
+    record["schema_version"] = SCHEMA_VERSION_V4
+    record["session_id"] = "session"
+    record = telemetry_event_to_dict(telemetry_event_from_record(record))
+    record["metadata"]["memory_capabilities"]["future_flag"] = True
+
+    with pytest.raises(ValueError, match="Unknown memory capability fields"):
+        validate_telemetry_record(record)
+
+
+def test_v4_rejects_counter_declared_unsupported() -> None:
+    record = telemetry_event_to_dict(_make_valid_event())
+    record["schema_version"] = SCHEMA_VERSION_V4
+    record["session_id"] = "session"
+    record = telemetry_event_to_dict(telemetry_event_from_record(record))
+    capabilities = record["metadata"]["memory_capabilities"]
+    capabilities["supports_device_used"] = False
+
+    with pytest.raises(ValueError, match="device_used_bytes must be null"):
+        validate_telemetry_record(record)
+
+
+@pytest.mark.parametrize(
+    "schema_version", [SCHEMA_VERSION_V2, SCHEMA_VERSION_V3, SCHEMA_VERSION_V4]
+)
 @pytest.mark.parametrize(
     ("updates", "message"),
     [
@@ -157,7 +239,7 @@ def test_telemetry_validation_preserves_error_order(
 ) -> None:
     record = telemetry_event_to_dict(_make_valid_event())
     record.update(schema_version=schema_version, **updates)
-    if schema_version == SCHEMA_VERSION_V3:
+    if schema_version in {SCHEMA_VERSION_V3, SCHEMA_VERSION_V4}:
         record["session_id"] = "validation-session"
 
     with pytest.raises(ValueError) as exc_info:
@@ -183,7 +265,7 @@ def test_telemetry_validation_accepts_nullable_counters_and_unknown_pid() -> Non
     assert record == original
 
 
-def test_legacy_gpumemprof_record_converts_to_v3() -> None:
+def test_legacy_gpumemprof_record_converts_to_v4() -> None:
     legacy = {
         "timestamp": 1700000000.25,
         "event_type": "allocation",
@@ -202,7 +284,7 @@ def test_legacy_gpumemprof_record_converts_to_v3() -> None:
     )
     record = telemetry_event_to_dict(event)
 
-    assert record["schema_version"] == SCHEMA_VERSION_V3
+    assert record["schema_version"] == SCHEMA_VERSION_V4
     assert isinstance(record["session_id"], str)
     assert record["session_id"]
     assert record["collector"] == "stormlog.cuda_tracker"
@@ -210,7 +292,7 @@ def test_legacy_gpumemprof_record_converts_to_v3() -> None:
     assert record["allocator_reserved_bytes"] == 15_000
     assert record["allocator_change_bytes"] == 512
     assert record["metadata"]["usage_percent"] == 75.5
-    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V3))
+    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V4))
 
 
 def test_legacy_cpu_record_converts_with_defaults() -> None:
@@ -241,7 +323,7 @@ def test_legacy_cpu_record_converts_with_defaults() -> None:
     assert record["world_size"] == 1
     assert isinstance(record["session_id"], str)
     assert record["session_id"]
-    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V3))
+    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V4))
 
 
 def test_legacy_record_uses_backend_metadata_for_collector() -> None:
@@ -285,7 +367,7 @@ def test_legacy_tf_record_converts_with_defaults() -> None:
     assert record["device_used_bytes"] == 2 * 1024 * 1024
     assert isinstance(record["session_id"], str)
     assert record["session_id"]
-    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V3))
+    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V4))
 
 
 def test_phase_boundary_record_round_trips_through_v3_schema() -> None:
@@ -333,7 +415,7 @@ def test_phase_boundary_record_round_trips_through_v3_schema() -> None:
     record = telemetry_event_to_dict(event)
 
     validate_telemetry_record(record)
-    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V3))
+    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V4))
     scope = parse_phase_boundary(record)
     assert scope is not None
     assert scope.path == ("train", "step")
@@ -613,7 +695,12 @@ def test_v2_record_keeps_metadata_identity_keys_opaque() -> None:
     assert round_tripped["rank"] == 0
     assert round_tripped["local_rank"] == 0
     assert round_tripped["world_size"] == 1
-    assert round_tripped["metadata"] == record["metadata"]
+    for key, value in record["metadata"].items():
+        assert round_tripped["metadata"][key] == value
+    assert (
+        round_tripped["metadata"]["memory_capabilities"]["supports_allocator_allocated"]
+        is True
+    )
 
 
 def test_load_telemetry_events_reads_dict_events_payload(tmp_path: Path) -> None:
@@ -634,7 +721,7 @@ def test_load_telemetry_events_reads_dict_events_payload(tmp_path: Path) -> None
     events = load_telemetry_events(path, events_key="events")
 
     assert len(events) == 1
-    assert events[0].schema_version == SCHEMA_VERSION_V3
+    assert events[0].schema_version == SCHEMA_VERSION_V4
 
 
 def test_load_telemetry_events_reads_append_only_sink_directory(tmp_path: Path) -> None:
@@ -898,13 +985,13 @@ def test_schema_version_bool_is_rejected_when_present() -> None:
 
 def test_unsupported_schema_version_is_rejected_without_legacy_fallback() -> None:
     legacy = {
-        "schema_version": 4,
+        "schema_version": 5,
         "timestamp": 1700000001.0,
         "event_type": "allocation",
         "memory_allocated": 8_192,
     }
 
-    with pytest.raises(ValueError, match="Unsupported schema_version: 4"):
+    with pytest.raises(ValueError, match="Unsupported schema_version: 5"):
         telemetry_event_from_record(legacy, permissive_legacy=True)
 
 
@@ -913,7 +1000,7 @@ def test_load_telemetry_events_rejects_unsupported_schema_version(
 ) -> None:
     payload = [
         {
-            "schema_version": 4,
+            "schema_version": 5,
             "timestamp": 1700000005.0,
             "event_type": "allocation",
             "memory_allocated": 1024,
@@ -922,7 +1009,7 @@ def test_load_telemetry_events_rejects_unsupported_schema_version(
     path = tmp_path / "unsupported_schema.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Unsupported schema_version: 4"):
+    with pytest.raises(ValueError, match="Unsupported schema_version: 5"):
         load_telemetry_events(path, permissive_legacy=True)
 
 
@@ -944,9 +1031,9 @@ def test_legacy_total_memory_null_is_accepted() -> None:
     )
     record = telemetry_event_to_dict(event)
 
-    assert record["schema_version"] == SCHEMA_VERSION_V3
+    assert record["schema_version"] == SCHEMA_VERSION_V4
     assert isinstance(record["session_id"], str)
     assert record["session_id"]
     assert record["device_total_bytes"] is None
     assert record["device_free_bytes"] is None
-    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V3))
+    jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V4))

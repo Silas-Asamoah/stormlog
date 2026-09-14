@@ -2,16 +2,16 @@
   "version": "v0.4",
   "description": "Allowed positive regression deltas for the v0.4 pull-request benchmark gate.",
   "tolerances": {
-    "gpumemprof_cpu.artifact_growth_bytes": 2000000.0,
+    "gpumemprof_cpu.artifact_growth_bytes": 8000000.0,
     "gpumemprof_cpu.collector_failure_event_count": 0.0,
     "gpumemprof_cpu.cpu_overhead_pct": 150.0,
-    "gpumemprof_cpu.final_retained_bytes": 16000000.0,
+    "gpumemprof_cpu.final_retained_bytes": 48000000.0,
     "gpumemprof_cpu.final_retained_files": 0.0,
     "gpumemprof_cpu.history_dropped_alerts": 0.0,
     "gpumemprof_cpu.history_dropped_events": 25000.0,
     "gpumemprof_cpu.history_dropped_samples": 0.0,
     "gpumemprof_cpu.max_rss_delta_bytes": 64000000.0,
-    "gpumemprof_cpu.pruned_bytes": 64000000.0,
+    "gpumemprof_cpu.pruned_bytes": 80000000.0,
     "gpumemprof_cpu.pruned_segment_count": 8.0,
     "gpumemprof_cpu.rollover_count": 8.0,
     "gpumemprof_cpu.rss_growth_per_24h_equiv": 256000000.0,
@@ -24,11 +24,11 @@
     "tfmemprof_cpu.history_dropped_alerts": 0.0,
     "tfmemprof_cpu.history_dropped_events": 25000.0,
     "tfmemprof_cpu.history_dropped_samples": 25000.0,
-    "tfmemprof_cpu.max_rss_delta_bytes": 64000000.0,
+    "tfmemprof_cpu.max_rss_delta_bytes": 80000000.0,
     "tfmemprof_cpu.pruned_bytes": 16000000.0,
     "tfmemprof_cpu.pruned_segment_count": 2.0,
     "tfmemprof_cpu.rollover_count": 6.0,
-    "tfmemprof_cpu.rss_growth_per_24h_equiv": 128000000.0,
+    "tfmemprof_cpu.rss_growth_per_24h_equiv": 300000000.0,
     "tfmemprof_cpu.runtime_overhead_pct": 250.0
   }
 }

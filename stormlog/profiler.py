@@ -12,6 +12,11 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import psutil
 import torch
 
+from .device_collectors import (
+    build_device_memory_collector,
+    detect_torch_runtime_backend,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -116,6 +121,12 @@ class GPUMemoryProfiler:
             raise ValueError("max_snapshots must be >= 1")
 
         self.device = self._setup_device(device)
+        capabilities = build_device_memory_collector(self.device).capabilities()
+        if not capabilities.supports_bounded_profiling:
+            raise RuntimeError(
+                "bounded profiling requires allocator peak/reset capabilities; "
+                f"backend {capabilities.backend!r} does not provide them"
+            )
         self.track_tensors = track_tensors
         self.track_cpu_memory = track_cpu_memory
         self.collect_stack_traces = collect_stack_traces
@@ -142,8 +153,12 @@ class GPUMemoryProfiler:
         if device is None:
             if torch.cuda.is_available():
                 resolved_device = torch.device(f"cuda:{torch.cuda.current_device()}")
+            elif detect_torch_runtime_backend() == "mps":
+                resolved_device = torch.device("mps")
             else:
-                raise RuntimeError("CUDA is not available, cannot profile GPU memory")
+                raise RuntimeError(
+                    "No supported accelerator is available for GPU memory profiling"
+                )
         elif isinstance(device, int):
             resolved_device = torch.device(f"cuda:{device}")
         elif isinstance(device, str):
@@ -151,8 +166,18 @@ class GPUMemoryProfiler:
         else:
             resolved_device = device
 
+        return self._validate_profiling_device(resolved_device)
+
+    @staticmethod
+    def _validate_profiling_device(resolved_device: torch.device) -> torch.device:
+        if resolved_device.type == "mps":
+            if detect_torch_runtime_backend() != "mps":
+                raise RuntimeError("MPS backend is not available in this runtime")
+            return resolved_device
         if resolved_device.type != "cuda":
-            raise ValueError("Only CUDA devices are supported for GPU memory profiling")
+            raise ValueError(
+                "Only CUDA/ROCm or MPS devices are recognized for GPU memory profiling"
+            )
 
         # Ensure device is available
         device_index = (

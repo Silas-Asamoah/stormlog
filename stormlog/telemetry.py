@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Literal, Mapping, Optional
+from typing import Any, Iterable, Literal, Mapping, Optional, Union
 
 from .session import (
     SESSION_STATUS_INCOMPLETE,
@@ -28,7 +28,8 @@ from .telemetry_sink import (
 
 SCHEMA_VERSION_V2: Literal[2] = 2
 SCHEMA_VERSION_V3: Literal[3] = 3
-SCHEMA_VERSION_LATEST: Literal[3] = SCHEMA_VERSION_V3
+SCHEMA_VERSION_V4: Literal[4] = 4
+SCHEMA_VERSION_LATEST: Literal[4] = SCHEMA_VERSION_V4
 UNKNOWN_PID = -1
 UNKNOWN_HOST = "unknown"
 
@@ -72,6 +73,9 @@ REQUIRED_V2_FIELDS = tuple(
 OPTIONAL_V2_FIELDS = OPTIONAL_V3_FIELDS
 KNOWN_V2_FIELD_SET = frozenset(REQUIRED_V2_FIELDS + OPTIONAL_V2_FIELDS)
 KNOWN_V3_FIELD_SET = frozenset(REQUIRED_V3_FIELDS + OPTIONAL_V3_FIELDS)
+REQUIRED_V4_FIELDS = REQUIRED_V3_FIELDS
+OPTIONAL_V4_FIELDS = OPTIONAL_V3_FIELDS
+KNOWN_V4_FIELD_SET = frozenset(REQUIRED_V4_FIELDS + OPTIONAL_V4_FIELDS)
 _DISTRIBUTED_METADATA_KEYS = frozenset(OPTIONAL_V3_FIELDS)
 _SESSION_METADATA_KEYS = frozenset({"session_id"})
 _RANK_ENV_GROUPS = (
@@ -84,6 +88,36 @@ _RANK_ENV_GROUPS = (
     ("SLURM_PROCID", "SLURM_LOCALID", "SLURM_NTASKS"),
 )
 _JOB_ID_ENV_KEYS = ("TORCHELASTIC_RUN_ID", "SLURM_JOB_ID")
+_MEMORY_CAPABILITY_BOOLEAN_FIELDS = (
+    "supports_allocator_allocated",
+    "supports_allocator_reserved",
+    "supports_allocator_active",
+    "supports_allocator_inactive",
+    "supports_device_used",
+    "supports_device_free",
+    "supports_device_total",
+    "supports_native_allocator_history",
+    "supports_fragmentation_analysis",
+    "supports_allocator_attribution",
+    "supports_bounded_profiling",
+)
+_MEMORY_CAPABILITY_STRING_FIELDS = (
+    "backend",
+    "telemetry_collector",
+    "sampling_source",
+)
+_MEMORY_CAPABILITY_FIELD_SET = frozenset(
+    _MEMORY_CAPABILITY_STRING_FIELDS + _MEMORY_CAPABILITY_BOOLEAN_FIELDS
+)
+_COUNTER_CAPABILITY_FIELDS = {
+    "allocator_allocated_bytes": "supports_allocator_allocated",
+    "allocator_reserved_bytes": "supports_allocator_reserved",
+    "allocator_active_bytes": "supports_allocator_active",
+    "allocator_inactive_bytes": "supports_allocator_inactive",
+    "device_used_bytes": "supports_device_used",
+    "device_free_bytes": "supports_device_free",
+    "device_total_bytes": "supports_device_total",
+}
 
 
 @dataclass
@@ -119,7 +153,7 @@ class TelemetryEventV2:
 
 @dataclass
 class TelemetryEventV3:
-    """Canonical telemetry event payload used by tracker exports and loaders."""
+    """Legacy session-aware telemetry payload with required core counters."""
 
     schema_version: Literal[3]
     session_id: str
@@ -149,7 +183,40 @@ class TelemetryEventV3:
         validate_telemetry_record(telemetry_event_to_dict(self))
 
 
-TelemetryEvent = TelemetryEventV3
+@dataclass
+class TelemetryEventV4:
+    """Capability-aware telemetry payload used by tracker exports and loaders."""
+
+    schema_version: Literal[4]
+    session_id: str
+    timestamp_ns: int
+    event_type: str
+    collector: str
+    sampling_interval_ms: int
+    pid: int
+    host: str
+    device_id: int
+    allocator_allocated_bytes: Optional[int]
+    allocator_reserved_bytes: Optional[int]
+    allocator_active_bytes: Optional[int]
+    allocator_inactive_bytes: Optional[int]
+    allocator_change_bytes: Optional[int]
+    device_used_bytes: Optional[int]
+    device_free_bytes: Optional[int]
+    device_total_bytes: Optional[int]
+    context: Optional[str]
+    job_id: Optional[str] = None
+    rank: int = 0
+    local_rank: int = 0
+    world_size: int = 1
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        validate_telemetry_record(telemetry_event_to_dict(self))
+
+
+TelemetryEvent = TelemetryEventV4
+TelemetryEventLike = Union[TelemetryEventV2, TelemetryEventV3, TelemetryEventV4]
 
 
 @dataclass
@@ -224,6 +291,94 @@ def _coerce_metadata_dict(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("metadata must be an object")
     return dict(value)
+
+
+def _validate_memory_capabilities(metadata: Mapping[str, Any]) -> None:
+    capabilities = metadata.get("memory_capabilities")
+    if not isinstance(capabilities, Mapping):
+        raise ValueError("metadata.memory_capabilities must be an object")
+    missing = [
+        name
+        for name in (
+            *_MEMORY_CAPABILITY_STRING_FIELDS,
+            *_MEMORY_CAPABILITY_BOOLEAN_FIELDS,
+        )
+        if name not in capabilities
+    ]
+    if missing:
+        raise ValueError("Missing memory capability fields: " + ", ".join(missing))
+    unknown = sorted(set(capabilities) - _MEMORY_CAPABILITY_FIELD_SET)
+    if unknown:
+        raise ValueError("Unknown memory capability fields: " + ", ".join(unknown))
+    for name in _MEMORY_CAPABILITY_STRING_FIELDS:
+        _coerce_required_string(
+            capabilities[name], f"metadata.memory_capabilities.{name}"
+        )
+    for name in _MEMORY_CAPABILITY_BOOLEAN_FIELDS:
+        if not isinstance(capabilities[name], bool):
+            raise ValueError(f"metadata.memory_capabilities.{name} must be a boolean")
+
+
+def _validate_capability_counter_consistency(
+    record: Mapping[str, Any], metadata: Mapping[str, Any]
+) -> None:
+    capabilities = metadata["memory_capabilities"]
+    for counter_field, capability_field in _COUNTER_CAPABILITY_FIELDS.items():
+        if record[counter_field] is not None and not capabilities[capability_field]:
+            raise ValueError(
+                f"{counter_field} must be null when "
+                f"metadata.memory_capabilities.{capability_field} is false"
+            )
+    if (
+        record["allocator_change_bytes"] is not None
+        and not capabilities["supports_allocator_allocated"]
+    ):
+        raise ValueError(
+            "allocator_change_bytes must be null when allocator allocated memory "
+            "is unsupported"
+        )
+
+
+def _with_inferred_memory_capabilities(
+    metadata: Mapping[str, Any],
+    record: Mapping[str, Any],
+) -> dict[str, Any]:
+    result = dict(metadata)
+    if "memory_capabilities" in result:
+        return result
+    collector = str(record.get("collector", "legacy.unknown"))
+    backend_value = result.get("backend")
+    if not isinstance(backend_value, str) or not backend_value.strip():
+        backend_value = next(
+            (
+                candidate
+                for candidate in ("cuda", "rocm", "mps", "cpu", "tensorflow", "jax")
+                if candidate in collector.lower()
+            ),
+            "unknown",
+        )
+    allocated = record.get("allocator_allocated_bytes") is not None
+    reserved = record.get("allocator_reserved_bytes") is not None
+    capabilities = {
+        "backend": str(backend_value),
+        "telemetry_collector": collector,
+        "sampling_source": str(result.get("sampling_source", "legacy")),
+        "supports_allocator_allocated": allocated,
+        "supports_allocator_reserved": reserved,
+        "supports_allocator_active": record.get("allocator_active_bytes") is not None,
+        "supports_allocator_inactive": (
+            record.get("allocator_inactive_bytes") is not None
+        ),
+        "supports_device_used": record.get("device_used_bytes") is not None,
+        "supports_device_free": record.get("device_free_bytes") is not None,
+        "supports_device_total": record.get("device_total_bytes") is not None,
+        "supports_native_allocator_history": False,
+        "supports_fragmentation_analysis": allocated and reserved,
+        "supports_allocator_attribution": allocated and reserved,
+        "supports_bounded_profiling": False,
+    }
+    result["memory_capabilities"] = capabilities
+    return result
 
 
 def _extract_metadata(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -589,7 +744,7 @@ def _legacy_collector(
 
 
 def telemetry_event_to_dict(
-    event: TelemetryEvent | TelemetryEventV2,
+    event: TelemetryEventV2 | TelemetryEventV3 | TelemetryEventV4,
 ) -> dict[str, Any]:
     """Serialize a telemetry event to a plain dictionary."""
     if isinstance(event, TelemetryEventV2):
@@ -645,20 +800,24 @@ def telemetry_event_to_dict(
 
 
 def validate_telemetry_record(record: Mapping[str, Any]) -> None:
-    """Validate a v2 or v3 telemetry record.
+    """Validate a v2, v3, or v4 telemetry record.
 
     Raises:
         ValueError: if the record is invalid or partial.
     """
 
-    _validate_telemetry_shape(record)
+    schema_version = _validate_telemetry_shape(record)
+    nullable_core_counters = schema_version == SCHEMA_VERSION_V4
     _validate_telemetry_process(record)
     _validate_telemetry_identity_fields(record)
     _coerce_int(record["device_id"], "device_id")
-    _validate_allocator_counters(record)
-    _validate_device_counters(record)
+    _validate_allocator_counters(record, nullable_core_counters=nullable_core_counters)
+    _validate_device_counters(record, nullable_core_counters=nullable_core_counters)
     _coerce_string(record["context"], "context", allow_none=True)
-    _coerce_metadata_dict(record["metadata"])
+    metadata = _coerce_metadata_dict(record["metadata"])
+    if schema_version == SCHEMA_VERSION_V4:
+        _validate_memory_capabilities(metadata)
+        _validate_capability_counter_consistency(record, metadata)
     resolve_distributed_identity(
         job_id=record.get("job_id"),
         rank=record.get("rank"),
@@ -667,11 +826,16 @@ def validate_telemetry_record(record: Mapping[str, Any]) -> None:
     )
 
 
-def _validate_telemetry_shape(record: Mapping[str, Any]) -> None:
-    schema_version = _coerce_int(record.get("schema_version"), "schema_version")
+def _telemetry_schema_fields(
+    schema_version: int,
+) -> tuple[tuple[str, ...], frozenset[str], bool]:
     required_fields: tuple[str, ...]
     known_fields: frozenset[str]
-    if schema_version == SCHEMA_VERSION_V3:
+    if schema_version == SCHEMA_VERSION_V4:
+        required_fields = REQUIRED_V4_FIELDS
+        known_fields = KNOWN_V4_FIELD_SET
+        require_session_id = True
+    elif schema_version == SCHEMA_VERSION_V3:
         required_fields = REQUIRED_V3_FIELDS
         known_fields = KNOWN_V3_FIELD_SET
         require_session_id = True
@@ -681,6 +845,15 @@ def _validate_telemetry_shape(record: Mapping[str, Any]) -> None:
         require_session_id = False
     else:
         raise ValueError(f"Unsupported schema_version: {schema_version}")
+
+    return required_fields, known_fields, require_session_id
+
+
+def _validate_telemetry_shape(record: Mapping[str, Any]) -> int:
+    schema_version = _coerce_int(record.get("schema_version"), "schema_version")
+    required_fields, known_fields, require_session_id = _telemetry_schema_fields(
+        schema_version
+    )
 
     missing = [name for name in required_fields if name not in record]
     if missing:
@@ -692,6 +865,7 @@ def _validate_telemetry_shape(record: Mapping[str, Any]) -> None:
 
     if require_session_id:
         _coerce_required_string(record["session_id"], "session_id")
+    return schema_version
 
 
 def _validate_telemetry_process(record: Mapping[str, Any]) -> None:
@@ -729,12 +903,29 @@ def _validate_telemetry_identity_fields(record: Mapping[str, Any]) -> None:
         _coerce_positive_int(record["world_size"], "world_size")
 
 
-def _validate_allocator_counters(record: Mapping[str, Any]) -> None:
-    allocator_allocated_bytes = _coerce_int(
-        record["allocator_allocated_bytes"], "allocator_allocated_bytes"
+def _validate_counter_range(value: int | None, error: str) -> None:
+    if value is not None and value < 0:
+        raise ValueError(error)
+
+
+def _validate_allocator_counters(
+    record: Mapping[str, Any], *, nullable_core_counters: bool
+) -> None:
+    allocator_allocated_bytes = (
+        _coerce_optional_int(
+            record["allocator_allocated_bytes"], "allocator_allocated_bytes"
+        )
+        if nullable_core_counters
+        else _coerce_int(
+            record["allocator_allocated_bytes"], "allocator_allocated_bytes"
+        )
     )
-    allocator_reserved_bytes = _coerce_int(
-        record["allocator_reserved_bytes"], "allocator_reserved_bytes"
+    allocator_reserved_bytes = (
+        _coerce_optional_int(
+            record["allocator_reserved_bytes"], "allocator_reserved_bytes"
+        )
+        if nullable_core_counters
+        else _coerce_int(record["allocator_reserved_bytes"], "allocator_reserved_bytes")
     )
     allocator_active_bytes = _coerce_optional_int(
         record["allocator_active_bytes"], "allocator_active_bytes"
@@ -742,20 +933,36 @@ def _validate_allocator_counters(record: Mapping[str, Any]) -> None:
     allocator_inactive_bytes = _coerce_optional_int(
         record["allocator_inactive_bytes"], "allocator_inactive_bytes"
     )
-    _coerce_int(record["allocator_change_bytes"], "allocator_change_bytes")
+    allocator_change_bytes = (
+        _coerce_optional_int(record["allocator_change_bytes"], "allocator_change_bytes")
+        if nullable_core_counters
+        else _coerce_int(record["allocator_change_bytes"], "allocator_change_bytes")
+    )
 
-    if allocator_allocated_bytes < 0:
-        raise ValueError("allocator_allocated_bytes must be >= 0")
-    if allocator_reserved_bytes < 0:
-        raise ValueError("allocator_reserved_bytes must be >= 0")
-    if allocator_active_bytes is not None and allocator_active_bytes < 0:
-        raise ValueError("allocator_active_bytes must be >= 0 when provided")
-    if allocator_inactive_bytes is not None and allocator_inactive_bytes < 0:
-        raise ValueError("allocator_inactive_bytes must be >= 0 when provided")
+    _validate_counter_range(
+        allocator_allocated_bytes, "allocator_allocated_bytes must be >= 0"
+    )
+    _validate_counter_range(
+        allocator_reserved_bytes, "allocator_reserved_bytes must be >= 0"
+    )
+    _validate_counter_range(
+        allocator_active_bytes, "allocator_active_bytes must be >= 0 when provided"
+    )
+    _validate_counter_range(
+        allocator_inactive_bytes, "allocator_inactive_bytes must be >= 0 when provided"
+    )
+    if allocator_change_bytes is not None and not _is_int(allocator_change_bytes):
+        raise ValueError("allocator_change_bytes must be an integer when provided")
 
 
-def _validate_device_counters(record: Mapping[str, Any]) -> None:
-    device_used_bytes = _coerce_int(record["device_used_bytes"], "device_used_bytes")
+def _validate_device_counters(
+    record: Mapping[str, Any], *, nullable_core_counters: bool
+) -> None:
+    device_used_bytes = (
+        _coerce_optional_int(record["device_used_bytes"], "device_used_bytes")
+        if nullable_core_counters
+        else _coerce_int(record["device_used_bytes"], "device_used_bytes")
+    )
     device_free_bytes = _coerce_optional_int(
         record["device_free_bytes"], "device_free_bytes"
     )
@@ -763,16 +970,17 @@ def _validate_device_counters(record: Mapping[str, Any]) -> None:
         record["device_total_bytes"], "device_total_bytes"
     )
 
-    if device_used_bytes < 0:
-        raise ValueError("device_used_bytes must be >= 0")
-    if device_free_bytes is not None and device_free_bytes < 0:
-        raise ValueError("device_free_bytes must be >= 0 when provided")
-    if device_total_bytes is not None and device_total_bytes < 0:
-        raise ValueError("device_total_bytes must be >= 0 when provided")
+    _validate_counter_range(device_used_bytes, "device_used_bytes must be >= 0")
+    _validate_counter_range(
+        device_free_bytes, "device_free_bytes must be >= 0 when provided"
+    )
+    _validate_counter_range(
+        device_total_bytes, "device_total_bytes must be >= 0 when provided"
+    )
 
     if device_total_bytes is None:
         return
-    if device_used_bytes > device_total_bytes:
+    if device_used_bytes is not None and device_used_bytes > device_total_bytes:
         raise ValueError("device_used_bytes cannot exceed device_total_bytes")
     if device_free_bytes is not None and device_free_bytes > device_total_bytes:
         raise ValueError("device_free_bytes cannot exceed device_total_bytes")
@@ -785,14 +993,18 @@ def telemetry_event_from_record(
     default_sampling_interval_ms: int = 0,
     default_session_id: str | None = None,
 ) -> TelemetryEvent:
-    """Create a canonical telemetry event from v3, v2, or legacy records."""
+    """Create a canonical telemetry event from v4, v3, v2, or legacy records."""
 
     if not isinstance(record, Mapping):
         raise ValueError("record must be a mapping")
 
     if "schema_version" in record:
         schema_version = _coerce_int(record["schema_version"], "schema_version")
-        if schema_version not in {SCHEMA_VERSION_V2, SCHEMA_VERSION_V3}:
+        if schema_version not in {
+            SCHEMA_VERSION_V2,
+            SCHEMA_VERSION_V3,
+            SCHEMA_VERSION_V4,
+        }:
             raise ValueError(f"Unsupported schema_version: {schema_version}")
 
         raw_metadata = record.get("metadata", {})
@@ -808,14 +1020,24 @@ def telemetry_event_from_record(
             metadata=metadata,
             default_session_id=default_session_id,
         )
-        upgraded_record = dict(record)
-        upgraded_record["schema_version"] = SCHEMA_VERSION_V3
-        upgraded_record["session_id"] = session_id
-        validate_telemetry_record(upgraded_record)
-        metadata = _coerce_metadata_dict(upgraded_record["metadata"])
+        metadata = _with_inferred_memory_capabilities(
+            _coerce_metadata_dict(record["metadata"]),
+            record,
+        )
+        normalized_record = dict(record)
+        if schema_version != SCHEMA_VERSION_V2:
+            normalized_record["session_id"] = session_id
+        normalized_record["metadata"] = metadata
+        validate_telemetry_record(normalized_record)
+        nullable_core_counters = schema_version == SCHEMA_VERSION_V4
+
+        def core_counter(field_name: str) -> Optional[int]:
+            if nullable_core_counters:
+                return _coerce_optional_int(record[field_name], field_name)
+            return _coerce_int(record[field_name], field_name)
 
         return TelemetryEvent(
-            schema_version=SCHEMA_VERSION_V3,
+            schema_version=SCHEMA_VERSION_V4,
             session_id=session_id,
             timestamp_ns=_coerce_int(record["timestamp_ns"], "timestamp_ns"),
             event_type=_coerce_required_string(record["event_type"], "event_type"),
@@ -826,24 +1048,16 @@ def telemetry_event_from_record(
             pid=_coerce_int(record["pid"], "pid"),
             host=_coerce_required_string(record["host"], "host"),
             device_id=_coerce_int(record["device_id"], "device_id"),
-            allocator_allocated_bytes=_coerce_int(
-                record["allocator_allocated_bytes"], "allocator_allocated_bytes"
-            ),
-            allocator_reserved_bytes=_coerce_int(
-                record["allocator_reserved_bytes"], "allocator_reserved_bytes"
-            ),
+            allocator_allocated_bytes=core_counter("allocator_allocated_bytes"),
+            allocator_reserved_bytes=core_counter("allocator_reserved_bytes"),
             allocator_active_bytes=_coerce_optional_int(
                 record["allocator_active_bytes"], "allocator_active_bytes"
             ),
             allocator_inactive_bytes=_coerce_optional_int(
                 record["allocator_inactive_bytes"], "allocator_inactive_bytes"
             ),
-            allocator_change_bytes=_coerce_int(
-                record["allocator_change_bytes"], "allocator_change_bytes"
-            ),
-            device_used_bytes=_coerce_int(
-                record["device_used_bytes"], "device_used_bytes"
-            ),
+            allocator_change_bytes=core_counter("allocator_change_bytes"),
+            device_used_bytes=core_counter("device_used_bytes"),
             device_free_bytes=_coerce_optional_int(
                 record["device_free_bytes"], "device_free_bytes"
             ),
@@ -911,8 +1125,21 @@ def telemetry_event_from_record(
     context_value = record.get("context", record.get("message"))
     context = _coerce_string(context_value, "context", allow_none=True)
 
+    normalized_counters = {
+        **record,
+        "collector": collector,
+        "allocator_allocated_bytes": allocator_allocated_bytes,
+        "allocator_reserved_bytes": allocator_reserved_bytes,
+        "allocator_active_bytes": allocator_active_bytes,
+        "allocator_inactive_bytes": allocator_inactive_bytes,
+        "device_used_bytes": device_used_bytes,
+        "device_free_bytes": device_free_bytes,
+        "device_total_bytes": device_total_bytes,
+    }
+    metadata = _with_inferred_memory_capabilities(metadata, normalized_counters)
+
     event = TelemetryEvent(
-        schema_version=SCHEMA_VERSION_V3,
+        schema_version=SCHEMA_VERSION_V4,
         session_id=session_id,
         timestamp_ns=timestamp_ns,
         event_type=event_type,
@@ -1168,7 +1395,7 @@ def project_telemetry_event(
     event: TelemetryEvent | Mapping[str, Any],
 ) -> ProjectedTelemetryRecord:
     """Project telemetry objects or compatible mappings into the shared model."""
-    if isinstance(event, TelemetryEventV3):
+    if isinstance(event, (TelemetryEventV3, TelemetryEventV4)):
         normalized = event
     else:
         normalized = telemetry_event_from_record(event)
@@ -1214,12 +1441,15 @@ def _group_sink_events(
 __all__ = [
     "SCHEMA_VERSION_V2",
     "SCHEMA_VERSION_V3",
+    "SCHEMA_VERSION_V4",
     "SCHEMA_VERSION_LATEST",
     "ProjectedTelemetryRecord",
     "LoadedTelemetrySession",
     "TelemetryEvent",
     "TelemetryEventV2",
     "TelemetryEventV3",
+    "TelemetryEventV4",
+    "TelemetryEventLike",
     "project_telemetry_event",
     "project_telemetry_events",
     "load_telemetry_sessions",

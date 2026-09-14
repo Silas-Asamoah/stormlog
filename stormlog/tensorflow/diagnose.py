@@ -211,7 +211,7 @@ def build_diagnostic_summary(
     }
     _derived = compute_event_fields(_synthetic_event)
     utilization_ratio = _derived["utilization_ratio"] or 0.0
-    allocator_gap_bytes: int = _derived["allocator_gap_bytes"]  # always 0 for TF
+    allocator_gap_bytes = _derived["allocator_gap_bytes"] or 0  # always 0 for TF
 
     # Risk flags (no OOM/fragmentation from TF API)
     oom_occurred = num_ooms > 0

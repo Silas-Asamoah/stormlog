@@ -119,6 +119,122 @@ def test_cuda_collector_reports_full_sample_diagnostics(
         inactive_bytes=256,
         device_id=2,
     )
+    capabilities = collector.capabilities()
+    assert isinstance(capabilities, collectors.DeviceMemoryCapabilities)
+    assert capabilities.supports_allocator_allocated is True
+    assert capabilities.supports_device_used is True
+    assert capabilities.supports_native_allocator_history is True
+
+
+def test_validate_device_only_sample_accepts_absent_allocator_metrics() -> None:
+    capabilities = collectors.DeviceMemoryCapabilities(
+        backend="future",
+        telemetry_collector="stormlog.future_tracker",
+        sampling_source="future.device_memory",
+        supports_device_used=True,
+        supports_device_free=True,
+        supports_device_total=True,
+    )
+    sample = collectors.DeviceMemorySample(
+        allocated_bytes=None,
+        reserved_bytes=None,
+        used_bytes=3072,
+        free_bytes=1024,
+        total_bytes=4096,
+        active_bytes=None,
+        inactive_bytes=None,
+        device_id=0,
+    )
+
+    collectors.validate_device_memory_sample(sample, capabilities)
+
+
+def test_validate_sample_rejects_counter_declared_unsupported() -> None:
+    capabilities = collectors.DeviceMemoryCapabilities(
+        backend="future",
+        telemetry_collector="stormlog.future_tracker",
+        sampling_source="future.device_memory",
+        supports_device_used=True,
+    )
+    sample = collectors.DeviceMemorySample(
+        allocated_bytes=1,
+        reserved_bytes=None,
+        used_bytes=2,
+        free_bytes=None,
+        total_bytes=None,
+        active_bytes=None,
+        inactive_bytes=None,
+        device_id=0,
+    )
+
+    with pytest.raises(ValueError, match="declares it unsupported"):
+        collectors.validate_device_memory_sample(sample, capabilities)
+
+
+def test_validate_sample_requires_partial_diagnostic_for_missing_counter() -> None:
+    capabilities = collectors.DeviceMemoryCapabilities(
+        backend="future",
+        telemetry_collector="stormlog.future_tracker",
+        sampling_source="future.device_memory",
+        supports_device_used=True,
+        supports_device_total=True,
+    )
+    sample = collectors.DeviceMemorySample(
+        allocated_bytes=None,
+        reserved_bytes=None,
+        used_bytes=2,
+        free_bytes=None,
+        total_bytes=None,
+        active_bytes=None,
+        inactive_bytes=None,
+        device_id=0,
+    )
+
+    with pytest.raises(ValueError, match="missing without a partial-field"):
+        collectors.validate_device_memory_sample(sample, capabilities)
+    collectors.validate_device_memory_sample(
+        sample,
+        capabilities,
+        partial_fields=("device_total_bytes",),
+    )
+
+
+def test_capabilities_reject_allocator_feature_without_core_counters() -> None:
+    with pytest.raises(ValueError, match="allocator features require"):
+        collectors.DeviceMemoryCapabilities(
+            backend="future",
+            telemetry_collector="stormlog.future_tracker",
+            sampling_source="future.device_memory",
+            supports_device_used=True,
+            supports_fragmentation_analysis=True,
+        )
+
+
+def test_validate_sample_rejects_populated_partial_field() -> None:
+    capabilities = collectors.DeviceMemoryCapabilities(
+        backend="future",
+        telemetry_collector="stormlog.future_tracker",
+        sampling_source="future.device_memory",
+        supports_device_used=True,
+        supports_device_total=True,
+    )
+    sample = collectors.DeviceMemorySample(
+        allocated_bytes=None,
+        reserved_bytes=None,
+        used_bytes=2,
+        free_bytes=None,
+        total_bytes=4,
+        active_bytes=None,
+        inactive_bytes=None,
+        device_id=0,
+    )
+
+    with pytest.raises(ValueError, match="populated but marked partial"):
+        collectors.validate_device_memory_sample(
+            sample,
+            capabilities,
+            partial_fields=("device_total_bytes",),
+        )
 
 
 def test_cuda_collector_reports_partial_probe_failures(

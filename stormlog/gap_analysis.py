@@ -14,7 +14,7 @@ try:
 except ImportError:  # pragma: no cover - phase package may land in another slice
     PhaseAttribution = Any  # type: ignore[assignment,misc]
     PhaseReplayIndex = Any  # type: ignore[assignment,misc]
-from .telemetry import TelemetryEventV2
+from .telemetry import TelemetryEventLike
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class GapFinding:
 
 
 def analyze_hidden_memory_gaps(
-    events: Sequence[TelemetryEventV2],
+    events: Sequence[TelemetryEventLike],
     thresholds: Mapping[str, float],
     format_memory: Callable[[int], str],
     remediation_by_classification: Mapping[str, List[str]],
@@ -44,12 +44,14 @@ def analyze_hidden_memory_gaps(
     gaps: List[float] = []
     normalized: List[float] = []
     timestamps_ns: List[int] = []
-    usable_events: List[TelemetryEventV2] = []
+    usable_events: List[TelemetryEventLike] = []
 
     for event in events:
         if str(event.event_type).strip().lower() != "sample":
             continue
         if event.device_total_bytes is None or event.device_total_bytes <= 0:
+            continue
+        if event.device_used_bytes is None or event.allocator_reserved_bytes is None:
             continue
         gap = event.device_used_bytes - event.allocator_reserved_bytes
         gaps.append(float(gap))
@@ -112,7 +114,7 @@ def analyze_hidden_memory_gaps(
 
 
 def _detect_gap_transient_spikes(
-    events: Sequence[TelemetryEventV2],
+    events: Sequence[TelemetryEventLike],
     gaps: List[float],
     z_threshold: float,
     remediation: List[str],
@@ -165,7 +167,7 @@ def _detect_gap_transient_spikes(
 
 
 def _detect_gap_persistent_drift(
-    events: Sequence[TelemetryEventV2],
+    events: Sequence[TelemetryEventLike],
     gaps: List[float],
     timestamps_ns: List[int],
     drift_r_squared_threshold: float,
@@ -217,7 +219,7 @@ def _detect_gap_persistent_drift(
 
 
 def _detect_gap_fragmentation_pattern(
-    events: Sequence[TelemetryEventV2],
+    events: Sequence[TelemetryEventLike],
     gaps: List[float],
     fragmentation_threshold: float,
     remediation: List[str],
@@ -225,7 +227,7 @@ def _detect_gap_fragmentation_pattern(
 ) -> List[GapFinding]:
     """Detect fragmentation-like behaviour: high reserved-allocated ratio."""
     frag_ratios: List[float] = []
-    frag_events: List[TelemetryEventV2] = []
+    frag_events: List[TelemetryEventLike] = []
     for event in events:
         derived = compute_event_fields(event)
         frag = derived.get("fragmentation_ratio")
@@ -269,7 +271,7 @@ def _detect_gap_fragmentation_pattern(
 
 def _resolve_phase_attribution(
     phase_resolver: PhaseReplayIndex | None,
-    event: TelemetryEventV2,
+    event: TelemetryEventLike,
 ) -> PhaseAttribution | None:
     if phase_resolver is None:
         return None

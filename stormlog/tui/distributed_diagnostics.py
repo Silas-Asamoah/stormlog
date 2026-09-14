@@ -16,6 +16,7 @@ from stormlog.collective_attribution import (
     attribute_collective_memory,
     resolve_collective_attribution_config,
 )
+from stormlog.derived_fields import fragmentation_unavailable_reason
 from stormlog.gap_analysis import analyze_hidden_memory_gaps
 
 try:
@@ -129,10 +130,11 @@ class RankDiagnosticsRow:
     rank: int
     availability: str
     samples: int
-    allocated_delta_bytes: int
-    reserved_delta_bytes: int
-    hidden_gap_latest_bytes: int
-    hidden_gap_peak_abs_bytes: int
+    allocated_delta_bytes: int | None
+    reserved_delta_bytes: int | None
+    device_used_delta_bytes: int | None
+    hidden_gap_latest_bytes: int | None
+    hidden_gap_peak_abs_bytes: int | None
     has_anomaly: bool
     first_anomaly_timestamp_ns: int | None = None
     first_anomaly_signal: str | None = None
@@ -163,7 +165,7 @@ class DistributedDiagnosticsModel:
     expected_ranks: list[int]
     present_ranks: list[int]
     missing_ranks: list[int]
-    per_rank_timelines: dict[int, dict[str, list[int]]]
+    per_rank_timelines: dict[int, dict[str, list[int | None]]]
     warnings: list[str] = field(default_factory=list)
     markers_by_rank: dict[int, list[TimelineMarker]] = field(default_factory=dict)
 
@@ -709,16 +711,89 @@ def _filter_ranks(ranks: list[int], selected_ranks: set[int] | None) -> list[int
 
 def _build_rank_timeline(
     samples: Sequence[TelemetryCompatibleEvent],
-) -> dict[str, list[int]]:
+) -> dict[str, list[int | None]]:
+    if any(event.allocator_allocated_bytes is not None for event in samples):
+        return _allocator_rank_timeline(samples)
+    return _device_rank_timeline(samples)
+
+
+def _allocator_complete_events(
+    samples: Sequence[TelemetryCompatibleEvent],
+) -> list[TelemetryCompatibleEvent]:
+    return [
+        event
+        for event in samples
+        if event.allocator_allocated_bytes is not None
+        and event.allocator_reserved_bytes is not None
+        and event.device_used_bytes is not None
+    ]
+
+
+def _allocator_rank_timeline(
+    allocator_samples: Sequence[TelemetryCompatibleEvent],
+) -> dict[str, list[int | None]]:
+    """Preserve sample alignment; missing counters are not zero measurements."""
     return {
-        "timestamps_ns": [event.timestamp_ns for event in samples],
-        "allocated": [event.allocator_allocated_bytes for event in samples],
-        "reserved": [event.allocator_reserved_bytes for event in samples],
+        "timestamps_ns": [event.timestamp_ns for event in allocator_samples],
+        "allocated": [event.allocator_allocated_bytes for event in allocator_samples],
+        "reserved": [event.allocator_reserved_bytes for event in allocator_samples],
         "gap": [
-            event.device_used_bytes - event.allocator_reserved_bytes
-            for event in samples
+            (
+                event.device_used_bytes - event.allocator_reserved_bytes
+                if event.device_used_bytes is not None
+                and event.allocator_reserved_bytes is not None
+                else None
+            )
+            for event in allocator_samples
         ],
     }
+
+
+def _device_rank_timeline(
+    samples: Sequence[TelemetryCompatibleEvent],
+) -> dict[str, list[int | None]]:
+    device_samples = [event for event in samples if event.device_used_bytes is not None]
+    return {
+        "timestamps_ns": [event.timestamp_ns for event in device_samples],
+        "device_used": [
+            event.device_used_bytes
+            for event in device_samples
+            if event.device_used_bytes is not None
+        ],
+    }
+
+
+def _append_allocator_capability_warning(
+    sample_grouped: dict[int, list[TelemetryCompatibleEvent]], warnings: list[str]
+) -> None:
+    sample_events = [
+        event for rank_samples in sample_grouped.values() for event in rank_samples
+    ]
+    allocator_samples = [
+        event
+        for event in sample_events
+        if event.allocator_allocated_bytes is not None
+        and event.allocator_reserved_bytes is not None
+    ]
+    if sample_grouped and not allocator_samples:
+        warnings.append(_missing_allocator_counter_warning(sample_events))
+    reason = fragmentation_unavailable_reason(allocator_samples)
+    if reason is not None:
+        warnings.append(reason)
+
+
+def _missing_allocator_counter_warning(
+    samples: Sequence[TelemetryCompatibleEvent],
+) -> str:
+    if any(event.allocator_allocated_bytes is not None for event in samples):
+        return (
+            "Allocator-native diagnostics are unavailable; showing available "
+            "allocator memory counters."
+        )
+    return (
+        "Allocator-native diagnostics are unavailable; showing device memory "
+        "usage only."
+    )
 
 
 def build_distributed_model(
@@ -751,6 +826,7 @@ def build_distributed_model(
         warnings.append(
             "Inconsistent world_size values detected; using max observed world_size."
         )
+    _append_allocator_capability_warning(sample_grouped, warnings)
 
     selected = set(selected_ranks) if selected_ranks is not None else None
     filtered_expected = _filter_ranks(expected_ranks, selected)
@@ -762,7 +838,7 @@ def build_distributed_model(
         filtered_present,
     )
     rows: list[RankDiagnosticsRow] = []
-    timelines: dict[int, dict[str, list[int]]] = {}
+    timelines: dict[int, dict[str, list[int | None]]] = {}
     candidates: list[_AnomalyCandidate] = []
     collective_by_rank = _group_collective_attribution_by_rank(
         events,
@@ -778,10 +854,11 @@ def build_distributed_model(
                     rank=rank,
                     availability="missing",
                     samples=0,
-                    allocated_delta_bytes=0,
-                    reserved_delta_bytes=0,
-                    hidden_gap_latest_bytes=0,
-                    hidden_gap_peak_abs_bytes=0,
+                    allocated_delta_bytes=None,
+                    reserved_delta_bytes=None,
+                    device_used_delta_bytes=None,
+                    hidden_gap_latest_bytes=None,
+                    hidden_gap_peak_abs_bytes=None,
                     has_anomaly=False,
                 )
             )
@@ -834,13 +911,17 @@ def _build_rank_row(
     *,
     phase_resolver: PhaseReplayIndex | None = None,
 ) -> tuple[RankDiagnosticsRow, list[_AnomalyCandidate]]:
-    allocated_delta, reserved_delta = _rank_memory_deltas(rank_samples)
+    allocated_delta, reserved_delta, device_used_delta = _rank_memory_deltas(
+        rank_samples
+    )
     gaps = [
         event.device_used_bytes - event.allocator_reserved_bytes
         for event in rank_samples
+        if event.device_used_bytes is not None
+        and event.allocator_reserved_bytes is not None
     ]
-    gap_latest = gaps[-1] if gaps else 0
-    gap_peak_abs = max((abs(value) for value in gaps), default=0)
+    gap_latest = gaps[-1] if gaps else None
+    gap_peak_abs = max((abs(value) for value in gaps), default=None)
 
     candidates = _derive_rank_anomaly_candidates(
         rank,
@@ -860,6 +941,7 @@ def _build_rank_row(
         samples=len(rank_samples),
         allocated_delta_bytes=allocated_delta,
         reserved_delta_bytes=reserved_delta,
+        device_used_delta_bytes=device_used_delta,
         hidden_gap_latest_bytes=gap_latest,
         hidden_gap_peak_abs_bytes=gap_peak_abs,
         has_anomaly=bool(candidates),
@@ -885,8 +967,9 @@ def _derive_rank_anomaly_candidates(
         rank, rank_samples, candidates, phase_resolver
     )
 
+    allocator_events = _allocator_complete_events(rank_events)
     gap_findings = analyze_hidden_memory_gaps(
-        events=cast(Sequence[TelemetryEventV2], rank_events),
+        events=cast(Sequence[TelemetryEventV2], allocator_events),
         thresholds=_GAP_THRESHOLDS,
         format_memory=format_bytes,
         remediation_by_classification=_EMPTY_REMEDIATION,
@@ -952,8 +1035,15 @@ def _group_collective_attribution_by_rank(
     phase_resolver: PhaseReplayIndex | None = None,
 ) -> dict[int, list[CollectiveAttributionResult]]:
     grouped: dict[int, list[CollectiveAttributionResult]] = {}
+    allocator_events = [
+        event
+        for event in events
+        if event.allocator_allocated_bytes is not None
+        and event.allocator_reserved_bytes is not None
+        and event.device_used_bytes is not None
+    ]
     attributions = attribute_collective_memory(
-        events=cast(Sequence[TelemetryEventV2], events),
+        events=cast(Sequence[TelemetryEventV2], allocator_events),
         config=_COLLECTIVE_ATTRIBUTION_CONFIG,
         phase_resolver=phase_resolver,
     )
@@ -1475,21 +1565,25 @@ def _group_distributed_sessions(
 
 def _rank_memory_deltas(
     rank_samples: Sequence[TelemetryCompatibleEvent],
-) -> tuple[int, int]:
-    first_event = rank_samples[0] if rank_samples else None
-    last_event = rank_samples[-1] if rank_samples else None
+) -> tuple[int | None, int | None, int | None]:
+    if not rank_samples:
+        return None, None, None
+    first_event, last_event = rank_samples[0], rank_samples[-1]
+    return (
+        _nullable_memory_delta(
+            first_event.allocator_allocated_bytes, last_event.allocator_allocated_bytes
+        ),
+        _nullable_memory_delta(
+            first_event.allocator_reserved_bytes, last_event.allocator_reserved_bytes
+        ),
+        _nullable_memory_delta(
+            first_event.device_used_bytes, last_event.device_used_bytes
+        ),
+    )
 
-    allocated_delta = (
-        last_event.allocator_allocated_bytes - first_event.allocator_allocated_bytes
-        if first_event is not None and last_event is not None
-        else 0
-    )
-    reserved_delta = (
-        last_event.allocator_reserved_bytes - first_event.allocator_reserved_bytes
-        if first_event is not None and last_event is not None
-        else 0
-    )
-    return allocated_delta, reserved_delta
+
+def _nullable_memory_delta(first: int | None, last: int | None) -> int | None:
+    return last - first if first is not None and last is not None else None
 
 
 def _append_alert_candidates(
@@ -1527,7 +1621,12 @@ def _append_gap_ratio_candidates(
 ) -> int | None:
     first_gap_breach_ts: int | None = None
     for event in rank_samples:
-        if event.device_total_bytes and event.device_total_bytes > 0:
+        if (
+            event.device_total_bytes
+            and event.device_total_bytes > 0
+            and event.device_used_bytes is not None
+            and event.allocator_reserved_bytes is not None
+        ):
             gap_value = event.device_used_bytes - event.allocator_reserved_bytes
             gap_ratio = abs(gap_value) / event.device_total_bytes
             if gap_ratio >= GAP_RATIO_THRESHOLD:
@@ -1554,7 +1653,7 @@ def _append_gap_ratio_candidates(
 
 
 def _timeline_identity_hints(
-    payload: Mapping[str, Any]
+    payload: Mapping[str, Any],
 ) -> tuple[int | None, int | None, int | None]:
     metadata = payload.get("metadata") if isinstance(payload, Mapping) else None
     identity = (

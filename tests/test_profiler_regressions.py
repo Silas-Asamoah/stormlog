@@ -9,7 +9,16 @@ import pytest
 
 import stormlog.profiler as profiler_module
 from stormlog.context_profiler import profile_function
+from stormlog.device_collectors import DeviceMemoryCapabilities
 from stormlog.profiler import GPUMemoryProfiler, MemorySnapshot, TensorTracker
+
+
+class _CapabilityCollector:
+    def __init__(self, capabilities: DeviceMemoryCapabilities) -> None:
+        self._capabilities = capabilities
+
+    def capabilities(self) -> DeviceMemoryCapabilities:
+        return self._capabilities
 
 
 def test_stormlog_import_and_star_import_succeed_when_viz_imports_blocked() -> None:
@@ -128,10 +137,47 @@ def test_gpu_profiler_uses_bounded_snapshot_buffer(
     )
     monkeypatch.setattr(GPUMemoryProfiler, "_setup_device", lambda *_: object())
     monkeypatch.setattr(GPUMemoryProfiler, "_take_snapshot", lambda *_: snapshot)
+    monkeypatch.setattr(
+        profiler_module,
+        "build_device_memory_collector",
+        lambda _device: _CapabilityCollector(
+            DeviceMemoryCapabilities(
+                backend="cuda",
+                telemetry_collector="stormlog.cuda_tracker",
+                sampling_source="test",
+                supports_allocator_allocated=True,
+                supports_allocator_reserved=True,
+                supports_bounded_profiling=True,
+            )
+        ),
+    )
 
     profiler = GPUMemoryProfiler(max_snapshots=3)
 
     assert profiler.snapshots.maxlen == 3
+
+
+def test_gpu_profiler_rejects_backend_without_bounded_profiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(GPUMemoryProfiler, "_setup_device", lambda *_: object())
+    monkeypatch.setattr(
+        profiler_module,
+        "build_device_memory_collector",
+        lambda _device: _CapabilityCollector(
+            DeviceMemoryCapabilities(
+                backend="mps",
+                telemetry_collector="stormlog.mps_tracker",
+                sampling_source="torch.mps",
+                supports_allocator_allocated=True,
+                supports_allocator_reserved=True,
+                supports_device_used=True,
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="bounded profiling requires"):
+        GPUMemoryProfiler()
 
 
 def test_monitoring_retains_only_latest_snapshots(

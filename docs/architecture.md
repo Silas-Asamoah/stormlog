@@ -26,11 +26,12 @@ Those surfaces are implemented under one package root:
 The `stormlog` package owns:
 
 - `GPUMemoryProfiler` for bounded PyTorch profiling
-- `MemoryTracker` for time-based tracking on CUDA, ROCm, MPS, or CPU fallback paths
+- `MemoryTracker` for capability-aware device tracking on CUDA, ROCm, MPS, or
+  an injected collector; CPU tracking uses the dedicated fallback path
 - `CPUMemoryProfiler` and `CPUMemoryTracker` for CPU-only workflows
 - `MemoryVisualizer` for PNG, HTML, heatmap, and dashboard-style exports
 - `MemoryAnalyzer`, `GapFinding`, and collective-attribution helpers
-- `TelemetryEventV2` plus telemetry conversion and validation utilities
+- `TelemetryEventV4` plus v2/v3 conversion and validation utilities
 - device collector abstractions in `device_collectors.py`
 - OpenAI-compatible inference profiling under `stormlog.infer`
 - local artifact queries under `stormlog.query` and `stormlog.query_cli`
@@ -78,7 +79,7 @@ User code / shell
     |     +-- stormlog / stormlog query / stormlog infer
     |
     +-- Shared artifact layer
-          +-- TelemetryEventV2 JSON/CSV exports
+          +-- TelemetryEventV4 JSON/CSV exports
           +-- inference JSONL exports
           +-- diagnose bundles
           +-- PNG / HTML visualization outputs
@@ -123,7 +124,8 @@ Trackers are responsible for:
 
 Key responsibilities:
 
-- normalize legacy records into canonical `TelemetryEventV3`
+- normalize v2, v3, and recognized legacy records into canonical
+  `TelemetryEventV4`
 - validate event shape
 - load saved event streams from disk
 - group saved artifacts into session-aware capture units
@@ -150,15 +152,30 @@ underlying event model.
 
 Current collector contract:
 
-- `sample()` returns a normalized `DeviceMemorySample`
-- `capabilities()` reports backend metadata such as `supports_device_total`
+- `sample()` returns a normalized `DeviceMemorySample` whose allocator and
+  device counters may be `None`
+- `capabilities()` returns a frozen `DeviceMemoryCapabilities` describing each
+  supported counter and allocator-native feature
 - `name()` identifies the runtime backend (`cuda`, `rocm`, `mps`)
+
+The tracker validates each sample against its capability declaration. Populated
+unsupported fields are collector failures. Supported fields may be temporarily
+missing only when collector diagnostics name them as partial. This makes the
+distinction between allocator counters and whole-device used/free/total memory
+explicit.
 
 Current concrete collectors:
 
 - `CudaDeviceCollector`
 - `ROCmDeviceCollector`
 - `MPSDeviceCollector`
+
+Third-party runtimes can inject a `DeviceMemoryCollector` into
+`MemoryTracker(collector=...)` without passing a torch device. No global backend
+registry is required. Device-only collectors retain session, distributed,
+append-only sink, query, and TUI behavior while allocator allocation events,
+fragmentation, attribution, native history, and bounded profiling remain
+unavailable.
 
 ### Inference profiling
 
@@ -232,7 +249,7 @@ Current tabs are:
 The TUI is not a separate analysis engine. It reuses:
 
 - tracker sessions for live data
-- TelemetryEventV3 records for artifact loading
+- TelemetryEventV4 records for artifact loading
 - session-aware artifact loading so users can switch between discovered captures
 - `MemoryVisualizer`-style plot generation for PNG/HTML export
 

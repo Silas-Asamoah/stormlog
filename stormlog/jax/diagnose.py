@@ -233,7 +233,7 @@ def build_diagnostic_summary(
     }
     _derived = compute_event_fields(_synthetic_event)
     utilization_ratio = _derived["utilization_ratio"] or 0.0
-    allocator_gap_bytes: int = _derived["allocator_gap_bytes"]
+    allocator_gap_bytes = _derived["allocator_gap_bytes"] or 0
 
     # JAX does not expose OOM counts or fragmentation
     num_ooms = 0

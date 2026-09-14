@@ -13,9 +13,6 @@ from typing import Any, Iterable, Literal, Mapping, Optional, cast
 # compatibility behavior for the projected envelope.
 TELEMETRY_PROJECTION_SCHEMA_VERSION: Literal[1] = 1
 
-_SUPPORTED_METADATA_SOURCE_KINDS = frozenset(
-    {"cpu", "cuda", "rocm", "mps", "tensorflow"}
-)
 _INFERRED_COLLECTOR_SOURCE_KINDS = ("cuda", "rocm", "mps", "cpu", "tensorflow")
 
 _SEVERITY_BY_EVENT_TYPE = {
@@ -93,9 +90,7 @@ def _record_id(record: Mapping[str, Any]) -> str:
 def _source_kind(record: Mapping[str, Any], metadata: Mapping[str, Any]) -> str:
     backend = metadata.get("backend")
     if isinstance(backend, str) and backend.strip():
-        normalized_backend = backend.strip().lower()
-        if normalized_backend in _SUPPORTED_METADATA_SOURCE_KINDS:
-            return normalized_backend
+        return backend.strip().lower()
 
     collector = record.get("collector")
     if isinstance(collector, str):

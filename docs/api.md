@@ -41,6 +41,63 @@ Primary exported symbols:
 - `CPUMemoryTracker`
 - `MemoryVisualizer`
 - `TelemetryEventV2`
+- `TelemetryEventV3`
+- `TelemetryEventV4`
+- `DeviceMemoryCapabilities`
+
+`TelemetryEventV4` is the latest canonical event type. V2 and v3 remain public
+for compatibility with existing artifacts; loading either version produces v4
+events.
+
+`MemoryTracker` accepts an optional collector extension seam. Pass either
+`device` or `collector`, never both:
+
+```python
+from stormlog import MemoryTracker
+from stormlog.device_collectors import (
+    DeviceMemoryCapabilities,
+    DeviceMemoryCollector,
+    DeviceMemorySample,
+)
+
+
+class RuntimeCollector(DeviceMemoryCollector):
+    def name(self) -> str:
+        return "custom"
+
+    def is_available(self) -> bool:
+        return True
+
+    def capabilities(self) -> DeviceMemoryCapabilities:
+        return DeviceMemoryCapabilities(
+            backend="custom",
+            telemetry_collector="example.custom_tracker",
+            sampling_source="custom.runtime.memory_info",
+            supports_device_used=True,
+            supports_device_free=True,
+            supports_device_total=True,
+        )
+
+    def sample(self) -> DeviceMemorySample:
+        used, free, total = read_runtime_memory_info()
+        return DeviceMemorySample(
+            device_id=0,
+            allocated_bytes=None,
+            reserved_bytes=None,
+            active_bytes=None,
+            inactive_bytes=None,
+            used_bytes=used,
+            free_bytes=free,
+            total_bytes=total,
+        )
+
+
+tracker = MemoryTracker(collector=RuntimeCollector())
+```
+
+The example deliberately does not map device usage to allocator counters.
+`GPUMemoryProfiler` remains allocator-native and rejects collectors whose
+capabilities do not declare bounded profiling support.
 
 Telemetry model symbols exported from `stormlog.telemetry`:
 

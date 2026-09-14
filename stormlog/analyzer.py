@@ -3,7 +3,7 @@
 import statistics
 from collections import defaultdict
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 from scipy import stats
@@ -14,6 +14,7 @@ from .collective_attribution import (
     attribute_collective_memory,
     resolve_collective_attribution_config,
 )
+from .derived_fields import fragmentation_unavailable_reason
 from .distributed_analysis import summarize_cross_rank_analysis
 from .gap_analysis import GapFinding, analyze_hidden_memory_gaps
 
@@ -30,7 +31,7 @@ except ImportError:  # pragma: no cover - phase package may land in another slic
 
 
 from .profiler import GPUMemoryProfiler, ProfileResult
-from .telemetry import TelemetryEventV2
+from .telemetry import TelemetryEventLike
 from .utils import format_bytes
 
 
@@ -728,12 +729,12 @@ class MemoryAnalyzer:
         return insights
 
     # ------------------------------------------------------------------
-    # Hidden-memory gap analysis (operates on TelemetryEventV2 series)
+    # Hidden-memory gap analysis (operates on canonical telemetry series)
     # ------------------------------------------------------------------
 
     def analyze_memory_gaps(
         self,
-        events: List[TelemetryEventV2],
+        events: Sequence[TelemetryEventLike],
         *,
         phase_resolver: PhaseReplayIndex | None = None,
     ) -> List[GapFinding]:
@@ -755,7 +756,7 @@ class MemoryAnalyzer:
 
     def analyze_cross_rank_timeline(
         self,
-        events: List[TelemetryEventV2],
+        events: Sequence[TelemetryEventLike],
         *,
         phase_resolver: PhaseReplayIndex | None = None,
     ) -> Dict[str, Any]:
@@ -765,7 +766,7 @@ class MemoryAnalyzer:
 
     def analyze_collective_attribution(
         self,
-        events: List[TelemetryEventV2],
+        events: Sequence[TelemetryEventLike],
         *,
         phase_resolver: PhaseReplayIndex | None = None,
     ) -> List[CollectiveAttributionResult]:
@@ -779,7 +780,7 @@ class MemoryAnalyzer:
     def generate_optimization_report(
         self,
         results: Optional[List[ProfileResult]] = None,
-        events: Optional[List[TelemetryEventV2]] = None,
+        events: Optional[Sequence[TelemetryEventLike]] = None,
     ) -> Dict[str, Any]:
         """
         Generate a comprehensive optimization report.
@@ -832,7 +833,7 @@ class MemoryAnalyzer:
         }
 
     def _add_telemetry_analysis(
-        self, report: Dict[str, Any], events: List[TelemetryEventV2]
+        self, report: Dict[str, Any], events: Sequence[TelemetryEventLike]
     ) -> None:
         phase_resolver = (
             PhaseReplayIndex.from_events(events)
@@ -852,11 +853,50 @@ class MemoryAnalyzer:
             _serialize_collective_attribution(result)
             for result in collective_attribution
         ]
+        self._add_analysis_availability(report, events)
         if len({event.rank for event in events}) > 1:
             report["cross_rank_analysis"] = self.analyze_cross_rank_timeline(
                 events,
                 phase_resolver=phase_resolver,
             )
+
+    @staticmethod
+    def _add_analysis_availability(
+        report: Dict[str, Any], events: Sequence[TelemetryEventLike]
+    ) -> None:
+        allocator_samples = [
+            event
+            for event in events
+            if event.event_type.casefold() == "sample"
+            and event.allocator_allocated_bytes is not None
+            and event.allocator_reserved_bytes is not None
+            and event.device_used_bytes is not None
+        ]
+        if not allocator_samples:
+            reason = (
+                "Allocator-native analysis is unavailable because this "
+                "telemetry session does not expose allocator counters."
+            )
+            report["analysis_availability"] = {
+                "gap_analysis": {"available": False, "reason": reason},
+                "collective_attribution": {
+                    "available": False,
+                    "reason": reason,
+                },
+                "fragmentation_analysis": {
+                    "available": False,
+                    "reason": reason,
+                },
+            }
+            return
+        fragmentation_reason = fragmentation_unavailable_reason(allocator_samples)
+        if fragmentation_reason is not None:
+            report["analysis_availability"] = {
+                "fragmentation_analysis": {
+                    "available": False,
+                    "reason": fragmentation_reason,
+                }
+            }
 
     def _generate_priority_recommendations(
         self, patterns: List[MemoryPattern], insights: List[PerformanceInsight]

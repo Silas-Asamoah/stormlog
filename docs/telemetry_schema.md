@@ -1,8 +1,8 @@
 [← Back to main docs](index.md)
 
-# TelemetryEvent v3 Schema
+# TelemetryEvent v4 Schema
 
-`TelemetryEvent v3` is the canonical event format for tracker exports,
+`TelemetryEvent v4` is the canonical event format for tracker exports,
 append-only sink segments, synthesized diagnose timelines, and loader output.
 The backend-neutral `ProjectedTelemetryRecord` described in
 [Stormlog Telemetry Projection](telemetry_projection.md) is an internal view
@@ -10,12 +10,13 @@ derived from this persisted schema; it is not a replacement artifact format.
 
 Schema files:
 
-- `docs/schemas/telemetry_event_v3.schema.json`
-- legacy compatibility: `docs/schemas/telemetry_event_v2.schema.json`
+- `docs/schemas/telemetry_event_v4.schema.json`
+- legacy compatibility: `docs/schemas/telemetry_event_v3.schema.json` and
+  `docs/schemas/telemetry_event_v2.schema.json`
 
 ## Required fields
 
-- `schema_version` (`3`)
+- `schema_version` (`4`)
 - `session_id`
 - `timestamp_ns`
 - `event_type`
@@ -34,6 +35,12 @@ Schema files:
 - `device_total_bytes`
 - `context`
 - `metadata`
+
+Every memory key remains present. Allocator and device counters are
+`integer | null`: `null` means the backend does not expose that measurement, or
+the collector declared the supported field temporarily unavailable in its
+diagnostics. Loaders upgrade v2, v3, and recognized legacy records to v4 while
+preserving measured values.
 
 ## Session identity and lifecycle
 
@@ -58,7 +65,7 @@ Default session selection when multiple sessions are present:
 
 ## Distributed identity fields
 
-`TelemetryEvent v3` also recognizes these top-level distributed identity fields:
+`TelemetryEvent v4` also recognizes these top-level distributed identity fields:
 
 - `job_id` (`string | null`)
 - `rank` (`integer`)
@@ -72,7 +79,7 @@ New exports always emit these fields. For single-process runs, the defaults are:
 - `local_rank` -> `0`
 - `world_size` -> `1`
 
-`TelemetryEvent v3` validation is strict:
+`TelemetryEvent v4` validation is strict:
 
 - unknown top-level fields are rejected
 - `metadata` must be a JSON object (`dict` in Python terms)
@@ -91,19 +98,24 @@ New exports always emit these fields. For single-process runs, the defaults are:
 
 ## Backend capability metadata
 
-Tracker exports may include backend capability hints under `metadata`:
+Every v4 event includes the complete capability contract under
+`metadata["memory_capabilities"]`:
 
-- `backend`
-- `supports_device_total`
-- `supports_device_free`
-- `sampling_source`
-- `device_memory_available`
-- `device_memory_unavailable_reason`
+- identity: `backend`, `telemetry_collector`, and `sampling_source`
+- allocator counters: `supports_allocator_allocated`,
+  `supports_allocator_reserved`, `supports_allocator_active`, and
+  `supports_allocator_inactive`
+- device counters: `supports_device_used`, `supports_device_free`, and
+  `supports_device_total`
+- features: `supports_native_allocator_history`,
+  `supports_fragmentation_analysis`, `supports_allocator_attribution`, and
+  `supports_bounded_profiling`
 
-The JAX tracker sets `device_memory_available` to `false` when the selected
-backend does not expose allocator counters. Collector status events may retain
-numeric allocator fields for schema compatibility; `collector_partial_fields`
-identifies fields that are not current device-memory measurements.
+The older flat `backend`, `supports_device_total`, `supports_device_free`, and
+`sampling_source` metadata keys remain in tracker exports for compatibility.
+Unsupported counters remain `null`. A supported counter that is temporarily
+unavailable is also `null`, and its field name appears in
+`collector_partial_fields` with an explanation in collector diagnostics.
 
 ## Collector health metadata
 
@@ -173,7 +185,7 @@ Example:
 ## Timeline markers
 
 Timeline markers are a derived view over canonical telemetry, not a new
-`TelemetryEvent` top-level schema. This keeps v3 event validation strict while
+`TelemetryEvent` top-level schema. This keeps v4 event validation strict while
 letting CLI, TUI, and query surfaces align important landmarks on one timeline.
 
 The first marker contract is exposed through `stormlog.timeline_markers`:
@@ -224,7 +236,7 @@ telemetry records.
 
 Correlation queries can also discover local `stormlog_attachments.json`
 sidecars. These sidecars are not raw telemetry and do not change
-`TelemetryEvent v3`; they are catalog/query-layer metadata that links external
+`TelemetryEvent v4`; they are catalog/query-layer metadata that links external
 evidence such as experiment-tracking URLs, profiler traces, or runbooks to a
 session/job/rank/time window.
 

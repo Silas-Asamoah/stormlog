@@ -4,7 +4,7 @@
 
 Stormlog issue fingerprinting is a deterministic summarization layer over
 existing artifacts. It groups repeated failures across sessions without mutating
-`TelemetryEvent v3`, append-only sink segments, diagnose bundles, or OOM flight
+`TelemetryEvent v4`, append-only sink segments, diagnose bundles, or OOM flight
 recorder bundles.
 
 The v1 implementation follows two outside patterns:

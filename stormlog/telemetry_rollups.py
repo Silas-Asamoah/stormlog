@@ -193,15 +193,18 @@ class _CounterAccumulator:
     device_used_bytes: _PeakAccumulator = field(default_factory=_PeakAccumulator)
 
     def observe(self, event: TelemetryEvent) -> None:
-        self.allocator_allocated_bytes.observe(
-            event.allocator_allocated_bytes,
-            event,
-        )
-        self.allocator_reserved_bytes.observe(
-            event.allocator_reserved_bytes,
-            event,
-        )
-        self.device_used_bytes.observe(event.device_used_bytes, event)
+        if event.allocator_allocated_bytes is not None:
+            self.allocator_allocated_bytes.observe(
+                event.allocator_allocated_bytes,
+                event,
+            )
+        if event.allocator_reserved_bytes is not None:
+            self.allocator_reserved_bytes.observe(
+                event.allocator_reserved_bytes,
+                event,
+            )
+        if event.device_used_bytes is not None:
+            self.device_used_bytes.observe(event.device_used_bytes, event)
 
     def to_summary(self) -> CounterSummary:
         return CounterSummary(
@@ -241,6 +244,8 @@ class _RankAccumulator:
         if event.event_type != "sample":
             return
         self.sample_count += 1
+        if event.device_used_bytes is None or event.allocator_reserved_bytes is None:
+            return
         gap_bytes = event.device_used_bytes - event.allocator_reserved_bytes
         if self.hidden_gap_first_timestamp_ns is None:
             self.hidden_gap_first_timestamp_ns = event.timestamp_ns

@@ -124,6 +124,7 @@ class DistributedRankTable(DataTable):
                 "Samples",
                 "Δ Allocated",
                 "Δ Reserved",
+                "Δ Device Used",
                 "Gap Latest",
                 "Gap Peak |abs|",
                 "Anomaly",
@@ -132,7 +133,7 @@ class DistributedRankTable(DataTable):
     def update_rows(self, rows: list[RankDiagnosticsRow]) -> None:
         self.clear()
         if not rows:
-            self.add_row("-", "-", "-", "-", "-", "-", "-", "No rank data.")
+            self.add_row("-", "-", "-", "-", "-", "-", "-", "-", "No rank data.")
             return
 
         for row in rows:
@@ -143,6 +144,7 @@ class DistributedRankTable(DataTable):
                 str(row.samples),
                 self._format_bytes(row.allocated_delta_bytes),
                 self._format_bytes(row.reserved_delta_bytes),
+                self._format_bytes(row.device_used_delta_bytes),
                 self._format_bytes(row.hidden_gap_latest_bytes),
                 self._format_bytes(row.hidden_gap_peak_abs_bytes),
                 anomaly_label,
@@ -160,7 +162,9 @@ class DistributedRankTable(DataTable):
         return None
 
     @staticmethod
-    def _format_bytes(value: int) -> str:
+    def _format_bytes(value: int | None) -> str:
+        if value is None:
+            return "N/A"
         sign = "-" if value < 0 else ""
         absolute = abs(value)
         units = ["B", "KB", "MB", "GB", "TB"]
