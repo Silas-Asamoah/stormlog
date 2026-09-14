@@ -112,7 +112,7 @@ class DistributedTimelineCanvas(Static):
 
     def render_rank_timelines(
         self,
-        timelines: dict[int, dict[str, list[int]]],
+        timelines: Mapping[int, Mapping[str, Sequence[int | None]]],
         active_rank: int | None = None,
         markers_by_rank: Mapping[int, Sequence[TimelineMarker]] | None = None,
     ) -> None:
@@ -150,40 +150,45 @@ class DistributedTimelineCanvas(Static):
     def _build_rank_lines(
         self,
         rank: int,
-        payload: Mapping[str, list[int]],
+        payload: Mapping[str, Sequence[int | None]],
         *,
         is_active: bool,
         markers: Sequence[TimelineMarker],
     ) -> list[str]:
         allocated = payload.get("allocated", [])
         values = allocated or payload.get("device_used", [])
-        if not values:
+        alloc_mb = self._sample_megabytes(values)
+        if not alloc_mb:
             return []
 
-        alloc_mb = self._sample_megabytes(values)
-        alloc_latest = alloc_mb[-1] if alloc_mb else 0.0
-        alloc_max = max(alloc_mb) if alloc_mb else 0.0
-        gap_mb = self._sample_megabytes(payload.get("gap", []) or [])
-        gap_latest = gap_mb[-1] if gap_mb else 0.0
+        alloc_latest = self._latest_memory_text(values)
+        alloc_max = max(alloc_mb)
+        gap_latest = self._latest_memory_text(payload.get("gap", []))
         marker = "*" if is_active else " "
         if allocated:
             heading = (
                 f"{marker}r{rank:02d} alloc(max={alloc_max:.1f}MB "
-                f"latest={alloc_latest:.1f}MB) gap_latest={gap_latest:.1f}MB"
+                f"latest={alloc_latest}) gap_latest={gap_latest}"
             )
         else:
             heading = (
                 f"{marker}r{rank:02d} device-used(max={alloc_max:.1f}MB "
-                f"latest={alloc_latest:.1f}MB) allocator=N/A"
+                f"latest={alloc_latest}) allocator=N/A"
             )
         lines = [heading, f"    [{self._generate_sparkline(alloc_mb)}]"]
         if markers:
             lines.append(f"    markers: {self._format_marker_summary(markers)}")
         return lines
 
-    def _sample_megabytes(self, values: Sequence[int]) -> list[float]:
+    @staticmethod
+    def _latest_memory_text(values: Sequence[int | None]) -> str:
+        latest = values[-1] if values else None
+        return f"{latest / (1024**2):.1f}MB" if latest is not None else "N/A"
+
+    def _sample_megabytes(self, values: Sequence[int | None]) -> list[float]:
         return [
-            value / (1024**2) for value in self._resample([float(v) for v in values])
+            value / (1024**2)
+            for value in self._resample([float(v) for v in values if v is not None])
         ]
 
     def render_placeholder(self, message: str) -> None:

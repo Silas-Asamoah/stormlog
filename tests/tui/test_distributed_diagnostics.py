@@ -14,6 +14,7 @@ try:
 except ImportError:  # pragma: no cover - phase package may land in another slice
     _stormlog_phases = None
 
+from stormlog.device_collectors import DeviceMemoryCapabilities
 from stormlog.session import create_session_summary, stable_legacy_session_id
 from stormlog.telemetry import (
     LoadedTelemetrySession,
@@ -299,6 +300,63 @@ def test_build_distributed_model_explains_disabled_fragmentation() -> None:
     )
     assert model.per_rank_timelines[0]["allocated"] == [100_000_000] * 12
     assert model.warnings == ["Collector capabilities disable fragmentation analysis."]
+
+
+@pytest.mark.parametrize(
+    ("used_values", "reserved_values", "expected_gaps"),
+    [
+        ([None, None, None], [120, 140, 170], [None, None, None]),
+        ([140, None, 190], [120, 140, 170], [20, None, 20]),
+        ([140, 165, None], [120, 140, 170], [20, 25, None]),
+        ([None, None, None], [None, None, None], [None, None, None]),
+    ],
+)
+def test_allocator_timeline_preserves_partial_counters(
+    used_values: list[int | None],
+    reserved_values: list[int | None],
+    expected_gaps: list[int | None],
+) -> None:
+    capabilities = DeviceMemoryCapabilities(
+        backend="future",
+        telemetry_collector="stormlog.future_tracker",
+        sampling_source="future.memory",
+        supports_allocator_allocated=True,
+        supports_allocator_reserved=any(value is not None for value in reserved_values),
+        supports_device_used=any(value is not None for value in used_values),
+        supports_device_total=True,
+    )
+    events = [
+        replace(
+            _make_event(
+                timestamp=float(index),
+                rank=0,
+                world_size=1,
+                allocated=allocated,
+                total=1000,
+            ),
+            collector="stormlog.future_tracker",
+            allocator_reserved_bytes=reserved,
+            device_used_bytes=used,
+            device_free_bytes=None,
+            metadata={"memory_capabilities": capabilities.to_metadata()},
+        )
+        for index, (allocated, reserved, used) in enumerate(
+            zip([100, 125, 150], reserved_values, used_values), start=1
+        )
+    ]
+
+    model = build_distributed_model(events)
+
+    assert model.per_rank_timelines[0] == {
+        "timestamps_ns": [1_000_000_000, 2_000_000_000, 3_000_000_000],
+        "allocated": [100, 125, 150],
+        "reserved": reserved_values,
+        "gap": expected_gaps,
+    }
+    assert model.rows[0].allocated_delta_bytes == 50
+    assert all(
+        "showing device memory usage only" not in warning for warning in model.warnings
+    )
 
 
 def test_build_distributed_model_includes_earliest_and_most_severe_indicators() -> None:

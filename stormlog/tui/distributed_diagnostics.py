@@ -165,7 +165,7 @@ class DistributedDiagnosticsModel:
     expected_ranks: list[int]
     present_ranks: list[int]
     missing_ranks: list[int]
-    per_rank_timelines: dict[int, dict[str, list[int]]]
+    per_rank_timelines: dict[int, dict[str, list[int | None]]]
     warnings: list[str] = field(default_factory=list)
     markers_by_rank: dict[int, list[TimelineMarker]] = field(default_factory=dict)
 
@@ -711,10 +711,9 @@ def _filter_ranks(ranks: list[int], selected_ranks: set[int] | None) -> list[int
 
 def _build_rank_timeline(
     samples: Sequence[TelemetryCompatibleEvent],
-) -> dict[str, list[int]]:
-    allocator_samples = _allocator_complete_events(samples)
-    if allocator_samples:
-        return _allocator_rank_timeline(allocator_samples)
+) -> dict[str, list[int | None]]:
+    if any(event.allocator_allocated_bytes is not None for event in samples):
+        return _allocator_rank_timeline(samples)
     return _device_rank_timeline(samples)
 
 
@@ -732,31 +731,27 @@ def _allocator_complete_events(
 
 def _allocator_rank_timeline(
     allocator_samples: Sequence[TelemetryCompatibleEvent],
-) -> dict[str, list[int]]:
+) -> dict[str, list[int | None]]:
+    """Preserve sample alignment; missing counters are not zero measurements."""
     return {
         "timestamps_ns": [event.timestamp_ns for event in allocator_samples],
-        "allocated": [
-            event.allocator_allocated_bytes
-            for event in allocator_samples
-            if event.allocator_allocated_bytes is not None
-        ],
-        "reserved": [
-            event.allocator_reserved_bytes
-            for event in allocator_samples
-            if event.allocator_reserved_bytes is not None
-        ],
+        "allocated": [event.allocator_allocated_bytes for event in allocator_samples],
+        "reserved": [event.allocator_reserved_bytes for event in allocator_samples],
         "gap": [
-            event.device_used_bytes - event.allocator_reserved_bytes
+            (
+                event.device_used_bytes - event.allocator_reserved_bytes
+                if event.device_used_bytes is not None
+                and event.allocator_reserved_bytes is not None
+                else None
+            )
             for event in allocator_samples
-            if event.device_used_bytes is not None
-            and event.allocator_reserved_bytes is not None
         ],
     }
 
 
 def _device_rank_timeline(
     samples: Sequence[TelemetryCompatibleEvent],
-) -> dict[str, list[int]]:
+) -> dict[str, list[int | None]]:
     device_samples = [event for event in samples if event.device_used_bytes is not None]
     return {
         "timestamps_ns": [event.timestamp_ns for event in device_samples],
@@ -771,21 +766,34 @@ def _device_rank_timeline(
 def _append_allocator_capability_warning(
     sample_grouped: dict[int, list[TelemetryCompatibleEvent]], warnings: list[str]
 ) -> None:
+    sample_events = [
+        event for rank_samples in sample_grouped.values() for event in rank_samples
+    ]
     allocator_samples = [
         event
-        for rank_samples in sample_grouped.values()
-        for event in rank_samples
+        for event in sample_events
         if event.allocator_allocated_bytes is not None
         and event.allocator_reserved_bytes is not None
     ]
     if sample_grouped and not allocator_samples:
-        warnings.append(
-            "Allocator-native diagnostics are unavailable; showing device memory "
-            "usage only."
-        )
+        warnings.append(_missing_allocator_counter_warning(sample_events))
     reason = fragmentation_unavailable_reason(allocator_samples)
     if reason is not None:
         warnings.append(reason)
+
+
+def _missing_allocator_counter_warning(
+    samples: Sequence[TelemetryCompatibleEvent],
+) -> str:
+    if any(event.allocator_allocated_bytes is not None for event in samples):
+        return (
+            "Allocator-native diagnostics are unavailable; showing available "
+            "allocator memory counters."
+        )
+    return (
+        "Allocator-native diagnostics are unavailable; showing device memory "
+        "usage only."
+    )
 
 
 def build_distributed_model(
@@ -830,7 +838,7 @@ def build_distributed_model(
         filtered_present,
     )
     rows: list[RankDiagnosticsRow] = []
-    timelines: dict[int, dict[str, list[int]]] = {}
+    timelines: dict[int, dict[str, list[int | None]]] = {}
     candidates: list[_AnomalyCandidate] = []
     collective_by_rank = _group_collective_attribution_by_rank(
         events,
