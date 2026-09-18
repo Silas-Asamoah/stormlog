@@ -145,7 +145,7 @@ stormlog infer profile ... --system-sampler none
 Remote endpoints may not expose memory. In that case memory fields are omitted,
 not filled with synthetic zeroes.
 
-## Future engine adapters
+## Execution correlation and future adapters
 
 The v1 request path is engine-agnostic. Future adapters can enrich the same run
 with engine-native telemetry such as vLLM scheduler metrics, SGLang cache
