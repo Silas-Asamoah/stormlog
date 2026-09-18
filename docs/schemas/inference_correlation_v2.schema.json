@@ -4,6 +4,7 @@
   "title": "Stormlog inference correlation event v2",
   "description": "One JSONL event; v1 client observations retain their original schema.",
   "oneOf": [
+    {"$ref": "#/$defs/artifact"},
     {"$ref": "#/$defs/request"},
     {"$ref": "#/$defs/iteration"},
     {"$ref": "#/$defs/stage"},
@@ -75,6 +76,20 @@
         "output_tokens": {"$ref": "#/$defs/nullable_count"},
         "kv_bytes": {"$ref": "#/$defs/nullable_count"}
       }
+    },
+    "artifact": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "required": ["artifact_kind", "created_at_ns"],
+          "properties": {
+            "event_type": {"const": "infer.artifact"},
+            "artifact_kind": {"type": "string", "minLength": 1},
+            "created_at_ns": {"type": "integer", "minimum": 0}
+          }
+        }
+      ],
+      "unevaluatedProperties": false
     },
     "request": {
       "allOf": [
@@ -158,6 +173,7 @@
             "event_type": {"const": "infer.activity_ref"},
             "activity_ref": {"$ref": "#/$defs/ref"},
             "activity_kind": {"type": "string", "minLength": 1},
+            "activity_domain": {"enum": ["gpu", "runtime", "cpu", "unknown"]},
             "attribution_status": {"enum": ["linked", "unresolved"]},
             "iteration_ref": {"$ref": "#/$defs/nullable_ref"},
             "correlation_scope": {"$ref": "#/$defs/nullable_ref"},

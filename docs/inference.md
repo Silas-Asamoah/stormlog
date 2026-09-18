@@ -155,4 +155,5 @@ without changing the core `stormlog infer profile` artifact shape.
 The versioned request, iteration, stage, membership, and GPU activity contract
 is described in [Inference execution correlation](inference_correlation.md).
 It preserves v1 client observations while allowing optional server evidence
-to be appended to the same JSONL stream.
+to be appended to the same JSONL stream. New profiles also include a v2
+artifact identity record that names their run and capture session.

@@ -8,6 +8,7 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from stormlog.infer.correlation_events import (
     ActivityReferenceEvent,
+    ArtifactIdentityEvent,
     CapabilityEvent,
     ClockAlignmentEvent,
     CorrelationContext,
@@ -98,6 +99,7 @@ def test_v2_records_round_trip_through_existing_jsonl_writer(tmp_path) -> None:
             activity_ref=EntityRef("trace-0", "kernel-1"),
             iteration_ref=iteration,
             activity_kind="gpu_kernel",
+            activity_domain="gpu",
             attribution_status="linked",
             trace_attachment_id="trace-attachment",
             runtime_correlation_id=7,
@@ -214,6 +216,14 @@ def test_public_v2_schema_matches_serialized_records() -> None:
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
     validator = Draft202012Validator(schema)
+    artifact = ArtifactIdentityEvent(
+        context=_context(),
+        event_id="artifact-1",
+        artifact_kind="inference_jsonl",
+        created_at_ns=100,
+    )
+    validator.validate(artifact.to_record())
+    assert parse_inference_record(artifact.to_record()) == artifact
     event = MembershipEvent(
         context=_context(),
         event_id="membership-1",

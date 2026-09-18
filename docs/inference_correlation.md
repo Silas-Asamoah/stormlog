@@ -23,6 +23,7 @@ from different producers do not establish a join.
 
 | v2 event | Meaning |
 | --- | --- |
+| `infer.artifact` | Run and session identity for the JSONL artifact, including its producing Stormlog version. |
 | `infer.request` | A logical request observation, with optional attempt and backend request references. |
 | `infer.iteration` | One execution iteration, recorded once even when many requests participate. An optional batch reference can group iterations. |
 | `infer.stage` | A named span attached to a request, an iteration, or both. Names are generic; token and KV fields are optional. |
@@ -34,6 +35,8 @@ from different producers do not establish a join.
 An iteration can mix prefill for one request and decode for another. The
 `infer.membership.role` records each request's role; it does not assert a
 separately measured duration or grant the request ownership of the full batch.
+An activity's `activity_domain` is `gpu`, `runtime`, `cpu`, or `unknown`. Only
+explicitly classified GPU activities enter GPU time calculations.
 An activity with no proved iteration link uses `attribution_status: unresolved`
 and `iteration_ref: null`. Optional numeric fields use `null` for unavailable
 data, never zero as a substitute.
@@ -54,9 +57,45 @@ in `to_clock_domain`, carrying `uncertainty_ns` with the result. An alignment
 may have a validity range. Without a valid alignment, cross-domain subtraction
 is undefined.
 
+## GPU time and request shares
+
+`resolve_inference_events` deduplicates event identities and physical entity
+references before resolving request, iteration, stage, and activity links. It
+accepts out-of-order delivery and reports links whose targets never arrived.
+Conflicting duplicates fail explicitly. Legacy v1 observations remain separate
+from server evidence.
+
+`account_gpu_time` reports three distinct quantities:
+
+- **Iteration elapsed time:** the local monotonic interval of an iteration,
+  when both endpoints were recorded.
+- **Summed activity duration:** the sum of complete GPU activity spans. This
+  can exceed elapsed time when streams overlap.
+- **Observed GPU activity union:** the length of the merged activity intervals,
+  grouped by device UUID, clock domain, and clock kind. For `[0, 8)` and
+  `[2, 10)`, the sum is 16 units and the union is 10. This is a union of
+  observed trace intervals, not a hardware utilization measurement.
+
+An activity without a device UUID, complete span, or usable clock domain stays
+unmeasured. Unlinked activities can still contribute to the device total when
+their intervals are valid, but not to an iteration total. Totals from different
+devices or clock domains are not silently added. Summing per-iteration unions
+can also double-count intervals that overlap across iterations; use the run's
+device total for that question.
+
+There is no automatically measured per-request GPU duration. A caller may
+submit `RequestShareEstimate` values with a named model. For a chosen
+iteration/device/clock budget, `validate_request_shares` requires the
+estimated shares plus an explicit unattributed remainder to equal the measured
+union. Shares in one budget must use the same named estimation model.
+Membership proves participation; it does not itself choose a share.
+
 ## Compatibility
 
-The existing profiler continues to write v1 client observations unchanged.
+New endpoint profiles write one v2 `infer.artifact` record with a generated
+`run_id` alongside their unchanged v1 client observations. The `run_id` is
+also available as `InferenceProfiler.run_id` when a caller needs to coordinate
+optional capture. Existing v1-only files remain valid.
 `load_inference_artifact` reads a stream containing both v1 and v2 records.
 It returns v1 records as `LegacyInferenceRecord`, preserving their original
 fields; it does not invent a server iteration, host clock, or GPU attribution.

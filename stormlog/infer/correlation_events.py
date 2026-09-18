@@ -141,6 +141,20 @@ class CorrelationEvent:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ArtifactIdentityEvent(CorrelationEvent):
+    """Versioned run identity for an inference JSONL artifact."""
+
+    EVENT_TYPE: ClassVar[str] = "infer.artifact"
+    artifact_kind: str
+    created_at_ns: int
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        _nonempty(self.artifact_kind, "artifact_kind")
+        _optional_nonnegative(self.created_at_ns, "created_at_ns")
+
+
+@dataclass(frozen=True, kw_only=True)
 class RequestEvent(CorrelationEvent):
     """One logical request observation; attempts are separate identities."""
 
@@ -243,6 +257,7 @@ class ActivityReferenceEvent(CorrelationEvent):
     activity_ref: EntityRef
     activity_kind: str
     attribution_status: str
+    activity_domain: str = "unknown"
     iteration_ref: EntityRef | None = None
     correlation_scope: EntityRef | None = None
     trace_attachment_id: str | None = None
@@ -257,6 +272,8 @@ class ActivityReferenceEvent(CorrelationEvent):
         super().__post_init__()
         _require_ref(self.activity_ref, "activity_ref")
         _nonempty(self.activity_kind, "activity_kind")
+        if self.activity_domain not in {"gpu", "runtime", "cpu", "unknown"}:
+            raise ValueError("activity_domain must be gpu, runtime, cpu, or unknown")
         _optional_ref(self.iteration_ref, "iteration_ref")
         _optional_ref(self.correlation_scope, "correlation_scope")
         if self.attribution_status not in {"linked", "unresolved"}:
@@ -336,6 +353,7 @@ InferenceRecord = CorrelationEvent | LegacyInferenceRecord
 _EVENT_TYPES = {
     event.EVENT_TYPE: event
     for event in (
+        ArtifactIdentityEvent,
         RequestEvent,
         IterationEvent,
         StageEvent,
@@ -432,6 +450,7 @@ def load_inference_artifact(path: str | Path) -> list[InferenceRecord]:
 __all__ = [
     "CORRELATION_SCHEMA_VERSION",
     "ActivityReferenceEvent",
+    "ArtifactIdentityEvent",
     "CapabilityEvent",
     "ClockAlignmentEvent",
     "CorrelationContext",

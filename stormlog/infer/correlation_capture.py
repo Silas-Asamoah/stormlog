@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
+from .. import __version__
 from ..run_catalog import (
     RUN_ENVELOPE_FILENAME,
     RUN_ENVELOPE_FORMAT,
@@ -272,6 +273,7 @@ def _capability_event(
             session_id=session.session_id,
             producer_id="stormlog.infer.capture",
             source="stormlog.infer.capture",
+            source_version=__version__,
             host=session.host,
             pid=session.pid,
             rank=session.rank,
