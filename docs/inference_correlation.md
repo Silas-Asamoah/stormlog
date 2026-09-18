@@ -28,6 +28,7 @@ from different producers do not establish a join.
 | `infer.stage` | A named span attached to a request, an iteration, or both. Names are generic; token and KV fields are optional. |
 | `infer.membership` | A request's participation in an iteration, with its own role (for example, prefill or decode). |
 | `infer.activity_ref` | A trace activity with optional iteration and trace attachment links, plus available runtime/CUDA, stream, and graph IDs. |
+| `infer.capabilities` | Whether an optional source was present, what it supported and enabled, and what it actually collected. |
 | `infer.clock_alignment` | An offset and uncertainty between two clock domains. |
 
 An iteration can mix prefill for one request and decode for another. The
@@ -66,3 +67,21 @@ v1. New fields that change record meaning require a new schema version.
 Raw profiler traces are linked by `trace_attachment_id` through the existing
 run envelope attachment catalog. The activity record is a pointer and
 correlation fact, not a copy of the raw trace.
+
+## Optional collection and run catalog
+
+`EngineAdapter` and `TraceCollector` are separate optional protocols. An engine
+adapter returns server events; a trace collector returns activity events and
+raw trace attachments. `append_inference_capture` validates their run/session
+identity, appends the v2 records to an existing inference JSONL artifact, and
+registers that artifact and any traces in the existing `stormlog_run.json`
+envelope. It preserves a compatible existing envelope and rejects a conflicting
+run ID. An absent source produces an `infer.capabilities` record with
+`available: false`; supported, enabled, and successfully collected capabilities
+are separate lists.
+
+Automatic joining uses a shared `correlation_scope`, the host, process, device,
+session, and a runtime or CUDA correlation ID. A stream or graph ID is retained
+as evidence but is not enough by itself to prove a request-to-activity link.
+An ambiguous or unscoped match remains unresolved. Adapters may also provide
+an explicit iteration link when they can prove it.
