@@ -7,7 +7,7 @@ import os
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from .. import __version__
@@ -328,14 +328,15 @@ def _prepare_run_envelope(
 
 def _load_or_create_envelope(envelope: Path, run_id: str) -> dict[str, Any]:
     if envelope.exists():
-        payload = json.loads(envelope.read_text(encoding="utf-8"))
+        loaded = json.loads(envelope.read_text(encoding="utf-8"))
         if (
-            not isinstance(payload, dict)
-            or run_envelope_from_payload(payload, envelope) is None
+            not isinstance(loaded, dict)
+            or run_envelope_from_payload(loaded, envelope) is None
         ):
             raise ValueError("existing run envelope is invalid")
-        if payload["run_id"] != run_id:
+        if loaded["run_id"] != run_id:
             raise ValueError("existing run envelope has a different run_id")
+        payload = cast(dict[str, Any], loaded)
     else:
         payload = {
             "schema_version": RUN_ENVELOPE_SCHEMA_VERSION,

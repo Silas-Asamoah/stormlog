@@ -350,18 +350,15 @@ class LegacyInferenceRecord:
 
 InferenceRecord = CorrelationEvent | LegacyInferenceRecord
 
-_EVENT_TYPES = {
-    event.EVENT_TYPE: event
-    for event in (
-        ArtifactIdentityEvent,
-        RequestEvent,
-        IterationEvent,
-        StageEvent,
-        MembershipEvent,
-        ActivityReferenceEvent,
-        CapabilityEvent,
-        ClockAlignmentEvent,
-    )
+_EVENT_TYPES: dict[str, type[CorrelationEvent]] = {
+    ArtifactIdentityEvent.EVENT_TYPE: ArtifactIdentityEvent,
+    RequestEvent.EVENT_TYPE: RequestEvent,
+    IterationEvent.EVENT_TYPE: IterationEvent,
+    StageEvent.EVENT_TYPE: StageEvent,
+    MembershipEvent.EVENT_TYPE: MembershipEvent,
+    ActivityReferenceEvent.EVENT_TYPE: ActivityReferenceEvent,
+    CapabilityEvent.EVENT_TYPE: CapabilityEvent,
+    ClockAlignmentEvent.EVENT_TYPE: ClockAlignmentEvent,
 }
 _REF_FIELDS = (
     "request_ref",
