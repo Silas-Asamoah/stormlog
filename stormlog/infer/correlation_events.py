@@ -27,6 +27,11 @@ def _optional_nonnegative(value: object, name: str) -> None:
         raise ValueError(f"{name} must be a non-negative integer or null")
 
 
+def _required_nonnegative(value: object, name: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+
+
 def _span(start_ns: int | None, end_ns: int | None) -> None:
     _optional_nonnegative(start_ns, "start_ns")
     _optional_nonnegative(end_ns, "end_ns")
@@ -151,7 +156,7 @@ class ArtifactIdentityEvent(CorrelationEvent):
     def __post_init__(self) -> None:
         super().__post_init__()
         _nonempty(self.artifact_kind, "artifact_kind")
-        _optional_nonnegative(self.created_at_ns, "created_at_ns")
+        _required_nonnegative(self.created_at_ns, "created_at_ns")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -334,7 +339,7 @@ class ClockAlignmentEvent(CorrelationEvent):
         _nonempty(self.to_clock_domain, "to_clock_domain")
         if not isinstance(self.offset_ns, int) or isinstance(self.offset_ns, bool):
             raise ValueError("offset_ns must be an integer")
-        _optional_nonnegative(self.uncertainty_ns, "uncertainty_ns")
+        _required_nonnegative(self.uncertainty_ns, "uncertainty_ns")
         _span(self.valid_from_ns, self.valid_to_ns)
 
 

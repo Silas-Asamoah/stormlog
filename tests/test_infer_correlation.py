@@ -184,6 +184,26 @@ def test_reader_rejects_unsupported_versions_and_invalid_spans() -> None:
             activity_kind="gpu_kernel",
             attribution_status="linked",
         )
+    alignment = ClockAlignmentEvent(
+        context=_context(),
+        event_id="bad-uncertainty",
+        from_clock_domain="worker-b/monotonic",
+        to_clock_domain="worker-a/monotonic",
+        offset_ns=0,
+        uncertainty_ns=1,
+    ).to_record()
+    alignment["uncertainty_ns"] = None
+    with pytest.raises(ValueError, match="uncertainty_ns"):
+        parse_inference_record(alignment)
+    artifact = ArtifactIdentityEvent(
+        context=_context(),
+        event_id="bad-created-at",
+        artifact_kind="inference_jsonl",
+        created_at_ns=1,
+    ).to_record()
+    artifact["created_at_ns"] = None
+    with pytest.raises(ValueError, match="created_at_ns"):
+        parse_inference_record(artifact)
 
 
 def test_non_llm_stage_and_unattributed_activity_need_no_token_fields() -> None:
