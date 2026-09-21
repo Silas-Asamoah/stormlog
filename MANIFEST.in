@@ -1,0 +1,3 @@
+include requirements-ci-native.txt
+include scripts/check_native_cupti.py
+recursive-include native/cupti CMakeLists.txt *.cpp

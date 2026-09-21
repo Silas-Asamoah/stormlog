@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import shutil
-import subprocess
+
+# The compiler is invoked with a constructed argument vector and no shell.
+import subprocess  # nosec B404
 import sys
 import tempfile
 from pathlib import Path
@@ -83,7 +85,7 @@ def _compile(
                 str(output),
             )
         )
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True)  # nosec B603
 
 
 def main(argv: Sequence[str] | None = None) -> int:

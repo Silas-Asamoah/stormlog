@@ -8,7 +8,9 @@ import os
 import platform
 import signal
 import stat
-import subprocess
+
+# Targets are launched with an explicit argument vector and no shell.
+import subprocess  # nosec B404
 import sys
 import time
 import uuid
@@ -123,7 +125,7 @@ def capture_cupti_activity(
         environment=environment,
     )
     started_epoch_ns = time.time_ns()
-    process = subprocess.Popen(
+    process = subprocess.Popen(  # nosec B603
         config.command,
         cwd=config.cwd,
         env=launch_environment,
