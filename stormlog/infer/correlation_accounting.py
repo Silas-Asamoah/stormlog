@@ -384,6 +384,12 @@ def _validate_share_members(
             raise ValueError("estimated request is not a member of the iteration")
         if identity in seen:
             raise ValueError("duplicate request share")
+        if any(
+            member_request == share.request_ref
+            and (member_attempt is None or share.attempt_ref is None)
+            for member_request, member_attempt in seen
+        ):
+            raise ValueError("generic and attempt-specific request shares overlap")
         seen.add(identity)
     if len(models) > 1:
         raise ValueError("request shares must use one estimation model")

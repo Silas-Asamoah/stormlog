@@ -225,6 +225,103 @@ def test_estimated_shares_require_an_explicit_model_and_remainder() -> None:
         )
 
 
+def test_generic_and_attempt_specific_shares_cannot_overlap() -> None:
+    events, request_a, _request_b, iteration_1, _ = _shared_events()
+    context = next(event.context for event in events if isinstance(event, RequestEvent))
+    attempt = EntityRef("client", "attempt-A")
+    events.extend(
+        [
+            RequestEvent(
+                context=context,
+                event_id="rA-attempt",
+                request_ref=request_a,
+                attempt_ref=attempt,
+            ),
+            MembershipEvent(
+                context=context,
+                event_id="mA-attempt",
+                request_ref=request_a,
+                attempt_ref=attempt,
+                iteration_ref=iteration_1,
+                role="decode",
+            ),
+        ]
+    )
+    graph = resolve_inference_events(events)
+    report = account_gpu_time(graph)
+    key = DeviceClock("GPU-123", "worker-a/monotonic")
+
+    with pytest.raises(ValueError, match="overlap"):
+        validate_request_shares(
+            graph,
+            report,
+            iteration_ref=iteration_1,
+            device_clock=key,
+            shares=(
+                RequestShareEstimate(request_a, 5_000_000, "model"),
+                RequestShareEstimate(
+                    request_a, 5_000_000, "model", attempt_ref=attempt
+                ),
+            ),
+            unattributed_ns=0,
+        )
+
+
+def test_distinct_attempt_specific_shares_remain_valid() -> None:
+    events, request_a, _request_b, iteration_1, _ = _shared_events()
+    context = next(event.context for event in events if isinstance(event, RequestEvent))
+    attempt_a = EntityRef("client", "attempt-A")
+    attempt_b = EntityRef("client", "attempt-B")
+    events.extend(
+        [
+            RequestEvent(
+                context=context,
+                event_id="rA-attempt-a",
+                request_ref=request_a,
+                attempt_ref=attempt_a,
+            ),
+            RequestEvent(
+                context=context,
+                event_id="rA-attempt-b",
+                request_ref=request_a,
+                attempt_ref=attempt_b,
+            ),
+            MembershipEvent(
+                context=context,
+                event_id="mA-attempt-a",
+                request_ref=request_a,
+                attempt_ref=attempt_a,
+                iteration_ref=iteration_1,
+                role="decode",
+            ),
+            MembershipEvent(
+                context=context,
+                event_id="mA-attempt-b",
+                request_ref=request_a,
+                attempt_ref=attempt_b,
+                iteration_ref=iteration_1,
+                role="decode",
+            ),
+        ]
+    )
+    graph = resolve_inference_events(events)
+    report = account_gpu_time(graph)
+    key = DeviceClock("GPU-123", "worker-a/monotonic")
+
+    budget = validate_request_shares(
+        graph,
+        report,
+        iteration_ref=iteration_1,
+        device_clock=key,
+        shares=(
+            RequestShareEstimate(request_a, 4_000_000, "model", attempt_ref=attempt_a),
+            RequestShareEstimate(request_a, 6_000_000, "model", attempt_ref=attempt_b),
+        ),
+        unattributed_ns=0,
+    )
+    assert budget.budget_ns == 10_000_000
+
+
 def test_clock_alignment_carries_cross_host_uncertainty() -> None:
     alignment = ClockAlignmentEvent(
         context=_context("sync", host="worker-a", device_uuid=None),
