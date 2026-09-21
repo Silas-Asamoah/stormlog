@@ -1,216 +1,180 @@
 [← Back to main docs](index.md)
 
-# Native Trace Helper Integration
+# Native CUPTI Trace Capture
 
-This page documents the portable scaffolding from
-[issue #234](https://github.com/Silas-Asamoah/stormlog/issues/234). It implements
-the process and artifact boundary recommended by
-[issue #118](https://github.com/Silas-Asamoah/stormlog/issues/118), but it does
-**not** ship or invoke a native collector.
+Stormlog implements an **opt-in, Linux-only CUPTI Activity prototype** for
+commands that Stormlog starts. It is disabled by default, is built separately
+from the Python package, and adds no mandatory native or Python dependency.
+AMD ROCProfiler remains a separate, unsupported backend rather than an implied
+equivalent.
 
-Hardware qualification remains in
-[issue #235](https://github.com/Silas-Asamoah/stormlog/issues/235). Contract
-tests and synthetic traces are not evidence that CUPTI, ROCProfiler, a GPU,
-driver, runtime, engine, or container configuration works.
+The implementation consists of the CUDA injection library in `native/cupti`,
+the `stormlog.native_trace_capture` launcher/importer, bounded trace sidecars,
+and the `stormlog native-trace` command. It follows the feasibility decision in
+[issue #118](https://github.com/Silas-Asamoah/stormlog/issues/118) and the
+portable boundary in
+[issue #234](https://github.com/Silas-Asamoah/stormlog/issues/234). Hardware
+qualification remains in
+[issue #235](https://github.com/Silas-Asamoah/stormlog/issues/235). Compiling
+the helper and passing synthetic tests are not GPU accuracy or overhead
+evidence.
 
-## Guarantees
+## Build the native component
 
-The scaffolding provides these platform-independent guarantees:
+Prerequisites are Linux, CMake 3.20 or newer, a C++17 compiler, and a CUDA 12+
+Toolkit containing CUPTI headers and `libcupti`.
 
-- CUPTI and ROCProfiler are optional. Importing Stormlog does not load either
-  native library.
-- Preflight reports `available`, `unavailable`, or `unsupported`. `available`
-  means only that a candidate library was found; the helper must still verify
-  its ABI, driver, device, permissions, and requested activities.
-- Helper control messages carry an exact protocol version and request identity.
-- CPU launch and device execution intervals are separate nullable fields.
-- Every normalized record carries a clock domain, provenance, and uncertainty.
-- Trace files are bounded, owner-only, and checksum-addressed. The writer drops
-  an entire opaque record when it would exceed the limit, so it never publishes
-  a locally truncated record as valid.
-- Interrupted captures can preserve an owner-only `.partial` artifact.
-- Manifests are written atomically and link to raw trace files by safe relative
-  paths.
-- Only the manifest is registered in `stormlog_attachments.json`. Raw trace
-  records do not become `TelemetryEvent v4` memory samples.
-- Helper or trace failures use the existing `healthy`, `degraded`, and
-  `unhealthy` vocabulary. Dropped records and truncation remain separate,
-  explicit loss facts.
+```bash
+cmake \
+  -S native/cupti \
+  -B build/native-cupti \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCUDAToolkit_ROOT=/usr/local/cuda
+cmake --build build/native-cupti --config Release
+```
 
-These guarantees protect the local artifact boundary. They do not measure
-collection overhead or prove the semantic accuracy of native records.
+The build produces `libstormlog_cupti_injection.so`. It is deliberately not
+included in the Stormlog wheel. CI compiles the source against pinned NVIDIA
+CUDA 12.9 runtime, compiler, and CUPTI headers. A portable configuration check
+that does not require CUDA is also available:
 
-## Contracts
+```bash
+cmake \
+  -S native/cupti \
+  -B build/native-cupti-contract \
+  -DSTORMLOG_CUPTI_VALIDATE_ONLY=ON
+```
+
+## Capture a command
+
+Use a new capture ID for each run. The argument separator keeps target flags
+out of Stormlog's parser.
+
+```bash
+stormlog native-trace \
+  --injection-library "$PWD/build/native-cupti/libstormlog_cupti_injection.so" \
+  --output-dir "$PWD/artifacts/native" \
+  --session-id inference-session-1 \
+  --capture-id warmup-1 \
+  --max-bytes 67108864 \
+  --timeout 300 \
+  -- python -m my_inference_server --model example/model
+```
+
+The default activity set is driver API, runtime API, concurrent kernel,
+memcpy, and memset. Repeating `--activity` replaces that set:
+
+```bash
+stormlog native-trace \
+  --injection-library /opt/stormlog/libstormlog_cupti_injection.so \
+  --output-dir ./artifacts/native \
+  --session-id session-1 \
+  --activity runtime \
+  --activity kernel \
+  --activity synchronization \
+  -- ./serve-model --port 8000
+```
+
+Optional `--run-id`, `--job-id`, `--rank`, and `--device-id` values preserve
+distributed identity. The command returns the target's exit code. A timeout
+returns `124` after terminating the launched process group. Collector failure
+does not replace a successful target exit code; inspect `health` and the
+manifest for capture completeness.
+
+## Execution and data flow
+
+1. Stormlog verifies Linux support, a regular non-symlink injection library,
+   and that the library is not group- or world-writable.
+2. It creates an owner-only capture directory and rejects pre-existing
+   `CUDA_INJECTION64_PATH` or reserved `STORMLOG_CUPTI_*` settings.
+3. It starts the argument vector with `shell=False` and a new process group.
+4. CUDA loads the library and calls its exported `InitializeInjection` entry
+   point when the target initializes CUDA.
+5. The library registers asynchronous CUPTI buffers and enables the requested
+   activities. `CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL` preserves observable
+   concurrency; the serializing kernel activity kind is never enabled.
+6. Completion callbacks normalize supported records into bounded NDJSON. A
+   record that cannot fit is dropped in full and counted.
+7. Exit handling force-flushes CUPTI, records CUPTI and local drops, publishes
+   a complete trace only after a successful flush, and atomically publishes
+   helper status.
+8. Python validates the status PID and request, checks artifact type and
+   permissions, hashes the trace, writes the manifest, and registers it in
+   `stormlog_attachments.json`.
 
 The machine-readable contracts are:
 
-- [`native_helper_protocol_v1.schema.json`](schemas/native_helper_protocol_v1.schema.json)
+- [`native_cupti_status_v1.schema.json`](schemas/native_cupti_status_v1.schema.json)
 - [`native_trace_record_v1.schema.json`](schemas/native_trace_record_v1.schema.json)
 - [`native_trace_manifest_v1.schema.json`](schemas/native_trace_manifest_v1.schema.json)
 - [`stormlog_attachments_v1.schema.json`](schemas/stormlog_attachments_v1.schema.json)
 
-The schemas reject unknown protocol versions, unsafe manifest paths, missing
-uncertainty, and unknown required fields. Python constructors additionally
-validate interval ordering, requested/enabled activity relationships, health
-and loss consistency, and attachment identity conflicts.
-
-Adding optional fields is compatible only when readers can ignore them safely.
-Changing field meaning, required behavior, clock interpretation, or lifecycle
-semantics requires a new schema or protocol version.
-
-## Capability preflight
-
-```python
-from stormlog.native_trace import native_trace_preflight
-
-for capability in native_trace_preflight():
-    print(capability.backend, capability.status, capability.reason)
-```
-
-Preflight never imports a discovered native library. On unsupported operating
-systems it returns `unsupported`. On a supported operating system without a
-discoverable library it returns `unavailable`. Finding a library returns
-`available` with an explicitly unverified reason.
-
-A future helper must repeat capability detection in its own process before
-capture and return the actual toolkit, driver, device, activity, privilege, and
-coexistence outcome. Stormlog must not promote library discovery to supported
-hardware.
-
-## Helper protocol
-
-`NativeHelperMessage` models newline-delimited JSON control messages. Version 1
-allows these message types:
-
-- `hello` and `capabilities` for negotiation;
-- `start` and `started` for an explicitly bounded capture;
-- `status` for health and loss reporting;
-- `flush` for a bounded drain;
-- `stop` and `stopped` for orderly shutdown; and
-- `error` for an attributable failure response.
-
-Every response must retain the request ID it answers. A future launcher must
-pass an executable and argument vector directly to the operating system. It
-must never construct a shell command from user-controlled values. The current
-scaffolding intentionally does not launch a binary.
-
-Each message type has required payload fields in the protocol schema and in the
-Python parser. `NativeHelperOutcome` maps completed, partial, cancelled, timed
-out, failed, and incompatible termination into collector health. Cancellation
-and readable partial output are degraded; timeout, crash, and incompatibility
-are unhealthy. These outcomes remain data for the optional source and do not
-raise through or disable the default monitor.
+High-volume records remain trace sidecars. They are not converted into
+`TelemetryEvent v4` memory samples.
 
 ## Record semantics
 
-`NativeTraceRecord` is a normalized evidence record, not a memory telemetry
-event. It supports:
+Runtime and driver records populate CPU intervals. Kernels, copies, and
+memsets populate device intervals. Correlation IDs are strings so launch and
+device records can be joined without numeric-width loss. Kernel records retain
+stream, graph, graph-node, device, context, and symbol identity.
+Synchronization records retain CUPTI type and stream/context identity.
 
-- independent CPU and device intervals;
-- explicit source clock domain;
-- correlation, stream, graph, and graph-node identifiers;
-- provenance and uncertainty; and
-- backend-specific metadata that does not change the common field meanings.
+Native record timestamps use the explicit `cupti_timestamp_ns` clock domain.
+Capture bounds use `unix_epoch_ns`. Stormlog does not pretend those domains are
+interchangeable or infer a conversion. Records identify `cupti_activity`
+provenance and the remaining timestamp uncertainty.
 
-An interval must contain both its start and end and its end cannot precede its
-start. A record may contain a CPU interval, a device interval, or both. Importers
-must not synthesize a missing device interval from CPU launch duration.
+## Bounds, health, and failure behavior
 
-## Bounded artifact flow
+The producer enforces `--max-bytes` before every complete NDJSON record. It
+separately reports delivered records, CUPTI buffer drops, local record and byte
+drops, and shutdown/flush completion.
 
-```python
-from stormlog.collector_health import CollectorHealthState
-from stormlog.native_trace_store import (
-    BoundedTraceWriter,
-    NativeTraceIdentity,
-    NativeTraceManifest,
-    register_native_trace_attachment,
-    write_native_trace_manifest,
-)
+Zero drops and validated final status produce `healthy`. Unsupported requested
+activities or dropped data produce `degraded` with partial telemetry. Missing,
+malformed, permission-unsafe, PID-mismatched, or unfinalized output produces
+`unhealthy`. A failed flush retains `activity.ndjson.partial`; it is never
+renamed to a complete trace.
 
-capture_dir = "artifacts/native/capture-1"
-writer = BoundedTraceWriter(
-    capture_dir,
-    "raw/activity.ndjson",
-    max_bytes=64 * 1024 * 1024,
-)
+Target crashes, `SIGKILL`, `exec`, and `_exit` can bypass exit flushing. The
+importer treats missing final status as unhealthy and preserves only validated
+partial evidence. A target's nonzero exit alone does not mean the collector
+failed, and healthy collection does not mean the target succeeded.
 
-# A future helper adapter supplies complete bytes or NativeTraceRecord values.
-# The example deliberately does not pretend to collect GPU evidence.
-writer.write(b'{"external_native_record":true}\n')
-artifact = writer.finalize(content_type="application/x-ndjson")
-loss = writer.loss(flush_outcome="complete")
+## Security and operational constraints
 
-manifest = NativeTraceManifest(
-    capture_id="capture-1",
-    backend="cupti_activity",
-    identity=NativeTraceIdentity(session_id="session-1", pid=1234),
-    helper_executable="stormlog-cupti-helper",
-    helper_version="0.1.0",
-    started_ns=1,
-    ended_ns=2,
-    clock_domains=("host/monotonic_ns", "gpu-0/device_ns"),
-    requested_activities=("runtime", "kernel"),
-    enabled_activities=("runtime", "kernel"),
-    max_bytes=64 * 1024 * 1024,
-    privilege="same-process",
-    target_selector="pid:1234",
-    health=CollectorHealthState(),
-    loss=loss,
-    artifacts=(artifact,),
-)
-manifest_path = write_native_trace_manifest(capture_dir, manifest)
-register_native_trace_attachment(capture_dir, manifest_path, manifest)
-```
+- Native injection runs inside the target CUDA process. A defect in the
+  library can affect that process; full process-level crash isolation is not
+  possible with CUPTI startup injection.
+- Stormlog launches an argument vector and never builds a shell command.
+- Capture directories use mode `0700`; trace, status, manifest, and attachment
+  files use mode `0600`.
+- Native output uses directory-relative `openat` with `O_NOFOLLOW`. Import
+  rejects symlink components, unsafe paths, and non-owner-only files.
+- Captures can contain symbols, process/thread IDs, graph identity, and workload
+  timing. Treat the whole capture directory as sensitive.
+- Existing CUDA injection settings are rejected instead of overwritten.
+  Containers must mount the library and a compatible CUPTI runtime explicitly.
+- No root access is needed when Stormlog launches a process owned by the caller.
+  The prototype does not attach to existing or unrelated processes.
+- CUPTI and another profiler may compete for resources. Coexistence is not
+  assumed; qualify every profiler/runtime combination through #235.
 
-When a record does not fit, `write` returns `False` and increments dropped
-record and byte counters. The final manifest must then use partial health and a
-non-complete flush outcome. When a helper crashes or is cancelled, call
-`preserve_partial` and publish degraded or unhealthy manifest state only if the
-remaining metadata is trustworthy.
+## Current limitations
 
-## Security boundary
+- Linux startup injection only. Windows CUPTI support is not implemented, and
+  macOS has no CUDA path.
+- NVIDIA only. No ROCProfiler library or AMD support claim is shipped.
+- No late attach, system-wide tracing, eBPF or USDT transport, programmable
+  instruction probes, or device metrics.
+- CUPTI v1 Activity callbacks preserve CUDA 12 compatibility. A future CUDA
+  13.3+ path may adopt subscriber-scoped v2 APIs after compatibility testing.
+- Graph identity is recorded for kernels. Graph replay correctness,
+  overlapping-stream fidelity, framework correlation coverage, coexistence,
+  event loss, and overhead still require the matched hardware protocol in
+  #235.
+- Abrupt process termination can leave only partial evidence.
 
-- Artifact paths must be POSIX-style relative paths without `..`, absolute
-  roots, Windows drive roots, or backslashes.
-- Resolved paths must stay beneath the capture directory, including through
-  existing symlinks.
-- Capture directories use owner-only permissions and files use mode `0600`.
-- Temporary manifests are flushed and atomically replaced in the destination
-  directory.
-- Checksums are streamed so a bounded but large trace is not loaded fully into
-  Python memory.
-- Manifests declare sensitive field classes such as symbols, addresses, stacks,
-  paths, or user data.
-- A future launcher must record the helper executable identity, privilege, and
-  target selector and must reject ambiguous process scope.
-
-The helper remains a separate trust boundary. Packaging provenance, binary
-signing, native sandboxing, injection behavior, and runtime privileges require
-review with the actual implementation.
-
-## Synthetic fixtures
-
-The deterministic fixture in
-`tests/fixtures/native_trace/overlap_graph_records.jsonl` exercises:
-
-- distinct CPU and device clock domains;
-- overlapping device intervals on two streams;
-- graph and graph-node identity;
-- repeated graph execution; and
-- explicit synthetic provenance and uncertainty.
-
-It validates parsing, schema, storage, correlation fields, and loss handling.
-It does not validate GPU timestamps, runtime correlation, graph semantics,
-kernel coverage, event loss, or overhead. Those claims require #235.
-
-## Integration with inference correlation
-
-[PR #233](https://github.com/Silas-Asamoah/stormlog/pull/233) defines the
-request, iteration, shared-execution, capability, and activity-reference
-contracts. Native import should adapt completed manifests and normalized records
-to that contract only when scoped correlation IDs and identity make the join
-unambiguous. Timestamp proximity alone is insufficient.
-
-This module does not duplicate #233's request accounting and remains mergeable
-whether #233 or the native-probe research lands first.
+These limitations are explicit unsupported or partial states, not silent
+support claims.

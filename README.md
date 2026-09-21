@@ -73,6 +73,7 @@ live under `stormlog.jax`.
 | Import TensorFlow APIs | `from stormlog.tensorflow import TFMemoryProfiler` |
 | Import JAX APIs | `from stormlog.jax import JAXMemoryProfiler` |
 | Query local artifacts | `stormlog query` |
+| Capture opt-in native CUDA activity | `stormlog native-trace` (source-built helper) |
 | Run framework memory CLI automation | `gpumemprof`, `tfmemprof`, or `jaxmemprof` |
 
 ### From source

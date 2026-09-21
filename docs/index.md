@@ -94,7 +94,7 @@ examples/test_guides/README
 
 - [Optional Native Probe Feasibility](native_probe_feasibility.md)
 - [Native Probe Qualification Protocol](native_probe_qualification.md)
-- [Native Trace Helper Integration](native_trace_integration.md)
+- [Native CUPTI Trace Capture](native_trace_integration.md)
 
 ### Framework-specific workflows
 

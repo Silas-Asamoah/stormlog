@@ -21,8 +21,10 @@ infer AMD support from NVIDIA results, or vLLM and SGLang support from llama.cpp
 results.
 
 This is an **adopt for a bounded prototype**, not an adoption decision for a
-production collector. No native collector, dependency, CLI, schema, or default
-behavior is added by this investigation.
+production collector. The separately reviewed follow-up in issue #234 now
+implements that opt-in prototype, CLI, and sidecar schemas without changing
+default behavior or mandatory dependencies. See
+[Native CUPTI Trace Capture](native_trace_integration.md).
 
 ## Evidence status
 
@@ -135,9 +137,9 @@ run a capability check on the target host.
   that the architecture is implementable, but its workload results and support
   model are not Stormlog results.
 
-## Proposed prototype boundary
+## Implemented prototype boundary
 
-The future prototype should have four explicit boundaries:
+The follow-up prototype has four explicit boundaries:
 
 1. A native helper owns CUPTI initialization, activity selection, bounded
    buffers, drop accounting, flush, and shutdown.
@@ -149,11 +151,12 @@ The future prototype should have four explicit boundaries:
 4. Analysis joins the trace with request/iteration evidence only when clock,
    identity, and correlation coverage support the claimed relationship.
 
-This boundary is a **strong inference**. It isolates crashes and native ABI
-dependencies, preserves the local-first artifact workflow, and permits an
-unsupported helper to fail without taking down monitoring. It costs more build
-and process-lifecycle work than an in-process Python binding. The prototype must
-measure whether that isolation is worth the complexity.
+This boundary is a **strong inference**. It isolates native packaging and ABI
+dependencies from mandatory Python dependencies, preserves the local-first
+artifact workflow, and permits capture failure without taking down the default
+monitor. CUPTI startup injection still runs native callbacks inside the target,
+so it cannot isolate the target from an injected-library crash. Qualification
+must measure whether the evidence is worth that residual risk and complexity.
 
 The design breaks first when capture must begin after a server has already
 initialized CUDA but the selected attachment mechanism requires startup-time
@@ -199,7 +202,7 @@ batch, or GPU-work schema here.
 | Startup-time injection | Cannot attach safely to an existing server | Declare startup requirements in the manifest and distinguish them from attachable modes. |
 | Profiler ownership conflict | Capture failure or changed workload behavior | Probe subscriber/tool coexistence, refuse unsafe combinations, and record the conflicting tool. |
 | Buffer exhaustion | Biased or incomplete trace | Bound buffers and files, count all loss, mark the artifact partial, and never claim complete attribution. |
-| Helper crash or hang | Lost evidence or target disruption | Isolate the helper, bound shutdown/flush, preserve partial artifacts, and keep target liveness primary. |
+| Helper crash or hang | Lost evidence or target disruption | Minimize injected code, bound shutdown/flush, preserve partial artifacts, and state that startup injection cannot provide full crash isolation. |
 | Clock conversion error | Incorrect ordering or latency | Retain raw timestamps and clock metadata; validate conversion against trusted markers. |
 | Container or cloud restrictions | Missing libraries, injection denial, or counter permission failure | Publish a capability preflight and least-privilege deployment examples; do not require privileged defaults. |
 | Symbol and address exposure | Sensitive implementation details in artifacts | Use restrictive file permissions, configurable symbolization, scrubbing, retention, and explicit sharing guidance. |
@@ -226,9 +229,10 @@ future implementation therefore must:
 
 ## Decision gates
 
-Proceed from research to a CUPTI prototype only after issue #216 supplies a
-bounded capture/import path and issue #211 supplies shared-execution correlation.
-Use [Native Probe Qualification](native_probe_qualification.md) with issue #221
+The bounded CUPTI prototype is implemented as follow-up issue #234. Reuse issue
+#216 capture work and align with issue #211 shared-execution correlation when
+those contracts land. Use
+[Native Probe Qualification](native_probe_qualification.md) with issue #221
 before any production-readiness claim.
 
 Adopt a production collector only if all of the following are demonstrated:

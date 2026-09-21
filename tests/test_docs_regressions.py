@@ -101,6 +101,7 @@ _BANNED_DOC_SNIPPETS = {
     "docs/native_trace_integration.md": [
         "synthetic traces prove CUPTI support",
         "native tracing is enabled by default",
+        "ship or invoke a native collector.",
     ],
     "docs/tui.md": [
         "tui-distributed-diagnostics-workflow.svg",
@@ -210,10 +211,11 @@ _REQUIRED_DOC_SNIPPETS = {
         "is valid when the manifest and raw evidence",
     ],
     "docs/native_trace_integration.md": [
-        "ship or invoke a native collector.",
-        "tests and synthetic traces are not evidence",
-        "records do not become `TelemetryEvent v4` memory samples.",
-        "Those claims require #235.",
+        "disabled by default",
+        "CUDA_INJECTION64_PATH",
+        "CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL",
+        "They are not converted into",
+        "qualification remains in",
     ],
 }
 

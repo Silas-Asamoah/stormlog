@@ -12,7 +12,9 @@ Stormlog currently exposes four console scripts:
 Use `gpumemprof`, `tfmemprof`, and `jaxmemprof` for framework memory
 automation. Use `stormlog` with no arguments when you want the Textual TUI,
 `stormlog query` when you want local artifact queries, or `stormlog infer` when
-you want OpenAI-compatible inference endpoint profiling.
+you want OpenAI-compatible inference endpoint profiling. The opt-in
+`stormlog native-trace` command wraps a Linux CUDA process with a separately
+built CUPTI Activity collector.
 
 If you want task-oriented operational recipes instead of option-by-option
 guidance, use the [Production Cookbook](cookbook/index.md), especially
@@ -29,6 +31,7 @@ jaxmemprof --help
 stormlog --help
 stormlog query --help
 stormlog infer --help
+stormlog native-trace --help
 ```
 
 If you are working from a repository checkout, `pip install -e .` also exposes
@@ -55,6 +58,7 @@ The command also dispatches non-TUI workflows without importing Textual:
 ```bash
 stormlog query --help
 stormlog infer --help
+stormlog native-trace --help
 ```
 
 ### Profile OpenAI-compatible inference
@@ -87,6 +91,24 @@ pip install "stormlog[infer-tokenizers]"
 ```
 
 See [Inference Profiling](inference.md) for the full endpoint profiling guide.
+
+### Capture native CUDA activity
+
+`stormlog native-trace` launches a new Linux CUDA process with bounded CUPTI
+Activity capture. It is disabled by default and requires the separately built
+injection library:
+
+```bash
+stormlog native-trace \
+  --injection-library ./build/native-cupti/libstormlog_cupti_injection.so \
+  --output-dir ./artifacts/native \
+  --session-id session-1 \
+  --capture-id capture-1 \
+  -- python -m my_inference_server
+```
+
+See [Native CUPTI Trace Capture](native_trace_integration.md) for build,
+security, artifact, failure, and qualification details.
 
 ## `gpumemprof`
 
