@@ -210,6 +210,28 @@ jobs:
             - name: Check cyclomatic complexity
               run: python3 scripts/check_complexity.py --json
 
+    native-cupti-source:
+        if: github.event_name != 'schedule'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+
+        steps:
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  persist-credentials: false
+
+            - name: Set up Python
+              uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+              with:
+                  python-version: "3.10"
+
+            - name: Install pinned NVIDIA build inputs
+              run: python3 -m pip install -r requirements-ci-native.txt
+
+            - name: Compile optional CUPTI injection library
+              run: python3 scripts/check_native_cupti.py
+
     workflow-audit:
         if: github.event_name != 'schedule'
         runs-on: ubuntu-latest
@@ -266,7 +288,7 @@ jobs:
         runs-on: ubuntu-latest
         permissions:
             contents: read
-        needs: [test, lint, workflow-audit, docs]
+        needs: [test, lint, native-cupti-source, workflow-audit, docs]
 
         steps:
             - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

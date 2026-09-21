@@ -143,3 +143,17 @@ def test_ci_enforces_radon_complexity_without_framework_dependencies() -> None:
     assert "python3 scripts/check_complexity.py --json" in job_block
     assert "continue-on-error" not in job_block
     assert "pip install -e" not in job_block
+
+
+def test_ci_compile_checks_optional_cupti_source() -> None:
+    content = _ci_workflow_content()
+    start = content.index("    native-cupti-source:")
+    end = content.index("    workflow-audit:", start)
+    job_block = content[start:end]
+
+    assert "runs-on: ubuntu-latest" in job_block
+    assert "requirements-ci-native.txt" in job_block
+    assert "python3 scripts/check_native_cupti.py" in job_block
+    assert "persist-credentials: false" in job_block
+    assert "pip install -e" not in job_block
+    assert "native-cupti-source" in content[content.index("    build:") :]
