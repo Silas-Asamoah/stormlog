@@ -193,6 +193,75 @@ def test_optional_capture_joins_scoped_ids_and_indexes_trace(tmp_path) -> None:
     assert len(envelope["attachments"]) == 2
 
 
+def test_capture_rejects_conflicting_existing_event_before_writing(tmp_path) -> None:
+    artifact = tmp_path / "infer.jsonl"
+    _legacy_artifact(artifact)
+    envelope_path = tmp_path / "stormlog_run.json"
+    session = create_session_summary(source="test", session_id="session-1")
+    append_inference_capture(
+        artifact,
+        run_id="run-1",
+        session=session,
+        engine_adapter=_Engine(),
+        envelope_path=envelope_path,
+    )
+    artifact_before = artifact.read_bytes()
+    envelope_before = envelope_path.read_bytes()
+
+    class ConflictingEngine(_Engine):
+        def collect(self, *, run_id: str, session_id: str) -> EngineCapture:
+            capture = super().collect(run_id=run_id, session_id=session_id)
+            iteration = replace(capture.events[0], end_ns=201)
+            return replace(capture, events=(iteration, *capture.events[1:]))
+
+    with pytest.raises(ValueError, match="conflicting"):
+        append_inference_capture(
+            artifact,
+            run_id="run-1",
+            session=session,
+            engine_adapter=ConflictingEngine(),
+            envelope_path=envelope_path,
+        )
+
+    assert artifact.read_bytes() == artifact_before
+    assert envelope_path.read_bytes() == envelope_before
+
+
+def test_capture_serializes_all_events_before_mutating_artifacts(tmp_path) -> None:
+    artifact = tmp_path / "infer.jsonl"
+    _legacy_artifact(artifact)
+    envelope_path = tmp_path / "stormlog_run.json"
+    session = create_session_summary(source="test", session_id="session-1")
+    append_inference_capture(
+        artifact,
+        run_id="run-1",
+        session=session,
+        envelope_path=envelope_path,
+    )
+    artifact_before = artifact.read_bytes()
+    envelope_before = envelope_path.read_bytes()
+
+    class InvalidEngine(_Engine):
+        def collect(self, *, run_id: str, session_id: str) -> EngineCapture:
+            capture = super().collect(run_id=run_id, session_id=session_id)
+            invalid = replace(capture.events[1], metadata={"bad": object()})
+            return replace(
+                capture, events=(capture.events[0], invalid, *capture.events[2:])
+            )
+
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        append_inference_capture(
+            artifact,
+            run_id="run-1",
+            session=session,
+            engine_adapter=InvalidEngine(),
+            envelope_path=envelope_path,
+        )
+
+    assert artifact.read_bytes() == artifact_before
+    assert envelope_path.read_bytes() == envelope_before
+
+
 def test_missing_adapters_are_recorded_without_fake_server_events(tmp_path) -> None:
     artifact = tmp_path / "infer.jsonl"
     _legacy_artifact(artifact)

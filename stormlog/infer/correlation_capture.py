@@ -18,12 +18,14 @@ from ..run_catalog import (
     run_envelope_from_payload,
 )
 from ..session import SessionSummary
+from .correlation_accounting import resolve_inference_events
 from .correlation_events import (
     ActivityReferenceEvent,
     CapabilityEvent,
     CorrelationContext,
     CorrelationEvent,
     EntityRef,
+    InferenceRecord,
     load_inference_artifact,
 )
 
@@ -117,7 +119,7 @@ def append_inference_capture(
         raise ValueError("inference artifact must already exist")
     if not run_id:
         raise ValueError("run_id is required")
-    _validate_existing_artifact(artifact, run_id, session.session_id)
+    existing_records = _validate_existing_artifact(artifact, run_id, session.session_id)
     envelope = Path(envelope_path or artifact.parent / RUN_ENVELOPE_FILENAME)
     engine, trace = _collect_optional(
         run_id, session.session_id, engine_adapter, trace_collector
@@ -141,12 +143,17 @@ def append_inference_capture(
         attachments=trace.attachments if trace else (),
     )
     _validate_attachment_references(events, payload)
+    _validate_combined_events(existing_records, events)
+    serialized_events = _serialize_events(events)
     _write_envelope(envelope, payload)
-    _append_events(artifact, events)
+    _append_events(artifact, serialized_events)
 
 
-def _validate_existing_artifact(artifact: Path, run_id: str, session_id: str) -> None:
-    for record in load_inference_artifact(artifact):
+def _validate_existing_artifact(
+    artifact: Path, run_id: str, session_id: str
+) -> tuple[InferenceRecord, ...]:
+    records = tuple(load_inference_artifact(artifact))
+    for record in records:
         original = record.to_record()
         context = original.get("context")
         record_session = original.get("session_id")
@@ -158,6 +165,20 @@ def _validate_existing_artifact(artifact: Path, run_id: str, session_id: str) ->
             raise ValueError("artifact contains a different session_id")
         if record_run is not None and record_run != run_id:
             raise ValueError("artifact contains a different run_id")
+    return records
+
+
+def _validate_combined_events(
+    existing_records: tuple[InferenceRecord, ...],
+    new_events: tuple[CorrelationEvent, ...],
+) -> None:
+    """Reject conflicting identities before either artifact is changed."""
+    resolve_inference_events((*existing_records, *new_events))
+
+
+def _serialize_events(events: tuple[CorrelationEvent, ...]) -> tuple[str, ...]:
+    """Serialize every event before either artifact is changed."""
+    return tuple(json.dumps(event.to_record(), sort_keys=True) for event in events)
 
 
 def _collect_optional(
@@ -206,10 +227,24 @@ def _validate_attachment_references(
             raise ValueError("activity references an unregistered trace attachment")
 
 
-def _append_events(artifact: Path, events: tuple[CorrelationEvent, ...]) -> None:
-    with artifact.open("a", encoding="utf-8") as handle:
-        for event in events:
-            handle.write(json.dumps(event.to_record(), sort_keys=True) + "\n")
+def _append_events(artifact: Path, serialized_events: tuple[str, ...]) -> None:
+    """Atomically replace the artifact with its complete staged contents."""
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=artifact.parent, delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(artifact.read_bytes())
+            for record in serialized_events:
+                handle.write(record.encode("utf-8"))
+                handle.write(b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, artifact)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def link_trace_activities(
