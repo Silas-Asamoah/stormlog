@@ -53,6 +53,7 @@ query_layer
 run_envelopes
 issue_fingerprinting
 correlation
+native_probe_feasibility
 pytorch_testing_guide
 tensorflow_testing_guide
 jax_testing_guide
@@ -86,6 +87,10 @@ examples/test_guides/README
 2. [CI and Release Qualification](cookbook/ci_release.md)
 3. [Examples](examples.md)
 4. [Benchmark Harness](benchmark_harness.md)
+
+### Native probe research
+
+- [Optional Native Probe Feasibility](native_probe_feasibility.md)
 
 ### Framework-specific workflows
 
