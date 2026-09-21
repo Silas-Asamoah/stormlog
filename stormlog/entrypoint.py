@@ -36,6 +36,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .query_cli import main as query_main
 
         return query_main(resolved_argv[1:])
+    if command == "native-trace":
+        from .native_trace_capture import main as native_trace_main
+
+        return native_trace_main(resolved_argv[1:])
     if command in {"-h", "--help"}:
         _build_parser().print_help()
         return 0
@@ -55,7 +59,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["tui", "query", "infer"],
+        choices=["tui", "query", "infer", "native-trace"],
         help="Command group. Omit to launch the TUI.",
     )
     return parser

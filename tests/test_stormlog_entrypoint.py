@@ -58,6 +58,17 @@ class StormlogEntrypointTests(unittest.TestCase):
         self.assertEqual(exit_code, 8)
         query_main.assert_called_once_with(["sessions", "artifacts"])
 
+    def test_native_trace_command_dispatches_to_capture_cli(self) -> None:
+        importlib.import_module("stormlog.native_trace_capture")
+
+        with mock.patch(
+            "stormlog.native_trace_capture.main", return_value=9
+        ) as native_trace_main:
+            exit_code = entrypoint.main(["native-trace", "--help"])
+
+        self.assertEqual(exit_code, 9)
+        native_trace_main.assert_called_once_with(["--help"])
+
     def test_help_mentions_no_arg_tui_behavior(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
@@ -68,6 +79,7 @@ class StormlogEntrypointTests(unittest.TestCase):
         self.assertIn("Textual TUI", help_text)
         self.assertIn("query", help_text)
         self.assertIn("infer", help_text)
+        self.assertIn("native-trace", help_text)
 
     def test_unknown_command_exits_with_parser_error(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()):

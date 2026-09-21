@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/native_cupti_status_v1.schema.json",
+  "title": "Stormlog CUPTI Helper Status v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "helper_version",
+    "pid",
+    "cupti_version",
+    "compiled_cupti_api_version",
+    "compiled_cuda_version",
+    "driver_version",
+    "started_timestamp_ns",
+    "ended_timestamp_ns",
+    "requested_activities",
+    "enabled_activities",
+    "delivered_records",
+    "cupti_dropped_records",
+    "local_dropped_records",
+    "bytes_written",
+    "bytes_dropped",
+    "finalized",
+    "initialization_error"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "helper_version": {"type": "string", "minLength": 1},
+    "pid": {"type": "integer", "minimum": 1},
+    "cupti_version": {"type": "integer", "minimum": 0},
+    "compiled_cupti_api_version": {"type": "integer", "minimum": 1},
+    "compiled_cuda_version": {"type": "integer", "minimum": 1},
+    "driver_version": {"type": ["string", "null"], "minLength": 1},
+    "started_timestamp_ns": {"type": "integer", "minimum": 0},
+    "ended_timestamp_ns": {"type": "integer", "minimum": 0},
+    "requested_activities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/activity"}
+    },
+    "enabled_activities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/activity"}
+    },
+    "delivered_records": {"type": "integer", "minimum": 0},
+    "cupti_dropped_records": {"type": "integer", "minimum": 0},
+    "local_dropped_records": {"type": "integer", "minimum": 0},
+    "bytes_written": {"type": "integer", "minimum": 0},
+    "bytes_dropped": {"type": "integer", "minimum": 0},
+    "finalized": {"type": "boolean"},
+    "initialization_error": {"type": ["string", "null"], "minLength": 1}
+  },
+  "$defs": {
+    "activity": {
+      "type": "string",
+      "enum": [
+        "driver",
+        "runtime",
+        "kernel",
+        "memcpy",
+        "memset",
+        "synchronization"
+      ]
+    }
+  }
+}

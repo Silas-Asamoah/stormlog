@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -86,6 +87,68 @@ def _sha256_file(path: Path) -> str:
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _open_relative_regular_file(
+    root: Path, relative: Path
+) -> tuple[BinaryIO, os.stat_result]:
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    directory_fd = os.open(root, directory_flags)
+    try:
+        for component in relative.parts[:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            file_flags |= os.O_NOFOLLOW
+        descriptor = os.open(relative.name, file_flags, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    handle = os.fdopen(descriptor, "rb")
+    stat_result = os.fstat(handle.fileno())
+    if not stat.S_ISREG(stat_result.st_mode):
+        handle.close()
+        raise ValueError("native trace artifact must be a regular file")
+    return handle, stat_result
+
+
+def native_trace_artifact_from_file(
+    root: str | Path,
+    relative_path: str | Path,
+    *,
+    kind: str = "native_trace",
+    content_type: str = "application/octet-stream",
+    sensitive_fields: Sequence[str] = (),
+) -> NativeTraceArtifact:
+    """Describe an existing owner-only regular file produced by a native helper."""
+    root_path = Path(root).resolve()
+    relative = _safe_relative_path(relative_path)
+    _capture_path(root_path, relative)
+    try:
+        handle, stat_result = _open_relative_regular_file(root_path, relative)
+    except OSError as exc:
+        raise ValueError(
+            "native trace artifact path must not contain symlinks"
+        ) from exc
+    with handle:
+        if stat_result.st_mode & 0o077:
+            raise ValueError("native trace artifact must be owner-only")
+        digest = hashlib.sha256()
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return NativeTraceArtifact(
+        kind=kind,
+        path=relative.as_posix(),
+        content_type=content_type,
+        size_bytes=stat_result.st_size,
+        sha256=digest.hexdigest(),
+        sensitive_fields=tuple(dict.fromkeys(sensitive_fields)),
+    )
 
 
 def _validate_required_manifest_strings(values: Mapping[str, str]) -> None:
@@ -541,6 +604,7 @@ __all__ = [
     "NativeTraceIdentity",
     "NativeTraceLoss",
     "NativeTraceManifest",
+    "native_trace_artifact_from_file",
     "register_native_trace_attachment",
     "write_native_trace_manifest",
 ]
