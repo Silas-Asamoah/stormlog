@@ -55,6 +55,7 @@ issue_fingerprinting
 correlation
 native_probe_feasibility
 native_probe_qualification
+native_trace_integration
 pytorch_testing_guide
 tensorflow_testing_guide
 jax_testing_guide
@@ -93,6 +94,7 @@ examples/test_guides/README
 
 - [Optional Native Probe Feasibility](native_probe_feasibility.md)
 - [Native Probe Qualification Protocol](native_probe_qualification.md)
+- [Native Trace Helper Integration](native_trace_integration.md)
 
 ### Framework-specific workflows
 

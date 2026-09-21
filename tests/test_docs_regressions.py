@@ -98,6 +98,10 @@ _BANNED_DOC_SNIPPETS = {
         "all unsupported combinations passed",
         "missing values are zero",
     ],
+    "docs/native_trace_integration.md": [
+        "synthetic traces prove CUPTI support",
+        "native tracing is enabled by default",
+    ],
     "docs/tui.md": [
         "tui-distributed-diagnostics-workflow.svg",
         "tui-distributed-diagnostics-workflow.png",
@@ -204,6 +208,12 @@ _REQUIRED_DOC_SNIPPETS = {
         "A lane that skips every applicable GPU scenario is not a successful run.",
         "Unknown and unsupported values remain explicit.",
         "is valid when the manifest and raw evidence",
+    ],
+    "docs/native_trace_integration.md": [
+        "ship or invoke a native collector.",
+        "tests and synthetic traces are not evidence",
+        "records do not become `TelemetryEvent v4` memory samples.",
+        "Those claims require #235.",
     ],
 }
 
