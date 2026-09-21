@@ -89,6 +89,15 @@ _BANNED_DOC_SNIPPETS = {
         "it never treats unavailable",
         "Use the generated pprof/OOM artifacts",
     ],
+    "docs/native_probe_feasibility.md": [
+        "Stormlog measured native-probe overhead",
+        "Stormlog achieved less than 4% overhead",
+        "production-ready native collector",
+    ],
+    "docs/native_probe_qualification.md": [
+        "all unsupported combinations passed",
+        "missing values are zero",
+    ],
     "docs/tui.md": [
         "tui-distributed-diagnostics-workflow.svg",
         "tui-distributed-diagnostics-workflow.png",
@@ -183,6 +192,18 @@ _REQUIRED_DOC_SNIPPETS = {
     ],
     "docs/telemetry_schema.md": [
         "`stormlog.jax.memory_tracker`",
+    ],
+    "docs/native_probe_feasibility.md": [
+        "**Prototype CUPTI Activity collection first",
+        "no Stormlog native-probe performance",
+        "opt-in, separately built native helper",
+        "High-volume native activity must **not** be encoded as memory samples",
+    ],
+    "docs/native_probe_qualification.md": [
+        "that the experiments have run.",
+        "A lane that skips every applicable GPU scenario is not a successful run.",
+        "Unknown and unsupported values remain explicit.",
+        "is valid when the manifest and raw evidence",
     ],
 }
 
