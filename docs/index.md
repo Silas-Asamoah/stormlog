@@ -54,6 +54,7 @@ run_envelopes
 issue_fingerprinting
 correlation
 native_probe_feasibility
+native_probe_qualification
 pytorch_testing_guide
 tensorflow_testing_guide
 jax_testing_guide
@@ -91,6 +92,7 @@ examples/test_guides/README
 ### Native probe research
 
 - [Optional Native Probe Feasibility](native_probe_feasibility.md)
+- [Native Probe Qualification Protocol](native_probe_qualification.md)
 
 ### Framework-specific workflows
 

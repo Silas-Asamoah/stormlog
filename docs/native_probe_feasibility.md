@@ -228,8 +228,8 @@ future implementation therefore must:
 
 Proceed from research to a CUPTI prototype only after issue #216 supplies a
 bounded capture/import path and issue #211 supplies shared-execution correlation.
-Use the native-probe qualification protocol added by this investigation with
-issue #221 before any production-readiness claim.
+Use [Native Probe Qualification](native_probe_qualification.md) with issue #221
+before any production-readiness claim.
 
 Adopt a production collector only if all of the following are demonstrated:
 
