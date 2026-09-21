@@ -24,5 +24,144 @@
     },
     "request_id": {"type": "string", "minLength": 1},
     "payload": {"type": "object"}
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"message_type": {"const": "hello"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["helper_version", "executable", "supported_protocol_versions"],
+            "properties": {
+              "helper_version": {"type": "string", "minLength": 1},
+              "executable": {"type": "string", "minLength": 1},
+              "supported_protocol_versions": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {"type": "integer", "minimum": 1}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"message_type": {"const": "capabilities"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["backends"],
+            "properties": {"backends": {"type": "array"}}
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"message_type": {"const": "start"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "required": [
+              "capture_id",
+              "backend",
+              "output_directory",
+              "max_bytes",
+              "requested_activities",
+              "target_selector"
+            ],
+            "properties": {
+              "capture_id": {"type": "string", "minLength": 1},
+              "backend": {"type": "string", "enum": ["cupti_activity", "rocprofiler"]},
+              "output_directory": {"type": "string", "minLength": 1},
+              "max_bytes": {"type": "integer", "minimum": 1},
+              "requested_activities": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {"type": "string", "minLength": 1}
+              },
+              "target_selector": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"message_type": {"const": "started"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["capture_id", "helper_pid"],
+            "properties": {
+              "capture_id": {"type": "string", "minLength": 1},
+              "helper_pid": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"message_type": {"const": "status"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["capture_id", "status", "delivered_records", "dropped_records"],
+            "properties": {
+              "capture_id": {"type": "string", "minLength": 1},
+              "status": {"type": "string", "enum": ["healthy", "degraded", "unhealthy"]},
+              "delivered_records": {"type": "integer", "minimum": 0},
+              "dropped_records": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "message_type": {"enum": ["flush", "stop"]}
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["capture_id"],
+            "properties": {"capture_id": {"type": "string", "minLength": 1}}
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"message_type": {"const": "stopped"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["capture_id", "flush_outcome"],
+            "properties": {
+              "capture_id": {"type": "string", "minLength": 1},
+              "flush_outcome": {
+                "type": "string",
+                "enum": ["complete", "partial", "failed", "not_attempted"]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"message_type": {"const": "error"}}},
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["code", "message", "retryable"],
+            "properties": {
+              "code": {"type": "string", "minLength": 1},
+              "message": {"type": "string", "minLength": 1},
+              "retryable": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    }
+  ]
 }

@@ -11,7 +11,9 @@ import ctypes.util
 import platform
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
+
+from .collector_health import CollectorHealthState
 
 NATIVE_TRACE_FORMAT = "stormlog.native_trace"
 NATIVE_TRACE_SCHEMA_VERSION = 1
@@ -30,6 +32,14 @@ HelperMessageType = Literal[
     "stopped",
     "error",
 ]
+HelperTermination = Literal[
+    "completed",
+    "partial",
+    "cancelled",
+    "timed_out",
+    "failed",
+    "incompatible",
+]
 
 _BACKENDS: tuple[NativeBackend, ...] = ("cupti_activity", "rocprofiler")
 _HELPER_MESSAGE_TYPES = {
@@ -43,6 +53,24 @@ _HELPER_MESSAGE_TYPES = {
     "stopped",
     "error",
 }
+_MESSAGE_REQUIRED_FIELDS = {
+    "hello": {"helper_version", "executable", "supported_protocol_versions"},
+    "capabilities": {"backends"},
+    "start": {
+        "capture_id",
+        "backend",
+        "output_directory",
+        "max_bytes",
+        "requested_activities",
+        "target_selector",
+    },
+    "started": {"capture_id", "helper_pid"},
+    "status": {"capture_id", "status", "delivered_records", "dropped_records"},
+    "flush": {"capture_id"},
+    "stop": {"capture_id"},
+    "stopped": {"capture_id", "flush_outcome"},
+    "error": {"code", "message", "retryable"},
+}
 
 
 def _require_non_empty(value: str, name: str) -> None:
@@ -53,6 +81,75 @@ def _require_non_empty(value: str, name: str) -> None:
 def _require_non_negative(value: int | None, name: str) -> None:
     if value is not None and value < 0:
         raise ValueError(f"{name} must be >= 0")
+
+
+def _validate_helper_payload(
+    message_type: HelperMessageType, payload: Mapping[str, Any]
+) -> None:
+    missing = _MESSAGE_REQUIRED_FIELDS[message_type] - payload.keys()
+    if missing:
+        raise ValueError(
+            f"{message_type} payload is missing: {', '.join(sorted(missing))}"
+        )
+    for name in _message_string_fields(message_type):
+        _require_non_empty(payload[name], name)
+    validator = _payload_validators().get(message_type)
+    if validator is not None:
+        validator(payload)
+
+
+def _message_string_fields(message_type: HelperMessageType) -> tuple[str, ...]:
+    fields = {
+        "hello": ("helper_version", "executable"),
+        "capabilities": (),
+        "start": ("capture_id", "backend", "output_directory", "target_selector"),
+        "started": ("capture_id",),
+        "status": ("capture_id", "status"),
+        "flush": ("capture_id",),
+        "stop": ("capture_id",),
+        "stopped": ("capture_id", "flush_outcome"),
+        "error": ("code", "message"),
+    }
+    return fields[message_type]
+
+
+def _validate_status_payload(payload: Mapping[str, Any]) -> None:
+    if payload["status"] not in {"healthy", "degraded", "unhealthy"}:
+        raise ValueError("status payload has an unsupported health status")
+    for name in ("delivered_records", "dropped_records"):
+        value = payload[name]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{name} must be a non-negative integer")
+
+
+def _validate_start_payload(payload: Mapping[str, Any]) -> None:
+    max_bytes = payload["max_bytes"]
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
+        raise ValueError("max_bytes must be a positive integer")
+
+
+def _validate_started_payload(payload: Mapping[str, Any]) -> None:
+    helper_pid = payload["helper_pid"]
+    if (
+        not isinstance(helper_pid, int)
+        or isinstance(helper_pid, bool)
+        or helper_pid <= 0
+    ):
+        raise ValueError("helper_pid must be a positive integer")
+
+
+def _validate_error_payload(payload: Mapping[str, Any]) -> None:
+    if not isinstance(payload["retryable"], bool):
+        raise ValueError("retryable must be a boolean")
+
+
+def _payload_validators() -> Mapping[str, Callable[[Mapping[str, Any]], None]]:
+    return {
+        "start": _validate_start_payload,
+        "started": _validate_started_payload,
+        "status": _validate_status_payload,
+        "error": _validate_error_payload,
+    }
 
 
 @dataclass(frozen=True)
@@ -115,6 +212,7 @@ class NativeHelperMessage:
         _require_non_empty(self.request_id, "request_id")
         if not isinstance(self.payload, Mapping):
             raise ValueError("payload must be a mapping")
+        _validate_helper_payload(self.message_type, self.payload)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe helper message."""
@@ -145,6 +243,48 @@ class NativeHelperMessage:
             message_type=message_type,  # type: ignore[arg-type]
             request_id=request_id,
             payload=message_payload,
+        )
+
+
+@dataclass(frozen=True)
+class NativeHelperOutcome:
+    """Failure-isolated helper termination translated to collector health."""
+
+    termination: HelperTermination
+    error: str | None = None
+    consecutive_failures: int = 0
+
+    def __post_init__(self) -> None:
+        supported = {
+            "completed",
+            "partial",
+            "cancelled",
+            "timed_out",
+            "failed",
+            "incompatible",
+        }
+        if self.termination not in supported:
+            raise ValueError(f"unsupported helper termination: {self.termination}")
+        if self.consecutive_failures < 0:
+            raise ValueError("consecutive_failures must be >= 0")
+        if self.termination == "completed" and self.error is not None:
+            raise ValueError("completed helper outcome cannot contain an error")
+        if self.termination != "completed" and not self.error:
+            raise ValueError("non-completed helper outcome requires an error")
+
+    def to_health(self) -> CollectorHealthState:
+        """Map helper termination without raising into the default monitor."""
+        if self.termination == "completed":
+            return CollectorHealthState()
+        status = (
+            "degraded" if self.termination in {"partial", "cancelled"} else "unhealthy"
+        )
+        return CollectorHealthState(
+            status=status,
+            telemetry_partial=True,
+            partial_fields=("native_trace",),
+            last_error=self.error,
+            consecutive_failures=max(self.consecutive_failures, 1),
         )
 
 
@@ -305,6 +445,7 @@ __all__ = [
     "NATIVE_TRACE_SCHEMA_VERSION",
     "NativeBackend",
     "NativeHelperMessage",
+    "NativeHelperOutcome",
     "NativeTraceCapability",
     "NativeTraceRecord",
     "native_trace_preflight",

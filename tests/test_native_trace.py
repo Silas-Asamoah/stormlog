@@ -12,6 +12,7 @@ from stormlog import query
 from stormlog.collector_health import CollectorHealthState
 from stormlog.native_trace import (
     NativeHelperMessage,
+    NativeHelperOutcome,
     NativeTraceRecord,
     native_trace_preflight,
 )
@@ -137,6 +138,53 @@ def test_helper_protocol_schema_accepts_strict_message() -> None:
     jsonschema.Draft202012Validator(
         _schema("native_helper_protocol_v1.schema.json")
     ).validate(message.to_dict())
+
+
+def test_helper_protocol_rejects_incomplete_start_payload() -> None:
+    with pytest.raises(ValueError, match="start payload is missing"):
+        NativeHelperMessage(
+            message_type="start",
+            request_id="request-1",
+            payload={"capture_id": "capture-1"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("termination", "expected_status"),
+    [
+        ("partial", "degraded"),
+        ("cancelled", "degraded"),
+        ("timed_out", "unhealthy"),
+        ("failed", "unhealthy"),
+        ("incompatible", "unhealthy"),
+    ],
+)
+def test_helper_failure_outcomes_are_isolated_as_health(
+    termination: str, expected_status: str
+) -> None:
+    outcome = NativeHelperOutcome(
+        termination=termination,  # type: ignore[arg-type]
+        error=f"helper {termination}",
+    )
+
+    health = outcome.to_health()
+
+    assert health.status == expected_status
+    assert health.telemetry_partial is True
+    assert health.partial_fields == ("native_trace",)
+    assert health.consecutive_failures == 1
+
+
+def test_completed_helper_outcome_is_healthy() -> None:
+    health = NativeHelperOutcome(termination="completed").to_health()
+
+    assert health.status == "healthy"
+    assert health.telemetry_partial is False
+
+
+def test_non_completed_helper_outcome_requires_error() -> None:
+    with pytest.raises(ValueError, match="requires an error"):
+        NativeHelperOutcome(termination="timed_out")
 
 
 @pytest.mark.parametrize(

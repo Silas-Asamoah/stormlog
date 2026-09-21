@@ -94,6 +94,13 @@ pass an executable and argument vector directly to the operating system. It
 must never construct a shell command from user-controlled values. The current
 scaffolding intentionally does not launch a binary.
 
+Each message type has required payload fields in the protocol schema and in the
+Python parser. `NativeHelperOutcome` maps completed, partial, cancelled, timed
+out, failed, and incompatible termination into collector health. Cancellation
+and readable partial output are degraded; timeout, crash, and incompatibility
+are unhealthy. These outcomes remain data for the optional source and do not
+raise through or disable the default monitor.
+
 ## Record semantics
 
 `NativeTraceRecord` is a normalized evidence record, not a memory telemetry
