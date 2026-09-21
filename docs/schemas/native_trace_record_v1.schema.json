@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/native_trace_record_v1.schema.json",
+  "title": "Stormlog Native Trace Record v1",
+  "description": "Normalized native activity evidence. CPU and device intervals remain separate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_id",
+    "activity_kind",
+    "clock_domain",
+    "cpu_start_ns",
+    "cpu_end_ns",
+    "device_start_ns",
+    "device_end_ns",
+    "correlation_id",
+    "stream_id",
+    "graph_id",
+    "graph_node_id",
+    "provenance",
+    "uncertainty",
+    "metadata"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "record_id": {"type": "string", "minLength": 1},
+    "activity_kind": {"type": "string", "minLength": 1},
+    "clock_domain": {"type": "string", "minLength": 1},
+    "cpu_start_ns": {"type": ["integer", "null"], "minimum": 0},
+    "cpu_end_ns": {"type": ["integer", "null"], "minimum": 0},
+    "device_start_ns": {"type": ["integer", "null"], "minimum": 0},
+    "device_end_ns": {"type": ["integer", "null"], "minimum": 0},
+    "correlation_id": {"type": ["string", "null"], "minLength": 1},
+    "stream_id": {"type": ["string", "null"], "minLength": 1},
+    "graph_id": {"type": ["string", "null"], "minLength": 1},
+    "graph_node_id": {"type": ["string", "null"], "minLength": 1},
+    "provenance": {"type": "string", "minLength": 1},
+    "uncertainty": {"type": "string", "minLength": 1},
+    "metadata": {"type": "object"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"cpu_start_ns": {"type": "integer"}}},
+      "then": {"properties": {"cpu_end_ns": {"type": "integer"}}},
+      "else": {"properties": {"cpu_end_ns": {"type": "null"}}}
+    },
+    {
+      "if": {"properties": {"device_start_ns": {"type": "integer"}}},
+      "then": {"properties": {"device_end_ns": {"type": "integer"}}},
+      "else": {"properties": {"device_end_ns": {"type": "null"}}}
+    }
+  ]
+}

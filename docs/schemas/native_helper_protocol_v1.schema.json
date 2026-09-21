@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/native_helper_protocol_v1.schema.json",
+  "title": "Stormlog Native Helper Protocol v1",
+  "description": "Control messages exchanged with an optional native trace helper.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "message_type", "request_id", "payload"],
+  "properties": {
+    "protocol_version": {"type": "integer", "const": 1},
+    "message_type": {
+      "type": "string",
+      "enum": [
+        "hello",
+        "capabilities",
+        "start",
+        "started",
+        "status",
+        "flush",
+        "stop",
+        "stopped",
+        "error"
+      ]
+    },
+    "request_id": {"type": "string", "minLength": 1},
+    "payload": {"type": "object"}
+  }
+}
