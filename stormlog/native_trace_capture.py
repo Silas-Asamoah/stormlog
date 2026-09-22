@@ -146,17 +146,14 @@ def capture_cupti_activity(
         expected_pid=process.pid,
         expected_activities=config.activities,
     )
-    health = _capture_health(status, status_error, wait_outcome)
     artifacts, artifact_error = _capture_artifacts(capture_directory)
-    if artifact_error is not None:
-        health = _failed_health(artifact_error)
-    elif health.status == "healthy" and any(
-        artifact.kind == "native_trace_partial" for artifact in artifacts
-    ):
-        health = _partial_health("native capture retained a partial trace artifact")
-    size_error = _validate_artifact_size(status, artifacts)
-    if size_error is not None:
-        health = _failed_health(size_error)
+    health = _validated_capture_health(
+        status,
+        status_error,
+        wait_outcome,
+        artifacts,
+        artifact_error,
+    )
     loss = _capture_loss(status, artifacts, health)
     enabled = _status_string_tuple(status, "enabled_activities")
     manifest = NativeTraceManifest(
@@ -323,28 +320,7 @@ def _read_native_status(
 ) -> tuple[dict[str, Any], str | None]:
     path = capture_directory / CUPTI_STATUS_FILENAME
     try:
-        flags = os.O_RDONLY
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(path, flags)
-        with os.fdopen(descriptor, encoding="utf-8") as handle:
-            stat_result = os.fstat(handle.fileno())
-            if not stat.S_ISREG(stat_result.st_mode):
-                raise ValueError("status must be a regular file")
-            if stat_result.st_mode & 0o077:
-                raise ValueError("status must be owner-only")
-            if hasattr(os, "getuid") and stat_result.st_uid != os.getuid():
-                raise ValueError("status must be owned by the current user")
-            if stat_result.st_nlink != 1:
-                raise ValueError("status must have exactly one hard link")
-            if stat_result.st_size > MAX_STATUS_BYTES:
-                raise ValueError("status exceeds the maximum supported size")
-            content = handle.read(MAX_STATUS_BYTES + 1)
-            if len(content.encode("utf-8")) > MAX_STATUS_BYTES:
-                raise ValueError("status exceeds the maximum supported size")
-            payload = json.loads(content)
-        if not isinstance(payload, dict):
-            raise ValueError("status must contain an object")
+        payload = _load_native_status(path)
         _validate_native_status(payload)
         if payload.get("pid") != expected_pid:
             raise ValueError("status pid does not match the launched target")
@@ -354,6 +330,36 @@ def _read_native_status(
         return payload, None
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         return {}, f"native status unavailable: {exc}"
+
+
+def _load_native_status(path: Path) -> dict[str, Any]:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, encoding="utf-8") as handle:
+        stat_result = os.fstat(handle.fileno())
+        _validate_status_file(stat_result)
+        content = handle.read(MAX_STATUS_BYTES + 1)
+    if len(content.encode("utf-8")) > MAX_STATUS_BYTES:
+        raise ValueError("status exceeds the maximum supported size")
+    payload = json.loads(content)
+    if not isinstance(payload, dict):
+        raise ValueError("status must contain an object")
+    return payload
+
+
+def _validate_status_file(stat_result: os.stat_result) -> None:
+    if not stat.S_ISREG(stat_result.st_mode):
+        raise ValueError("status must be a regular file")
+    if stat_result.st_mode & 0o077:
+        raise ValueError("status must be owner-only")
+    if hasattr(os, "getuid") and stat_result.st_uid != os.getuid():
+        raise ValueError("status must be owned by the current user")
+    if stat_result.st_nlink != 1:
+        raise ValueError("status must have exactly one hard link")
+    if stat_result.st_size > MAX_STATUS_BYTES:
+        raise ValueError("status exceeds the maximum supported size")
 
 
 def _validate_native_status(payload: Mapping[str, Any]) -> None:
@@ -487,6 +493,24 @@ def _capture_health(
             consecutive_failures=1,
         )
     return CollectorHealthState()
+
+
+def _validated_capture_health(
+    status: Mapping[str, Any],
+    status_error: str | None,
+    wait_outcome: WaitOutcome,
+    artifacts: Sequence[NativeTraceArtifact],
+    artifact_error: str | None,
+) -> CollectorHealthState:
+    health = _capture_health(status, status_error, wait_outcome)
+    if artifact_error is not None:
+        return _failed_health(artifact_error)
+    if health.status == "healthy" and any(
+        artifact.kind == "native_trace_partial" for artifact in artifacts
+    ):
+        health = _partial_health("native capture retained a partial trace artifact")
+    size_error = _validate_artifact_size(status, artifacts)
+    return _failed_health(size_error) if size_error is not None else health
 
 
 def _failed_health(message: str) -> CollectorHealthState:

@@ -605,34 +605,10 @@ def register_native_trace_attachment(
 
 
 def _load_attachment_sidecar(path: Path) -> dict[str, Any]:
-    try:
-        handle, stat_result = _open_relative_regular_file(path.parent, Path(path.name))
-    except FileNotFoundError:
-        return {
-            "schema_version": ATTACHMENTS_SCHEMA_VERSION,
-            "format": ATTACHMENTS_FORMAT,
-            "attachments": [],
-        }
-    except OSError as exc:
-        raise ValueError("attachment sidecar path must not be a symlink") from exc
-    with handle:
-        if stat_result.st_mode & 0o077:
-            raise ValueError("attachment sidecar must be owner-only")
-        if hasattr(os, "getuid") and stat_result.st_uid != os.getuid():
-            raise ValueError("attachment sidecar must be owned by the current user")
-        if stat_result.st_nlink != 1:
-            raise ValueError("attachment sidecar must have exactly one hard link")
-        if stat_result.st_size > _MAX_ATTACHMENT_SIDECAR_BYTES:
-            raise ValueError("attachment sidecar exceeds the maximum supported size")
-        content = handle.read(_MAX_ATTACHMENT_SIDECAR_BYTES + 1)
-        if len(content) > _MAX_ATTACHMENT_SIDECAR_BYTES:
-            raise ValueError("attachment sidecar exceeds the maximum supported size")
-    try:
-        payload = json.loads(content.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError("attachment sidecar must contain valid UTF-8 JSON") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("attachment sidecar must contain an object")
+    content = _read_attachment_sidecar(path)
+    if content is None:
+        return _empty_attachment_sidecar()
+    payload = _decode_attachment_sidecar(content)
     if payload.get("schema_version") != ATTACHMENTS_SCHEMA_VERSION:
         raise ValueError("unsupported attachment sidecar schema version")
     if payload.get("format") != ATTACHMENTS_FORMAT:
@@ -640,6 +616,50 @@ def _load_attachment_sidecar(path: Path) -> dict[str, Any]:
     rows = payload.get("attachments")
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise ValueError("attachment sidecar attachments must be objects")
+    return payload
+
+
+def _empty_attachment_sidecar() -> dict[str, Any]:
+    return {
+        "schema_version": ATTACHMENTS_SCHEMA_VERSION,
+        "format": ATTACHMENTS_FORMAT,
+        "attachments": [],
+    }
+
+
+def _read_attachment_sidecar(path: Path) -> bytes | None:
+    try:
+        handle, stat_result = _open_relative_regular_file(path.parent, Path(path.name))
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError("attachment sidecar path must not be a symlink") from exc
+    with handle:
+        _validate_attachment_sidecar_file(stat_result)
+        content = handle.read(_MAX_ATTACHMENT_SIDECAR_BYTES + 1)
+        if len(content) > _MAX_ATTACHMENT_SIDECAR_BYTES:
+            raise ValueError("attachment sidecar exceeds the maximum supported size")
+    return content
+
+
+def _validate_attachment_sidecar_file(stat_result: os.stat_result) -> None:
+    if stat_result.st_mode & 0o077:
+        raise ValueError("attachment sidecar must be owner-only")
+    if hasattr(os, "getuid") and stat_result.st_uid != os.getuid():
+        raise ValueError("attachment sidecar must be owned by the current user")
+    if stat_result.st_nlink != 1:
+        raise ValueError("attachment sidecar must have exactly one hard link")
+    if stat_result.st_size > _MAX_ATTACHMENT_SIDECAR_BYTES:
+        raise ValueError("attachment sidecar exceeds the maximum supported size")
+
+
+def _decode_attachment_sidecar(content: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(content.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("attachment sidecar must contain valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("attachment sidecar must contain an object")
     return payload
 
 
