@@ -32,6 +32,7 @@ installation
 usage
 cli
 inference
+inference_correlation
 tui
 cookbook/index
 cookbook/always_on
@@ -76,9 +77,10 @@ examples/test_guides/README
 
 1. [CLI](cli.md)
 2. [Inference Profiling](inference.md)
-3. [TUI](tui.md)
-4. [Production Cookbook](cookbook/index.md)
-5. [Troubleshooting](troubleshooting.md)
+3. [Inference execution correlation](inference_correlation.md)
+4. [TUI](tui.md)
+5. [Production Cookbook](cookbook/index.md)
+6. [Troubleshooting](troubleshooting.md)
 
 ### Release or CI validation
 

@@ -15,6 +15,10 @@ from unittest import mock
 from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
+from stormlog.infer.correlation_events import (
+    ArtifactIdentityEvent,
+    load_inference_artifact,
+)
 from stormlog.infer.openai_client import (
     ChatCompletionResult,
     OpenAIChatCompletionsClient,
@@ -230,6 +234,25 @@ class InferenceProfileTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(measured), 2)
                 self.assertEqual(len(warmup), 1)
+                artifact_identity = [
+                    record
+                    for record in records
+                    if record.get("event_type") == "infer.artifact"
+                ]
+                session_id = measured[0]["session_id"]
+                self.assertEqual(len(artifact_identity), 1)
+                self.assertEqual(artifact_identity[0]["schema_version"], 2)
+                self.assertEqual(
+                    artifact_identity[0]["context"]["session_id"], session_id
+                )
+                self.assertTrue(artifact_identity[0]["context"]["run_id"])
+                self.assertTrue(
+                    any(
+                        isinstance(record, ArtifactIdentityEvent)
+                        and record.context.session_id == session_id
+                        for record in load_inference_artifact(output)
+                    )
+                )
                 first = measured[0]
                 self.assertEqual(first["status"], "ok")
                 self.assertEqual(first["timestamp_ns"], first["started_at_ns"])

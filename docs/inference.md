@@ -145,9 +145,15 @@ stormlog infer profile ... --system-sampler none
 Remote endpoints may not expose memory. In that case memory fields are omitted,
 not filled with synthetic zeroes.
 
-## Future engine adapters
+## Execution correlation and future adapters
 
 The v1 request path is engine-agnostic. Future adapters can enrich the same run
 with engine-native telemetry such as vLLM scheduler metrics, SGLang cache
 metrics, TensorRT-LLM inflight batching metrics, or MLX Metal runtime stats
 without changing the core `stormlog infer profile` artifact shape.
+
+The versioned request, iteration, stage, membership, and GPU activity contract
+is described in [Inference execution correlation](inference_correlation.md).
+It preserves v1 client observations while allowing optional server evidence
+to be appended to the same JSONL stream. New profiles also include a v2
+artifact identity record that names their run and capture session.

@@ -10,15 +10,18 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from ..session import (
     SESSION_STATUS_INCOMPLETE,
     create_session_summary,
     finalize_session_summary,
+    new_session_id,
     session_summary_to_dict,
     update_session_summary,
 )
 from .analysis import analyze_inference_events
 from .config import ProfileConfig, WorkloadCase
+from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .openai_client import OpenAIChatCompletionsClient
 from .samplers import SystemSampler, build_system_sampler
@@ -28,9 +31,10 @@ from .tokens import TokenCount, TokenCounter, build_token_counter, generate_prom
 class InferenceProfiler:
     """Profile an OpenAI-compatible chat completions endpoint."""
 
-    def __init__(self, config: ProfileConfig) -> None:
+    def __init__(self, config: ProfileConfig, *, run_id: str | None = None) -> None:
         self.config = config
         self.session = create_session_summary(source="stormlog.infer.profile")
+        self.run_id = run_id or new_session_id()
         self.token_counter = build_token_counter(
             tokenizer=config.tokenizer,
             model=config.model,
@@ -83,6 +87,7 @@ class InferenceProfiler:
                     },
                 }
             )
+            writer.append(self._artifact_identity().to_record())
             stop_sampling = asyncio.Event()
             sample_task = asyncio.create_task(
                 self._sample_system_loop(
@@ -105,6 +110,30 @@ class InferenceProfiler:
             raise
         self._write_terminal_session(output_path=output_path, report=report)
         return report
+
+    def _artifact_identity(self) -> ArtifactIdentityEvent:
+        session = self.session
+        return ArtifactIdentityEvent(
+            context=CorrelationContext(
+                run_id=self.run_id,
+                session_id=session.session_id,
+                producer_id="stormlog.infer.profile",
+                source="stormlog.infer.profile",
+                source_version=__version__,
+                host=session.host,
+                pid=session.pid,
+                rank=session.rank,
+                local_rank=session.local_rank,
+                world_size=session.world_size,
+                clock_domain=f"{session.host}/unix_epoch_ns",
+                clock_kind="wall",
+                collection_mode="active",
+                provenance="observed",
+            ),
+            event_id="artifact",
+            artifact_kind="inference_jsonl",
+            created_at_ns=session.started_at_ns,
+        )
 
     def _write_terminal_session(
         self,
