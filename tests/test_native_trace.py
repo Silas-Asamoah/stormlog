@@ -334,6 +334,26 @@ def test_attachment_registration_is_idempotent_but_rejects_conflict(
         register_native_trace_attachment(tmp_path, manifest_path, conflicting)
 
 
+def test_attachment_registration_rejects_symlinked_sidecar(tmp_path: Path) -> None:
+    manifest = _manifest()
+    manifest_path = write_native_trace_manifest(tmp_path, manifest)
+    outside = tmp_path.parent / f"{tmp_path.name}-attachments.json"
+    outside.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "format": "stormlog_attachments",
+                "attachments": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "stormlog_attachments.json").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="symlink"):
+        register_native_trace_attachment(tmp_path, manifest_path, manifest)
+
+
 def test_manifest_rejects_healthy_truncated_evidence(tmp_path: Path) -> None:
     writer = BoundedTraceWriter(tmp_path, "trace.bin", max_bytes=1)
     writer.write(b"too-large")

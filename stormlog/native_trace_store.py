@@ -37,6 +37,23 @@ _HEALTH_STATUSES = {
     COLLECTOR_HEALTH_UNHEALTHY,
 }
 _FLUSH_OUTCOMES = {"complete", "partial", "failed", "not_attempted"}
+_MAX_ATTACHMENT_SIDECAR_BYTES = 4 * 1024 * 1024
+
+
+def _ensure_private_directory(path: Path) -> None:
+    if path.is_symlink():
+        raise ValueError("capture directory must not be a symlink")
+    created = not path.exists()
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if created:
+        path.chmod(0o700)
+    stat_result = path.stat()
+    if not stat.S_ISDIR(stat_result.st_mode):
+        raise ValueError("capture directory must be a directory")
+    if stat_result.st_mode & 0o077:
+        raise ValueError("capture directory must be owner-only")
+    if hasattr(os, "getuid") and stat_result.st_uid != os.getuid():
+        raise ValueError("capture directory must be owned by the current user")
 
 
 def _safe_relative_path(value: str | Path) -> Path:
@@ -76,6 +93,14 @@ def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
             os.fsync(handle.fileno())
         os.replace(temporary, path)
         path.chmod(0o600)
+        directory_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            directory_flags |= os.O_DIRECTORY
+        directory_fd = os.open(path.parent, directory_flags)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
@@ -138,6 +163,10 @@ def native_trace_artifact_from_file(
     with handle:
         if stat_result.st_mode & 0o077:
             raise ValueError("native trace artifact must be owner-only")
+        if hasattr(os, "getuid") and stat_result.st_uid != os.getuid():
+            raise ValueError("native trace artifact must be owned by the current user")
+        if stat_result.st_nlink != 1:
+            raise ValueError("native trace artifact must have exactly one hard link")
         digest = hashlib.sha256()
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
@@ -392,8 +421,7 @@ class BoundedTraceWriter:
         if max_bytes <= 0:
             raise ValueError("max_bytes must be > 0")
         self.root = Path(root)
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.root.chmod(0o700)
+        _ensure_private_directory(self.root)
         self.relative_path, self.path = _capture_path(self.root, relative_path)
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.partial_path = self.path.with_name(f"{self.path.name}.partial")
@@ -521,8 +549,7 @@ def write_native_trace_manifest(
 ) -> Path:
     """Atomically write an owner-only manifest inside a capture directory."""
     root_path = Path(root)
-    root_path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    root_path.chmod(0o700)
+    _ensure_private_directory(root_path)
     _, path = _capture_path(root_path, relative_path)
     _atomic_json_write(path, manifest.to_dict())
     return path
@@ -578,13 +605,32 @@ def register_native_trace_attachment(
 
 
 def _load_attachment_sidecar(path: Path) -> dict[str, Any]:
-    if not path.exists():
+    try:
+        handle, stat_result = _open_relative_regular_file(path.parent, Path(path.name))
+    except FileNotFoundError:
         return {
             "schema_version": ATTACHMENTS_SCHEMA_VERSION,
             "format": ATTACHMENTS_FORMAT,
             "attachments": [],
         }
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError("attachment sidecar path must not be a symlink") from exc
+    with handle:
+        if stat_result.st_mode & 0o077:
+            raise ValueError("attachment sidecar must be owner-only")
+        if hasattr(os, "getuid") and stat_result.st_uid != os.getuid():
+            raise ValueError("attachment sidecar must be owned by the current user")
+        if stat_result.st_nlink != 1:
+            raise ValueError("attachment sidecar must have exactly one hard link")
+        if stat_result.st_size > _MAX_ATTACHMENT_SIDECAR_BYTES:
+            raise ValueError("attachment sidecar exceeds the maximum supported size")
+        content = handle.read(_MAX_ATTACHMENT_SIDECAR_BYTES + 1)
+        if len(content) > _MAX_ATTACHMENT_SIDECAR_BYTES:
+            raise ValueError("attachment sidecar exceeds the maximum supported size")
+    try:
+        payload = json.loads(content.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("attachment sidecar must contain valid UTF-8 JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError("attachment sidecar must contain an object")
     if payload.get("schema_version") != ATTACHMENTS_SCHEMA_VERSION:

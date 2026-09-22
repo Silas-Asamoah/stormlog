@@ -33,6 +33,7 @@ CUPTI_INJECTION_ENV = "CUDA_INJECTION64_PATH"
 CUPTI_STATUS_FILENAME = "cupti_status.json"
 CUPTI_TRACE_FILENAME = "activity.ndjson"
 DEFAULT_MAX_BYTES = 64 * 1024 * 1024
+MAX_STATUS_BYTES = 1024 * 1024
 DEFAULT_ACTIVITIES = ("driver", "runtime", "kernel", "memcpy", "memset")
 SUPPORTED_ACTIVITIES = (*DEFAULT_ACTIVITIES, "synchronization")
 _NATIVE_ENV_PREFIX = "STORMLOG_CUPTI_"
@@ -116,22 +117,27 @@ def capture_cupti_activity(
     """Launch a command with the separately built CUPTI injection library."""
     _validate_supported_host()
     library = _validate_injection_library(config.injection_library)
+    base_environment = _validated_base_environment(environment)
     capture_id = config.capture_id or f"cupti-{uuid.uuid4().hex}"
     capture_directory = _create_capture_directory(config.output_root, capture_id)
     launch_environment = _capture_environment(
         config,
         capture_directory,
         library,
-        environment=environment,
+        base_environment=base_environment,
     )
     started_epoch_ns = time.time_ns()
-    process = subprocess.Popen(  # nosec B603
-        config.command,
-        cwd=config.cwd,
-        env=launch_environment,
-        shell=False,
-        start_new_session=True,
-    )
+    try:
+        process = subprocess.Popen(  # nosec B603
+            config.command,
+            cwd=config.cwd,
+            env=launch_environment,
+            shell=False,
+            start_new_session=True,
+        )
+    except OSError:
+        capture_directory.rmdir()
+        raise
     wait_outcome = _wait_for_target(process, config.timeout_seconds)
     timed_out = wait_outcome == "timed_out"
     ended_epoch_ns = time.time_ns()
@@ -144,6 +150,13 @@ def capture_cupti_activity(
     artifacts, artifact_error = _capture_artifacts(capture_directory)
     if artifact_error is not None:
         health = _failed_health(artifact_error)
+    elif health.status == "healthy" and any(
+        artifact.kind == "native_trace_partial" for artifact in artifacts
+    ):
+        health = _partial_health("native capture retained a partial trace artifact")
+    size_error = _validate_artifact_size(status, artifacts)
+    if size_error is not None:
+        health = _failed_health(size_error)
     loss = _capture_loss(status, artifacts, health)
     enabled = _status_string_tuple(status, "enabled_activities")
     manifest = NativeTraceManifest(
@@ -182,6 +195,7 @@ def capture_cupti_activity(
             "compiled_cupti_api_version": status.get("compiled_cupti_api_version"),
             "compiled_cuda_version": status.get("compiled_cuda_version"),
             "driver_version": status.get("driver_version"),
+            "runtime_version": status.get("runtime_version"),
             "native_status_error": status_error,
             "native_artifact_error": artifact_error,
         },
@@ -230,18 +244,15 @@ def _is_safe_identifier(value: str) -> bool:
 def _create_capture_directory(root: Path, capture_id: str) -> Path:
     root_path = root.expanduser().resolve()
     root_path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    root_path.chmod(0o700)
+    if not root_path.is_dir():
+        raise ValueError("output_root must be a directory")
     capture_directory = root_path / capture_id
     capture_directory.mkdir(mode=0o700)
     capture_directory.chmod(0o700)
     return capture_directory
 
 
-def _capture_environment(
-    config: CuptiCaptureConfig,
-    capture_directory: Path,
-    library: Path,
-    *,
+def _validated_base_environment(
     environment: Mapping[str, str] | None,
 ) -> dict[str, str]:
     values = dict(os.environ if environment is None else environment)
@@ -252,6 +263,17 @@ def _capture_environment(
             raise ValueError(
                 f"reserved native capture environment is already set: {name}"
             )
+    return values
+
+
+def _capture_environment(
+    config: CuptiCaptureConfig,
+    capture_directory: Path,
+    library: Path,
+    *,
+    base_environment: Mapping[str, str],
+) -> dict[str, str]:
+    values = dict(base_environment)
     values.update(
         {
             CUPTI_INJECTION_ENV: str(library),
@@ -278,11 +300,18 @@ def _wait_for_target(
 
 
 def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
-    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait()
+        return
     try:
         process.wait(timeout=5.0)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.wait()
 
 
@@ -304,7 +333,16 @@ def _read_native_status(
                 raise ValueError("status must be a regular file")
             if stat_result.st_mode & 0o077:
                 raise ValueError("status must be owner-only")
-            payload = json.load(handle)
+            if hasattr(os, "getuid") and stat_result.st_uid != os.getuid():
+                raise ValueError("status must be owned by the current user")
+            if stat_result.st_nlink != 1:
+                raise ValueError("status must have exactly one hard link")
+            if stat_result.st_size > MAX_STATUS_BYTES:
+                raise ValueError("status exceeds the maximum supported size")
+            content = handle.read(MAX_STATUS_BYTES + 1)
+            if len(content.encode("utf-8")) > MAX_STATUS_BYTES:
+                raise ValueError("status exceeds the maximum supported size")
+            payload = json.loads(content)
         if not isinstance(payload, dict):
             raise ValueError("status must contain an object")
         _validate_native_status(payload)
@@ -327,6 +365,7 @@ def _validate_native_status(payload: Mapping[str, Any]) -> None:
         "compiled_cupti_api_version",
         "compiled_cuda_version",
         "driver_version",
+        "runtime_version",
         "started_timestamp_ns",
         "ended_timestamp_ns",
         "requested_activities",
@@ -358,6 +397,7 @@ def _validate_status_scalars(payload: Mapping[str, Any], expected: set[str]) -> 
         "finalized",
         "initialization_error",
         "driver_version",
+        "runtime_version",
     }:
         _require_status_integer(payload, name)
     if payload["pid"] == 0:
@@ -376,11 +416,10 @@ def _validate_status_text_fields(payload: Mapping[str, Any]) -> None:
     error = payload["initialization_error"]
     if error is not None and (not isinstance(error, str) or not error):
         raise ValueError("status initialization_error must be null or non-empty")
-    driver_version = payload["driver_version"]
-    if driver_version is not None and (
-        not isinstance(driver_version, str) or not driver_version
-    ):
-        raise ValueError("status driver_version must be null or non-empty")
+    for name in ("driver_version", "runtime_version"):
+        version = payload[name]
+        if version is not None and (not isinstance(version, str) or not version):
+            raise ValueError(f"status {name} must be null or non-empty")
 
 
 def _validate_status_activities(payload: Mapping[str, Any]) -> None:
@@ -460,6 +499,16 @@ def _failed_health(message: str) -> CollectorHealthState:
     )
 
 
+def _partial_health(message: str) -> CollectorHealthState:
+    return CollectorHealthState(
+        status="degraded",
+        telemetry_partial=True,
+        partial_fields=("native_trace",),
+        last_error=message,
+        consecutive_failures=1,
+    )
+
+
 def _status_non_negative_int(status: Mapping[str, Any], name: str) -> int:
     value = status.get(name, 0)
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -516,6 +565,21 @@ def _capture_loss(
         truncated=truncated,
         flush_outcome=flush_outcome,
     )
+
+
+def _validate_artifact_size(
+    status: Mapping[str, Any], artifacts: Sequence[NativeTraceArtifact]
+) -> str | None:
+    if not status or len(artifacts) != 1:
+        return None
+    expected = _status_non_negative_int(status, "bytes_written")
+    actual = artifacts[0].size_bytes
+    if expected != actual:
+        return (
+            "native trace size does not match helper status: "
+            f"expected {expected} bytes, found {actual}"
+        )
+    return None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -594,6 +658,7 @@ __all__ = [
     "CUPTI_STATUS_FILENAME",
     "CUPTI_TRACE_FILENAME",
     "DEFAULT_ACTIVITIES",
+    "MAX_STATUS_BYTES",
     "SUPPORTED_ACTIVITIES",
     "CuptiCaptureConfig",
     "CuptiCaptureResult",

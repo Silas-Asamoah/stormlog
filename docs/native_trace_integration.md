@@ -95,11 +95,12 @@ manifest for capture completeness.
    concurrency; the serializing kernel activity kind is never enabled.
 6. Completion callbacks normalize supported records into bounded NDJSON. A
    record that cannot fit is dropped in full and counted.
-7. Exit handling force-flushes CUPTI, records CUPTI and local drops, publishes
-   a complete trace only after a successful flush, and atomically publishes
-   helper status.
-8. Python validates the status PID and request, checks artifact type and
-   permissions, hashes the trace, writes the manifest, and registers it in
+7. Exit handling force-flushes CUPTI, records CUPTI and local drops, and
+   publishes a complete trace only after the final timestamp, file flush,
+   close, rename, and directory synchronization succeed.
+8. Python validates the bounded status document, PID, request, ownership,
+   permissions, link count, and reported trace size. It hashes the trace,
+   writes the manifest, and securely registers it in
    `stormlog_attachments.json`.
 
 The machine-readable contracts are:
@@ -125,6 +126,12 @@ Capture bounds use `unix_epoch_ns`. Stormlog does not pretend those domains are
 interchangeable or infer a conversion. Records identify `cupti_activity`
 provenance and the remaining timestamp uncertainty.
 
+Status metadata records the compiled CUDA and CUPTI API versions and the
+loaded CUPTI version. Driver and CUDA Runtime versions are queried from symbols
+already loaded in the target and remain explicit `null` values when the target
+does not expose those APIs. GPU architecture and authoritative device identity
+remain qualification metadata for #235 rather than inferred values.
+
 ## Bounds, health, and failure behavior
 
 The producer enforces `--max-bytes` before every complete NDJSON record. It
@@ -135,7 +142,9 @@ Zero drops and validated final status produce `healthy`. Unsupported requested
 activities or dropped data produce `degraded` with partial telemetry. Missing,
 malformed, permission-unsafe, PID-mismatched, or unfinalized output produces
 `unhealthy`. A failed flush retains `activity.ndjson.partial`; it is never
-renamed to a complete trace.
+renamed to a complete trace. The importer independently treats any retained
+`.partial` artifact or trace-size disagreement as partial or unhealthy evidence,
+even if producer status claims success.
 
 Target crashes, `SIGKILL`, `exec`, and `_exit` can bypass exit flushing. The
 importer treats missing final status as unhealthy and preserves only validated
@@ -151,7 +160,8 @@ failed, and healthy collection does not mean the target succeeded.
 - Capture directories use mode `0700`; trace, status, manifest, and attachment
   files use mode `0600`.
 - Native output uses directory-relative `openat` with `O_NOFOLLOW`. Import
-  rejects symlink components, unsafe paths, and non-owner-only files.
+  rejects symlink components, hard-linked files, unsafe paths, files owned by
+  another user, non-owner-only files, and oversized status/attachment metadata.
 - Captures can contain symbols, process/thread IDs, graph identity, and workload
   timing. Treat the whole capture directory as sensitive.
 - Existing CUDA injection settings are rejected instead of overwritten.

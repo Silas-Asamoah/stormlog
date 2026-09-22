@@ -13,7 +13,10 @@ import pytest
 
 from stormlog.native_trace_capture import (
     CUPTI_INJECTION_ENV,
+    MAX_STATUS_BYTES,
     CuptiCaptureConfig,
+    _read_native_status,
+    _terminate_process_group,
     _wait_for_target,
     capture_cupti_activity,
 )
@@ -29,8 +32,15 @@ def _injection_library(tmp_path: Path) -> Path:
     return library
 
 
-def _synthetic_target(*, status: bool = True, sleep: float = 0.0) -> tuple[str, ...]:
-    source = """
+def _synthetic_target(
+    *,
+    status: bool = True,
+    sleep: float = 0.0,
+    partial: bool = False,
+    reported_bytes: int = 21,
+) -> tuple[str, ...]:
+    source = (
+        """
 import json
 import os
 import pathlib
@@ -38,7 +48,7 @@ import time
 
 root = pathlib.Path(os.environ["STORMLOG_CUPTI_OUTPUT_DIR"])
 time.sleep(SLEEP)
-trace = root / "activity.ndjson"
+trace = root / TRACE_NAME
 trace.write_text('{"schema_version":1}\\n', encoding="utf-8")
 trace.chmod(0o600)
 if WRITE_STATUS:
@@ -50,6 +60,7 @@ if WRITE_STATUS:
         "compiled_cupti_api_version": 28,
         "compiled_cuda_version": 12090,
         "driver_version": None,
+        "runtime_version": None,
         "started_timestamp_ns": 1,
         "ended_timestamp_ns": 2,
         "requested_activities": ["runtime", "kernel", "memcpy"],
@@ -57,7 +68,7 @@ if WRITE_STATUS:
         "delivered_records": 1,
         "cupti_dropped_records": 0,
         "local_dropped_records": 0,
-        "bytes_written": 21,
+        "bytes_written": REPORTED_BYTES,
         "bytes_dropped": 0,
         "finalized": True,
         "initialization_error": None,
@@ -66,9 +77,14 @@ if WRITE_STATUS:
     target.write_text(json.dumps(payload), encoding="utf-8")
     target.chmod(0o600)
 """.replace(
-        "SLEEP", repr(sleep)
-    ).replace(
-        "WRITE_STATUS", repr(status)
+            "SLEEP", repr(sleep)
+        )
+        .replace("WRITE_STATUS", repr(status))
+        .replace(
+            "TRACE_NAME",
+            repr("activity.ndjson.partial" if partial else "activity.ndjson"),
+        )
+        .replace("REPORTED_BYTES", repr(reported_bytes))
     )
     return (sys.executable, "-c", source)
 
@@ -129,6 +145,49 @@ def test_capture_reports_missing_native_status_without_failing_target(
     assert "status unavailable" in (result.health.last_error or "")
 
 
+def test_capture_never_reports_partial_artifact_as_healthy(tmp_path: Path) -> None:
+    config = CuptiCaptureConfig(
+        command=_synthetic_target(partial=True),
+        injection_library=_injection_library(tmp_path),
+        output_root=tmp_path / "captures",
+        session_id="session-1",
+        activities=("runtime", "kernel", "memcpy"),
+    )
+
+    with mock.patch(
+        "stormlog.native_trace_capture.platform.system", return_value="Linux"
+    ):
+        result = capture_cupti_activity(
+            config, environment={"PATH": os.environ["PATH"]}
+        )
+
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert result.health.status == "degraded"
+    assert manifest["artifacts"][0]["kind"] == "native_trace_partial"
+    assert manifest["loss"]["truncated"] is True
+    assert manifest["loss"]["flush_outcome"] == "partial"
+
+
+def test_capture_rejects_trace_size_that_disagrees_with_status(tmp_path: Path) -> None:
+    config = CuptiCaptureConfig(
+        command=_synthetic_target(reported_bytes=20),
+        injection_library=_injection_library(tmp_path),
+        output_root=tmp_path / "captures",
+        session_id="session-1",
+        activities=("runtime", "kernel", "memcpy"),
+    )
+
+    with mock.patch(
+        "stormlog.native_trace_capture.platform.system", return_value="Linux"
+    ):
+        result = capture_cupti_activity(
+            config, environment={"PATH": os.environ["PATH"]}
+        )
+
+    assert result.health.status == "unhealthy"
+    assert "size does not match" in (result.health.last_error or "")
+
+
 def test_capture_terminates_target_process_group_on_timeout(tmp_path: Path) -> None:
     config = CuptiCaptureConfig(
         command=_synthetic_target(sleep=30.0),
@@ -163,6 +222,18 @@ def test_wait_terminates_process_group_on_keyboard_interrupt() -> None:
     killpg.assert_called_once_with(123, signal.SIGTERM)
 
 
+def test_process_exit_race_during_termination_is_not_an_error() -> None:
+    process = mock.Mock()
+    process.pid = 123
+
+    with mock.patch(
+        "stormlog.native_trace_capture.os.killpg", side_effect=ProcessLookupError
+    ):
+        _terminate_process_group(process)
+
+    process.wait.assert_called_once_with()
+
+
 def test_capture_rejects_existing_cuda_injection_environment(tmp_path: Path) -> None:
     config = CuptiCaptureConfig(
         command=(sys.executable, "--version"),
@@ -179,6 +250,60 @@ def test_capture_rejects_existing_cuda_injection_environment(tmp_path: Path) -> 
                 config,
                 environment={CUPTI_INJECTION_ENV: "/untrusted/injection.so"},
             )
+
+
+def test_failed_process_launch_removes_empty_capture_directory(tmp_path: Path) -> None:
+    output_root = tmp_path / "captures"
+    config = CuptiCaptureConfig(
+        command=(str(tmp_path / "missing-executable"),),
+        injection_library=_injection_library(tmp_path),
+        output_root=output_root,
+        capture_id="failed-launch",
+        session_id="session-1",
+    )
+
+    with mock.patch(
+        "stormlog.native_trace_capture.platform.system", return_value="Linux"
+    ):
+        with pytest.raises(OSError):
+            capture_cupti_activity(config, environment={})
+
+    assert list(output_root.iterdir()) == []
+
+
+def test_capture_does_not_change_existing_output_root_mode(tmp_path: Path) -> None:
+    output_root = tmp_path / "captures"
+    output_root.mkdir(mode=0o750)
+    output_root.chmod(0o750)
+    config = CuptiCaptureConfig(
+        command=_synthetic_target(),
+        injection_library=_injection_library(tmp_path),
+        output_root=output_root,
+        session_id="session-1",
+        activities=("runtime", "kernel", "memcpy"),
+    )
+
+    with mock.patch(
+        "stormlog.native_trace_capture.platform.system", return_value="Linux"
+    ):
+        capture_cupti_activity(config, environment={"PATH": os.environ["PATH"]})
+
+    assert stat.S_IMODE(output_root.stat().st_mode) == 0o750
+
+
+def test_native_status_read_is_bounded(tmp_path: Path) -> None:
+    status = tmp_path / "cupti_status.json"
+    status.write_bytes(b" " * (MAX_STATUS_BYTES + 1))
+    status.chmod(0o600)
+
+    payload, error = _read_native_status(
+        tmp_path,
+        expected_pid=123,
+        expected_activities=("runtime",),
+    )
+
+    assert payload == {}
+    assert "maximum supported size" in (error or "")
 
 
 def test_capture_is_explicitly_unsupported_on_macos(tmp_path: Path) -> None:
@@ -221,6 +346,16 @@ def test_existing_native_artifact_rejects_symlink(tmp_path: Path) -> None:
         native_trace_artifact_from_file(tmp_path, link.name)
 
 
+def test_existing_native_artifact_rejects_hard_link(tmp_path: Path) -> None:
+    trace = tmp_path / "activity.ndjson"
+    trace.write_text("{}\n", encoding="utf-8")
+    trace.chmod(0o600)
+    os.link(trace, tmp_path / "duplicate.ndjson")
+
+    with pytest.raises(ValueError, match="hard link"):
+        native_trace_artifact_from_file(tmp_path, trace.name)
+
+
 def test_cupti_status_schema_accepts_native_contract() -> None:
     schema = json.loads(
         (REPO_ROOT / "docs/schemas/native_cupti_status_v1.schema.json").read_text(
@@ -235,6 +370,7 @@ def test_cupti_status_schema_accepts_native_contract() -> None:
         "compiled_cupti_api_version": 28,
         "compiled_cuda_version": 12090,
         "driver_version": None,
+        "runtime_version": None,
         "started_timestamp_ns": 1,
         "ended_timestamp_ns": 2,
         "requested_activities": ["runtime", "kernel"],
