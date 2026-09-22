@@ -12,6 +12,7 @@
     "compiled_cupti_api_version",
     "compiled_cuda_version",
     "driver_version",
+    "runtime_version",
     "started_timestamp_ns",
     "ended_timestamp_ns",
     "requested_activities",
@@ -32,6 +33,7 @@
     "compiled_cupti_api_version": {"type": "integer", "minimum": 1},
     "compiled_cuda_version": {"type": "integer", "minimum": 1},
     "driver_version": {"type": ["string", "null"], "minLength": 1},
+    "runtime_version": {"type": ["string", "null"], "minLength": 1},
     "started_timestamp_ns": {"type": "integer", "minimum": 0},
     "ended_timestamp_ns": {"type": "integer", "minimum": 0},
     "requested_activities": {

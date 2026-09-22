@@ -153,6 +153,10 @@ def test_ci_compile_checks_optional_cupti_source() -> None:
 
     assert "runs-on: ubuntu-latest" in job_block
     assert "requirements-ci-native.txt" in job_block
+    assert "clang-format==18.1.8" in (
+        REPO_ROOT / "requirements-ci-native.txt"
+    ).read_text(encoding="utf-8")
+    assert "clang-format --style=file --dry-run --Werror" in job_block
     assert "python3 scripts/check_native_cupti.py" in job_block
     assert "persist-credentials: false" in job_block
     assert "pip install -e" not in job_block

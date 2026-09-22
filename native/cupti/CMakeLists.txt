@@ -45,6 +45,7 @@ target_link_libraries(
     stormlog_cupti_injection
     PRIVATE
         "${CUPTI_LIBRARY}"
+        dl
         pthread
 )
 target_compile_options(

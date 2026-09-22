@@ -229,6 +229,9 @@ jobs:
             - name: Install pinned NVIDIA build inputs
               run: python3 -m pip install -r requirements-ci-native.txt
 
+            - name: Check Google C++ formatting
+              run: clang-format --style=file --dry-run --Werror native/cupti/*.cpp
+
             - name: Compile optional CUPTI injection library
               run: python3 scripts/check_native_cupti.py
 

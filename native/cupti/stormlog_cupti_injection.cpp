@@ -1,6 +1,11 @@
 // Opt-in CUPTI Activity injection for bounded Stormlog trace sidecars.
 
 #include <cupti.h>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <cerrno>
@@ -9,15 +14,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
-#include <fcntl.h>
 #include <limits>
 #include <mutex>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -65,6 +66,8 @@ struct CaptureState {
   bool initialized{false};
   bool finalized{false};
   std::string initialization_error;
+  std::string driver_version;
+  std::string runtime_version;
   std::vector<std::string> requested_activities;
   std::vector<std::string> enabled_activities;
 };
@@ -145,8 +148,7 @@ std::vector<std::string> SplitActivities(const char* value) {
   std::size_t start = 0;
   while (start <= input.size()) {
     const std::size_t comma = input.find(',', start);
-    const std::size_t end =
-        comma == std::string::npos ? input.size() : comma;
+    const std::size_t end = comma == std::string::npos ? input.size() : comma;
     if (end > start) {
       activities.emplace_back(input.substr(start, end - start));
     }
@@ -190,6 +192,38 @@ void SetInitializationError(std::string message) {
   }
 }
 
+bool HasInitializationError() {
+  std::lock_guard<std::mutex> lock(g_state.error_mutex);
+  return !g_state.initialization_error.empty();
+}
+
+std::string InitializationError() {
+  std::lock_guard<std::mutex> lock(g_state.error_mutex);
+  return g_state.initialization_error;
+}
+
+void SetSystemError(std::string_view operation) {
+  const int saved_errno = errno;
+  SetInitializationError(std::string(operation) + ": " +
+                         std::strerror(saved_errno));
+}
+
+std::string QueryCudaVersion(const char* symbol_name) {
+  using VersionFunction = int (*)(int*);
+  void* symbol = dlsym(RTLD_DEFAULT, symbol_name);
+  if (symbol == nullptr) {
+    return {};
+  }
+  static_assert(sizeof(VersionFunction) == sizeof(symbol));
+  VersionFunction version_function = nullptr;
+  std::memcpy(&version_function, &symbol, sizeof(version_function));
+  int version = 0;
+  if (version_function(&version) != 0 || version <= 0) {
+    return {};
+  }
+  return std::to_string(version);
+}
+
 void WriteRecord(std::string record) {
   record.push_back('\n');
   std::lock_guard<std::mutex> lock(g_state.output_mutex);
@@ -201,8 +235,12 @@ void WriteRecord(std::string record) {
     return;
   }
   if (!WriteAll(g_state.trace_fd, record)) {
-    ftruncate(g_state.trace_fd, static_cast<off_t>(current));
-    lseek(g_state.trace_fd, static_cast<off_t>(current), SEEK_SET);
+    if (ftruncate(g_state.trace_fd, static_cast<off_t>(current)) != 0 ||
+        lseek(g_state.trace_fd, static_cast<off_t>(current), SEEK_SET) < 0) {
+      SetSystemError("could not restore trace after a partial write");
+    } else {
+      SetInitializationError("could not write a complete trace record");
+    }
     g_state.local_dropped_records.fetch_add(1);
     g_state.bytes_dropped.fetch_add(record.size());
     return;
@@ -212,10 +250,8 @@ void WriteRecord(std::string record) {
 }
 
 std::string RecordPrefix(std::string_view activity_kind,
-                         std::string_view record_id,
-                         std::uint64_t start,
-                         std::uint64_t end,
-                         bool device_interval) {
+                         std::string_view record_id, std::uint64_t start,
+                         std::uint64_t end, bool device_interval) {
   std::ostringstream output;
   output << "{\"schema_version\":1,\"record_id\":" << JsonString(record_id)
          << ",\"activity_kind\":" << JsonString(activity_kind)
@@ -232,8 +268,7 @@ std::string RecordPrefix(std::string_view activity_kind,
     if (start == 0 && end == 0) {
       output << ",\"cpu_start_ns\":null,\"cpu_end_ns\":null";
     } else {
-      output << ",\"cpu_start_ns\":" << start
-             << ",\"cpu_end_ns\":" << end;
+      output << ",\"cpu_start_ns\":" << start << ",\"cpu_end_ns\":" << end;
     }
     output << ",\"device_start_ns\":null,\"device_end_ns\":null";
   }
@@ -250,7 +285,8 @@ std::string NextRecordId() {
 
 void WriteApiRecord(const CUpti_Activity* record) {
   const auto* activity = reinterpret_cast<const CUpti_ActivityAPI*>(record);
-  const char* kind = record->kind == CUPTI_ACTIVITY_KIND_DRIVER ? "driver" : "runtime";
+  const char* kind =
+      record->kind == CUPTI_ACTIVITY_KIND_DRIVER ? "driver" : "runtime";
   std::ostringstream output;
   output << RecordPrefix(kind, NextRecordId(), activity->start, activity->end,
                          false)
@@ -258,7 +294,8 @@ void WriteApiRecord(const CUpti_Activity* record) {
          << JsonString(std::to_string(activity->correlationId))
          << ",\"stream_id\":null,\"graph_id\":null,\"graph_node_id\":null"
          << ",\"provenance\":\"cupti_activity\""
-         << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion applied\""
+         << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion "
+            "applied\""
          << ",\"metadata\":{\"cbid\":" << activity->cbid
          << ",\"process_id\":" << activity->processId
          << ",\"thread_id\":" << activity->threadId << "}}";
@@ -268,15 +305,16 @@ void WriteApiRecord(const CUpti_Activity* record) {
 void WriteKernelRecord(const CUpti_Activity* record) {
   const auto* activity = reinterpret_cast<const CUpti_ActivityKernel9*>(record);
   std::ostringstream output;
-  output << RecordPrefix("kernel", NextRecordId(), activity->start, activity->end,
-                         true)
+  output << RecordPrefix("kernel", NextRecordId(), activity->start,
+                         activity->end, true)
          << ",\"correlation_id\":"
          << JsonString(std::to_string(activity->correlationId))
          << ",\"stream_id\":" << JsonString(std::to_string(activity->streamId))
          << ",\"graph_id\":" << OptionalIdentifier(activity->graphId)
          << ",\"graph_node_id\":" << OptionalIdentifier(activity->graphNodeId)
          << ",\"provenance\":\"cupti_activity\""
-         << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion applied\""
+         << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion "
+            "applied\""
          << ",\"metadata\":{\"name\":"
          << JsonString(activity->name == nullptr ? "" : activity->name)
          << ",\"device_id\":" << activity->deviceId
@@ -287,14 +325,15 @@ void WriteKernelRecord(const CUpti_Activity* record) {
 void WriteMemcpyRecord(const CUpti_Activity* record) {
   const auto* activity = reinterpret_cast<const CUpti_ActivityMemcpy*>(record);
   std::ostringstream output;
-  output << RecordPrefix("memcpy", NextRecordId(), activity->start, activity->end,
-                         true)
+  output << RecordPrefix("memcpy", NextRecordId(), activity->start,
+                         activity->end, true)
          << ",\"correlation_id\":"
          << JsonString(std::to_string(activity->correlationId))
          << ",\"stream_id\":" << JsonString(std::to_string(activity->streamId))
          << ",\"graph_id\":null,\"graph_node_id\":null"
          << ",\"provenance\":\"cupti_activity\""
-         << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion applied\""
+         << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion "
+            "applied\""
          << ",\"metadata\":{\"bytes\":" << activity->bytes
          << ",\"copy_kind\":" << static_cast<unsigned int>(activity->copyKind)
          << ",\"device_id\":" << activity->deviceId
@@ -305,14 +344,15 @@ void WriteMemcpyRecord(const CUpti_Activity* record) {
 void WriteMemsetRecord(const CUpti_Activity* record) {
   const auto* activity = reinterpret_cast<const CUpti_ActivityMemset*>(record);
   std::ostringstream output;
-  output << RecordPrefix("memset", NextRecordId(), activity->start, activity->end,
-                         true)
+  output << RecordPrefix("memset", NextRecordId(), activity->start,
+                         activity->end, true)
          << ",\"correlation_id\":"
          << JsonString(std::to_string(activity->correlationId))
          << ",\"stream_id\":" << JsonString(std::to_string(activity->streamId))
          << ",\"graph_id\":null,\"graph_node_id\":null"
          << ",\"provenance\":\"cupti_activity\""
-         << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion applied\""
+         << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion "
+            "applied\""
          << ",\"metadata\":{\"bytes\":" << activity->bytes
          << ",\"value\":" << static_cast<unsigned int>(activity->value)
          << ",\"device_id\":" << activity->deviceId
@@ -334,7 +374,8 @@ void WriteSynchronizationRecord(const CUpti_Activity* record) {
                  : JsonString(std::to_string(activity->streamId)))
          << ",\"graph_id\":null,\"graph_node_id\":null"
          << ",\"provenance\":\"cupti_activity\""
-         << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion applied\""
+         << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion "
+            "applied\""
          << ",\"metadata\":{\"synchronization_type\":"
          << static_cast<unsigned int>(activity->type)
          << ",\"context_id\":" << activity->contextId << "}}";
@@ -369,6 +410,7 @@ void CUPTIAPI BufferRequested(std::uint8_t** buffer, std::size_t* size,
   void* allocation = nullptr;
   if (posix_memalign(&allocation, alignof(std::max_align_t),
                      kActivityBufferBytes) != 0) {
+    SetInitializationError("could not allocate a CUPTI activity buffer");
     *buffer = nullptr;
     *size = 0;
     *maximum_records = 0;
@@ -431,42 +473,51 @@ void WriteStatus() {
     return;
   }
   std::ostringstream output;
-  output << "{\"schema_version\":1,\"helper_version\":"
-         << JsonString(kHelperVersion) << ",\"pid\":" << getpid()
-         << ",\"cupti_version\":" << g_state.cupti_version
-         << ",\"compiled_cupti_api_version\":" << CUPTI_API_VERSION
-         << ",\"compiled_cuda_version\":" << CUDA_VERSION
-         << ",\"driver_version\":null"
-         << ",\"started_timestamp_ns\":" << g_state.started_timestamp_ns
-         << ",\"ended_timestamp_ns\":" << g_state.ended_timestamp_ns
-         << ",\"requested_activities\":"
-         << JsonStringArray(g_state.requested_activities)
-         << ",\"enabled_activities\":"
-         << JsonStringArray(g_state.enabled_activities)
-         << ",\"delivered_records\":" << g_state.delivered_records.load()
-         << ",\"cupti_dropped_records\":"
-         << g_state.cupti_dropped_records.load()
-         << ",\"local_dropped_records\":"
-         << g_state.local_dropped_records.load()
-         << ",\"bytes_written\":" << g_state.bytes_written.load()
-         << ",\"bytes_dropped\":" << g_state.bytes_dropped.load()
-         << ",\"finalized\":" << (g_state.finalized ? "true" : "false")
-         << ",\"initialization_error\":";
-  if (g_state.initialization_error.empty()) {
+  const std::string initialization_error = InitializationError();
+  output
+      << "{\"schema_version\":1,\"helper_version\":"
+      << JsonString(kHelperVersion) << ",\"pid\":" << getpid()
+      << ",\"cupti_version\":" << g_state.cupti_version
+      << ",\"compiled_cupti_api_version\":" << CUPTI_API_VERSION
+      << ",\"compiled_cuda_version\":" << CUDA_VERSION << ",\"driver_version\":"
+      << (g_state.driver_version.empty() ? "null"
+                                         : JsonString(g_state.driver_version))
+      << ",\"runtime_version\":"
+      << (g_state.runtime_version.empty() ? "null"
+                                          : JsonString(g_state.runtime_version))
+      << ",\"started_timestamp_ns\":" << g_state.started_timestamp_ns
+      << ",\"ended_timestamp_ns\":" << g_state.ended_timestamp_ns
+      << ",\"requested_activities\":"
+      << JsonStringArray(g_state.requested_activities)
+      << ",\"enabled_activities\":"
+      << JsonStringArray(g_state.enabled_activities)
+      << ",\"delivered_records\":" << g_state.delivered_records.load()
+      << ",\"cupti_dropped_records\":" << g_state.cupti_dropped_records.load()
+      << ",\"local_dropped_records\":" << g_state.local_dropped_records.load()
+      << ",\"bytes_written\":" << g_state.bytes_written.load()
+      << ",\"bytes_dropped\":" << g_state.bytes_dropped.load()
+      << ",\"finalized\":" << (g_state.finalized ? "true" : "false")
+      << ",\"initialization_error\":";
+  if (initialization_error.empty()) {
     output << "null";
   } else {
-    output << JsonString(g_state.initialization_error);
+    output << JsonString(initialization_error);
   }
   output << "}\n";
   const std::string content = output.str();
-  const bool written = WriteAll(descriptor, content);
-  if (written) {
-    fsync(descriptor);
+  bool persisted = WriteAll(descriptor, content);
+  if (persisted && fsync(descriptor) != 0) {
+    persisted = false;
   }
-  close(descriptor);
-  if (written) {
-    renameat(g_state.directory_fd, kStatusTemporaryFilename,
-             g_state.directory_fd, kStatusFilename);
+  if (close(descriptor) != 0) {
+    persisted = false;
+  }
+  if (persisted && renameat(g_state.directory_fd, kStatusTemporaryFilename,
+                            g_state.directory_fd, kStatusFilename) != 0) {
+    persisted = false;
+  }
+  if (persisted) {
+    fsync(g_state.directory_fd);
   }
 }
 
@@ -476,25 +527,39 @@ void Finalize() {
       const CUptiResult flush_result =
           cuptiActivityFlushAll(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
       if (flush_result != CUPTI_SUCCESS) {
-        SetInitializationError("activity flush failed: " + CuptiError(flush_result));
+        SetInitializationError("activity flush failed: " +
+                               CuptiError(flush_result));
       }
       for (const ActivitySelection& activity : kSupportedActivities) {
         if (IsRequested(activity.name)) {
           cuptiActivityDisable(activity.kind);
         }
       }
-      cuptiGetTimestamp(&g_state.ended_timestamp_ns);
-    }
-    if (g_state.trace_fd >= 0) {
-      fsync(g_state.trace_fd);
-      close(g_state.trace_fd);
-      g_state.trace_fd = -1;
-      if (g_state.initialization_error.empty()) {
-        renameat(g_state.directory_fd, kTracePartialFilename,
-                 g_state.directory_fd, kTraceFilename);
+      const CUptiResult timestamp_result =
+          cuptiGetTimestamp(&g_state.ended_timestamp_ns);
+      if (timestamp_result != CUPTI_SUCCESS) {
+        SetInitializationError("final timestamp failed: " +
+                               CuptiError(timestamp_result));
       }
     }
-    g_state.finalized = g_state.initialized && g_state.initialization_error.empty();
+    if (g_state.trace_fd >= 0) {
+      if (fsync(g_state.trace_fd) != 0) {
+        SetSystemError("trace fsync failed");
+      }
+      if (close(g_state.trace_fd) != 0) {
+        SetSystemError("trace close failed");
+      }
+      g_state.trace_fd = -1;
+      if (!HasInitializationError() &&
+          renameat(g_state.directory_fd, kTracePartialFilename,
+                   g_state.directory_fd, kTraceFilename) != 0) {
+        SetSystemError("trace finalization rename failed");
+      }
+      if (!HasInitializationError() && fsync(g_state.directory_fd) != 0) {
+        SetSystemError("capture directory fsync failed");
+      }
+    }
+    g_state.finalized = g_state.initialized && !HasInitializationError();
     WriteStatus();
     if (g_state.directory_fd >= 0) {
       close(g_state.directory_fd);
@@ -506,39 +571,47 @@ void Finalize() {
 void Initialize() {
   const char* output_directory = std::getenv(kOutputDirectoryEnv);
   if (output_directory == nullptr || output_directory[0] != '/') {
-    g_state.initialization_error = "output directory must be absolute";
+    SetInitializationError("output directory must be absolute");
     return;
   }
   if (!ParsePositiveInteger(std::getenv(kMaximumBytesEnv),
                             &g_state.maximum_bytes)) {
-    g_state.initialization_error = "maximum bytes must be a positive integer";
+    SetInitializationError("maximum bytes must be a positive integer");
     return;
   }
   g_state.requested_activities = SplitActivities(std::getenv(kActivitiesEnv));
   if (g_state.requested_activities.empty()) {
-    g_state.initialization_error = "at least one activity must be requested";
+    SetInitializationError("at least one activity must be requested");
     return;
   }
   g_state.directory_fd =
       open(output_directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (g_state.directory_fd < 0) {
-    g_state.initialization_error = "could not open output directory";
+    SetInitializationError("could not open output directory");
     return;
   }
   g_state.trace_fd =
       openat(g_state.directory_fd, kTracePartialFilename,
              O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
   if (g_state.trace_fd < 0) {
-    g_state.initialization_error = "could not create trace output";
+    SetInitializationError("could not create trace output");
     WriteStatus();
     return;
   }
-  cuptiGetVersion(&g_state.cupti_version);
+  const CUptiResult version_result = cuptiGetVersion(&g_state.cupti_version);
+  if (version_result != CUPTI_SUCCESS) {
+    SetInitializationError("CUPTI version query failed: " +
+                           CuptiError(version_result));
+    WriteStatus();
+    return;
+  }
+  g_state.driver_version = QueryCudaVersion("cuDriverGetVersion");
+  g_state.runtime_version = QueryCudaVersion("cudaRuntimeGetVersion");
   CUptiResult result =
       cuptiActivityRegisterCallbacks(BufferRequested, BufferCompleted);
   if (result != CUPTI_SUCCESS) {
-    g_state.initialization_error =
-        "callback registration failed: " + CuptiError(result);
+    SetInitializationError("callback registration failed: " +
+                           CuptiError(result));
     WriteStatus();
     return;
   }
@@ -552,14 +625,14 @@ void Initialize() {
     }
   }
   if (g_state.enabled_activities.empty()) {
-    g_state.initialization_error = "none of the requested activities could be enabled";
+    SetInitializationError("none of the requested activities could be enabled");
     WriteStatus();
     return;
   }
   result = cuptiGetTimestamp(&g_state.started_timestamp_ns);
   if (result != CUPTI_SUCCESS) {
-    g_state.initialization_error =
-        "timestamp initialization failed: " + CuptiError(result);
+    SetInitializationError("timestamp initialization failed: " +
+                           CuptiError(result));
     WriteStatus();
     return;
   }
@@ -579,10 +652,10 @@ extern "C" STORMLOG_EXPORT int InitializeInjection() {
   try {
     std::call_once(g_initialize_once, Initialize);
   } catch (const std::exception& error) {
-    g_state.initialization_error = error.what();
+    SetInitializationError(error.what());
     WriteStatus();
   } catch (...) {
-    g_state.initialization_error = "unknown initialization failure";
+    SetInitializationError("unknown initialization failure");
     WriteStatus();
   }
   // Tracing failures never prevent the target CUDA application from starting.

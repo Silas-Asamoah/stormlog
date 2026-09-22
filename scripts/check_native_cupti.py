@@ -67,6 +67,7 @@ def _compile(
         "-Wall",
         "-Wextra",
         "-Wpedantic",
+        "-Werror",
     ]
     for include_path in include_paths:
         command.extend(("-isystem", str(include_path)))
@@ -80,6 +81,7 @@ def _compile(
                 str(source),
                 f"-L{library_path}",
                 "-l:libcupti.so.12",
+                "-ldl",
                 "-pthread",
                 "-o",
                 str(output),
