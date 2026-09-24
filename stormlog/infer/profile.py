@@ -23,6 +23,7 @@ from .analysis import analyze_inference_events
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
+from .host_clock import host_boot_id
 from .openai_client import OpenAIChatCompletionsClient
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter, generate_prompt
@@ -34,7 +35,7 @@ class InferenceProfiler:
     def __init__(self, config: ProfileConfig, *, run_id: str | None = None) -> None:
         self.config = config
         self.session = create_session_summary(source="stormlog.infer.profile")
-        self.run_id = run_id or new_session_id()
+        self.run_id = run_id or config.run_id or new_session_id()
         self.token_counter = build_token_counter(
             tokenizer=config.tokenizer,
             model=config.model,
@@ -131,6 +132,7 @@ class InferenceProfiler:
                 provenance="observed",
             ),
             event_id="artifact",
+            metadata={"boot_id": host_boot_id()},
             artifact_kind="inference_jsonl",
             created_at_ns=session.started_at_ns,
         )

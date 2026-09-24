@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stormlog.readthedocs.io/en/latest/schemas/inference_telemetry_v1.schema.json",
+  "title": "Stormlog inference host telemetry sample v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_type",
+    "scope",
+    "clock_domain",
+    "counter_owner",
+    "run_id",
+    "identity",
+    "observed_at_ns",
+    "metric",
+    "value_bytes",
+    "state",
+    "source",
+    "interval_ms",
+    "detail",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_type": { "const": "infer.telemetry_sample" },
+    "scope": { "enum": ["server_process", "gpu_device", "gpu_instance"] },
+    "clock_domain": { "type": "string", "minLength": 1 },
+    "counter_owner": {
+      "enum": [
+        "operating_system_process",
+        "gpu_process",
+        "allocator",
+        "engine_cache",
+        "gpu_device",
+        "gpu_instance"
+      ]
+    },
+    "run_id": { "type": "string", "minLength": 1 },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "pid",
+        "process_start_ns",
+        "device_uuid",
+        "gpu_instance_id",
+        "replica_id",
+        "rank",
+        "boot_id"
+      ],
+      "properties": {
+        "host": { "type": "string", "minLength": 1 },
+        "pid": { "type": "integer", "minimum": 1 },
+        "process_start_ns": { "type": "integer", "minimum": 1 },
+        "device_uuid": { "type": ["string", "null"] },
+        "gpu_instance_id": { "type": ["string", "null"] },
+        "replica_id": { "type": ["string", "null"] },
+        "rank": { "type": ["integer", "null"], "minimum": 0 },
+        "boot_id": { "type": ["string", "null"] }
+      }
+    },
+    "observed_at_ns": { "type": "integer", "minimum": 1 },
+    "metric": {
+      "enum": [
+        "process_rss_bytes",
+        "process_gpu_used_bytes",
+        "allocator_allocated_bytes",
+        "allocator_reserved_bytes",
+        "engine_cache_occupied_bytes",
+        "device_memory_used_bytes",
+        "device_memory_reserved_bytes",
+        "instance_memory_used_bytes",
+        "instance_memory_reserved_bytes"
+      ]
+    },
+    "value_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "state": { "enum": ["valid", "missing", "stale", "invalid"] },
+    "source": { "type": "string", "minLength": 1 },
+    "interval_ms": { "type": "integer", "minimum": 1 },
+    "detail": { "type": ["string", "null"] },
+    "provenance": { "enum": ["observed", "reported", "estimated"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "valid" } } },
+      "then": { "properties": { "value_bytes": { "type": "integer" } } },
+      "else": { "properties": { "value_bytes": { "type": "null" } } }
+    }
+  ]
+}

@@ -12,6 +12,7 @@ from typing import Sequence
 from .analysis import analyze_inference_events, format_analysis_text
 from .config import ProfileConfig, parse_int_list, resolve_endpoint
 from .profile import run_profile
+from .server_collector import collect_server_telemetry
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -26,6 +27,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_profile(args)
         if args.infer_command == "analyze":
             return cmd_analyze(args)
+        if args.infer_command == "collect-server":
+            return cmd_collect_server(args)
     except BrokenPipeError:
         return 1
     except Exception as exc:
@@ -59,6 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="OpenAI-compatible /v1 base URL",
     )
     profile_parser.add_argument("--model", required=True, help="Model name")
+    profile_parser.add_argument(
+        "--run-id", default=None, help="Shared run ID for an on-host collector"
+    )
     profile_parser.add_argument(
         "--concurrency",
         default="1",
@@ -196,6 +202,44 @@ def build_parser() -> argparse.ArgumentParser:
         default="txt",
         help="Report format (default: txt)",
     )
+    analyze_parser.add_argument(
+        "--server-telemetry",
+        action="append",
+        default=[],
+        metavar="JSONL",
+        help="On-host collector artifact; may be supplied more than once",
+    )
+    analyze_parser.add_argument(
+        "--direct-server",
+        action="store_true",
+        help="Assert requests went to the single server identity in telemetry",
+    )
+    analyze_parser.add_argument(
+        "--clock-offset-ns",
+        type=int,
+        default=None,
+        help="Server timestamp plus this offset equals client timestamp",
+    )
+    analyze_parser.add_argument(
+        "--clock-uncertainty-ns",
+        type=int,
+        default=None,
+        help="Absolute uncertainty of the supplied cross-host clock offset",
+    )
+    collector_parser = subparsers.add_parser(
+        "collect-server",
+        help="Collect scoped process and NVML memory on the inference host",
+    )
+    collector_parser.add_argument("--run-id", required=True)
+    collector_parser.add_argument("--pid", required=True, type=int)
+    collector_parser.add_argument("--output", required=True)
+    collector_parser.add_argument("--interval", type=float, default=0.1)
+    collector_parser.add_argument("--duration", type=float, default=None)
+    collector_parser.add_argument("--device-index", type=int, default=0)
+    collector_parser.add_argument("--device-uuid", default=None)
+    collector_parser.add_argument("--no-gpu", action="store_true")
+    collector_parser.add_argument("--replica-id", default=None)
+    collector_parser.add_argument("--rank", type=int, default=None)
     return parser
 
 
@@ -229,6 +273,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         strict_token_counts=bool(args.strict_token_counts),
         system_sampler=args.system_sampler,
         sample_interval_seconds=float(args.sample_interval),
+        run_id=args.run_id,
         seed=int(args.seed),
     )
     report = run_profile(config)
@@ -250,7 +295,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if not input_path.exists():
         print(f"Error: Input file '{args.input_file}' not found", file=sys.stderr)
         return 1
-    report = analyze_inference_events(input_path)
+    report = analyze_inference_events(
+        input_path,
+        server_telemetry_paths=args.server_telemetry,
+        direct_server=args.direct_server,
+        clock_offset_ns=args.clock_offset_ns,
+        clock_uncertainty_ns=args.clock_uncertainty_ns,
+    )
     if args.format == "json":
         payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
     else:
@@ -262,6 +313,24 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         print(f"Analysis report saved to: {output_path}")
     else:
         print(payload, end="")
+    return 0
+
+
+def cmd_collect_server(args: argparse.Namespace) -> int:
+    """Collect telemetry on the server while a profile uses the same run ID."""
+    count = collect_server_telemetry(
+        run_id=args.run_id,
+        pid=args.pid,
+        output_path=args.output,
+        interval_seconds=args.interval,
+        duration_seconds=args.duration,
+        device_index=args.device_index,
+        device_uuid=args.device_uuid,
+        no_gpu=args.no_gpu,
+        replica_id=args.replica_id,
+        rank=args.rank,
+    )
+    print(f"Collected {count} server polls to: {Path(args.output)}")
     return 0
 
 

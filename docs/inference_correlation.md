@@ -96,6 +96,12 @@ New endpoint profiles write one v2 `infer.artifact` record with a generated
 `run_id` alongside their unchanged v1 client observations. The `run_id` is
 also available as `InferenceProfiler.run_id` when a caller needs to coordinate
 optional capture. Existing v1-only files remain valid.
+Pass `--run-id` to `stormlog infer profile` when coordinating a separate
+on-host server telemetry artifact. The scoped `infer.telemetry_sample` records
+are ingested by `stormlog infer analyze --server-telemetry`; they are separate
+from the v2 execution events and do not establish request-to-iteration links.
+See [Inference Profiling](inference.md#optional-server-telemetry) for the
+identity, route, and clock requirements for a case-window memory observation.
 `load_inference_artifact` reads a stream containing both v1 and v2 records.
 It returns v1 records as `LegacyInferenceRecord`, preserving their original
 fields; it does not invent a server iteration, host clock, or GPU attribution.
