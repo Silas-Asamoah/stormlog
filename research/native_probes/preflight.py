@@ -153,7 +153,8 @@ def _mode_status(
 
 def _source_identity(repository: Path) -> dict[str, Any]:
     return {
-        "repository": str(repository),
+        "repository": _git(repository, "remote", "get-url", "origin"),
+        "working_tree": repository.name,
         "revision": _git(repository, "rev-parse", "HEAD"),
         "branch": _git(repository, "branch", "--show-current"),
         "dirty": bool(_git(repository, "status", "--porcelain")),

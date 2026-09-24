@@ -36,9 +36,10 @@
     "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repository", "revision", "branch", "dirty"],
+      "required": ["repository", "working_tree", "revision", "branch", "dirty"],
       "properties": {
         "repository": {"type": "string"},
+        "working_tree": {"type": "string"},
         "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
         "branch": {"type": "string"},
         "dirty": {"type": "boolean"}
