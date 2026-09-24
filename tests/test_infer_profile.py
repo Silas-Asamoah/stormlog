@@ -242,6 +242,7 @@ class InferenceProfileTests(unittest.TestCase):
                 session_id = measured[0]["session_id"]
                 self.assertEqual(len(artifact_identity), 1)
                 self.assertEqual(artifact_identity[0]["schema_version"], 2)
+                self.assertIn("boot_id", artifact_identity[0]["metadata"])
                 self.assertEqual(
                     artifact_identity[0]["context"]["session_id"], session_id
                 )
