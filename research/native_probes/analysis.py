@@ -35,6 +35,84 @@ def analyze_trials(
     }
 
 
+def paired_perturbations(
+    trials: Iterable[Mapping[str, Any]], metric: str
+) -> list[dict[str, Any]]:
+    """Compare each measured mode with its matched profiler-off trial."""
+    materialized = list(trials)
+    baselines: dict[tuple[str, str, int], Mapping[str, Any]] = {}
+    for trial in materialized:
+        if trial.get("mode") == "off":
+            baselines[_pair_key(trial)] = trial
+    comparisons: list[dict[str, Any]] = []
+    for trial in materialized:
+        if trial.get("mode") == "off":
+            continue
+        baseline = baselines.get(_pair_key(trial))
+        if baseline is None:
+            comparisons.append(
+                _unavailable_comparison(trial, "matched off trial missing")
+            )
+            continue
+        comparisons.append(_paired_delta(baseline, trial, metric))
+    return comparisons
+
+
+def _pair_key(trial: Mapping[str, Any]) -> tuple[str, str, int]:
+    configuration = trial.get("configuration_id")
+    workload = trial.get("workload_id")
+    repetition = trial.get("repetition")
+    if not isinstance(configuration, str) or not isinstance(workload, str):
+        raise ValueError("paired trials require configuration_id and workload_id")
+    if isinstance(repetition, bool) or not isinstance(repetition, int):
+        raise ValueError("paired trials require an integer repetition")
+    return configuration, workload, repetition
+
+
+def _paired_delta(
+    baseline: Mapping[str, Any], trial: Mapping[str, Any], metric: str
+) -> dict[str, Any]:
+    baseline_value = _trial_metric(baseline, metric)
+    profiled_value = _trial_metric(trial, metric)
+    if baseline_value is None or profiled_value is None:
+        return _unavailable_comparison(
+            trial, f"{metric} denominator or value unavailable"
+        )
+    if baseline_value == 0:
+        return _unavailable_comparison(trial, f"{metric} baseline denominator is zero")
+    delta = 100 * (profiled_value - baseline_value) / baseline_value
+    return {
+        "trial_id": _trial_id(trial),
+        "baseline_trial_id": _trial_id(baseline),
+        "metric": metric,
+        "baseline": baseline_value,
+        "profiled": profiled_value,
+        "percent_delta": delta,
+        "status": "measured",
+    }
+
+
+def _trial_metric(trial: Mapping[str, Any], metric: str) -> float | None:
+    metrics = trial.get("metrics")
+    if not isinstance(metrics, Mapping):
+        raise ValueError("trial metrics must be an object")
+    value = metrics.get(metric)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"metric {metric!r} must be numeric or null")
+    return float(value)
+
+
+def _unavailable_comparison(trial: Mapping[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "trial_id": _trial_id(trial),
+        "baseline_trial_id": None,
+        "status": "unknown",
+        "reason": reason,
+    }
+
+
 def _group_key(trial: Mapping[str, Any]) -> tuple[str, str]:
     configuration_id = trial.get("configuration_id")
     mode = trial.get("mode")
