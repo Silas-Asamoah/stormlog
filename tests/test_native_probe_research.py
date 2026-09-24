@@ -18,6 +18,7 @@ from research.native_probes.runner import run_trial
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 SCHEMAS = REPOSITORY / "research/native_probes/schemas"
+MATRICES = REPOSITORY / "research/native_probes/matrices"
 
 
 def test_preflight_is_explicit_about_unavailable_accelerators() -> None:
@@ -29,6 +30,17 @@ def test_preflight_is_explicit_about_unavailable_accelerators() -> None:
     assert manifest["platform"]["python_executable"]
     if manifest["platform"]["system"] == "Darwin":
         assert manifest["modes"]["ebpf-semantic"]["status"] == "unsupported"
+
+
+def test_source_capability_matrix_is_complete_and_not_mislabeled() -> None:
+    matrix = json.loads((MATRICES / "source_backed.json").read_text(encoding="utf-8"))
+
+    _validate(matrix, "capability_matrix.schema.json")
+    assert len(matrix["candidates"]) >= 7
+    for candidate in matrix["candidates"]:
+        assert candidate["evidence_sources"]
+        statuses = {claim["status"] for claim in candidate["claims"].values()}
+        assert "STORMLOG_VALIDATED" not in statuses
 
 
 def test_manifest_writer_refuses_to_overwrite_evidence(tmp_path: Path) -> None:

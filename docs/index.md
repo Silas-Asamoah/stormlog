@@ -33,6 +33,8 @@ usage
 cli
 inference
 inference_correlation
+native_probe_audit
+native_probe_source_review
 tui
 cookbook/index
 cookbook/always_on

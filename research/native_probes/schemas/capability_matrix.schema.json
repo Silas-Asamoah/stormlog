@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/capability_matrix.schema.json",
+  "title": "Stormlog native probe capability matrix",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact_kind", "matrix_kind", "reviewed_on", "candidates"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact_kind": {"const": "native_probe_capability_matrix"},
+    "matrix_kind": {"enum": ["source_backed", "stormlog_validated"]},
+    "reviewed_on": {"type": "string", "format": "date"},
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/candidate"}
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "claims", "evidence_sources", "unverified_assumptions"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+        "name": {"type": "string", "minLength": 1},
+        "claims": {
+          "type": "object",
+          "required": [
+            "signal",
+            "host_api_timing",
+            "device_execution_timing",
+            "cpu_gpu_correlation",
+            "streams",
+            "graph_replay",
+            "kernel_identity",
+            "semantic_inference_phases",
+            "instruction_level_detail",
+            "nvidia",
+            "amd",
+            "linux",
+            "windows",
+            "macos",
+            "containers",
+            "startup_injection",
+            "late_attach",
+            "privileges",
+            "runtime_coupling",
+            "engine_coupling",
+            "buffer_loss_visibility",
+            "profiler_coexistence",
+            "packaging_complexity",
+            "support_burden"
+          ],
+          "additionalProperties": {"$ref": "#/$defs/claim"}
+        },
+        "evidence_sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "url", "version_or_date", "accessed_on"],
+            "properties": {
+              "title": {"type": "string"},
+              "url": {"type": "string", "format": "uri"},
+              "version_or_date": {"type": "string"},
+              "accessed_on": {"type": "string", "format": "date"}
+            }
+          }
+        },
+        "unverified_assumptions": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "detail"],
+      "properties": {
+        "status": {
+          "enum": [
+            "CONFIRMED_BY_PRIMARY_SOURCE",
+            "PAPER_RESULT_NOT_REPRODUCED",
+            "STORMLOG_VALIDATED",
+            "INFERENCE",
+            "UNKNOWN",
+            "UNSUPPORTED",
+            "VERSION_DEPENDENT"
+          ]
+        },
+        "detail": {"type": "string", "minLength": 1},
+        "evidence": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}
