@@ -143,3 +143,15 @@ def test_ci_enforces_radon_complexity_without_framework_dependencies() -> None:
     assert "python3 scripts/check_complexity.py --json" in job_block
     assert "continue-on-error" not in job_block
     assert "pip install -e" not in job_block
+
+
+def test_ci_lints_research_prototypes() -> None:
+    content = _ci_workflow_content()
+    start = content.index("    lint:")
+    end = content.index("    complexity:", start)
+    job_block = content[start:end]
+
+    assert "isort --check --diff stormlog/ tests/ examples/ research/" in job_block
+    assert "black --check stormlog/ tests/ examples/ research/" in job_block
+    assert "flake8 stormlog/ tests/ examples/ research/" in job_block
+    assert "mypy stormlog/ research/native_probes/" in job_block

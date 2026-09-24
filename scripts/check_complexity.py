@@ -22,7 +22,7 @@ from radon.visitors import (
 
 RADON_VERSION = "6.0.1"
 MAX_COMPLEXITY = 10
-DEFAULT_PATHS = ("stormlog", "scripts/check_complexity.py")
+DEFAULT_PATHS = ("stormlog", "research", "scripts/check_complexity.py")
 BASELINE_PATH = Path(".ci/complexity-baseline.json")
 
 

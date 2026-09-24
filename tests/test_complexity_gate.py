@@ -36,12 +36,13 @@ def _complex_source(branches: int = 10, name: str = "legacy") -> str:
 
 def _project(tmp_path: Path, source: str) -> Path:
     (tmp_path / "stormlog").mkdir()
+    (tmp_path / "research").mkdir()
     (tmp_path / "scripts").mkdir()
     (tmp_path / "stormlog/example.py").write_text(source, encoding="utf-8")
     (tmp_path / "scripts/check_complexity.py").write_text("", encoding="utf-8")
     (tmp_path / ".ci").mkdir()
     path = tmp_path / ".ci/complexity-baseline.json"
-    scores = scan(tmp_path, ["stormlog", "scripts/check_complexity.py"])
+    scores = scan(tmp_path, ["stormlog", "research", "scripts/check_complexity.py"])
     path.write_text(json.dumps(baseline_payload(scores)), encoding="utf-8")
     return path
 
