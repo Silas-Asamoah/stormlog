@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/environment.schema.json",
+  "title": "Stormlog native probe experiment environment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "created_at",
+    "host_id",
+    "platform",
+    "source",
+    "accelerator",
+    "tools",
+    "modes",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact_kind": {"const": "native_probe_environment"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "host_id": {"type": "string", "minLength": 1},
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system", "release", "machine", "python", "python_executable"],
+      "properties": {
+        "system": {"type": "string"},
+        "release": {"type": "string"},
+        "machine": {"type": "string"},
+        "python": {"type": "string"},
+        "python_executable": {"type": "string"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "revision", "branch", "dirty"],
+      "properties": {
+        "repository": {"type": "string"},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "branch": {"type": "string"},
+        "dirty": {"type": "boolean"}
+      }
+    },
+    "accelerator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nvidia_toolchain_detected", "amd_toolchain_detected", "linux"],
+      "properties": {
+        "nvidia_toolchain_detected": {"type": "boolean"},
+        "amd_toolchain_detected": {"type": "boolean"},
+        "linux": {"type": "boolean"}
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/tool"}
+    },
+    "modes": {
+      "type": "object",
+      "minProperties": 11,
+      "additionalProperties": {"$ref": "#/$defs/mode"}
+    },
+    "limitations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "path"],
+      "properties": {
+        "available": {"type": "boolean"},
+        "path": {"type": ["string", "null"]}
+      }
+    },
+    "mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "required_tools", "detected_tools"],
+      "properties": {
+        "status": {
+          "enum": ["pass", "fail", "partial", "unsupported", "untested", "timeout"]
+        },
+        "reason": {"type": "string", "minLength": 1},
+        "required_tools": {"type": "array", "items": {"type": "string"}},
+        "detected_tools": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

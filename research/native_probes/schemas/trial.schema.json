@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/trial.schema.json",
+  "title": "Stormlog native probe experiment trial",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "trial_id",
+    "configuration_id",
+    "workload_id",
+    "mode",
+    "repetition",
+    "status",
+    "command",
+    "metrics",
+    "artifacts",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact_kind": {"const": "native_probe_trial"},
+    "trial_id": {"type": "string", "minLength": 1},
+    "configuration_id": {"type": "string", "minLength": 1},
+    "workload_id": {"enum": ["w1-eager", "w2-overlap", "w3-graph", "w4-stress", "vllm"]},
+    "mode": {
+      "enum": [
+        "off",
+        "public-pytorch",
+        "public-engine",
+        "proton",
+        "trusted",
+        "ebpf-semantic",
+        "direct-cupti",
+        "hybrid-cupti-ebpf",
+        "programmable",
+        "amd-rocprofiler",
+        "detailed-counter"
+      ]
+    },
+    "repetition": {"type": "integer", "minimum": 0},
+    "status": {"enum": ["pass", "fail", "partial", "unsupported", "untested", "timeout"]},
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "environment", "timeout_seconds"],
+      "properties": {
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "environment": {"type": "object", "additionalProperties": {"type": "string"}},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {"type": ["number", "null"]}
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "bytes": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  }
+}
