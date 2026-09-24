@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sys
+import tarfile
 from pathlib import Path
 
 import jsonschema
@@ -14,6 +16,7 @@ from research.native_probes.mode_commands import Workload, microbenchmark_comman
 from research.native_probes.models import CommandSpec, ExperimentMode, TrialSpec
 from research.native_probes.planning import counterbalanced_order, trial_id
 from research.native_probes.preflight import collect_environment, write_manifest
+from research.native_probes.references import _safe_extract
 from research.native_probes.runner import run_trial
 from research.native_probes.validation import build_unvalidated_matrix
 
@@ -81,6 +84,23 @@ def test_manifest_writer_refuses_to_overwrite_evidence(tmp_path: Path) -> None:
     assert json.loads(output.read_text(encoding="utf-8")) == {"value": 1}
     with pytest.raises(FileExistsError):
         write_manifest(output, {"value": 2})
+
+
+def test_reference_extraction_rejects_traversal_and_extracts_regular_files(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "reference"
+    destination.mkdir()
+
+    _safe_extract(
+        _tar_bytes("native/cupti/CMakeLists.txt", b"project(test)"), destination
+    )
+
+    extracted = destination / "native/cupti/CMakeLists.txt"
+    assert extracted.read_bytes() == b"project(test)"
+    with pytest.raises(ValueError, match="unsafe archive member"):
+        _safe_extract(_tar_bytes("../escape", b"unsafe"), destination)
+    assert not (tmp_path / "escape").exists()
 
 
 def test_counterbalanced_order_is_reproducible_and_rotates() -> None:
@@ -197,6 +217,15 @@ def test_mode_commands_preserve_identical_workload_parameters(tmp_path: Path) ->
 def _validate(instance: object, schema_name: str) -> None:
     schema = json.loads((SCHEMAS / schema_name).read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator(schema).validate(instance)
+
+
+def _tar_bytes(name: str, contents: bytes) -> bytes:
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w") as output:
+        member = tarfile.TarInfo(name)
+        member.size = len(contents)
+        output.addfile(member, io.BytesIO(contents))
+    return archive.getvalue()
 
 
 def _trial(

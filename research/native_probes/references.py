@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import os
+import shutil
 import subprocess
 import tarfile
 from pathlib import Path
@@ -40,14 +42,31 @@ def extract_cupti_reference(repository: Path, destination: Path) -> Path:
 def _safe_extract(archive: bytes, destination: Path) -> None:
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
         for member in source.getmembers():
-            target = (destination / member.name).resolve()
-            if not target.is_relative_to(destination.resolve()):
-                raise ValueError(f"unsafe archive member: {member.name}")
-            if member.issym() or member.islnk():
-                raise ValueError(f"links are not permitted: {member.name}")
-            if not member.isfile() and not member.isdir():
-                raise ValueError(f"unsupported archive member: {member.name}")
-        source.extractall(destination)
+            _extract_member(source, member, destination)
+
+
+def _extract_member(
+    source: tarfile.TarFile, member: tarfile.TarInfo, destination: Path
+) -> None:
+    target = (destination / member.name).resolve()
+    if not target.is_relative_to(destination.resolve()):
+        raise ValueError(f"unsafe archive member: {member.name}")
+    if member.issym() or member.islnk():
+        raise ValueError(f"links are not permitted: {member.name}")
+    if member.isdir():
+        target.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return
+    if not member.isfile():
+        raise ValueError(f"unsupported archive member: {member.name}")
+
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    extracted = source.extractfile(member)
+    if extracted is None:
+        raise ValueError(f"archive file has no content: {member.name}")
+    with extracted, target.open("xb") as output:
+        shutil.copyfileobj(extracted, output)
+    mode = 0o700 if member.mode & 0o100 else 0o600
+    os.chmod(target, mode)
 
 
 def _git(repository: Path, *arguments: str) -> str:
