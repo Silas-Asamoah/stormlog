@@ -34,7 +34,7 @@ class InferenceProfiler:
     def __init__(self, config: ProfileConfig, *, run_id: str | None = None) -> None:
         self.config = config
         self.session = create_session_summary(source="stormlog.infer.profile")
-        self.run_id = run_id or new_session_id()
+        self.run_id = run_id or config.run_id or new_session_id()
         self.token_counter = build_token_counter(
             tokenizer=config.tokenizer,
             model=config.model,

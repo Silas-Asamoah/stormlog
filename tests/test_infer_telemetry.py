@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
+from stormlog.infer.server_collector import collect_server_telemetry
 from stormlog.infer.telemetry import ServerIdentity, TelemetrySample, load_telemetry
 
 
@@ -70,3 +72,62 @@ def test_unavailable_counter_is_null_and_scope_cannot_be_forged() -> None:
 def test_instance_metric_requires_instance_identity() -> None:
     with pytest.raises(ValueError, match="gpu_instance_id"):
         _sample(metric="instance_memory_used_bytes")
+
+
+def test_on_host_collector_writes_process_and_gpu_with_same_identity(tmp_path) -> None:
+    class FakeGpu:
+        device_uuid = "GPU-live"
+        gpu_instance_id = None
+
+        def read(self):
+            return 256, 64, None
+
+        def close(self):
+            pass
+
+    path = tmp_path / "server.jsonl"
+    count = collect_server_telemetry(
+        run_id="run-live",
+        pid=os.getpid(),
+        output_path=path,
+        interval_seconds=0.01,
+        duration_seconds=0.025,
+        gpu_source=FakeGpu(),
+    )
+    samples = load_telemetry(path)
+    assert len(samples) == count * 3
+    assert {sample.metric for sample in samples} == {
+        "process_rss_bytes",
+        "device_memory_used_bytes",
+        "device_memory_reserved_bytes",
+    }
+    assert {sample.identity.process_start_ns for sample in samples} == {
+        samples[0].identity.process_start_ns
+    }
+    assert {sample.identity.device_uuid for sample in samples} == {"GPU-live"}
+
+
+def test_on_host_collector_emits_missing_nvml_counter(tmp_path) -> None:
+    class MissingGpu:
+        device_uuid = "GPU-live"
+        gpu_instance_id = None
+
+        def read(self):
+            return None, None, "NVML unavailable"
+
+        def close(self):
+            pass
+
+    path = tmp_path / "missing.jsonl"
+    collect_server_telemetry(
+        run_id="run-live",
+        pid=os.getpid(),
+        output_path=path,
+        interval_seconds=0.01,
+        duration_seconds=0.015,
+        gpu_source=MissingGpu(),
+    )
+    gpu_samples = [s for s in load_telemetry(path) if s.scope == "gpu_device"]
+    assert gpu_samples
+    assert {s.state for s in gpu_samples} == {"missing"}
+    assert all(s.value_bytes is None for s in gpu_samples)
