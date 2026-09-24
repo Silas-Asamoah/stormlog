@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
-from stormlog.infer.server_collector import collect_server_telemetry
+from stormlog.infer.server_collector import GpuMemoryReading, collect_server_telemetry
 from stormlog.infer.telemetry import ServerIdentity, TelemetrySample, load_telemetry
+
+SCHEMA = json.loads(
+    (
+        Path(__file__).resolve().parents[1]
+        / "docs/schemas/inference_telemetry_v1.schema.json"
+    ).read_text()
+)
 
 
 def _identity(**changes: object) -> ServerIdentity:
@@ -59,6 +68,9 @@ def test_telemetry_has_explicit_scope_owner_and_provenance(tmp_path) -> None:
     ]
     assert device.to_record()["counter_owner"] == "gpu_device"
     assert device.to_record()["provenance"] == "observed"
+    Draft202012Validator.check_schema(SCHEMA)
+    for sample in (device, process, instance):
+        Draft202012Validator(SCHEMA).validate(sample.to_record())
 
 
 def test_unavailable_counter_is_null_and_scope_cannot_be_forged() -> None:
@@ -70,11 +82,38 @@ def test_unavailable_counter_is_null_and_scope_cannot_be_forged() -> None:
     forged["scope"] = "server_process"
     with pytest.raises(ValueError, match="scope"):
         TelemetrySample.from_record(forged)
+    with pytest.raises(ValueError, match="non-negative value_bytes"):
+        _sample(value_bytes=True)
+    with pytest.raises(ValueError, match="positive pid"):
+        _identity(pid=True)
+    with pytest.raises(ValueError, match="non-empty strings"):
+        _identity(boot_id="")
+    forged = _sample().to_record()
+    forged["schema_version"] = True
+    with pytest.raises(ValueError, match="unsupported telemetry"):
+        TelemetrySample.from_record(forged)
 
 
 def test_instance_metric_requires_instance_identity() -> None:
     with pytest.raises(ValueError, match="gpu_instance_id"):
         _sample(metric="instance_memory_used_bytes")
+
+
+def test_allocator_and_engine_cache_are_separate_reported_counters() -> None:
+    allocator = _sample(
+        metric="allocator_allocated_bytes",
+        source="pytorch",
+        provenance="reported",
+    )
+    cache = _sample(
+        metric="engine_cache_occupied_bytes",
+        source="vllm",
+        provenance="reported",
+    )
+    assert allocator.scope == cache.scope == "server_process"
+    assert allocator.to_record()["counter_owner"] == "allocator"
+    assert cache.to_record()["counter_owner"] == "engine_cache"
+    assert TelemetrySample.from_record(cache.to_record()) == cache
 
 
 def test_on_host_collector_writes_process_and_gpu_with_same_identity(tmp_path) -> None:
@@ -83,7 +122,7 @@ def test_on_host_collector_writes_process_and_gpu_with_same_identity(tmp_path) -
         gpu_instance_id = None
 
         def read(self):
-            return 256, 64, None
+            return GpuMemoryReading(256, 64, "valid")
 
         def close(self):
             pass
@@ -116,7 +155,7 @@ def test_on_host_collector_emits_missing_nvml_counter(tmp_path) -> None:
         gpu_instance_id = None
 
         def read(self):
-            return None, None, "NVML unavailable"
+            return GpuMemoryReading(None, None, "missing", "NVML unavailable")
 
         def close(self):
             pass
@@ -134,3 +173,27 @@ def test_on_host_collector_emits_missing_nvml_counter(tmp_path) -> None:
     assert gpu_samples
     assert {s.state for s in gpu_samples} == {"missing"}
     assert all(s.value_bytes is None for s in gpu_samples)
+
+
+def test_on_host_collector_stops_after_gpu_identity_failure(tmp_path) -> None:
+    class ChangedGpu:
+        device_uuid = "GPU-original"
+        gpu_instance_id = None
+
+        def read(self):
+            return GpuMemoryReading(None, None, "invalid", "device UUID changed")
+
+        def close(self):
+            pass
+
+    path = tmp_path / "changed.jsonl"
+    count = collect_server_telemetry(
+        run_id="run-live",
+        pid=os.getpid(),
+        output_path=path,
+        interval_seconds=0.01,
+        duration_seconds=0.1,
+        gpu_source=ChangedGpu(),
+    )
+    assert count == 1
+    assert [s.state for s in load_telemetry(path)] == ["valid", "invalid", "invalid"]

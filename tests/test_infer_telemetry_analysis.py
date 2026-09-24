@@ -17,6 +17,7 @@ def _profile(tmp_path, *, host: str = "client", run_id: str = "run-1"):
             "schema_version": 2,
             "event_type": "infer.artifact",
             "context": {"run_id": run_id, "host": host},
+            "metadata": {"boot_id": f"boot-{host}"},
         },
         {
             "schema_version": 1,
@@ -52,6 +53,7 @@ def _server_sample(
     state: str = "valid",
     value: int | None = 256,
     run_id: str = "run-1",
+    boot_id: str | None = None,
 ) -> TelemetrySample:
     return TelemetrySample(
         run_id=run_id,
@@ -62,6 +64,7 @@ def _server_sample(
             device_uuid=uuid,
             gpu_instance_id=instance,
             replica_id=f"replica-{host}",
+            boot_id=boot_id or f"boot-{host}",
         ),
         observed_at_ns=150,
         metric=metric,
@@ -110,14 +113,28 @@ def test_direct_remote_join_requires_clock_alignment(tmp_path) -> None:
     assert memory["server_observations"]["device_memory_used_bytes"] == {
         "observation_scope": "gpu_device",
         "counter_owner": "gpu_device",
-        "source": "nvml-v2",
-        "highest_observed_bytes": 256,
+        "sources": ["nvml-v2"],
+        "provenance": ["observed"],
+        "maximum_recorded_bytes": 256,
         "valid_samples": 1,
         "missing_samples": 0,
         "stale_samples": 0,
         "invalid_samples": 0,
-        "interval_ms": 100,
+        "intervals_ms": [100],
     }
+
+
+def test_equal_hostname_without_equal_boot_id_needs_alignment(tmp_path) -> None:
+    profile = _profile(tmp_path, host="server-a")
+    telemetry = _telemetry(
+        tmp_path,
+        "same-name.jsonl",
+        _server_sample(boot_id="another-boot"),
+    )
+    report = analyze_inference_events(
+        profile, server_telemetry_paths=[telemetry], direct_server=True
+    )
+    assert report["telemetry"]["server_join"]["reason"] == "clock_alignment_required"
 
 
 def test_two_servers_both_index_zero_are_not_merged(tmp_path) -> None:
@@ -179,8 +196,23 @@ def test_missing_counter_is_null_and_instance_scope_remains_distinct(tmp_path) -
     )
     memory = report["cases"]["case-a"]["memory"]["server_observations"]
     assert memory["instance_memory_used_bytes"]["observation_scope"] == "gpu_instance"
-    assert memory["instance_memory_reserved_bytes"]["highest_observed_bytes"] is None
+    assert memory["instance_memory_reserved_bytes"]["maximum_recorded_bytes"] is None
     assert memory["instance_memory_reserved_bytes"]["missing_samples"] == 1
+
+
+def test_invalid_server_sample_prevents_join_even_after_valid_sample(tmp_path) -> None:
+    profile = _profile(tmp_path, host="server-a")
+    telemetry = _telemetry(
+        tmp_path,
+        "invalid.jsonl",
+        _server_sample(),
+        _server_sample(state="invalid", value=None),
+    )
+    report = analyze_inference_events(
+        profile, server_telemetry_paths=[telemetry], direct_server=True
+    )
+    assert report["telemetry"]["server_join"]["reason"] == "server_identity_invalidated"
+    assert report["cases"]["case-a"]["memory"]["server_observations"] == {}
 
 
 def test_mismatched_run_id_is_rejected(tmp_path) -> None:
