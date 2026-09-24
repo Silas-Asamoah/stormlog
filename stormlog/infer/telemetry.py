@@ -95,9 +95,10 @@ class TelemetrySample:
 
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> TelemetrySample:
-        if record.get("schema_version") != TELEMETRY_SCHEMA_VERSION or record.get(
-            "event_type"
-        ) != "infer.telemetry_sample":
+        if (
+            record.get("schema_version") != TELEMETRY_SCHEMA_VERSION
+            or record.get("event_type") != "infer.telemetry_sample"
+        ):
             raise ValueError("unsupported telemetry record")
         identity = ServerIdentity(**record["identity"])
         sample = cls(
@@ -115,6 +116,10 @@ class TelemetrySample:
             raise ValueError("telemetry scope does not match metric")
         if record.get("clock_domain") != f"{identity.host}/unix_epoch_ns":
             raise ValueError("telemetry clock domain does not match host")
+        if record.get("counter_owner") != sample.scope:
+            raise ValueError("telemetry counter owner does not match metric")
+        if record.get("provenance") != "observed":
+            raise ValueError("telemetry provenance must be observed")
         return sample
 
 
@@ -131,7 +136,9 @@ def load_telemetry(path: str | Path) -> list[TelemetrySample]:
                     raise TypeError("record must be an object")
                 samples.append(TelemetrySample.from_record(payload))
             except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError(f"invalid telemetry line {line_number}: {exc}") from exc
+                raise ValueError(
+                    f"invalid telemetry line {line_number}: {exc}"
+                ) from exc
     if not samples:
         raise ValueError("telemetry artifact has no samples")
     return samples

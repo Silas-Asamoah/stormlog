@@ -56,7 +56,7 @@ class InferenceRequestEvent:
 
 @dataclass(frozen=True)
 class InferenceSystemSample:
-    """Best-effort system telemetry sampled during an inference profiling run."""
+    """Best-effort telemetry from the machine running the endpoint client."""
 
     session_id: str
     timestamp_ns: int
@@ -69,6 +69,7 @@ class InferenceSystemSample:
     gpu_utilization_percent: float | None = None
     process_rss_bytes: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    observation_scope: str = "client_local"
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)

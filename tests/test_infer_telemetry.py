@@ -47,7 +47,10 @@ def test_telemetry_has_explicit_scope_owner_and_provenance(tmp_path) -> None:
     )
     path = tmp_path / "telemetry.jsonl"
     path.write_text(
-        "".join(json.dumps(sample.to_record()) + "\n" for sample in (device, process, instance))
+        "".join(
+            json.dumps(sample.to_record()) + "\n"
+            for sample in (device, process, instance)
+        )
     )
     assert [sample.scope for sample in load_telemetry(path)] == [
         "gpu_device",

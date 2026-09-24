@@ -202,6 +202,30 @@ def build_parser() -> argparse.ArgumentParser:
         default="txt",
         help="Report format (default: txt)",
     )
+    analyze_parser.add_argument(
+        "--server-telemetry",
+        action="append",
+        default=[],
+        metavar="JSONL",
+        help="On-host collector artifact; may be supplied more than once",
+    )
+    analyze_parser.add_argument(
+        "--direct-server",
+        action="store_true",
+        help="Assert requests went to the single server identity in telemetry",
+    )
+    analyze_parser.add_argument(
+        "--clock-offset-ns",
+        type=int,
+        default=None,
+        help="Server timestamp plus this offset equals client timestamp",
+    )
+    analyze_parser.add_argument(
+        "--clock-uncertainty-ns",
+        type=int,
+        default=None,
+        help="Absolute uncertainty of the supplied cross-host clock offset",
+    )
     collector_parser = subparsers.add_parser(
         "collect-server",
         help="Collect scoped process and NVML memory on the inference host",
@@ -271,7 +295,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if not input_path.exists():
         print(f"Error: Input file '{args.input_file}' not found", file=sys.stderr)
         return 1
-    report = analyze_inference_events(input_path)
+    report = analyze_inference_events(
+        input_path,
+        server_telemetry_paths=args.server_telemetry,
+        direct_server=args.direct_server,
+        clock_offset_ns=args.clock_offset_ns,
+        clock_uncertainty_ns=args.clock_uncertainty_ns,
+    )
     if args.format == "json":
         payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
     else:

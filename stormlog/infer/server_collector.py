@@ -50,7 +50,11 @@ class NvmlMemorySource:
             ctypes.POINTER(ctypes.c_void_p),
         ]
         lib.nvmlDeviceGetHandleByIndex_v2.restype = ctypes.c_int
-        lib.nvmlDeviceGetUUID.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+        lib.nvmlDeviceGetUUID.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_uint,
+        ]
         lib.nvmlDeviceGetUUID.restype = ctypes.c_int
         lib.nvmlDeviceGetMemoryInfo_v2.argtypes = [
             ctypes.c_void_p,
@@ -84,6 +88,7 @@ class NvmlMemorySource:
                 self._handle_uuid if self._handle_uuid.startswith("MIG-") else None
             )
             self.device_uuid = self._handle_uuid
+            self._parent_handle = None
             if self.gpu_instance_id:
                 lib.nvmlDeviceGetDeviceHandleFromMigDeviceHandle.argtypes = [
                     ctypes.c_void_p,
@@ -96,6 +101,7 @@ class NvmlMemorySource:
                 )
                 if code != 0:
                     raise RuntimeError(f"NVML MIG parent lookup failed (code {code})")
+                self._parent_handle = parent
                 self.device_uuid = self._uuid(parent)
         except Exception:
             self.close()
@@ -113,6 +119,11 @@ class NvmlMemorySource:
             current_uuid = self._uuid(self._handle)
             if current_uuid != self._handle_uuid:
                 return None, None, "device UUID changed"
+            if (
+                self._parent_handle
+                and self._uuid(self._parent_handle) != self.device_uuid
+            ):
+                return None, None, "parent device UUID changed"
             info = _NvmlMemoryV2()
             info.version = ctypes.sizeof(_NvmlMemoryV2) | (2 << 24)
             code = self._lib.nvmlDeviceGetMemoryInfo_v2(
@@ -122,7 +133,7 @@ class NvmlMemorySource:
                 return None, None, f"NVML memory read unavailable (code {code})"
             return int(info.used), int(info.reserved), None
         except RuntimeError as exc:
-            return None, None, str(exc)
+            return None, None, f"device identity unavailable: {exc}"
 
     def close(self) -> None:
         if not self._closed:
@@ -156,7 +167,11 @@ def collect_server_telemetry(
         raise ValueError("server process is not running")
     start_ns = int(process.create_time() * 1_000_000_000)
     own_source = gpu_source is None and not no_gpu
-    source = gpu_source or (NvmlMemorySource(device_index=device_index, expected_uuid=device_uuid) if not no_gpu else None)
+    source = gpu_source or (
+        NvmlMemorySource(device_index=device_index, expected_uuid=device_uuid)
+        if not no_gpu
+        else None
+    )
     try:
         identity = ServerIdentity(
             host=socket.gethostname(),
@@ -179,9 +194,10 @@ def collect_server_telemetry(
                 next_poll += interval_seconds
                 observed_at_ns = time.time_ns()
                 try:
-                    same_process = process.is_running() and int(
-                        process.create_time() * 1_000_000_000
-                    ) == start_ns
+                    same_process = (
+                        process.is_running()
+                        and int(process.create_time() * 1_000_000_000) == start_ns
+                    )
                     rss = int(process.memory_info().rss) if same_process else None
                 except psutil.Error:
                     same_process, rss = False, None
@@ -195,16 +211,33 @@ def collect_server_telemetry(
                         state="valid" if rss is not None else "invalid",
                         source="psutil",
                         interval_ms=interval_ms,
-                        detail=None if rss is not None else "server process ended or restarted",
+                        detail=None
+                        if rss is not None
+                        else "server process ended or restarted",
                     )
                 ]
                 if source:
-                    used, reserved, error = source.read() if same_process else (None, None, "server process ended or restarted")
-                    state = "valid" if error is None else (
-                        "invalid" if "UUID changed" in error or not same_process else "missing"
+                    used, reserved, error = (
+                        source.read()
+                        if same_process
+                        else (None, None, "server process ended or restarted")
+                    )
+                    state = (
+                        "valid"
+                        if error is None
+                        else (
+                            "invalid"
+                            if "UUID changed" in error
+                            or "identity unavailable" in error
+                            or not same_process
+                            else "missing"
+                        )
                     )
                     prefix = "instance" if identity.gpu_instance_id else "device"
-                    for metric, value in ((f"{prefix}_memory_used_bytes", used), (f"{prefix}_memory_reserved_bytes", reserved)):
+                    for metric, value in (
+                        (f"{prefix}_memory_used_bytes", used),
+                        (f"{prefix}_memory_reserved_bytes", reserved),
+                    ):
                         samples.append(
                             TelemetrySample(
                                 run_id=run_id,

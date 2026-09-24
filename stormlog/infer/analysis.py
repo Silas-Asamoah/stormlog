@@ -3,14 +3,37 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Iterable, TypeGuard
+from typing import Any, TypeGuard
+
+from .telemetry import TelemetrySample, load_telemetry
 
 
-def analyze_inference_events(path: str | Path) -> dict[str, Any]:
+def analyze_inference_events(
+    path: str | Path,
+    *,
+    server_telemetry_paths: Iterable[str | Path] = (),
+    direct_server: bool = False,
+    clock_offset_ns: int | None = None,
+    clock_uncertainty_ns: int | None = None,
+) -> dict[str, Any]:
     """Analyze an inference profiling JSONL artifact."""
     records = _load_jsonl(path)
     requests, samples = _partition_inference_records(records)
+    server_samples = [
+        sample
+        for telemetry_path in server_telemetry_paths
+        for sample in load_telemetry(telemetry_path)
+    ]
+    join = _server_join(
+        records,
+        server_samples,
+        direct_server=direct_server,
+        clock_offset_ns=clock_offset_ns,
+        clock_uncertainty_ns=clock_uncertainty_ns,
+    )
     ok_requests = [record for record in requests if record.get("status") == "ok"]
 
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -24,6 +47,9 @@ def analyze_inference_events(path: str | Path) -> dict[str, Any]:
             case_requests,
             samples=_samples_for_request_window(samples, case_requests),
         )
+        cases[case_id]["memory"]["server_observations"] = _server_observations(
+            server_samples, case_requests, join
+        )
     failed = [record for record in requests if record.get("status") != "ok"]
     return {
         "summary": {
@@ -34,6 +60,11 @@ def analyze_inference_events(path: str | Path) -> dict[str, Any]:
             "case_count": len(cases),
         },
         "cases": cases,
+        "telemetry": {
+            "client_observation_scope": "client_local",
+            "server_join": join,
+            "server_targets": _server_targets(server_samples),
+        },
     }
 
 
@@ -49,6 +80,14 @@ def format_analysis_text(report: dict[str, Any]) -> str:
         f"Failure rate: {float(summary.get('failure_rate', 0.0)):.2%}",
     ]
     cases = report.get("cases", {})
+    join = report.get("telemetry", {}).get("server_join", {})
+    lines.append("Memory observations: client-local")
+    if join.get("status") == "joined":
+        lines.append(
+            "Server telemetry: observed during case windows (declared direct route)"
+        )
+    elif join.get("status") not in {None, "not_configured"}:
+        lines.append(f"Server telemetry: unjoined ({join.get('reason')})")
     if isinstance(cases, dict) and cases:
         lines.append("")
         lines.append("Cases:")
@@ -75,7 +114,7 @@ def _load_jsonl(path: str | Path) -> list[dict[str, Any]]:
                 continue
             payload = json.loads(line)
             if not isinstance(payload, dict):
-                raise ValueError(f"Line {line_number} is not a JSON object")
+                raise TypeError(f"Line {line_number} is not a JSON object")
             records.append(payload)
     return records
 
@@ -131,6 +170,7 @@ def _summarize_requests(
             ),
         },
         "memory": {
+            "observation_scope": "client_local",
             "peak_device_used_bytes": peak_device_used,
             "peak_process_rss_bytes": peak_process_rss,
         },
@@ -233,3 +273,130 @@ def _partition_inference_records(
         if record.get("event_type") == "infer.system_sample"
     ]
     return requests, samples
+
+
+def _server_join(
+    records: list[dict[str, Any]],
+    samples: list[TelemetrySample],
+    *,
+    direct_server: bool,
+    clock_offset_ns: int | None,
+    clock_uncertainty_ns: int | None,
+) -> dict[str, Any]:
+    """Return a case-window join only for one declared, matching server."""
+    if not samples:
+        return {"status": "not_configured"}
+    artifacts = [r for r in records if r.get("event_type") == "infer.artifact"]
+    if len(artifacts) != 1 or not isinstance(artifacts[0].get("context"), dict):
+        return {"status": "unjoined", "reason": "missing_run_identity"}
+    context = artifacts[0]["context"]
+    run_id = context.get("run_id")
+    if any(sample.run_id != run_id for sample in samples):
+        raise ValueError("server telemetry run_id does not match inference artifact")
+    identities = {sample.identity for sample in samples}
+    if len(identities) != 1:
+        return {"status": "unjoined", "reason": "multiple_server_identities"}
+    identity = next(iter(identities))
+    if not direct_server:
+        return {"status": "unjoined", "reason": "route_not_declared"}
+    if not any(sample.state == "valid" for sample in samples):
+        return {"status": "unjoined", "reason": "no_valid_server_samples"}
+    same_host = context.get("host") == identity.host
+    if clock_offset_ns is None:
+        if not same_host:
+            return {"status": "unjoined", "reason": "clock_alignment_required"}
+        clock_offset_ns = 0
+        clock_uncertainty_ns = 0
+    elif clock_uncertainty_ns is None:
+        return {"status": "unjoined", "reason": "clock_uncertainty_required"}
+    if isinstance(clock_offset_ns, bool) or not isinstance(clock_offset_ns, int):
+        raise TypeError("clock_offset_ns must be an integer")
+    if (
+        isinstance(clock_uncertainty_ns, bool)
+        or not isinstance(clock_uncertainty_ns, int)
+        or clock_uncertainty_ns < 0
+    ):
+        raise ValueError("clock_uncertainty_ns must be a non-negative integer")
+    return {
+        "status": "joined",
+        "route_evidence": "operator_declared_direct",
+        "identity": asdict(identity),
+        "clock_offset_ns": clock_offset_ns,
+        "clock_uncertainty_ns": clock_uncertainty_ns,
+        "clock_alignment_evidence": "same_host"
+        if same_host and clock_offset_ns == 0
+        else "operator_supplied",
+        "attribution": "case_window_observation_only",
+    }
+
+
+def _server_targets(samples: list[TelemetrySample]) -> list[dict[str, Any]]:
+    targets: list[dict[str, Any]] = []
+    for identity in sorted(
+        {s.identity for s in samples},
+        key=lambda item: (
+            item.host,
+            item.pid,
+            item.process_start_ns,
+            item.device_uuid or "",
+        ),
+    ):
+        selected = [s for s in samples if s.identity == identity]
+        targets.append(
+            {
+                "identity": asdict(identity),
+                "metrics": sorted({s.metric for s in selected}),
+                "sample_states": {
+                    state: sum(s.state == state for s in selected)
+                    for state in ("valid", "missing", "stale", "invalid")
+                },
+            }
+        )
+    return targets
+
+
+def _server_observations(
+    samples: list[TelemetrySample],
+    requests: list[dict[str, Any]],
+    join: dict[str, Any],
+) -> dict[str, Any]:
+    if join.get("status") != "joined":
+        return {}
+    window = _request_time_window(requests)
+    if window is None:
+        return {}
+    start_ns, end_ns = window
+    offset = join["clock_offset_ns"]
+    uncertainty = join["clock_uncertainty_ns"]
+    metric_names = sorted({sample.metric for sample in samples})
+    observations = {}
+    for metric in metric_names:
+        metric_samples = [
+            sample
+            for sample in samples
+            if sample.metric == metric
+            and start_ns + uncertainty
+            <= sample.observed_at_ns + offset
+            <= end_ns - uncertainty
+        ]
+        valid_values = [
+            sample.value_bytes
+            for sample in metric_samples
+            if sample.state == "valid" and sample.value_bytes is not None
+        ]
+        source = next(sample.source for sample in samples if sample.metric == metric)
+        scope = next(sample.scope for sample in samples if sample.metric == metric)
+        observations[metric] = {
+            "observation_scope": scope,
+            "counter_owner": scope,
+            "source": source,
+            "highest_observed_bytes": max(valid_values, default=None),
+            "valid_samples": len(valid_values),
+            "missing_samples": sum(s.state == "missing" for s in metric_samples),
+            "stale_samples": sum(s.state == "stale" for s in metric_samples),
+            "invalid_samples": sum(s.state == "invalid" for s in metric_samples),
+            "interval_ms": next(
+                sample.interval_ms for sample in samples if sample.metric == metric
+            ),
+        }
+    return observations
