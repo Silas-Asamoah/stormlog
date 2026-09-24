@@ -1,0 +1,2 @@
+.venv/bin/python -m research.native_probes.cli preflight --host-id control-macos-arm64 --repository /Users/nanaagyei/Documents/Codes/Projects/stormlog --output research/native_probes/artifacts/control-macos-arm64/environment.json
+.venv/bin/python -m research.native_probes.cli initialize-matrix --source research/native_probes/matrices/source_backed.json --environment-artifact research/native_probes/artifacts/control-macos-arm64/environment.json --output research/native_probes/matrices/stormlog_validated.json

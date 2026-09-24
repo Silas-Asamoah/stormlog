@@ -1,0 +1,1539 @@
+{
+  "artifact_kind": "native_probe_capability_matrix",
+  "candidates": [
+    {
+      "claims": {
+        "amd": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "PyTorch profiler",
+          "url": "https://docs.pytorch.org/docs/stable/profiler.html",
+          "version_or_date": "PyTorch 2.14 documentation"
+        }
+      ],
+      "id": "pytorch-kineto",
+      "name": "PyTorch/Kineto",
+      "unverified_assumptions": [
+        "Stormlog workload overhead and trace completeness are unmeasured.",
+        "No compatible accelerator trial was executed on the control host."
+      ]
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Profiling vLLM",
+          "url": "https://docs.vllm.ai/en/latest/contributing/profiling/",
+          "version_or_date": "latest documentation, accessed 2026-09-23"
+        }
+      ],
+      "id": "vllm-proton",
+      "name": "vLLM Triton Proton",
+      "unverified_assumptions": [
+        "Whether Proton already answers every intended Stormlog question is unmeasured.",
+        "No compatible accelerator trial was executed on the control host."
+      ]
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "CUPTI Activity API and correlation",
+          "url": "https://docs.nvidia.com/cupti/main/main.html",
+          "version_or_date": "CUDA/CUPTI 13.3+ current documentation"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "CUPTI release notes",
+          "url": "https://docs.nvidia.com/cupti/release-notes/release-notes.html",
+          "version_or_date": "current through CUDA 13.3 documentation"
+        }
+      ],
+      "id": "direct-cupti",
+      "name": "Direct CUPTI Activity",
+      "unverified_assumptions": [
+        "Stormlog fidelity, overhead, loss behavior, and coexistence are unmeasured.",
+        "No compatible accelerator trial was executed on the control host."
+      ]
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Linux BPF ring buffer",
+          "url": "https://www.kernel.org/doc/html/next/bpf/ringbuf.html",
+          "version_or_date": "Linux kernel next documentation"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "USDT concepts",
+          "url": "https://docs.ebpf.io/linux/concepts/usdt/",
+          "version_or_date": "updated 2025-04-06"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "ProfInfer",
+          "url": "https://arxiv.org/abs/2601.20755",
+          "version_or_date": "arXiv v2, 2026-01-29"
+        }
+      ],
+      "id": "ebpf-semantic",
+      "name": "USDT/uprobe/eBPF semantic probes",
+      "unverified_assumptions": [
+        "ProfInfer's llama.cpp probes have not been reproduced on vLLM.",
+        "No compatible accelerator trial was executed on the control host."
+      ]
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "parcagpu source",
+          "url": "https://github.com/parca-dev/parcagpu",
+          "version_or_date": "commit 1e7e8da62513fd188c121716fc5028b4bd8ac47c"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Continuous NVIDIA CUDA Profiling in Production",
+          "url": "https://www.polarsignals.com/blog/posts/2025/10/22/gpu-profiling",
+          "version_or_date": "2025-10-22"
+        }
+      ],
+      "id": "cupti-ebpf-hybrid",
+      "name": "CUPTI to USDT/eBPF hybrid",
+      "unverified_assumptions": [
+        "Stormlog has not reproduced the published overhead or transport advantage.",
+        "No compatible accelerator trial was executed on the control host."
+      ]
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Neutrino OSDI 2025",
+          "url": "https://www.usenix.org/conference/osdi25/presentation/huang-songlin",
+          "version_or_date": "OSDI 2025"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Neutrino source",
+          "url": "https://github.com/open-neutrino/neutrino",
+          "version_or_date": "commit 4a82cd22f474c31ac2fecfa174d381a19bb3f469"
+        }
+      ],
+      "id": "neutrino",
+      "name": "Neutrino programmable GPU probes",
+      "unverified_assumptions": [
+        "No named Stormlog incident currently proves instruction-level evidence is required.",
+        "Published overhead varies by probe and is not a Stormlog result.",
+        "No compatible accelerator trial was executed on the control host."
+      ]
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "ROCProfiler SDK documentation",
+          "url": "https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/",
+          "version_or_date": "1.3.5 latest documentation"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "ROCProfiler quick reference",
+          "url": "https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/quick-reference/quick_guide.html",
+          "version_or_date": "1.3.5 latest documentation"
+        }
+      ],
+      "id": "rocprofiler",
+      "name": "ROCProfiler SDK and rocprofv3",
+      "unverified_assumptions": [
+        "No supported AMD hardware is available in the current environment.",
+        "No compatible accelerator trial was executed on the control host."
+      ]
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "evidence": [
+            "research/native_probes/artifacts/control-macos-arm64/environment.json"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Nsight Systems user guide",
+          "url": "https://docs.nvidia.com/nsight-systems/UserGuide/",
+          "version_or_date": "current documentation"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Profiling vLLM",
+          "url": "https://docs.vllm.ai/en/latest/contributing/profiling/",
+          "version_or_date": "latest documentation"
+        }
+      ],
+      "id": "no-native-collector",
+      "name": "No new native collector",
+      "unverified_assumptions": [
+        "The intended Stormlog debugging questions may already be answered adequately by supported public imports.",
+        "No compatible accelerator trial was executed on the control host."
+      ]
+    }
+  ],
+  "matrix_kind": "stormlog_validated",
+  "reviewed_on": "2026-09-23",
+  "schema_version": 1
+}

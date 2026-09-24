@@ -38,6 +38,7 @@ native_probe_source_review
 native_probe_experiment_specification
 native_probe_security_deployment
 native_probe_followups
+native_probe_evaluation
 tui
 cookbook/index
 cookbook/always_on

@@ -1,0 +1,23 @@
+{
+  "artifact_kind": "native_probe_trial_inventory",
+  "environment": "research/native_probes/artifacts/control-macos-arm64/environment.json",
+  "not_run": [
+    {
+      "modes": [
+        "public-pytorch",
+        "public-engine",
+        "proton",
+        "trusted",
+        "ebpf-semantic",
+        "direct-cupti",
+        "hybrid-cupti-ebpf",
+        "programmable",
+        "amd-rocprofiler",
+        "detailed-counter"
+      ],
+      "reason": "UNTESTED - REQUIRED ACCELERATOR, LINUX EBPF, AND ENGINE TOOLCHAINS UNAVAILABLE"
+    }
+  ],
+  "schema_version": 1,
+  "trials": []
+}

@@ -15,6 +15,7 @@ from research.native_probes.models import CommandSpec, ExperimentMode, TrialSpec
 from research.native_probes.planning import counterbalanced_order, trial_id
 from research.native_probes.preflight import collect_environment, write_manifest
 from research.native_probes.runner import run_trial
+from research.native_probes.validation import build_unvalidated_matrix
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 SCHEMAS = REPOSITORY / "research/native_probes/schemas"
@@ -41,6 +42,35 @@ def test_source_capability_matrix_is_complete_and_not_mislabeled() -> None:
         assert candidate["evidence_sources"]
         statuses = {claim["status"] for claim in candidate["claims"].values()}
         assert "STORMLOG_VALIDATED" not in statuses
+
+
+def test_validated_matrix_does_not_promote_unrun_experiments() -> None:
+    matrix = json.loads(
+        (MATRICES / "stormlog_validated.json").read_text(encoding="utf-8")
+    )
+
+    _validate(matrix, "capability_matrix.schema.json")
+    assert matrix["matrix_kind"] == "stormlog_validated"
+    for candidate in matrix["candidates"]:
+        for claim in candidate["claims"].values():
+            assert claim["status"] == "UNKNOWN"
+            assert claim["detail"].startswith("UNTESTED - ")
+            for evidence in claim["evidence"]:
+                assert (REPOSITORY / evidence).is_file()
+
+
+def test_validated_matrix_initialization_resets_source_confidence() -> None:
+    source = json.loads((MATRICES / "source_backed.json").read_text(encoding="utf-8"))
+
+    result = build_unvalidated_matrix(source, "evidence/environment.json")
+
+    statuses = {
+        claim["status"]
+        for candidate in result["candidates"]
+        for claim in candidate["claims"].values()
+    }
+    assert statuses == {"UNKNOWN"}
+    assert source["candidates"][0]["claims"]["signal"]["status"] != "UNKNOWN"
 
 
 def test_manifest_writer_refuses_to_overwrite_evidence(tmp_path: Path) -> None:

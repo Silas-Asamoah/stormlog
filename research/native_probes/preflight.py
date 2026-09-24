@@ -135,20 +135,29 @@ def _mode_status(
         return ResultStatus.PASS, "profiler-off control is available"
     if mode is ExperimentMode.PUBLIC_PYTORCH:
         return ResultStatus.UNTESTED, "framework import is checked by the workload"
-    if mode in {ExperimentMode.EBPF_SEMANTIC, ExperimentMode.HYBRID_CUPTI_EBPF}:
-        if not accelerator["linux"]:
-            return ResultStatus.UNSUPPORTED, "Linux eBPF is unavailable on this host"
-    if mode in {ExperimentMode.DIRECT_CUPTI, ExperimentMode.PROTON}:
-        if not accelerator["nvidia_toolchain_detected"]:
-            return ResultStatus.UNSUPPORTED, "NVIDIA CUDA/CUPTI is unavailable"
-    if mode is ExperimentMode.AMD_ROCPROFILER:
-        if not accelerator["amd_toolchain_detected"]:
-            return ResultStatus.UNSUPPORTED, "AMD ROCProfiler is unavailable"
+    unavailable_reason = _unavailable_platform_reason(mode, accelerator)
+    if unavailable_reason:
+        return ResultStatus.UNSUPPORTED, unavailable_reason
     if required and not present:
         return ResultStatus.UNSUPPORTED, "none of the required tools were detected"
     if len(present) != len(required):
         return ResultStatus.PARTIAL, "only part of the required toolchain was detected"
     return ResultStatus.UNTESTED, "tooling detected; runtime experiment has not run"
+
+
+def _unavailable_platform_reason(
+    mode: ExperimentMode, accelerator: Mapping[str, Any]
+) -> str | None:
+    ebpf_modes = {ExperimentMode.EBPF_SEMANTIC, ExperimentMode.HYBRID_CUPTI_EBPF}
+    if mode in ebpf_modes and not accelerator["linux"]:
+        return "Linux eBPF is unavailable on this host"
+    if mode in {ExperimentMode.DIRECT_CUPTI, ExperimentMode.PROTON}:
+        if not accelerator["nvidia_toolchain_detected"]:
+            return "NVIDIA CUDA/CUPTI is unavailable"
+    if mode is ExperimentMode.AMD_ROCPROFILER:
+        if not accelerator["amd_toolchain_detected"]:
+            return "AMD ROCProfiler is unavailable"
+    return None
 
 
 def _source_identity(repository: Path) -> dict[str, Any]:
