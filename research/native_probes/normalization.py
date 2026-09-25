@@ -112,6 +112,7 @@ def normalize_trial(trial: Mapping[str, Any]) -> dict[str, Any]:
         "metrics": dict(_mapping(trial.get("metrics")) or {}),
         "measurement_window": trial.get("measurement_window"),
         "loss": loss,
+        "pressure_controls": dict(_mapping(trial.get("pressure_controls")) or {}),
         "raw_artifact_ids": [
             row.get("artifact_id")
             for row in artifacts

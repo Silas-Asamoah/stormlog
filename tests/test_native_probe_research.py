@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import sys
 import tarfile
 from pathlib import Path
+from typing import Sequence
 
 import jsonschema
 import pytest
@@ -57,6 +59,41 @@ def test_preflight_is_explicit_about_unavailable_accelerators() -> None:
             manifest["mode_qualifications"]["ebpf-semantic-linux"]["status"]
             == "unsupported"
         )
+
+
+def test_preflight_treats_vendor_tools_as_alternatives() -> None:
+    paths = {"nvidia-smi": "/bin/nvidia-smi", "nsys": "/bin/nsys"}
+
+    def probe(argv: Sequence[str]) -> tuple[bool, str]:
+        command = tuple(argv)
+        if "--query-gpu=name,compute_cap,driver_version" in command:
+            return True, "A100, 8.0, 555.1"
+        return True, "tool 1.0"
+
+    manifest = collect_environment(
+        "nvidia", REPOSITORY, command_probe=probe, system="Linux", tool_paths=paths
+    )
+
+    assert manifest["mode_qualifications"]["trusted-nvidia"]["status"] == "untested"
+    assert manifest["mode_qualifications"]["trusted-amd"]["status"] == "unsupported"
+    assert manifest["accelerators"]["nvidia"]["cuda_toolkit_detected"] is False
+
+
+def test_preflight_does_not_treat_nvcc_as_a_gpu() -> None:
+    manifest = collect_environment(
+        "toolkit-only",
+        REPOSITORY,
+        command_probe=lambda argv: (True, "12.8"),
+        system="Linux",
+        tool_paths={"nvcc": "/bin/nvcc"},
+    )
+
+    assert manifest["accelerators"]["nvidia"]["cuda_toolkit_detected"] is True
+    assert manifest["accelerators"]["nvidia"]["gpu_detected"] is False
+    assert (
+        manifest["mode_qualifications"]["direct-cupti-nvidia"]["status"]
+        == "unsupported"
+    )
 
 
 def test_source_capability_matrix_is_complete_and_not_mislabeled() -> None:
@@ -222,6 +259,59 @@ def test_runner_rejects_secret_environment_keys(tmp_path: Path) -> None:
         run_trial(spec, tmp_path)
 
 
+def test_runner_marks_missing_required_profiler_artifact_partial(
+    tmp_path: Path,
+) -> None:
+    payload = json.dumps(
+        {
+            "artifact_kind": "workload_result",
+            "metrics": {},
+            "measurement_window": _window(),
+            "ground_truth": {},
+        }
+    )
+    spec = TrialSpec(
+        trial_id="missing",
+        configuration_id="control",
+        workload_id=WorkloadId.W1_EAGER,
+        mode=ExperimentMode.PUBLIC_PYTORCH,
+        repetition=0,
+        command=CommandSpec((sys.executable, "-c", f"print({payload!r})"), {}, 5.0),
+        expected_artifacts=expected_artifacts(ExperimentMode.PUBLIC_PYTORCH),
+        process_roles=process_roles(ExperimentMode.PUBLIC_PYTORCH),
+    )
+
+    result = run_trial(spec, tmp_path)
+
+    assert result["status"] == "partial"
+    assert (
+        next(
+            row for row in result["artifacts"] if row["artifact_id"] == "pytorch-trace"
+        )["status"]
+        == "missing"
+    )
+
+
+def test_runner_timeout_retains_partial_evidence(tmp_path: Path) -> None:
+    spec = TrialSpec(
+        trial_id="timeout",
+        configuration_id="control",
+        workload_id=WorkloadId.W1_EAGER,
+        mode=ExperimentMode.OFF,
+        repetition=0,
+        command=CommandSpec(
+            (sys.executable, "-c", "import time; time.sleep(10)"), {}, 0.1
+        ),
+        expected_artifacts=expected_artifacts(ExperimentMode.OFF),
+        process_roles=process_roles(ExperimentMode.OFF),
+    )
+
+    result = run_trial(spec, tmp_path)
+
+    assert result["status"] == "timeout"
+    assert all(row["status"] == "present" for row in result["artifacts"])
+
+
 def test_paired_perturbation_requires_matched_nonzero_baseline() -> None:
     baseline = _paired_trial("off-0", "off", 0, 10.0)
     profiled = _paired_trial("public-0", "public-pytorch", 0, 12.0)
@@ -348,6 +438,38 @@ def test_matrix_promotion_requires_all_evidence_roles(tmp_path: Path) -> None:
             [{"candidate_id": candidate["id"], "claim_id": claim, "evidence": []}],
             tmp_path,
         )
+
+
+def test_matrix_promotion_accepts_complete_hashed_bundle(tmp_path: Path) -> None:
+    matrix = json.loads((MATRICES / "stormlog_validated.json").read_text())
+    candidate = matrix["candidates"][0]
+    claim = next(iter(candidate["claims"]))
+    evidence = []
+    for role in ("environment", "command", "raw_artifact", "trial", "analysis"):
+        path = tmp_path / f"{role}.json"
+        path.write_text("{}", encoding="utf-8")
+        evidence.append(
+            {
+                "role": role,
+                "path": path.name,
+                "sha256": hashlib.sha256(b"{}").hexdigest(),
+            }
+        )
+
+    promoted = validate_matrix_promotions(
+        matrix,
+        [
+            {
+                "candidate_id": candidate["id"],
+                "claim_id": claim,
+                "detail": "hardware run",
+                "evidence": evidence,
+            }
+        ],
+        tmp_path,
+    )
+
+    assert promoted["candidates"][0]["claims"][claim]["status"] == "STORMLOG_VALIDATED"
 
 
 def _window() -> dict[str, object]:

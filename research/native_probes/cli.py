@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 from pathlib import Path
 from typing import Any, Sequence
@@ -22,6 +23,9 @@ from .planning import build_plan
 from .preflight import collect_environment, write_manifest
 from .runner import run_trial
 from .validation import build_unvalidated_matrix, validate_matrix_promotions
+
+_SCHEMAS = Path(__file__).with_name("schemas")
+jsonschema = importlib.import_module("jsonschema")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -106,6 +110,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _preflight(arguments: argparse.Namespace) -> int:
     manifest = collect_environment(arguments.host_id, arguments.repository)
+    _validate(manifest, "environment.schema.json")
     checksum = write_manifest(arguments.output, manifest)
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
     return 0
@@ -131,6 +136,7 @@ def _plan(arguments: argparse.Namespace) -> int:
         artifact_root=arguments.artifact_root,
         cupti_library=arguments.cupti_library,
     )
+    _validate(plan, "plan.schema.json")
     checksum = write_manifest(arguments.output, plan)
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
     return 0
@@ -138,6 +144,7 @@ def _plan(arguments: argparse.Namespace) -> int:
 
 def _run(arguments: argparse.Namespace) -> int:
     plan = _read_object(arguments.plan)
+    _validate(plan, "plan.schema.json")
     root = Path(plan["artifact_root"])
     results = []
     for row in plan["trials"]:
@@ -160,8 +167,10 @@ def _run(arguments: argparse.Namespace) -> int:
                 for item in row["process_roles"]
             ),
             measurement_range_id=row["measurement_range_id"],
+            pressure_controls=row.get("pressure_controls", {}),
         )
         manifest = run_trial(spec, root)
+        _validate(manifest, "trial.schema.json")
         results.append(
             str(
                 root
@@ -188,6 +197,7 @@ def _run(arguments: argparse.Namespace) -> int:
 
 def _normalize(arguments: argparse.Namespace) -> int:
     result = normalize_trial(_read_object(arguments.trial))
+    _validate(result, "normalized.schema.json")
     checksum = write_manifest(arguments.output, result)
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
     return 0
@@ -217,6 +227,11 @@ def _read_object(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{path}: expected a JSON object")
     return value
+
+
+def _validate(value: object, schema_name: str) -> None:
+    schema = _read_object(_SCHEMAS / schema_name)
+    jsonschema.Draft202012Validator(schema).validate(value)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

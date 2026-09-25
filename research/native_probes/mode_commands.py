@@ -29,6 +29,12 @@ class Workload:
     overlap_elements: int = 1_048_576
     overlap_operations: int = 8
     measurement_range_id: str = "stormlog-native-probe-measured"
+    producer_buffer_bytes: int = 8 * 1024 * 1024
+    transport_buffer_bytes: int = 8 * 1024 * 1024
+    output_byte_bound: int = 256 * 1024 * 1024
+    consumer_delay_ms: float = 0.0
+    flush_interval_ms: float = 100.0
+    postprocessor_delay_ms: float = 0.0
 
 
 def microbenchmark_command(
@@ -52,7 +58,9 @@ def microbenchmark_command(
     if mode is ExperimentMode.DIRECT_CUPTI:
         if cupti_library is None:
             raise ValueError("direct-cupti requires a pinned injection library")
-        return _direct_cupti(base, artifact_directory, cupti_library)
+        return _direct_cupti(
+            base, artifact_directory, cupti_library, workload.output_byte_bound
+        )
     if mode is ExperimentMode.AMD_ROCPROFILER:
         return _rocprofiler_command(base, artifact_directory)
     if mode is ExperimentMode.DETAILED_COUNTER:
@@ -86,6 +94,18 @@ def _workload_argv(workload: Workload) -> tuple[str, ...]:
         str(workload.overlap_operations),
         "--measurement-range-id",
         workload.measurement_range_id,
+        "--producer-buffer-bytes",
+        str(workload.producer_buffer_bytes),
+        "--transport-buffer-bytes",
+        str(workload.transport_buffer_bytes),
+        "--output-byte-bound",
+        str(workload.output_byte_bound),
+        "--consumer-delay-ms",
+        str(workload.consumer_delay_ms),
+        "--flush-interval-ms",
+        str(workload.flush_interval_ms),
+        "--postprocessor-delay-ms",
+        str(workload.postprocessor_delay_ms),
     )
 
 
@@ -206,7 +226,10 @@ def _trusted_command(
 
 
 def _direct_cupti(
-    base: tuple[str, ...], artifact_directory: Path, library: Path
+    base: tuple[str, ...],
+    artifact_directory: Path,
+    library: Path,
+    output_byte_bound: int,
 ) -> CommandSpec:
     resolved_library = library.resolve(strict=True)
     return CommandSpec(
@@ -214,7 +237,7 @@ def _direct_cupti(
         {
             "CUDA_INJECTION64_PATH": str(resolved_library),
             "STORMLOG_CUPTI_OUTPUT_DIR": str(artifact_directory / "cupti"),
-            "STORMLOG_CUPTI_MAX_BYTES": str(256 * 1024 * 1024),
+            "STORMLOG_CUPTI_MAX_BYTES": str(output_byte_bound),
             "STORMLOG_CUPTI_ACTIVITIES": (
                 "driver,runtime,kernel,memcpy,memset,synchronization"
             ),

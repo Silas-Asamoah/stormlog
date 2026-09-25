@@ -61,6 +61,20 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--measurement-range-id", default="stormlog-native-probe-measured"
     )
+    parser.add_argument(
+        "--producer-buffer-bytes", type=_positive_int, default=8 * 1024 * 1024
+    )
+    parser.add_argument(
+        "--transport-buffer-bytes", type=_positive_int, default=8 * 1024 * 1024
+    )
+    parser.add_argument(
+        "--output-byte-bound", type=_positive_int, default=256 * 1024 * 1024
+    )
+    parser.add_argument("--consumer-delay-ms", type=_nonnegative_float, default=0.0)
+    parser.add_argument("--flush-interval-ms", type=_positive_float, default=100.0)
+    parser.add_argument(
+        "--postprocessor-delay-ms", type=_nonnegative_float, default=0.0
+    )
     return parser
 
 
@@ -229,9 +243,12 @@ def _w4_stress(
             "launches_per_iteration": launches_per_iteration,
             "pressure_controls": {
                 "launches_per_iteration": launches_per_iteration,
-                "output_byte_bound": None,
-                "consumer_delay_ms": None,
-                "flush_interval_ms": None,
+                "producer_buffer_bytes": arguments.producer_buffer_bytes,
+                "transport_buffer_bytes": arguments.transport_buffer_bytes,
+                "output_byte_bound": arguments.output_byte_bound,
+                "consumer_delay_ms": arguments.consumer_delay_ms,
+                "flush_interval_ms": arguments.flush_interval_ms,
+                "postprocessor_delay_ms": arguments.postprocessor_delay_ms,
             },
         },
         window,
@@ -305,6 +322,20 @@ def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be positive")
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return parsed
+
+
+def _nonnegative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be nonnegative")
     return parsed
 
 

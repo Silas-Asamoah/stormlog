@@ -22,6 +22,7 @@
     "measurement_window",
     "ground_truth",
     "loss",
+    "pressure_controls",
     "artifacts",
     "limitations"
   ],
@@ -73,6 +74,7 @@
     "measurement_window": {"type": ["object", "null"]},
     "ground_truth": {"type": ["object", "null"]},
     "loss": {"type": "object"},
+    "pressure_controls": {"type": "object"},
     "artifacts": {
       "type": "array",
       "items": {

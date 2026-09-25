@@ -38,13 +38,14 @@ def collect_environment(
     *,
     command_probe: Probe | None = None,
     system: str | None = None,
+    tool_paths: Mapping[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """Return a manifest without equating an installed tool with usable hardware."""
     if not host_id or not host_id.strip():
         raise ValueError("host_id must not be empty")
     repo = repository.resolve(strict=True)
     probe = command_probe or _run_probe
-    tools = _tool_inventory(probe)
+    tools = _tool_inventory(probe, tool_paths)
     system_name = system or platform.system()
     nvidia = _nvidia_inventory(tools, probe)
     amd = _amd_inventory(tools, probe)
@@ -91,10 +92,12 @@ def write_manifest(path: Path, manifest: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _tool_inventory(probe: Probe) -> dict[str, dict[str, Any]]:
+def _tool_inventory(
+    probe: Probe, tool_paths: Mapping[str, str | None] | None = None
+) -> dict[str, dict[str, Any]]:
     inventory = {}
     for name in _TOOLS:
-        path = shutil.which(name)
+        path = tool_paths.get(name) if tool_paths is not None else shutil.which(name)
         ok, version = probe((path or name, "--version")) if path else (False, "")
         inventory[name] = {
             "available": path is not None,

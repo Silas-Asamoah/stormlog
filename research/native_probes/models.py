@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
@@ -138,6 +138,7 @@ class TrialSpec:
     expected_artifacts: tuple[ArtifactExpectation, ...] = ()
     process_roles: tuple[ProcessRoleSpec, ...] = ()
     measurement_range_id: str = "stormlog-native-probe-measured"
+    pressure_controls: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _nonempty_string(value: object, field: str) -> str:

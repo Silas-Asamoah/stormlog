@@ -81,6 +81,7 @@ def run_trial(spec: TrialSpec, output_root: Path) -> dict[str, Any]:
             workload_result.get("ground_truth") if workload_result else None
         ),
         "loss": {},
+        "pressure_controls": dict(spec.pressure_controls),
         "artifacts": artifacts,
         "limitations": _limitations(status, return_code, missing_required),
     }

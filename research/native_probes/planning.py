@@ -125,6 +125,7 @@ def build_plan(
                             for row in process_roles(mode)
                         ],
                         "measurement_range_id": workload.measurement_range_id,
+                        "pressure_controls": _pressure_controls(workload, mode),
                     }
                 )
     return {
@@ -137,4 +138,26 @@ def build_plan(
         "environment_artifact": environment_artifact,
         "artifact_root": str(artifact_root),
         "trials": trials,
+    }
+
+
+def _pressure_controls(workload: Workload, mode: ExperimentMode) -> dict[str, Any]:
+    values = {
+        "launches_per_iteration": workload.launches_per_iteration,
+        "producer_buffer_bytes": workload.producer_buffer_bytes,
+        "transport_buffer_bytes": workload.transport_buffer_bytes,
+        "output_byte_bound": workload.output_byte_bound,
+        "consumer_delay_ms": workload.consumer_delay_ms,
+        "flush_interval_ms": workload.flush_interval_ms,
+        "postprocessor_delay_ms": workload.postprocessor_delay_ms,
+    }
+    supported = {"launches_per_iteration"}
+    if mode is ExperimentMode.DIRECT_CUPTI:
+        supported |= {"output_byte_bound"}
+    if mode in {ExperimentMode.EBPF_SEMANTIC, ExperimentMode.HYBRID_CUPTI_EBPF}:
+        supported |= {"transport_buffer_bytes", "consumer_delay_ms"}
+    return {
+        "values": values,
+        "supported": sorted(supported),
+        "unsupported": sorted(set(values) - supported),
     }
