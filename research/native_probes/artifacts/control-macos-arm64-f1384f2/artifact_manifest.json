@@ -1,0 +1,11 @@
+{
+  "artifact_kind": "native_probe_artifact_manifest",
+  "environment": {
+    "path": "research/native_probes/artifacts/control-macos-arm64-f1384f2/environment.json",
+    "sha256": "a2f50aeb1b4d7c9bef41a68e4059c00726cc256d8cdff5f1066bb869cee49f95"
+  },
+  "framework_revision": "f1384f2e693c49af0f28c05defaf1909ea43f9d1",
+  "raw_trace_location": null,
+  "raw_trace_reason": "No accelerator experiment ran on the control host.",
+  "schema_version": 1
+}

@@ -56,8 +56,8 @@ Consequently:
 - vLLM and Proton: **UNTESTED - ENGINE/TOOLCHAIN UNAVAILABLE**
 
 The final framework-revision environment artifact and its checksum are under
-`research/native_probes/artifacts/control-macos-arm64-903548c/`. It records
-framework revision `903548c5cd13520d4884f60edacca68580560dcf`; the following
+`research/native_probes/artifacts/control-macos-arm64-f1384f2/`. It records
+framework revision `f1384f2e693c49af0f28c05defaf1909ea43f9d1`; the following
 evidence-only commit adds that immutable output without changing the harness.
 No accelerator trial
 was run, so there is no raw GPU trace and the trial dataset is intentionally
