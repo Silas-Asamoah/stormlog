@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import random
-from typing import Iterable
+from pathlib import Path
+from typing import Any, Iterable, Sequence
 
-from .models import ExperimentMode
+from .mode_commands import (
+    Workload,
+    expected_artifacts,
+    microbenchmark_command,
+    process_roles,
+)
+from .models import ExperimentMode, WorkloadId
 
 
 def counterbalanced_order(
@@ -60,3 +67,74 @@ def _unique_modes(modes: Iterable[ExperimentMode]) -> list[ExperimentMode]:
         seen.add(mode)
         result.append(mode)
     return result
+
+
+def build_plan(
+    *,
+    configuration_id: str,
+    vendor: str,
+    workloads: Sequence[WorkloadId],
+    modes: Sequence[ExperimentMode],
+    repetitions: int,
+    seed: int,
+    environment_artifact: str,
+    artifact_root: Path,
+    cupti_library: Path | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic, serializable execution plan without running it."""
+    if vendor not in {"nvidia", "amd"}:
+        raise ValueError("vendor must be 'nvidia' or 'amd'")
+    orders = counterbalanced_order(modes, repetitions=repetitions, seed=seed)
+    trials = []
+    for workload_id in workloads:
+        workload = Workload(workload_id, seed=seed)
+        for repetition, order in enumerate(orders):
+            for mode in order:
+                identity = trial_id(
+                    configuration_id, workload_id.value, mode, repetition
+                )
+                directory = artifact_root / configuration_id / "trials" / identity
+                command = microbenchmark_command(
+                    mode,
+                    workload,
+                    directory,
+                    cupti_library=cupti_library,
+                    vendor=vendor,
+                )
+                trials.append(
+                    {
+                        "trial_id": identity,
+                        "configuration_id": configuration_id,
+                        "workload_id": workload_id.value,
+                        "mode": mode.value,
+                        "repetition": repetition,
+                        "command": {
+                            "argv": list(command.argv),
+                            "environment": dict(command.environment),
+                            "timeout_seconds": command.timeout_seconds,
+                        },
+                        "expected_artifacts": [
+                            row.__dict__ for row in expected_artifacts(mode, vendor)
+                        ],
+                        "process_roles": [
+                            {
+                                "role": row.role.value,
+                                "discovery": row.discovery,
+                                "argv_contains": row.argv_contains,
+                            }
+                            for row in process_roles(mode)
+                        ],
+                        "measurement_range_id": workload.measurement_range_id,
+                    }
+                )
+    return {
+        "schema_version": 1,
+        "artifact_kind": "native_probe_plan",
+        "configuration_id": configuration_id,
+        "vendor": vendor,
+        "seed": seed,
+        "repetitions": repetitions,
+        "environment_artifact": environment_artifact,
+        "artifact_root": str(artifact_root),
+        "trials": trials,
+    }

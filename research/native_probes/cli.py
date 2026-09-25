@@ -8,8 +8,20 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .analysis import analyze_trials
+from .models import (
+    ArtifactExpectation,
+    CommandSpec,
+    ExperimentMode,
+    ProcessRole,
+    ProcessRoleSpec,
+    TrialSpec,
+    WorkloadId,
+)
+from .normalization import normalize_trial
+from .planning import build_plan
 from .preflight import collect_environment, write_manifest
-from .validation import build_unvalidated_matrix
+from .runner import run_trial
+from .validation import build_unvalidated_matrix, validate_matrix_promotions
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -18,9 +30,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.command == "preflight":
         return _preflight(arguments)
-    if arguments.command == "initialize-matrix":
-        return _initialize_matrix(arguments)
-    return _analyze(arguments)
+    handlers = {
+        "preflight": _preflight,
+        "plan": _plan,
+        "run": _run,
+        "normalize": _normalize,
+        "analyze": _analyze,
+        "initialize-matrix": _initialize_matrix,
+        "validate-matrix": _validate_matrix,
+    }
+    return handlers[arguments.command](arguments)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -31,6 +50,36 @@ def _parser() -> argparse.ArgumentParser:
     preflight.add_argument("--host-id", required=True)
     preflight.add_argument("--repository", type=Path, default=Path.cwd())
     preflight.add_argument("--output", required=True, type=Path)
+
+    plan = subparsers.add_parser("plan", help="create an immutable trial plan")
+    plan.add_argument("--configuration-id", required=True)
+    plan.add_argument("--vendor", required=True, choices=("nvidia", "amd"))
+    plan.add_argument(
+        "--workload",
+        action="append",
+        required=True,
+        choices=[row.value for row in WorkloadId],
+    )
+    plan.add_argument(
+        "--mode",
+        action="append",
+        required=True,
+        choices=[row.value for row in ExperimentMode],
+    )
+    plan.add_argument("--repetitions", type=int, default=5)
+    plan.add_argument("--seed", type=int, default=118)
+    plan.add_argument("--environment-artifact", required=True)
+    plan.add_argument("--artifact-root", required=True, type=Path)
+    plan.add_argument("--cupti-library", type=Path)
+    plan.add_argument("--output", required=True, type=Path)
+
+    run = subparsers.add_parser("run", help="execute every trial in a plan")
+    run.add_argument("--plan", required=True, type=Path)
+    run.add_argument("--output", required=True, type=Path)
+
+    normalize = subparsers.add_parser("normalize", help="normalize one trial")
+    normalize.add_argument("--trial", required=True, type=Path)
+    normalize.add_argument("--output", required=True, type=Path)
 
     analyze = subparsers.add_parser("analyze", help="aggregate trial JSONL")
     analyze.add_argument("--input", required=True, type=Path)
@@ -44,6 +93,14 @@ def _parser() -> argparse.ArgumentParser:
     matrix.add_argument("--source", required=True, type=Path)
     matrix.add_argument("--environment-artifact", required=True)
     matrix.add_argument("--output", required=True, type=Path)
+
+    validate = subparsers.add_parser(
+        "validate-matrix", help="apply only fully evidenced matrix promotions"
+    )
+    validate.add_argument("--matrix", required=True, type=Path)
+    validate.add_argument("--promotions", required=True, type=Path)
+    validate.add_argument("--repository", type=Path, default=Path.cwd())
+    validate.add_argument("--output", required=True, type=Path)
     return parser
 
 
@@ -62,6 +119,80 @@ def _analyze(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _plan(arguments: argparse.Namespace) -> int:
+    plan = build_plan(
+        configuration_id=arguments.configuration_id,
+        vendor=arguments.vendor,
+        workloads=[WorkloadId(row) for row in arguments.workload],
+        modes=[ExperimentMode(row) for row in arguments.mode],
+        repetitions=arguments.repetitions,
+        seed=arguments.seed,
+        environment_artifact=arguments.environment_artifact,
+        artifact_root=arguments.artifact_root,
+        cupti_library=arguments.cupti_library,
+    )
+    checksum = write_manifest(arguments.output, plan)
+    print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
+    return 0
+
+
+def _run(arguments: argparse.Namespace) -> int:
+    plan = _read_object(arguments.plan)
+    root = Path(plan["artifact_root"])
+    results = []
+    for row in plan["trials"]:
+        spec = TrialSpec(
+            trial_id=row["trial_id"],
+            configuration_id=row["configuration_id"],
+            workload_id=WorkloadId(row["workload_id"]),
+            mode=ExperimentMode(row["mode"]),
+            repetition=row["repetition"],
+            command=CommandSpec.from_mapping(row["command"]),
+            expected_artifacts=tuple(
+                ArtifactExpectation(**item) for item in row["expected_artifacts"]
+            ),
+            process_roles=tuple(
+                ProcessRoleSpec(
+                    role=ProcessRole(item["role"]),
+                    discovery=item["discovery"],
+                    argv_contains=item.get("argv_contains"),
+                )
+                for item in row["process_roles"]
+            ),
+            measurement_range_id=row["measurement_range_id"],
+        )
+        manifest = run_trial(spec, root)
+        results.append(
+            str(
+                root
+                / spec.configuration_id
+                / "trials"
+                / spec.trial_id
+                / "manifest.json"
+            )
+        )
+        if manifest["status"] not in {"pass", "partial", "unsupported"}:
+            continue
+    checksum = write_manifest(
+        arguments.output,
+        {
+            "schema_version": 1,
+            "artifact_kind": "native_probe_run_index",
+            "plan": str(arguments.plan),
+            "trial_manifests": results,
+        },
+    )
+    print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
+    return 0
+
+
+def _normalize(arguments: argparse.Namespace) -> int:
+    result = normalize_trial(_read_object(arguments.trial))
+    checksum = write_manifest(arguments.output, result)
+    print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
+    return 0
+
+
 def _initialize_matrix(arguments: argparse.Namespace) -> int:
     with arguments.source.open(encoding="utf-8") as source:
         source_matrix = json.load(source)
@@ -69,6 +200,23 @@ def _initialize_matrix(arguments: argparse.Namespace) -> int:
     checksum = write_manifest(arguments.output, matrix)
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
     return 0
+
+
+def _validate_matrix(arguments: argparse.Namespace) -> int:
+    matrix = _read_object(arguments.matrix)
+    promotions = _read_object(arguments.promotions).get("promotions", [])
+    result = validate_matrix_promotions(matrix, promotions, arguments.repository)
+    checksum = write_manifest(arguments.output, result)
+    print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
+    return 0
+
+
+def _read_object(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as source:
+        value = json.load(source)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: expected a JSON object")
+    return value
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

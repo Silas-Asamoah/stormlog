@@ -14,7 +14,8 @@ from typing import Any, Mapping
 
 import psutil
 
-from .models import ResultStatus, TrialSpec
+from .models import ProcessRole, ProcessRoleSpec, ResultStatus, TrialSpec
+from .normalization import validate_unique_artifacts
 from .preflight import write_manifest
 
 _POLL_SECONDS = 0.05
@@ -45,25 +46,21 @@ def run_trial(spec: TrialSpec, output_root: Path) -> dict[str, Any]:
     stderr_path = logs_directory / "stderr.log"
     started_at_ns = time.time_ns()
     status, return_code, resources = _execute(spec, stdout_path, stderr_path)
-    artifacts = [_artifact(stdout_path), _artifact(stderr_path)]
-    metrics = _workload_metrics(stdout_path)
-    metrics.update(
-        {
-            "wall_time_ms": resources.wall_time_ms,
-            "target_cpu_user_seconds": resources.cpu_user_seconds,
-            "target_cpu_system_seconds": resources.cpu_system_seconds,
-            "target_peak_rss_bytes": float(resources.peak_rss_bytes),
-            "target_peak_threads": float(resources.peak_threads),
-            "target_read_bytes": _optional_float(resources.read_bytes),
-            "target_write_bytes": _optional_float(resources.write_bytes),
-        }
+    artifacts = _collect_artifacts(spec, trial_directory)
+    validate_unique_artifacts(artifacts)
+    workload_result = _workload_result(stdout_path)
+    metrics = dict(workload_result.get("metrics", {})) if workload_result else {}
+    missing_required = any(
+        row["status"] == "missing" and row["required"] for row in artifacts
     )
+    if status is ResultStatus.PASS and missing_required:
+        status = ResultStatus.PARTIAL
     manifest = {
         "schema_version": 1,
         "artifact_kind": "native_probe_trial",
         "trial_id": spec.trial_id,
         "configuration_id": spec.configuration_id,
-        "workload_id": spec.workload_id,
+        "workload_id": spec.workload_id.value,
         "mode": spec.mode.value,
         "repetition": spec.repetition,
         "status": status.value,
@@ -76,8 +73,16 @@ def run_trial(spec: TrialSpec, output_root: Path) -> dict[str, Any]:
             "timeout_seconds": spec.command.timeout_seconds,
         },
         "metrics": metrics,
+        "resources": resources,
+        "measurement_window": (
+            workload_result.get("measurement_window") if workload_result else None
+        ),
+        "ground_truth": (
+            workload_result.get("ground_truth") if workload_result else None
+        ),
+        "loss": {},
         "artifacts": artifacts,
-        "limitations": _limitations(status, return_code),
+        "limitations": _limitations(status, return_code, missing_required),
     }
     write_manifest(trial_directory / "manifest.json", manifest)
     return manifest
@@ -85,7 +90,7 @@ def run_trial(spec: TrialSpec, output_root: Path) -> dict[str, Any]:
 
 def _execute(
     spec: TrialSpec, stdout_path: Path, stderr_path: Path
-) -> tuple[ResultStatus, int | None, ProcessMetrics]:
+) -> tuple[ResultStatus, int | None, dict[str, Any]]:
     environment = os.environ.copy()
     environment.update(spec.command.environment)
     started = time.monotonic()
@@ -98,7 +103,9 @@ def _execute(
             stderr=stderr,
             start_new_session=True,
         )
-        metrics = _observe(process, started, spec.command.timeout_seconds)
+        metrics = _observe(
+            process, started, spec.command.timeout_seconds, spec.process_roles
+        )
     if process.returncode is None:
         raise RuntimeError("trial process did not reach a terminal state")
     status = ResultStatus.PASS if process.returncode == 0 else ResultStatus.FAIL
@@ -108,25 +115,24 @@ def _execute(
 
 
 def _observe(
-    process: subprocess.Popen[bytes], started: float, timeout_seconds: float
-) -> tuple[bool, ProcessMetrics]:
+    process: subprocess.Popen[bytes],
+    started: float,
+    timeout_seconds: float,
+    role_specs: tuple[ProcessRoleSpec, ...],
+) -> tuple[bool, dict[str, Any]]:
     root = psutil.Process(process.pid)
-    peak_rss = 0
-    peak_threads = 0
-    cpu_user = 0.0
-    cpu_system = 0.0
-    read_bytes: int | None = 0
-    write_bytes: int | None = 0
+    roles = role_specs or (ProcessRoleSpec(ProcessRole.TARGET, "root"),)
+    observed: dict[ProcessRole, ProcessMetrics] = {}
+    system_start = psutil.cpu_times()
     timed_out = False
     while process.poll() is None:
         process_rows = _process_tree(root)
-        sample = _sample_processes(process_rows)
-        peak_rss = max(peak_rss, sample[0])
-        peak_threads = max(peak_threads, sample[1])
-        cpu_user = max(cpu_user, sample[2])
-        cpu_system = max(cpu_system, sample[3])
-        read_bytes = _maximum_optional(read_bytes, sample[4])
-        write_bytes = _maximum_optional(write_bytes, sample[5])
+        for role in roles:
+            selected = _select_role(process_rows, process.pid, role)
+            if selected:
+                observed[role.role] = _merge_metrics(
+                    observed.get(role.role), _sample_processes(selected)
+                )
         if time.monotonic() - started >= timeout_seconds:
             timed_out = True
             _terminate(process)
@@ -134,15 +140,87 @@ def _observe(
         time.sleep(_POLL_SECONDS)
     process.wait()
     elapsed_ms = (time.monotonic() - started) * 1_000
-    return timed_out, ProcessMetrics(
-        wall_time_ms=elapsed_ms,
-        cpu_user_seconds=cpu_user,
-        cpu_system_seconds=cpu_system,
-        peak_rss_bytes=peak_rss,
-        peak_threads=peak_threads,
-        read_bytes=read_bytes,
-        write_bytes=write_bytes,
+    result = {
+        role.role.value: _role_manifest(observed.get(role.role), elapsed_ms)
+        for role in roles
+    }
+    system_end = psutil.cpu_times()
+    result[ProcessRole.SYSTEM.value] = {
+        "status": "observed",
+        "wall_time_ms": elapsed_ms,
+        "cpu_user_seconds": max(0.0, system_end.user - system_start.user),
+        "cpu_system_seconds": max(0.0, system_end.system - system_start.system),
+        "peak_rss_bytes": None,
+        "peak_threads": None,
+        "read_bytes": None,
+        "write_bytes": None,
+    }
+    return timed_out, result
+
+
+def _select_role(
+    processes: list[psutil.Process], root_pid: int, spec: ProcessRoleSpec
+) -> list[psutil.Process]:
+    if spec.discovery == "root":
+        return [row for row in processes if row.pid == root_pid]
+    if spec.discovery == "descendant_argv_contains" and spec.argv_contains:
+        selected = []
+        for row in processes:
+            if row.pid == root_pid:
+                continue
+            try:
+                if any(spec.argv_contains in item for item in row.cmdline()):
+                    selected.append(row)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                continue
+        return selected
+    return []
+
+
+def _merge_metrics(
+    previous: ProcessMetrics | None,
+    sample: tuple[int, int, float, float, int | None, int | None],
+) -> ProcessMetrics:
+    current = ProcessMetrics(
+        0.0, sample[2], sample[3], sample[0], sample[1], sample[4], sample[5]
     )
+    if previous is None:
+        return current
+    return ProcessMetrics(
+        0.0,
+        max(previous.cpu_user_seconds, current.cpu_user_seconds),
+        max(previous.cpu_system_seconds, current.cpu_system_seconds),
+        max(previous.peak_rss_bytes, current.peak_rss_bytes),
+        max(previous.peak_threads, current.peak_threads),
+        _maximum_optional(previous.read_bytes, current.read_bytes),
+        _maximum_optional(previous.write_bytes, current.write_bytes),
+    )
+
+
+def _role_manifest(
+    metrics: ProcessMetrics | None, wall_time_ms: float
+) -> dict[str, Any]:
+    if metrics is None:
+        return {
+            "status": "unknown",
+            "wall_time_ms": None,
+            "cpu_user_seconds": None,
+            "cpu_system_seconds": None,
+            "peak_rss_bytes": None,
+            "peak_threads": None,
+            "read_bytes": None,
+            "write_bytes": None,
+        }
+    return {
+        "status": "observed",
+        "wall_time_ms": wall_time_ms,
+        "cpu_user_seconds": metrics.cpu_user_seconds,
+        "cpu_system_seconds": metrics.cpu_system_seconds,
+        "peak_rss_bytes": metrics.peak_rss_bytes,
+        "peak_threads": metrics.peak_threads,
+        "read_bytes": metrics.read_bytes,
+        "write_bytes": metrics.write_bytes,
+    }
 
 
 def _process_tree(root: psutil.Process) -> list[psutil.Process]:
@@ -194,7 +272,7 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
             pass
 
 
-def _workload_metrics(stdout_path: Path) -> dict[str, float | None]:
+def _workload_result(stdout_path: Path) -> Mapping[str, Any] | None:
     last_object: Mapping[str, Any] | None = None
     with stdout_path.open(encoding="utf-8", errors="replace") as source:
         for line in source:
@@ -207,16 +285,7 @@ def _workload_metrics(stdout_path: Path) -> dict[str, float | None]:
                 and value.get("artifact_kind") == "workload_result"
             ):
                 last_object = value
-    if last_object is None:
-        return {}
-    raw_metrics = last_object.get("metrics", {})
-    if not isinstance(raw_metrics, Mapping):
-        return {}
-    return {
-        name: _metric_value(name, value)
-        for name, value in raw_metrics.items()
-        if isinstance(name, str)
-    }
+    return last_object
 
 
 def _metric_value(name: str, value: object) -> float | None:
@@ -227,16 +296,83 @@ def _metric_value(name: str, value: object) -> float | None:
     return float(value)
 
 
-def _artifact(path: Path) -> dict[str, Any]:
+def _artifact(
+    path: Path,
+    *,
+    artifact_id: str,
+    kind: str,
+    producer: str,
+    format_name: str,
+    required: bool,
+    sensitive: bool,
+    loss_metadata_expected: bool,
+) -> dict[str, Any]:
     digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
+    size = 0
+    paths = (
+        [path]
+        if path.is_file()
+        else sorted(row for row in path.rglob("*") if row.is_file())
+    )
+    for artifact_path in paths:
+        digest.update(str(artifact_path.relative_to(path.parent)).encode())
+        with artifact_path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+                size += len(chunk)
     return {
+        "artifact_id": artifact_id,
+        "kind": kind,
         "path": str(path),
         "sha256": digest.hexdigest(),
-        "bytes": path.stat().st_size,
+        "bytes": size,
+        "producer": producer,
+        "format": format_name,
+        "required": required,
+        "sensitive": sensitive,
+        "loss_metadata_expected": loss_metadata_expected,
+        "status": "present",
+        "storage": "local",
+        "durable_location": None,
     }
+
+
+def _collect_artifacts(spec: TrialSpec, trial_directory: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for expected in spec.expected_artifacts:
+        path = trial_directory / expected.relative_path
+        if path.is_file() or path.is_dir():
+            rows.append(
+                _artifact(
+                    path,
+                    artifact_id=expected.artifact_id,
+                    kind=expected.kind,
+                    producer=expected.producer,
+                    format_name=expected.format,
+                    required=expected.required,
+                    sensitive=expected.sensitive,
+                    loss_metadata_expected=expected.loss_metadata_expected,
+                )
+            )
+        else:
+            rows.append(
+                {
+                    "artifact_id": expected.artifact_id,
+                    "kind": expected.kind,
+                    "path": str(path),
+                    "sha256": None,
+                    "bytes": None,
+                    "producer": expected.producer,
+                    "format": expected.format,
+                    "required": expected.required,
+                    "sensitive": expected.sensitive,
+                    "loss_metadata_expected": expected.loss_metadata_expected,
+                    "status": "missing",
+                    "storage": "local",
+                    "durable_location": None,
+                }
+            )
+    return rows
 
 
 def _validate_environment(environment: Mapping[str, str]) -> None:
@@ -245,9 +381,13 @@ def _validate_environment(environment: Mapping[str, str]) -> None:
             raise ValueError(f"refusing to persist secret-like environment key: {key}")
 
 
-def _limitations(status: ResultStatus, return_code: int | None) -> list[str]:
+def _limitations(
+    status: ResultStatus, return_code: int | None, missing_required: bool
+) -> list[str]:
     if status is ResultStatus.PASS:
         return []
+    if missing_required and return_code == 0:
+        return ["one or more required profiler artifacts were not produced"]
     if status is ResultStatus.TIMEOUT:
         return ["trial exceeded its declared timeout; partial output was retained"]
     return [f"trial process exited with code {return_code}; output was retained"]

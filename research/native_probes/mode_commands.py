@@ -6,18 +6,29 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import CommandSpec, ExperimentMode
+from .models import (
+    ArtifactExpectation,
+    CommandSpec,
+    ExperimentMode,
+    ProcessRole,
+    ProcessRoleSpec,
+    WorkloadId,
+)
 
 
 @dataclass(frozen=True)
 class Workload:
     """Parameters shared by profiler-off and profiler-on microbenchmarks."""
 
-    workload_id: str
+    workload_id: WorkloadId
     warmup: int = 100
     iterations: int = 1_000
     matrix_size: int = 512
     seed: int = 118
+    launches_per_iteration: int = 100
+    overlap_elements: int = 1_048_576
+    overlap_operations: int = 8
+    measurement_range_id: str = "stormlog-native-probe-measured"
 
 
 def microbenchmark_command(
@@ -58,7 +69,7 @@ def _workload_argv(workload: Workload) -> tuple[str, ...]:
         "-m",
         "research.native_probes.workloads.cuda_microbench",
         "--workload",
-        workload.workload_id,
+        workload.workload_id.value,
         "--warmup",
         str(workload.warmup),
         "--iterations",
@@ -67,7 +78,109 @@ def _workload_argv(workload: Workload) -> tuple[str, ...]:
         str(workload.matrix_size),
         "--seed",
         str(workload.seed),
+        "--launches-per-iteration",
+        str(workload.launches_per_iteration),
+        "--overlap-elements",
+        str(workload.overlap_elements),
+        "--overlap-operations",
+        str(workload.overlap_operations),
+        "--measurement-range-id",
+        workload.measurement_range_id,
     )
+
+
+def expected_artifacts(
+    mode: ExperimentMode, vendor: str = "nvidia"
+) -> tuple[ArtifactExpectation, ...]:
+    """Declare raw outputs before a trial, including ownership and loss needs."""
+    stdout = ArtifactExpectation(
+        "workload-stdout", "log", "logs/stdout.log", "target", "jsonl", True, False
+    )
+    stderr = ArtifactExpectation(
+        "workload-stderr", "log", "logs/stderr.log", "target", "text", True, False
+    )
+    trusted_path = "vendor-trace.nsys-rep" if vendor == "nvidia" else "rocprofiler"
+    counter_path = "counter-report.ncu-rep" if vendor == "nvidia" else "rocprofiler"
+    raw: dict[ExperimentMode, tuple[ArtifactExpectation, ...]] = {
+        ExperimentMode.PUBLIC_PYTORCH: (
+            ArtifactExpectation(
+                "pytorch-trace",
+                "raw_trace",
+                "pytorch-trace.json",
+                "target",
+                "chrome-trace-json",
+                True,
+                True,
+                False,
+            ),
+        ),
+        ExperimentMode.TRUSTED: (
+            ArtifactExpectation(
+                "vendor-trace",
+                "raw_trace",
+                trusted_path,
+                "profiler_wrapper",
+                "vendor-native",
+                True,
+                True,
+                True,
+            ),
+        ),
+        ExperimentMode.DIRECT_CUPTI: (
+            ArtifactExpectation(
+                "cupti-trace",
+                "raw_trace",
+                "cupti",
+                "target",
+                "stormlog-cupti-v1",
+                True,
+                True,
+                True,
+            ),
+        ),
+        ExperimentMode.AMD_ROCPROFILER: (
+            ArtifactExpectation(
+                "rocprofiler-trace",
+                "raw_trace",
+                "rocprofiler",
+                "profiler_wrapper",
+                "rocprofiler-csv",
+                True,
+                True,
+                True,
+            ),
+        ),
+        ExperimentMode.DETAILED_COUNTER: (
+            ArtifactExpectation(
+                "counter-report",
+                "raw_report",
+                counter_path,
+                "profiler_wrapper",
+                "vendor-native",
+                True,
+                True,
+                False,
+            ),
+        ),
+    }
+    return (stdout, stderr, *raw.get(mode, ()))
+
+
+def process_roles(mode: ExperimentMode) -> tuple[ProcessRoleSpec, ...]:
+    """Return deterministic role discovery for one wrapper topology."""
+    wrapped = {
+        ExperimentMode.TRUSTED,
+        ExperimentMode.AMD_ROCPROFILER,
+        ExperimentMode.DETAILED_COUNTER,
+    }
+    if mode in wrapped:
+        return (
+            ProcessRoleSpec(ProcessRole.PROFILER_WRAPPER, "root"),
+            ProcessRoleSpec(
+                ProcessRole.TARGET, "descendant_argv_contains", "cuda_microbench"
+            ),
+        )
+    return (ProcessRoleSpec(ProcessRole.TARGET, "root"),)
 
 
 def _trusted_command(
@@ -81,7 +194,7 @@ def _trusted_command(
                 "--trace=cuda,nvtx",
                 "--cuda-graph-trace=node",
                 "--force-overwrite=false",
-                f"--output={artifact_directory / 'nsight-system'}",
+                f"--output={artifact_directory / 'vendor-trace'}",
                 *base,
             ),
             {},
@@ -100,7 +213,7 @@ def _direct_cupti(
         base,
         {
             "CUDA_INJECTION64_PATH": str(resolved_library),
-            "STORMLOG_CUPTI_OUTPUT_DIR": str(artifact_directory),
+            "STORMLOG_CUPTI_OUTPUT_DIR": str(artifact_directory / "cupti"),
             "STORMLOG_CUPTI_MAX_BYTES": str(256 * 1024 * 1024),
             "STORMLOG_CUPTI_ACTIVITIES": (
                 "driver,runtime,kernel,memcpy,memset,synchronization"
@@ -122,7 +235,7 @@ def _rocprofiler_command(
             "--output-format",
             "csv",
             "--output-directory",
-            str(artifact_directory),
+            str(artifact_directory / "rocprofiler"),
             "--",
             *base,
         ),
@@ -143,7 +256,7 @@ def _counter_command(
                 "--target-processes",
                 "all",
                 "--export",
-                str(artifact_directory / "nsight-compute"),
+                str(artifact_directory / "counter-report"),
                 *base,
             ),
             {},

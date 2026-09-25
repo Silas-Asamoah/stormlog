@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/plan.schema.json",
+  "title": "Stormlog native probe execution plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact_kind", "configuration_id", "vendor", "seed", "repetitions", "environment_artifact", "artifact_root", "trials"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact_kind": {"const": "native_probe_plan"},
+    "configuration_id": {"type": "string", "minLength": 1},
+    "vendor": {"enum": ["nvidia", "amd"]},
+    "seed": {"type": "integer"},
+    "repetitions": {"type": "integer", "minimum": 5},
+    "environment_artifact": {"type": "string", "minLength": 1},
+    "artifact_root": {"type": "string", "minLength": 1},
+    "trials": {"type": "array", "minItems": 10, "items": {"type": "object"}}
+  }
+}

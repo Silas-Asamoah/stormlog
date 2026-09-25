@@ -23,6 +23,27 @@ class ExperimentMode(str, Enum):
     DETAILED_COUNTER = "detailed-counter"
 
 
+class WorkloadId(str, Enum):
+    """Canonical workload identifiers accepted by every experiment layer."""
+
+    W1_EAGER = "w1-eager"
+    W2_OVERLAP = "w2-overlap"
+    W2_SERIALIZED = "w2-serialized"
+    W3_GRAPH = "w3-graph"
+    W4_STRESS = "w4-stress"
+    VLLM = "vllm"
+
+
+class ProcessRole(str, Enum):
+    """Resource-accounting roles which must not be silently combined."""
+
+    TARGET = "target"
+    PROFILER_WRAPPER = "profiler_wrapper"
+    HELPER_AGENT = "helper_agent"
+    POSTPROCESSOR = "postprocessor"
+    SYSTEM = "system"
+
+
 class ResultStatus(str, Enum):
     """Outcome of a capability check or measured trial."""
 
@@ -82,15 +103,41 @@ class CommandSpec:
 
 
 @dataclass(frozen=True)
+class ArtifactExpectation:
+    """One output a mode is expected to produce during a trial."""
+
+    artifact_id: str
+    kind: str
+    relative_path: str
+    producer: str
+    format: str
+    required: bool = True
+    sensitive: bool = True
+    loss_metadata_expected: bool = False
+
+
+@dataclass(frozen=True)
+class ProcessRoleSpec:
+    """How a process role is discovered without guessing after execution."""
+
+    role: ProcessRole
+    discovery: str
+    argv_contains: str | None = None
+
+
+@dataclass(frozen=True)
 class TrialSpec:
     """One immutable workload and profiler-mode trial definition."""
 
     trial_id: str
     configuration_id: str
-    workload_id: str
+    workload_id: WorkloadId
     mode: ExperimentMode
     repetition: int
     command: CommandSpec
+    expected_artifacts: tuple[ArtifactExpectation, ...] = ()
+    process_roles: tuple[ProcessRoleSpec, ...] = ()
+    measurement_range_id: str = "stormlog-native-probe-measured"
 
 
 def _nonempty_string(value: object, field: str) -> str:

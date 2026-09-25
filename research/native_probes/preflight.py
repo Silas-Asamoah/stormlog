@@ -1,4 +1,4 @@
-"""Read-only capability and environment discovery for experiment hosts."""
+"""Read-only, vendor-aware capability discovery for experiment hosts."""
 
 from __future__ import annotations
 
@@ -11,62 +11,71 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
-from .models import ExperimentMode, ResultStatus
+from .models import ResultStatus
 
-_TOOLS_BY_MODE: Mapping[ExperimentMode, tuple[str, ...]] = {
-    ExperimentMode.OFF: (),
-    ExperimentMode.PUBLIC_PYTORCH: (),
-    ExperimentMode.PUBLIC_ENGINE: ("vllm",),
-    ExperimentMode.PROTON: ("proton-viewer",),
-    ExperimentMode.TRUSTED: ("nsys", "rocprofv3"),
-    ExperimentMode.EBPF_SEMANTIC: ("bpftool", "bpftrace"),
-    ExperimentMode.DIRECT_CUPTI: ("nvcc",),
-    ExperimentMode.HYBRID_CUPTI_EBPF: ("nvcc", "bpftool"),
-    ExperimentMode.PROGRAMMABLE: ("neutrino",),
-    ExperimentMode.AMD_ROCPROFILER: ("rocprofv3",),
-    ExperimentMode.DETAILED_COUNTER: ("ncu", "rocprofv3"),
-}
+Probe = Callable[[Sequence[str]], tuple[bool, str]]
+_TOOLS = (
+    "nvcc",
+    "nvidia-smi",
+    "nsys",
+    "ncu",
+    "rocminfo",
+    "rocm-smi",
+    "hipconfig",
+    "rocprofv3",
+    "bpftool",
+    "bpftrace",
+    "vllm",
+    "proton-viewer",
+)
 
 
-def collect_environment(host_id: str, repository: Path) -> dict[str, Any]:
-    """Return a deterministic, secret-minimized environment manifest."""
+def collect_environment(
+    host_id: str,
+    repository: Path,
+    *,
+    command_probe: Probe | None = None,
+    system: str | None = None,
+) -> dict[str, Any]:
+    """Return a manifest without equating an installed tool with usable hardware."""
     if not host_id or not host_id.strip():
         raise ValueError("host_id must not be empty")
-    resolved_repository = repository.resolve(strict=True)
-    tools = _tool_inventory(_all_tools())
-    accelerator = _accelerator_inventory(tools)
-    modes = {
-        mode.value: _mode_capability(mode, tools, accelerator)
-        for mode in ExperimentMode
-    }
+    repo = repository.resolve(strict=True)
+    probe = command_probe or _run_probe
+    tools = _tool_inventory(probe)
+    system_name = system or platform.system()
+    nvidia = _nvidia_inventory(tools, probe)
+    amd = _amd_inventory(tools, probe)
+    ebpf = _ebpf_inventory(system_name)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_kind": "native_probe_environment",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "host_id": host_id,
         "platform": {
-            "system": platform.system(),
+            "system": system_name,
             "release": platform.release(),
             "machine": platform.machine(),
             "python": platform.python_version(),
             "python_executable": _repository_relative_executable(
-                Path(sys.executable), resolved_repository
+                Path(sys.executable), repo
             ),
         },
-        "source": _source_identity(resolved_repository),
-        "accelerator": accelerator,
+        "source": _source_identity(repo),
+        "accelerators": {"nvidia": nvidia, "amd": amd},
+        "linux_ebpf": ebpf,
         "tools": tools,
-        "modes": modes,
-        "limitations": _limitations(accelerator, tools),
+        "mode_qualifications": _qualifications(nvidia, amd, ebpf, tools),
+        "limitations": _limitations(nvidia, amd, ebpf, tools),
     }
 
 
 def write_manifest(path: Path, manifest: Mapping[str, Any]) -> str:
-    """Create a new manifest without overwriting prior evidence."""
+    """Create a new owner-only manifest without overwriting evidence."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    payload = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(descriptor, "wb") as output:
@@ -82,82 +91,245 @@ def write_manifest(path: Path, manifest: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _all_tools() -> tuple[str, ...]:
-    return tuple(sorted({tool for tools in _TOOLS_BY_MODE.values() for tool in tools}))
-
-
-def _tool_inventory(tools: Iterable[str]) -> dict[str, dict[str, Any]]:
-    inventory: dict[str, dict[str, Any]] = {}
-    for tool in tools:
-        path = shutil.which(tool)
-        inventory[tool] = {
+def _tool_inventory(probe: Probe) -> dict[str, dict[str, Any]]:
+    inventory = {}
+    for name in _TOOLS:
+        path = shutil.which(name)
+        ok, version = probe((path or name, "--version")) if path else (False, "")
+        inventory[name] = {
             "available": path is not None,
             "path": path,
+            "version": version.splitlines()[0][:500] if ok and version else None,
         }
     return inventory
 
 
-def _accelerator_inventory(tools: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
-    nvidia = (
-        bool(tools.get("nvcc", {}).get("available")) and platform.system() != "Darwin"
+def _nvidia_inventory(
+    tools: Mapping[str, Mapping[str, Any]], probe: Probe
+) -> dict[str, Any]:
+    if tools["nvidia-smi"]["available"]:
+        driver_ok, output = probe(
+            (
+                "nvidia-smi",
+                "--query-gpu=name,compute_cap,driver_version",
+                "--format=csv,noheader",
+            )
+        )
+    else:
+        driver_ok, output = False, ""
+    rows = (
+        [line.strip() for line in output.splitlines() if line.strip()]
+        if driver_ok
+        else []
     )
-    amd = bool(tools.get("rocprofv3", {}).get("available"))
+    cupti_roots = (Path("/usr/local/cuda/extras/CUPTI"), Path("/opt/cuda/extras/CUPTI"))
     return {
-        "nvidia_toolchain_detected": nvidia,
-        "amd_toolchain_detected": amd,
-        "linux": platform.system() == "Linux",
+        "cuda_toolkit_detected": tools["nvcc"]["available"],
+        "cuda_toolkit_version": tools["nvcc"]["version"],
+        "cupti_detected": any(path.exists() for path in cupti_roots),
+        "cupti_version": None,
+        "driver_detected": driver_ok,
+        "driver_version": _csv_column(rows, 2),
+        "gpu_detected": bool(rows),
+        "device_count": len(rows),
+        "device_models": _csv_column(rows, 0),
+        "compute_capabilities": _csv_column(rows, 1),
+        "runtime_initialization_usable": bool(rows),
+        "nsight_systems_detected": tools["nsys"]["available"],
+        "nsight_compute_detected": tools["ncu"]["available"],
+        "vllm_detected": tools["vllm"]["available"],
+        "proton_detected": tools["proton-viewer"]["available"],
     }
 
 
-def _mode_capability(
-    mode: ExperimentMode,
-    tools: Mapping[str, Mapping[str, Any]],
-    accelerator: Mapping[str, Any],
+def _amd_inventory(
+    tools: Mapping[str, Mapping[str, Any]], probe: Probe
 ) -> dict[str, Any]:
-    required = _TOOLS_BY_MODE[mode]
-    present = [tool for tool in required if tools[tool]["available"]]
-    status, reason = _mode_status(mode, required, present, accelerator)
+    runtime_ok, output = (
+        probe(("rocminfo",)) if tools["rocminfo"]["available"] else (False, "")
+    )
+    models = (
+        [
+            line.split(":", 1)[1].strip()
+            for line in output.splitlines()
+            if line.strip().startswith("Marketing Name:")
+        ]
+        if runtime_ok
+        else []
+    )
     return {
-        "status": status.value,
+        "rocm_detected": tools["hipconfig"]["available"]
+        or tools["rocminfo"]["available"],
+        "rocm_version": tools["hipconfig"]["version"],
+        "rocprofiler_sdk_detected": tools["rocprofv3"]["available"],
+        "rocprofv3_detected": tools["rocprofv3"]["available"],
+        "gpu_detected": bool(models),
+        "device_count": len(models),
+        "device_models": models,
+        "runtime_initialization_usable": runtime_ok and bool(models),
+    }
+
+
+def _ebpf_inventory(system_name: str) -> dict[str, Any]:
+    linux = system_name == "Linux"
+    return {
+        "linux": linux,
+        "kernel_version": platform.release() if linux else None,
+        "btf_available": linux and Path("/sys/kernel/btf/vmlinux").is_file(),
+        "tracefs_available": linux
+        and any(
+            Path(path).is_dir()
+            for path in ("/sys/kernel/tracing", "/sys/kernel/debug/tracing")
+        ),
+        "lockdown_state": (
+            _read_optional(Path("/sys/kernel/security/lockdown")) if linux else None
+        ),
+        "unprivileged_bpf_disabled": (
+            _read_optional(Path("/proc/sys/kernel/unprivileged_bpf_disabled"))
+            if linux
+            else None
+        ),
+        "perf_event_paranoid": (
+            _read_optional(Path("/proc/sys/kernel/perf_event_paranoid"))
+            if linux
+            else None
+        ),
+        "effective_capabilities": _effective_capabilities() if linux else {},
+    }
+
+
+def _qualifications(
+    nvidia: Mapping[str, Any],
+    amd: Mapping[str, Any],
+    ebpf: Mapping[str, Any],
+    tools: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "off": _qualification(
+            True, (), "profiler-off control is available", ResultStatus.PASS, tools
+        ),
+        "public-pytorch-nvidia": _vendor_qualification(nvidia, (), "NVIDIA", tools),
+        "public-pytorch-amd": _vendor_qualification(amd, (), "AMD", tools),
+        "trusted-nvidia": _vendor_qualification(nvidia, ("nsys",), "NVIDIA", tools),
+        "trusted-amd": _vendor_qualification(amd, ("rocprofv3",), "AMD", tools),
+        "detailed-counter-nvidia": _vendor_qualification(
+            nvidia, ("ncu",), "NVIDIA", tools
+        ),
+        "detailed-counter-amd": _vendor_qualification(
+            amd, ("rocprofv3",), "AMD", tools
+        ),
+        "direct-cupti-nvidia": _vendor_qualification(
+            nvidia, (), "NVIDIA CUPTI", tools, require="cupti_detected"
+        ),
+        "amd-rocprofiler": _vendor_qualification(amd, ("rocprofv3",), "AMD", tools),
+        "ebpf-semantic-linux": _qualification(
+            bool(ebpf["linux"]),
+            ("bpftool",),
+            "Linux eBPF host required",
+            ResultStatus.UNTESTED,
+            tools,
+        ),
+        "hybrid-cupti-ebpf-nvidia": _qualification(
+            bool(nvidia["runtime_initialization_usable"] and ebpf["linux"]),
+            ("bpftool",),
+            "NVIDIA runtime and Linux eBPF required",
+            ResultStatus.UNTESTED,
+            tools,
+        ),
+        "proton-nvidia": _vendor_qualification(
+            nvidia, ("vllm", "proton-viewer"), "NVIDIA", tools
+        ),
+    }
+
+
+def _vendor_qualification(
+    vendor: Mapping[str, Any],
+    required: tuple[str, ...],
+    label: str,
+    tools: Mapping[str, Mapping[str, Any]],
+    *,
+    require: str | None = None,
+) -> dict[str, Any]:
+    usable = bool(vendor.get("runtime_initialization_usable"))
+    if require:
+        usable = usable and bool(vendor.get(require))
+    return _qualification(
+        usable,
+        required,
+        f"{label} hardware/runtime required",
+        ResultStatus.UNTESTED,
+        tools,
+    )
+
+
+def _qualification(
+    usable: bool,
+    required: tuple[str, ...],
+    reason: str,
+    status: ResultStatus,
+    tools: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    present = [name for name in required if tools[name]["available"]]
+    if not usable:
+        result = ResultStatus.UNSUPPORTED
+    elif len(present) != len(required):
+        result, reason = (
+            ResultStatus.UNSUPPORTED,
+            "required vendor-specific tooling is absent",
+        )
+    else:
+        result = status
+        if status is ResultStatus.UNTESTED:
+            reason = "requirements detected; runtime experiment has not run"
+    return {
+        "status": result.value,
         "reason": reason,
         "required_tools": list(required),
         "detected_tools": present,
     }
 
 
-def _mode_status(
-    mode: ExperimentMode,
-    required: tuple[str, ...],
-    present: list[str],
-    accelerator: Mapping[str, Any],
-) -> tuple[ResultStatus, str]:
-    if mode is ExperimentMode.OFF:
-        return ResultStatus.PASS, "profiler-off control is available"
-    if mode is ExperimentMode.PUBLIC_PYTORCH:
-        return ResultStatus.UNTESTED, "framework import is checked by the workload"
-    unavailable_reason = _unavailable_platform_reason(mode, accelerator)
-    if unavailable_reason:
-        return ResultStatus.UNSUPPORTED, unavailable_reason
-    if required and not present:
-        return ResultStatus.UNSUPPORTED, "none of the required tools were detected"
-    if len(present) != len(required):
-        return ResultStatus.PARTIAL, "only part of the required toolchain was detected"
-    return ResultStatus.UNTESTED, "tooling detected; runtime experiment has not run"
+def _run_probe(argv: Sequence[str]) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            argv, check=False, capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False, ""
+    return result.returncode == 0, (result.stdout or result.stderr).strip()
 
 
-def _unavailable_platform_reason(
-    mode: ExperimentMode, accelerator: Mapping[str, Any]
-) -> str | None:
-    ebpf_modes = {ExperimentMode.EBPF_SEMANTIC, ExperimentMode.HYBRID_CUPTI_EBPF}
-    if mode in ebpf_modes and not accelerator["linux"]:
-        return "Linux eBPF is unavailable on this host"
-    if mode in {ExperimentMode.DIRECT_CUPTI, ExperimentMode.PROTON}:
-        if not accelerator["nvidia_toolchain_detected"]:
-            return "NVIDIA CUDA/CUPTI is unavailable"
-    if mode is ExperimentMode.AMD_ROCPROFILER:
-        if not accelerator["amd_toolchain_detected"]:
-            return "AMD ROCProfiler is unavailable"
-    return None
+def _csv_column(rows: Sequence[str], index: int) -> list[str]:
+    return [
+        parts[index].strip() for row in rows if len(parts := row.split(",")) > index
+    ]
+
+
+def _read_optional(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def _effective_capabilities() -> dict[str, bool | None]:
+    status = _read_optional(Path("/proc/self/status")) or ""
+    value = next(
+        (line.split()[1] for line in status.splitlines() if line.startswith("CapEff:")),
+        None,
+    )
+    if value is None:
+        return {
+            name: None
+            for name in ("CAP_BPF", "CAP_PERFMON", "CAP_SYS_PTRACE", "CAP_SYS_ADMIN")
+        }
+    mask = int(value, 16)
+    return {
+        "CAP_SYS_PTRACE": bool(mask & (1 << 19)),
+        "CAP_SYS_ADMIN": bool(mask & (1 << 21)),
+        "CAP_PERFMON": bool(mask & (1 << 38)),
+        "CAP_BPF": bool(mask & (1 << 39)),
+    }
 
 
 def _source_identity(repository: Path) -> dict[str, Any]:
@@ -171,14 +343,10 @@ def _source_identity(repository: Path) -> dict[str, Any]:
 
 
 def _git(repository: Path, *arguments: str) -> str:
-    completed = subprocess.run(
-        ("git", *arguments),
-        cwd=repository,
-        check=True,
-        capture_output=True,
-        text=True,
+    result = subprocess.run(
+        ("git", *arguments), cwd=repository, check=True, capture_output=True, text=True
     )
-    return completed.stdout.strip()
+    return result.stdout.strip()
 
 
 def _repository_relative_executable(executable: Path, repository: Path) -> str:
@@ -189,15 +357,18 @@ def _repository_relative_executable(executable: Path, repository: Path) -> str:
 
 
 def _limitations(
-    accelerator: Mapping[str, Any], tools: Mapping[str, Mapping[str, Any]]
+    nvidia: Mapping[str, Any],
+    amd: Mapping[str, Any],
+    ebpf: Mapping[str, Any],
+    tools: Mapping[str, Mapping[str, Any]],
 ) -> list[str]:
-    limitations: list[str] = []
-    if not accelerator["nvidia_toolchain_detected"]:
-        limitations.append("UNTESTED - NVIDIA HARDWARE/TOOLCHAIN UNAVAILABLE")
-    if not accelerator["amd_toolchain_detected"]:
-        limitations.append("UNTESTED - AMD HARDWARE/TOOLCHAIN UNAVAILABLE")
-    if not accelerator["linux"]:
+    limitations = []
+    if not nvidia["runtime_initialization_usable"]:
+        limitations.append("UNTESTED - NVIDIA HARDWARE/RUNTIME UNAVAILABLE")
+    if not amd["runtime_initialization_usable"]:
+        limitations.append("UNTESTED - AMD HARDWARE/RUNTIME UNAVAILABLE")
+    if not ebpf["linux"]:
         limitations.append("UNTESTED - LINUX EBPF HOST UNAVAILABLE")
-    if not tools.get("vllm", {}).get("available"):
+    if not tools["vllm"]["available"]:
         limitations.append("UNTESTED - VLLM UNAVAILABLE")
     return limitations

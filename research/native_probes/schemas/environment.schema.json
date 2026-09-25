@@ -4,90 +4,40 @@
   "title": "Stormlog native probe experiment environment",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "artifact_kind",
-    "created_at",
-    "host_id",
-    "platform",
-    "source",
-    "accelerator",
-    "tools",
-    "modes",
-    "limitations"
-  ],
+  "required": ["schema_version", "artifact_kind", "created_at", "host_id", "platform", "source", "accelerators", "linux_ebpf", "tools", "mode_qualifications", "limitations"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "artifact_kind": {"const": "native_probe_environment"},
     "created_at": {"type": "string", "format": "date-time"},
     "host_id": {"type": "string", "minLength": 1},
-    "platform": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["system", "release", "machine", "python", "python_executable"],
-      "properties": {
-        "system": {"type": "string"},
-        "release": {"type": "string"},
-        "machine": {"type": "string"},
-        "python": {"type": "string"},
-        "python_executable": {"type": "string"}
-      }
-    },
+    "platform": {"type": "object"},
     "source": {
       "type": "object",
-      "additionalProperties": false,
       "required": ["repository", "working_tree", "revision", "branch", "dirty"],
-      "properties": {
-        "repository": {"type": "string"},
-        "working_tree": {"type": "string"},
-        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-        "branch": {"type": "string"},
-        "dirty": {"type": "boolean"}
-      }
+      "properties": {"revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "dirty": {"type": "boolean"}}
     },
-    "accelerator": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["nvidia_toolchain_detected", "amd_toolchain_detected", "linux"],
-      "properties": {
-        "nvidia_toolchain_detected": {"type": "boolean"},
-        "amd_toolchain_detected": {"type": "boolean"},
-        "linux": {"type": "boolean"}
-      }
+    "accelerators": {
+      "type": "object", "additionalProperties": false,
+      "required": ["nvidia", "amd"],
+      "properties": {"nvidia": {"$ref": "#/$defs/inventory"}, "amd": {"$ref": "#/$defs/inventory"}}
     },
-    "tools": {
-      "type": "object",
-      "additionalProperties": {"$ref": "#/$defs/tool"}
-    },
-    "modes": {
-      "type": "object",
-      "minProperties": 11,
-      "additionalProperties": {"$ref": "#/$defs/mode"}
-    },
-    "limitations": {
-      "type": "array",
-      "items": {"type": "string"},
-      "uniqueItems": true
-    }
+    "linux_ebpf": {"type": "object", "required": ["linux", "btf_available", "tracefs_available", "effective_capabilities"]},
+    "tools": {"type": "object", "additionalProperties": {"$ref": "#/$defs/tool"}},
+    "mode_qualifications": {"type": "object", "minProperties": 10, "additionalProperties": {"$ref": "#/$defs/mode"}},
+    "limitations": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
   },
   "$defs": {
+    "inventory": {"type": "object", "required": ["gpu_detected", "device_count", "device_models", "runtime_initialization_usable"]},
     "tool": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["available", "path"],
-      "properties": {
-        "available": {"type": "boolean"},
-        "path": {"type": ["string", "null"]}
-      }
+      "type": "object", "additionalProperties": false,
+      "required": ["available", "path", "version"],
+      "properties": {"available": {"type": "boolean"}, "path": {"type": ["string", "null"]}, "version": {"type": ["string", "null"]}}
     },
     "mode": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["status", "reason", "required_tools", "detected_tools"],
       "properties": {
-        "status": {
-          "enum": ["pass", "fail", "partial", "unsupported", "untested", "timeout"]
-        },
+        "status": {"enum": ["pass", "fail", "partial", "unsupported", "untested", "timeout"]},
         "reason": {"type": "string", "minLength": 1},
         "required_tools": {"type": "array", "items": {"type": "string"}},
         "detected_tools": {"type": "array", "items": {"type": "string"}}

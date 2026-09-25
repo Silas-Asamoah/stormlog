@@ -18,6 +18,10 @@
     "return_code",
     "command",
     "metrics",
+    "resources",
+    "measurement_window",
+    "ground_truth",
+    "loss",
     "artifacts",
     "limitations"
   ],
@@ -26,7 +30,7 @@
     "artifact_kind": {"const": "native_probe_trial"},
     "trial_id": {"type": "string", "minLength": 1},
     "configuration_id": {"type": "string", "minLength": 1},
-    "workload_id": {"enum": ["w1-eager", "w2-overlap", "w3-graph", "w4-stress", "vllm"]},
+    "workload_id": {"enum": ["w1-eager", "w2-overlap", "w2-serialized", "w3-graph", "w4-stress", "vllm"]},
     "mode": {
       "enum": [
         "off",
@@ -61,19 +65,54 @@
       "type": "object",
       "additionalProperties": {"type": ["number", "null"]}
     },
+    "resources": {
+      "type": "object",
+      "propertyNames": {"enum": ["target", "profiler_wrapper", "helper_agent", "postprocessor", "system"]},
+      "additionalProperties": {"$ref": "#/$defs/resources"}
+    },
+    "measurement_window": {"type": ["object", "null"]},
+    "ground_truth": {"type": ["object", "null"]},
+    "loss": {"type": "object"},
     "artifacts": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "sha256", "bytes"],
+        "required": ["artifact_id", "kind", "path", "sha256", "bytes", "producer", "format", "required", "sensitive", "loss_metadata_expected", "status", "storage", "durable_location"],
         "properties": {
+          "artifact_id": {"type": "string", "minLength": 1},
+          "kind": {"type": "string", "minLength": 1},
           "path": {"type": "string"},
-          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-          "bytes": {"type": "integer", "minimum": 0}
+          "sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+          "bytes": {"type": ["integer", "null"], "minimum": 0},
+          "producer": {"type": "string"},
+          "format": {"type": "string"},
+          "required": {"type": "boolean"},
+          "sensitive": {"type": "boolean"},
+          "loss_metadata_expected": {"type": "boolean"},
+          "status": {"enum": ["present", "missing", "external"]},
+          "storage": {"enum": ["local", "external"]},
+          "durable_location": {"type": ["string", "null"]}
         }
       }
     },
     "limitations": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "wall_time_ms", "cpu_user_seconds", "cpu_system_seconds", "peak_rss_bytes", "peak_threads", "read_bytes", "write_bytes"],
+      "properties": {
+        "status": {"enum": ["observed", "unknown"]},
+        "wall_time_ms": {"type": ["number", "null"]},
+        "cpu_user_seconds": {"type": ["number", "null"]},
+        "cpu_system_seconds": {"type": ["number", "null"]},
+        "peak_rss_bytes": {"type": ["integer", "null"]},
+        "peak_threads": {"type": ["integer", "null"]},
+        "read_bytes": {"type": ["integer", "null"]},
+        "write_bytes": {"type": ["integer", "null"]}
+      }
+    }
   }
 }

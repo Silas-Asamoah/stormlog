@@ -9,6 +9,8 @@ import time
 from contextlib import nullcontext
 from typing import Any, Iterator, Sequence
 
+from ..models import WorkloadId
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run a selected GPU microbenchmark and emit one JSON result line."""
@@ -19,7 +21,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     device = torch.device("cuda")
     context = _profiler_context(torch, arguments.torch_trace)
     with context as profiler:
-        metrics, ground_truth = _run(torch, device, arguments)
+        metrics, ground_truth, measurement_window = _run(torch, device, arguments)
         if profiler is not None:
             profiler.step()
     if profiler is not None:
@@ -35,6 +37,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "runtime": "hip" if torch.version.hip else "cuda",
         "metrics": metrics,
         "ground_truth": ground_truth,
+        "measurement_window": measurement_window,
     }
     print(json.dumps(result, sort_keys=True))
     return 0
@@ -45,13 +48,19 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workload",
         required=True,
-        choices=("w1-eager", "w2-overlap", "w2-serialized", "w3-graph", "w4-stress"),
+        choices=tuple(item.value for item in WorkloadId if item is not WorkloadId.VLLM),
     )
     parser.add_argument("--warmup", type=_positive_int, default=100)
     parser.add_argument("--iterations", type=_positive_int, default=1_000)
     parser.add_argument("--matrix-size", type=_positive_int, default=512)
     parser.add_argument("--seed", type=int, default=118)
     parser.add_argument("--torch-trace")
+    parser.add_argument("--launches-per-iteration", type=_positive_int, default=100)
+    parser.add_argument("--overlap-elements", type=_positive_int, default=1_048_576)
+    parser.add_argument("--overlap-operations", type=_positive_int, default=8)
+    parser.add_argument(
+        "--measurement-range-id", default="stormlog-native-probe-measured"
+    )
     return parser
 
 
@@ -82,7 +91,9 @@ def _profiler_context(torch: Any, path: str | None) -> Any:
     )
 
 
-def _run(torch: Any, device: Any, arguments: argparse.Namespace) -> tuple[Any, Any]:
+def _run(
+    torch: Any, device: Any, arguments: argparse.Namespace
+) -> tuple[Any, Any, Any]:
     if arguments.workload == "w1-eager":
         return _w1_eager(torch, device, arguments)
     if arguments.workload in {"w2-overlap", "w2-serialized"}:
@@ -94,49 +105,85 @@ def _run(torch: Any, device: Any, arguments: argparse.Namespace) -> tuple[Any, A
 
 def _w1_eager(
     torch: Any, device: Any, arguments: argparse.Namespace
-) -> tuple[Any, Any]:
+) -> tuple[Any, Any, Any]:
     left, right = _matrices(torch, device, arguments.matrix_size)
 
     def iteration() -> None:
         output = torch.mm(left, right)
         output.add_(1.0)
 
-    metrics = _measure(torch, iteration, arguments.warmup, arguments.iterations)
-    return metrics, {
-        "expected_iterations": arguments.iterations,
-        "expected_operations_per_iteration": ["mm", "add_"],
-        "cpu_api_interval_is_device_interval": False,
-    }
+    metrics, window = _measure(torch, iteration, arguments)
+    return (
+        metrics,
+        {
+            "expected_iterations": arguments.iterations,
+            "expected_operations_per_iteration": ["mm", "add_"],
+            "cpu_api_interval_is_device_interval": False,
+        },
+        window,
+    )
 
 
 def _w2_streams(
     torch: Any, device: Any, arguments: argparse.Namespace
-) -> tuple[Any, Any]:
-    left, right = _matrices(torch, device, arguments.matrix_size)
+) -> tuple[Any, Any, Any]:
+    values = [
+        torch.ones(arguments.overlap_elements, device=device),
+        torch.ones(arguments.overlap_elements, device=device),
+    ]
     streams = [torch.cuda.Stream(device=device), torch.cuda.Stream(device=device)]
     serialized = arguments.workload == "w2-serialized"
 
     def iteration() -> None:
         for index, stream in enumerate(streams):
             with torch.cuda.stream(stream):
-                torch.mm(left, right)
+                for _ in range(arguments.overlap_operations):
+                    values[index].mul_(1.000001).add_(0.000001)
             if serialized and index == 0:
                 stream.synchronize()
 
-    metrics = _measure(torch, iteration, arguments.warmup, arguments.iterations)
-    return metrics, {
-        "expected_iterations": arguments.iterations,
+    metrics, window = _measure(torch, iteration, arguments)
+    contract = w2_contract(
+        serialized=serialized,
+        stream_ids=[int(stream.cuda_stream) for stream in streams],
+        operations_per_stream=arguments.overlap_operations,
+        elements=arguments.overlap_elements,
+    )
+    contract["expected_iterations"] = arguments.iterations
+    return metrics, contract, window
+
+
+def w2_contract(
+    *,
+    serialized: bool,
+    stream_ids: Sequence[int],
+    operations_per_stream: int,
+    elements: int,
+) -> dict[str, Any]:
+    """Describe W2 design intent without claiming observed device concurrency."""
+    if len(stream_ids) != 2 or len(set(stream_ids)) != 2:
+        raise ValueError("W2 requires two distinct stream identifiers")
+    return {
         "stream_count": 2,
-        "expected_overlap": not serialized,
+        "stream_ids": list(stream_ids),
+        "overlap_eligible_by_design": not serialized,
+        "overlap_expected_by_design": not serialized,
+        "overlap_observed_in_trusted_trace": None,
+        "overlap_preserved_by_candidate": None,
+        "device_makespan_ns": None,
+        "concurrent_interval_ns": None,
+        "ordering_edges": [[stream_ids[0], stream_ids[1]]] if serialized else [],
         "serialized_control": serialized,
+        "operations_per_stream": operations_per_stream,
+        "elements_per_operation": elements,
     }
 
 
 def _w3_graph(
     torch: Any, device: Any, arguments: argparse.Namespace
-) -> tuple[Any, Any]:
-    if torch.version.hip:
-        raise SystemExit("UNTESTED - HIP GRAPH WORKLOAD NOT QUALIFIED")
+) -> tuple[Any, Any, Any]:
+    if not hasattr(torch.cuda, "CUDAGraph") or not hasattr(torch.cuda, "graph"):
+        raise SystemExit("UNSUPPORTED - PYTORCH GRAPH API UNAVAILABLE")
     left, right = _matrices(torch, device, arguments.matrix_size)
     graph = torch.cuda.CUDAGraph()
     capture_stream = torch.cuda.Stream(device=device)
@@ -149,31 +196,46 @@ def _w3_graph(
             static_output = torch.mm(left, right)
             static_output.add_(1.0)
     torch.cuda.current_stream(device).wait_stream(capture_stream)
-    metrics = _measure(torch, graph.replay, arguments.warmup, arguments.iterations)
-    return metrics, {
-        "capture_count": 1,
-        "expected_replays": arguments.iterations,
-        "expected_operations_per_replay": ["mm", "add_"],
-    }
+    metrics, window = _measure(torch, graph.replay, arguments)
+    return (
+        metrics,
+        {
+            "capture_count": 1,
+            "expected_replays": arguments.iterations,
+            "expected_operations_per_replay": ["mm", "add_"],
+            "runtime_graph_api": "HIP" if torch.version.hip else "CUDA",
+        },
+        window,
+    )
 
 
 def _w4_stress(
     torch: Any, device: Any, arguments: argparse.Namespace
-) -> tuple[Any, Any]:
+) -> tuple[Any, Any, Any]:
     value = torch.ones(256, device=device)
-    launches_per_iteration = 100
+    launches_per_iteration = arguments.launches_per_iteration
 
     def iteration() -> None:
         nonlocal value
         for _ in range(launches_per_iteration):
             value = value + 1.0
 
-    metrics = _measure(torch, iteration, arguments.warmup, arguments.iterations)
-    return metrics, {
-        "expected_iterations": arguments.iterations,
-        "expected_launches": arguments.iterations * launches_per_iteration,
-        "launches_per_iteration": launches_per_iteration,
-    }
+    metrics, window = _measure(torch, iteration, arguments)
+    return (
+        metrics,
+        {
+            "expected_iterations": arguments.iterations,
+            "expected_launches": arguments.iterations * launches_per_iteration,
+            "launches_per_iteration": launches_per_iteration,
+            "pressure_controls": {
+                "launches_per_iteration": launches_per_iteration,
+                "output_byte_bound": None,
+                "consumer_delay_ms": None,
+                "flush_interval_ms": None,
+            },
+        },
+        window,
+    )
 
 
 def _matrices(torch: Any, device: Any, size: int) -> tuple[Any, Any]:
@@ -184,9 +246,9 @@ def _matrices(torch: Any, device: Any, size: int) -> tuple[Any, Any]:
 
 
 def _measure(
-    torch: Any, operation: Any, warmup: int, iterations: int
-) -> dict[str, float]:
-    for _ in range(warmup):
+    torch: Any, operation: Any, arguments: argparse.Namespace
+) -> tuple[dict[str, float], dict[str, Any]]:
+    for _ in range(arguments.warmup):
         operation()
     torch.cuda.synchronize()
     samples: list[float] = []
@@ -194,7 +256,10 @@ def _measure(
     device_end = torch.cuda.Event(enable_timing=True)
     device_start.record()
     host_started = time.perf_counter_ns()
-    for _ in _range_with_markers(torch, iterations):
+    capture_started_ns = time.time_ns()
+    for _ in _range_with_markers(
+        torch, arguments.iterations, arguments.measurement_range_id
+    ):
         iteration_started = time.perf_counter_ns()
         operation()
         samples.append((time.perf_counter_ns() - iteration_started) / 1_000_000)
@@ -202,6 +267,7 @@ def _measure(
     device_end.record()
     torch.cuda.synchronize()
     host_complete_ms = (time.perf_counter_ns() - host_started) / 1_000_000
+    capture_finished_ns = time.time_ns()
     return {
         "host_enqueue_ms": host_enqueue_ms,
         "host_complete_ms": host_complete_ms,
@@ -209,11 +275,20 @@ def _measure(
         "host_iteration_median_ms": statistics.median(samples),
         "host_iteration_p95_ms": _percentile(samples, 0.95),
         "host_iteration_p99_ms": _percentile(samples, 0.99),
+    }, {
+        "range_id": arguments.measurement_range_id,
+        "marker": "nvtx-range",
+        "warmup_iterations": arguments.warmup,
+        "measured_iterations": arguments.iterations,
+        "host_started_ns": capture_started_ns,
+        "host_finished_ns": capture_finished_ns,
+        "clock": "CLOCK_REALTIME",
+        "flush_completed": True,
     }
 
 
-def _range_with_markers(torch: Any, iterations: int) -> Iterator[int]:
-    torch.cuda.nvtx.range_push("stormlog-native-probe-measured")
+def _range_with_markers(torch: Any, iterations: int, range_id: str) -> Iterator[int]:
+    torch.cuda.nvtx.range_push(range_id)
     try:
         yield from range(iterations)
     finally:
