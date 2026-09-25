@@ -55,8 +55,11 @@ Consequently:
 - eBPF and USDT transport: **UNTESTED - LINUX HOST UNAVAILABLE**
 - vLLM and Proton: **UNTESTED - ENGINE/TOOLCHAIN UNAVAILABLE**
 
-The immutable environment artifact and its checksum are under
-`research/native_probes/artifacts/control-macos-arm64/`. No accelerator trial
+The final framework-revision environment artifact and its checksum are under
+`research/native_probes/artifacts/control-macos-arm64-903548c/`. It records
+framework revision `903548c5cd13520d4884f60edacca68580560dcf`; the following
+evidence-only commit adds that immutable output without changing the harness.
+No accelerator trial
 was run, so there is no raw GPU trace and the trial dataset is intentionally
 empty. Unsupported preflight results are retained rather than replaced by
 synthetic results.

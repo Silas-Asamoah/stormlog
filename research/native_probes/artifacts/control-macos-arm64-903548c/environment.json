@@ -1,0 +1,218 @@
+{
+  "accelerators": {
+    "amd": {
+      "device_count": 0,
+      "device_models": [],
+      "gpu_detected": false,
+      "rocm_detected": false,
+      "rocm_version": null,
+      "rocprofiler_sdk_detected": false,
+      "rocprofv3_detected": false,
+      "runtime_initialization_usable": false
+    },
+    "nvidia": {
+      "compute_capabilities": [],
+      "cuda_toolkit_detected": false,
+      "cuda_toolkit_version": null,
+      "cupti_detected": false,
+      "cupti_version": null,
+      "device_count": 0,
+      "device_models": [],
+      "driver_detected": false,
+      "driver_version": [],
+      "gpu_detected": false,
+      "nsight_compute_detected": false,
+      "nsight_systems_detected": false,
+      "proton_detected": false,
+      "runtime_initialization_usable": false,
+      "vllm_detected": false
+    }
+  },
+  "artifact_kind": "native_probe_environment",
+  "created_at": "2026-09-25T19:10:15.884877+00:00",
+  "host_id": "control-macos-arm64-903548c",
+  "limitations": [
+    "UNTESTED - NVIDIA HARDWARE/RUNTIME UNAVAILABLE",
+    "UNTESTED - AMD HARDWARE/RUNTIME UNAVAILABLE",
+    "UNTESTED - LINUX EBPF HOST UNAVAILABLE",
+    "UNTESTED - VLLM UNAVAILABLE"
+  ],
+  "linux_ebpf": {
+    "btf_available": false,
+    "effective_capabilities": {},
+    "kernel_version": null,
+    "linux": false,
+    "lockdown_state": null,
+    "perf_event_paranoid": null,
+    "tracefs_available": false,
+    "unprivileged_bpf_disabled": null
+  },
+  "mode_qualifications": {
+    "amd-rocprofiler": {
+      "detected_tools": [],
+      "reason": "AMD hardware/runtime required",
+      "required_tools": [
+        "rocprofv3"
+      ],
+      "status": "unsupported"
+    },
+    "detailed-counter-amd": {
+      "detected_tools": [],
+      "reason": "AMD hardware/runtime required",
+      "required_tools": [
+        "rocprofv3"
+      ],
+      "status": "unsupported"
+    },
+    "detailed-counter-nvidia": {
+      "detected_tools": [],
+      "reason": "NVIDIA hardware/runtime required",
+      "required_tools": [
+        "ncu"
+      ],
+      "status": "unsupported"
+    },
+    "direct-cupti-nvidia": {
+      "detected_tools": [],
+      "reason": "NVIDIA CUPTI hardware/runtime required",
+      "required_tools": [],
+      "status": "unsupported"
+    },
+    "ebpf-semantic-linux": {
+      "detected_tools": [],
+      "reason": "Linux eBPF host required",
+      "required_tools": [
+        "bpftool"
+      ],
+      "status": "unsupported"
+    },
+    "hybrid-cupti-ebpf-nvidia": {
+      "detected_tools": [],
+      "reason": "NVIDIA runtime and Linux eBPF required",
+      "required_tools": [
+        "bpftool"
+      ],
+      "status": "unsupported"
+    },
+    "off": {
+      "detected_tools": [],
+      "reason": "profiler-off control is available",
+      "required_tools": [],
+      "status": "pass"
+    },
+    "proton-nvidia": {
+      "detected_tools": [],
+      "reason": "NVIDIA hardware/runtime required",
+      "required_tools": [
+        "vllm",
+        "proton-viewer"
+      ],
+      "status": "unsupported"
+    },
+    "public-pytorch-amd": {
+      "detected_tools": [],
+      "reason": "AMD hardware/runtime required",
+      "required_tools": [],
+      "status": "unsupported"
+    },
+    "public-pytorch-nvidia": {
+      "detected_tools": [],
+      "reason": "NVIDIA hardware/runtime required",
+      "required_tools": [],
+      "status": "unsupported"
+    },
+    "trusted-amd": {
+      "detected_tools": [],
+      "reason": "AMD hardware/runtime required",
+      "required_tools": [
+        "rocprofv3"
+      ],
+      "status": "unsupported"
+    },
+    "trusted-nvidia": {
+      "detected_tools": [],
+      "reason": "NVIDIA hardware/runtime required",
+      "required_tools": [
+        "nsys"
+      ],
+      "status": "unsupported"
+    }
+  },
+  "platform": {
+    "machine": "arm64",
+    "python": "3.11.4",
+    "python_executable": "python",
+    "release": "25.6.0",
+    "system": "Darwin"
+  },
+  "schema_version": 2,
+  "source": {
+    "branch": "research/investigate-optional-low-overhead-native-probe-surfaces",
+    "dirty": false,
+    "repository": "https://github.com/Silas-Asamoah/gpu-memory-profiler.git",
+    "revision": "903548c5cd13520d4884f60edacca68580560dcf",
+    "working_tree": "stormlog"
+  },
+  "tools": {
+    "bpftool": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "bpftrace": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "hipconfig": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "ncu": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "nsys": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "nvcc": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "nvidia-smi": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "proton-viewer": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "rocm-smi": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "rocminfo": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "rocprofv3": {
+      "available": false,
+      "path": null,
+      "version": null
+    },
+    "vllm": {
+      "available": false,
+      "path": null,
+      "version": null
+    }
+  }
+}
