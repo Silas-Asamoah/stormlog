@@ -313,6 +313,20 @@ Use the repository `.venv` and run from the repository root:
   --repository "$PWD" \
   --output research/native_probes/artifacts/<host-id>/environment.json
 
+.venv/bin/python -m research.native_probes.cli plan \
+  --configuration-id <configuration-id> \
+  --vendor <nvidia-or-amd> \
+  --workload w1-eager --workload w2-overlap --workload w2-serialized \
+  --mode off --mode trusted --repetitions 5 \
+  --environment-artifact \
+    research/native_probes/artifacts/<host-id>/environment.json \
+  --artifact-root research/native_probes/artifacts/<host-id> \
+  --output research/native_probes/artifacts/<host-id>/plan.json
+
+.venv/bin/python -m research.native_probes.cli run \
+  --plan research/native_probes/artifacts/<host-id>/plan.json \
+  --output research/native_probes/artifacts/<host-id>/run-index.json
+
 .venv/bin/python -m research.native_probes.cli initialize-matrix \
   --source research/native_probes/matrices/source_backed.json \
   --environment-artifact \

@@ -108,13 +108,17 @@ the other.
 
 ### W2: overlapping streams
 
-Run the same independent matrix operations on two streams in two variants:
+Run the same bounded elementwise work on two streams in two variants. The
+element count and operations per stream control duration and resource demand:
 
 - `w2-overlap`, with no inter-stream serialization;
 - `w2-serialized`, synchronizing the first stream before the second launch.
 
-Pass condition: the trusted trace confirms that the variants differ; the
-candidate preserves stream identity, per-stream order, and the overlap result.
+Separate `overlap_eligible_by_design` from
+`overlap_observed_in_trusted_trace`. Pass condition: the trusted trace first
+demonstrates a positive concurrent interval and confirms that the variants
+differ; only then may a candidate be graded for preserving stream identity,
+per-stream order, and overlap.
 If profiling serializes the overlap variant, mark the trial perturbed and fail
 the fidelity gate.
 
@@ -129,8 +133,10 @@ mistaken for repeated framework capture, and missing node identity is explicit.
 
 ### W4: high-event-rate stress
 
-Issue 100 small elementwise launches per iteration and increase iterations or
-reduce buffer bounds until loss occurs. Record expected launches, delivered
+Issue a declared number of small elementwise launches per iteration and vary
+one declared pressure control at a time until loss occurs: launch count,
+producer buffer bound, transport buffer bound, output byte bound, consumer or
+reader delay, flush interval, or postprocessor delay. Record expected launches, delivered
 records, all producer and transport drops, truncation, buffer capacity,
 occupancy where exposed, flush result, and artifact bytes.
 
@@ -245,7 +251,8 @@ coverage and rejected kernels. Do not infer heavy memory-probe cost from it.
 
 ## Trial discipline
 
-- Warm up once before measurement.
+- Warm up before the named measurement range. Persist the marker, range ID,
+  warmup/measured counts, host boundaries, clock, and flush completion.
 - Restart the target between independent trials.
 - Run at least five measured trials per condition.
 - Use at least 1,000 measured microbenchmark iterations.
@@ -297,7 +304,8 @@ degradation.
 
 ### Collector and resource cost
 
-Measure target, helper, and system CPU; RSS; threads; wakeups when practical;
+Measure target, profiler wrapper, helper/agent, postprocessor, and system CPU;
+RSS; threads; wakeups when practical;
 disk I/O; records and bytes per second; peak buffer occupancy; raw and
 compressed bytes; symbolization; and all post-processing time.
 

@@ -96,6 +96,17 @@ AMD qualification is an independent lane. HIP graph behavior, queues, loss,
 coexistence, permissions, containers, and engine support must be measured on a
 supported AMD host. No NVIDIA result is carried into the AMD matrix.
 
+PyTorch's current
+[HIP semantics](https://docs.pytorch.org/docs/main/notes/hip.html) explicitly
+reuses the `torch.cuda` interfaces on ROCm. AMD's current
+[HIP graph documentation](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_runtime_api/hipgraph.html)
+documents stream capture, graph instantiation, and replay. The W3 harness must
+therefore attempt the public PyTorch graph API on a compatible ROCm build and
+retain an exact runtime rejection if unsupported, rather than blanket-skipping
+all HIP hosts. ROCProfiler buffered callbacks expose a `drop_count`; that is a
+distinct AMD producer-loss input, not evidence about BPF transport or artifact
+storage loss.
+
 ## Direct NVIDIA Activity API
 
 The current [CUPTI documentation](https://docs.nvidia.com/cupti/main/main.html)

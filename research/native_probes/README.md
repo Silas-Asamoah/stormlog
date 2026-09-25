@@ -18,6 +18,8 @@ in the Stormlog Python package and does not select a production collector.
   CUPTI helper without merging its production integration.
 - `analysis.py`: individual values, medians, dispersion, bootstrap intervals,
   retained failures, unknown denominators, and matched perturbation.
+- `normalization.py`: measurement-window, loss-domain, artifact, and trusted
+  overlap gates that preserve unknown evidence.
 - `schemas/`: environment, trial, and capability-matrix contracts.
 - `matrices/`: theoretical and Stormlog-validated matrices kept separate.
 - `artifacts/`: immutable control-host and future hardware evidence.
@@ -89,6 +91,13 @@ cmake --build /tmp/stormlog-cupti-build --config Release
 ```
 
 The build is not evidence that runtime behavior is correct.
+
+## End-to-end CLI
+
+The supported sequence is `preflight`, `plan`, `run`, `normalize`, `analyze`,
+then `validate-matrix`. See
+`docs/native_probe_integration_contract.md` for exact commands, evidence roles,
+sidecar boundaries, and versioning.
 
 ## Analysis
 
