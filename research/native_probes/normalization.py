@@ -90,12 +90,8 @@ def normalize_loss(raw: Mapping[str, Any] | None) -> dict[str, Any]:
 def normalize_trial(trial: Mapping[str, Any]) -> dict[str, Any]:
     """Produce one analysis input while preserving unsupported semantics."""
     errors = validate_measurement_window(_mapping(trial.get("measurement_window")))
-    artifacts = trial.get("artifacts", [])
-    missing = [
-        row.get("artifact_id")
-        for row in artifacts
-        if isinstance(row, Mapping) and row.get("status") == "missing"
-    ]
+    artifacts = _artifact_rows(trial.get("artifacts"))
+    missing = _artifact_ids(artifacts, "missing")
     loss = normalize_loss(_mapping(trial.get("loss")))
     status = trial.get("status", "fail")
     if status == "pass" and (errors or missing):
@@ -113,11 +109,7 @@ def normalize_trial(trial: Mapping[str, Any]) -> dict[str, Any]:
         "measurement_window": trial.get("measurement_window"),
         "loss": loss,
         "pressure_controls": dict(_mapping(trial.get("pressure_controls")) or {}),
-        "raw_artifact_ids": [
-            row.get("artifact_id")
-            for row in artifacts
-            if isinstance(row, Mapping) and row.get("status") == "present"
-        ],
+        "raw_artifact_ids": _artifact_ids(artifacts, "present"),
         "limitations": [*trial.get("limitations", []), *errors],
     }
 
@@ -132,3 +124,13 @@ def validate_unique_artifacts(artifacts: Sequence[Mapping[str, Any]]) -> None:
 
 def _mapping(value: object) -> Mapping[str, Any] | None:
     return value if isinstance(value, Mapping) else None
+
+
+def _artifact_rows(value: object) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [row for row in value if isinstance(row, Mapping)]
+
+
+def _artifact_ids(artifacts: Sequence[Mapping[str, Any]], status: str) -> list[Any]:
+    return [row.get("artifact_id") for row in artifacts if row.get("status") == status]

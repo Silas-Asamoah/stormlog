@@ -60,37 +60,8 @@ def validate_matrix_promotions(
     result: dict[str, Any] = deepcopy(dict(matrix))
     candidates = {row["id"]: row for row in result.get("candidates", [])}
     for promotion in promotions:
-        candidate_id = promotion.get("candidate_id")
-        claim_id = promotion.get("claim_id")
-        if candidate_id not in candidates:
-            raise ValueError(f"unknown candidate: {candidate_id}")
-        claims = candidates[candidate_id].get("claims", {})
-        if claim_id not in claims:
-            raise ValueError(f"unknown claim: {candidate_id}.{claim_id}")
-        evidence = promotion.get("evidence")
-        if not isinstance(evidence, list):
-            raise ValueError("promotion evidence must be an array")
-        by_role = {row.get("role"): row for row in evidence if isinstance(row, Mapping)}
-        if set(by_role) != _EVIDENCE_ROLES:
-            missing = sorted(_EVIDENCE_ROLES - set(by_role))
-            raise ValueError(f"promotion missing evidence roles: {missing}")
-        for role, row in by_role.items():
-            path = row.get("path")
-            checksum = row.get("sha256")
-            durable = row.get("durable_location")
-            if not isinstance(checksum, str) or len(checksum) != 64:
-                raise ValueError(f"{role} evidence requires a SHA-256 checksum")
-            if isinstance(path, str):
-                resolved = (repository / path).resolve()
-                if (
-                    repository.resolve() not in resolved.parents
-                    or not resolved.is_file()
-                ):
-                    raise ValueError(f"{role} evidence path is unavailable or unsafe")
-            elif not isinstance(durable, str) or not durable.startswith("https://"):
-                raise ValueError(
-                    f"{role} evidence requires a file or durable HTTPS location"
-                )
+        candidate_id, claim_id, claims = _promotion_target(promotion, candidates)
+        evidence = _promotion_evidence(promotion, repository)
         claims[claim_id]["status"] = "STORMLOG_VALIDATED"
         claims[claim_id]["detail"] = str(
             promotion.get("detail", "validated by hardware experiment")
@@ -99,3 +70,47 @@ def validate_matrix_promotions(
             str(row.get("path") or row["durable_location"]) for row in evidence
         ]
     return result
+
+
+def _promotion_target(
+    promotion: Mapping[str, Any], candidates: Mapping[str, Any]
+) -> tuple[str, str, dict[str, Any]]:
+    candidate_id = promotion.get("candidate_id")
+    claim_id = promotion.get("claim_id")
+    if not isinstance(candidate_id, str) or candidate_id not in candidates:
+        raise ValueError(f"unknown candidate: {candidate_id}")
+    claims = candidates[candidate_id].get("claims", {})
+    if not isinstance(claim_id, str) or claim_id not in claims:
+        raise ValueError(f"unknown claim: {candidate_id}.{claim_id}")
+    return candidate_id, claim_id, claims
+
+
+def _promotion_evidence(
+    promotion: Mapping[str, Any], repository: Path
+) -> list[Mapping[str, Any]]:
+    evidence = promotion.get("evidence")
+    if not isinstance(evidence, list):
+        raise ValueError("promotion evidence must be an array")
+    rows = [row for row in evidence if isinstance(row, Mapping)]
+    by_role = {row.get("role"): row for row in rows}
+    if set(by_role) != _EVIDENCE_ROLES:
+        missing = sorted(_EVIDENCE_ROLES - set(by_role))
+        raise ValueError(f"promotion missing evidence roles: {missing}")
+    for role, row in by_role.items():
+        _validate_evidence_row(str(role), row, repository)
+    return rows
+
+
+def _validate_evidence_row(role: str, row: Mapping[str, Any], repository: Path) -> None:
+    checksum = row.get("sha256")
+    if not isinstance(checksum, str) or len(checksum) != 64:
+        raise ValueError(f"{role} evidence requires a SHA-256 checksum")
+    path = row.get("path")
+    if isinstance(path, str):
+        resolved = (repository / path).resolve()
+        if repository.resolve() not in resolved.parents or not resolved.is_file():
+            raise ValueError(f"{role} evidence path is unavailable or unsafe")
+        return
+    durable = row.get("durable_location")
+    if not isinstance(durable, str) or not durable.startswith("https://"):
+        raise ValueError(f"{role} evidence requires a file or durable HTTPS location")

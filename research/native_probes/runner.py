@@ -165,17 +165,24 @@ def _select_role(
     if spec.discovery == "root":
         return [row for row in processes if row.pid == root_pid]
     if spec.discovery == "descendant_argv_contains" and spec.argv_contains:
-        selected = []
-        for row in processes:
-            if row.pid == root_pid:
-                continue
-            try:
-                if any(spec.argv_contains in item for item in row.cmdline()):
-                    selected.append(row)
-            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-                continue
-        return selected
+        return _matching_descendants(processes, root_pid, spec.argv_contains)
     return []
+
+
+def _matching_descendants(
+    processes: list[psutil.Process], root_pid: int, marker: str
+) -> list[psutil.Process]:
+    selected = []
+    for row in processes:
+        if row.pid == root_pid:
+            continue
+        try:
+            command = row.cmdline()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            continue
+        if any(marker in item for item in command):
+            selected.append(row)
+    return selected
 
 
 def _merge_metrics(
