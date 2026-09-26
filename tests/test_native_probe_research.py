@@ -21,6 +21,7 @@ from research.native_probes.mode_commands import (
     process_roles,
 )
 from research.native_probes.models import (
+    ArtifactExpectation,
     CommandSpec,
     ExperimentMode,
     TrialSpec,
@@ -194,7 +195,7 @@ def test_analysis_retains_failures_unknowns_and_individual_values() -> None:
     ]
 
     result = analyze_trials(trials, bootstrap_samples=200)
-    group = result["groups"]["nvidia-a100:off"]
+    group = result["groups"]["nvidia-a100:w1-eager:off"]
 
     assert group["trial_count"] == 3
     assert group["failure_count"] == 1
@@ -241,6 +242,11 @@ def test_runner_retains_metrics_logs_and_checksums(tmp_path: Path) -> None:
     assert result["status"] == "pass"
     assert result["metrics"]["latency_ms"] == 2.5
     assert result["artifacts"][0]["sha256"]
+    stdout_log = tmp_path / "control" / "trials" / spec.trial_id / "logs" / "stdout.log"
+    assert (
+        result["artifacts"][0]["sha256"]
+        == hashlib.sha256(stdout_log.read_bytes()).hexdigest()
+    )
     assert result["resources"]["target"]["status"] == "observed"
 
 
@@ -257,6 +263,51 @@ def test_runner_rejects_secret_environment_keys(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="secret-like"):
         run_trial(spec, tmp_path)
+
+
+def test_runner_downgrades_missing_result_and_malformed_trace(tmp_path: Path) -> None:
+    malformed_result = TrialSpec(
+        trial_id="bad-result",
+        configuration_id="control",
+        workload_id=WorkloadId.W1_EAGER,
+        mode=ExperimentMode.OFF,
+        repetition=0,
+        command=CommandSpec((sys.executable, "-c", "print('not-json')"), {}, 5.0),
+        expected_artifacts=expected_artifacts(ExperimentMode.OFF),
+        process_roles=process_roles(ExperimentMode.OFF),
+    )
+    assert run_trial(malformed_result, tmp_path)["status"] == "partial"
+
+    trial_id = "bad-trace"
+    trace_path = tmp_path / "control" / "trials" / trial_id / "trace.json"
+    payload = {
+        "artifact_kind": "workload_result",
+        "metrics": {"latency_ms": 1.0},
+        "measurement_window": _window(),
+        "ground_truth": {},
+    }
+    code = (
+        "from pathlib import Path; import json; "
+        f"Path({str(trace_path)!r}).write_text('{{broken'); "
+        f"print({json.dumps(payload)!r})"
+    )
+    malformed_trace = TrialSpec(
+        trial_id=trial_id,
+        configuration_id="control",
+        workload_id=WorkloadId.W1_EAGER,
+        mode=ExperimentMode.PUBLIC_PYTORCH,
+        repetition=0,
+        command=CommandSpec((sys.executable, "-c", code), {}, 5.0),
+        expected_artifacts=(
+            ArtifactExpectation(
+                "trace", "raw_trace", "trace.json", "target", "chrome-trace-json"
+            ),
+        ),
+        process_roles=process_roles(ExperimentMode.OFF),
+    )
+    result = run_trial(malformed_trace, tmp_path)
+    assert result["status"] == "partial"
+    assert result["artifacts"][0]["status"] == "malformed"
 
 
 def test_runner_marks_missing_required_profiler_artifact_partial(
@@ -390,6 +441,9 @@ def test_measurement_window_rejects_partial_boundaries() -> None:
     assert "collector flush did not complete" in validate_measurement_window(
         {**_window(), "flush_completed": False}
     )
+    assert "measurement window measured_iterations must be an integer >= 1" in (
+        validate_measurement_window({**_window(), "measured_iterations": 0})
+    )
 
 
 def test_plan_is_counterbalanced_and_schema_valid(tmp_path: Path) -> None:
@@ -432,7 +486,7 @@ def test_matrix_promotion_requires_all_evidence_roles(tmp_path: Path) -> None:
     matrix = json.loads((MATRICES / "stormlog_validated.json").read_text())
     candidate = matrix["candidates"][0]
     claim = next(iter(candidate["claims"]))
-    with pytest.raises(ValueError, match="missing evidence roles"):
+    with pytest.raises(ValueError, match="five unique evidence roles"):
         validate_matrix_promotions(
             matrix,
             [{"candidate_id": candidate["id"], "claim_id": claim, "evidence": []}],
@@ -440,7 +494,7 @@ def test_matrix_promotion_requires_all_evidence_roles(tmp_path: Path) -> None:
         )
 
 
-def test_matrix_promotion_accepts_complete_hashed_bundle(tmp_path: Path) -> None:
+def test_matrix_promotion_rejects_unlinked_checksum_bundle(tmp_path: Path) -> None:
     matrix = json.loads((MATRICES / "stormlog_validated.json").read_text())
     candidate = matrix["candidates"][0]
     claim = next(iter(candidate["claims"]))
@@ -455,21 +509,104 @@ def test_matrix_promotion_accepts_complete_hashed_bundle(tmp_path: Path) -> None
                 "sha256": hashlib.sha256(b"{}").hexdigest(),
             }
         )
+    with pytest.raises(ValueError):
+        validate_matrix_promotions(
+            matrix,
+            [
+                {
+                    "candidate_id": candidate["id"],
+                    "claim_id": claim,
+                    "detail": "hardware run",
+                    "evidence": evidence,
+                }
+            ],
+            tmp_path,
+        )
 
-    promoted = validate_matrix_promotions(
-        matrix,
+
+def test_matrix_promotion_preserves_verified_role_hash_provenance(
+    tmp_path: Path,
+) -> None:
+    matrix = json.loads((MATRICES / "stormlog_validated.json").read_text())
+    candidate = matrix["candidates"][0]
+    claim = next(iter(candidate["claims"]))
+    documents = _promotion_fixture(tmp_path, candidate["id"], claim)
+
+    promoted = validate_matrix_promotions(matrix, [documents], tmp_path)
+
+    promoted_claim = promoted["candidates"][0]["claims"][claim]
+    assert promoted_claim["status"] == "STORMLOG_VALIDATED"
+    assert {row["role"] for row in promoted_claim["evidence_roles"]} == {
+        "environment",
+        "command",
+        "raw_artifact",
+        "trial",
+        "analysis",
+    }
+    assert all(len(row["sha256"]) == 64 for row in promoted_claim["evidence_roles"])
+
+
+def test_matrix_promotion_rejects_cross_file_workload_mismatch(tmp_path: Path) -> None:
+    matrix = json.loads((MATRICES / "stormlog_validated.json").read_text())
+    candidate = matrix["candidates"][0]
+    claim = next(iter(candidate["claims"]))
+    promotion = _promotion_fixture(tmp_path, candidate["id"], claim)
+    trial_path = tmp_path / "trial.json"
+    trial = json.loads(trial_path.read_text(encoding="utf-8"))
+    trial["workload_id"] = "w2-overlap"
+    trial_path.write_text(json.dumps(trial), encoding="utf-8")
+    promotion["workload_id"] = "w2-overlap"
+    promotion["evidence"] = _evidence_rows(tmp_path)
+
+    with pytest.raises(ValueError, match="mismatch for workload_id"):
+        validate_matrix_promotions(matrix, [promotion], tmp_path)
+
+
+def test_matrix_promotion_rejects_tampered_digest_and_symlink(tmp_path: Path) -> None:
+    matrix = json.loads((MATRICES / "stormlog_validated.json").read_text())
+    candidate = matrix["candidates"][0]
+    claim = next(iter(candidate["claims"]))
+
+    (tmp_path / "tampered").mkdir()
+    tampered = _promotion_fixture(tmp_path / "tampered", candidate["id"], claim)
+    (tmp_path / "tampered" / "raw.trace").write_bytes(b"changed after hashing")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        validate_matrix_promotions(matrix, [tampered], tmp_path / "tampered")
+
+    (tmp_path / "linked").mkdir()
+    linked = _promotion_fixture(tmp_path / "linked", candidate["id"], claim)
+    root = tmp_path / "linked"
+    (root / "environment-link.json").symlink_to(root / "environment.json")
+    linked["evidence"] = _evidence_rows(root)
+    linked["evidence"][0]["path"] = "environment-link.json"
+    with pytest.raises(ValueError, match="symlink"):
+        validate_matrix_promotions(matrix, [linked], root)
+
+
+def test_analysis_groups_by_workload_identity() -> None:
+    result = analyze_trials(
         [
-            {
-                "candidate_id": candidate["id"],
-                "claim_id": claim,
-                "detail": "hardware run",
-                "evidence": evidence,
-            }
+            {**_trial("w1", "pass", 10.0, None), "workload_id": "w1-eager"},
+            {**_trial("w2", "pass", 90.0, None), "workload_id": "w2-overlap"},
         ],
-        tmp_path,
+        bootstrap_samples=100,
     )
 
-    assert promoted["candidates"][0]["claims"][claim]["status"] == "STORMLOG_VALIDATED"
+    assert set(result["groups"]) == {
+        "nvidia-a100:w1-eager:off",
+        "nvidia-a100:w2-overlap:off",
+    }
+
+
+def test_pairing_rejects_duplicate_and_nonfinite_trials() -> None:
+    baseline = _paired_trial("off-0", "off", 0, 10.0)
+    with pytest.raises(ValueError, match="duplicate"):
+        paired_perturbations([baseline, baseline], "latency_ms")
+    with pytest.raises(ValueError, match="finite"):
+        paired_perturbations(
+            [baseline, _paired_trial("public-0", "public-pytorch", 0, float("nan"))],
+            "latency_ms",
+        )
 
 
 def _window() -> dict[str, object]:
@@ -505,6 +642,7 @@ def _trial(
     return {
         "trial_id": trial,
         "configuration_id": "nvidia-a100",
+        "workload_id": "w1-eager",
         "mode": "off",
         "status": status,
         "metrics": {"latency_ms": latency_ms, "loss_rate": loss_rate},
@@ -522,3 +660,114 @@ def _paired_trial(
         "repetition": repetition,
         "metrics": {"latency_ms": latency_ms},
     }
+
+
+def _promotion_fixture(
+    tmp_path: Path, candidate_id: str, claim_id: str
+) -> dict[str, object]:
+    revision = "a" * 40
+    raw_path = tmp_path / "raw.trace"
+    raw_path.write_bytes(b"usable raw trace")
+    raw_hash = hashlib.sha256(raw_path.read_bytes()).hexdigest()
+    trial_id = "fixture-trial-1"
+    documents = {
+        "environment": {
+            "artifact_kind": "native_probe_environment",
+            "source": {"revision": revision},
+        },
+        "command": {
+            "artifact_kind": "native_probe_plan",
+            "configuration_id": "fixture-config",
+            "environment_artifact": "environment.json",
+            "revision": revision,
+            "trials": [
+                {
+                    "trial_id": trial_id,
+                    "configuration_id": "fixture-config",
+                    "workload_id": "w1-eager",
+                    "mode": "off",
+                    "repetition": 0,
+                    "command": {
+                        "argv": ["fixture"],
+                        "environment": {},
+                        "timeout_seconds": 1,
+                    },
+                }
+            ],
+        },
+        "trial": {
+            "artifact_kind": "native_probe_trial",
+            "trial_id": trial_id,
+            "configuration_id": "fixture-config",
+            "workload_id": "w1-eager",
+            "mode": "off",
+            "repetition": 0,
+            "revision": revision,
+            "command": {
+                "argv": ["fixture"],
+                "environment": {},
+                "timeout_seconds": 1,
+            },
+            "status": "pass",
+            "return_code": 0,
+            "measurement_window": _window(),
+            "artifacts": [
+                {
+                    "path": str(raw_path),
+                    "artifact_id": "trace-1",
+                    "sha256": raw_hash,
+                    "status": "present",
+                    "required": True,
+                    "kind": "cuda_trace",
+                    "producer": "fixture",
+                }
+            ],
+        },
+        "analysis": {
+            "artifact_kind": "native_probe_analysis",
+            "groups": {"fixture": {"trial_ids": [trial_id]}},
+            "claim_evidence": {
+                claim_id: {
+                    "status": "pass",
+                    "basis": "reviewed fixture outcome",
+                    "criterion": "one verified trace interval meets the claim criterion",
+                    "observed": "the linked trace records the required interval",
+                    "trial_ids": [trial_id],
+                    "artifact_ids": ["trace-1"],
+                }
+            },
+        },
+    }
+    for name, document in documents.items():
+        (tmp_path / f"{name}.json").write_text(json.dumps(document), encoding="utf-8")
+    evidence = _evidence_rows(tmp_path)
+    return {
+        "candidate_id": candidate_id,
+        "claim_id": claim_id,
+        "detail": "verified fixture evidence",
+        "trial_id": trial_id,
+        "configuration_id": "fixture-config",
+        "workload_id": "w1-eager",
+        "mode": "off",
+        "repetition": 0,
+        "revision": revision,
+        "evidence": evidence,
+    }
+
+
+def _evidence_rows(tmp_path: Path) -> list[dict[str, str]]:
+    names = {
+        "environment": "environment.json",
+        "command": "command.json",
+        "raw_artifact": "raw.trace",
+        "trial": "trial.json",
+        "analysis": "analysis.json",
+    }
+    return [
+        {
+            "role": role,
+            "path": filename,
+            "sha256": hashlib.sha256((tmp_path / filename).read_bytes()).hexdigest(),
+        }
+        for role, filename in names.items()
+    ]

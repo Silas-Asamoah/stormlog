@@ -8,6 +8,7 @@
   "properties": {
     "schema_version": {"const": 1},
     "artifact_kind": {"const": "native_probe_plan"},
+    "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "configuration_id": {"type": "string", "minLength": 1},
     "vendor": {"enum": ["nvidia", "amd"]},
     "seed": {"type": "integer"},

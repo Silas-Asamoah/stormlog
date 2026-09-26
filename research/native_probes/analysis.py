@@ -18,14 +18,14 @@ def analyze_trials(
     if bootstrap_samples < 100:
         raise ValueError("bootstrap_samples must be at least 100")
     materialized = list(trials)
-    groups: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
+    groups: dict[tuple[str, str, str], list[Mapping[str, Any]]] = defaultdict(list)
     for trial in materialized:
         groups[_group_key(trial)].append(trial)
     summaries = {
-        f"{configuration_id}:{mode}": _summarize_group(
+        f"{configuration_id}:{workload_id}:{mode}": _summarize_group(
             group, bootstrap_samples=bootstrap_samples
         )
-        for (configuration_id, mode), group in sorted(groups.items())
+        for (configuration_id, workload_id, mode), group in sorted(groups.items())
     }
     return {
         "schema_version": 1,
@@ -40,10 +40,20 @@ def paired_perturbations(
 ) -> list[dict[str, Any]]:
     """Compare each measured mode with its matched profiler-off trial."""
     materialized = list(trials)
+    seen: set[tuple[str, str, int, str]] = set()
+    for trial in materialized:
+        identity = (*_pair_key(trial), _mode(trial))
+        if identity in seen:
+            raise ValueError(f"duplicate paired trial identity: {identity}")
+        seen.add(identity)
+        _trial_metric(trial, metric)
     baselines: dict[tuple[str, str, int], Mapping[str, Any]] = {}
     for trial in materialized:
         if trial.get("mode") == "off":
-            baselines[_pair_key(trial)] = trial
+            baseline_key = _pair_key(trial)
+            if baseline_key in baselines:
+                raise ValueError(f"duplicate baseline trial identity: {baseline_key}")
+            baselines[baseline_key] = trial
     comparisons: list[dict[str, Any]] = []
     for trial in materialized:
         if trial.get("mode") == "off":
@@ -101,7 +111,10 @@ def _trial_metric(trial: Mapping[str, Any], metric: str) -> float | None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"metric {metric!r} must be numeric or null")
-    return float(value)
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError(f"metric {metric!r} must be finite")
+    return numeric
 
 
 def _unavailable_comparison(trial: Mapping[str, Any], reason: str) -> dict[str, Any]:
@@ -113,14 +126,24 @@ def _unavailable_comparison(trial: Mapping[str, Any], reason: str) -> dict[str, 
     }
 
 
-def _group_key(trial: Mapping[str, Any]) -> tuple[str, str]:
+def _group_key(trial: Mapping[str, Any]) -> tuple[str, str, str]:
     configuration_id = trial.get("configuration_id")
     mode = trial.get("mode")
+    workload_id = trial.get("workload_id")
     if not isinstance(configuration_id, str) or not configuration_id:
         raise ValueError("trial configuration_id must be a nonempty string")
     if not isinstance(mode, str) or not mode:
         raise ValueError("trial mode must be a nonempty string")
-    return configuration_id, mode
+    if not isinstance(workload_id, str) or not workload_id:
+        raise ValueError("trial workload_id must be a nonempty string")
+    return configuration_id, workload_id, mode
+
+
+def _mode(trial: Mapping[str, Any]) -> str:
+    mode = trial.get("mode")
+    if not isinstance(mode, str) or not mode:
+        raise ValueError("paired trials require a nonempty mode")
+    return mode
 
 
 def _summarize_group(

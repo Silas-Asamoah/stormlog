@@ -17,7 +17,8 @@ in the Stormlog Python package and does not select a production collector.
 - `references.py`: exact prototype revisions, including extraction of PR #237's
   CUPTI helper without merging its production integration.
 - `analysis.py`: individual values, medians, dispersion, bootstrap intervals,
-  retained failures, unknown denominators, and matched perturbation.
+  retained failures, unknown denominators, workload-separated groups, and
+  duplicate-safe matched perturbation.
 - `normalization.py`: measurement-window, loss-domain, artifact, and trusted
   overlap gates that preserve unknown evidence.
 - `schemas/`: environment, trial, and capability-matrix contracts.
@@ -31,6 +32,8 @@ in the Stormlog Python package and does not select a production collector.
 - Never put credentials in command environment overrides or artifacts.
 - Never overwrite an environment, trial, raw trace, or analysis artifact.
 - Keep failures, timeouts, partial runs, and unsupported modes.
+- `run` always writes an index containing every retained trial manifest and
+  exits nonzero if any trial fails, times out, is partial, or is unsupported.
 - Use `null` and `UNKNOWN` when a denominator is unavailable.
 - Do not relabel CPU launch time as GPU execution time.
 - Do not relabel a shared iteration as measured per-request GPU time.
@@ -110,6 +113,34 @@ records, then run:
   --output /path/to/analysis.json
 ```
 
-The analysis output retains individual measurements and failure counts. Raw
-traces remain outside Git when large or sensitive; commit cryptographic
-checksums and a durable access location instead.
+The analysis output retains individual measurements and failure counts. Large
+or sensitive raw traces may be gitignored, but promotion validation requires a
+local copy inside the repository tree so it can recompute the digest. A durable
+remote reference alone is not promotion evidence.
+
+## CPU pipeline verification
+
+The CLI integration test runs `plan`-shaped CPU fixtures through subprocess
+`run`, `normalize`, and `analyze` stages. Run it with:
+
+```bash
+.venv/bin/python -m pytest tests/test_native_probe_research.py tests/test_native_probe_cli.py -q
+```
+
+These fixtures verify orchestration and input rejection only. They do not
+qualify CUDA, graph capture, overlap, loss, or any hardware claim.
+
+## Opt-in NVIDIA smoke
+
+On a host with a usable NVIDIA CUDA runtime and PyTorch CUDA build, run:
+
+```bash
+STORMLOG_RUN_NVIDIA_SMOKE=1 .venv/bin/python -m pytest tests/test_native_probe_gpu.py -q -s
+```
+
+The selected smoke fails when PyTorch or CUDA initialization is unavailable or
+when the eager CUDA Chrome trace has no usable events. It prints that full
+issue #118 adoption evidence remains pending. The Proton tree-mode graph path
+requires Triton 3.7 or newer and `proton_graph_attribution: true`; Chrome trace
+graph attribution requires eager mode. The smoke is not graph-mode or full
+adoption evidence.

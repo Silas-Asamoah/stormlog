@@ -118,6 +118,7 @@ def _preflight(arguments: argparse.Namespace) -> int:
 
 def _analyze(arguments: argparse.Namespace) -> int:
     trials = _read_jsonl(arguments.input)
+    _validate_analysis_inputs(trials)
     analysis = analyze_trials(trials, bootstrap_samples=arguments.bootstrap_samples)
     checksum = write_manifest(arguments.output, analysis)
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
@@ -136,6 +137,12 @@ def _plan(arguments: argparse.Namespace) -> int:
         artifact_root=arguments.artifact_root,
         cupti_library=arguments.cupti_library,
     )
+    environment_path = Path(arguments.environment_artifact)
+    if environment_path.is_file():
+        environment = _read_object(environment_path)
+        source = environment.get("source")
+        if isinstance(source, dict) and isinstance(source.get("revision"), str):
+            plan["revision"] = source["revision"]
     _validate(plan, "plan.schema.json")
     checksum = write_manifest(arguments.output, plan)
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
@@ -147,6 +154,7 @@ def _run(arguments: argparse.Namespace) -> int:
     _validate(plan, "plan.schema.json")
     root = Path(plan["artifact_root"])
     results = []
+    failed = False
     for row in plan["trials"]:
         spec = TrialSpec(
             trial_id=row["trial_id"],
@@ -169,19 +177,22 @@ def _run(arguments: argparse.Namespace) -> int:
             measurement_range_id=row["measurement_range_id"],
             pressure_controls=row.get("pressure_controls", {}),
         )
-        manifest = run_trial(spec, root)
+        manifest = run_trial(spec, root, revision=plan.get("revision"))
         _validate(manifest, "trial.schema.json")
         results.append(
-            str(
-                root
-                / spec.configuration_id
-                / "trials"
-                / spec.trial_id
-                / "manifest.json"
-            )
+            {
+                "trial_id": spec.trial_id,
+                "path": str(
+                    root
+                    / spec.configuration_id
+                    / "trials"
+                    / spec.trial_id
+                    / "manifest.json"
+                ),
+                "status": manifest["status"],
+            }
         )
-        if manifest["status"] not in {"pass", "partial", "unsupported"}:
-            continue
+        failed = failed or manifest["status"] != "pass"
     checksum = write_manifest(
         arguments.output,
         {
@@ -189,14 +200,19 @@ def _run(arguments: argparse.Namespace) -> int:
             "artifact_kind": "native_probe_run_index",
             "plan": str(arguments.plan),
             "trial_manifests": results,
+            "status": "fail" if failed else "pass",
         },
     )
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
-    return 0
+    return 1 if failed else 0
 
 
 def _normalize(arguments: argparse.Namespace) -> int:
-    result = normalize_trial(_read_object(arguments.trial))
+    trial = _read_object(arguments.trial)
+    if trial.get("artifact_kind") != "native_probe_trial":
+        raise ValueError("normalize input must be a native_probe_trial document")
+    _validate(trial, "trial.schema.json")
+    result = normalize_trial(trial)
     _validate(result, "normalized.schema.json")
     checksum = write_manifest(arguments.output, result)
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
@@ -214,8 +230,10 @@ def _initialize_matrix(arguments: argparse.Namespace) -> int:
 
 def _validate_matrix(arguments: argparse.Namespace) -> int:
     matrix = _read_object(arguments.matrix)
+    _validate(matrix, "capability_matrix.schema.json")
     promotions = _read_object(arguments.promotions).get("promotions", [])
     result = validate_matrix_promotions(matrix, promotions, arguments.repository)
+    _validate(result, "capability_matrix.schema.json")
     checksum = write_manifest(arguments.output, result)
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
     return 0
@@ -245,6 +263,24 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"{path}:{line_number}: trial must be a JSON object")
             trials.append(value)
     return trials
+
+
+def _validate_analysis_inputs(trials: list[dict[str, Any]]) -> None:
+    if not trials:
+        raise ValueError("analysis requires at least one trial")
+    seen: set[str] = set()
+    for trial in trials:
+        kind = trial.get("artifact_kind")
+        if kind == "native_probe_trial":
+            _validate(trial, "trial.schema.json")
+        elif kind == "native_probe_normalized_trial":
+            _validate(trial, "normalized.schema.json")
+        else:
+            raise ValueError("analysis input has an unsupported document kind")
+        trial_id = trial.get("trial_id")
+        if not isinstance(trial_id, str) or trial_id in seen:
+            raise ValueError("analysis input has a missing or duplicate trial_id")
+        seen.add(trial_id)
 
 
 if __name__ == "__main__":

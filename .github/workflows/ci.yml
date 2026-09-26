@@ -79,6 +79,10 @@ jobs:
                       python3 -m pytest tests/ -o "python_files=test_jax*.py" -v -ra -m "not tui_pilot and not tui_snapshot and not tui_pty" --cov=stormlog --cov-report=xml
                   fi
 
+            - name: Run native probe CPU pipeline gate
+              run: |
+                  python3 -m pytest tests/test_native_probe_research.py tests/test_native_probe_cli.py -q
+
             - name: Upload coverage to Codecov
               uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
               with:

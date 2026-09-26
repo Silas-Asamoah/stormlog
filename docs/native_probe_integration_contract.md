@@ -25,8 +25,20 @@ The research harness emits five evidence layers:
 
 A `STORMLOG_VALIDATED` matrix cell requires links for all five roles:
 environment, command, raw artifact, trial, and analysis. The validator rejects
-partial bundles. A large or sensitive raw trace may remain outside Git only
-when its manifest includes its SHA-256, byte size, and durable HTTPS location.
+partial bundles, duplicate roles, path escapes, symlinks, remote-only files,
+checksum mismatches, wrong document kinds, and cross-file identity or revision
+mismatches. Every promoted source must be locally readable while validation
+runs. The matrix cell preserves each role, path, and recomputed SHA-256 in its
+`evidence_roles` field.
+
+Promotion also requires a `pass` trial with exit code zero, a valid flushed
+measurement window, all required artifacts present, and analysis
+`claim_evidence[claim_id]` containing `status: "pass"`, a nonempty `basis`, and
+nonempty `criterion` and `observed` fields, plus the linked trial ID and raw
+artifact ID. The generic analyzer does not infer graph attribution,
+overlap preservation, or loss completeness from a successful process. Add
+claim-specific evidence only after reviewing the raw evidence. If that proof
+is unavailable, keep the matrix cell `UNKNOWN`.
 
 ## Clock and measurement contract
 
@@ -110,9 +122,14 @@ the writer refuses replacement.
 ```
 
 The plan is the reviewable command inventory. `run` executes only its argv and
-declared environment. `normalize` preserves raw artifact identities and loss
-domains. `analyze` retains individual observations and failures. Matrix
-promotion is last and fails closed.
+declared environment. It retains every trial and writes the run index even if
+a command is missing, fails, times out, or produces a partial result; its exit
+status is nonzero if any trial is not `pass`. `normalize` validates its input
+and preserves raw artifact identities and loss domains. `analyze` accepts only
+schema-valid trial/normalized JSONL and groups by configuration, workload, and
+mode. Matrix promotion is last and fails closed. CPU fixture integration tests
+exercise this chain without promoting hardware claims; see the research README
+for the opt-in NVIDIA runtime smoke command.
 
 ## Compatibility and versioning
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping, Sequence
 
 LOSS_DOMAINS = (
@@ -53,7 +54,23 @@ def validate_measurement_window(window: Mapping[str, Any] | None) -> list[str]:
     errors = [
         f"measurement window missing {key}" for key in required if key not in window
     ]
-    if window.get("host_started_ns", 0) >= window.get("host_finished_ns", 0):
+    for field in ("range_id", "marker", "clock"):
+        if not isinstance(window.get(field), str) or not window[field].strip():
+            errors.append(f"measurement window {field} must be a nonempty string")
+    for field, minimum in (("warmup_iterations", 0), ("measured_iterations", 1)):
+        value = window.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            errors.append(f"measurement window {field} must be an integer >= {minimum}")
+    started = window.get("host_started_ns")
+    finished = window.get("host_finished_ns")
+    if (
+        isinstance(started, bool)
+        or not isinstance(started, int)
+        or isinstance(finished, bool)
+        or not isinstance(finished, int)
+    ):
+        errors.append("measurement window timestamps must be integers")
+    elif started >= finished:
         errors.append("measurement window timestamps are not ordered")
     if window.get("flush_completed") is not True:
         errors.append("collector flush did not complete")
@@ -89,9 +106,38 @@ def normalize_loss(raw: Mapping[str, Any] | None) -> dict[str, Any]:
 
 def normalize_trial(trial: Mapping[str, Any]) -> dict[str, Any]:
     """Produce one analysis input while preserving unsupported semantics."""
+    required = (
+        "trial_id",
+        "configuration_id",
+        "workload_id",
+        "mode",
+        "repetition",
+        "status",
+        "metrics",
+    )
+    if any(key not in trial for key in required):
+        raise ValueError("trial is missing required identity or result fields")
+    if trial.get("status") == "pass" and trial.get("measurement_window") is None:
+        # A process exit alone cannot establish that a measurement was usable.
+        trial = {**trial, "status": "partial"}
+    metrics = _mapping(trial.get("metrics"))
+    if metrics is None:
+        raise ValueError("trial metrics must be an object")
+    for name, value in metrics.items():
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            raise ValueError(f"metric {name!r} must be finite or null")
     errors = validate_measurement_window(_mapping(trial.get("measurement_window")))
     artifacts = _artifact_rows(trial.get("artifacts"))
-    missing = _artifact_ids(artifacts, "missing")
+    validate_unique_artifacts(artifacts)
+    missing = [
+        row.get("artifact_id")
+        for row in artifacts
+        if row.get("status") in {"missing", "malformed"}
+    ]
     loss = normalize_loss(_mapping(trial.get("loss")))
     status = trial.get("status", "fail")
     if status == "pass" and (errors or missing):
@@ -105,7 +151,7 @@ def normalize_trial(trial: Mapping[str, Any]) -> dict[str, Any]:
         "mode": trial["mode"],
         "repetition": trial["repetition"],
         "status": status,
-        "metrics": dict(_mapping(trial.get("metrics")) or {}),
+        "metrics": dict(metrics),
         "measurement_window": trial.get("measurement_window"),
         "loss": loss,
         "pressure_controls": dict(_mapping(trial.get("pressure_controls")) or {}),

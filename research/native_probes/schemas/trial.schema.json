@@ -29,6 +29,7 @@
   "properties": {
     "schema_version": {"const": 1},
     "artifact_kind": {"const": "native_probe_trial"},
+    "revision": {"type": ["string", "null"]},
     "trial_id": {"type": "string", "minLength": 1},
     "configuration_id": {"type": "string", "minLength": 1},
     "workload_id": {"enum": ["w1-eager", "w2-overlap", "w2-serialized", "w3-graph", "w4-stress", "vllm"]},
@@ -92,7 +93,7 @@
           "required": {"type": "boolean"},
           "sensitive": {"type": "boolean"},
           "loss_metadata_expected": {"type": "boolean"},
-          "status": {"enum": ["present", "missing", "external"]},
+          "status": {"enum": ["present", "missing", "external", "malformed"]},
           "storage": {"enum": ["local", "external"]},
           "durable_location": {"type": ["string", "null"]}
         }

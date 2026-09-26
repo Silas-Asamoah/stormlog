@@ -88,7 +88,22 @@
           ]
         },
         "detail": {"type": "string", "minLength": 1},
-        "evidence": {"type": "array", "items": {"type": "string"}}
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "evidence_roles": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "path", "sha256"],
+            "properties": {
+              "role": {"enum": ["environment", "command", "raw_artifact", "trial", "analysis"]},
+              "path": {"type": "string", "minLength": 1},
+              "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
+          }
+        }
       }
     }
   }

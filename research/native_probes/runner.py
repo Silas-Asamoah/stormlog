@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import signal
 import subprocess
@@ -15,7 +16,7 @@ from typing import Any, Mapping
 import psutil
 
 from .models import ProcessRole, ProcessRoleSpec, ResultStatus, TrialSpec
-from .normalization import validate_unique_artifacts
+from .normalization import validate_measurement_window, validate_unique_artifacts
 from .preflight import write_manifest
 
 _POLL_SECONDS = 0.05
@@ -35,7 +36,9 @@ class ProcessMetrics:
     write_bytes: int | None
 
 
-def run_trial(spec: TrialSpec, output_root: Path) -> dict[str, Any]:
+def run_trial(
+    spec: TrialSpec, output_root: Path, *, revision: str | None = None
+) -> dict[str, Any]:
     """Execute one argv-only trial and preserve all outputs and failures."""
     _validate_environment(spec.command.environment)
     trial_directory = output_root / spec.configuration_id / "trials" / spec.trial_id
@@ -50,8 +53,11 @@ def run_trial(spec: TrialSpec, output_root: Path) -> dict[str, Any]:
     validate_unique_artifacts(artifacts)
     workload_result = _workload_result(stdout_path)
     metrics = dict(workload_result.get("metrics", {})) if workload_result else {}
+    malformed_result = workload_result is None
+    if status is ResultStatus.PASS and malformed_result:
+        status = ResultStatus.PARTIAL
     missing_required = any(
-        row["status"] == "missing" and row["required"] for row in artifacts
+        row["status"] != "present" and row["required"] for row in artifacts
     )
     if status is ResultStatus.PASS and missing_required:
         status = ResultStatus.PARTIAL
@@ -59,6 +65,7 @@ def run_trial(spec: TrialSpec, output_root: Path) -> dict[str, Any]:
         "schema_version": 1,
         "artifact_kind": "native_probe_trial",
         "trial_id": spec.trial_id,
+        "revision": revision,
         "configuration_id": spec.configuration_id,
         "workload_id": spec.workload_id.value,
         "mode": spec.mode.value,
@@ -83,7 +90,9 @@ def run_trial(spec: TrialSpec, output_root: Path) -> dict[str, Any]:
         "loss": {},
         "pressure_controls": dict(spec.pressure_controls),
         "artifacts": artifacts,
-        "limitations": _limitations(status, return_code, missing_required),
+        "limitations": _limitations(
+            status, return_code, missing_required, malformed_result
+        ),
     }
     write_manifest(trial_directory / "manifest.json", manifest)
     return manifest
@@ -96,14 +105,30 @@ def _execute(
     environment.update(spec.command.environment)
     started = time.monotonic()
     with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-        process = subprocess.Popen(
-            spec.command.argv,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout,
-            stderr=stderr,
-            start_new_session=True,
-        )
+        try:
+            process = subprocess.Popen(
+                spec.command.argv,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=True,
+            )
+        except OSError as error:
+            stderr.write(f"unable to start command: {error}\n".encode())
+            unknown = {
+                "status": "unknown",
+                "wall_time_ms": None,
+                "cpu_user_seconds": None,
+                "cpu_system_seconds": None,
+                "peak_rss_bytes": None,
+                "peak_threads": None,
+                "read_bytes": None,
+                "write_bytes": None,
+            }
+            resources = {role.role.value: dict(unknown) for role in spec.process_roles}
+            resources[ProcessRole.SYSTEM.value] = dict(unknown)
+            return ResultStatus.FAIL, None, resources
         metrics = _observe(
             process, started, spec.command.timeout_seconds, spec.process_roles
         )
@@ -287,11 +312,25 @@ def _workload_result(stdout_path: Path) -> Mapping[str, Any] | None:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError:
-                continue
+                return None
             if (
                 isinstance(value, Mapping)
                 and value.get("artifact_kind") == "workload_result"
             ):
+                metrics = value.get("metrics")
+                if not isinstance(metrics, Mapping):
+                    return None
+                try:
+                    for name, metric in metrics.items():
+                        if not isinstance(name, str):
+                            return None
+                        _metric_value(name, metric)
+                except ValueError:
+                    return None
+                if not isinstance(value.get("measurement_window"), Mapping):
+                    return None
+                if validate_measurement_window(value["measurement_window"]):
+                    return None
                 last_object = value
     return last_object
 
@@ -301,7 +340,10 @@ def _metric_value(name: str, value: object) -> float | None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"workload metric {name!r} must be numeric or null")
-    return float(value)
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError(f"workload metric {name!r} must be finite")
+    return numeric
 
 
 def _artifact(
@@ -323,7 +365,8 @@ def _artifact(
         else sorted(row for row in path.rglob("*") if row.is_file())
     )
     for artifact_path in paths:
-        digest.update(str(artifact_path.relative_to(path.parent)).encode())
+        if path.is_dir():
+            digest.update(str(artifact_path.relative_to(path)).encode())
         with artifact_path.open("rb") as source:
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
                 digest.update(chunk)
@@ -350,18 +393,21 @@ def _collect_artifacts(spec: TrialSpec, trial_directory: Path) -> list[dict[str,
     for expected in spec.expected_artifacts:
         path = trial_directory / expected.relative_path
         if path.is_file() or path.is_dir():
-            rows.append(
-                _artifact(
-                    path,
-                    artifact_id=expected.artifact_id,
-                    kind=expected.kind,
-                    producer=expected.producer,
-                    format_name=expected.format,
-                    required=expected.required,
-                    sensitive=expected.sensitive,
-                    loss_metadata_expected=expected.loss_metadata_expected,
-                )
+            artifact = _artifact(
+                path,
+                artifact_id=expected.artifact_id,
+                kind=expected.kind,
+                producer=expected.producer,
+                format_name=expected.format,
+                required=expected.required,
+                sensitive=expected.sensitive,
+                loss_metadata_expected=expected.loss_metadata_expected,
             )
+            if expected.format == "chrome-trace-json" and not _usable_chrome_trace(
+                path
+            ):
+                artifact["status"] = "malformed"
+            rows.append(artifact)
         else:
             rows.append(
                 {
@@ -383,6 +429,20 @@ def _collect_artifacts(spec: TrialSpec, trial_directory: Path) -> list[dict[str,
     return rows
 
 
+def _usable_chrome_trace(path: Path) -> bool:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    events = value.get("traceEvents") if isinstance(value, Mapping) else None
+    return isinstance(events, list) and any(
+        isinstance(event, Mapping)
+        and isinstance(event.get("name"), str)
+        and isinstance(event.get("ph"), str)
+        for event in events
+    )
+
+
 def _validate_environment(environment: Mapping[str, str]) -> None:
     for key in environment:
         if any(marker in key.upper() for marker in _SECRET_MARKERS):
@@ -390,14 +450,21 @@ def _validate_environment(environment: Mapping[str, str]) -> None:
 
 
 def _limitations(
-    status: ResultStatus, return_code: int | None, missing_required: bool
+    status: ResultStatus,
+    return_code: int | None,
+    missing_required: bool,
+    malformed_result: bool,
 ) -> list[str]:
     if status is ResultStatus.PASS:
         return []
     if missing_required and return_code == 0:
-        return ["one or more required profiler artifacts were not produced"]
+        return ["one or more required profiler artifacts were not usable"]
+    if malformed_result and return_code == 0:
+        return ["workload result is missing or malformed; output was retained"]
     if status is ResultStatus.TIMEOUT:
         return ["trial exceeded its declared timeout; partial output was retained"]
+    if return_code is None:
+        return ["trial process could not be started; failure evidence was retained"]
     return [f"trial process exited with code {return_code}; output was retained"]
 
 
