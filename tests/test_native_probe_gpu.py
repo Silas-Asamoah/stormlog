@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from research.native_probes.runner import _is_device_activity_event
+
 
 @pytest.mark.skipif(
     os.environ.get("STORMLOG_RUN_NVIDIA_SMOKE") != "1",
@@ -39,19 +41,11 @@ def test_nvidia_initialization_and_chrome_trace(tmp_path: Path) -> None:
     profile.export_chrome_trace(str(trace_path))
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
     events = trace.get("traceEvents")
-    usable_cuda_events = [
-        event
-        for event in events or []
-        if isinstance(event, dict)
-        and isinstance(event.get("name"), str)
-        and (
-            "cuda" in str(event.get("cat", "")).lower()
-            or "kernel" in str(event.get("cat", "")).lower()
-            or "cuda" in event["name"].lower()
-        )
+    usable_device_events = [
+        event for event in events or [] if _is_device_activity_event(event)
     ]
-    if not usable_cuda_events:
-        pytest.fail("NVIDIA smoke produced no usable CUDA Chrome trace events")
+    if not usable_device_events:
+        pytest.fail("NVIDIA smoke produced no timed GPU device kernel events")
     print(
         "Real NVIDIA initialization and Chrome trace passed; full issue #118 "
         "adoption evidence remains pending."

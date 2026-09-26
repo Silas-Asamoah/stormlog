@@ -312,7 +312,9 @@ def _workload_result(stdout_path: Path) -> Mapping[str, Any] | None:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError:
-                return None
+                # Wrappers such as ncu may interleave human-readable progress
+                # with the workload's structured result on stdout.
+                continue
             if (
                 isinstance(value, Mapping)
                 and value.get("artifact_kind") == "workload_result"
@@ -357,6 +359,26 @@ def _artifact(
     sensitive: bool,
     loss_metadata_expected: bool,
 ) -> dict[str, Any]:
+    checksum, size = _artifact_digest(path)
+    return {
+        "artifact_id": artifact_id,
+        "kind": kind,
+        "path": str(path),
+        "sha256": checksum,
+        "bytes": size,
+        "producer": producer,
+        "format": format_name,
+        "required": required,
+        "sensitive": sensitive,
+        "loss_metadata_expected": loss_metadata_expected,
+        "status": "present",
+        "storage": "local",
+        "durable_location": None,
+    }
+
+
+def _artifact_digest(path: Path) -> tuple[str, int]:
+    """Hash artifacts using the stable file/directory contract used by trials."""
     digest = hashlib.sha256()
     size = 0
     paths = (
@@ -371,21 +393,7 @@ def _artifact(
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
                 digest.update(chunk)
                 size += len(chunk)
-    return {
-        "artifact_id": artifact_id,
-        "kind": kind,
-        "path": str(path),
-        "sha256": digest.hexdigest(),
-        "bytes": size,
-        "producer": producer,
-        "format": format_name,
-        "required": required,
-        "sensitive": sensitive,
-        "loss_metadata_expected": loss_metadata_expected,
-        "status": "present",
-        "storage": "local",
-        "durable_location": None,
-    }
+    return digest.hexdigest(), size
 
 
 def _collect_artifacts(spec: TrialSpec, trial_directory: Path) -> list[dict[str, Any]]:
@@ -436,10 +444,41 @@ def _usable_chrome_trace(path: Path) -> bool:
         return False
     events = value.get("traceEvents") if isinstance(value, Mapping) else None
     return isinstance(events, list) and any(
-        isinstance(event, Mapping)
-        and isinstance(event.get("name"), str)
-        and isinstance(event.get("ph"), str)
-        for event in events
+        _is_device_activity_event(event) for event in events
+    )
+
+
+def _is_device_activity_event(event: object) -> bool:
+    """Accept complete GPU kernel events with timing and device identity.
+
+    Chrome trace exporters commonly encode these as ``cat: kernel``,
+    ``ph: X`` events with ``ts``/``dur`` and ``args.device``. The generic
+    category covers CUDA and ROCProfiler without relying on vendor-specific
+    kernel names.
+    """
+    if not isinstance(event, Mapping):
+        return False
+    category = event.get("cat")
+    phase = event.get("ph")
+    timestamp = event.get("ts")
+    duration = event.get("dur")
+    args = event.get("args")
+    device = args.get("device") if isinstance(args, Mapping) else None
+    category_text = category.lower() if isinstance(category, str) else ""
+    has_device_identity = (
+        isinstance(device, int) and not isinstance(device, bool) and device >= 0
+    ) or (isinstance(device, str) and bool(device.strip()))
+    return (
+        phase == "X"
+        and "kernel" in category_text
+        and isinstance(timestamp, (int, float))
+        and not isinstance(timestamp, bool)
+        and math.isfinite(float(timestamp))
+        and isinstance(duration, (int, float))
+        and not isinstance(duration, bool)
+        and math.isfinite(float(duration))
+        and float(duration) > 0
+        and has_device_identity
     )
 
 

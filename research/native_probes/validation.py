@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, cast
 
 from .normalization import validate_measurement_window
+from .runner import _artifact_digest
 
 
 def build_unvalidated_matrix(
@@ -55,6 +55,16 @@ def build_unvalidated_matrix(
 
 
 _EVIDENCE_ROLES = ("environment", "command", "raw_artifact", "trial", "analysis")
+_CANDIDATE_MODES = {
+    "pytorch-kineto": {"public-pytorch"},
+    "vllm-proton": {"proton"},
+    "direct-cupti": {"direct-cupti"},
+    "ebpf-semantic": {"ebpf-semantic"},
+    "cupti-ebpf-hybrid": {"hybrid-cupti-ebpf"},
+    "neutrino": {"programmable"},
+    "rocprofiler": {"amd-rocprofiler"},
+    "no-native-collector": {"off"},
+}
 
 
 def validate_matrix_promotions(
@@ -151,9 +161,21 @@ def _validate_evidence_row(role: str, row: Mapping[str, Any], repository: Path) 
         raise ValueError(f"{role} evidence may not be a symlink")
     resolved = candidate.resolve()
     root = repository.resolve()
-    if root not in resolved.parents or not resolved.is_file():
+    if root not in resolved.parents:
         raise ValueError(f"{role} evidence path is unavailable or unsafe")
-    actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    if role == "raw_artifact" and resolved.is_dir():
+        members = sorted(resolved.rglob("*"))
+        for member in members:
+            if member.is_symlink():
+                raise ValueError("raw_artifact evidence may not contain symlinks")
+            member_resolved = member.resolve()
+            if resolved not in member_resolved.parents:
+                raise ValueError("raw_artifact evidence contains a path escape")
+        actual, _ = _artifact_digest(resolved)
+    elif resolved.is_file():
+        actual, _ = _artifact_digest(resolved)
+    else:
+        raise ValueError(f"{role} evidence path is unavailable or unsafe")
     if actual != checksum:
         raise ValueError(f"{role} evidence checksum mismatch")
     return resolved
@@ -235,6 +257,14 @@ def _validate_evidence_links(
     }
     if any(promotion.get(key) != value for key, value in identity.items()):
         raise ValueError("promotion selector does not match its evidence identity")
+    candidate_id = promotion.get("candidate_id")
+    candidate_modes = (
+        _CANDIDATE_MODES.get(candidate_id, set())
+        if isinstance(candidate_id, str)
+        else set()
+    )
+    if trial.get("mode") not in candidate_modes:
+        raise ValueError("trial mode is unrelated to the promoted candidate")
     planned = [
         row
         for row in plan.get("trials", [])
@@ -263,7 +293,7 @@ def _validate_evidence_links(
     )
     if required_missing:
         raise ValueError("passing trial is missing a required artifact")
-    raw_digest = hashlib.sha256(raw_artifact.read_bytes()).hexdigest()
+    raw_digest, _ = _artifact_digest(raw_artifact)
     evidence_path = (repository / raw_evidence_path).resolve()
 
     def artifact_path(row: Mapping[str, Any]) -> Path | None:
@@ -292,9 +322,16 @@ def _validate_evidence_links(
         or not artifact.get("producer")
     ):
         raise ValueError("raw artifact is not linked from the trial")
-    analysis_trials = _analysis_trial_ids(analysis)
-    if trial_id not in analysis_trials:
-        raise ValueError("analysis does not include the promoted trial")
+    group_key = ":".join(
+        str(trial[field]) for field in ("configuration_id", "workload_id", "mode")
+    )
+    groups = analysis.get("groups")
+    group = groups.get(group_key) if isinstance(groups, Mapping) else None
+    group_trial_ids = group.get("trial_ids") if isinstance(group, Mapping) else None
+    if not isinstance(group_trial_ids, list) or trial_id not in group_trial_ids:
+        raise ValueError(
+            "analysis does not include the promoted trial in its exact group"
+        )
     claim_id = promotion.get("claim_id")
     claims = analysis.get("claim_evidence")
     proof = claims.get(claim_id) if isinstance(claims, Mapping) else None
@@ -321,17 +358,3 @@ def _validate_evidence_links(
         or artifact.get("artifact_id") not in artifact_ids
     ):
         raise ValueError("claim evidence does not reference the promoted raw artifact")
-
-
-def _analysis_trial_ids(analysis: Mapping[str, Any]) -> set[str]:
-    groups = analysis.get("groups")
-    if not isinstance(groups, Mapping):
-        return set()
-    trial_ids: set[str] = set()
-    for group in groups.values():
-        if not isinstance(group, Mapping):
-            continue
-        values = group.get("trial_ids")
-        if isinstance(values, list):
-            trial_ids.update(value for value in values if isinstance(value, str))
-    return trial_ids

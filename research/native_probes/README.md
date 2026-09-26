@@ -116,7 +116,15 @@ records, then run:
 The analysis output retains individual measurements and failure counts. Large
 or sensitive raw traces may be gitignored, but promotion validation requires a
 local copy inside the repository tree so it can recompute the digest. A durable
-remote reference alone is not promotion evidence.
+remote reference alone is not promotion evidence. Direct CUPTI and ROCProfiler
+raw evidence may be a directory bundle; its digest uses the runner's sorted
+relative-path and streamed-file-content contract, and bundles containing
+symlinks are rejected. Promotion also checks that the trial mode belongs to
+the named candidate and that analysis includes the trial in its exact
+configuration/workload/mode group. Structured `claim_evidence` fields establish
+cross-document linkage only; they are human-authored metadata, not proof that a
+semantic claim is true. Independent review of the linked raw evidence is still
+required before interpreting or publishing a promoted claim.
 
 ## CPU pipeline verification
 
