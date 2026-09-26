@@ -80,6 +80,7 @@ jobs:
                   fi
 
             - name: Run native probe CPU pipeline gate
+              if: matrix.framework == 'pytorch' && matrix.python-version == '3.10'
               run: |
                   python3 -m pytest tests/test_native_probe_research.py tests/test_native_probe_cli.py -q
 
