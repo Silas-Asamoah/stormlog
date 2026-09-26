@@ -15,6 +15,30 @@
     "repetitions": {"type": "integer", "minimum": 5},
     "environment_artifact": {"type": "string", "minLength": 1},
     "artifact_root": {"type": "string", "minLength": 1},
-    "trials": {"type": "array", "minItems": 10, "items": {"type": "object"}}
+    "trials": {"type": "array", "minItems": 10, "items": {"$ref": "#/$defs/plannedTrial"}}
+  },
+  "$defs": {
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "environment", "timeout_seconds"],
+      "properties": {
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "environment": {"type": "object", "additionalProperties": {"type": "string"}},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "plannedTrial": {
+      "type": "object",
+      "required": ["trial_id", "configuration_id", "workload_id", "mode", "repetition", "command"],
+      "properties": {
+        "trial_id": {"type": "string", "minLength": 1},
+        "configuration_id": {"type": "string", "minLength": 1},
+        "workload_id": {"enum": ["w1-eager", "w2-overlap", "w2-serialized", "w3-graph", "w4-stress", "vllm"]},
+        "mode": {"type": "string", "minLength": 1},
+        "repetition": {"type": "integer", "minimum": 0},
+        "command": {"$ref": "#/$defs/command"}
+      }
+    }
   }
 }

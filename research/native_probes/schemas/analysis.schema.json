@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/analysis.schema.json",
+  "title": "Stormlog native probe analysis evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact_kind", "trial_count", "groups"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "artifact_kind": {"const": "native_probe_analysis"},
+    "trial_count": {"type": "integer", "minimum": 1},
+    "groups": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/group"}
+    },
+    "claim_evidence": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/claimEvidence"}
+    }
+  },
+  "$defs": {
+    "group": {
+      "type": "object",
+      "required": ["trial_ids", "trial_count", "status_counts", "failure_count", "metrics", "unknown_metric_counts"],
+      "properties": {
+        "trial_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "trial_count": {"type": "integer", "minimum": 1},
+        "status_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "failure_count": {"type": "integer", "minimum": 0},
+        "metrics": {"type": "object", "additionalProperties": {"$ref": "#/$defs/metric"}},
+        "unknown_metric_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}
+      }
+    },
+    "metric": {
+      "type": "object",
+      "required": ["count", "individual_values", "median", "median_absolute_deviation", "bootstrap_median_95_ci"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 1},
+        "individual_values": {"type": "array", "minItems": 1, "items": {"type": "number"}},
+        "median": {"type": "number"},
+        "median_absolute_deviation": {"type": "number"},
+        "bootstrap_median_95_ci": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}
+      }
+    },
+    "claimEvidence": {
+      "type": "object",
+      "required": ["status", "basis", "criterion", "observed", "trial_ids", "artifact_ids"],
+      "properties": {
+        "status": {"const": "pass"},
+        "basis": {"type": "string", "minLength": 1},
+        "criterion": {"type": "string", "minLength": 1},
+        "observed": {"type": "string", "minLength": 1},
+        "trial_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "artifact_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  }
+}

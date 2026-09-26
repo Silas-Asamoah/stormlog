@@ -118,13 +118,23 @@ or sensitive raw traces may be gitignored, but promotion validation requires a
 local copy inside the repository tree so it can recompute the digest. A durable
 remote reference alone is not promotion evidence. Direct CUPTI and ROCProfiler
 raw evidence may be a directory bundle; its digest uses the runner's sorted
-relative-path and streamed-file-content contract, and bundles containing
-symlinks are rejected. Promotion also checks that the trial mode belongs to
-the named candidate and that analysis includes the trial in its exact
+relative-path manifest with each member's byte size and SHA-256, and bundles
+containing symlinks are rejected. Promotion also checks that the trial mode
+belongs to the named candidate and that analysis includes the trial in its exact
 configuration/workload/mode group. Structured `claim_evidence` fields establish
 cross-document linkage only; they are human-authored metadata, not proof that a
 semantic claim is true. Independent review of the linked raw evidence is still
 required before interpreting or publishing a promoted claim.
+
+Trial, run-index, and analysis artifacts use schema version 2. Version 2 makes
+the directory digest unambiguous, records run-index trial manifests as objects,
+and groups analysis by configuration, workload, and mode. Historical version 1
+trial, run-index, and analysis evidence is immutable. To obtain v2 evidence,
+users rerun the current experiment pipeline into fresh immutable paths.
+Preserve historical v1 artifacts; do not relabel them in place. No automatic
+metadata conversion is supplied, and the validator does not reinterpret old
+directory hashes. Environment remains version 2; plans, matrices, and
+normalized records remain version 1.
 
 ## CPU pipeline verification
 

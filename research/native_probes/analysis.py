@@ -28,7 +28,7 @@ def analyze_trials(
         for (configuration_id, workload_id, mode), group in sorted(groups.items())
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_kind": "native_probe_analysis",
         "trial_count": len(materialized),
         "groups": summaries,

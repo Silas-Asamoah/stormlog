@@ -615,6 +615,37 @@ def test_matrix_promotion_preserves_verified_role_hash_provenance(
     assert all(len(row["sha256"]) == 64 for row in promoted_claim["evidence_roles"])
 
 
+@pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("document_name", ["trial", "analysis"])
+def test_matrix_promotion_rejects_nonfinite_evidence_numbers(
+    tmp_path: Path, document_name: str, nonfinite: float
+) -> None:
+    matrix = json.loads((MATRICES / "stormlog_validated.json").read_text())
+    candidate = matrix["candidates"][0]
+    claim = next(iter(candidate["claims"]))
+    promotion = _promotion_fixture(tmp_path, candidate["id"], claim)
+
+    path = tmp_path / f"{document_name}.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document_name == "trial":
+        document["metrics"]["device_elapsed_ms"] = nonfinite
+    else:
+        document["groups"]["fixture-config:w1-eager:public-pytorch"]["metrics"][
+            "device_elapsed_ms"
+        ] = {
+            "count": 1,
+            "individual_values": [nonfinite],
+            "median": nonfinite,
+            "median_absolute_deviation": 0.0,
+            "bootstrap_median_95_ci": [nonfinite, nonfinite],
+        }
+    path.write_text(json.dumps(document), encoding="utf-8")
+    promotion["evidence"] = _evidence_rows(tmp_path)
+
+    with pytest.raises(ValueError, match="valid JSON"):
+        validate_matrix_promotions(matrix, [promotion], tmp_path)
+
+
 def test_matrix_promotion_hashes_directory_raw_artifact_with_runner_contract(
     tmp_path: Path,
 ) -> None:
@@ -630,6 +661,18 @@ def test_matrix_promotion_hashes_directory_raw_artifact_with_runner_contract(
     with pytest.raises(ValueError, match="checksum mismatch"):
         validate_matrix_promotions(matrix, [promotion], tmp_path)
 
+    (tmp_path / "raw.trace" / "nested" / "activity.bin").write_bytes(
+        b"usable raw trace"
+    )
+    (tmp_path / "raw.trace" / "nested" / "activity.bin").rename(
+        tmp_path / "raw.trace" / "nested" / "activity.binu"
+    )
+    (tmp_path / "raw.trace" / "nested" / "activity.binu").write_bytes(
+        b"sable raw trace"
+    )
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        validate_matrix_promotions(matrix, [promotion], tmp_path)
+
     (tmp_path / "linked").mkdir()
     linked = _promotion_fixture(
         tmp_path / "linked", candidate["id"], claim, raw_directory=True
@@ -640,6 +683,96 @@ def test_matrix_promotion_hashes_directory_raw_artifact_with_runner_contract(
     linked["evidence"] = _evidence_rows(tmp_path / "linked")
     with pytest.raises(ValueError, match="may not contain symlinks"):
         validate_matrix_promotions(matrix, [linked], tmp_path / "linked")
+
+
+def test_directory_digest_frames_paths_sizes_and_file_hashes(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "a").write_bytes(b"x")
+    (first / "b").write_bytes(b"by")
+    (second / "a").write_bytes(b"xb")
+    (second / "b").write_bytes(b"y")
+    assert _artifact_digest(first)[0] != _artifact_digest(second)[0]
+
+    (first / "nested").mkdir()
+    (first / "nested" / "activity.bin").write_bytes(b"usable raw trace")
+    original = _artifact_digest(first)[0]
+    (first / "nested" / "activity.bin").rename(first / "nested" / "activity.binu")
+    (first / "nested" / "activity.binu").write_bytes(b"sable raw trace")
+    assert _artifact_digest(first)[0] != original
+
+
+@pytest.mark.parametrize("role", ["environment", "command", "trial", "analysis"])
+def test_matrix_promotion_rejects_unsupported_evidence_versions(
+    tmp_path: Path, role: str
+) -> None:
+    matrix = json.loads((MATRICES / "stormlog_validated.json").read_text())
+    candidate = matrix["candidates"][0]
+    claim = next(iter(candidate["claims"]))
+    promotion = _promotion_fixture(tmp_path, candidate["id"], claim)
+    path = tmp_path / f"{role}.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["schema_version"] = 999
+    path.write_text(json.dumps(document), encoding="utf-8")
+    promotion["evidence"] = _evidence_rows(tmp_path)
+    with pytest.raises(ValueError):
+        validate_matrix_promotions(matrix, [promotion], tmp_path)
+
+
+def test_matrix_promotion_requires_linked_executed_command(
+    tmp_path: Path,
+) -> None:
+    matrix = json.loads((MATRICES / "stormlog_validated.json").read_text())
+    candidate = matrix["candidates"][0]
+    claim = next(iter(candidate["claims"]))
+    promotion = _promotion_fixture(tmp_path, candidate["id"], claim)
+    plan_path = tmp_path / "command.json"
+    trial_path = tmp_path / "trial.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    trial = json.loads(trial_path.read_text(encoding="utf-8"))
+    plan["trials"][0].pop("command", None)
+    trial.pop("command", None)
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    trial_path.write_text(json.dumps(trial), encoding="utf-8")
+    promotion["evidence"] = _evidence_rows(tmp_path)
+    with pytest.raises(ValueError):
+        validate_matrix_promotions(matrix, [promotion], tmp_path)
+
+
+def test_readers_distinguish_immutable_v1_evidence_from_v2(tmp_path: Path) -> None:
+    from research.native_probes.cli import _validate
+
+    candidate = json.loads((MATRICES / "stormlog_validated.json").read_text())[
+        "candidates"
+    ][0]
+    promotion = _promotion_fixture(
+        tmp_path, candidate["id"], next(iter(candidate["claims"]))
+    )
+    for name, schema_name in (
+        ("trial", "trial.schema.json"),
+        ("analysis", "analysis.schema.json"),
+    ):
+        document = json.loads((tmp_path / f"{name}.json").read_text())
+        _validate(document, schema_name)
+        document["schema_version"] = 1
+        with pytest.raises(ValueError):
+            _validate(document, schema_name)
+
+    run_index = {
+        "schema_version": 2,
+        "artifact_kind": "native_probe_run_index",
+        "plan": "plan.json",
+        "trial_manifests": [
+            {"trial_id": "trial-1", "path": "trial.json", "status": "pass"}
+        ],
+        "status": "pass",
+    }
+    _validate(run_index, "run_index.schema.json")
+    run_index["schema_version"] = 1
+    with pytest.raises(ValueError):
+        _validate(run_index, "run_index.schema.json")
 
 
 def test_matrix_promotion_rejects_unrelated_candidate_mode_and_analysis_group(
@@ -657,9 +790,8 @@ def test_matrix_promotion_rejects_unrelated_candidate_mode_and_analysis_group(
 
     analysis_path = tmp_path / "analysis.json"
     analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
-    analysis["groups"] = {
-        "wrong-config:w1-eager:public-pytorch": {"trial_ids": [promotion["trial_id"]]}
-    }
+    group = analysis["groups"].pop("fixture-config:w1-eager:public-pytorch")
+    analysis["groups"]["wrong-config:w1-eager:public-pytorch"] = group
     analysis_path.write_text(json.dumps(analysis), encoding="utf-8")
     promotion["evidence"] = _evidence_rows(tmp_path)
     with pytest.raises(ValueError, match="exact group"):
@@ -805,53 +937,138 @@ def _promotion_fixture(
     )
     raw_hash = raw_artifact["sha256"]
     trial_id = "fixture-trial-1"
-    documents = {
-        "environment": {
-            "artifact_kind": "native_probe_environment",
-            "source": {"revision": revision},
-        },
-        "command": {
-            "artifact_kind": "native_probe_plan",
-            "configuration_id": "fixture-config",
-            "environment_artifact": "environment.json",
+    command = {
+        "argv": ["fixture"],
+        "environment": {},
+        "timeout_seconds": 1,
+    }
+    environment = {
+        "schema_version": 2,
+        "artifact_kind": "native_probe_environment",
+        "created_at": "2026-01-01T00:00:00Z",
+        "host_id": "fixture-host",
+        "platform": {},
+        "source": {
+            "repository": "fixture",
+            "working_tree": "clean",
             "revision": revision,
-            "trials": [
-                {
-                    "trial_id": trial_id,
-                    "configuration_id": "fixture-config",
-                    "workload_id": "w1-eager",
-                    "mode": "public-pytorch",
-                    "repetition": 0,
-                    "command": {
-                        "argv": ["fixture"],
-                        "environment": {},
-                        "timeout_seconds": 1,
-                    },
-                }
-            ],
+            "branch": "fixture",
+            "dirty": False,
         },
-        "trial": {
-            "artifact_kind": "native_probe_trial",
-            "trial_id": trial_id,
+        "accelerators": {
+            "nvidia": {
+                "gpu_detected": False,
+                "device_count": 0,
+                "device_models": [],
+                "runtime_initialization_usable": False,
+            },
+            "amd": {
+                "gpu_detected": False,
+                "device_count": 0,
+                "device_models": [],
+                "runtime_initialization_usable": False,
+            },
+        },
+        "linux_ebpf": {
+            "linux": False,
+            "btf_available": False,
+            "tracefs_available": False,
+            "effective_capabilities": [],
+        },
+        "tools": {},
+        "mode_qualifications": {
+            f"mode-{i}": {
+                "status": "untested",
+                "reason": "fixture",
+                "required_tools": [],
+                "detected_tools": [],
+            }
+            for i in range(10)
+        },
+        "limitations": [],
+    }
+    trial = {
+        "schema_version": 2,
+        "artifact_kind": "native_probe_trial",
+        "trial_id": trial_id,
+        "configuration_id": "fixture-config",
+        "workload_id": "w1-eager",
+        "mode": "public-pytorch",
+        "repetition": 0,
+        "revision": revision,
+        "status": "pass",
+        "started_at_ns": 1,
+        "finished_at_ns": 2,
+        "return_code": 0,
+        "command": command,
+        "metrics": {},
+        "resources": {
+            name: {
+                "status": "unknown",
+                "wall_time_ms": None,
+                "cpu_user_seconds": None,
+                "cpu_system_seconds": None,
+                "peak_rss_bytes": None,
+                "peak_threads": None,
+                "read_bytes": None,
+                "write_bytes": None,
+            }
+            for name in (
+                "target",
+                "profiler_wrapper",
+                "helper_agent",
+                "postprocessor",
+                "system",
+            )
+        },
+        "measurement_window": _window(),
+        "ground_truth": None,
+        "loss": {},
+        "pressure_controls": {},
+        "artifacts": [{**raw_artifact, "path": str(raw_path)}],
+        "limitations": [],
+    }
+    planned_trials = [
+        {
+            "trial_id": trial_id if index == 0 else f"fixture-plan-{index}",
             "configuration_id": "fixture-config",
             "workload_id": "w1-eager",
             "mode": "public-pytorch",
-            "repetition": 0,
-            "revision": revision,
-            "command": {
-                "argv": ["fixture"],
-                "environment": {},
-                "timeout_seconds": 1,
-            },
-            "status": "pass",
-            "return_code": 0,
-            "measurement_window": _window(),
-            "artifacts": [{**raw_artifact, "path": str(raw_path)}],
+            "repetition": index,
+            "command": command,
+        }
+        for index in range(10)
+    ]
+    documents = {
+        "environment": {
+            **environment,
         },
+        "command": {
+            "schema_version": 1,
+            "artifact_kind": "native_probe_plan",
+            "configuration_id": "fixture-config",
+            "environment_artifact": "environment.json",
+            "vendor": "nvidia",
+            "seed": 1,
+            "repetitions": 10,
+            "artifact_root": "artifacts",
+            "revision": revision,
+            "trials": planned_trials,
+        },
+        "trial": trial,
         "analysis": {
+            "schema_version": 2,
             "artifact_kind": "native_probe_analysis",
+            "trial_count": 1,
             "groups": {
-                "fixture-config:w1-eager:public-pytorch": {"trial_ids": [trial_id]}
+                "fixture-config:w1-eager:public-pytorch": {
+                    "trial_ids": [trial_id],
+                    "trial_count": 1,
+                    "failure_count": 0,
+                    "status_counts": {"pass": 1},
+                    "metrics": {},
+                    "unknown_metric_counts": {},
+                }
             },
             "claim_evidence": {
                 claim_id: {
@@ -865,6 +1082,17 @@ def _promotion_fixture(
             },
         },
     }
+    documents["trial"]["schema_version"] = 2
+    documents["trial"]["artifacts"][0]["path"] = str(raw_path)
+    from research.native_probes.cli import _validate
+
+    for name, schema_name in (
+        ("environment", "environment.schema.json"),
+        ("command", "plan.schema.json"),
+        ("trial", "trial.schema.json"),
+        ("analysis", "analysis.schema.json"),
+    ):
+        _validate(documents[name], schema_name)
     for name, document in documents.items():
         (tmp_path / f"{name}.json").write_text(json.dumps(document), encoding="utf-8")
     evidence = _evidence_rows(tmp_path)

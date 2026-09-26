@@ -134,10 +134,24 @@ for the opt-in NVIDIA runtime smoke command.
 ## Compatibility and versioning
 
 Environment schema version 2 separates installed tooling from accessible
-hardware and runtime initialization. Trial, plan, and normalized records use
-schema version 1. Any incompatible field change requires a schema-version bump
-and adapter update; consumers must reject unknown major versions. Raw vendor
-formats retain their own versions and remain authoritative evidence.
+hardware and runtime initialization. Trial, run-index, and analysis records
+use schema version 2. Trial v2 uses a canonical directory manifest containing
+normalized relative paths, member byte sizes, and per-file SHA-256 values.
+Run-index v2 stores trial manifest entries as objects, and analysis v2 uses
+configuration/workload/mode group keys with a defined evidence structure.
+Promotion validates environment, plan, trial, and analysis against their
+schemas, rejects unsupported versions, and requires a structured executed
+command in both the linked plan trial and trial manifest. Plan, capability
+matrix, and normalized records remain schema version 1. Any incompatible field
+change requires a schema-version bump and adapter update; consumers must reject
+unknown versions. Raw vendor formats retain their own versions and remain
+authoritative evidence.
+
+Version 1 trial, run-index, and analysis evidence is immutable. To obtain v2
+evidence, users rerun the current experiment pipeline into fresh immutable
+paths. Preserve historical v1 artifacts; do not relabel them in place. No
+automatic metadata conversion is supplied, and old directory hashes are not
+reinterpreted using the version 2 manifest contract.
 
 The default Stormlog package remains pure Python and gains no CUDA, ROCm, eBPF,
 vLLM, or native runtime dependency from this research harness.

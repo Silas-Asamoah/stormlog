@@ -19,7 +19,9 @@ def test_cli_runs_cpu_fixture_through_run_normalize_and_analyze(
     _run_cli("run", "--plan", plan_path, "--output", run_index)
     index = json.loads(run_index.read_text(encoding="utf-8"))
     assert index["status"] == "pass"
+    assert index["schema_version"] == 2
     assert len(index["trial_manifests"]) == 10
+    assert isinstance(index["trial_manifests"][0], dict)
 
     trial_path = Path(index["trial_manifests"][0]["path"])
     normalized_path = tmp_path / "normalized.json"
@@ -33,6 +35,7 @@ def test_cli_runs_cpu_fixture_through_run_normalize_and_analyze(
     _run_cli("analyze", "--input", jsonl, "--output", analysis_path)
     analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
     assert analysis["trial_count"] == 1
+    assert analysis["schema_version"] == 2
     assert artifact_root.exists()
 
 

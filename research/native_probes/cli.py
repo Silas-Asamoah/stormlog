@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 from pathlib import Path
 from typing import Any, Sequence
@@ -22,10 +21,8 @@ from .normalization import normalize_trial
 from .planning import build_plan
 from .preflight import collect_environment, write_manifest
 from .runner import run_trial
+from .schema_validation import validate_document
 from .validation import build_unvalidated_matrix, validate_matrix_promotions
-
-_SCHEMAS = Path(__file__).with_name("schemas")
-jsonschema = importlib.import_module("jsonschema")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -120,6 +117,7 @@ def _analyze(arguments: argparse.Namespace) -> int:
     trials = _read_jsonl(arguments.input)
     _validate_analysis_inputs(trials)
     analysis = analyze_trials(trials, bootstrap_samples=arguments.bootstrap_samples)
+    _validate(analysis, "analysis.schema.json")
     checksum = write_manifest(arguments.output, analysis)
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
     return 0
@@ -193,16 +191,15 @@ def _run(arguments: argparse.Namespace) -> int:
             }
         )
         failed = failed or manifest["status"] != "pass"
-    checksum = write_manifest(
-        arguments.output,
-        {
-            "schema_version": 1,
-            "artifact_kind": "native_probe_run_index",
-            "plan": str(arguments.plan),
-            "trial_manifests": results,
-            "status": "fail" if failed else "pass",
-        },
-    )
+    run_index = {
+        "schema_version": 2,
+        "artifact_kind": "native_probe_run_index",
+        "plan": str(arguments.plan),
+        "trial_manifests": results,
+        "status": "fail" if failed else "pass",
+    }
+    _validate(run_index, "run_index.schema.json")
+    checksum = write_manifest(arguments.output, run_index)
     print(json.dumps({"output": str(arguments.output), "sha256": checksum}))
     return 1 if failed else 0
 
@@ -248,8 +245,7 @@ def _read_object(path: Path) -> dict[str, Any]:
 
 
 def _validate(value: object, schema_name: str) -> None:
-    schema = _read_object(_SCHEMAS / schema_name)
-    jsonschema.Draft202012Validator(schema).validate(value)
+    validate_document(value, schema_name)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

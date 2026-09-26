@@ -62,7 +62,7 @@ def run_trial(
     if status is ResultStatus.PASS and missing_required:
         status = ResultStatus.PARTIAL
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_kind": "native_probe_trial",
         "trial_id": spec.trial_id,
         "revision": revision,
@@ -385,22 +385,37 @@ def _artifact(
 
 
 def _artifact_digest(path: Path) -> tuple[str, int]:
-    """Hash artifacts using the stable file/directory contract used by trials."""
-    digest = hashlib.sha256()
-    size = 0
-    paths = (
-        [path]
-        if path.is_file()
-        else sorted(row for row in path.rglob("*") if row.is_file())
-    )
-    for artifact_path in paths:
-        if path.is_dir():
-            digest.update(str(artifact_path.relative_to(path)).encode())
-        with artifact_path.open("rb") as source:
+    """Hash files directly and directories through a canonical member manifest."""
+    if path.is_file():
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as source:
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
                 digest.update(chunk)
                 size += len(chunk)
-    return digest.hexdigest(), size
+        return digest.hexdigest(), size
+
+    manifest: list[dict[str, Any]] = []
+    total_size = 0
+    for artifact_path in sorted(row for row in path.rglob("*") if row.is_file()):
+        file_digest = hashlib.sha256()
+        file_size = 0
+        with artifact_path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                file_digest.update(chunk)
+                file_size += len(chunk)
+        manifest.append(
+            {
+                "path": artifact_path.relative_to(path).as_posix(),
+                "bytes": file_size,
+                "sha256": file_digest.hexdigest(),
+            }
+        )
+        total_size += file_size
+    encoded = json.dumps(
+        manifest, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest(), total_size
 
 
 def _collect_artifacts(spec: TrialSpec, trial_directory: Path) -> list[dict[str, Any]]:

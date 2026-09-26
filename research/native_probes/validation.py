@@ -7,8 +7,10 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, cast
 
+from .models import CommandSpec
 from .normalization import validate_measurement_window
 from .runner import _artifact_digest
+from .schema_validation import validate_document
 
 
 def build_unvalidated_matrix(
@@ -121,6 +123,13 @@ def _promotion_evidence(
         _read_document(paths[index]) for index in (0, 1, 3, 4)
     )
     _validate_document_kinds(environment, plan, trial, analysis)
+    for document, schema_name in (
+        (environment, "environment.schema.json"),
+        (plan, "plan.schema.json"),
+        (trial, "trial.schema.json"),
+        (analysis, "analysis.schema.json"),
+    ):
+        validate_document(document, schema_name)
     _validate_evidence_links(
         promotion,
         environment,
@@ -316,6 +325,8 @@ def _validate_planned_trial(
     if len(planned) != 1:
         raise ValueError("plan must contain exactly one linked trial")
     planned_trial = planned[0]
+    _require_executed_command(planned_trial.get("command"), "plan trial")
+    _require_executed_command(trial.get("command"), "trial")
     if plan.get("configuration_id") != trial.get("configuration_id"):
         raise ValueError("plan/trial mismatch for configuration_id")
     links = ("configuration_id", "workload_id", "mode", "repetition")
@@ -325,6 +336,21 @@ def _validate_planned_trial(
     if planned_trial.get("command") != trial.get("command"):
         raise ValueError("plan/trial mismatch for command")
     return planned_trial
+
+
+def _require_executed_command(command: Any, role: str) -> None:
+    if not isinstance(command, Mapping) or not {
+        "argv",
+        "environment",
+        "timeout_seconds",
+    }.issubset(command):
+        raise ValueError(f"{role} must contain a structured executed command")
+    try:
+        CommandSpec.from_mapping(command)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"{role} must contain a structured executed command"
+        ) from error
 
 
 def _validate_complete_trial(trial: Mapping[str, Any]) -> None:
