@@ -1,0 +1,14 @@
+{
+  "artifact_kind": "native_probe_artifact_manifest",
+  "environment": {
+    "path": "research/native_probes/artifacts/control-macos-arm64/environment.json",
+    "sha256": "4768f71189612d84263248838d30a1b5b5e970e3a47cfbe7cdbd6b1a159ef7ef"
+  },
+  "matrix": {
+    "path": "research/native_probes/matrices/stormlog_validated.json",
+    "sha256": "7bb056b28f7f2ac6dcc98c579b75eeb1806f28423b63acbf8b9fabca51998cbc"
+  },
+  "raw_trace_location": null,
+  "raw_trace_reason": "No accelerator experiment ran on the control host.",
+  "schema_version": 1
+}

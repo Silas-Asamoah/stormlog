@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/run_index.schema.json",
+  "title": "Stormlog native probe run index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact_kind", "plan", "trial_manifests", "status"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "artifact_kind": {"const": "native_probe_run_index"},
+    "plan": {"type": "string", "minLength": 1},
+    "trial_manifests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["trial_id", "path", "status"],
+        "properties": {
+          "trial_id": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "status": {"enum": ["pass", "fail", "partial", "unsupported", "untested", "timeout"]}
+        }
+      }
+    },
+    "status": {"enum": ["pass", "fail"]}
+  }
+}

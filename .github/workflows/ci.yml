@@ -79,6 +79,11 @@ jobs:
                       python3 -m pytest tests/ -o "python_files=test_jax*.py" -v -ra -m "not tui_pilot and not tui_snapshot and not tui_pty" --cov=stormlog --cov-report=xml
                   fi
 
+            - name: Run native probe CPU pipeline gate
+              if: matrix.framework == 'pytorch' && matrix.python-version == '3.10'
+              run: |
+                  python3 -m pytest tests/test_native_probe_research.py tests/test_native_probe_cli.py -q
+
             - name: Upload coverage to Codecov
               uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
               with:
@@ -168,19 +173,19 @@ jobs:
 
             - name: Run isort
               run: |
-                  python3 -m isort --check --diff stormlog/ tests/ examples/
+                  python3 -m isort --check --diff stormlog/ tests/ examples/ research/
 
             - name: Run black
               run: |
-                  python3 -m black --check stormlog/ tests/ examples/
+                  python3 -m black --check stormlog/ tests/ examples/ research/
 
             - name: Run flake8
               run: |
-                  python3 -m flake8 stormlog/ tests/ examples/ --show-source --statistics
+                  python3 -m flake8 stormlog/ tests/ examples/ research/ --show-source --statistics
 
             - name: Run mypy
               run: |
-                  python3 -m mypy stormlog/
+                  python3 -m mypy stormlog/ research/native_probes/
 
     complexity:
         if: github.event_name != 'schedule'

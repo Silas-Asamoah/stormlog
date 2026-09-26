@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/environment.schema.json",
+  "title": "Stormlog native probe experiment environment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact_kind", "created_at", "host_id", "platform", "source", "accelerators", "linux_ebpf", "tools", "mode_qualifications", "limitations"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "artifact_kind": {"const": "native_probe_environment"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "host_id": {"type": "string", "minLength": 1},
+    "platform": {"type": "object"},
+    "source": {
+      "type": "object",
+      "required": ["repository", "working_tree", "revision", "branch", "dirty"],
+      "properties": {"revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "dirty": {"type": "boolean"}}
+    },
+    "accelerators": {
+      "type": "object", "additionalProperties": false,
+      "required": ["nvidia", "amd"],
+      "properties": {"nvidia": {"$ref": "#/$defs/inventory"}, "amd": {"$ref": "#/$defs/inventory"}}
+    },
+    "linux_ebpf": {"type": "object", "required": ["linux", "btf_available", "tracefs_available", "effective_capabilities"]},
+    "tools": {"type": "object", "additionalProperties": {"$ref": "#/$defs/tool"}},
+    "mode_qualifications": {"type": "object", "minProperties": 10, "additionalProperties": {"$ref": "#/$defs/mode"}},
+    "limitations": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+  },
+  "$defs": {
+    "inventory": {"type": "object", "required": ["gpu_detected", "device_count", "device_models", "runtime_initialization_usable"]},
+    "tool": {
+      "type": "object", "additionalProperties": false,
+      "required": ["available", "path", "version"],
+      "properties": {"available": {"type": "boolean"}, "path": {"type": ["string", "null"]}, "version": {"type": ["string", "null"]}}
+    },
+    "mode": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "reason", "required_tools", "detected_tools"],
+      "properties": {
+        "status": {"enum": ["pass", "fail", "partial", "unsupported", "untested", "timeout"]},
+        "reason": {"type": "string", "minLength": 1},
+        "required_tools": {"type": "array", "items": {"type": "string"}},
+        "detected_tools": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

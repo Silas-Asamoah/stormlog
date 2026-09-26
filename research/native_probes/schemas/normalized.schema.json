@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/normalized.schema.json",
+  "title": "Stormlog normalized native probe trial",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact_kind", "trial_id", "configuration_id", "workload_id", "mode", "repetition", "status", "metrics", "measurement_window", "loss", "pressure_controls", "raw_artifact_ids", "limitations"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact_kind": {"const": "native_probe_normalized_trial"},
+    "trial_id": {"type": "string"},
+    "configuration_id": {"type": "string"},
+    "workload_id": {"enum": ["w1-eager", "w2-overlap", "w2-serialized", "w3-graph", "w4-stress", "vllm"]},
+    "mode": {"type": "string"},
+    "repetition": {"type": "integer"},
+    "status": {"enum": ["pass", "fail", "partial", "unsupported", "untested", "timeout"]},
+    "metrics": {"type": "object"},
+    "measurement_window": {"type": ["object", "null"]},
+    "loss": {"type": "object"},
+    "pressure_controls": {"type": "object"},
+    "raw_artifact_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  }
+}

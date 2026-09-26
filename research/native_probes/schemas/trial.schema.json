@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/trial.schema.json",
+  "title": "Stormlog native probe experiment trial",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "trial_id",
+    "configuration_id",
+    "workload_id",
+    "mode",
+    "repetition",
+    "status",
+    "started_at_ns",
+    "finished_at_ns",
+    "return_code",
+    "command",
+    "metrics",
+    "resources",
+    "measurement_window",
+    "ground_truth",
+    "loss",
+    "pressure_controls",
+    "artifacts",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "artifact_kind": {"const": "native_probe_trial"},
+    "revision": {"type": ["string", "null"]},
+    "trial_id": {"type": "string", "minLength": 1},
+    "configuration_id": {"type": "string", "minLength": 1},
+    "workload_id": {"enum": ["w1-eager", "w2-overlap", "w2-serialized", "w3-graph", "w4-stress", "vllm"]},
+    "mode": {
+      "enum": [
+        "off",
+        "public-pytorch",
+        "public-engine",
+        "proton",
+        "trusted",
+        "ebpf-semantic",
+        "direct-cupti",
+        "hybrid-cupti-ebpf",
+        "programmable",
+        "amd-rocprofiler",
+        "detailed-counter"
+      ]
+    },
+    "repetition": {"type": "integer", "minimum": 0},
+    "status": {"enum": ["pass", "fail", "partial", "unsupported", "untested", "timeout"]},
+    "started_at_ns": {"type": "integer", "minimum": 0},
+    "finished_at_ns": {"type": "integer", "minimum": 0},
+    "return_code": {"type": ["integer", "null"]},
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "environment", "timeout_seconds"],
+      "properties": {
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "environment": {"type": "object", "additionalProperties": {"type": "string"}},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {"type": ["number", "null"]}
+    },
+    "resources": {
+      "type": "object",
+      "propertyNames": {"enum": ["target", "profiler_wrapper", "helper_agent", "postprocessor", "system"]},
+      "additionalProperties": {"$ref": "#/$defs/resources"}
+    },
+    "measurement_window": {"type": ["object", "null"]},
+    "ground_truth": {"type": ["object", "null"]},
+    "loss": {"type": "object"},
+    "pressure_controls": {"type": "object"},
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifact_id", "kind", "path", "sha256", "bytes", "producer", "format", "required", "sensitive", "loss_metadata_expected", "status", "storage", "durable_location"],
+        "properties": {
+          "artifact_id": {"type": "string", "minLength": 1},
+          "kind": {"type": "string", "minLength": 1},
+          "path": {"type": "string"},
+          "sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+          "bytes": {"type": ["integer", "null"], "minimum": 0},
+          "producer": {"type": "string"},
+          "format": {"type": "string"},
+          "required": {"type": "boolean"},
+          "sensitive": {"type": "boolean"},
+          "loss_metadata_expected": {"type": "boolean"},
+          "status": {"enum": ["present", "missing", "external", "malformed"]},
+          "storage": {"enum": ["local", "external"]},
+          "durable_location": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "wall_time_ms", "cpu_user_seconds", "cpu_system_seconds", "peak_rss_bytes", "peak_threads", "read_bytes", "write_bytes"],
+      "properties": {
+        "status": {"enum": ["observed", "unknown"]},
+        "wall_time_ms": {"type": ["number", "null"]},
+        "cpu_user_seconds": {"type": ["number", "null"]},
+        "cpu_system_seconds": {"type": ["number", "null"]},
+        "peak_rss_bytes": {"type": ["integer", "null"]},
+        "peak_threads": {"type": ["integer", "null"]},
+        "read_bytes": {"type": ["integer", "null"]},
+        "write_bytes": {"type": ["integer", "null"]}
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "artifact_kind": "native_probe_trial_inventory",
+  "environment": "research/native_probes/artifacts/control-macos-arm64-903548c/environment.json",
+  "framework_revision": "903548c5cd13520d4884f60edacca68580560dcf",
+  "not_run": [
+    {
+      "modes": [
+        "public-pytorch-nvidia",
+        "public-pytorch-amd",
+        "proton-nvidia",
+        "trusted-nvidia",
+        "trusted-amd",
+        "ebpf-semantic-linux",
+        "direct-cupti-nvidia",
+        "hybrid-cupti-ebpf-nvidia",
+        "amd-rocprofiler",
+        "detailed-counter-nvidia",
+        "detailed-counter-amd"
+      ],
+      "reason": "UNTESTED - REQUIRED ACCELERATOR, LINUX EBPF, AND ENGINE TOOLCHAINS UNAVAILABLE"
+    }
+  ],
+  "schema_version": 1,
+  "trials": []
+}

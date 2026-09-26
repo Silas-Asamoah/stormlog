@@ -1,0 +1,1 @@
+.venv/bin/python -m research.native_probes.cli preflight --host-id control-macos-arm64-903548c --repository /Users/nanaagyei/Documents/Codes/Projects/stormlog --output research/native_probes/artifacts/control-macos-arm64-903548c/environment.json

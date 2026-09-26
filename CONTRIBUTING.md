@@ -121,10 +121,10 @@ are `gpumemprof`, `tfmemprof`, and `stormlog`.
 The repository is configured for Black, isort, flake8, mypy, and pytest.
 
 ```bash
-python3 -m isort stormlog/ tests/ examples/
-python3 -m black stormlog/ tests/ examples/
-python3 -m flake8 stormlog/ tests/ examples/ --show-source --statistics
-python3 -m mypy stormlog/
+python3 -m isort stormlog/ tests/ examples/ research/
+python3 -m black stormlog/ tests/ examples/ research/
+python3 -m flake8 stormlog/ tests/ examples/ research/ --show-source --statistics
+python3 -m mypy stormlog/ research/native_probes/
 ```
 
 Project conventions:
@@ -141,9 +141,9 @@ Project conventions:
 ### Cyclomatic Complexity
 
 All scoped Python functions and methods must have Radon complexity **10 or
-less** (grade A or B). The CI complexity job checks `stormlog/` and the checker
-itself, including nested functions and methods of local classes. Class aggregate
-scores are excluded. Tests and examples are outside this gate.
+less** (grade A or B). The CI complexity job checks `stormlog/`, `research/`,
+and the checker itself, including nested functions and methods of local classes.
+Class aggregate scores are excluded. Tests and examples are outside this gate.
 
 ```bash
 python3 -m pip install -r requirements-complexity.txt
