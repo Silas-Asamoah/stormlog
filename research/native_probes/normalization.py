@@ -41,6 +41,16 @@ def validate_measurement_window(window: Mapping[str, Any] | None) -> list[str]:
     """Return violations of the shared warmup/capture/flush boundary contract."""
     if window is None:
         return ["measurement window is missing"]
+    return [
+        *_missing_window_fields(window),
+        *_invalid_window_strings(window),
+        *_invalid_window_iterations(window),
+        *_invalid_window_timestamps(window),
+        *_invalid_window_flush(window),
+    ]
+
+
+def _missing_window_fields(window: Mapping[str, Any]) -> list[str]:
     required = (
         "range_id",
         "marker",
@@ -51,16 +61,29 @@ def validate_measurement_window(window: Mapping[str, Any] | None) -> list[str]:
         "clock",
         "flush_completed",
     )
-    errors = [
+    return [
         f"measurement window missing {key}" for key in required if key not in window
     ]
+
+
+def _invalid_window_strings(window: Mapping[str, Any]) -> list[str]:
+    errors = []
     for field in ("range_id", "marker", "clock"):
         if not isinstance(window.get(field), str) or not window[field].strip():
             errors.append(f"measurement window {field} must be a nonempty string")
+    return errors
+
+
+def _invalid_window_iterations(window: Mapping[str, Any]) -> list[str]:
+    errors = []
     for field, minimum in (("warmup_iterations", 0), ("measured_iterations", 1)):
         value = window.get(field)
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             errors.append(f"measurement window {field} must be an integer >= {minimum}")
+    return errors
+
+
+def _invalid_window_timestamps(window: Mapping[str, Any]) -> list[str]:
     started = window.get("host_started_ns")
     finished = window.get("host_finished_ns")
     if (
@@ -69,12 +92,16 @@ def validate_measurement_window(window: Mapping[str, Any] | None) -> list[str]:
         or isinstance(finished, bool)
         or not isinstance(finished, int)
     ):
-        errors.append("measurement window timestamps must be integers")
-    elif started >= finished:
-        errors.append("measurement window timestamps are not ordered")
+        return ["measurement window timestamps must be integers"]
+    if started >= finished:
+        return ["measurement window timestamps are not ordered"]
+    return []
+
+
+def _invalid_window_flush(window: Mapping[str, Any]) -> list[str]:
     if window.get("flush_completed") is not True:
-        errors.append("collector flush did not complete")
-    return errors
+        return ["collector flush did not complete"]
+    return []
 
 
 def normalize_loss(raw: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -106,6 +133,17 @@ def normalize_loss(raw: Mapping[str, Any] | None) -> dict[str, Any]:
 
 def normalize_trial(trial: Mapping[str, Any]) -> dict[str, Any]:
     """Produce one analysis input while preserving unsupported semantics."""
+    _require_trial_fields(trial)
+    metrics = _validated_trial_metrics(trial)
+    errors = validate_measurement_window(_mapping(trial.get("measurement_window")))
+    artifacts = _artifact_rows(trial.get("artifacts"))
+    validate_unique_artifacts(artifacts)
+    missing = _missing_artifact_ids(artifacts)
+    status = _normalized_status(trial, errors, missing)
+    return _normalized_trial_record(trial, metrics, artifacts, status, errors)
+
+
+def _require_trial_fields(trial: Mapping[str, Any]) -> None:
     required = (
         "trial_id",
         "configuration_id",
@@ -117,9 +155,9 @@ def normalize_trial(trial: Mapping[str, Any]) -> dict[str, Any]:
     )
     if any(key not in trial for key in required):
         raise ValueError("trial is missing required identity or result fields")
-    if trial.get("status") == "pass" and trial.get("measurement_window") is None:
-        # A process exit alone cannot establish that a measurement was usable.
-        trial = {**trial, "status": "partial"}
+
+
+def _validated_trial_metrics(trial: Mapping[str, Any]) -> Mapping[str, Any]:
     metrics = _mapping(trial.get("metrics"))
     if metrics is None:
         raise ValueError("trial metrics must be an object")
@@ -130,18 +168,34 @@ def normalize_trial(trial: Mapping[str, Any]) -> dict[str, Any]:
             or not math.isfinite(float(value))
         ):
             raise ValueError(f"metric {name!r} must be finite or null")
-    errors = validate_measurement_window(_mapping(trial.get("measurement_window")))
-    artifacts = _artifact_rows(trial.get("artifacts"))
-    validate_unique_artifacts(artifacts)
-    missing = [
+    return metrics
+
+
+def _missing_artifact_ids(artifacts: Sequence[Mapping[str, Any]]) -> list[Any]:
+    return [
         row.get("artifact_id")
         for row in artifacts
         if row.get("status") in {"missing", "malformed"}
     ]
-    loss = normalize_loss(_mapping(trial.get("loss")))
+
+
+def _normalized_status(
+    trial: Mapping[str, Any], errors: list[str], missing: list[Any]
+) -> Any:
     status = trial.get("status", "fail")
     if status == "pass" and (errors or missing):
-        status = "partial"
+        return "partial"
+    return status
+
+
+def _normalized_trial_record(
+    trial: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    artifacts: Sequence[Mapping[str, Any]],
+    status: Any,
+    errors: list[str],
+) -> dict[str, Any]:
+    loss = normalize_loss(_mapping(trial.get("loss")))
     return {
         "schema_version": 1,
         "artifact_kind": "native_probe_normalized_trial",

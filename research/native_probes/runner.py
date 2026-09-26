@@ -319,22 +319,29 @@ def _workload_result(stdout_path: Path) -> Mapping[str, Any] | None:
                 isinstance(value, Mapping)
                 and value.get("artifact_kind") == "workload_result"
             ):
-                metrics = value.get("metrics")
-                if not isinstance(metrics, Mapping):
-                    return None
-                try:
-                    for name, metric in metrics.items():
-                        if not isinstance(name, str):
-                            return None
-                        _metric_value(name, metric)
-                except ValueError:
-                    return None
-                if not isinstance(value.get("measurement_window"), Mapping):
-                    return None
-                if validate_measurement_window(value["measurement_window"]):
+                if not _valid_workload_result(value):
                     return None
                 last_object = value
     return last_object
+
+
+def _valid_workload_result(value: Mapping[str, Any]) -> bool:
+    metrics = value.get("metrics")
+    if not isinstance(metrics, Mapping) or not _valid_workload_metrics(metrics):
+        return False
+    window = value.get("measurement_window")
+    return isinstance(window, Mapping) and not validate_measurement_window(window)
+
+
+def _valid_workload_metrics(metrics: Mapping[Any, Any]) -> bool:
+    try:
+        for name, metric in metrics.items():
+            if not isinstance(name, str):
+                return False
+            _metric_value(name, metric)
+    except ValueError:
+        return False
+    return True
 
 
 def _metric_value(name: str, value: object) -> float | None:
@@ -459,27 +466,34 @@ def _is_device_activity_event(event: object) -> bool:
     if not isinstance(event, Mapping):
         return False
     category = event.get("cat")
-    phase = event.get("ph")
-    timestamp = event.get("ts")
-    duration = event.get("dur")
     args = event.get("args")
     device = args.get("device") if isinstance(args, Mapping) else None
     category_text = category.lower() if isinstance(category, str) else ""
-    has_device_identity = (
+    return (
+        event.get("ph") == "X"
+        and "kernel" in category_text
+        and _finite_number(event.get("ts"))
+        and _positive_finite_number(event.get("dur"))
+        and _has_device_identity(device)
+    )
+
+
+def _finite_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _positive_finite_number(value: object) -> bool:
+    return _finite_number(value) and isinstance(value, (int, float)) and value > 0
+
+
+def _has_device_identity(device: object) -> bool:
+    return (
         isinstance(device, int) and not isinstance(device, bool) and device >= 0
     ) or (isinstance(device, str) and bool(device.strip()))
-    return (
-        phase == "X"
-        and "kernel" in category_text
-        and isinstance(timestamp, (int, float))
-        and not isinstance(timestamp, bool)
-        and math.isfinite(float(timestamp))
-        and isinstance(duration, (int, float))
-        and not isinstance(duration, bool)
-        and math.isfinite(float(duration))
-        and float(duration) > 0
-        and has_device_identity
-    )
 
 
 def _validate_environment(environment: Mapping[str, str]) -> None:

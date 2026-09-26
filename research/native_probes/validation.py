@@ -112,17 +112,7 @@ def _promotion_target(
 def _promotion_evidence(
     promotion: Mapping[str, Any], repository: Path
 ) -> list[Mapping[str, Any]]:
-    evidence = promotion.get("evidence")
-    if not isinstance(evidence, list) or len(evidence) != len(_EVIDENCE_ROLES):
-        raise ValueError("promotion requires exactly five unique evidence roles")
-    rows = [row for row in evidence if isinstance(row, Mapping)]
-    if len(rows) != len(evidence) or any(
-        not isinstance(row.get("role"), str) for row in rows
-    ):
-        raise ValueError("promotion requires exactly five unique evidence roles")
-    by_role = cast(dict[str, Mapping[str, Any]], {row["role"]: row for row in rows})
-    if tuple(sorted(by_role)) != tuple(sorted(_EVIDENCE_ROLES)):
-        raise ValueError("promotion requires exactly five unique evidence roles")
+    rows, by_role = _evidence_rows_by_role(promotion)
     paths = [
         _validate_evidence_row(role, by_role[role], repository)
         for role in _EVIDENCE_ROLES
@@ -145,6 +135,23 @@ def _promotion_evidence(
     return rows
 
 
+def _evidence_rows_by_role(
+    promotion: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
+    evidence = promotion.get("evidence")
+    if not isinstance(evidence, list) or len(evidence) != len(_EVIDENCE_ROLES):
+        raise ValueError("promotion requires exactly five unique evidence roles")
+    rows = [row for row in evidence if isinstance(row, Mapping)]
+    if len(rows) != len(evidence) or any(
+        not isinstance(row.get("role"), str) for row in rows
+    ):
+        raise ValueError("promotion requires exactly five unique evidence roles")
+    by_role = cast(dict[str, Mapping[str, Any]], {row["role"]: row for row in rows})
+    if tuple(sorted(by_role)) != tuple(sorted(_EVIDENCE_ROLES)):
+        raise ValueError("promotion requires exactly five unique evidence roles")
+    return rows, by_role
+
+
 def _validate_evidence_row(role: str, row: Mapping[str, Any], repository: Path) -> Path:
     checksum = row.get("sha256")
     if not isinstance(checksum, str) or len(checksum) != 64:
@@ -163,6 +170,13 @@ def _validate_evidence_row(role: str, row: Mapping[str, Any], repository: Path) 
     root = repository.resolve()
     if root not in resolved.parents:
         raise ValueError(f"{role} evidence path is unavailable or unsafe")
+    actual = _evidence_digest(role, resolved)
+    if actual != checksum:
+        raise ValueError(f"{role} evidence checksum mismatch")
+    return resolved
+
+
+def _evidence_digest(role: str, resolved: Path) -> str:
     if role == "raw_artifact" and resolved.is_dir():
         members = sorted(resolved.rglob("*"))
         for member in members:
@@ -176,9 +190,7 @@ def _validate_evidence_row(role: str, row: Mapping[str, Any], repository: Path) 
         actual, _ = _artifact_digest(resolved)
     else:
         raise ValueError(f"{role} evidence path is unavailable or unsafe")
-    if actual != checksum:
-        raise ValueError(f"{role} evidence checksum mismatch")
-    return resolved
+    return actual
 
 
 def _read_document(path: Path) -> dict[str, Any]:
@@ -219,6 +231,21 @@ def _validate_evidence_links(
     trial: Mapping[str, Any],
     analysis: Mapping[str, Any],
 ) -> None:
+    _validate_revision_links(environment, plan, trial)
+    _validate_environment_artifact_link(plan, repository, environment_evidence_path)
+    trial_id = _validate_promotion_identity(promotion, trial)
+    _validate_planned_trial(plan, trial, trial_id)
+    _validate_complete_trial(trial)
+    artifact = _linked_raw_artifact(trial, repository, raw_evidence_path, raw_artifact)
+    _validate_analysis_group(analysis, trial, trial_id)
+    _validate_claim_proof(promotion, analysis, trial_id, artifact)
+
+
+def _validate_revision_links(
+    environment: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    trial: Mapping[str, Any],
+) -> None:
     environment_source = environment.get("source")
     revision = (
         environment_source.get("revision")
@@ -233,6 +260,11 @@ def _validate_evidence_links(
         or trial.get("revision") != revision
     ):
         raise ValueError("environment, plan, and trial revision links do not match")
+
+
+def _validate_environment_artifact_link(
+    plan: Mapping[str, Any], repository: Path, environment_evidence_path: str
+) -> None:
     planned_environment = plan.get("environment_artifact")
     if not isinstance(planned_environment, str):
         raise ValueError("plan does not reference its environment artifact")
@@ -244,6 +276,11 @@ def _validate_evidence_links(
         != (repository / environment_evidence_path).resolve()
     ):
         raise ValueError("plan/environment artifact link does not match")
+
+
+def _validate_promotion_identity(
+    promotion: Mapping[str, Any], trial: Mapping[str, Any]
+) -> str:
     trial_id = trial.get("trial_id")
     if not isinstance(trial_id, str) or not trial_id:
         raise ValueError("trial evidence has no trial_id")
@@ -265,6 +302,12 @@ def _validate_evidence_links(
     )
     if trial.get("mode") not in candidate_modes:
         raise ValueError("trial mode is unrelated to the promoted candidate")
+    return trial_id
+
+
+def _validate_planned_trial(
+    plan: Mapping[str, Any], trial: Mapping[str, Any], trial_id: str
+) -> Mapping[str, Any]:
     planned = [
         row
         for row in plan.get("trials", [])
@@ -281,6 +324,10 @@ def _validate_evidence_links(
             raise ValueError(f"plan/trial mismatch for {field}")
     if planned_trial.get("command") != trial.get("command"):
         raise ValueError("plan/trial mismatch for command")
+    return planned_trial
+
+
+def _validate_complete_trial(trial: Mapping[str, Any]) -> None:
     if trial.get("status") != "pass" or trial.get("return_code") != 0:
         raise ValueError("only a passing complete trial can be promoted")
     if validate_measurement_window(trial.get("measurement_window")):
@@ -293,35 +340,64 @@ def _validate_evidence_links(
     )
     if required_missing:
         raise ValueError("passing trial is missing a required artifact")
+
+
+def _linked_raw_artifact(
+    trial: Mapping[str, Any],
+    repository: Path,
+    raw_evidence_path: str,
+    raw_artifact: Path,
+) -> Mapping[str, Any]:
+    artifact = _find_raw_artifact(trial, repository, raw_evidence_path, raw_artifact)
+    _validate_linked_raw_artifact(artifact)
+    return artifact
+
+
+def _find_raw_artifact(
+    trial: Mapping[str, Any],
+    repository: Path,
+    raw_evidence_path: str,
+    raw_artifact: Path,
+) -> Mapping[str, Any]:
     raw_digest, _ = _artifact_digest(raw_artifact)
     evidence_path = (repository / raw_evidence_path).resolve()
-
-    def artifact_path(row: Mapping[str, Any]) -> Path | None:
-        value = row.get("path")
-        if not isinstance(value, str):
-            return None
-        path = Path(value)
-        return (path if path.is_absolute() else repository / path).resolve()
-
     artifact = next(
         (
             row
             for row in trial.get("artifacts", [])
             if isinstance(row, Mapping)
-            and artifact_path(row) == evidence_path
+            and _trial_artifact_path(row, repository) == evidence_path
             and row.get("sha256") == raw_digest
         ),
         None,
     )
+    if artifact is None:
+        raise ValueError("raw artifact is not linked from the trial")
+    return artifact
+
+
+def _validate_linked_raw_artifact(artifact: Mapping[str, Any]) -> None:
     if (
-        artifact is None
-        or artifact.get("status") != "present"
+        artifact.get("status") != "present"
         or not isinstance(artifact.get("kind"), str)
         or not artifact.get("kind")
         or not isinstance(artifact.get("producer"), str)
         or not artifact.get("producer")
     ):
         raise ValueError("raw artifact is not linked from the trial")
+
+
+def _trial_artifact_path(row: Mapping[str, Any], repository: Path) -> Path | None:
+    value = row.get("path")
+    if not isinstance(value, str):
+        return None
+    path = Path(value)
+    return (path if path.is_absolute() else repository / path).resolve()
+
+
+def _validate_analysis_group(
+    analysis: Mapping[str, Any], trial: Mapping[str, Any], trial_id: str
+) -> None:
     group_key = ":".join(
         str(trial[field]) for field in ("configuration_id", "workload_id", "mode")
     )
@@ -332,9 +408,23 @@ def _validate_evidence_links(
         raise ValueError(
             "analysis does not include the promoted trial in its exact group"
         )
+
+
+def _validate_claim_proof(
+    promotion: Mapping[str, Any],
+    analysis: Mapping[str, Any],
+    trial_id: str,
+    artifact: Mapping[str, Any],
+) -> None:
     claim_id = promotion.get("claim_id")
     claims = analysis.get("claim_evidence")
     proof = claims.get(claim_id) if isinstance(claims, Mapping) else None
+    proof = _validate_explicit_claim_proof(proof)
+    _validate_claim_trial_reference(proof, trial_id)
+    _validate_claim_artifact_reference(proof, artifact)
+
+
+def _validate_explicit_claim_proof(proof: Any) -> Mapping[str, Any]:
     if (
         not isinstance(proof, Mapping)
         or proof.get("status") != "pass"
@@ -346,11 +436,20 @@ def _validate_evidence_links(
         or not proof.get("observed", "").strip()
     ):
         raise ValueError("analysis has no explicit passing evidence for this claim")
+    return proof
+
+
+def _validate_claim_trial_reference(proof: Mapping[str, Any], trial_id: str) -> None:
     if (
         not isinstance(proof.get("trial_ids"), list)
         or trial_id not in proof["trial_ids"]
     ):
         raise ValueError("claim evidence does not reference the promoted trial")
+
+
+def _validate_claim_artifact_reference(
+    proof: Mapping[str, Any], artifact: Mapping[str, Any]
+) -> None:
     artifact_ids = proof.get("artifact_ids")
     if (
         not isinstance(artifact_ids, list)
