@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .host_clock import wall_clock_domain
+
 TELEMETRY_SCHEMA_VERSION = 1
 
 METRIC_SCOPES = {
@@ -67,6 +69,9 @@ class ServerIdentity:
             or not _positive_int(self.process_start_ns)
         ):
             raise ValueError("host, positive pid, and process_start_ns are required")
+        if "/" in self.host or "/" in (self.boot_id or ""):
+            # Both are parts of the clock domain name.
+            raise ValueError("host and boot_id cannot contain '/'")
         self._validate_optional_fields()
 
     def _validate_optional_fields(self) -> None:
@@ -88,6 +93,11 @@ class ServerIdentity:
             or self.rank < 0
         ):
             raise ValueError("rank must be non-negative")
+
+    @property
+    def clock_domain(self) -> str:
+        """The wall clock of this host boot; see ``wall_clock_domain``."""
+        return wall_clock_domain(self.host, self.boot_id)
 
 
 @dataclass(frozen=True)
@@ -162,7 +172,7 @@ class TelemetrySample:
             "schema_version": TELEMETRY_SCHEMA_VERSION,
             "event_type": "infer.telemetry_sample",
             "scope": self.scope,
-            "clock_domain": f"{self.identity.host}/unix_epoch_ns",
+            "clock_domain": self.identity.clock_domain,
             "counter_owner": self.counter_owner,
             **asdict(self),
         }
@@ -191,7 +201,7 @@ class TelemetrySample:
         )
         if record.get("scope") != sample.scope:
             raise ValueError("telemetry scope does not match metric")
-        if record.get("clock_domain") != f"{identity.host}/unix_epoch_ns":
+        if record.get("clock_domain") != identity.clock_domain:
             raise ValueError("telemetry clock domain does not match host")
         if record.get("counter_owner") != sample.counter_owner:
             raise ValueError("telemetry counter owner does not match metric")

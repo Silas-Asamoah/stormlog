@@ -23,6 +23,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from stormlog.infer.cli import main as infer_main
+from stormlog.infer.host_clock import is_boot_qualified, wall_clock_domain
 from stormlog.infer.server_collector import (
     STOP_DURATION_ELAPSED,
     STOP_GPU_IDENTITY_CHANGED,
@@ -197,6 +198,33 @@ def test_schema_rejects_what_the_loader_rejects(
 def test_schema_lists_every_record_field(field: str) -> None:
     # Every dataclass field is written to the record, so the schema must list it.
     assert field in SCHEMA["properties"]
+
+
+def test_clock_domain_names_the_host_boot() -> None:
+    booted = _sample(identity=_identity(boot_id="boot-1"))
+    record = booted.to_record()
+    assert record["clock_domain"] == "server-a/boot-1/unix_epoch_ns"
+    assert TelemetrySample.from_record(record) == booted
+    assert _sample().to_record()["clock_domain"] == "server-a/unix_epoch_ns"
+    # A hostname-only domain no longer matches an identity that has a boot ID.
+    record["clock_domain"] = "server-a/unix_epoch_ns"
+    with pytest.raises(ValueError, match="clock domain"):
+        TelemetrySample.from_record(record)
+    _assert_schema_valid([booted])
+
+
+@pytest.mark.parametrize("changes", [{"host": "rack/a"}, {"boot_id": "boot/1"}])
+def test_identity_parts_cannot_split_the_clock_domain(changes: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match="cannot contain '/'"):
+        _identity(**changes)
+
+
+def test_only_boot_qualified_domains_can_prove_one_clock() -> None:
+    assert wall_clock_domain("host", "boot") == "host/boot/unix_epoch_ns"
+    assert wall_clock_domain("host", None) == "host/unix_epoch_ns"
+    assert is_boot_qualified("host/boot/unix_epoch_ns")
+    assert not is_boot_qualified("host/unix_epoch_ns")
+    assert not is_boot_qualified("worker-a/monotonic")
 
 
 def test_instance_metric_requires_instance_identity() -> None:

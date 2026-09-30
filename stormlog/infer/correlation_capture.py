@@ -28,6 +28,7 @@ from .correlation_events import (
     InferenceRecord,
     load_inference_artifact,
 )
+from .host_clock import host_boot_id, wall_clock_domain
 
 
 @dataclass(frozen=True)
@@ -314,7 +315,7 @@ def _capability_event(
             rank=session.rank,
             local_rank=session.local_rank,
             world_size=session.world_size,
-            clock_domain=f"{session.host}/unix_epoch_ns",
+            clock_domain=wall_clock_domain(session.host, host_boot_id()),
             clock_kind="wall",
             collection_mode="active",
             provenance="observed",

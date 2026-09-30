@@ -23,7 +23,7 @@ from .analysis import analyze_inference_events
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
-from .host_clock import host_boot_id
+from .host_clock import host_boot_id, wall_clock_domain
 from .openai_client import OpenAIChatCompletionsClient
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter, generate_prompt
@@ -114,6 +114,7 @@ class InferenceProfiler:
 
     def _artifact_identity(self) -> ArtifactIdentityEvent:
         session = self.session
+        boot_id = host_boot_id()
         return ArtifactIdentityEvent(
             context=CorrelationContext(
                 run_id=self.run_id,
@@ -126,13 +127,13 @@ class InferenceProfiler:
                 rank=session.rank,
                 local_rank=session.local_rank,
                 world_size=session.world_size,
-                clock_domain=f"{session.host}/unix_epoch_ns",
+                clock_domain=wall_clock_domain(session.host, boot_id),
                 clock_kind="wall",
                 collection_mode="active",
                 provenance="observed",
             ),
             event_id="artifact",
-            metadata={"boot_id": host_boot_id()},
+            metadata={"boot_id": boot_id},
             artifact_kind="inference_jsonl",
             created_at_ns=session.started_at_ns,
         )
