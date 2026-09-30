@@ -73,6 +73,7 @@ class ProfileConfig:
     strict_token_counts: bool = False
     system_sampler: str = "auto"
     sample_interval_seconds: float = 1.0
+    run_id: str | None = None
 
     def cases(self) -> list[WorkloadCase]:
         cases: list[WorkloadCase] = []
