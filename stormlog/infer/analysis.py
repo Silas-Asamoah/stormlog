@@ -116,6 +116,12 @@ def _joined_status_lines(join: dict[str, Any]) -> list[str]:
             f"Server coverage: {counts.get('observed', 0)} observed, "
             f"{counts.get('partial', 0)} partial, {counts.get('empty', 0)} empty"
         )
+    invalidation = join.get("invalidation")
+    if isinstance(invalidation, dict):
+        lines.append(
+            f"Server identity ended ({invalidation.get('detail')}); "
+            "case windows after the last confirmed poll are not joined"
+        )
     return lines
 
 
@@ -365,17 +371,42 @@ def _server_join(
         "identity": asdict(identity),
         **alignment,
         "attribution": "case_window_observation_only",
+        "invalidation": _invalidation(samples),
     }
 
 
 def _route_issue(samples: list[TelemetrySample], direct_server: bool) -> str | None:
     if not direct_server:
         return "route_not_declared"
-    if any(sample.state == "invalid" for sample in samples):
-        return "server_identity_invalidated"
     if not any(sample.state == "valid" for sample in samples):
         return "no_valid_server_samples"
     return None
+
+
+def _invalidation(samples: list[TelemetrySample]) -> dict[str, Any] | None:
+    """Locate where the observed process or GPU stopped being the original one.
+
+    Samples before the first ``invalid`` sample describe the original identity,
+    so an invalidation only affects case windows that could reach past the last
+    poll that still confirmed it.
+    """
+    first = min(
+        (sample for sample in samples if sample.state == "invalid"),
+        key=lambda sample: sample.observed_at_ns,
+        default=None,
+    )
+    if first is None:
+        return None
+    confirmed = [
+        sample.observed_at_ns
+        for sample in samples
+        if sample.observed_at_ns < first.observed_at_ns
+    ]
+    return {
+        "observed_at_ns": first.observed_at_ns,
+        "detail": first.detail,
+        "last_confirmed_at_ns": max(confirmed, default=None),
+    }
 
 
 def _artifact_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -461,13 +492,15 @@ def _server_targets(samples: list[TelemetrySample]) -> list[dict[str, Any]]:
 
 @dataclass(frozen=True)
 class _ServerTimeline:
-    """A joined collector's polls in client time."""
+    """A joined collector's polls in client time, and how long it can be trusted."""
 
     offset_ns: int
     uncertainty_ns: int
     slack_ns: int
     first_poll_ns: int
     last_poll_ns: int
+    invalidated: bool
+    trusted_until_ns: int | None
 
 
 def _server_timeline(
@@ -478,12 +511,19 @@ def _server_timeline(
     offset = join["clock_offset_ns"]
     uncertainty = join["clock_uncertainty_ns"]
     polls = [sample.observed_at_ns + offset for sample in samples]
+    invalidation = join.get("invalidation")
+    confirmed = invalidation.get("last_confirmed_at_ns") if invalidation else None
     return _ServerTimeline(
         offset_ns=offset,
         uncertainty_ns=uncertainty,
         slack_ns=max(sample.interval_ms for sample in samples) * 1_000_000,
         first_poll_ns=min(polls),
         last_poll_ns=max(polls),
+        invalidated=invalidation is not None,
+        # The identity was last confirmed at ``confirmed``; allow for clock error.
+        trusted_until_ns=(
+            None if confirmed is None else confirmed + offset - uncertainty
+        ),
     )
 
 
@@ -510,19 +550,20 @@ def _server_case_view(
         for sample in samples
         if low <= sample.observed_at_ns + timeline.offset_ns <= high
     ]
-    coverage = _case_coverage(low, high, bool(in_window), timeline)
+    coverage = _case_coverage(window[1], low, high, bool(in_window), timeline)
     if coverage["status"] == "empty":
         return {}, coverage
     return _metric_summaries(samples, in_window), coverage
 
 
 def _case_coverage(
+    end_ns: int,
     low: int,
     high: int,
     has_samples: bool,
     timeline: _ServerTimeline,
 ) -> dict[str, Any]:
-    empty_reason = _empty_reason(low, high, has_samples)
+    empty_reason = _empty_reason(end_ns, low, high, has_samples, timeline)
     if empty_reason is not None:
         return {
             "status": "empty",
@@ -537,9 +578,19 @@ def _case_coverage(
     }
 
 
-def _empty_reason(low: int, high: int, has_samples: bool) -> str | None:
+def _empty_reason(
+    end_ns: int,
+    low: int,
+    high: int,
+    has_samples: bool,
+    timeline: _ServerTimeline,
+) -> str | None:
     if high < low:
         return "window_shorter_than_uncertainty"
+    if timeline.invalidated and (
+        timeline.trusted_until_ns is None or end_ns > timeline.trusted_until_ns
+    ):
+        return "identity_invalidated"
     if not has_samples:
         return "no_collector_coverage"
     return None

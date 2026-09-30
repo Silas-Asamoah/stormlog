@@ -106,6 +106,15 @@ def _polls(
     ]
 
 
+def _ended(observed_at_ns: int) -> TelemetrySample:
+    return _server_sample(
+        observed_at_ns=observed_at_ns,
+        state="invalid",
+        value=None,
+        detail="server process ended or its PID was reused",
+    )
+
+
 def _telemetry(tmp_path: Path, name: str, *samples: TelemetrySample) -> Path:
     path = tmp_path / name
     path.write_text("".join(json.dumps(s.to_record()) + "\n" for s in samples))
@@ -153,6 +162,7 @@ def test_direct_remote_join_requires_clock_alignment(tmp_path: Path) -> None:
     join = report["telemetry"]["server_join"]
     assert join["status"] == "joined"
     assert join["route_evidence"] == "operator_declared_direct"
+    assert join["invalidation"] is None
     memory = report["cases"]["case-a"]["memory"]
     assert memory["peak_device_used_bytes"] == 999
     assert memory["server_coverage"]["status"] == "observed"
@@ -250,21 +260,82 @@ def test_missing_counter_is_null_and_instance_scope_remains_distinct(
     assert memory["instance_memory_reserved_bytes"]["missing_samples"] == 1
 
 
-def test_invalid_server_sample_prevents_join_even_after_valid_sample(
+def test_server_stopping_after_the_run_keeps_every_case(tmp_path: Path) -> None:
+    # The collector writes an invalid sample when the server goes away; after
+    # the last case that must not discard readings taken during the run.
+    report = _same_host_report(
+        tmp_path,
+        {"case-a": (1 * SECOND, 2 * SECOND)},
+        *_polls(900 * MS, 2_500 * MS),
+        _ended(2_600 * MS),
+    )
+    join = report["telemetry"]["server_join"]
+    assert join["status"] == "joined"
+    assert join["invalidation"] == {
+        "observed_at_ns": 2_600 * MS,
+        "detail": "server process ended or its PID was reused",
+        "last_confirmed_at_ns": 2_500 * MS,
+    }
+    memory = report["cases"]["case-a"]["memory"]
+    assert memory["server_coverage"]["status"] == "observed"
+    observation = memory["server_observations"]["device_memory_used_bytes"]
+    assert observation["maximum_recorded_bytes"] == 2_000
+    assert observation["valid_samples"] == 11
+    assert observation["invalid_samples"] == 0
+
+
+def test_invalidation_only_affects_cases_after_the_last_confirmed_poll(
     tmp_path: Path,
 ) -> None:
-    profile = _profile(tmp_path, host="server-a")
-    telemetry = _telemetry(
+    report = _same_host_report(
         tmp_path,
-        "invalid.jsonl",
+        {"case-a": (1 * SECOND, 2 * SECOND), "case-b": (3 * SECOND, 4 * SECOND)},
+        *_polls(900 * MS, 2_500 * MS),
+        _ended(2_600 * MS),
+    )
+    cases = report["cases"]
+    assert cases["case-a"]["memory"]["server_coverage"]["status"] == "observed"
+    assert cases["case-b"]["memory"]["server_observations"] == {}
+    assert cases["case-b"]["memory"]["server_coverage"] == {
+        "status": "empty",
+        "reason": "identity_invalidated",
+        "counted_window_ns": [3 * SECOND, 4 * SECOND],
+    }
+    assert report["telemetry"]["server_join"]["case_coverage"] == {
+        "observed": 1,
+        "partial": 0,
+        "empty": 1,
+    }
+
+
+def test_invalidation_within_clock_uncertainty_of_a_case_excludes_it(
+    tmp_path: Path,
+) -> None:
+    # Confirmed through 2.0 s, but a 200 ms clock uncertainty means that poll
+    # could have happened before the 1.9 s end of the case.
+    report = _same_host_report(
+        tmp_path,
+        {"case-a": (1 * SECOND, 1_900 * MS)},
+        *_polls(900 * MS, 2_000 * MS),
+        _ended(2_100 * MS),
+        clock_offset_ns=0,
+        clock_uncertainty_ns=200 * MS,
+    )
+    coverage = report["cases"]["case-a"]["memory"]["server_coverage"]
+    assert coverage["reason"] == "identity_invalidated"
+
+
+def test_invalid_first_poll_leaves_no_trusted_window(tmp_path: Path) -> None:
+    report = _same_host_report(
+        tmp_path,
+        None,
         _server_sample(),
         _server_sample(state="invalid", value=None),
     )
-    report = analyze_inference_events(
-        profile, server_telemetry_paths=[telemetry], direct_server=True
-    )
-    assert report["telemetry"]["server_join"]["reason"] == "server_identity_invalidated"
-    assert report["cases"]["case-a"]["memory"]["server_observations"] == {}
+    assert report["telemetry"]["server_join"]["status"] == "joined"
+    memory = report["cases"]["case-a"]["memory"]
+    assert memory["server_observations"] == {}
+    assert memory["server_coverage"]["reason"] == "identity_invalidated"
 
 
 def test_mismatched_run_id_is_rejected(tmp_path: Path) -> None:
