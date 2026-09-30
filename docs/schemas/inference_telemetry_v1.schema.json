@@ -58,7 +58,9 @@
         "gpu_instance_id": { "type": ["string", "null"], "minLength": 1 },
         "replica_id": { "type": ["string", "null"], "minLength": 1 },
         "rank": { "type": ["integer", "null"], "minimum": 0 },
-        "boot_id": { "type": ["string", "null"], "minLength": 1 }
+        "boot_id": { "type": ["string", "null"], "minLength": 1 },
+        "group_id": { "type": ["string", "null"], "minLength": 1 },
+        "world_size": { "type": ["integer", "null"], "minimum": 1 }
       },
       "allOf": [
         {
@@ -67,6 +69,19 @@
             "required": ["gpu_instance_id"]
           },
           "then": { "properties": { "device_uuid": { "type": "string" } } }
+        },
+        {
+          "if": {
+            "properties": { "group_id": { "type": "string" } },
+            "required": ["group_id"]
+          },
+          "then": {
+            "properties": {
+              "world_size": { "type": "integer" },
+              "rank": { "type": "integer" }
+            }
+          },
+          "else": { "properties": { "world_size": { "type": "null" } } }
         }
       ]
     },

@@ -194,10 +194,54 @@ server process owns the GPU work, the warning names that PID. Inside a container
 NVML can report host PIDs, so treat the warning as a prompt to check rather than
 proof of a wrong GPU.
 
-One collector watches one GPU, and the join accepts one server identity. A
-server that spreads a model across several GPUs, such as vLLM with tensor
-parallelism of 2 or more, therefore cannot be joined yet; see
-[multi-GPU server joins](https://github.com/Silas-Asamoah/stormlog/issues/241).
+A server that spreads a model across GPUs, such as vLLM with tensor parallelism,
+runs one worker process per GPU. Run one collector per worker, with that
+worker's PID and GPU UUID, and declare the collectors as one group: the same
+`--group-id` and `--world-size`, and a distinct `--rank` from 0 to N-1. In vLLM
+0.30 the workers are children of the `VLLM::EngineCore` process and are titled
+`VLLM::Worker_TP0`, `VLLM::Worker_TP1`, and so on; the API server and engine
+core hold no GPU memory.
+
+```bash
+ps -eo pid,args | grep "[V]LLM::Worker_TP"   # worker PIDs and ranks
+nvidia-smi --query-compute-apps=pid,gpu_uuid --format=csv,noheader
+stormlog infer collect-server --run-id "$RUN_ID" --pid 2600 \
+  --device-uuid "$GPU_UUID_0" --group-id tp --rank 0 --world-size 2 \
+  --output artifacts/rank0.jsonl &
+stormlog infer collect-server --run-id "$RUN_ID" --pid 2601 \
+  --device-uuid "$GPU_UUID_1" --group-id tp --rank 1 --world-size 2 \
+  --output artifacts/rank1.jsonl &
+# ... run `stormlog infer profile --run-id "$RUN_ID" ...`, then stop the collectors
+stormlog infer analyze artifacts/client.jsonl --direct-server \
+  --server-telemetry artifacts/rank0.jsonl --server-telemetry artifacts/rank1.jsonl
+```
+
+Read process titles with `ps -o args`; `/proc/<pid>/comm` cuts them at 15
+characters. The same flags describe one process that spreads a model over
+several GPUs: run one collector per GPU with the same `--pid`.
+
+The analyzer joins a group only when every rank from 0 to N-1 appears exactly
+once. Otherwise the report stays unjoined with one of these reasons:
+
+| Reason | Meaning |
+| --- | --- |
+| `group_member_missing` | A rank below `--world-size` has no collector artifact |
+| `group_member_changed` | One rank appears with two identities, such as a restarted worker or another GPU |
+| `undeclared_server_identity` | An identity without the group ID sits next to the group |
+| `multiple_server_groups` | The artifacts name more than one group ID |
+| `inconsistent_group_size` | The members disagree on `--world-size` |
+| `clock_flags_ambiguous` | Clock flags were given, but members run on more than one other host |
+
+Each member keeps its own clock evidence and invalidation point. Members on the
+client's host and boot share its clock; members on other hosts each need an
+`infer.clock_alignment` record, because `--clock-offset-ns` can describe only
+one remote host. For a group, each case lists `memory.server_members`, one
+entry per rank with its PID, GPU, observations, and coverage, and
+`memory.server_observations` stays empty. `memory.server_coverage` is
+`observed` when every member is observed, `empty` when none is, and `partial`
+otherwise. Values from different members are never added together: separate
+collectors poll at different instants, so a sum of their maxima is not the peak
+of the combined usage.
 
 Collection ends when `--duration` elapses, on Ctrl+C or SIGTERM, when the server
 process exits, or when the GPU UUID changes. Every completed poll is kept, and

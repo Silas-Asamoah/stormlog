@@ -20,6 +20,8 @@ from .server_clock import (
     build_server_clock,
     client_clock_domain,
 )
+from .server_group import members as group_members
+from .server_group import membership_issue
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
 
 
@@ -35,14 +37,14 @@ def analyze_inference_events(
     records = _load_jsonl(path)
     requests, samples = _partition_inference_records(records)
     server_samples = _load_server_samples(server_telemetry_paths)
-    join, alignment = _server_join(
+    join, members = _server_join(
         records,
         server_samples,
         direct_server=direct_server,
         clock_offset_ns=clock_offset_ns,
         clock_uncertainty_ns=clock_uncertainty_ns,
     )
-    timeline = _server_timeline(server_samples, join, alignment)
+    timelines = [(member, _member_timeline(member)) for member in members]
     ok_requests = [record for record in requests if record.get("status") == "ok"]
 
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -56,12 +58,10 @@ def analyze_inference_events(
             case_requests,
             samples=_samples_for_request_window(samples, case_requests),
         )
-        observations, coverage = _server_case_view(
-            server_samples, case_requests, timeline
+        cases[case_id]["memory"].update(
+            _server_case_memory(timelines, case_requests, "group" in join)
         )
-        cases[case_id]["memory"]["server_observations"] = observations
-        cases[case_id]["memory"]["server_coverage"] = coverage
-    if timeline is not None:
+    if timelines:
         join["case_coverage"] = _coverage_counts(cases)
     failed = [record for record in requests if record.get("status") != "ok"]
     return {
@@ -123,13 +123,30 @@ def _joined_status_lines(join: dict[str, Any]) -> list[str]:
             f"Server coverage: {counts.get('observed', 0)} observed, "
             f"{counts.get('partial', 0)} partial, {counts.get('empty', 0)} empty"
         )
-    invalidation = join.get("invalidation")
-    if isinstance(invalidation, dict):
+    group = join.get("group")
+    if isinstance(group, dict):
         lines.append(
-            f"Server identity ended ({invalidation.get('detail')}); "
+            f"Server group: {group.get('group_id')} "
+            f"({group.get('world_size')} members)"
+        )
+    for label, invalidation in _invalidations(join):
+        lines.append(
+            f"Server identity ended{label} ({invalidation.get('detail')}); "
             "case windows after the last confirmed poll are not joined"
         )
     return lines
+
+
+def _invalidations(join: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    group = join.get("group")
+    if not isinstance(group, dict):
+        invalidation = join.get("invalidation")
+        return [("", invalidation)] if isinstance(invalidation, dict) else []
+    return [
+        (f" for rank {member.get('rank')}", member["invalidation"])
+        for member in group.get("members", [])
+        if isinstance(member.get("invalidation"), dict)
+    ]
 
 
 def _case_lines(case_id: str, case: Any) -> list[str]:
@@ -151,6 +168,12 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
 def _server_case_lines(memory: Any) -> list[str]:
     if not isinstance(memory, dict):
         return []
+    if isinstance(memory.get("server_members"), list):
+        return [
+            line
+            for member in memory["server_members"]
+            for line in _server_member_lines(member)
+        ]
     coverage = memory.get("server_coverage") or {}
     if coverage.get("status") == "empty":
         return [f"  server telemetry: none ({coverage.get('reason')})"]
@@ -162,8 +185,24 @@ def _server_case_lines(memory: Any) -> list[str]:
     return lines
 
 
-def _server_metric_line(metric: str, observation: dict[str, Any]) -> str:
-    label = f"  {metric} ({observation.get('observation_scope')})"
+def _server_member_lines(member: dict[str, Any]) -> list[str]:
+    where = member.get("device_uuid") or member.get("host")
+    label = f"  rank {member.get('rank')} ({where})"
+    coverage = member.get("coverage") or {}
+    if coverage.get("status") == "empty":
+        return [f"{label}: none ({coverage.get('reason')})"]
+    lines = []
+    if coverage.get("status") == "partial":
+        lines.append(f"{label}: partial ({coverage.get('reason')})")
+    for metric, observation in (member.get("observations") or {}).items():
+        lines.append(_server_metric_line(metric, observation, prefix=f"{label} "))
+    return lines
+
+
+def _server_metric_line(
+    metric: str, observation: dict[str, Any], prefix: str = "  "
+) -> str:
+    label = f"{prefix}{metric} ({observation.get('observation_scope')})"
     value = observation.get("maximum_recorded_bytes")
     if value is None:
         missing = observation.get("missing_samples", 0)
@@ -351,6 +390,16 @@ def _load_server_samples(paths: Iterable[str | Path]) -> list[TelemetrySample]:
     )
 
 
+@dataclass(frozen=True)
+class _Member:
+    """One joined server identity, its clock and its samples on the client clock."""
+
+    identity: ServerIdentity
+    samples: list[TelemetrySample]
+    clock: ServerClock
+    placed: SampleAlignment
+
+
 def _server_join(
     records: list[dict[str, Any]],
     samples: list[TelemetrySample],
@@ -358,30 +407,45 @@ def _server_join(
     direct_server: bool,
     clock_offset_ns: int | None,
     clock_uncertainty_ns: int | None,
-) -> tuple[dict[str, Any], SampleAlignment | None]:
-    """Return a case-window join only for one declared, matching server.
+) -> tuple[dict[str, Any], list[_Member]]:
+    """Return a case-window join for one server or one declared group.
 
-    The second value gives each joined sample's time on the client clock.
+    The second value lists the joined members, ordered by rank.
     """
     if not samples:
-        return {"status": "not_configured"}, None
+        return {"status": "not_configured"}, []
     artifact = _artifact_record(records)
     if artifact is None:
-        return _unjoined("missing_run_identity"), None
+        return _unjoined("missing_run_identity"), []
     issue = _run_id_issue(artifact, samples) or _identity_issue(samples, direct_server)
     if issue is not None:
-        return issue, None
-    identity = samples[0].identity
-    clock = _server_clock(
-        artifact, records, identity, clock_offset_ns, clock_uncertainty_ns
+        return issue, []
+    by_identity = group_members(samples)
+    clocks = _member_clocks(
+        artifact, records, list(by_identity), clock_offset_ns, clock_uncertainty_ns
     )
-    if isinstance(clock, str):
-        return _unjoined(clock), None
-    placed = align_samples(samples, clock)
-    if not placed.aligned:
-        reason = "ambiguous" if placed.unaligned[AMBIGUOUS] else "uncovered"
-        return _unjoined(f"clock_alignment_{reason}"), None
-    return _joined(identity, samples, clock, placed), placed
+    members = clocks if isinstance(clocks, str) else _place(by_identity, clocks)
+    if isinstance(members, str):
+        return _unjoined(members), []
+    return _joined(members), members
+
+
+def _place(
+    by_identity: dict[ServerIdentity, list[TelemetrySample]],
+    clocks: dict[ServerIdentity, ServerClock],
+) -> list[_Member] | str:
+    """Place each member's samples; every member needs at least one placed."""
+    members = [
+        _Member(
+            identity, found, clocks[identity], align_samples(found, clocks[identity])
+        )
+        for identity, found in by_identity.items()
+    ]
+    for member in members:
+        if not member.placed.aligned:
+            ambiguous = member.placed.unaligned[AMBIGUOUS]
+            return f"clock_alignment_{'ambiguous' if ambiguous else 'uncovered'}"
+    return members
 
 
 def _unjoined(reason: str) -> dict[str, Any]:
@@ -391,60 +455,154 @@ def _unjoined(reason: str) -> dict[str, Any]:
 def _identity_issue(
     samples: list[TelemetrySample], direct_server: bool
 ) -> dict[str, Any] | None:
-    if len({sample.identity for sample in samples}) != 1:
-        return _unjoined("multiple_server_identities")
+    membership = membership_issue(samples)
+    if membership is not None:
+        return _unjoined(membership)
     route_issue = _route_issue(samples, direct_server)
     return _unjoined(route_issue) if route_issue else None
 
 
-def _server_clock(
+def _member_clocks(
     artifact: dict[str, Any],
     records: list[dict[str, Any]],
-    identity: ServerIdentity,
+    identities: list[ServerIdentity],
     offset_ns: int | None,
     uncertainty_ns: int | None,
-) -> ServerClock | str:
+) -> dict[ServerIdentity, ServerClock] | str:
+    """Build one clock per server domain; the flags describe one remote domain."""
     client_domain = client_clock_domain(artifact)
     if client_domain is None:
         return "missing_client_clock_domain"
+    domains = sorted({identity.clock_domain for identity in identities})
+    flags_domain = _flags_domain(domains, client_domain, offset_ns)
+    if flags_domain is None:
+        return "clock_flags_ambiguous"
     run_id = str(artifact["context"].get("run_id"))
-    return build_server_clock(
-        run_id=run_id,
-        server_domain=identity.clock_domain,
-        client_domain=client_domain,
-        recorded=artifact_alignments(records, run_id),
-        offset_ns=offset_ns,
-        uncertainty_ns=uncertainty_ns,
+    recorded = artifact_alignments(records, run_id)
+    clocks: dict[str, ServerClock] = {}
+    for domain in domains:
+        flags = (offset_ns, uncertainty_ns) if domain == flags_domain else (None, None)
+        clock = build_server_clock(
+            run_id=run_id,
+            server_domain=domain,
+            client_domain=client_domain,
+            recorded=recorded,
+            offset_ns=flags[0],
+            uncertainty_ns=flags[1],
+        )
+        if isinstance(clock, str):
+            return clock
+        clocks[domain] = clock
+    return {identity: clocks[identity.clock_domain] for identity in identities}
+
+
+def _flags_domain(
+    domains: list[str], client_domain: str, offset_ns: int | None
+) -> str | None:
+    """The server domain the clock flags describe, or None if that is unclear.
+
+    Members on the client's host and boot share its clock; the flags then
+    belong to the single remote domain. With several remote hosts, each needs
+    its own ``infer.clock_alignment`` record instead.
+    """
+    remote = [domain for domain in domains if domain != client_domain]
+    if offset_ns is not None and len(remote) > 1:
+        return None
+    return remote[0] if remote else client_domain
+
+
+def _joined(members: list[_Member]) -> dict[str, Any]:
+    return {
+        "status": "joined",
+        "route_evidence": "operator_declared_direct",
+        **_membership_report(members),
+        **_clock_report(members),
+        "attribution": "case_window_observation_only",
+    }
+
+
+def _membership_report(members: list[_Member]) -> dict[str, Any]:
+    first = members[0].identity
+    if first.group_id is None:
+        return {
+            "identity": asdict(first),
+            "invalidation": _invalidation(members[0].samples),
+        }
+    return {
+        "group": {
+            "group_id": first.group_id,
+            "world_size": first.world_size,
+            "members": [
+                {
+                    "rank": member.identity.rank,
+                    "identity": asdict(member.identity),
+                    "clock_alignment_evidence": member.clock.evidence,
+                    "invalidation": _invalidation(member.samples),
+                }
+                for member in members
+            ],
+        }
+    }
+
+
+def _clock_report(members: list[_Member]) -> dict[str, Any]:
+    applied = _merge_applied(
+        [item for member in members for item in member.placed.applied]
+    )
+    offsets = {item["offset_ns"] for item in applied}
+    report: dict[str, Any] = {
+        "clock_alignment_evidence": _evidence(members),
+        # One offset when a single alignment placed every joined sample.
+        "clock_offset_ns": next(iter(offsets)) if len(offsets) == 1 else None,
+        "clock_uncertainty_ns": _max_uncertainty(members),
+        "clock_alignments": applied,
+        "unaligned_samples": _unaligned(members),
+    }
+    for key, field in (
+        ("overridden_clock_alignments", "overridden"),
+        ("ignored_clock_alignments", "ignored"),
+    ):
+        event_ids = _record_ids(members, field)
+        if event_ids:
+            report[key] = event_ids
+    return report
+
+
+def _record_ids(members: list[_Member], field: str) -> list[str]:
+    """Event IDs a member's clock replaced or ignored, across the whole join."""
+    return sorted({item for member in members for item in getattr(member.clock, field)})
+
+
+def _max_uncertainty(members: list[_Member]) -> int:
+    return max(
+        placed.uncertainty_ns
+        for member in members
+        for placed in member.placed.aligned.values()
     )
 
 
-def _joined(
-    identity: ServerIdentity,
-    samples: list[TelemetrySample],
-    clock: ServerClock,
-    placed: SampleAlignment,
-) -> dict[str, Any]:
-    offsets = {item["offset_ns"] for item in placed.applied}
-    joined = {
-        "status": "joined",
-        "route_evidence": "operator_declared_direct",
-        "identity": asdict(identity),
-        "clock_alignment_evidence": clock.evidence,
-        # One offset when a single alignment placed every joined sample.
-        "clock_offset_ns": next(iter(offsets)) if len(offsets) == 1 else None,
-        "clock_uncertainty_ns": max(
-            item.uncertainty_ns for item in placed.aligned.values()
-        ),
-        "clock_alignments": placed.applied,
-        "unaligned_samples": placed.unaligned,
-        "attribution": "case_window_observation_only",
-        "invalidation": _invalidation(samples),
+def _unaligned(members: list[_Member]) -> dict[str, int]:
+    return {
+        key: sum(member.placed.unaligned[key] for member in members)
+        for key in (UNCOVERED, AMBIGUOUS)
     }
-    if clock.overridden:
-        joined["overridden_clock_alignments"] = list(clock.overridden)
-    if clock.ignored:
-        joined["ignored_clock_alignments"] = list(clock.ignored)
-    return joined
+
+
+def _evidence(members: list[_Member]) -> str:
+    evidence = sorted({member.clock.evidence for member in members})
+    return evidence[0] if len(evidence) == 1 else "mixed"
+
+
+def _merge_applied(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Combine one alignment used by several members into one entry."""
+    merged: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for item in items:
+        key = tuple(value for name, value in item.items() if name != "aligned_samples")
+        if key in merged:
+            merged[key]["aligned_samples"] += item["aligned_samples"]
+        else:
+            merged[key] = dict(item)
+    return list(merged.values())
 
 
 def _run_id_issue(
@@ -552,21 +710,15 @@ class _ServerTimeline:
     trusted_until_ns: int | None
 
 
-def _server_timeline(
-    samples: list[TelemetrySample],
-    join: dict[str, Any],
-    alignment: SampleAlignment | None,
-) -> _ServerTimeline | None:
-    if alignment is None or join.get("status") != "joined":
-        return None
-    aligned = alignment.aligned
+def _member_timeline(member: _Member) -> _ServerTimeline:
+    aligned = member.placed.aligned
     values = [placed.value_ns for placed in aligned.values()]
-    invalidation = join.get("invalidation")
+    invalidation = _invalidation(member.samples)
     return _ServerTimeline(
         placed=aligned,
-        unplaced=alignment.unplaced,
-        offsets=tuple(sorted({item["offset_ns"] for item in alignment.applied})),
-        slack_ns=max(sample.interval_ms for sample in samples) * 1_000_000,
+        unplaced=member.placed.unplaced,
+        offsets=tuple(sorted({item["offset_ns"] for item in member.placed.applied})),
+        slack_ns=max(sample.interval_ms for sample in member.samples) * 1_000_000,
         first_poll_ns=min(values),
         last_poll_ns=max(values),
         invalidated=invalidation is not None,
@@ -590,10 +742,63 @@ def _trusted_until(
     return max(confirmed) if confirmed else None
 
 
+def _server_case_memory(
+    timelines: list[tuple[_Member, _ServerTimeline]],
+    requests: list[dict[str, Any]],
+    declared_group: bool,
+) -> dict[str, Any]:
+    """Server values for one case: one server's, or one entry per group member.
+
+    Values from different members are never combined: separate collectors
+    sample at different instants, so no per-case total would be well defined.
+    """
+    if not timelines:
+        return {"server_observations": {}, "server_coverage": {"status": "not_joined"}}
+    views = []
+    for member, timeline in timelines:
+        observations, coverage = _server_case_view(member.samples, requests, timeline)
+        views.append((member, observations, coverage))
+    if not declared_group:
+        _member, observations, coverage = views[0]
+        return {"server_observations": observations, "server_coverage": coverage}
+    return {
+        "server_observations": {},
+        "server_coverage": _group_coverage([coverage for _, _, coverage in views]),
+        "server_members": [
+            _member_view(member, observations, coverage)
+            for member, observations, coverage in views
+        ],
+    }
+
+
+def _member_view(
+    member: _Member, observations: dict[str, Any], coverage: dict[str, Any]
+) -> dict[str, Any]:
+    identity = member.identity
+    return {
+        "rank": identity.rank,
+        "host": identity.host,
+        "pid": identity.pid,
+        "device_uuid": identity.device_uuid,
+        "gpu_instance_id": identity.gpu_instance_id,
+        "observations": observations,
+        "coverage": coverage,
+    }
+
+
+def _group_coverage(coverages: list[dict[str, Any]]) -> dict[str, Any]:
+    statuses = {coverage["status"] for coverage in coverages}
+    if statuses == {"observed"}:
+        return {"status": "observed", "reason": None}
+    if statuses == {"empty"}:
+        return {"status": "empty", "reason": "no_member_observed"}
+    return {"status": "partial", "reason": "some_members_not_fully_observed"}
+
+
 def _server_case_view(
     samples: list[TelemetrySample],
     requests: list[dict[str, Any]],
-    timeline: _ServerTimeline | None,
+    timeline: _ServerTimeline,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Summarize server samples in one case window and say how well it is covered.
 
@@ -601,8 +806,6 @@ def _server_case_view(
     the window, so a short window or a collector that was not running can
     leave a joined case without server values; the coverage record says which.
     """
-    if timeline is None:
-        return {}, {"status": "not_joined"}
     window = _request_time_window(requests)
     if window is None:
         return {}, {"status": "empty", "reason": "no_request_window"}

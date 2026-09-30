@@ -78,6 +78,9 @@ def _server_sample(
     source: str = "nvml-v2",
     provenance: str = "observed",
     detail: str | None = None,
+    rank: int | None = None,
+    group_id: str | None = None,
+    world_size: int | None = None,
 ) -> TelemetrySample:
     return TelemetrySample(
         run_id=run_id,
@@ -88,7 +91,10 @@ def _server_sample(
             device_uuid=uuid,
             gpu_instance_id=instance,
             replica_id=f"replica-{host}",
+            rank=rank,
             boot_id=boot_id or f"boot-{host}",
+            group_id=group_id,
+            world_size=world_size,
         ),
         observed_at_ns=observed_at_ns,
         metric=metric,
@@ -197,6 +203,7 @@ def test_endpoint_only_memory_is_explicitly_client_local(tmp_path: Path) -> None
     assert memory["peak_device_used_bytes"] == 999
     assert memory["server_observations"] == {}
     assert memory["server_coverage"] == {"status": "not_joined"}
+    assert "server_members" not in memory
     assert report["telemetry"]["server_join"]["status"] == "not_configured"
 
 
@@ -676,6 +683,173 @@ def test_malformed_alignment_record_is_rejected(tmp_path: Path) -> None:
         _aligned_report(tmp_path, [record], _server_sample())
 
 
+def _member(rank: int, **changes: Any) -> TelemetrySample:
+    """One tensor-parallel worker: its own PID and GPU, in group ``tp``."""
+    values: dict[str, Any] = {
+        "pid": 40 + rank,
+        "uuid": f"GPU-{rank}",
+        "rank": rank,
+        "group_id": "tp",
+        "world_size": 2,
+        "value": 100 * (rank + 1),
+        **changes,
+    }
+    return _server_sample(**values)
+
+
+def _group_report(
+    tmp_path: Path, *samples: TelemetrySample, **options: Any
+) -> dict[str, Any]:
+    return _same_host_report(tmp_path, None, *samples, **options)
+
+
+def test_declared_group_joins_with_values_per_member(tmp_path: Path) -> None:
+    report = _group_report(tmp_path, _member(0), _member(1))
+    join = report["telemetry"]["server_join"]
+    assert join["status"] == "joined"
+    assert join["group"]["group_id"] == "tp"
+    assert [member["rank"] for member in join["group"]["members"]] == [0, 1]
+    assert "identity" not in join
+    memory = report["cases"]["case-a"]["memory"]
+    assert memory["server_observations"] == {}
+    assert memory["server_coverage"] == {"status": "observed", "reason": None}
+    maxima = {
+        member["device_uuid"]: member["observations"]["device_memory_used_bytes"][
+            "maximum_recorded_bytes"
+        ]
+        for member in memory["server_members"]
+    }
+    # Each GPU keeps its own value; nothing adds them together.
+    assert maxima == {"GPU-0": 100, "GPU-1": 200}
+    text = format_analysis_text(report)
+    assert "Server group: tp (2 members)" in text
+    assert "rank 1 (GPU-1) device_memory_used_bytes (gpu_device)" in text
+
+
+@pytest.mark.parametrize(
+    ("samples", "reason"),
+    [
+        ([_member(0)], "group_member_missing"),
+        ([_member(0), _member(0, pid=50), _member(1)], "group_member_changed"),
+        ([_member(0), _member(1), _member(1, uuid="GPU-9")], "group_member_changed"),
+        (
+            [_member(0), _member(1), _server_sample(pid=77)],
+            "undeclared_server_identity",
+        ),
+        ([_member(0), _member(1, group_id="tp-b")], "multiple_server_groups"),
+        ([_member(0), _member(1, world_size=3)], "inconsistent_group_size"),
+    ],
+)
+def test_incomplete_or_changed_groups_stay_unjoined(
+    tmp_path: Path, samples: list[TelemetrySample], reason: str
+) -> None:
+    report = _group_report(tmp_path, *samples)
+    assert report["telemetry"]["server_join"] == {
+        "status": "unjoined",
+        "reason": reason,
+    }
+
+
+def test_one_process_on_two_gpus_is_a_group(tmp_path: Path) -> None:
+    report = _group_report(tmp_path, _member(0, pid=40), _member(1, pid=40))
+    members = report["cases"]["case-a"]["memory"]["server_members"]
+    assert [(member["pid"], member["device_uuid"]) for member in members] == [
+        (40, "GPU-0"),
+        (40, "GPU-1"),
+    ]
+
+
+def test_members_on_two_hosts_each_need_an_alignment(tmp_path: Path) -> None:
+    remote = [
+        _member(0, host="server-a"),
+        _member(1, host="server-b"),
+    ]
+    both = [
+        _alignment_record("probe-a"),
+        _alignment_record(
+            "probe-b", from_clock_domain="server-b/boot-server-b/unix_epoch_ns"
+        ),
+    ]
+    report = _aligned_report(tmp_path, both, *remote)
+    join = report["telemetry"]["server_join"]
+    assert (join["status"], join["clock_alignment_evidence"]) == (
+        "joined",
+        "artifact_record",
+    )
+    assert sorted(item["event_id"] for item in join["clock_alignments"]) == [
+        "probe-a",
+        "probe-b",
+    ]
+    one = _aligned_report(tmp_path, both[:1], *remote)
+    assert one["telemetry"]["server_join"]["reason"] == "clock_alignment_required"
+    flags = _aligned_report(
+        tmp_path, [], *remote, clock_offset_ns=0, clock_uncertainty_ns=5
+    )
+    assert flags["telemetry"]["server_join"]["reason"] == "clock_flags_ambiguous"
+
+
+def test_local_members_share_the_client_clock_while_flags_align_a_remote_one(
+    tmp_path: Path,
+) -> None:
+    profile = _profile(tmp_path, host="server-a")
+    telemetry = _telemetry(
+        tmp_path,
+        "group.jsonl",
+        _member(0, host="server-a"),
+        _member(1, host="server-b"),
+    )
+    report = analyze_inference_events(
+        profile,
+        server_telemetry_paths=[telemetry],
+        direct_server=True,
+        clock_offset_ns=0,
+        clock_uncertainty_ns=5,
+    )
+    join = report["telemetry"]["server_join"]
+    assert join["clock_alignment_evidence"] == "mixed"
+    evidence = {
+        member["rank"]: member["clock_alignment_evidence"]
+        for member in join["group"]["members"]
+    }
+    assert evidence == {0: "same_host", 1: "operator_supplied"}
+
+
+def test_a_member_restart_only_affects_that_member(tmp_path: Path) -> None:
+    rank_1 = [
+        _member(1, observed_at_ns=observed, value=observed // MS)
+        for observed in range(900 * MS, 2_500 * MS + 1, 100 * MS)
+    ]
+    report = _same_host_report(
+        tmp_path,
+        {"case-a": (1 * SECOND, 2 * SECOND), "case-b": (3 * SECOND, 4 * SECOND)},
+        *_polls(
+            900 * MS,
+            4_100 * MS,
+            rank=0,
+            pid=40,
+            uuid="GPU-0",
+            group_id="tp",
+            world_size=2,
+        ),
+        *rank_1,
+        _member(1, observed_at_ns=2_600 * MS, state="invalid", value=None),
+    )
+    case_b = report["cases"]["case-b"]["memory"]
+    coverage = {
+        member["rank"]: member["coverage"]["status"]
+        for member in case_b["server_members"]
+    }
+    assert coverage == {0: "observed", 1: "empty"}
+    assert case_b["server_coverage"]["status"] == "partial"
+    assert (
+        report["cases"]["case-a"]["memory"]["server_coverage"]["status"] == "observed"
+    )
+    members = report["telemetry"]["server_join"]["group"]["members"]
+    assert members[0]["invalidation"] is None
+    assert members[1]["invalidation"]["observed_at_ns"] == 2_600 * MS
+    assert "Server identity ended for rank 1" in format_analysis_text(report)
+
+
 def test_each_sample_keeps_its_own_alignment_uncertainty(tmp_path: Path) -> None:
     # A precise early alignment must not inherit a later, looser one's margin.
     report = _aligned_report(
@@ -772,4 +946,30 @@ def test_case_in_an_alignment_gap_says_its_samples_were_not_placed(
         "early": ("observed", None),
         "gap": ("empty", "clock_alignment_uncovered"),
         "late": ("observed", None),
+    }
+
+
+def test_group_clock_flags_describe_one_shared_clock_or_one_remote(
+    tmp_path: Path,
+) -> None:
+    # All members on the client's host and boot: an uncertainty alone applies.
+    local = _group_report(tmp_path, _member(0), _member(1), clock_uncertainty_ns=40)
+    assert local["telemetry"]["server_join"]["clock_uncertainty_ns"] == 40
+    # With a remote member it would be dropped for that member, so refuse.
+    profile = _profile(tmp_path, host="server-a")
+    telemetry = _telemetry(
+        tmp_path,
+        "group.jsonl",
+        _member(0, host="server-a"),
+        _member(1, host="server-b"),
+    )
+    mixed = analyze_inference_events(
+        profile,
+        server_telemetry_paths=[telemetry],
+        direct_server=True,
+        clock_uncertainty_ns=500,
+    )
+    assert mixed["telemetry"]["server_join"] == {
+        "status": "unjoined",
+        "reason": "clock_offset_required",
     }

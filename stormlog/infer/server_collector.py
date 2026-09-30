@@ -16,7 +16,7 @@ from typing import Any, Protocol
 import psutil
 
 from .host_clock import host_boot_id
-from .telemetry import ServerIdentity, TelemetrySample
+from .telemetry import ServerIdentity, TelemetrySample, validate_group_membership
 
 STOP_DURATION_ELAPSED = "duration_elapsed"
 STOP_REQUESTED = "stop_requested"
@@ -253,6 +253,8 @@ def collect_server_telemetry(
     no_gpu: bool = False,
     replica_id: str | None = None,
     rank: int | None = None,
+    group_id: str | None = None,
+    world_size: int | None = None,
     gpu_source: GpuMemorySource | None = None,
     stop_event: threading.Event | None = None,
     on_warning: Callable[[str], None] | None = None,
@@ -262,10 +264,13 @@ def collect_server_telemetry(
     Collection stops when ``stop_event`` is set or the caller is interrupted,
     when the duration elapses, when the process ends, or when the GPU identity
     changes. The result says which, so callers can tell a clean stop from one
-    that leaves later case windows unobserved.
+    that leaves later case windows unobserved. ``group_id``, ``rank`` and
+    ``world_size`` declare this process as one member of a server group, such as
+    one tensor-parallel worker.
     """
     _validate_collection_options(run_id, pid, no_gpu, device_uuid, gpu_source)
     _validate_timing(interval_seconds, duration_seconds)
+    validate_group_membership(group_id, rank, world_size)
     process = psutil.Process(pid)
     if not process.is_running():
         raise ValueError("server process is not running")
@@ -275,7 +280,9 @@ def collect_server_telemetry(
         for message in warnings:
             if on_warning is not None:
                 on_warning(message)
-        identity = _server_identity(process, source, replica_id, rank)
+        identity = _server_identity(
+            process, source, replica_id, (group_id, rank, world_size)
+        )
         polls, stop_reason, detail = _collect_loop(
             run_id,
             process,
@@ -331,8 +338,9 @@ def _server_identity(
     process: psutil.Process,
     source: GpuMemorySource | None,
     replica_id: str | None,
-    rank: int | None,
+    group: tuple[str | None, int | None, int | None],
 ) -> ServerIdentity:
+    group_id, rank, world_size = group
     return ServerIdentity(
         host=socket.gethostname(),
         pid=process.pid,
@@ -342,6 +350,8 @@ def _server_identity(
         replica_id=replica_id,
         rank=rank,
         boot_id=host_boot_id(),
+        group_id=group_id,
+        world_size=world_size,
     )
 
 
