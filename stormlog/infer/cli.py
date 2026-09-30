@@ -225,13 +225,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--clock-offset-ns",
         type=int,
         default=None,
-        help="Server timestamp plus this offset equals client timestamp",
+        help=(
+            "Server timestamp plus this offset equals client timestamp; "
+            "replaces infer.clock_alignment records for the same clocks"
+        ),
     )
     analyze_parser.add_argument(
         "--clock-uncertainty-ns",
         type=int,
         default=None,
-        help="Absolute uncertainty of the supplied cross-host clock offset",
+        help=(
+            "Absolute uncertainty of --clock-offset-ns; on one host and boot "
+            "it may be given alone"
+        ),
     )
     collector_parser = subparsers.add_parser(
         "collect-server",

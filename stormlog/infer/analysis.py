@@ -9,6 +9,16 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, TypeGuard
 
+from .correlation_accounting import AlignedTimestamp
+from .server_clock import (
+    AMBIGUOUS,
+    SampleAlignment,
+    ServerClock,
+    align_samples,
+    artifact_alignments,
+    build_server_clock,
+    client_clock_domain,
+)
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
 
 
@@ -24,14 +34,14 @@ def analyze_inference_events(
     records = _load_jsonl(path)
     requests, samples = _partition_inference_records(records)
     server_samples = _load_server_samples(server_telemetry_paths)
-    join = _server_join(
+    join, aligned = _server_join(
         records,
         server_samples,
         direct_server=direct_server,
         clock_offset_ns=clock_offset_ns,
         clock_uncertainty_ns=clock_uncertainty_ns,
     )
-    timeline = _server_timeline(server_samples, join)
+    timeline = _server_timeline(server_samples, join, aligned)
     ok_requests = [record for record in requests if record.get("status") == "ok"]
 
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -347,35 +357,90 @@ def _server_join(
     direct_server: bool,
     clock_offset_ns: int | None,
     clock_uncertainty_ns: int | None,
-) -> dict[str, Any]:
-    """Return a case-window join only for one declared, matching server."""
+) -> tuple[dict[str, Any], dict[TelemetrySample, AlignedTimestamp]]:
+    """Return a case-window join only for one declared, matching server.
+
+    The second value gives each joined sample's time on the client clock.
+    """
     if not samples:
-        return {"status": "not_configured"}
+        return {"status": "not_configured"}, {}
     artifact = _artifact_record(records)
     if artifact is None:
-        return {"status": "unjoined", "reason": "missing_run_identity"}
-    run_id_issue = _run_id_issue(artifact, samples)
-    if run_id_issue is not None:
-        return run_id_issue
-    identities = {sample.identity for sample in samples}
-    if len(identities) != 1:
-        return {"status": "unjoined", "reason": "multiple_server_identities"}
-    identity = next(iter(identities))
+        return _unjoined("missing_run_identity"), {}
+    issue = _run_id_issue(artifact, samples) or _identity_issue(samples, direct_server)
+    if issue is not None:
+        return issue, {}
+    identity = samples[0].identity
+    clock = _server_clock(
+        artifact, records, identity, clock_offset_ns, clock_uncertainty_ns
+    )
+    if isinstance(clock, str):
+        return _unjoined(clock), {}
+    placed = align_samples(samples, clock)
+    if not placed.aligned:
+        reason = "ambiguous" if placed.unaligned[AMBIGUOUS] else "uncovered"
+        return _unjoined(f"clock_alignment_{reason}"), {}
+    return _joined(identity, samples, clock, placed), placed.aligned
+
+
+def _unjoined(reason: str) -> dict[str, Any]:
+    return {"status": "unjoined", "reason": reason}
+
+
+def _identity_issue(
+    samples: list[TelemetrySample], direct_server: bool
+) -> dict[str, Any] | None:
+    if len({sample.identity for sample in samples}) != 1:
+        return _unjoined("multiple_server_identities")
     route_issue = _route_issue(samples, direct_server)
-    if route_issue:
-        return {"status": "unjoined", "reason": route_issue}
-    same_host = _same_host_clock(artifact, identity)
-    alignment = _clock_alignment(same_host, clock_offset_ns, clock_uncertainty_ns)
-    if "reason" in alignment:
-        return {"status": "unjoined", "reason": alignment["reason"]}
-    return {
+    return _unjoined(route_issue) if route_issue else None
+
+
+def _server_clock(
+    artifact: dict[str, Any],
+    records: list[dict[str, Any]],
+    identity: ServerIdentity,
+    offset_ns: int | None,
+    uncertainty_ns: int | None,
+) -> ServerClock | str:
+    client_domain = client_clock_domain(artifact)
+    if client_domain is None:
+        return "missing_client_clock_domain"
+    return build_server_clock(
+        run_id=str(artifact["context"].get("run_id")),
+        server_domain=identity.clock_domain,
+        client_domain=client_domain,
+        recorded=artifact_alignments(records),
+        offset_ns=offset_ns,
+        uncertainty_ns=uncertainty_ns,
+    )
+
+
+def _joined(
+    identity: ServerIdentity,
+    samples: list[TelemetrySample],
+    clock: ServerClock,
+    placed: SampleAlignment,
+) -> dict[str, Any]:
+    offsets = {item["offset_ns"] for item in placed.applied}
+    joined = {
         "status": "joined",
         "route_evidence": "operator_declared_direct",
         "identity": asdict(identity),
-        **alignment,
+        "clock_alignment_evidence": clock.evidence,
+        # One offset when a single alignment placed every joined sample.
+        "clock_offset_ns": next(iter(offsets)) if len(offsets) == 1 else None,
+        "clock_uncertainty_ns": max(
+            item.uncertainty_ns for item in placed.aligned.values()
+        ),
+        "clock_alignments": placed.applied,
+        "unaligned_samples": placed.unaligned,
         "attribution": "case_window_observation_only",
         "invalidation": _invalidation(samples),
     }
+    if clock.overridden:
+        joined["overridden_clock_alignments"] = list(clock.overridden)
+    return joined
 
 
 def _run_id_issue(
@@ -435,52 +500,6 @@ def _artifact_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
     return artifacts[0]
 
 
-def _same_host_clock(artifact: dict[str, Any], identity: ServerIdentity) -> bool:
-    metadata = artifact.get("metadata")
-    if not isinstance(metadata, dict):
-        return False
-    boot_id = metadata.get("boot_id")
-    return (
-        artifact["context"].get("host") == identity.host
-        and isinstance(boot_id, str)
-        and bool(boot_id)
-        and boot_id == identity.boot_id
-    )
-
-
-def _clock_alignment(
-    same_host: bool,
-    offset_ns: int | None,
-    uncertainty_ns: int | None,
-) -> dict[str, Any]:
-    if offset_ns is None and not same_host:
-        return {"reason": "clock_alignment_required"}
-    if offset_ns is not None and uncertainty_ns is None:
-        return {"reason": "clock_uncertainty_required"}
-    # A shared clock needs no offset, but a supplied uncertainty is still honored.
-    offset = 0 if offset_ns is None else offset_ns
-    uncertainty = 0 if uncertainty_ns is None else uncertainty_ns
-    _validate_clock_alignment(offset, uncertainty)
-    return {
-        "clock_offset_ns": offset,
-        "clock_uncertainty_ns": uncertainty,
-        "clock_alignment_evidence": (
-            "same_host" if same_host and offset == 0 else "operator_supplied"
-        ),
-    }
-
-
-def _validate_clock_alignment(offset_ns: int, uncertainty_ns: int) -> None:
-    if isinstance(offset_ns, bool) or not isinstance(offset_ns, int):
-        raise TypeError("clock_offset_ns must be an integer")
-    if (
-        isinstance(uncertainty_ns, bool)
-        or not isinstance(uncertainty_ns, int)
-        or uncertainty_ns < 0
-    ):
-        raise ValueError("clock_uncertainty_ns must be a non-negative integer")
-
-
 def _server_targets(samples: list[TelemetrySample]) -> list[dict[str, Any]]:
     grouped: dict[ServerIdentity, list[TelemetrySample]] = {}
     for sample in samples:
@@ -514,7 +533,7 @@ def _server_targets(samples: list[TelemetrySample]) -> list[dict[str, Any]]:
 class _ServerTimeline:
     """A joined collector's polls in client time, and how long it can be trusted."""
 
-    offset_ns: int
+    aligned_ns: dict[TelemetrySample, int]
     uncertainty_ns: int
     slack_ns: int
     first_poll_ns: int
@@ -524,27 +543,41 @@ class _ServerTimeline:
 
 
 def _server_timeline(
-    samples: list[TelemetrySample], join: dict[str, Any]
+    samples: list[TelemetrySample],
+    join: dict[str, Any],
+    aligned: dict[TelemetrySample, AlignedTimestamp],
 ) -> _ServerTimeline | None:
     if join.get("status") != "joined":
         return None
-    offset = join["clock_offset_ns"]
     uncertainty = join["clock_uncertainty_ns"]
-    polls = [sample.observed_at_ns + offset for sample in samples]
+    aligned_ns = {sample: placed.value_ns for sample, placed in aligned.items()}
     invalidation = join.get("invalidation")
-    confirmed = invalidation.get("last_confirmed_at_ns") if invalidation else None
     return _ServerTimeline(
-        offset_ns=offset,
+        aligned_ns=aligned_ns,
         uncertainty_ns=uncertainty,
         slack_ns=max(sample.interval_ms for sample in samples) * 1_000_000,
-        first_poll_ns=min(polls),
-        last_poll_ns=max(polls),
+        first_poll_ns=min(aligned_ns.values()),
+        last_poll_ns=max(aligned_ns.values()),
         invalidated=invalidation is not None,
-        # The identity was last confirmed at ``confirmed``; allow for clock error.
-        trusted_until_ns=(
-            None if confirmed is None else confirmed + offset - uncertainty
-        ),
+        trusted_until_ns=_trusted_until(aligned_ns, invalidation, uncertainty),
     )
+
+
+def _trusted_until(
+    aligned_ns: dict[TelemetrySample, int],
+    invalidation: dict[str, Any] | None,
+    uncertainty_ns: int,
+) -> int | None:
+    """Client time by which the last confirming poll had certainly happened."""
+    if invalidation is None:
+        return None
+    confirmed = [
+        placed
+        for sample, placed in aligned_ns.items()
+        if sample.observed_at_ns < invalidation["observed_at_ns"]
+    ]
+    # The poll could have happened up to one uncertainty earlier on this clock.
+    return max(confirmed) - uncertainty_ns if confirmed else None
 
 
 def _server_case_view(
@@ -567,8 +600,8 @@ def _server_case_view(
     high = window[1] - timeline.uncertainty_ns
     in_window = [
         sample
-        for sample in samples
-        if low <= sample.observed_at_ns + timeline.offset_ns <= high
+        for sample, placed in timeline.aligned_ns.items()
+        if low <= placed <= high
     ]
     coverage = _case_coverage(window[1], low, high, bool(in_window), timeline)
     if coverage["status"] == "empty":
