@@ -25,7 +25,7 @@
     "schema_version": { "const": 1 },
     "event_type": { "const": "infer.telemetry_sample" },
     "scope": { "enum": ["server_process", "gpu_device", "gpu_instance"] },
-    "clock_domain": { "type": "string", "minLength": 1 },
+    "clock_domain": { "type": "string", "pattern": "^.+/unix_epoch_ns$" },
     "counter_owner": {
       "enum": [
         "operating_system_process",
@@ -54,12 +54,21 @@
         "host": { "type": "string", "minLength": 1 },
         "pid": { "type": "integer", "minimum": 1 },
         "process_start_ns": { "type": "integer", "minimum": 1 },
-        "device_uuid": { "type": ["string", "null"] },
-        "gpu_instance_id": { "type": ["string", "null"] },
-        "replica_id": { "type": ["string", "null"] },
+        "device_uuid": { "type": ["string", "null"], "minLength": 1 },
+        "gpu_instance_id": { "type": ["string", "null"], "minLength": 1 },
+        "replica_id": { "type": ["string", "null"], "minLength": 1 },
         "rank": { "type": ["integer", "null"], "minimum": 0 },
-        "boot_id": { "type": ["string", "null"] }
-      }
+        "boot_id": { "type": ["string", "null"], "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "gpu_instance_id": { "type": "string" } },
+            "required": ["gpu_instance_id"]
+          },
+          "then": { "properties": { "device_uuid": { "type": "string" } } }
+        }
+      ]
     },
     "observed_at_ns": { "type": "integer", "minimum": 1 },
     "metric": {
@@ -87,6 +96,136 @@
       "if": { "properties": { "state": { "const": "valid" } } },
       "then": { "properties": { "value_bytes": { "type": "integer" } } },
       "else": { "properties": { "value_bytes": { "type": "null" } } }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "not": { "const": "process_rss_bytes" } } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "identity": { "properties": { "device_uuid": { "type": "string" } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "scope": { "const": "gpu_instance" } },
+        "required": ["scope"]
+      },
+      "then": {
+        "properties": {
+          "identity": { "properties": { "gpu_instance_id": { "type": "string" } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "process_rss_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "server_process" },
+          "counter_owner": { "const": "operating_system_process" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "process_gpu_used_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "server_process" },
+          "counter_owner": { "const": "gpu_process" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "allocator_allocated_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "server_process" },
+          "counter_owner": { "const": "allocator" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "allocator_reserved_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "server_process" },
+          "counter_owner": { "const": "allocator" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "engine_cache_occupied_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "server_process" },
+          "counter_owner": { "const": "engine_cache" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "device_memory_used_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "gpu_device" },
+          "counter_owner": { "const": "gpu_device" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "device_memory_reserved_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "gpu_device" },
+          "counter_owner": { "const": "gpu_device" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "instance_memory_used_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "gpu_instance" },
+          "counter_owner": { "const": "gpu_instance" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "instance_memory_reserved_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "gpu_instance" },
+          "counter_owner": { "const": "gpu_instance" }
+        }
+      }
     }
   ]
 }

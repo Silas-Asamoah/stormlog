@@ -185,8 +185,9 @@ class TelemetrySample:
             state=record["state"],
             source=record["source"],
             interval_ms=record["interval_ms"],
-            detail=record.get("detail"),
-            provenance=record.get("provenance", "observed"),
+            # Required, as in the published schema; ``detail`` may be null.
+            detail=record["detail"],
+            provenance=record["provenance"],
         )
         if record.get("scope") != sample.scope:
             raise ValueError("telemetry scope does not match metric")

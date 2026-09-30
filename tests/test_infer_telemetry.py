@@ -151,6 +151,54 @@ def test_unavailable_counter_is_null_and_scope_cannot_be_forged() -> None:
         TelemetrySample.from_record(forged)
 
 
+def _set_identity(**changes: object) -> Callable[[dict[str, Any]], None]:
+    return lambda record: record["identity"].update(changes)
+
+
+def _set(**changes: object) -> Callable[[dict[str, Any]], None]:
+    return lambda record: record.update(changes)
+
+
+def _drop(key: str) -> Callable[[dict[str, Any]], None]:
+    return lambda record: record.pop(key)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        _set_identity(boot_id=""),
+        _set_identity(replica_id=""),
+        _set_identity(device_uuid=None),
+        _set_identity(device_uuid=None, gpu_instance_id="MIG-a"),
+        _set(
+            metric="instance_memory_used_bytes",
+            scope="gpu_instance",
+            counter_owner="gpu_instance",
+        ),
+        _set(scope="server_process"),
+        _set(counter_owner="allocator"),
+        _set(metric="process_rss_bytes"),
+        _set(clock_domain="server-a/monotonic_ns"),
+        _drop("detail"),
+        _drop("provenance"),
+    ],
+)
+def test_schema_rejects_what_the_loader_rejects(
+    mutate: Callable[[dict[str, Any]], None],
+) -> None:
+    record = _sample().to_record()
+    mutate(record)
+    with pytest.raises((KeyError, TypeError, ValueError)):
+        TelemetrySample.from_record(record)
+    assert list(Draft202012Validator(SCHEMA).iter_errors(record))
+
+
+@pytest.mark.parametrize("field", sorted(TelemetrySample.__dataclass_fields__))
+def test_schema_lists_every_record_field(field: str) -> None:
+    # Every dataclass field is written to the record, so the schema must list it.
+    assert field in SCHEMA["properties"]
+
+
 def test_instance_metric_requires_instance_identity() -> None:
     with pytest.raises(ValueError, match="gpu_instance_id"):
         _sample(metric="instance_memory_used_bytes")
