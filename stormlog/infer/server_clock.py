@@ -29,6 +29,8 @@ from .host_clock import is_boot_qualified, wall_clock_domain
 from .telemetry import TelemetrySample
 
 CLI_ALIGNMENT_ID = "cli:clock-offset"
+# Marks the server side of an equal, boot-less pair of clock domains.
+UNVERIFIED_SERVER_SUFFIX = "#server"
 UNCOVERED = "uncovered"
 AMBIGUOUS = "ambiguous"
 
@@ -211,13 +213,18 @@ def build_server_clock(
     pair of domains; the replaced records are listed in ``overridden``. Records
     from another run never place samples; they are listed in ``ignored``.
     """
-    issue = _flag_issue(offset_ns, uncertainty_ns, server_domain == client_domain)
+    shared = server_domain == client_domain and is_boot_qualified(server_domain)
+    issue = _flag_issue(offset_ns, uncertainty_ns, shared)
     if issue is not None:
         return issue
-    if server_domain == client_domain:
+    if shared:
         return _same_clock(
             run_id, server_domain, client_domain, offset_ns, uncertainty_ns
         )
+    aligned_domain = _alignable_domain(server_domain, client_domain, offset_ns)
+    if aligned_domain is None:
+        return "clock_domain_unverified"
+    server_domain = aligned_domain
     pair = tuple(
         item
         for item in recorded
@@ -236,6 +243,22 @@ def build_server_clock(
         (operator,),
         overridden=tuple(item.event_id for item in pair),
     )
+
+
+def _alignable_domain(
+    server_domain: str, client_domain: str, offset_ns: int | None
+) -> str | None:
+    """Name the server clock an alignment can start from, or None if none can.
+
+    Equal names without a boot ID could still be two machines. Only the
+    operator's offset connects them, under a distinct name for the server side
+    so ``align_timestamp`` does not treat the equal names as one clock.
+    """
+    if server_domain != client_domain:
+        return server_domain
+    if offset_ns is None:
+        return None
+    return server_domain + UNVERIFIED_SERVER_SUFFIX
 
 
 def _flag_issue(
@@ -278,9 +301,6 @@ def _same_clock(
     offset_ns: int | None,
     uncertainty_ns: int | None,
 ) -> ServerClock | str:
-    if not is_boot_qualified(server_domain):
-        # Equal hostnames without boot IDs could still be two machines.
-        return "clock_domain_unverified"
     # Validate operator values exactly as an alignment record would be.
     supplied = cli_alignment(
         run_id, server_domain, client_domain, offset_ns or 0, uncertainty_ns or 0

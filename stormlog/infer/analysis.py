@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, TypeGuard
 
 from .correlation_accounting import AlignedTimestamp
+from .host_clock import is_boot_qualified
 from .server_clock import (
     AMBIGUOUS,
     UNCOVERED,
@@ -502,10 +503,15 @@ def _flags_domain(
     """The server domain the clock flags describe, or None if that is unclear.
 
     Members on the client's host and boot share its clock; the flags then
-    belong to the single remote domain. With several remote hosts, each needs
-    its own ``infer.clock_alignment`` record instead.
+    belong to the single remote domain. A member with the client's hostname
+    but no boot ID counts as remote, because only the flags can align it. With
+    several remote hosts, each needs its own ``infer.clock_alignment`` record.
     """
-    remote = [domain for domain in domains if domain != client_domain]
+    remote = [
+        domain
+        for domain in domains
+        if domain != client_domain or not is_boot_qualified(domain)
+    ]
     if offset_ns is not None and len(remote) > 1:
         return None
     return remote[0] if remote else client_domain

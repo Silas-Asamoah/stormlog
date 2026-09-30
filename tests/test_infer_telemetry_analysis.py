@@ -973,3 +973,41 @@ def test_group_clock_flags_describe_one_shared_clock_or_one_remote(
         "status": "unjoined",
         "reason": "clock_offset_required",
     }
+
+
+def _bootless(sample: TelemetrySample) -> TelemetrySample:
+    return replace(sample, identity=replace(sample.identity, boot_id=None))
+
+
+def test_bootless_same_hostname_joins_with_explicit_clock_flags(
+    tmp_path: Path,
+) -> None:
+    # A Windows host reports no boot ID; the operator's flags still align it.
+    profile = _profile(tmp_path, host="server-a", boot=False)
+    telemetry = _telemetry(tmp_path, "server.jsonl", _bootless(_server_sample()))
+    report = analyze_inference_events(
+        profile,
+        server_telemetry_paths=[telemetry],
+        direct_server=True,
+        clock_offset_ns=0,
+        clock_uncertainty_ns=5,
+    )
+    join = report["telemetry"]["server_join"]
+    assert (join["status"], join["clock_alignment_evidence"]) == (
+        "joined",
+        "operator_supplied",
+    )
+    assert join["clock_alignments"][0]["from_clock_domain"] == (
+        "server-a/unix_epoch_ns#server"
+    )
+    group = _telemetry(
+        tmp_path, "group.jsonl", _bootless(_member(0)), _bootless(_member(1))
+    )
+    grouped = analyze_inference_events(
+        profile,
+        server_telemetry_paths=[group],
+        direct_server=True,
+        clock_offset_ns=0,
+        clock_uncertainty_ns=5,
+    )
+    assert grouped["telemetry"]["server_join"]["status"] == "joined"

@@ -259,9 +259,14 @@ machines. The client artifact records its domain in the `infer.artifact`
 context, and each telemetry record carries the collector's. Equal domains are
 one clock, so on the same host and boot no alignment is needed; a
 `--clock-uncertainty-ns` given alone is applied as given. A host that cannot
-report a boot ID gets `{host}/unix_epoch_ns`, which never counts as a shared
-clock, even with the same hostname on both sides. Artifacts written before
-domains named the boot are read with the boot ID from their `metadata`.
+report a boot ID, such as a Windows host, gets `{host}/unix_epoch_ns`, which
+never counts as a shared clock, even with the same hostname on both sides. Such
+a pair can still be joined with `--clock-offset-ns` and `--clock-uncertainty-ns`
+(use an offset of 0 when both commands ran on one machine); the report then
+names the server side `{host}/unix_epoch_ns#server`. An `infer.clock_alignment`
+record cannot describe that pair, because both of its domain names would be
+equal. Artifacts written before domains named the boot are read with the boot
+ID from their `metadata`.
 
 For a profiler on another host, copy the server JSONL to the analysis host and
 provide a measured server-to-client clock offset and an uncertainty bound:
@@ -297,7 +302,7 @@ samples to client request windows, and `telemetry.server_join.reason` says why:
 | `clock_uncertainty_required` | `--clock-offset-ns` was given without `--clock-uncertainty-ns` |
 | `clock_offset_required` | `--clock-uncertainty-ns` was given alone, but the server is on another host or boot |
 | `clock_offset_on_shared_clock` | A nonzero `--clock-offset-ns` was given for one host and boot, which is one clock |
-| `clock_domain_unverified` | Both sides have the same hostname and no boot ID |
+| `clock_domain_unverified` | Both sides have the same hostname and no boot ID, and no clock flags were given |
 | `clock_alignment_uncovered` | No record's validity window covers any sample |
 | `clock_alignment_ambiguous` | Several records cover the same samples |
 | `clock_alignment_from_another_run` | The only records for these clocks name a different run ID |

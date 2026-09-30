@@ -225,3 +225,18 @@ def test_records_from_another_run_are_ignored() -> None:
     assert (clock.alignments, clock.ignored) == ((own,), ("copied",))
     placed, record = _place(clock, 100)
     assert (placed.value_ns, record) == (105, own)
+
+
+def test_equal_names_without_boot_ids_join_only_with_explicit_flags() -> None:
+    bootless = "win-box/unix_epoch_ns"
+    same = {"server_domain": bootless, "client_domain": bootless}
+    assert _clock(**same) == "clock_domain_unverified"
+    assert _clock(**same, uncertainty_ns=5) == "clock_offset_required"
+    clock = _clock(**same, offset_ns=20, uncertainty_ns=5)
+    assert isinstance(clock, ServerClock)
+    assert (clock.evidence, clock.server_domain) == (
+        "operator_supplied",
+        "win-box/unix_epoch_ns#server",
+    )
+    placed, _record = _place(clock, 100)
+    assert (placed.value_ns, placed.uncertainty_ns) == (120, 5)
