@@ -89,6 +89,8 @@ class SampleAlignment:
     aligned: dict[TelemetrySample, AlignedTimestamp]
     unaligned: dict[str, int]
     applied: list[dict[str, Any]]
+    # Samples no single alignment placed, with UNCOVERED or AMBIGUOUS.
+    unplaced: dict[TelemetrySample, str]
 
 
 def align_samples(
@@ -96,6 +98,7 @@ def align_samples(
 ) -> SampleAlignment:
     """Place every sample; count the ones no single alignment covers."""
     aligned: dict[TelemetrySample, AlignedTimestamp] = {}
+    unplaced: dict[TelemetrySample, str] = {}
     unaligned = {UNCOVERED: 0, AMBIGUOUS: 0}
     records: dict[int, ClockAlignmentEvent | None] = {}
     counts: dict[int, int] = {}
@@ -103,12 +106,13 @@ def align_samples(
         placement = clock.align(sample.observed_at_ns)
         if isinstance(placement, str):
             unaligned[placement] += 1
+            unplaced[sample] = placement
             continue
         aligned[sample], record = placement
         records[id(record)] = record
         counts[id(record)] = counts.get(id(record), 0) + 1
     applied = [_applied(clock, records[key], counts[key]) for key in records]
-    return SampleAlignment(aligned, unaligned, applied)
+    return SampleAlignment(aligned, unaligned, applied, unplaced)
 
 
 def _applied(

@@ -12,6 +12,7 @@ from typing import Any, TypeGuard
 from .correlation_accounting import AlignedTimestamp
 from .server_clock import (
     AMBIGUOUS,
+    UNCOVERED,
     SampleAlignment,
     ServerClock,
     align_samples,
@@ -34,14 +35,14 @@ def analyze_inference_events(
     records = _load_jsonl(path)
     requests, samples = _partition_inference_records(records)
     server_samples = _load_server_samples(server_telemetry_paths)
-    join, aligned = _server_join(
+    join, alignment = _server_join(
         records,
         server_samples,
         direct_server=direct_server,
         clock_offset_ns=clock_offset_ns,
         clock_uncertainty_ns=clock_uncertainty_ns,
     )
-    timeline = _server_timeline(server_samples, join, aligned)
+    timeline = _server_timeline(server_samples, join, alignment)
     ok_requests = [record for record in requests if record.get("status") == "ok"]
 
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -357,30 +358,30 @@ def _server_join(
     direct_server: bool,
     clock_offset_ns: int | None,
     clock_uncertainty_ns: int | None,
-) -> tuple[dict[str, Any], dict[TelemetrySample, AlignedTimestamp]]:
+) -> tuple[dict[str, Any], SampleAlignment | None]:
     """Return a case-window join only for one declared, matching server.
 
     The second value gives each joined sample's time on the client clock.
     """
     if not samples:
-        return {"status": "not_configured"}, {}
+        return {"status": "not_configured"}, None
     artifact = _artifact_record(records)
     if artifact is None:
-        return _unjoined("missing_run_identity"), {}
+        return _unjoined("missing_run_identity"), None
     issue = _run_id_issue(artifact, samples) or _identity_issue(samples, direct_server)
     if issue is not None:
-        return issue, {}
+        return issue, None
     identity = samples[0].identity
     clock = _server_clock(
         artifact, records, identity, clock_offset_ns, clock_uncertainty_ns
     )
     if isinstance(clock, str):
-        return _unjoined(clock), {}
+        return _unjoined(clock), None
     placed = align_samples(samples, clock)
     if not placed.aligned:
         reason = "ambiguous" if placed.unaligned[AMBIGUOUS] else "uncovered"
-        return _unjoined(f"clock_alignment_{reason}"), {}
-    return _joined(identity, samples, clock, placed), placed.aligned
+        return _unjoined(f"clock_alignment_{reason}"), None
+    return _joined(identity, samples, clock, placed), placed
 
 
 def _unjoined(reason: str) -> dict[str, Any]:
@@ -541,6 +542,9 @@ class _ServerTimeline:
     """
 
     placed: dict[TelemetrySample, AlignedTimestamp]
+    # Samples no single alignment placed, and the offsets that placed others.
+    unplaced: dict[TelemetrySample, str]
+    offsets: tuple[int, ...]
     slack_ns: int
     first_poll_ns: int
     last_poll_ns: int
@@ -551,14 +555,17 @@ class _ServerTimeline:
 def _server_timeline(
     samples: list[TelemetrySample],
     join: dict[str, Any],
-    aligned: dict[TelemetrySample, AlignedTimestamp],
+    alignment: SampleAlignment | None,
 ) -> _ServerTimeline | None:
-    if join.get("status") != "joined":
+    if alignment is None or join.get("status") != "joined":
         return None
+    aligned = alignment.aligned
     values = [placed.value_ns for placed in aligned.values()]
     invalidation = join.get("invalidation")
     return _ServerTimeline(
         placed=aligned,
+        unplaced=alignment.unplaced,
+        offsets=tuple(sorted({item["offset_ns"] for item in alignment.applied})),
         slack_ns=max(sample.interval_ms for sample in samples) * 1_000_000,
         first_poll_ns=min(values),
         last_poll_ns=max(values),
@@ -609,7 +616,8 @@ def _server_case_view(
     ]
     margin = _case_margin(timeline, start_ns, end_ns)
     low, high = start_ns + margin, end_ns - margin
-    coverage = _case_coverage(end_ns, low, high, bool(in_window), timeline)
+    gap = _unplaced_reason(timeline, start_ns, end_ns)
+    coverage = _case_coverage(end_ns, low, high, bool(in_window), gap, timeline)
     if coverage["status"] == "empty":
         return {}, coverage
     return _metric_summaries(samples, in_window), coverage
@@ -630,14 +638,38 @@ def _case_margin(timeline: _ServerTimeline, start_ns: int, end_ns: int) -> int:
     return min(inside or [placed.uncertainty_ns for placed in timeline.placed.values()])
 
 
+def _unplaced_reason(
+    timeline: _ServerTimeline, start_ns: int, end_ns: int
+) -> str | None:
+    """Say why a case has no samples when unplaced polls probably fell inside it.
+
+    Unplaced samples have no client time; any offset that placed other samples
+    gives the best estimate of where they would land.
+    """
+    near = [
+        reason
+        for sample, reason in timeline.unplaced.items()
+        if any(
+            start_ns <= sample.observed_at_ns + offset <= end_ns
+            for offset in timeline.offsets
+        )
+    ]
+    if not near:
+        return None
+    return f"clock_alignment_{AMBIGUOUS if AMBIGUOUS in near else UNCOVERED}"
+
+
 def _case_coverage(
     end_ns: int,
     low: int,
     high: int,
     has_samples: bool,
+    unplaced_reason: str | None,
     timeline: _ServerTimeline,
 ) -> dict[str, Any]:
-    empty_reason = _empty_reason(end_ns, low, high, has_samples, timeline)
+    empty_reason = _empty_reason(
+        end_ns, low, high, has_samples, unplaced_reason, timeline
+    )
     if empty_reason is not None:
         return {
             "status": "empty",
@@ -657,6 +689,7 @@ def _empty_reason(
     low: int,
     high: int,
     has_samples: bool,
+    unplaced_reason: str | None,
     timeline: _ServerTimeline,
 ) -> str | None:
     if high < low:
@@ -666,7 +699,7 @@ def _empty_reason(
     ):
         return "identity_invalidated"
     if not has_samples:
-        return "no_collector_coverage"
+        return unplaced_reason or "no_collector_coverage"
     return None
 
 

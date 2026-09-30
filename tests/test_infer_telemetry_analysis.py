@@ -744,3 +744,32 @@ def test_offset_on_one_shared_clock_is_unjoined(tmp_path: Path) -> None:
         "reason": "clock_offset_on_shared_clock",
     }
     assert report["summary"]["successful_requests"] == 1
+
+
+def test_case_in_an_alignment_gap_says_its_samples_were_not_placed(
+    tmp_path: Path,
+) -> None:
+    report = _aligned_report(
+        tmp_path,
+        [
+            _alignment_record("early", valid_to_ns=1_000),
+            _alignment_record("late", valid_from_ns=2_000),
+        ],
+        _server_sample(observed_at_ns=150),
+        _server_sample(observed_at_ns=1_500),
+        _server_sample(observed_at_ns=2_500),
+        windows={"early": (100, 300), "gap": (1_400, 1_600), "late": (2_400, 2_600)},
+    )
+    coverage = {
+        case_id: (
+            case["memory"]["server_coverage"]["status"],
+            case["memory"]["server_coverage"]["reason"],
+        )
+        for case_id, case in report["cases"].items()
+    }
+    # The collector polled during "gap"; no record could place that poll.
+    assert coverage == {
+        "early": ("observed", None),
+        "gap": ("empty", "clock_alignment_uncovered"),
+        "late": ("observed", None),
+    }
