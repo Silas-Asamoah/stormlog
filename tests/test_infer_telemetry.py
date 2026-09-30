@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import io
 import json
 import math
@@ -30,7 +31,9 @@ from stormlog.infer.server_collector import (
     CollectionResult,
     GpuMemoryReading,
     NvmlMemorySource,
+    _running_compute_pids,
     collect_server_telemetry,
+    describe_gpu_process_match,
     next_poll_time,
     read_process_rss,
 )
@@ -396,6 +399,40 @@ def test_only_a_gone_process_invalidates_rss(
     assert (rss is not None) == (expected_state == "valid")
 
 
+def test_gpu_process_match_explains_mismatches() -> None:
+    assert describe_gpu_process_match(100, "GPU-x", {100, 5}, set()) == []
+    (child,) = describe_gpu_process_match(100, "GPU-x", {523}, {523, 600})
+    assert "child process(es) 523" in child
+    assert "--pid 523" in child
+    (other,) = describe_gpu_process_match(100, "GPU-x", {7}, set())
+    assert "--device-uuid" in other
+    assert "PIDs: 7" in other
+    (empty,) = describe_gpu_process_match(100, "GPU-x", set(), set())
+    assert "PIDs: none" in empty
+    (unknown,) = describe_gpu_process_match(100, "GPU-x", None, set())
+    assert "could not list compute processes" in unknown
+
+
+def test_collector_reports_gpu_process_warnings(tmp_path: Path) -> None:
+    class GpuWithoutServer(_FakeGpu):
+        def compute_pids(self) -> set[int]:
+            return {999_999}
+
+    warnings: list[str] = []
+    result = collect_server_telemetry(
+        run_id="run-live",
+        pid=os.getpid(),
+        output_path=tmp_path / "warned.jsonl",
+        interval_seconds=0.01,
+        duration_seconds=0.015,
+        gpu_source=GpuWithoutServer(),
+        on_warning=warnings.append,
+    )
+    assert len(warnings) == 1
+    assert result.warnings == tuple(warnings)
+    assert f"PID {os.getpid()} has no compute context on GPU-live" in warnings[0]
+
+
 class _FakeNvmlLibrary:
     def __init__(self, uuids: dict[str, str], *, uuid_code: int = 0) -> None:
         self.uuids = uuids
@@ -461,6 +498,24 @@ def test_failed_nvml_memory_read_is_missing() -> None:
     reading = _nvml_source(library).read()
     assert reading.state == "missing"
     assert reading.used_bytes is None
+
+
+def test_compute_process_query_grows_the_buffer() -> None:
+    calls: list[bool] = []
+
+    def query(_handle: object, count_ref: Any, infos: Any) -> int:
+        calls.append(infos is not None)
+        if infos is None:
+            count_ref._obj.value = 2
+            return 7  # NVML_ERROR_INSUFFICIENT_SIZE
+        infos[0].pid, infos[1].pid = 11, 12
+        count_ref._obj.value = 2
+        return 0
+
+    assert _running_compute_pids(query, ctypes.c_void_p()) == {11, 12}
+    assert calls == [False, True]
+    assert _running_compute_pids(lambda *_: 0, ctypes.c_void_p()) == set()
+    assert _running_compute_pids(lambda *_: 999, ctypes.c_void_p()) is None
 
 
 def _run_collect_cli(

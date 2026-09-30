@@ -240,7 +240,12 @@ def build_parser() -> argparse.ArgumentParser:
     collector_parser.add_argument(
         "--run-id", required=True, help="Run ID also passed to `infer profile`"
     )
-    collector_parser.add_argument("--pid", required=True, type=int)
+    collector_parser.add_argument(
+        "--pid",
+        required=True,
+        type=int,
+        help="Server process to watch; use the worker that owns the GPU work",
+    )
     collector_parser.add_argument("--output", required=True, help="JSONL path")
     collector_parser.add_argument(
         "--interval", type=float, default=0.1, help="Seconds between polls"
@@ -251,8 +256,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Stop after this many seconds (default: until Ctrl+C or SIGTERM)",
     )
-    collector_parser.add_argument("--device-index", type=int, default=0)
-    collector_parser.add_argument("--device-uuid", default=None)
+    collector_parser.add_argument(
+        "--device-index",
+        type=int,
+        default=0,
+        help="NVML index (PCI bus order, not the server's CUDA ordinal)",
+    )
+    collector_parser.add_argument(
+        "--device-uuid",
+        default=None,
+        help="GPU or MIG UUID; preferred over --device-index",
+    )
     collector_parser.add_argument(
         "--no-gpu", action="store_true", help="Collect process RSS only"
     )
@@ -351,6 +365,7 @@ def cmd_collect_server(args: argparse.Namespace) -> int:
             replica_id=args.replica_id,
             rank=args.rank,
             stop_event=stop_event,
+            on_warning=_print_warning,
         )
     finally:
         _restore_signal_handlers(previous_handlers)

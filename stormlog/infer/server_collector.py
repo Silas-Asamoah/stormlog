@@ -8,9 +8,10 @@ import math
 import socket
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import psutil
 
@@ -23,6 +24,8 @@ STOP_SERVER_PROCESS_ENDED = "server_process_ended"
 STOP_GPU_IDENTITY_CHANGED = "gpu_identity_changed"
 
 _PROCESS_ENDED_DETAIL = "server process ended or its PID was reused"
+_NVML_SUCCESS = 0
+_NVML_ERROR_INSUFFICIENT_SIZE = 7
 
 
 class _NvmlMemoryV2(ctypes.Structure):
@@ -32,6 +35,17 @@ class _NvmlMemoryV2(ctypes.Structure):
         ("reserved", ctypes.c_ulonglong),
         ("free", ctypes.c_ulonglong),
         ("used", ctypes.c_ulonglong),
+    ]
+
+
+class _NvmlProcessInfo(ctypes.Structure):
+    """``nvmlProcessInfo_t``; the v2 and v3 process queries share this layout."""
+
+    _fields_ = [
+        ("pid", ctypes.c_uint),
+        ("usedGpuMemory", ctypes.c_ulonglong),
+        ("gpuInstanceId", ctypes.c_uint),
+        ("computeInstanceId", ctypes.c_uint),
     ]
 
 
@@ -91,6 +105,29 @@ def _mig_parent_handle(lib: ctypes.CDLL, handle: ctypes.c_void_p) -> ctypes.c_vo
     return parent
 
 
+def _running_compute_pids(function: Any, handle: ctypes.c_void_p) -> set[int] | None:
+    """Call an ``nvmlDeviceGetComputeRunningProcesses`` variant for its PIDs."""
+    function.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint),
+        ctypes.POINTER(_NvmlProcessInfo),
+    ]
+    function.restype = ctypes.c_int
+    count = ctypes.c_uint(0)
+    code = function(handle, ctypes.byref(count), None)
+    if code == _NVML_SUCCESS:
+        return set()
+    if code != _NVML_ERROR_INSUFFICIENT_SIZE:
+        return None
+    # Leave room for processes that start between the size query and the read.
+    capacity = count.value + 8
+    infos = (_NvmlProcessInfo * capacity)()
+    count = ctypes.c_uint(capacity)
+    if function(handle, ctypes.byref(count), infos) != _NVML_SUCCESS:
+        return None
+    return {int(infos[index].pid) for index in range(count.value)}
+
+
 class GpuMemorySource(Protocol):
     device_uuid: str
     gpu_instance_id: str | None
@@ -116,6 +153,7 @@ class CollectionResult:
     polls: int
     stop_reason: str
     detail: str | None = None
+    warnings: tuple[str, ...] = ()
 
 
 class NvmlMemorySource:
@@ -186,6 +224,17 @@ class NvmlMemorySource:
             return GpuMemoryReading(None, None, "invalid", "parent device UUID changed")
         return None
 
+    def compute_pids(self) -> set[int] | None:
+        """Return PIDs NVML reports on this GPU, or None when NVML cannot say."""
+        for name in (
+            "nvmlDeviceGetComputeRunningProcesses_v3",
+            "nvmlDeviceGetComputeRunningProcesses_v2",
+        ):
+            function = getattr(self._lib, name, None)
+            if function is not None:
+                return _running_compute_pids(function, self._handle)
+        return None
+
     def close(self) -> None:
         if not self._closed:
             self._lib.nvmlShutdown()
@@ -206,6 +255,7 @@ def collect_server_telemetry(
     rank: int | None = None,
     gpu_source: GpuMemorySource | None = None,
     stop_event: threading.Event | None = None,
+    on_warning: Callable[[str], None] | None = None,
 ) -> CollectionResult:
     """Sample a live server process until the duration, a stop, or a change.
 
@@ -221,6 +271,10 @@ def collect_server_telemetry(
         raise ValueError("server process is not running")
     source, own_source = _gpu_source(gpu_source, no_gpu, device_index, device_uuid)
     try:
+        warnings = _gpu_process_warnings(process, source)
+        for message in warnings:
+            if on_warning is not None:
+                on_warning(message)
         identity = _server_identity(process, source, replica_id, rank)
         polls, stop_reason, detail = _collect_loop(
             run_id,
@@ -232,7 +286,7 @@ def collect_server_telemetry(
             duration_seconds,
             stop_event or threading.Event(),
         )
-        return CollectionResult(polls, stop_reason, detail)
+        return CollectionResult(polls, stop_reason, detail, tuple(warnings))
     finally:
         if own_source and source:
             source.close()
@@ -289,6 +343,64 @@ def _server_identity(
         rank=rank,
         boot_id=host_boot_id(),
     )
+
+
+def _gpu_process_warnings(
+    process: psutil.Process, source: GpuMemorySource | None
+) -> list[str]:
+    """Warn when NVML does not show the server PID on the sampled GPU.
+
+    NVML numbers GPUs in its own order, and CUDA_VISIBLE_DEVICES renumbers them
+    for the server, so an index can name a different GPU than the server uses.
+    """
+    list_compute_pids = getattr(source, "compute_pids", None)
+    if source is None or list_compute_pids is None:
+        return []
+    return describe_gpu_process_match(
+        process.pid,
+        source.device_uuid,
+        list_compute_pids(),
+        _descendant_pids(process),
+    )
+
+
+def describe_gpu_process_match(
+    pid: int,
+    device_uuid: str,
+    gpu_pids: set[int] | None,
+    descendant_pids: set[int],
+) -> list[str]:
+    """Explain how the server PID relates to the processes NVML sees on a GPU."""
+    if gpu_pids is None:
+        return [
+            f"could not list compute processes on {device_uuid}; "
+            f"cannot confirm that PID {pid} uses this GPU"
+        ]
+    if pid in gpu_pids:
+        return []
+    workers = sorted(descendant_pids & gpu_pids)
+    if workers:
+        listed = ", ".join(str(worker) for worker in workers)
+        return [
+            f"PID {pid} has no compute context on {device_uuid}, but its child "
+            f"process(es) {listed} do. GPU memory is device-wide, but RSS is "
+            f"measured for PID {pid} only; pass --pid {workers[0]} to measure "
+            "the GPU worker instead"
+        ]
+    seen = ", ".join(str(item) for item in sorted(gpu_pids)) or "none"
+    return [
+        f"PID {pid} has no compute context on {device_uuid} (NVML reports PIDs: "
+        f"{seen}). If the server uses a different GPU, pass --device-uuid. "
+        "Inside a container NVML may report host PIDs, so this check can "
+        "be wrong there"
+    ]
+
+
+def _descendant_pids(process: psutil.Process) -> set[int]:
+    try:
+        return {child.pid for child in process.children(recursive=True)}
+    except psutil.Error:
+        return set()
 
 
 def _collect_loop(
