@@ -733,3 +733,12 @@ def test_collect_cli_passes_group_flags() -> None:
     )
     assert code == 0
     assert (seen["group_id"], seen["rank"], seen["world_size"]) == ("tp", 1, 2)
+
+
+def test_records_written_before_groups_stay_valid() -> None:
+    # Group fields are optional in v1: older artifacts omit them entirely.
+    sample = _sample()
+    record = sample.to_record()
+    del record["identity"]["group_id"], record["identity"]["world_size"]
+    Draft202012Validator(SCHEMA).validate(record)
+    assert TelemetrySample.from_record(record) == sample

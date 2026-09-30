@@ -48,9 +48,7 @@
         "gpu_instance_id",
         "replica_id",
         "rank",
-        "boot_id",
-        "group_id",
-        "world_size"
+        "boot_id"
       ],
       "properties": {
         "host": { "type": "string", "minLength": 1 },
