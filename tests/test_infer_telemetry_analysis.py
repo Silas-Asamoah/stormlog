@@ -421,6 +421,19 @@ def test_collector_started_late_is_partial(tmp_path: Path) -> None:
     )
 
 
+def test_same_host_join_honors_supplied_uncertainty(tmp_path: Path) -> None:
+    report = _same_host_report(
+        tmp_path, None, _server_sample(), clock_uncertainty_ns=40
+    )
+    join = report["telemetry"]["server_join"]
+    assert join["clock_alignment_evidence"] == "same_host"
+    assert join["clock_offset_ns"] == 0
+    assert join["clock_uncertainty_ns"] == 40
+    # 150 ns is inside [100 + 40, 300 - 40].
+    memory = report["cases"]["case-a"]["memory"]["server_observations"]
+    assert memory["device_memory_used_bytes"]["valid_samples"] == 1
+
+
 def test_metric_metadata_describes_only_samples_in_the_window(tmp_path: Path) -> None:
     report = _same_host_report(
         tmp_path,

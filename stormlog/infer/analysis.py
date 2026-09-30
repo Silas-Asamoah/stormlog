@@ -452,16 +452,17 @@ def _clock_alignment(
 ) -> dict[str, Any]:
     if offset_ns is None and not same_host:
         return {"reason": "clock_alignment_required"}
-    if offset_ns is None:
-        offset_ns, uncertainty_ns = 0, 0
-    elif uncertainty_ns is None:
+    if offset_ns is not None and uncertainty_ns is None:
         return {"reason": "clock_uncertainty_required"}
-    _validate_clock_alignment(offset_ns, uncertainty_ns)
+    # A shared clock needs no offset, but a supplied uncertainty is still honored.
+    offset = 0 if offset_ns is None else offset_ns
+    uncertainty = 0 if uncertainty_ns is None else uncertainty_ns
+    _validate_clock_alignment(offset, uncertainty)
     return {
-        "clock_offset_ns": offset_ns,
-        "clock_uncertainty_ns": uncertainty_ns,
+        "clock_offset_ns": offset,
+        "clock_uncertainty_ns": uncertainty,
         "clock_alignment_evidence": (
-            "same_host" if same_host and offset_ns == 0 else "operator_supplied"
+            "same_host" if same_host and offset == 0 else "operator_supplied"
         ),
     }
 
