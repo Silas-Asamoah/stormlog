@@ -15,6 +15,8 @@ import psutil
 from .host_clock import host_boot_id
 from .telemetry import ServerIdentity, TelemetrySample
 
+_PROCESS_ENDED_DETAIL = "server process ended or its PID was reused"
+
 
 class _NvmlMemoryV2(ctypes.Structure):
     _fields_ = [
@@ -139,31 +141,34 @@ class NvmlMemorySource:
         return buffer.value.decode()
 
     def read(self) -> GpuMemoryReading:
+        issue = self._identity_issue()
+        if issue is not None:
+            return issue
+        info = _NvmlMemoryV2()
+        info.version = ctypes.sizeof(_NvmlMemoryV2) | (2 << 24)
+        code = self._lib.nvmlDeviceGetMemoryInfo_v2(self._handle, ctypes.byref(info))
+        if code != 0:
+            return GpuMemoryReading(
+                None, None, "missing", f"NVML memory read unavailable (code {code})"
+            )
+        return GpuMemoryReading(int(info.used), int(info.reserved), "valid")
+
+    def _identity_issue(self) -> GpuMemoryReading | None:
+        """Only a different UUID invalidates; an unreadable UUID is missing data."""
         try:
             current_uuid = self._uuid(self._handle)
-            if current_uuid != self._handle_uuid:
-                return GpuMemoryReading(None, None, "invalid", "device UUID changed")
-            if (
-                self._parent_handle
-                and self._uuid(self._parent_handle) != self.device_uuid
-            ):
-                return GpuMemoryReading(
-                    None, None, "invalid", "parent device UUID changed"
-                )
-            info = _NvmlMemoryV2()
-            info.version = ctypes.sizeof(_NvmlMemoryV2) | (2 << 24)
-            code = self._lib.nvmlDeviceGetMemoryInfo_v2(
-                self._handle, ctypes.byref(info)
+            parent_uuid = (
+                self._uuid(self._parent_handle) if self._parent_handle else None
             )
-            if code != 0:
-                return GpuMemoryReading(
-                    None, None, "missing", f"NVML memory read unavailable (code {code})"
-                )
-            return GpuMemoryReading(int(info.used), int(info.reserved), "valid")
         except RuntimeError as exc:
             return GpuMemoryReading(
-                None, None, "invalid", f"device identity unavailable: {exc}"
+                None, None, "missing", f"device identity unreadable: {exc}"
             )
+        if current_uuid != self._handle_uuid:
+            return GpuMemoryReading(None, None, "invalid", "device UUID changed")
+        if parent_uuid is not None and parent_uuid != self.device_uuid:
+            return GpuMemoryReading(None, None, "invalid", "parent device UUID changed")
+        return None
 
     def close(self) -> None:
         if not self._closed:
@@ -299,14 +304,7 @@ def _process_sample(
     observed_at_ns: int,
     interval_ms: int,
 ) -> tuple[TelemetrySample, bool]:
-    try:
-        same_process = (
-            process.is_running()
-            and int(process.create_time() * 1_000_000_000) == identity.process_start_ns
-        )
-        rss = int(process.memory_info().rss) if same_process else None
-    except psutil.Error:
-        same_process, rss = False, None
+    state, rss, detail = read_process_rss(process)
     return (
         TelemetrySample(
             run_id=run_id,
@@ -314,13 +312,31 @@ def _process_sample(
             observed_at_ns=observed_at_ns,
             metric="process_rss_bytes",
             value_bytes=rss,
-            state="valid" if rss is not None else "invalid",
+            state=state,
             source="psutil",
             interval_ms=interval_ms,
-            detail=None if rss is not None else "server process ended or restarted",
+            detail=detail,
         ),
-        same_process,
+        state != "invalid",
     )
+
+
+def read_process_rss(process: psutil.Process) -> tuple[str, int | None, str | None]:
+    """Return ``(state, rss, detail)``; only a gone or replaced process is invalid.
+
+    ``is_running`` compares the process creation time with the original, so it
+    also detects a PID that the OS reused for another process.
+    """
+    try:
+        if not process.is_running():
+            return "invalid", None, _PROCESS_ENDED_DETAIL
+        return "valid", int(process.memory_info().rss), None
+    except psutil.NoSuchProcess:  # includes ZombieProcess
+        return "invalid", None, _PROCESS_ENDED_DETAIL
+    except psutil.AccessDenied:
+        return "missing", None, "access denied reading server process memory"
+    except psutil.Error as exc:
+        return "missing", None, f"server process memory unavailable: {exc}"
 
 
 def _gpu_samples(
@@ -334,9 +350,7 @@ def _gpu_samples(
     reading = (
         source.read()
         if same_process
-        else GpuMemoryReading(
-            None, None, "invalid", "server process ended or restarted"
-        )
+        else GpuMemoryReading(None, None, "invalid", _PROCESS_ENDED_DETAIL)
     )
     prefix = "instance" if identity.gpu_instance_id else "device"
     samples = [
