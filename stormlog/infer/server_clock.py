@@ -46,6 +46,7 @@ class ServerClock:
     alignments: tuple[ClockAlignmentEvent, ...] = ()
     same_clock_uncertainty_ns: int = 0
     overridden: tuple[str, ...] = ()
+    ignored: tuple[str, ...] = ()
 
     def align(self, timestamp_ns: int) -> Placement | str:
         """Return the client-clock time and the record used, or why none applies.
@@ -168,15 +169,27 @@ def _metadata_boot_id(artifact: Mapping[str, Any]) -> object:
 
 
 def artifact_alignments(
-    records: Iterable[Mapping[str, Any]],
+    records: Iterable[Mapping[str, Any]], run_id: str
 ) -> tuple[ClockAlignmentEvent, ...]:
-    """Parse and deduplicate the ``infer.clock_alignment`` records in an artifact."""
-    events = [
-        parse_inference_record(record)
-        for record in records
-        if record.get("event_type") == ClockAlignmentEvent.EVENT_TYPE
+    """Parse the artifact's ``infer.clock_alignment`` records.
+
+    This run's records are deduplicated by the correlation resolver; records
+    that name another run follow them unresolved, so a copied calibration can
+    be reported instead of stopping the analysis. ``build_server_clock`` never
+    places samples with them.
+    """
+    alignments = [
+        event
+        for event in (
+            parse_inference_record(record)
+            for record in records
+            if record.get("event_type") == ClockAlignmentEvent.EVENT_TYPE
+        )
+        if isinstance(event, ClockAlignmentEvent)
     ]
-    return resolve_inference_events(events).alignments
+    own = [event for event in alignments if event.context.run_id == run_id]
+    foreign = tuple(event for event in alignments if event.context.run_id != run_id)
+    return resolve_inference_events(own).alignments + foreign
 
 
 def build_server_clock(
@@ -191,7 +204,8 @@ def build_server_clock(
     """Choose the clock evidence for one server domain, or say what is missing.
 
     Operator-supplied flags take precedence over artifact records for the same
-    pair of domains; the replaced records are listed in ``overridden``.
+    pair of domains; the replaced records are listed in ``overridden``. Records
+    from another run never place samples; they are listed in ``ignored``.
     """
     if offset_ns is not None and uncertainty_ns is None:
         return "clock_uncertainty_required"
@@ -206,9 +220,7 @@ def build_server_clock(
         == (server_domain, client_domain)
     )
     if offset_ns is None:
-        if not pair:
-            return "clock_alignment_required"
-        return ServerClock(server_domain, client_domain, "artifact_record", pair)
+        return _recorded_clock(run_id, server_domain, client_domain, pair)
     operator = cli_alignment(
         run_id, server_domain, client_domain, offset_ns, uncertainty_ns or 0
     )
@@ -218,6 +230,27 @@ def build_server_clock(
         "operator_supplied",
         (operator,),
         overridden=tuple(item.event_id for item in pair),
+    )
+
+
+def _recorded_clock(
+    run_id: str,
+    server_domain: str,
+    client_domain: str,
+    pair: tuple[ClockAlignmentEvent, ...],
+) -> ServerClock | str:
+    """Use this run's alignment records; a calibration from another run is ignored."""
+    own = tuple(item for item in pair if item.context.run_id == run_id)
+    if not own:
+        return (
+            "clock_alignment_from_another_run" if pair else "clock_alignment_required"
+        )
+    return ServerClock(
+        server_domain,
+        client_domain,
+        "artifact_record",
+        own,
+        ignored=tuple(item.event_id for item in pair if item not in own),
     )
 
 

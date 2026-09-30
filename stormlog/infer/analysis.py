@@ -406,11 +406,12 @@ def _server_clock(
     client_domain = client_clock_domain(artifact)
     if client_domain is None:
         return "missing_client_clock_domain"
+    run_id = str(artifact["context"].get("run_id"))
     return build_server_clock(
-        run_id=str(artifact["context"].get("run_id")),
+        run_id=run_id,
         server_domain=identity.clock_domain,
         client_domain=client_domain,
-        recorded=artifact_alignments(records),
+        recorded=artifact_alignments(records, run_id),
         offset_ns=offset_ns,
         uncertainty_ns=uncertainty_ns,
     )
@@ -440,6 +441,8 @@ def _joined(
     }
     if clock.overridden:
         joined["overridden_clock_alignments"] = list(clock.overridden)
+    if clock.ignored:
+        joined["ignored_clock_alignments"] = list(clock.ignored)
     return joined
 
 

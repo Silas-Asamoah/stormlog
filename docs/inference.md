@@ -239,7 +239,10 @@ client's. Such records are used without retyping and may carry
 a long run; each sample then uses the one record whose window covers its server
 timestamp. The flags replace records for the same pair of domains, and the
 report lists the replaced records under `overridden_clock_alignments`. The
-flags and records are validated by the same rules.
+flags and records are validated by the same rules. A record whose
+`context.run_id` differs from the client artifact's run is never used, so a
+calibration copied from another run cannot place samples; a joined report lists
+such records under `ignored_clock_alignments`.
 
 Without clock evidence the report lists server targets but does not join their
 samples to client request windows, and `telemetry.server_join.reason` says why:
@@ -251,6 +254,7 @@ samples to client request windows, and `telemetry.server_join.reason` says why:
 | `clock_domain_unverified` | Both sides have the same hostname and no boot ID |
 | `clock_alignment_uncovered` | No record's validity window covers any sample |
 | `clock_alignment_ambiguous` | Several records cover the same samples |
+| `clock_alignment_from_another_run` | The only records for these clocks name a different run ID |
 
 A joined report lists every alignment it applied in
 `telemetry.server_join.clock_alignments` (its source, `event_id`, offset,

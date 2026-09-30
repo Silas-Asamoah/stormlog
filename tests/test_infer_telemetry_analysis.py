@@ -133,11 +133,12 @@ def _alignment_record(
     valid_to_ns: int | None = None,
     from_clock_domain: str = SERVER_CLOCK,
     to_clock_domain: str = CLIENT_CLOCK,
+    run_id: str = "run-1",
 ) -> dict[str, Any]:
     """An ``infer.clock_alignment`` record, as a clock probe would append it."""
     return ClockAlignmentEvent(
         context=CorrelationContext(
-            run_id="run-1",
+            run_id=run_id,
             session_id="session-probe",
             producer_id="clock-probe",
             source="clock-probe",
@@ -703,3 +704,17 @@ def test_each_sample_keeps_its_own_alignment_uncertainty(tmp_path: Path) -> None
     }
     # 6,500 lies within 1,000 of case-b's end, so its own uncertainty excludes it.
     assert counts == {"case-a": 1, "case-b": 1}
+
+
+def test_alignment_from_another_run_never_places_samples(tmp_path: Path) -> None:
+    foreign = _alignment_record("foreign", run_id="other-run")
+    report = _aligned_report(tmp_path, [foreign], _server_sample())
+    assert report["telemetry"]["server_join"] == {
+        "status": "unjoined",
+        "reason": "clock_alignment_from_another_run",
+    }
+    own = _alignment_record("own", uncertainty_ns=5)
+    report = _aligned_report(tmp_path, [foreign, own], _server_sample())
+    join = report["telemetry"]["server_join"]
+    assert [item["event_id"] for item in join["clock_alignments"]] == ["own"]
+    assert join["ignored_clock_alignments"] == ["foreign"]
