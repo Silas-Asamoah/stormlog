@@ -100,6 +100,8 @@ Pass `--run-id` to `stormlog infer profile` when coordinating a separate
 on-host server telemetry artifact. The scoped `infer.telemetry_sample` records
 are ingested by `stormlog infer analyze --server-telemetry`; they are separate
 from the v2 execution events and do not establish request-to-iteration links.
+The join places their timestamps on the client clock through the same
+`infer.clock_alignment` records and `align_timestamp` described here.
 See [Inference Profiling](inference.md#optional-server-telemetry) for the
 identity, route, and clock requirements for a case-window memory observation.
 `load_inference_artifact` reads a stream containing both v1 and v2 records.

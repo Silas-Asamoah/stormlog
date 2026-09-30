@@ -209,6 +209,16 @@ reading that fails without evidence of a different process or GPU, such as an
 NVML error or a psutil permission error, is recorded as `missing` with a null
 value, and collection continues.
 
+Timestamps are joined through clock domains. A wall clock domain names one host
+boot, `{host}/{boot_id}/unix_epoch_ns`, because hostnames can repeat across
+machines. The client artifact records its domain in the `infer.artifact`
+context, and each telemetry record carries the collector's. Equal domains are
+one clock, so on the same host and boot no alignment is needed; a
+`--clock-uncertainty-ns` given alone is applied as given. A host that cannot
+report a boot ID gets `{host}/unix_epoch_ns`, which never counts as a shared
+clock, even with the same hostname on both sides. Artifacts written before
+domains named the boot are read with the boot ID from their `metadata`.
+
 For a profiler on another host, copy the server JSONL to the analysis host and
 provide a measured server-to-client clock offset and an uncertainty bound:
 
@@ -220,13 +230,37 @@ stormlog infer analyze artifacts/client.jsonl \
 ```
 
 `server timestamp + offset = client timestamp`. Derive the bound from a clock
-synchronization service or a two-way timestamp probe near the run. If the
-hosts or boot IDs differ, or either boot ID is unavailable, and no alignment is
-supplied, the report lists server targets
-but does not join their samples to client request windows. On the same host and
-boot, no offset is needed, and a `--clock-uncertainty-ns` you supply is applied
-as given. The uncertainty must fit inside the request window for a sample to
-count. `--direct-server` is an explicit assertion that every request in the
+synchronization service or a two-way timestamp probe near the run. Instead of
+flags, a tool can append `infer.clock_alignment` records to the client artifact
+(see [Inference execution correlation](inference_correlation.md)) with
+`from_clock_domain` set to the server's domain and `to_clock_domain` set to the
+client's. Such records are used without retyping and may carry
+`valid_from_ns`/`valid_to_ns` windows, for example to follow clock drift during
+a long run; each sample then uses the one record whose window covers its server
+timestamp. The flags replace records for the same pair of domains, and the
+report lists the replaced records under `overridden_clock_alignments`. The
+flags and records are validated by the same rules.
+
+Without clock evidence the report lists server targets but does not join their
+samples to client request windows, and `telemetry.server_join.reason` says why:
+
+| Reason | Meaning |
+| --- | --- |
+| `clock_alignment_required` | The domains differ and no flag or record connects them |
+| `clock_uncertainty_required` | `--clock-offset-ns` was given without `--clock-uncertainty-ns` |
+| `clock_domain_unverified` | Both sides have the same hostname and no boot ID |
+| `clock_alignment_uncovered` | No record's validity window covers any sample |
+| `clock_alignment_ambiguous` | Several records cover the same samples |
+
+A joined report lists every alignment it applied in
+`telemetry.server_join.clock_alignments` (its source, `event_id`, offset,
+uncertainty, window and number of samples), and counts the samples that no
+single record covered under `unaligned_samples`; those samples are left out.
+`clock_offset_ns` is set when one alignment placed every joined sample, and
+`clock_uncertainty_ns` is the largest uncertainty applied. The uncertainty must
+fit inside the request window for a sample to count.
+
+`--direct-server` is an explicit assertion that every request in the
 profile reached this one serving process. Do not use it for a load balancer that
 can route to multiple replicas. Multiple server identities or a different run ID
 prevent the case-window join; the client report is still produced, with the
