@@ -351,9 +351,9 @@ def _server_join(
     artifact = _artifact_record(records)
     if artifact is None:
         return {"status": "unjoined", "reason": "missing_run_identity"}
-    context = artifact["context"]
-    if any(sample.run_id != context.get("run_id") for sample in samples):
-        raise ValueError("server telemetry run_id does not match inference artifact")
+    run_id_issue = _run_id_issue(artifact, samples)
+    if run_id_issue is not None:
+        return run_id_issue
     identities = {sample.identity for sample in samples}
     if len(identities) != 1:
         return {"status": "unjoined", "reason": "multiple_server_identities"}
@@ -372,6 +372,22 @@ def _server_join(
         **alignment,
         "attribution": "case_window_observation_only",
         "invalidation": _invalidation(samples),
+    }
+
+
+def _run_id_issue(
+    artifact: dict[str, Any], samples: list[TelemetrySample]
+) -> dict[str, Any] | None:
+    """A different run ID leaves the server data out; the client report stays."""
+    artifact_run_id = artifact["context"].get("run_id")
+    telemetry_run_ids = sorted({sample.run_id for sample in samples})
+    if telemetry_run_ids == [artifact_run_id]:
+        return None
+    return {
+        "status": "unjoined",
+        "reason": "run_id_mismatch",
+        "artifact_run_id": artifact_run_id,
+        "telemetry_run_ids": telemetry_run_ids,
     }
 
 

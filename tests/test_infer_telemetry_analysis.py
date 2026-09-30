@@ -338,13 +338,25 @@ def test_invalid_first_poll_leaves_no_trusted_window(tmp_path: Path) -> None:
     assert memory["server_coverage"]["reason"] == "identity_invalidated"
 
 
-def test_mismatched_run_id_is_rejected(tmp_path: Path) -> None:
+def test_mismatched_run_id_leaves_client_report_intact(tmp_path: Path) -> None:
     profile = _profile(tmp_path)
     telemetry = _telemetry(
         tmp_path, "wrong-run.jsonl", _server_sample(run_id="other-run")
     )
-    with pytest.raises(ValueError, match="run_id"):
-        analyze_inference_events(profile, server_telemetry_paths=[telemetry])
+    report = analyze_inference_events(
+        profile, server_telemetry_paths=[telemetry], direct_server=True
+    )
+    assert report["telemetry"]["server_join"] == {
+        "status": "unjoined",
+        "reason": "run_id_mismatch",
+        "artifact_run_id": "run-1",
+        "telemetry_run_ids": ["other-run"],
+    }
+    memory = report["cases"]["case-a"]["memory"]
+    assert memory["peak_device_used_bytes"] == 999
+    assert memory["server_observations"] == {}
+    assert report["summary"]["successful_requests"] == 1
+    assert "unjoined (run_id_mismatch)" in format_analysis_text(report)
 
 
 def test_window_shorter_than_twice_the_uncertainty_is_reported_empty(
