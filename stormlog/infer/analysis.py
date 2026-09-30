@@ -23,11 +23,7 @@ def analyze_inference_events(
     """Analyze an inference profiling JSONL artifact."""
     records = _load_jsonl(path)
     requests, samples = _partition_inference_records(records)
-    server_samples = [
-        sample
-        for telemetry_path in server_telemetry_paths
-        for sample in load_telemetry(telemetry_path)
-    ]
+    server_samples = _load_server_samples(server_telemetry_paths)
     join = _server_join(
         records,
         server_samples,
@@ -335,6 +331,13 @@ def _partition_inference_records(
         if record.get("event_type") == "infer.system_sample"
     ]
     return requests, samples
+
+
+def _load_server_samples(paths: Iterable[str | Path]) -> list[TelemetrySample]:
+    """Load every artifact; drop exact duplicates, e.g. a file passed twice."""
+    return list(
+        dict.fromkeys(sample for path in paths for sample in load_telemetry(path))
+    )
 
 
 def _server_join(

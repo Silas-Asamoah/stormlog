@@ -421,6 +421,20 @@ def test_collector_started_late_is_partial(tmp_path: Path) -> None:
     )
 
 
+def test_same_artifact_twice_is_not_double_counted(tmp_path: Path) -> None:
+    profile = _profile(tmp_path, host="server-a")
+    telemetry = _telemetry(tmp_path, "server.jsonl", _server_sample())
+    report = analyze_inference_events(
+        profile, server_telemetry_paths=[telemetry, telemetry], direct_server=True
+    )
+    observation = report["cases"]["case-a"]["memory"]["server_observations"][
+        "device_memory_used_bytes"
+    ]
+    assert observation["valid_samples"] == 1
+    target = report["telemetry"]["server_targets"][0]
+    assert target["sample_states"]["valid"] == 1
+
+
 def test_same_host_join_honors_supplied_uncertainty(tmp_path: Path) -> None:
     report = _same_host_report(
         tmp_path, None, _server_sample(), clock_uncertainty_ns=40
