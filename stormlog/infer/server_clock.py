@@ -89,6 +89,8 @@ class SampleAlignment:
     aligned: dict[TelemetrySample, AlignedTimestamp]
     unaligned: dict[str, int]
     applied: list[dict[str, Any]]
+    # Samples no single alignment placed, with UNCOVERED or AMBIGUOUS.
+    unplaced: dict[TelemetrySample, str]
 
 
 def align_samples(
@@ -96,6 +98,7 @@ def align_samples(
 ) -> SampleAlignment:
     """Place every sample; count the ones no single alignment covers."""
     aligned: dict[TelemetrySample, AlignedTimestamp] = {}
+    unplaced: dict[TelemetrySample, str] = {}
     unaligned = {UNCOVERED: 0, AMBIGUOUS: 0}
     records: dict[int, ClockAlignmentEvent | None] = {}
     counts: dict[int, int] = {}
@@ -103,12 +106,13 @@ def align_samples(
         placement = clock.align(sample.observed_at_ns)
         if isinstance(placement, str):
             unaligned[placement] += 1
+            unplaced[sample] = placement
             continue
         aligned[sample], record = placement
         records[id(record)] = record
         counts[id(record)] = counts.get(id(record), 0) + 1
     applied = [_applied(clock, records[key], counts[key]) for key in records]
-    return SampleAlignment(aligned, unaligned, applied)
+    return SampleAlignment(aligned, unaligned, applied, unplaced)
 
 
 def _applied(
@@ -207,8 +211,9 @@ def build_server_clock(
     pair of domains; the replaced records are listed in ``overridden``. Records
     from another run never place samples; they are listed in ``ignored``.
     """
-    if offset_ns is not None and uncertainty_ns is None:
-        return "clock_uncertainty_required"
+    issue = _flag_issue(offset_ns, uncertainty_ns, server_domain == client_domain)
+    if issue is not None:
+        return issue
     if server_domain == client_domain:
         return _same_clock(
             run_id, server_domain, client_domain, offset_ns, uncertainty_ns
@@ -231,6 +236,18 @@ def build_server_clock(
         (operator,),
         overridden=tuple(item.event_id for item in pair),
     )
+
+
+def _flag_issue(
+    offset_ns: int | None, uncertainty_ns: int | None, shared_clock: bool
+) -> str | None:
+    """Reject clock flags that cannot describe this pair of clocks."""
+    if offset_ns is not None and uncertainty_ns is None:
+        return "clock_uncertainty_required"
+    if not shared_clock and offset_ns is None and uncertainty_ns is not None:
+        # An uncertainty alone describes one shared clock; never drop it silently.
+        return "clock_offset_required"
+    return None
 
 
 def _recorded_clock(
@@ -269,7 +286,8 @@ def _same_clock(
         run_id, server_domain, client_domain, offset_ns or 0, uncertainty_ns or 0
     )
     if supplied.offset_ns != 0:
-        raise ValueError("a clock offset cannot apply within one clock domain")
+        # One host and boot is one clock, so a nonzero offset contradicts it.
+        return "clock_offset_on_shared_clock"
     return ServerClock(
         server_domain,
         client_domain,

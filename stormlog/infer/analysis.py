@@ -700,6 +700,9 @@ class _ServerTimeline:
     """
 
     placed: dict[TelemetrySample, AlignedTimestamp]
+    # Samples no single alignment placed, and the offsets that placed others.
+    unplaced: dict[TelemetrySample, str]
+    offsets: tuple[int, ...]
     slack_ns: int
     first_poll_ns: int
     last_poll_ns: int
@@ -713,6 +716,8 @@ def _member_timeline(member: _Member) -> _ServerTimeline:
     invalidation = _invalidation(member.samples)
     return _ServerTimeline(
         placed=aligned,
+        unplaced=member.placed.unplaced,
+        offsets=tuple(sorted({item["offset_ns"] for item in member.placed.applied})),
         slack_ns=max(sample.interval_ms for sample in member.samples) * 1_000_000,
         first_poll_ns=min(values),
         last_poll_ns=max(values),
@@ -814,7 +819,8 @@ def _server_case_view(
     ]
     margin = _case_margin(timeline, start_ns, end_ns)
     low, high = start_ns + margin, end_ns - margin
-    coverage = _case_coverage(end_ns, low, high, bool(in_window), timeline)
+    gap = _unplaced_reason(timeline, start_ns, end_ns)
+    coverage = _case_coverage(end_ns, low, high, bool(in_window), gap, timeline)
     if coverage["status"] == "empty":
         return {}, coverage
     return _metric_summaries(samples, in_window), coverage
@@ -835,14 +841,38 @@ def _case_margin(timeline: _ServerTimeline, start_ns: int, end_ns: int) -> int:
     return min(inside or [placed.uncertainty_ns for placed in timeline.placed.values()])
 
 
+def _unplaced_reason(
+    timeline: _ServerTimeline, start_ns: int, end_ns: int
+) -> str | None:
+    """Say why a case has no samples when unplaced polls probably fell inside it.
+
+    Unplaced samples have no client time; any offset that placed other samples
+    gives the best estimate of where they would land.
+    """
+    near = [
+        reason
+        for sample, reason in timeline.unplaced.items()
+        if any(
+            start_ns <= sample.observed_at_ns + offset <= end_ns
+            for offset in timeline.offsets
+        )
+    ]
+    if not near:
+        return None
+    return f"clock_alignment_{AMBIGUOUS if AMBIGUOUS in near else UNCOVERED}"
+
+
 def _case_coverage(
     end_ns: int,
     low: int,
     high: int,
     has_samples: bool,
+    unplaced_reason: str | None,
     timeline: _ServerTimeline,
 ) -> dict[str, Any]:
-    empty_reason = _empty_reason(end_ns, low, high, has_samples, timeline)
+    empty_reason = _empty_reason(
+        end_ns, low, high, has_samples, unplaced_reason, timeline
+    )
     if empty_reason is not None:
         return {
             "status": "empty",
@@ -862,6 +892,7 @@ def _empty_reason(
     low: int,
     high: int,
     has_samples: bool,
+    unplaced_reason: str | None,
     timeline: _ServerTimeline,
 ) -> str | None:
     if high < low:
@@ -871,7 +902,7 @@ def _empty_reason(
     ):
         return "identity_invalidated"
     if not has_samples:
-        return "no_collector_coverage"
+        return unplaced_reason or "no_collector_coverage"
     return None
 
 

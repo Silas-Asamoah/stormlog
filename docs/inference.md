@@ -295,6 +295,8 @@ samples to client request windows, and `telemetry.server_join.reason` says why:
 | --- | --- |
 | `clock_alignment_required` | The domains differ and no flag or record connects them |
 | `clock_uncertainty_required` | `--clock-offset-ns` was given without `--clock-uncertainty-ns` |
+| `clock_offset_required` | `--clock-uncertainty-ns` was given alone, but the server is on another host or boot |
+| `clock_offset_on_shared_clock` | A nonzero `--clock-offset-ns` was given for one host and boot, which is one clock |
 | `clock_domain_unverified` | Both sides have the same hostname and no boot ID |
 | `clock_alignment_uncovered` | No record's validity window covers any sample |
 | `clock_alignment_ambiguous` | Several records cover the same samples |
@@ -342,6 +344,8 @@ which samples count. A `partial` or `empty` case carries a `reason`:
 | `window_shorter_than_uncertainty` | The case is shorter than twice the clock uncertainty, so no sample is certainly inside it |
 | `identity_invalidated` | The case could extend past the last poll that confirmed the server process and GPU |
 | `no_collector_coverage` | No collector poll falls inside the counted window |
+| `clock_alignment_uncovered` | Polls that likely fell in this case were not placed, because no alignment record covers them |
+| `clock_alignment_ambiguous` | Polls that likely fell in this case were not placed, because several alignment records cover them |
 | `collector_started_after_window_start` | The collector's first poll came more than one interval after the window began |
 | `collector_stopped_before_window_end` | The collector's last poll came more than one interval before the window ended |
 
