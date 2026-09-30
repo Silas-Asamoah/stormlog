@@ -5,14 +5,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
+import threading
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from .analysis import analyze_inference_events, format_analysis_text
 from .config import ProfileConfig, parse_int_list, resolve_endpoint
 from .profile import run_profile
-from .server_collector import collect_server_telemetry
+from .server_collector import (
+    STOP_GPU_IDENTITY_CHANGED,
+    STOP_SERVER_PROCESS_ENDED,
+    CollectionResult,
+    collect_server_telemetry,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -230,14 +237,25 @@ def build_parser() -> argparse.ArgumentParser:
         "collect-server",
         help="Collect scoped process and NVML memory on the inference host",
     )
-    collector_parser.add_argument("--run-id", required=True)
+    collector_parser.add_argument(
+        "--run-id", required=True, help="Run ID also passed to `infer profile`"
+    )
     collector_parser.add_argument("--pid", required=True, type=int)
-    collector_parser.add_argument("--output", required=True)
-    collector_parser.add_argument("--interval", type=float, default=0.1)
-    collector_parser.add_argument("--duration", type=float, default=None)
+    collector_parser.add_argument("--output", required=True, help="JSONL path")
+    collector_parser.add_argument(
+        "--interval", type=float, default=0.1, help="Seconds between polls"
+    )
+    collector_parser.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        help="Stop after this many seconds (default: until Ctrl+C or SIGTERM)",
+    )
     collector_parser.add_argument("--device-index", type=int, default=0)
     collector_parser.add_argument("--device-uuid", default=None)
-    collector_parser.add_argument("--no-gpu", action="store_true")
+    collector_parser.add_argument(
+        "--no-gpu", action="store_true", help="Collect process RSS only"
+    )
     collector_parser.add_argument("--replica-id", default=None)
     collector_parser.add_argument("--rank", type=int, default=None)
     return parser
@@ -318,20 +336,66 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 def cmd_collect_server(args: argparse.Namespace) -> int:
     """Collect telemetry on the server while a profile uses the same run ID."""
-    count = collect_server_telemetry(
-        run_id=args.run_id,
-        pid=args.pid,
-        output_path=args.output,
-        interval_seconds=args.interval,
-        duration_seconds=args.duration,
-        device_index=args.device_index,
-        device_uuid=args.device_uuid,
-        no_gpu=args.no_gpu,
-        replica_id=args.replica_id,
-        rank=args.rank,
+    stop_event = threading.Event()
+    previous_handlers = _stop_on_signals(stop_event)
+    try:
+        result = collect_server_telemetry(
+            run_id=args.run_id,
+            pid=args.pid,
+            output_path=args.output,
+            interval_seconds=args.interval,
+            duration_seconds=args.duration,
+            device_index=args.device_index,
+            device_uuid=args.device_uuid,
+            no_gpu=args.no_gpu,
+            replica_id=args.replica_id,
+            rank=args.rank,
+            stop_event=stop_event,
+        )
+    finally:
+        _restore_signal_handlers(previous_handlers)
+    print(
+        f"Collected {result.polls} server polls to: {Path(args.output)} "
+        f"(stopped: {result.stop_reason})"
     )
-    print(f"Collected {count} server polls to: {Path(args.output)}")
+    return _collection_exit_code(result)
+
+
+def _collection_exit_code(result: CollectionResult) -> int:
+    if result.stop_reason == STOP_GPU_IDENTITY_CHANGED:
+        print(
+            f"Error: GPU identity changed ({result.detail}); later polls were "
+            "not recorded and later case windows will not be joined",
+            file=sys.stderr,
+        )
+        return 1
+    if result.stop_reason == STOP_SERVER_PROCESS_ENDED:
+        _print_warning(
+            f"{result.detail}; case windows that extend past the last "
+            "confirmed poll will not be joined"
+        )
     return 0
+
+
+def _print_warning(message: str) -> None:
+    print(f"Warning: {message}", file=sys.stderr)
+
+
+def _stop_on_signals(stop_event: threading.Event) -> dict[int, Any]:
+    """Turn Ctrl+C and SIGTERM into a clean stop instead of a traceback."""
+    if threading.current_thread() is not threading.main_thread():
+        return {}
+    previous: dict[int, Any] = {}
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous[signum] = signal.signal(
+            signum, lambda _signum, _frame: stop_event.set()
+        )
+    return previous
+
+
+def _restore_signal_handlers(previous: dict[int, Any]) -> None:
+    for signum, handler in previous.items():
+        signal.signal(signum, handler)
 
 
 def _validate_profile_arguments(args: argparse.Namespace) -> None:

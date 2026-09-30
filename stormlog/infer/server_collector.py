@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 import socket
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +16,11 @@ import psutil
 
 from .host_clock import host_boot_id
 from .telemetry import ServerIdentity, TelemetrySample
+
+STOP_DURATION_ELAPSED = "duration_elapsed"
+STOP_REQUESTED = "stop_requested"
+STOP_SERVER_PROCESS_ENDED = "server_process_ended"
+STOP_GPU_IDENTITY_CHANGED = "gpu_identity_changed"
 
 _PROCESS_ENDED_DETAIL = "server process ended or its PID was reused"
 
@@ -99,6 +106,15 @@ class GpuMemoryReading:
     used_bytes: int | None
     reserved_bytes: int | None
     state: str
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class CollectionResult:
+    """How many polls a collection wrote and why it stopped."""
+
+    polls: int
+    stop_reason: str
     detail: str | None = None
 
 
@@ -189,41 +205,34 @@ def collect_server_telemetry(
     replica_id: str | None = None,
     rank: int | None = None,
     gpu_source: GpuMemorySource | None = None,
-) -> int:
-    """Sample a live server process; stop on process or GPU identity change."""
-    _validate_collection_options(
-        run_id, pid, interval_seconds, duration_seconds, no_gpu, device_uuid, gpu_source
-    )
+    stop_event: threading.Event | None = None,
+) -> CollectionResult:
+    """Sample a live server process until the duration, a stop, or a change.
+
+    Collection stops when ``stop_event`` is set or the caller is interrupted,
+    when the duration elapses, when the process ends, or when the GPU identity
+    changes. The result says which, so callers can tell a clean stop from one
+    that leaves later case windows unobserved.
+    """
+    _validate_collection_options(run_id, pid, no_gpu, device_uuid, gpu_source)
+    _validate_timing(interval_seconds, duration_seconds)
     process = psutil.Process(pid)
     if not process.is_running():
         raise ValueError("server process is not running")
-    start_ns = int(process.create_time() * 1_000_000_000)
-    own_source = gpu_source is None and not no_gpu
-    source = gpu_source or (
-        NvmlMemorySource(device_index=device_index, expected_uuid=device_uuid)
-        if not no_gpu
-        else None
-    )
+    source, own_source = _gpu_source(gpu_source, no_gpu, device_index, device_uuid)
     try:
-        identity = ServerIdentity(
-            host=socket.gethostname(),
-            pid=pid,
-            process_start_ns=start_ns,
-            device_uuid=source.device_uuid if source else None,
-            gpu_instance_id=source.gpu_instance_id if source else None,
-            replica_id=replica_id,
-            rank=rank,
-            boot_id=host_boot_id(),
-        )
-        return _collect_loop(
+        identity = _server_identity(process, source, replica_id, rank)
+        polls, stop_reason, detail = _collect_loop(
             run_id,
             process,
             identity,
             source,
-            output_path,
+            Path(output_path),
             interval_seconds,
             duration_seconds,
+            stop_event or threading.Event(),
         )
+        return CollectionResult(polls, stop_reason, detail)
     finally:
         if own_source and source:
             source.close()
@@ -232,18 +241,54 @@ def collect_server_telemetry(
 def _validate_collection_options(
     run_id: str,
     pid: int,
-    interval_seconds: float,
-    duration_seconds: float | None,
     no_gpu: bool,
     device_uuid: str | None,
     gpu_source: GpuMemorySource | None,
 ) -> None:
-    if not run_id or pid <= 0 or interval_seconds < 0.01:
-        raise ValueError("run_id, positive pid, and interval >= 0.01s are required")
-    if duration_seconds is not None and duration_seconds <= 0:
-        raise ValueError("duration must be positive")
+    if not run_id or pid <= 0:
+        raise ValueError("run_id and a positive pid are required")
     if no_gpu and (device_uuid or gpu_source):
         raise ValueError("--no-gpu cannot be combined with a GPU source")
+
+
+def _validate_timing(interval_seconds: float, duration_seconds: float | None) -> None:
+    # NaN compares false with everything, so check finiteness explicitly.
+    if not math.isfinite(interval_seconds) or interval_seconds < 0.01:
+        raise ValueError("interval must be a finite number of seconds >= 0.01")
+    if duration_seconds is not None and (
+        not math.isfinite(duration_seconds) or duration_seconds <= 0
+    ):
+        raise ValueError("duration must be a finite, positive number of seconds")
+
+
+def _gpu_source(
+    gpu_source: GpuMemorySource | None,
+    no_gpu: bool,
+    device_index: int,
+    device_uuid: str | None,
+) -> tuple[GpuMemorySource | None, bool]:
+    """Return the GPU source and whether this collection owns (closes) it."""
+    if gpu_source is not None or no_gpu:
+        return gpu_source, False
+    return NvmlMemorySource(device_index=device_index, expected_uuid=device_uuid), True
+
+
+def _server_identity(
+    process: psutil.Process,
+    source: GpuMemorySource | None,
+    replica_id: str | None,
+    rank: int | None,
+) -> ServerIdentity:
+    return ServerIdentity(
+        host=socket.gethostname(),
+        pid=process.pid,
+        process_start_ns=int(process.create_time() * 1_000_000_000),
+        device_uuid=source.device_uuid if source else None,
+        gpu_instance_id=source.gpu_instance_id if source else None,
+        replica_id=replica_id,
+        rank=rank,
+        boot_id=host_boot_id(),
+    )
 
 
 def _collect_loop(
@@ -251,29 +296,60 @@ def _collect_loop(
     process: psutil.Process,
     identity: ServerIdentity,
     source: GpuMemorySource | None,
-    output_path: str | Path,
+    path: Path,
     interval_seconds: float,
     duration_seconds: float | None,
-) -> int:
-    path = Path(output_path)
+    stop_event: threading.Event,
+) -> tuple[int, str, str | None]:
     path.parent.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + duration_seconds if duration_seconds else None
-    next_poll = time.monotonic()
-    count = 0
+    started = time.monotonic()
+    deadline = None if duration_seconds is None else started + duration_seconds
+    next_poll = started
+    interval_ms = round(interval_seconds * 1000)
+    polls = 0
     with path.open("w", encoding="utf-8") as handle:
-        while deadline is None or time.monotonic() < deadline:
-            time.sleep(max(0, next_poll - time.monotonic()))
-            next_poll += interval_seconds
-            samples, stop = _poll_records(
-                run_id, process, identity, source, round(interval_seconds * 1000)
-            )
-            for sample in samples:
-                handle.write(json.dumps(sample.to_record(), sort_keys=True) + "\n")
-            handle.flush()
-            count += 1
-            if stop:
-                break
-    return count
+        try:
+            while True:
+                waited = _wait_for_poll(stop_event, next_poll, deadline)
+                if waited is not None:
+                    return polls, waited, None
+                samples, stop = _poll_records(
+                    run_id, process, identity, source, interval_ms
+                )
+                # One write per poll keeps each poll's lines together on disk.
+                handle.write(
+                    "".join(
+                        json.dumps(sample.to_record(), sort_keys=True) + "\n"
+                        for sample in samples
+                    )
+                )
+                handle.flush()
+                polls += 1
+                if stop is not None:
+                    return polls, stop[0], stop[1]
+                next_poll = next_poll_time(
+                    next_poll, interval_seconds, time.monotonic()
+                )
+        except KeyboardInterrupt:
+            return polls, STOP_REQUESTED, "interrupted"
+
+
+def _wait_for_poll(
+    stop_event: threading.Event, next_poll: float, deadline: float | None
+) -> str | None:
+    """Sleep until the next poll; return a stop reason if collection should end."""
+    wake = next_poll if deadline is None else min(next_poll, deadline)
+    if stop_event.wait(max(0.0, wake - time.monotonic())):
+        return STOP_REQUESTED
+    if deadline is not None and time.monotonic() >= deadline:
+        return STOP_DURATION_ELAPSED
+    return None
+
+
+def next_poll_time(previous: float, interval: float, now: float) -> float:
+    """Keep a steady cadence, but skip missed polls instead of bursting."""
+    scheduled = previous + interval
+    return scheduled if scheduled > now else now + interval
 
 
 def _poll_records(
@@ -282,19 +358,34 @@ def _poll_records(
     identity: ServerIdentity,
     source: GpuMemorySource | None,
     interval_ms: int,
-) -> tuple[list[TelemetrySample], bool]:
+) -> tuple[list[TelemetrySample], tuple[str, str | None] | None]:
     observed_at_ns = time.time_ns()
-    process_sample, same_process = _process_sample(
+    process_sample = _process_sample(
         run_id, process, identity, observed_at_ns, interval_ms
     )
     samples = [process_sample]
-    gpu_invalid = False
     if source:
-        gpu_samples, gpu_invalid = _gpu_samples(
-            run_id, identity, source, same_process, observed_at_ns, interval_ms
+        samples.extend(
+            _gpu_samples(
+                run_id,
+                identity,
+                source,
+                process_sample.state == "invalid",
+                observed_at_ns,
+                interval_ms,
+            )
         )
-        samples.extend(gpu_samples)
-    return samples, not same_process or gpu_invalid
+    return samples, _stop_reason(samples)
+
+
+def _stop_reason(samples: list[TelemetrySample]) -> tuple[str, str | None] | None:
+    process_sample = samples[0]
+    if process_sample.state == "invalid":
+        return STOP_SERVER_PROCESS_ENDED, process_sample.detail
+    changed = next((s for s in samples[1:] if s.state == "invalid"), None)
+    if changed is not None:
+        return STOP_GPU_IDENTITY_CHANGED, changed.detail
+    return None
 
 
 def _process_sample(
@@ -303,21 +394,18 @@ def _process_sample(
     identity: ServerIdentity,
     observed_at_ns: int,
     interval_ms: int,
-) -> tuple[TelemetrySample, bool]:
+) -> TelemetrySample:
     state, rss, detail = read_process_rss(process)
-    return (
-        TelemetrySample(
-            run_id=run_id,
-            identity=identity,
-            observed_at_ns=observed_at_ns,
-            metric="process_rss_bytes",
-            value_bytes=rss,
-            state=state,
-            source="psutil",
-            interval_ms=interval_ms,
-            detail=detail,
-        ),
-        state != "invalid",
+    return TelemetrySample(
+        run_id=run_id,
+        identity=identity,
+        observed_at_ns=observed_at_ns,
+        metric="process_rss_bytes",
+        value_bytes=rss,
+        state=state,
+        source="psutil",
+        interval_ms=interval_ms,
+        detail=detail,
     )
 
 
@@ -343,17 +431,17 @@ def _gpu_samples(
     run_id: str,
     identity: ServerIdentity,
     source: GpuMemorySource,
-    same_process: bool,
+    process_ended: bool,
     observed_at_ns: int,
     interval_ms: int,
-) -> tuple[list[TelemetrySample], bool]:
+) -> list[TelemetrySample]:
     reading = (
-        source.read()
-        if same_process
-        else GpuMemoryReading(None, None, "invalid", _PROCESS_ENDED_DETAIL)
+        GpuMemoryReading(None, None, "invalid", _PROCESS_ENDED_DETAIL)
+        if process_ended
+        else source.read()
     )
     prefix = "instance" if identity.gpu_instance_id else "device"
-    samples = [
+    return [
         TelemetrySample(
             run_id=run_id,
             identity=identity,
@@ -370,4 +458,3 @@ def _gpu_samples(
             ("reserved", reading.reserved_bytes),
         )
     ]
-    return samples, reading.state == "invalid"

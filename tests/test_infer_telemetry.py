@@ -2,20 +2,36 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import math
 import os
+import signal
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
+from unittest import mock
 
 import psutil
 import pytest
 from jsonschema import Draft202012Validator
 
+from stormlog.infer.cli import main as infer_main
 from stormlog.infer.server_collector import (
+    STOP_DURATION_ELAPSED,
+    STOP_GPU_IDENTITY_CHANGED,
+    STOP_REQUESTED,
+    STOP_SERVER_PROCESS_ENDED,
+    CollectionResult,
     GpuMemoryReading,
     NvmlMemorySource,
     collect_server_telemetry,
+    next_poll_time,
     read_process_rss,
 )
 from stormlog.infer.telemetry import ServerIdentity, TelemetrySample, load_telemetry
@@ -159,7 +175,7 @@ def test_on_host_collector_writes_process_and_gpu_with_same_identity(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "server.jsonl"
-    count = collect_server_telemetry(
+    result = collect_server_telemetry(
         run_id="run-live",
         pid=os.getpid(),
         output_path=path,
@@ -167,8 +183,9 @@ def test_on_host_collector_writes_process_and_gpu_with_same_identity(
         duration_seconds=0.025,
         gpu_source=_FakeGpu(),
     )
+    assert result.stop_reason == STOP_DURATION_ELAPSED
     samples = load_telemetry(path)
-    assert len(samples) == count * 3
+    assert len(samples) == result.polls * 3
     assert {sample.metric for sample in samples} == {
         "process_rss_bytes",
         "device_memory_used_bytes",
@@ -199,7 +216,7 @@ def test_on_host_collector_emits_missing_nvml_counter(tmp_path: Path) -> None:
 
 def test_on_host_collector_stops_after_gpu_identity_failure(tmp_path: Path) -> None:
     path = tmp_path / "changed.jsonl"
-    count = collect_server_telemetry(
+    result = collect_server_telemetry(
         run_id="run-live",
         pid=os.getpid(),
         output_path=path,
@@ -209,7 +226,9 @@ def test_on_host_collector_stops_after_gpu_identity_failure(tmp_path: Path) -> N
             GpuMemoryReading(None, None, "invalid", "device UUID changed")
         ),
     )
-    assert count == 1
+    assert result == CollectionResult(
+        polls=1, stop_reason=STOP_GPU_IDENTITY_CHANGED, detail="device UUID changed"
+    )
     samples = load_telemetry(path)
     assert [s.state for s in samples] == ["valid", "invalid", "invalid"]
     _assert_schema_valid(samples)
@@ -223,7 +242,7 @@ def test_access_denied_is_missing_and_collection_continues(
 
     monkeypatch.setattr(psutil.Process, "memory_info", deny)
     path = tmp_path / "denied.jsonl"
-    count = collect_server_telemetry(
+    result = collect_server_telemetry(
         run_id="run-live",
         pid=os.getpid(),
         output_path=path,
@@ -231,13 +250,115 @@ def test_access_denied_is_missing_and_collection_continues(
         duration_seconds=0.06,
         gpu_source=_FakeGpu(),
     )
-    assert count >= 2
+    assert result.stop_reason == STOP_DURATION_ELAPSED
+    assert result.polls >= 2
     samples = load_telemetry(path)
     rss = [s for s in samples if s.metric == "process_rss_bytes"]
     assert {s.state for s in rss} == {"missing"}
     assert {s.detail for s in rss} == {"access denied reading server process memory"}
     assert {s.state for s in samples if s.scope == "gpu_device"} == {"valid"}
     _assert_schema_valid(samples)
+
+
+def test_collector_stops_cleanly_when_the_server_process_ends(tmp_path: Path) -> None:
+    server = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+    def stop_server() -> None:
+        server.terminate()
+        server.wait()
+
+    timer = threading.Timer(0.3, stop_server)
+    path = tmp_path / "ended.jsonl"
+    try:
+        timer.start()
+        result = collect_server_telemetry(
+            run_id="run-live",
+            pid=server.pid,
+            output_path=path,
+            interval_seconds=0.02,
+            duration_seconds=20,
+            no_gpu=True,
+        )
+    finally:
+        timer.cancel()
+        server.kill()
+        server.wait()
+    assert result.stop_reason == STOP_SERVER_PROCESS_ENDED
+    samples = load_telemetry(path)
+    assert len(samples) == result.polls
+    assert samples[-1].state == "invalid"
+    assert samples[-1].detail == "server process ended or its PID was reused"
+    assert {s.state for s in samples[:-1]} == {"valid"}
+
+
+def test_stop_event_ends_collection_as_a_requested_stop(tmp_path: Path) -> None:
+    stop_event = threading.Event()
+
+    def stop_after_second_read(reads: int) -> None:
+        if reads == 2:
+            stop_event.set()
+
+    path = tmp_path / "stopped.jsonl"
+    result = collect_server_telemetry(
+        run_id="run-live",
+        pid=os.getpid(),
+        output_path=path,
+        interval_seconds=0.01,
+        gpu_source=_FakeGpu(on_read=stop_after_second_read),
+        stop_event=stop_event,
+    )
+    assert (result.polls, result.stop_reason) == (2, STOP_REQUESTED)
+    assert len(load_telemetry(path)) == 6
+
+
+def test_interrupt_keeps_every_completed_poll_readable(tmp_path: Path) -> None:
+    def interrupt_on_third_read(reads: int) -> None:
+        if reads == 3:
+            raise KeyboardInterrupt
+
+    path = tmp_path / "interrupted.jsonl"
+    result = collect_server_telemetry(
+        run_id="run-live",
+        pid=os.getpid(),
+        output_path=path,
+        interval_seconds=0.01,
+        gpu_source=_FakeGpu(on_read=interrupt_on_third_read),
+    )
+    assert result == CollectionResult(2, STOP_REQUESTED, "interrupted")
+    assert len(load_telemetry(path)) == 6
+
+
+@pytest.mark.parametrize(
+    ("interval", "duration"),
+    [
+        (math.nan, None),
+        (math.inf, None),
+        (0.005, None),
+        (0.1, math.nan),
+        (0.1, math.inf),
+        (0.1, 0.0),
+    ],
+)
+def test_non_finite_or_invalid_timing_is_rejected_before_writing(
+    tmp_path: Path, interval: float, duration: float | None
+) -> None:
+    path = tmp_path / "never.jsonl"
+    with pytest.raises(ValueError):
+        collect_server_telemetry(
+            run_id="run-live",
+            pid=os.getpid(),
+            output_path=path,
+            interval_seconds=interval,
+            duration_seconds=duration,
+            gpu_source=_FakeGpu(),
+        )
+    assert not path.exists()
+
+
+def test_poll_schedule_skips_missed_polls_instead_of_bursting() -> None:
+    assert next_poll_time(10.0, 0.1, now=10.05) == pytest.approx(10.1)
+    # A 3 s stall schedules one poll an interval later, not 30 catch-up polls.
+    assert next_poll_time(10.0, 0.1, now=13.0) == pytest.approx(13.1)
 
 
 class _Process:
@@ -340,3 +461,61 @@ def test_failed_nvml_memory_read_is_missing() -> None:
     reading = _nvml_source(library).read()
     assert reading.state == "missing"
     assert reading.used_bytes is None
+
+
+def _run_collect_cli(
+    result_factory: Callable[..., CollectionResult],
+) -> tuple[int, str, str]:
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with mock.patch(
+        "stormlog.infer.cli.collect_server_telemetry", side_effect=result_factory
+    ):
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = infer_main(
+                ["collect-server", "--run-id", "r", "--pid", "1", "--output", "o"]
+            )
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+def test_collect_cli_reports_why_collection_stopped() -> None:
+    code, stdout, stderr = _run_collect_cli(
+        lambda **_: CollectionResult(4, STOP_DURATION_ELAPSED)
+    )
+    assert code == 0
+    assert "Collected 4 server polls to: o (stopped: duration_elapsed)" in stdout
+    assert stderr == ""
+
+
+def test_collect_cli_fails_when_the_gpu_identity_changed() -> None:
+    code, stdout, stderr = _run_collect_cli(
+        lambda **_: CollectionResult(3, STOP_GPU_IDENTITY_CHANGED, "device changed")
+    )
+    assert code == 1
+    assert "(stopped: gpu_identity_changed)" in stdout
+    assert "Error: GPU identity changed (device changed)" in stderr
+
+
+def test_collect_cli_warns_when_the_server_process_ended() -> None:
+    code, _stdout, stderr = _run_collect_cli(
+        lambda **_: CollectionResult(9, STOP_SERVER_PROCESS_ENDED, "server ended")
+    )
+    assert code == 0
+    assert "Warning: server ended; case windows that extend past" in stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal delivery")
+def test_collect_cli_turns_ctrl_c_into_a_clean_stop() -> None:
+    before = signal.getsignal(signal.SIGINT)
+
+    def collect(*, stop_event: threading.Event, **_options: object) -> CollectionResult:
+        os.kill(os.getpid(), signal.SIGINT)
+        deadline = time.monotonic() + 5
+        while not stop_event.is_set() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert stop_event.is_set()
+        return CollectionResult(2, STOP_REQUESTED)
+
+    code, stdout, _stderr = _run_collect_cli(collect)
+    assert code == 0
+    assert "(stopped: stop_requested)" in stdout
+    assert signal.getsignal(signal.SIGINT) is before
