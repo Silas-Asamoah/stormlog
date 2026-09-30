@@ -421,13 +421,12 @@ def align_timestamp(
         raise ValueError("timestamp_ns must be non-negative")
     if from_clock_domain == to_clock_domain:
         return AlignedTimestamp(timestamp_ns, 0, to_clock_domain)
-    matches = [
-        item
-        for item in alignments
-        if item.from_clock_domain == from_clock_domain
-        and item.to_clock_domain == to_clock_domain
-        and _alignment_covers(item, timestamp_ns)
-    ]
+    matches = covering_alignments(
+        timestamp_ns,
+        from_clock_domain=from_clock_domain,
+        to_clock_domain=to_clock_domain,
+        alignments=alignments,
+    )
     if len(matches) != 1:
         raise ValueError("no valid clock alignment or multiple ambiguous alignments")
     alignment = matches[0]
@@ -436,6 +435,27 @@ def align_timestamp(
         alignment.uncertainty_ns,
         to_clock_domain,
     )
+
+
+def covering_alignments(
+    timestamp_ns: int,
+    *,
+    from_clock_domain: str,
+    to_clock_domain: str,
+    alignments: Iterable[ClockAlignmentEvent],
+) -> list[ClockAlignmentEvent]:
+    """Return the alignments whose domains and validity window cover a timestamp.
+
+    ``align_timestamp`` needs exactly one; callers can use the count to tell a
+    missing alignment from an ambiguous one.
+    """
+    return [
+        item
+        for item in alignments
+        if item.from_clock_domain == from_clock_domain
+        and item.to_clock_domain == to_clock_domain
+        and _alignment_covers(item, timestamp_ns)
+    ]
 
 
 def _alignment_covers(alignment: ClockAlignmentEvent, timestamp_ns: int) -> bool:
@@ -456,6 +476,7 @@ __all__ = [
     "UnresolvedReference",
     "account_gpu_time",
     "align_timestamp",
+    "covering_alignments",
     "resolve_inference_events",
     "validate_request_shares",
 ]

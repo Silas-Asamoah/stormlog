@@ -19,6 +19,7 @@ from stormlog.infer.correlation_events import (
     ArtifactIdentityEvent,
     load_inference_artifact,
 )
+from stormlog.infer.host_clock import wall_clock_domain
 from stormlog.infer.openai_client import (
     ChatCompletionResult,
     OpenAIChatCompletionsClient,
@@ -243,6 +244,13 @@ class InferenceProfileTests(unittest.TestCase):
                 self.assertEqual(len(artifact_identity), 1)
                 self.assertEqual(artifact_identity[0]["schema_version"], 2)
                 self.assertIn("boot_id", artifact_identity[0]["metadata"])
+                context = artifact_identity[0]["context"]
+                self.assertEqual(
+                    context["clock_domain"],
+                    wall_clock_domain(
+                        context["host"], artifact_identity[0]["metadata"]["boot_id"]
+                    ),
+                )
                 self.assertEqual(
                     artifact_identity[0]["context"]["session_id"], session_id
                 )

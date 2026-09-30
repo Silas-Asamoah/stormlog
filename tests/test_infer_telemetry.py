@@ -23,6 +23,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from stormlog.infer.cli import main as infer_main
+from stormlog.infer.host_clock import is_boot_qualified, wall_clock_domain
 from stormlog.infer.server_collector import (
     STOP_DURATION_ELAPSED,
     STOP_GPU_IDENTITY_CHANGED,
@@ -37,7 +38,12 @@ from stormlog.infer.server_collector import (
     next_poll_time,
     read_process_rss,
 )
-from stormlog.infer.telemetry import ServerIdentity, TelemetrySample, load_telemetry
+from stormlog.infer.telemetry import (
+    ServerIdentity,
+    TelemetrySample,
+    load_telemetry,
+    validate_group_membership,
+)
 
 SCHEMA = json.loads(
     (
@@ -170,6 +176,8 @@ def _drop(key: str) -> Callable[[dict[str, Any]], None]:
         _set_identity(replica_id=""),
         _set_identity(device_uuid=None),
         _set_identity(device_uuid=None, gpu_instance_id="MIG-a"),
+        _set_identity(group_id="tp", rank=0, world_size=None),
+        _set_identity(world_size=2),
         _set(
             metric="instance_memory_used_bytes",
             scope="gpu_instance",
@@ -197,6 +205,33 @@ def test_schema_rejects_what_the_loader_rejects(
 def test_schema_lists_every_record_field(field: str) -> None:
     # Every dataclass field is written to the record, so the schema must list it.
     assert field in SCHEMA["properties"]
+
+
+def test_clock_domain_names_the_host_boot() -> None:
+    booted = _sample(identity=_identity(boot_id="boot-1"))
+    record = booted.to_record()
+    assert record["clock_domain"] == "server-a/boot-1/unix_epoch_ns"
+    assert TelemetrySample.from_record(record) == booted
+    assert _sample().to_record()["clock_domain"] == "server-a/unix_epoch_ns"
+    # A hostname-only domain no longer matches an identity that has a boot ID.
+    record["clock_domain"] = "server-a/unix_epoch_ns"
+    with pytest.raises(ValueError, match="clock domain"):
+        TelemetrySample.from_record(record)
+    _assert_schema_valid([booted])
+
+
+@pytest.mark.parametrize("changes", [{"host": "rack/a"}, {"boot_id": "boot/1"}])
+def test_identity_parts_cannot_split_the_clock_domain(changes: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match="cannot contain '/'"):
+        _identity(**changes)
+
+
+def test_only_boot_qualified_domains_can_prove_one_clock() -> None:
+    assert wall_clock_domain("host", "boot") == "host/boot/unix_epoch_ns"
+    assert wall_clock_domain("host", None) == "host/unix_epoch_ns"
+    assert is_boot_qualified("host/boot/unix_epoch_ns")
+    assert not is_boot_qualified("host/unix_epoch_ns")
+    assert not is_boot_qualified("worker-a/monotonic")
 
 
 def test_instance_metric_requires_instance_identity() -> None:
@@ -567,7 +602,7 @@ def test_compute_process_query_grows_the_buffer() -> None:
 
 
 def _run_collect_cli(
-    result_factory: Callable[..., CollectionResult],
+    result_factory: Callable[..., CollectionResult], *extra: str
 ) -> tuple[int, str, str]:
     stdout, stderr = io.StringIO(), io.StringIO()
     with mock.patch(
@@ -575,7 +610,16 @@ def _run_collect_cli(
     ):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = infer_main(
-                ["collect-server", "--run-id", "r", "--pid", "1", "--output", "o"]
+                [
+                    "collect-server",
+                    "--run-id",
+                    "r",
+                    "--pid",
+                    "1",
+                    "--output",
+                    "o",
+                    *extra,
+                ]
             )
     return code, stdout.getvalue(), stderr.getvalue()
 
@@ -622,3 +666,79 @@ def test_collect_cli_turns_ctrl_c_into_a_clean_stop() -> None:
     assert code == 0
     assert "(stopped: stop_requested)" in stdout
     assert signal.getsignal(signal.SIGINT) is before
+
+
+@pytest.mark.parametrize(
+    ("group_id", "rank", "world_size", "message"),
+    [
+        (None, None, 2, "world_size requires group_id"),
+        ("", 0, 2, "group_id must be a non-empty string"),
+        ("tp", 0, 0, "positive world_size"),
+        ("tp", None, 2, "rank below world_size"),
+        ("tp", 2, 2, "rank below world_size"),
+    ],
+)
+def test_group_members_need_a_rank_within_the_world_size(
+    tmp_path: Path,
+    group_id: str | None,
+    rank: int | None,
+    world_size: int | None,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        validate_group_membership(group_id, rank, world_size)
+    path = tmp_path / "never.jsonl"
+    with pytest.raises(ValueError, match=message):
+        collect_server_telemetry(
+            run_id="run-live",
+            pid=os.getpid(),
+            output_path=path,
+            rank=rank,
+            group_id=group_id,
+            world_size=world_size,
+            gpu_source=_FakeGpu(),
+        )
+    assert not path.exists()
+
+
+def test_collector_records_group_membership(tmp_path: Path) -> None:
+    path = tmp_path / "member.jsonl"
+    collect_server_telemetry(
+        run_id="run-live",
+        pid=os.getpid(),
+        output_path=path,
+        interval_seconds=0.01,
+        duration_seconds=0.015,
+        rank=1,
+        group_id="tp",
+        world_size=2,
+        gpu_source=_FakeGpu(),
+    )
+    samples = load_telemetry(path)
+    assert {
+        (s.identity.group_id, s.identity.rank, s.identity.world_size) for s in samples
+    } == {("tp", 1, 2)}
+    _assert_schema_valid(samples)
+
+
+def test_collect_cli_passes_group_flags() -> None:
+    seen: dict[str, Any] = {}
+
+    def collect(**options: Any) -> CollectionResult:
+        seen.update(options)
+        return CollectionResult(1, STOP_DURATION_ELAPSED)
+
+    code, _stdout, _stderr = _run_collect_cli(
+        collect, "--group-id", "tp", "--rank", "1", "--world-size", "2"
+    )
+    assert code == 0
+    assert (seen["group_id"], seen["rank"], seen["world_size"]) == ("tp", 1, 2)
+
+
+def test_records_written_before_groups_stay_valid() -> None:
+    # Group fields are optional in v1: older artifacts omit them entirely.
+    sample = _sample()
+    record = sample.to_record()
+    del record["identity"]["group_id"], record["identity"]["world_size"]
+    Draft202012Validator(SCHEMA).validate(record)
+    assert TelemetrySample.from_record(record) == sample

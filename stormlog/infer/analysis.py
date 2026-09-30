@@ -9,6 +9,19 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, TypeGuard
 
+from .correlation_accounting import AlignedTimestamp
+from .server_clock import (
+    AMBIGUOUS,
+    UNCOVERED,
+    SampleAlignment,
+    ServerClock,
+    align_samples,
+    artifact_alignments,
+    build_server_clock,
+    client_clock_domain,
+)
+from .server_group import members as group_members
+from .server_group import membership_issue
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
 
 
@@ -24,14 +37,14 @@ def analyze_inference_events(
     records = _load_jsonl(path)
     requests, samples = _partition_inference_records(records)
     server_samples = _load_server_samples(server_telemetry_paths)
-    join = _server_join(
+    join, members = _server_join(
         records,
         server_samples,
         direct_server=direct_server,
         clock_offset_ns=clock_offset_ns,
         clock_uncertainty_ns=clock_uncertainty_ns,
     )
-    timeline = _server_timeline(server_samples, join)
+    timelines = [(member, _member_timeline(member)) for member in members]
     ok_requests = [record for record in requests if record.get("status") == "ok"]
 
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -45,12 +58,10 @@ def analyze_inference_events(
             case_requests,
             samples=_samples_for_request_window(samples, case_requests),
         )
-        observations, coverage = _server_case_view(
-            server_samples, case_requests, timeline
+        cases[case_id]["memory"].update(
+            _server_case_memory(timelines, case_requests, "group" in join)
         )
-        cases[case_id]["memory"]["server_observations"] = observations
-        cases[case_id]["memory"]["server_coverage"] = coverage
-    if timeline is not None:
+    if timelines:
         join["case_coverage"] = _coverage_counts(cases)
     failed = [record for record in requests if record.get("status") != "ok"]
     return {
@@ -112,13 +123,30 @@ def _joined_status_lines(join: dict[str, Any]) -> list[str]:
             f"Server coverage: {counts.get('observed', 0)} observed, "
             f"{counts.get('partial', 0)} partial, {counts.get('empty', 0)} empty"
         )
-    invalidation = join.get("invalidation")
-    if isinstance(invalidation, dict):
+    group = join.get("group")
+    if isinstance(group, dict):
         lines.append(
-            f"Server identity ended ({invalidation.get('detail')}); "
+            f"Server group: {group.get('group_id')} "
+            f"({group.get('world_size')} members)"
+        )
+    for label, invalidation in _invalidations(join):
+        lines.append(
+            f"Server identity ended{label} ({invalidation.get('detail')}); "
             "case windows after the last confirmed poll are not joined"
         )
     return lines
+
+
+def _invalidations(join: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    group = join.get("group")
+    if not isinstance(group, dict):
+        invalidation = join.get("invalidation")
+        return [("", invalidation)] if isinstance(invalidation, dict) else []
+    return [
+        (f" for rank {member.get('rank')}", member["invalidation"])
+        for member in group.get("members", [])
+        if isinstance(member.get("invalidation"), dict)
+    ]
 
 
 def _case_lines(case_id: str, case: Any) -> list[str]:
@@ -140,6 +168,12 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
 def _server_case_lines(memory: Any) -> list[str]:
     if not isinstance(memory, dict):
         return []
+    if isinstance(memory.get("server_members"), list):
+        return [
+            line
+            for member in memory["server_members"]
+            for line in _server_member_lines(member)
+        ]
     coverage = memory.get("server_coverage") or {}
     if coverage.get("status") == "empty":
         return [f"  server telemetry: none ({coverage.get('reason')})"]
@@ -151,8 +185,24 @@ def _server_case_lines(memory: Any) -> list[str]:
     return lines
 
 
-def _server_metric_line(metric: str, observation: dict[str, Any]) -> str:
-    label = f"  {metric} ({observation.get('observation_scope')})"
+def _server_member_lines(member: dict[str, Any]) -> list[str]:
+    where = member.get("device_uuid") or member.get("host")
+    label = f"  rank {member.get('rank')} ({where})"
+    coverage = member.get("coverage") or {}
+    if coverage.get("status") == "empty":
+        return [f"{label}: none ({coverage.get('reason')})"]
+    lines = []
+    if coverage.get("status") == "partial":
+        lines.append(f"{label}: partial ({coverage.get('reason')})")
+    for metric, observation in (member.get("observations") or {}).items():
+        lines.append(_server_metric_line(metric, observation, prefix=f"{label} "))
+    return lines
+
+
+def _server_metric_line(
+    metric: str, observation: dict[str, Any], prefix: str = "  "
+) -> str:
+    label = f"{prefix}{metric} ({observation.get('observation_scope')})"
     value = observation.get("maximum_recorded_bytes")
     if value is None:
         missing = observation.get("missing_samples", 0)
@@ -340,6 +390,16 @@ def _load_server_samples(paths: Iterable[str | Path]) -> list[TelemetrySample]:
     )
 
 
+@dataclass(frozen=True)
+class _Member:
+    """One joined server identity, its clock and its samples on the client clock."""
+
+    identity: ServerIdentity
+    samples: list[TelemetrySample]
+    clock: ServerClock
+    placed: SampleAlignment
+
+
 def _server_join(
     records: list[dict[str, Any]],
     samples: list[TelemetrySample],
@@ -347,35 +407,202 @@ def _server_join(
     direct_server: bool,
     clock_offset_ns: int | None,
     clock_uncertainty_ns: int | None,
-) -> dict[str, Any]:
-    """Return a case-window join only for one declared, matching server."""
+) -> tuple[dict[str, Any], list[_Member]]:
+    """Return a case-window join for one server or one declared group.
+
+    The second value lists the joined members, ordered by rank.
+    """
     if not samples:
-        return {"status": "not_configured"}
+        return {"status": "not_configured"}, []
     artifact = _artifact_record(records)
     if artifact is None:
-        return {"status": "unjoined", "reason": "missing_run_identity"}
-    run_id_issue = _run_id_issue(artifact, samples)
-    if run_id_issue is not None:
-        return run_id_issue
-    identities = {sample.identity for sample in samples}
-    if len(identities) != 1:
-        return {"status": "unjoined", "reason": "multiple_server_identities"}
-    identity = next(iter(identities))
+        return _unjoined("missing_run_identity"), []
+    issue = _run_id_issue(artifact, samples) or _identity_issue(samples, direct_server)
+    if issue is not None:
+        return issue, []
+    by_identity = group_members(samples)
+    clocks = _member_clocks(
+        artifact, records, list(by_identity), clock_offset_ns, clock_uncertainty_ns
+    )
+    members = clocks if isinstance(clocks, str) else _place(by_identity, clocks)
+    if isinstance(members, str):
+        return _unjoined(members), []
+    return _joined(members), members
+
+
+def _place(
+    by_identity: dict[ServerIdentity, list[TelemetrySample]],
+    clocks: dict[ServerIdentity, ServerClock],
+) -> list[_Member] | str:
+    """Place each member's samples; every member needs at least one placed."""
+    members = [
+        _Member(
+            identity, found, clocks[identity], align_samples(found, clocks[identity])
+        )
+        for identity, found in by_identity.items()
+    ]
+    for member in members:
+        if not member.placed.aligned:
+            ambiguous = member.placed.unaligned[AMBIGUOUS]
+            return f"clock_alignment_{'ambiguous' if ambiguous else 'uncovered'}"
+    return members
+
+
+def _unjoined(reason: str) -> dict[str, Any]:
+    return {"status": "unjoined", "reason": reason}
+
+
+def _identity_issue(
+    samples: list[TelemetrySample], direct_server: bool
+) -> dict[str, Any] | None:
+    membership = membership_issue(samples)
+    if membership is not None:
+        return _unjoined(membership)
     route_issue = _route_issue(samples, direct_server)
-    if route_issue:
-        return {"status": "unjoined", "reason": route_issue}
-    same_host = _same_host_clock(artifact, identity)
-    alignment = _clock_alignment(same_host, clock_offset_ns, clock_uncertainty_ns)
-    if "reason" in alignment:
-        return {"status": "unjoined", "reason": alignment["reason"]}
+    return _unjoined(route_issue) if route_issue else None
+
+
+def _member_clocks(
+    artifact: dict[str, Any],
+    records: list[dict[str, Any]],
+    identities: list[ServerIdentity],
+    offset_ns: int | None,
+    uncertainty_ns: int | None,
+) -> dict[ServerIdentity, ServerClock] | str:
+    """Build one clock per server domain; the flags describe one remote domain."""
+    client_domain = client_clock_domain(artifact)
+    if client_domain is None:
+        return "missing_client_clock_domain"
+    domains = sorted({identity.clock_domain for identity in identities})
+    flags_domain = _flags_domain(domains, client_domain, offset_ns)
+    if flags_domain is None:
+        return "clock_flags_ambiguous"
+    run_id = str(artifact["context"].get("run_id"))
+    recorded = artifact_alignments(records, run_id)
+    clocks: dict[str, ServerClock] = {}
+    for domain in domains:
+        flags = (offset_ns, uncertainty_ns) if domain == flags_domain else (None, None)
+        clock = build_server_clock(
+            run_id=run_id,
+            server_domain=domain,
+            client_domain=client_domain,
+            recorded=recorded,
+            offset_ns=flags[0],
+            uncertainty_ns=flags[1],
+        )
+        if isinstance(clock, str):
+            return clock
+        clocks[domain] = clock
+    return {identity: clocks[identity.clock_domain] for identity in identities}
+
+
+def _flags_domain(
+    domains: list[str], client_domain: str, offset_ns: int | None
+) -> str | None:
+    """The server domain the clock flags describe, or None if that is unclear.
+
+    Members on the client's host and boot share its clock; the flags then
+    belong to the single remote domain. With several remote hosts, each needs
+    its own ``infer.clock_alignment`` record instead.
+    """
+    remote = [domain for domain in domains if domain != client_domain]
+    if offset_ns is not None and len(remote) > 1:
+        return None
+    return remote[0] if remote else client_domain
+
+
+def _joined(members: list[_Member]) -> dict[str, Any]:
     return {
         "status": "joined",
         "route_evidence": "operator_declared_direct",
-        "identity": asdict(identity),
-        **alignment,
+        **_membership_report(members),
+        **_clock_report(members),
         "attribution": "case_window_observation_only",
-        "invalidation": _invalidation(samples),
     }
+
+
+def _membership_report(members: list[_Member]) -> dict[str, Any]:
+    first = members[0].identity
+    if first.group_id is None:
+        return {
+            "identity": asdict(first),
+            "invalidation": _invalidation(members[0].samples),
+        }
+    return {
+        "group": {
+            "group_id": first.group_id,
+            "world_size": first.world_size,
+            "members": [
+                {
+                    "rank": member.identity.rank,
+                    "identity": asdict(member.identity),
+                    "clock_alignment_evidence": member.clock.evidence,
+                    "invalidation": _invalidation(member.samples),
+                }
+                for member in members
+            ],
+        }
+    }
+
+
+def _clock_report(members: list[_Member]) -> dict[str, Any]:
+    applied = _merge_applied(
+        [item for member in members for item in member.placed.applied]
+    )
+    offsets = {item["offset_ns"] for item in applied}
+    report: dict[str, Any] = {
+        "clock_alignment_evidence": _evidence(members),
+        # One offset when a single alignment placed every joined sample.
+        "clock_offset_ns": next(iter(offsets)) if len(offsets) == 1 else None,
+        "clock_uncertainty_ns": _max_uncertainty(members),
+        "clock_alignments": applied,
+        "unaligned_samples": _unaligned(members),
+    }
+    for key, field in (
+        ("overridden_clock_alignments", "overridden"),
+        ("ignored_clock_alignments", "ignored"),
+    ):
+        event_ids = _record_ids(members, field)
+        if event_ids:
+            report[key] = event_ids
+    return report
+
+
+def _record_ids(members: list[_Member], field: str) -> list[str]:
+    """Event IDs a member's clock replaced or ignored, across the whole join."""
+    return sorted({item for member in members for item in getattr(member.clock, field)})
+
+
+def _max_uncertainty(members: list[_Member]) -> int:
+    return max(
+        placed.uncertainty_ns
+        for member in members
+        for placed in member.placed.aligned.values()
+    )
+
+
+def _unaligned(members: list[_Member]) -> dict[str, int]:
+    return {
+        key: sum(member.placed.unaligned[key] for member in members)
+        for key in (UNCOVERED, AMBIGUOUS)
+    }
+
+
+def _evidence(members: list[_Member]) -> str:
+    evidence = sorted({member.clock.evidence for member in members})
+    return evidence[0] if len(evidence) == 1 else "mixed"
+
+
+def _merge_applied(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Combine one alignment used by several members into one entry."""
+    merged: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for item in items:
+        key = tuple(value for name, value in item.items() if name != "aligned_samples")
+        if key in merged:
+            merged[key]["aligned_samples"] += item["aligned_samples"]
+        else:
+            merged[key] = dict(item)
+    return list(merged.values())
 
 
 def _run_id_issue(
@@ -435,52 +662,6 @@ def _artifact_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
     return artifacts[0]
 
 
-def _same_host_clock(artifact: dict[str, Any], identity: ServerIdentity) -> bool:
-    metadata = artifact.get("metadata")
-    if not isinstance(metadata, dict):
-        return False
-    boot_id = metadata.get("boot_id")
-    return (
-        artifact["context"].get("host") == identity.host
-        and isinstance(boot_id, str)
-        and bool(boot_id)
-        and boot_id == identity.boot_id
-    )
-
-
-def _clock_alignment(
-    same_host: bool,
-    offset_ns: int | None,
-    uncertainty_ns: int | None,
-) -> dict[str, Any]:
-    if offset_ns is None and not same_host:
-        return {"reason": "clock_alignment_required"}
-    if offset_ns is not None and uncertainty_ns is None:
-        return {"reason": "clock_uncertainty_required"}
-    # A shared clock needs no offset, but a supplied uncertainty is still honored.
-    offset = 0 if offset_ns is None else offset_ns
-    uncertainty = 0 if uncertainty_ns is None else uncertainty_ns
-    _validate_clock_alignment(offset, uncertainty)
-    return {
-        "clock_offset_ns": offset,
-        "clock_uncertainty_ns": uncertainty,
-        "clock_alignment_evidence": (
-            "same_host" if same_host and offset == 0 else "operator_supplied"
-        ),
-    }
-
-
-def _validate_clock_alignment(offset_ns: int, uncertainty_ns: int) -> None:
-    if isinstance(offset_ns, bool) or not isinstance(offset_ns, int):
-        raise TypeError("clock_offset_ns must be an integer")
-    if (
-        isinstance(uncertainty_ns, bool)
-        or not isinstance(uncertainty_ns, int)
-        or uncertainty_ns < 0
-    ):
-        raise ValueError("clock_uncertainty_ns must be a non-negative integer")
-
-
 def _server_targets(samples: list[TelemetrySample]) -> list[dict[str, Any]]:
     grouped: dict[ServerIdentity, list[TelemetrySample]] = {}
     for sample in samples:
@@ -512,10 +693,16 @@ def _server_targets(samples: list[TelemetrySample]) -> list[dict[str, Any]]:
 
 @dataclass(frozen=True)
 class _ServerTimeline:
-    """A joined collector's polls in client time, and how long it can be trusted."""
+    """A joined collector's polls in client time, and how long it can be trusted.
 
-    offset_ns: int
-    uncertainty_ns: int
+    Each sample keeps the uncertainty of the alignment that placed it, so one
+    imprecise alignment does not widen the margins of every other sample.
+    """
+
+    placed: dict[TelemetrySample, AlignedTimestamp]
+    # Samples no single alignment placed, and the offsets that placed others.
+    unplaced: dict[TelemetrySample, str]
+    offsets: tuple[int, ...]
     slack_ns: int
     first_poll_ns: int
     last_poll_ns: int
@@ -523,57 +710,156 @@ class _ServerTimeline:
     trusted_until_ns: int | None
 
 
-def _server_timeline(
-    samples: list[TelemetrySample], join: dict[str, Any]
-) -> _ServerTimeline | None:
-    if join.get("status") != "joined":
-        return None
-    offset = join["clock_offset_ns"]
-    uncertainty = join["clock_uncertainty_ns"]
-    polls = [sample.observed_at_ns + offset for sample in samples]
-    invalidation = join.get("invalidation")
-    confirmed = invalidation.get("last_confirmed_at_ns") if invalidation else None
+def _member_timeline(member: _Member) -> _ServerTimeline:
+    aligned = member.placed.aligned
+    values = [placed.value_ns for placed in aligned.values()]
+    invalidation = _invalidation(member.samples)
     return _ServerTimeline(
-        offset_ns=offset,
-        uncertainty_ns=uncertainty,
-        slack_ns=max(sample.interval_ms for sample in samples) * 1_000_000,
-        first_poll_ns=min(polls),
-        last_poll_ns=max(polls),
+        placed=aligned,
+        unplaced=member.placed.unplaced,
+        offsets=tuple(sorted({item["offset_ns"] for item in member.placed.applied})),
+        slack_ns=max(sample.interval_ms for sample in member.samples) * 1_000_000,
+        first_poll_ns=min(values),
+        last_poll_ns=max(values),
         invalidated=invalidation is not None,
-        # The identity was last confirmed at ``confirmed``; allow for clock error.
-        trusted_until_ns=(
-            None if confirmed is None else confirmed + offset - uncertainty
-        ),
+        trusted_until_ns=_trusted_until(aligned, invalidation),
     )
+
+
+def _trusted_until(
+    aligned: dict[TelemetrySample, AlignedTimestamp],
+    invalidation: dict[str, Any] | None,
+) -> int | None:
+    """Client time by which the last confirming poll had certainly happened."""
+    if invalidation is None:
+        return None
+    confirmed = [
+        # A poll could have happened up to its own uncertainty earlier.
+        placed.value_ns - placed.uncertainty_ns
+        for sample, placed in aligned.items()
+        if sample.observed_at_ns < invalidation["observed_at_ns"]
+    ]
+    return max(confirmed) if confirmed else None
+
+
+def _server_case_memory(
+    timelines: list[tuple[_Member, _ServerTimeline]],
+    requests: list[dict[str, Any]],
+    declared_group: bool,
+) -> dict[str, Any]:
+    """Server values for one case: one server's, or one entry per group member.
+
+    Values from different members are never combined: separate collectors
+    sample at different instants, so no per-case total would be well defined.
+    """
+    if not timelines:
+        return {"server_observations": {}, "server_coverage": {"status": "not_joined"}}
+    views = []
+    for member, timeline in timelines:
+        observations, coverage = _server_case_view(member.samples, requests, timeline)
+        views.append((member, observations, coverage))
+    if not declared_group:
+        _member, observations, coverage = views[0]
+        return {"server_observations": observations, "server_coverage": coverage}
+    return {
+        "server_observations": {},
+        "server_coverage": _group_coverage([coverage for _, _, coverage in views]),
+        "server_members": [
+            _member_view(member, observations, coverage)
+            for member, observations, coverage in views
+        ],
+    }
+
+
+def _member_view(
+    member: _Member, observations: dict[str, Any], coverage: dict[str, Any]
+) -> dict[str, Any]:
+    identity = member.identity
+    return {
+        "rank": identity.rank,
+        "host": identity.host,
+        "pid": identity.pid,
+        "device_uuid": identity.device_uuid,
+        "gpu_instance_id": identity.gpu_instance_id,
+        "observations": observations,
+        "coverage": coverage,
+    }
+
+
+def _group_coverage(coverages: list[dict[str, Any]]) -> dict[str, Any]:
+    statuses = {coverage["status"] for coverage in coverages}
+    if statuses == {"observed"}:
+        return {"status": "observed", "reason": None}
+    if statuses == {"empty"}:
+        return {"status": "empty", "reason": "no_member_observed"}
+    return {"status": "partial", "reason": "some_members_not_fully_observed"}
 
 
 def _server_case_view(
     samples: list[TelemetrySample],
     requests: list[dict[str, Any]],
-    timeline: _ServerTimeline | None,
+    timeline: _ServerTimeline,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Summarize server samples in one case window and say how well it is covered.
 
-    Only samples at least one clock uncertainty inside both window edges count,
-    so a short window or a collector that was not running can leave a joined
-    case without server values; the coverage record says which.
+    A sample counts only if its own clock uncertainty cannot move it outside
+    the window, so a short window or a collector that was not running can
+    leave a joined case without server values; the coverage record says which.
     """
-    if timeline is None:
-        return {}, {"status": "not_joined"}
     window = _request_time_window(requests)
     if window is None:
         return {}, {"status": "empty", "reason": "no_request_window"}
-    low = window[0] + timeline.uncertainty_ns
-    high = window[1] - timeline.uncertainty_ns
+    start_ns, end_ns = window
     in_window = [
         sample
-        for sample in samples
-        if low <= sample.observed_at_ns + timeline.offset_ns <= high
+        for sample, placed in timeline.placed.items()
+        if start_ns + placed.uncertainty_ns
+        <= placed.value_ns
+        <= end_ns - placed.uncertainty_ns
     ]
-    coverage = _case_coverage(window[1], low, high, bool(in_window), timeline)
+    margin = _case_margin(timeline, start_ns, end_ns)
+    low, high = start_ns + margin, end_ns - margin
+    gap = _unplaced_reason(timeline, start_ns, end_ns)
+    coverage = _case_coverage(end_ns, low, high, bool(in_window), gap, timeline)
     if coverage["status"] == "empty":
         return {}, coverage
     return _metric_summaries(samples, in_window), coverage
+
+
+def _case_margin(timeline: _ServerTimeline, start_ns: int, end_ns: int) -> int:
+    """The clock uncertainty that describes one case window's coverage.
+
+    It is the smallest uncertainty among samples placed inside the window, or
+    among all samples when none are, so the counted window is the widest any
+    sample could qualify for.
+    """
+    inside = [
+        placed.uncertainty_ns
+        for placed in timeline.placed.values()
+        if start_ns <= placed.value_ns <= end_ns
+    ]
+    return min(inside or [placed.uncertainty_ns for placed in timeline.placed.values()])
+
+
+def _unplaced_reason(
+    timeline: _ServerTimeline, start_ns: int, end_ns: int
+) -> str | None:
+    """Say why a case has no samples when unplaced polls probably fell inside it.
+
+    Unplaced samples have no client time; any offset that placed other samples
+    gives the best estimate of where they would land.
+    """
+    near = [
+        reason
+        for sample, reason in timeline.unplaced.items()
+        if any(
+            start_ns <= sample.observed_at_ns + offset <= end_ns
+            for offset in timeline.offsets
+        )
+    ]
+    if not near:
+        return None
+    return f"clock_alignment_{AMBIGUOUS if AMBIGUOUS in near else UNCOVERED}"
 
 
 def _case_coverage(
@@ -581,9 +867,12 @@ def _case_coverage(
     low: int,
     high: int,
     has_samples: bool,
+    unplaced_reason: str | None,
     timeline: _ServerTimeline,
 ) -> dict[str, Any]:
-    empty_reason = _empty_reason(end_ns, low, high, has_samples, timeline)
+    empty_reason = _empty_reason(
+        end_ns, low, high, has_samples, unplaced_reason, timeline
+    )
     if empty_reason is not None:
         return {
             "status": "empty",
@@ -603,6 +892,7 @@ def _empty_reason(
     low: int,
     high: int,
     has_samples: bool,
+    unplaced_reason: str | None,
     timeline: _ServerTimeline,
 ) -> str | None:
     if high < low:
@@ -612,7 +902,7 @@ def _empty_reason(
     ):
         return "identity_invalidated"
     if not has_samples:
-        return "no_collector_coverage"
+        return unplaced_reason or "no_collector_coverage"
     return None
 
 

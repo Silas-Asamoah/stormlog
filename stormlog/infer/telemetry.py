@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .host_clock import wall_clock_domain
+
 TELEMETRY_SCHEMA_VERSION = 1
 
 METRIC_SCOPES = {
@@ -47,6 +49,22 @@ def _positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def validate_group_membership(
+    group_id: str | None, rank: int | None, world_size: int | None
+) -> None:
+    """A declared group member has a rank in ``range(world_size)``."""
+    if group_id is None:
+        if world_size is not None:
+            raise ValueError("world_size requires group_id")
+        return
+    if not _nonempty_string(group_id):
+        raise ValueError("group_id must be a non-empty string")
+    if world_size is None or not _positive_int(world_size):
+        raise ValueError("group members need a positive world_size")
+    if rank is None or rank >= world_size:
+        raise ValueError("group members need a rank below world_size")
+
+
 @dataclass(frozen=True)
 class ServerIdentity:
     """The process and accelerator that a collector actually observed."""
@@ -59,6 +77,8 @@ class ServerIdentity:
     replica_id: str | None = None
     rank: int | None = None
     boot_id: str | None = None
+    group_id: str | None = None
+    world_size: int | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -67,7 +87,11 @@ class ServerIdentity:
             or not _positive_int(self.process_start_ns)
         ):
             raise ValueError("host, positive pid, and process_start_ns are required")
+        if "/" in self.host or "/" in (self.boot_id or ""):
+            # Both are parts of the clock domain name.
+            raise ValueError("host and boot_id cannot contain '/'")
         self._validate_optional_fields()
+        self._validate_group()
 
     def _validate_optional_fields(self) -> None:
         for value in (
@@ -75,6 +99,7 @@ class ServerIdentity:
             self.gpu_instance_id,
             self.replica_id,
             self.boot_id,
+            self.group_id,
         ):
             if value is not None and not _nonempty_string(value):
                 raise ValueError(
@@ -88,6 +113,14 @@ class ServerIdentity:
             or self.rank < 0
         ):
             raise ValueError("rank must be non-negative")
+
+    def _validate_group(self) -> None:
+        validate_group_membership(self.group_id, self.rank, self.world_size)
+
+    @property
+    def clock_domain(self) -> str:
+        """The wall clock of this host boot; see ``wall_clock_domain``."""
+        return wall_clock_domain(self.host, self.boot_id)
 
 
 @dataclass(frozen=True)
@@ -162,7 +195,7 @@ class TelemetrySample:
             "schema_version": TELEMETRY_SCHEMA_VERSION,
             "event_type": "infer.telemetry_sample",
             "scope": self.scope,
-            "clock_domain": f"{self.identity.host}/unix_epoch_ns",
+            "clock_domain": self.identity.clock_domain,
             "counter_owner": self.counter_owner,
             **asdict(self),
         }
@@ -191,7 +224,7 @@ class TelemetrySample:
         )
         if record.get("scope") != sample.scope:
             raise ValueError("telemetry scope does not match metric")
-        if record.get("clock_domain") != f"{identity.host}/unix_epoch_ns":
+        if record.get("clock_domain") != identity.clock_domain:
             raise ValueError("telemetry clock domain does not match host")
         if record.get("counter_owner") != sample.counter_owner:
             raise ValueError("telemetry counter owner does not match metric")

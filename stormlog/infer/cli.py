@@ -225,13 +225,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--clock-offset-ns",
         type=int,
         default=None,
-        help="Server timestamp plus this offset equals client timestamp",
+        help=(
+            "Server timestamp plus this offset equals client timestamp; "
+            "replaces infer.clock_alignment records for the same clocks"
+        ),
     )
     analyze_parser.add_argument(
         "--clock-uncertainty-ns",
         type=int,
         default=None,
-        help="Absolute uncertainty of the supplied cross-host clock offset",
+        help=(
+            "Absolute uncertainty of --clock-offset-ns; on one host and boot "
+            "it may be given alone"
+        ),
     )
     collector_parser = subparsers.add_parser(
         "collect-server",
@@ -271,7 +277,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-gpu", action="store_true", help="Collect process RSS only"
     )
     collector_parser.add_argument("--replica-id", default=None)
-    collector_parser.add_argument("--rank", type=int, default=None)
+    collector_parser.add_argument(
+        "--rank",
+        type=int,
+        default=None,
+        help="This process's rank; required with --group-id",
+    )
+    collector_parser.add_argument(
+        "--group-id",
+        default=None,
+        help="Shared by every collector of one server, e.g. its tensor-parallel workers",
+    )
+    collector_parser.add_argument(
+        "--world-size",
+        type=int,
+        default=None,
+        help="Number of group members; each rank 0..N-1 needs a collector",
+    )
     return parser
 
 
@@ -364,6 +386,8 @@ def cmd_collect_server(args: argparse.Namespace) -> int:
             no_gpu=args.no_gpu,
             replica_id=args.replica_id,
             rank=args.rank,
+            group_id=args.group_id,
+            world_size=args.world_size,
             stop_event=stop_event,
             on_warning=_print_warning,
         )
