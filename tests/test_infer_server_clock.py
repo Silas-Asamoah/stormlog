@@ -31,10 +31,11 @@ def _alignment(
     valid_from_ns: int | None = None,
     valid_to_ns: int | None = None,
     from_clock_domain: str = SERVER,
+    run_id: str = "run-1",
 ) -> ClockAlignmentEvent:
     return ClockAlignmentEvent(
         context=CorrelationContext(
-            run_id="run-1",
+            run_id=run_id,
             session_id="session-probe",
             producer_id="clock-probe",
             source="clock-probe",
@@ -209,3 +210,14 @@ def test_client_domain_names_the_boot_when_the_artifact_knows_it(
     artifact: dict[str, Any], domain: str | None
 ) -> None:
     assert client_clock_domain(artifact) == domain
+
+
+def test_records_from_another_run_are_ignored() -> None:
+    foreign = _alignment("copied", run_id="other-run", offset_ns=1_000)
+    assert _clock(recorded=(foreign,)) == "clock_alignment_from_another_run"
+    own = _alignment("probe", offset_ns=5)
+    clock = _clock(recorded=(foreign, own))
+    assert isinstance(clock, ServerClock)
+    assert (clock.alignments, clock.ignored) == ((own,), ("copied",))
+    placed, record = _place(clock, 100)
+    assert (placed.value_ns, record) == (105, own)

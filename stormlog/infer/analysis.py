@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, TypeGuard
 
+from .correlation_accounting import AlignedTimestamp
 from .server_clock import (
     AMBIGUOUS,
     UNCOVERED,
@@ -476,12 +477,13 @@ def _member_clocks(
     flags_domain = _flags_domain(domains, client_domain, offset_ns)
     if flags_domain is None:
         return "clock_flags_ambiguous"
-    recorded = artifact_alignments(records)
+    run_id = str(artifact["context"].get("run_id"))
+    recorded = artifact_alignments(records, run_id)
     clocks: dict[str, ServerClock] = {}
     for domain in domains:
         flags = (offset_ns, uncertainty_ns) if domain == flags_domain else (None, None)
         clock = build_server_clock(
-            run_id=str(artifact["context"].get("run_id")),
+            run_id=run_id,
             server_domain=domain,
             client_domain=client_domain,
             recorded=recorded,
@@ -556,12 +558,19 @@ def _clock_report(members: list[_Member]) -> dict[str, Any]:
         "clock_alignments": applied,
         "unaligned_samples": _unaligned(members),
     }
-    overridden = sorted(
-        {item for member in members for item in member.clock.overridden}
-    )
-    if overridden:
-        report["overridden_clock_alignments"] = overridden
+    for key, field in (
+        ("overridden_clock_alignments", "overridden"),
+        ("ignored_clock_alignments", "ignored"),
+    ):
+        event_ids = _record_ids(members, field)
+        if event_ids:
+            report[key] = event_ids
     return report
+
+
+def _record_ids(members: list[_Member], field: str) -> list[str]:
+    """Event IDs a member's clock replaced or ignored, across the whole join."""
+    return sorted({item for member in members for item in getattr(member.clock, field)})
 
 
 def _max_uncertainty(members: list[_Member]) -> int:
@@ -684,10 +693,13 @@ def _server_targets(samples: list[TelemetrySample]) -> list[dict[str, Any]]:
 
 @dataclass(frozen=True)
 class _ServerTimeline:
-    """A joined collector's polls in client time, and how long it can be trusted."""
+    """A joined collector's polls in client time, and how long it can be trusted.
 
-    aligned_ns: dict[TelemetrySample, int]
-    uncertainty_ns: int
+    Each sample keeps the uncertainty of the alignment that placed it, so one
+    imprecise alignment does not widen the margins of every other sample.
+    """
+
+    placed: dict[TelemetrySample, AlignedTimestamp]
     slack_ns: int
     first_poll_ns: int
     last_poll_ns: int
@@ -696,39 +708,33 @@ class _ServerTimeline:
 
 
 def _member_timeline(member: _Member) -> _ServerTimeline:
-    aligned_ns = {
-        sample: placed.value_ns for sample, placed in member.placed.aligned.items()
-    }
-    uncertainty = max(
-        placed.uncertainty_ns for placed in member.placed.aligned.values()
-    )
+    aligned = member.placed.aligned
+    values = [placed.value_ns for placed in aligned.values()]
     invalidation = _invalidation(member.samples)
     return _ServerTimeline(
-        aligned_ns=aligned_ns,
-        uncertainty_ns=uncertainty,
+        placed=aligned,
         slack_ns=max(sample.interval_ms for sample in member.samples) * 1_000_000,
-        first_poll_ns=min(aligned_ns.values()),
-        last_poll_ns=max(aligned_ns.values()),
+        first_poll_ns=min(values),
+        last_poll_ns=max(values),
         invalidated=invalidation is not None,
-        trusted_until_ns=_trusted_until(aligned_ns, invalidation, uncertainty),
+        trusted_until_ns=_trusted_until(aligned, invalidation),
     )
 
 
 def _trusted_until(
-    aligned_ns: dict[TelemetrySample, int],
+    aligned: dict[TelemetrySample, AlignedTimestamp],
     invalidation: dict[str, Any] | None,
-    uncertainty_ns: int,
 ) -> int | None:
     """Client time by which the last confirming poll had certainly happened."""
     if invalidation is None:
         return None
     confirmed = [
-        placed
-        for sample, placed in aligned_ns.items()
+        # A poll could have happened up to its own uncertainty earlier.
+        placed.value_ns - placed.uncertainty_ns
+        for sample, placed in aligned.items()
         if sample.observed_at_ns < invalidation["observed_at_ns"]
     ]
-    # The poll could have happened up to one uncertainty earlier on this clock.
-    return max(confirmed) - uncertainty_ns if confirmed else None
+    return max(confirmed) if confirmed else None
 
 
 def _server_case_memory(
@@ -791,24 +797,42 @@ def _server_case_view(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Summarize server samples in one case window and say how well it is covered.
 
-    Only samples at least one clock uncertainty inside both window edges count,
-    so a short window or a collector that was not running can leave a joined
-    case without server values; the coverage record says which.
+    A sample counts only if its own clock uncertainty cannot move it outside
+    the window, so a short window or a collector that was not running can
+    leave a joined case without server values; the coverage record says which.
     """
     window = _request_time_window(requests)
     if window is None:
         return {}, {"status": "empty", "reason": "no_request_window"}
-    low = window[0] + timeline.uncertainty_ns
-    high = window[1] - timeline.uncertainty_ns
+    start_ns, end_ns = window
     in_window = [
         sample
-        for sample, placed in timeline.aligned_ns.items()
-        if low <= placed <= high
+        for sample, placed in timeline.placed.items()
+        if start_ns + placed.uncertainty_ns
+        <= placed.value_ns
+        <= end_ns - placed.uncertainty_ns
     ]
-    coverage = _case_coverage(window[1], low, high, bool(in_window), timeline)
+    margin = _case_margin(timeline, start_ns, end_ns)
+    low, high = start_ns + margin, end_ns - margin
+    coverage = _case_coverage(end_ns, low, high, bool(in_window), timeline)
     if coverage["status"] == "empty":
         return {}, coverage
     return _metric_summaries(samples, in_window), coverage
+
+
+def _case_margin(timeline: _ServerTimeline, start_ns: int, end_ns: int) -> int:
+    """The clock uncertainty that describes one case window's coverage.
+
+    It is the smallest uncertainty among samples placed inside the window, or
+    among all samples when none are, so the counted window is the widest any
+    sample could qualify for.
+    """
+    inside = [
+        placed.uncertainty_ns
+        for placed in timeline.placed.values()
+        if start_ns <= placed.value_ns <= end_ns
+    ]
+    return min(inside or [placed.uncertainty_ns for placed in timeline.placed.values()])
 
 
 def _case_coverage(
