@@ -947,3 +947,29 @@ def test_case_in_an_alignment_gap_says_its_samples_were_not_placed(
         "gap": ("empty", "clock_alignment_uncovered"),
         "late": ("observed", None),
     }
+
+
+def test_group_clock_flags_describe_one_shared_clock_or_one_remote(
+    tmp_path: Path,
+) -> None:
+    # All members on the client's host and boot: an uncertainty alone applies.
+    local = _group_report(tmp_path, _member(0), _member(1), clock_uncertainty_ns=40)
+    assert local["telemetry"]["server_join"]["clock_uncertainty_ns"] == 40
+    # With a remote member it would be dropped for that member, so refuse.
+    profile = _profile(tmp_path, host="server-a")
+    telemetry = _telemetry(
+        tmp_path,
+        "group.jsonl",
+        _member(0, host="server-a"),
+        _member(1, host="server-b"),
+    )
+    mixed = analyze_inference_events(
+        profile,
+        server_telemetry_paths=[telemetry],
+        direct_server=True,
+        clock_uncertainty_ns=500,
+    )
+    assert mixed["telemetry"]["server_join"] == {
+        "status": "unjoined",
+        "reason": "clock_offset_required",
+    }
