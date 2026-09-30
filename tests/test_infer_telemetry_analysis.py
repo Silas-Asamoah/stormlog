@@ -466,3 +466,10 @@ def test_metric_metadata_describes_only_samples_in_the_window(tmp_path: Path) ->
     assert observation["sources"] == ["nvml-v2"]
     assert observation["provenance"] == ["observed"]
     assert observation["intervals_ms"] == [100]
+
+
+def test_non_object_profile_line_raises_value_error(tmp_path: Path) -> None:
+    path = tmp_path / "bad.jsonl"
+    path.write_text("[1, 2]\n")
+    with pytest.raises(ValueError, match="not a JSON object"):
+        analyze_inference_events(path)
