@@ -128,8 +128,8 @@ def test_one_host_boot_is_one_clock_with_optional_uncertainty() -> None:
     assert clock.evidence == "same_host"
     placed, record = _place(clock, 1_000)
     assert (placed.value_ns, placed.uncertainty_ns, record) == (1_000, 40, None)
-    with pytest.raises(ValueError, match="cannot apply within one clock domain"):
-        _clock(server_domain=CLIENT, offset_ns=5, uncertainty_ns=1)
+    shifted = _clock(server_domain=CLIENT, offset_ns=5, uncertainty_ns=1)
+    assert shifted == "clock_offset_on_shared_clock"
 
 
 def test_operator_flags_replace_records_for_the_same_clocks() -> None:

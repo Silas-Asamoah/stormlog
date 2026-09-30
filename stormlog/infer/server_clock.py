@@ -282,7 +282,8 @@ def _same_clock(
         run_id, server_domain, client_domain, offset_ns or 0, uncertainty_ns or 0
     )
     if supplied.offset_ns != 0:
-        raise ValueError("a clock offset cannot apply within one clock domain")
+        # One host and boot is one clock, so a nonzero offset contradicts it.
+        return "clock_offset_on_shared_clock"
     return ServerClock(
         server_domain,
         client_domain,

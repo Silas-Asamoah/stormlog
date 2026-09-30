@@ -733,3 +733,14 @@ def test_uncertainty_alone_is_refused_across_hosts(tmp_path: Path) -> None:
         "status": "unjoined",
         "reason": "clock_offset_required",
     }
+
+
+def test_offset_on_one_shared_clock_is_unjoined(tmp_path: Path) -> None:
+    report = _same_host_report(
+        tmp_path, None, _server_sample(), clock_offset_ns=5, clock_uncertainty_ns=1
+    )
+    assert report["telemetry"]["server_join"] == {
+        "status": "unjoined",
+        "reason": "clock_offset_on_shared_clock",
+    }
+    assert report["summary"]["successful_requests"] == 1

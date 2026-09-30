@@ -252,6 +252,7 @@ samples to client request windows, and `telemetry.server_join.reason` says why:
 | `clock_alignment_required` | The domains differ and no flag or record connects them |
 | `clock_uncertainty_required` | `--clock-offset-ns` was given without `--clock-uncertainty-ns` |
 | `clock_offset_required` | `--clock-uncertainty-ns` was given alone, but the server is on another host or boot |
+| `clock_offset_on_shared_clock` | A nonzero `--clock-offset-ns` was given for one host and boot, which is one clock |
 | `clock_domain_unverified` | Both sides have the same hostname and no boot ID |
 | `clock_alignment_uncovered` | No record's validity window covers any sample |
 | `clock_alignment_ambiguous` | Several records cover the same samples |
