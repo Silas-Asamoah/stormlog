@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, TypeGuard
 
@@ -35,6 +35,7 @@ def analyze_inference_events(
         clock_offset_ns=clock_offset_ns,
         clock_uncertainty_ns=clock_uncertainty_ns,
     )
+    timeline = _server_timeline(server_samples, join)
     ok_requests = [record for record in requests if record.get("status") == "ok"]
 
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -48,9 +49,13 @@ def analyze_inference_events(
             case_requests,
             samples=_samples_for_request_window(samples, case_requests),
         )
-        cases[case_id]["memory"]["server_observations"] = _server_observations(
-            server_samples, case_requests, join
+        observations, coverage = _server_case_view(
+            server_samples, case_requests, timeline
         )
+        cases[case_id]["memory"]["server_observations"] = observations
+        cases[case_id]["memory"]["server_coverage"] = coverage
+    if timeline is not None:
+        join["case_coverage"] = _coverage_counts(cases)
     failed = [record for record in requests if record.get("status") != "ok"]
     return {
         "summary": {
@@ -94,12 +99,24 @@ def format_analysis_text(report: dict[str, Any]) -> str:
 
 def _server_status_lines(join: dict[str, Any]) -> list[str]:
     if join.get("status") == "joined":
-        return [
-            "Server telemetry: observed during case windows (declared direct route)"
-        ]
+        return _joined_status_lines(join)
     if join.get("status") not in {None, "not_configured"}:
         return [f"Server telemetry: unjoined ({join.get('reason')})"]
     return []
+
+
+def _joined_status_lines(join: dict[str, Any]) -> list[str]:
+    lines = [
+        "Server telemetry: joined to case windows (declared direct route, "
+        f"{join.get('clock_alignment_evidence')} clock evidence)"
+    ]
+    counts = join.get("case_coverage")
+    if isinstance(counts, dict):
+        lines.append(
+            f"Server coverage: {counts.get('observed', 0)} observed, "
+            f"{counts.get('partial', 0)} partial, {counts.get('empty', 0)} empty"
+        )
+    return lines
 
 
 def _case_lines(case_id: str, case: Any) -> list[str]:
@@ -114,16 +131,34 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
         f"requests={_fmt(throughput.get('requests_per_second'))} req/s"
     ]
     memory = case.get("memory", {}) if isinstance(case, dict) else {}
-    server = memory.get("server_observations", {}) if isinstance(memory, dict) else {}
-    for metric, observation in server.items():
-        value = observation.get("maximum_recorded_bytes")
-        if value is not None:
-            lines.append(
-                f"  {metric} ({observation['observation_scope']}): "
-                f"max recorded {value} bytes, "
-                f"{observation['valid_samples']} samples"
-            )
+    lines.extend(_server_case_lines(memory))
     return lines
+
+
+def _server_case_lines(memory: Any) -> list[str]:
+    if not isinstance(memory, dict):
+        return []
+    coverage = memory.get("server_coverage") or {}
+    if coverage.get("status") == "empty":
+        return [f"  server telemetry: none ({coverage.get('reason')})"]
+    lines = []
+    if coverage.get("status") == "partial":
+        lines.append(f"  server telemetry: partial ({coverage.get('reason')})")
+    for metric, observation in (memory.get("server_observations") or {}).items():
+        lines.append(_server_metric_line(metric, observation))
+    return lines
+
+
+def _server_metric_line(metric: str, observation: dict[str, Any]) -> str:
+    label = f"  {metric} ({observation.get('observation_scope')})"
+    value = observation.get("maximum_recorded_bytes")
+    if value is None:
+        missing = observation.get("missing_samples", 0)
+        return f"{label}: no valid samples ({missing} missing)"
+    return (
+        f"{label}: max recorded {value} bytes, "
+        f"{observation.get('valid_samples')} samples"
+    )
 
 
 def _load_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -424,47 +459,127 @@ def _server_targets(samples: list[TelemetrySample]) -> list[dict[str, Any]]:
     return targets
 
 
-def _server_observations(
-    samples: list[TelemetrySample],
-    requests: list[dict[str, Any]],
-    join: dict[str, Any],
-) -> dict[str, Any]:
+@dataclass(frozen=True)
+class _ServerTimeline:
+    """A joined collector's polls in client time."""
+
+    offset_ns: int
+    uncertainty_ns: int
+    slack_ns: int
+    first_poll_ns: int
+    last_poll_ns: int
+
+
+def _server_timeline(
+    samples: list[TelemetrySample], join: dict[str, Any]
+) -> _ServerTimeline | None:
     if join.get("status") != "joined":
-        return {}
-    window = _request_time_window(requests)
-    if window is None:
-        return {}
-    start_ns, end_ns = window
+        return None
     offset = join["clock_offset_ns"]
     uncertainty = join["clock_uncertainty_ns"]
-    grouped: dict[str, list[TelemetrySample]] = {}
-    in_window: dict[str, list[TelemetrySample]] = {}
-    for sample in samples:
-        grouped.setdefault(sample.metric, []).append(sample)
-        if _within_aligned_window(sample, start_ns, end_ns, offset, uncertainty):
-            in_window.setdefault(sample.metric, []).append(sample)
+    polls = [sample.observed_at_ns + offset for sample in samples]
+    return _ServerTimeline(
+        offset_ns=offset,
+        uncertainty_ns=uncertainty,
+        slack_ns=max(sample.interval_ms for sample in samples) * 1_000_000,
+        first_poll_ns=min(polls),
+        last_poll_ns=max(polls),
+    )
+
+
+def _server_case_view(
+    samples: list[TelemetrySample],
+    requests: list[dict[str, Any]],
+    timeline: _ServerTimeline | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Summarize server samples in one case window and say how well it is covered.
+
+    Only samples at least one clock uncertainty inside both window edges count,
+    so a short window or a collector that was not running can leave a joined
+    case without server values; the coverage record says which.
+    """
+    if timeline is None:
+        return {}, {"status": "not_joined"}
+    window = _request_time_window(requests)
+    if window is None:
+        return {}, {"status": "empty", "reason": "no_request_window"}
+    low = window[0] + timeline.uncertainty_ns
+    high = window[1] - timeline.uncertainty_ns
+    in_window = [
+        sample
+        for sample in samples
+        if low <= sample.observed_at_ns + timeline.offset_ns <= high
+    ]
+    coverage = _case_coverage(low, high, bool(in_window), timeline)
+    if coverage["status"] == "empty":
+        return {}, coverage
+    return _metric_summaries(samples, in_window), coverage
+
+
+def _case_coverage(
+    low: int,
+    high: int,
+    has_samples: bool,
+    timeline: _ServerTimeline,
+) -> dict[str, Any]:
+    empty_reason = _empty_reason(low, high, has_samples)
+    if empty_reason is not None:
+        return {
+            "status": "empty",
+            "reason": empty_reason,
+            "counted_window_ns": [low, high] if high >= low else None,
+        }
+    partial_reason = _partial_reason(low, high, timeline)
     return {
-        metric: _summarize_server_metric(metric_samples, in_window.get(metric, []))
-        for metric, metric_samples in sorted(grouped.items())
+        "status": "observed" if partial_reason is None else "partial",
+        "reason": partial_reason,
+        "counted_window_ns": [low, high],
     }
 
 
-def _within_aligned_window(
-    sample: TelemetrySample,
-    start_ns: int,
-    end_ns: int,
-    offset_ns: int,
-    uncertainty_ns: int,
-) -> bool:
-    aligned_ns = sample.observed_at_ns + offset_ns
-    return start_ns + uncertainty_ns <= aligned_ns <= end_ns - uncertainty_ns
+def _empty_reason(low: int, high: int, has_samples: bool) -> str | None:
+    if high < low:
+        return "window_shorter_than_uncertainty"
+    if not has_samples:
+        return "no_collector_coverage"
+    return None
+
+
+def _partial_reason(low: int, high: int, timeline: _ServerTimeline) -> str | None:
+    if timeline.first_poll_ns > low + timeline.slack_ns:
+        return "collector_started_after_window_start"
+    if timeline.last_poll_ns < high - timeline.slack_ns:
+        return "collector_stopped_before_window_end"
+    return None
+
+
+def _coverage_counts(cases: dict[str, Any]) -> dict[str, int]:
+    statuses = Counter(
+        case["memory"]["server_coverage"]["status"] for case in cases.values()
+    )
+    return {status: statuses[status] for status in ("observed", "partial", "empty")}
+
+
+def _metric_summaries(
+    samples: list[TelemetrySample], in_window: list[TelemetrySample]
+) -> dict[str, Any]:
+    by_metric: dict[str, TelemetrySample] = {}
+    for sample in samples:
+        by_metric.setdefault(sample.metric, sample)
+    window_by_metric: dict[str, list[TelemetrySample]] = {}
+    for sample in in_window:
+        window_by_metric.setdefault(sample.metric, []).append(sample)
+    return {
+        metric: _summarize_server_metric(first, window_by_metric.get(metric, []))
+        for metric, first in sorted(by_metric.items())
+    }
 
 
 def _summarize_server_metric(
-    samples: list[TelemetrySample],
+    first: TelemetrySample,
     window_samples: list[TelemetrySample],
 ) -> dict[str, Any]:
-    first = samples[0]
+    """Describe one metric using only the samples inside the counted window."""
     states = Counter(sample.state for sample in window_samples)
     valid_values = [
         sample.value_bytes
@@ -474,12 +589,12 @@ def _summarize_server_metric(
     return {
         "observation_scope": first.scope,
         "counter_owner": first.counter_owner,
-        "provenance": sorted({sample.provenance for sample in samples}),
-        "sources": sorted({sample.source for sample in samples}),
+        "provenance": sorted({sample.provenance for sample in window_samples}),
+        "sources": sorted({sample.source for sample in window_samples}),
         "maximum_recorded_bytes": max(valid_values, default=None),
         "valid_samples": len(valid_values),
         "missing_samples": states["missing"],
         "stale_samples": states["stale"],
         "invalid_samples": states["invalid"],
-        "intervals_ms": sorted({sample.interval_ms for sample in samples}),
+        "intervals_ms": sorted({sample.interval_ms for sample in window_samples}),
     }

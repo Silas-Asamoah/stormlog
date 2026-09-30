@@ -3,16 +3,27 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from typing import Any
 
 import pytest
 
-from stormlog.infer.analysis import analyze_inference_events
+from stormlog.infer.analysis import analyze_inference_events, format_analysis_text
 from stormlog.infer.telemetry import ServerIdentity, TelemetrySample
 
+SECOND = 1_000_000_000
+MS = 1_000_000
 
-def _profile(tmp_path, *, host: str = "client", run_id: str = "run-1"):
+
+def _profile(
+    tmp_path: Path,
+    *,
+    host: str = "client",
+    run_id: str = "run-1",
+    windows: dict[str, tuple[int, int]] | None = None,
+) -> Path:
     path = tmp_path / "profile.jsonl"
-    records = [
+    records: list[dict[str, object]] = [
         {
             "schema_version": 2,
             "event_type": "infer.artifact",
@@ -26,18 +37,21 @@ def _profile(tmp_path, *, host: str = "client", run_id: str = "run-1"):
             "device_used_bytes": 999,
             "observation_scope": "client_local",
         },
-        {
-            "schema_version": 1,
-            "event_type": "infer.request",
-            "phase": "measured",
-            "status": "ok",
-            "case_id": "case-a",
-            "started_at_ns": 100,
-            "ended_at_ns": 300,
-            "output_tokens": 1,
-            "total_tokens": 2,
-        },
     ]
+    for case_id, (started, ended) in (windows or {"case-a": (100, 300)}).items():
+        records.append(
+            {
+                "schema_version": 1,
+                "event_type": "infer.request",
+                "phase": "measured",
+                "status": "ok",
+                "case_id": case_id,
+                "started_at_ns": started,
+                "ended_at_ns": ended,
+                "output_tokens": 1,
+                "total_tokens": 2,
+            }
+        )
     path.write_text("".join(json.dumps(record) + "\n" for record in records))
     return path
 
@@ -54,6 +68,11 @@ def _server_sample(
     value: int | None = 256,
     run_id: str = "run-1",
     boot_id: str | None = None,
+    observed_at_ns: int = 150,
+    interval_ms: int = 100,
+    source: str = "nvml-v2",
+    provenance: str = "observed",
+    detail: str | None = None,
 ) -> TelemetrySample:
     return TelemetrySample(
         run_id=run_id,
@@ -66,31 +85,57 @@ def _server_sample(
             replica_id=f"replica-{host}",
             boot_id=boot_id or f"boot-{host}",
         ),
-        observed_at_ns=150,
+        observed_at_ns=observed_at_ns,
         metric=metric,
         value_bytes=value,
         state=state,
-        source="nvml-v2",
-        interval_ms=100,
+        source=source,
+        interval_ms=interval_ms,
+        detail=detail,
+        provenance=provenance,
     )
 
 
-def _telemetry(tmp_path, name: str, *samples: TelemetrySample):
+def _polls(
+    start_ns: int, end_ns: int, *, step_ns: int = 100 * MS, **changes: Any
+) -> list[TelemetrySample]:
+    """One valid device sample per poll, like a collector running in that span."""
+    return [
+        _server_sample(observed_at_ns=observed, value=observed // MS, **changes)
+        for observed in range(start_ns, end_ns + 1, step_ns)
+    ]
+
+
+def _telemetry(tmp_path: Path, name: str, *samples: TelemetrySample) -> Path:
     path = tmp_path / name
     path.write_text("".join(json.dumps(s.to_record()) + "\n" for s in samples))
     return path
 
 
-def test_endpoint_only_memory_is_explicitly_client_local(tmp_path) -> None:
+def _same_host_report(
+    tmp_path: Path,
+    windows: dict[str, tuple[int, int]] | None,
+    *samples: TelemetrySample,
+    **options: Any,
+) -> dict[str, Any]:
+    profile = _profile(tmp_path, host="server-a", windows=windows)
+    telemetry = _telemetry(tmp_path, "server.jsonl", *samples)
+    return analyze_inference_events(
+        profile, server_telemetry_paths=[telemetry], direct_server=True, **options
+    )
+
+
+def test_endpoint_only_memory_is_explicitly_client_local(tmp_path: Path) -> None:
     report = analyze_inference_events(_profile(tmp_path))
     memory = report["cases"]["case-a"]["memory"]
     assert memory["observation_scope"] == "client_local"
     assert memory["peak_device_used_bytes"] == 999
     assert memory["server_observations"] == {}
+    assert memory["server_coverage"] == {"status": "not_joined"}
     assert report["telemetry"]["server_join"]["status"] == "not_configured"
 
 
-def test_direct_remote_join_requires_clock_alignment(tmp_path) -> None:
+def test_direct_remote_join_requires_clock_alignment(tmp_path: Path) -> None:
     profile = _profile(tmp_path)
     telemetry = _telemetry(tmp_path, "server.jsonl", _server_sample())
     unaligned = analyze_inference_events(
@@ -110,6 +155,7 @@ def test_direct_remote_join_requires_clock_alignment(tmp_path) -> None:
     assert join["route_evidence"] == "operator_declared_direct"
     memory = report["cases"]["case-a"]["memory"]
     assert memory["peak_device_used_bytes"] == 999
+    assert memory["server_coverage"]["status"] == "observed"
     assert memory["server_observations"]["device_memory_used_bytes"] == {
         "observation_scope": "gpu_device",
         "counter_owner": "gpu_device",
@@ -124,7 +170,7 @@ def test_direct_remote_join_requires_clock_alignment(tmp_path) -> None:
     }
 
 
-def test_equal_hostname_without_equal_boot_id_needs_alignment(tmp_path) -> None:
+def test_equal_hostname_without_equal_boot_id_needs_alignment(tmp_path: Path) -> None:
     profile = _profile(tmp_path, host="server-a")
     telemetry = _telemetry(
         tmp_path,
@@ -137,7 +183,7 @@ def test_equal_hostname_without_equal_boot_id_needs_alignment(tmp_path) -> None:
     assert report["telemetry"]["server_join"]["reason"] == "clock_alignment_required"
 
 
-def test_two_servers_both_index_zero_are_not_merged(tmp_path) -> None:
+def test_two_servers_both_index_zero_are_not_merged(tmp_path: Path) -> None:
     profile = _profile(tmp_path)
     a = _telemetry(tmp_path, "a.jsonl", _server_sample(uuid="GPU-A"))
     b = _telemetry(
@@ -162,7 +208,9 @@ def test_two_servers_both_index_zero_are_not_merged(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("change", [{"pid": 43}, {"start_ns": 11}, {"uuid": "GPU-B"}])
-def test_process_restart_or_gpu_change_cannot_silently_join(tmp_path, change) -> None:
+def test_process_restart_or_gpu_change_cannot_silently_join(
+    tmp_path: Path, change: dict[str, Any]
+) -> None:
     profile = _profile(tmp_path)
     telemetry = _telemetry(
         tmp_path, "changed.jsonl", _server_sample(), _server_sample(**change)
@@ -173,7 +221,9 @@ def test_process_restart_or_gpu_change_cannot_silently_join(tmp_path, change) ->
     assert report["telemetry"]["server_join"]["reason"] == "multiple_server_identities"
 
 
-def test_missing_counter_is_null_and_instance_scope_remains_distinct(tmp_path) -> None:
+def test_missing_counter_is_null_and_instance_scope_remains_distinct(
+    tmp_path: Path,
+) -> None:
     profile = _profile(tmp_path, host="server-a")
     telemetry = _telemetry(
         tmp_path,
@@ -200,7 +250,9 @@ def test_missing_counter_is_null_and_instance_scope_remains_distinct(tmp_path) -
     assert memory["instance_memory_reserved_bytes"]["missing_samples"] == 1
 
 
-def test_invalid_server_sample_prevents_join_even_after_valid_sample(tmp_path) -> None:
+def test_invalid_server_sample_prevents_join_even_after_valid_sample(
+    tmp_path: Path,
+) -> None:
     profile = _profile(tmp_path, host="server-a")
     telemetry = _telemetry(
         tmp_path,
@@ -215,10 +267,92 @@ def test_invalid_server_sample_prevents_join_even_after_valid_sample(tmp_path) -
     assert report["cases"]["case-a"]["memory"]["server_observations"] == {}
 
 
-def test_mismatched_run_id_is_rejected(tmp_path) -> None:
+def test_mismatched_run_id_is_rejected(tmp_path: Path) -> None:
     profile = _profile(tmp_path)
     telemetry = _telemetry(
         tmp_path, "wrong-run.jsonl", _server_sample(run_id="other-run")
     )
     with pytest.raises(ValueError, match="run_id"):
         analyze_inference_events(profile, server_telemetry_paths=[telemetry])
+
+
+def test_window_shorter_than_twice_the_uncertainty_is_reported_empty(
+    tmp_path: Path,
+) -> None:
+    report = _same_host_report(
+        tmp_path,
+        {"case-a": (1 * SECOND, 1_600 * MS)},
+        *_polls(900 * MS, 1_700 * MS),
+        clock_offset_ns=0,
+        clock_uncertainty_ns=350 * MS,
+    )
+    memory = report["cases"]["case-a"]["memory"]
+    assert memory["server_observations"] == {}
+    assert memory["server_coverage"] == {
+        "status": "empty",
+        "reason": "window_shorter_than_uncertainty",
+        "counted_window_ns": None,
+    }
+    text = format_analysis_text(report)
+    assert "server telemetry: none (window_shorter_than_uncertainty)" in text
+    assert "Server coverage: 0 observed, 0 partial, 1 empty" in text
+
+
+def test_collector_coverage_is_reported_per_case(tmp_path: Path) -> None:
+    report = _same_host_report(
+        tmp_path,
+        {
+            "case-a": (1 * SECOND, 1_900 * MS),
+            "case-b": (2 * SECOND, 2_900 * MS),
+            "case-c": (3 * SECOND, 3_900 * MS),
+        },
+        *_polls(900 * MS, 2_500 * MS),
+    )
+    coverage = {
+        case_id: (
+            case["memory"]["server_coverage"]["status"],
+            case["memory"]["server_coverage"]["reason"],
+        )
+        for case_id, case in report["cases"].items()
+    }
+    assert coverage == {
+        "case-a": ("observed", None),
+        "case-b": ("partial", "collector_stopped_before_window_end"),
+        "case-c": ("empty", "no_collector_coverage"),
+    }
+    text = format_analysis_text(report)
+    assert "server telemetry: partial (collector_stopped_before_window_end)" in text
+    assert "server telemetry: none (no_collector_coverage)" in text
+
+
+def test_collector_started_late_is_partial(tmp_path: Path) -> None:
+    report = _same_host_report(
+        tmp_path,
+        {"case-a": (1 * SECOND, 1_900 * MS)},
+        *_polls(1_500 * MS, 2_500 * MS),
+    )
+    coverage = report["cases"]["case-a"]["memory"]["server_coverage"]
+    assert (coverage["status"], coverage["reason"]) == (
+        "partial",
+        "collector_started_after_window_start",
+    )
+
+
+def test_metric_metadata_describes_only_samples_in_the_window(tmp_path: Path) -> None:
+    report = _same_host_report(
+        tmp_path,
+        None,
+        _server_sample(observed_at_ns=150),
+        _server_sample(
+            observed_at_ns=500,
+            source="dcgm",
+            provenance="reported",
+            interval_ms=1000,
+        ),
+    )
+    observation = report["cases"]["case-a"]["memory"]["server_observations"][
+        "device_memory_used_bytes"
+    ]
+    assert observation["sources"] == ["nvml-v2"]
+    assert observation["provenance"] == ["observed"]
+    assert observation["intervals_ms"] == [100]
