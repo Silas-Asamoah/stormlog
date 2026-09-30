@@ -161,8 +161,10 @@ for separate hosts, use the clock alignment options described below.
 
 ```bash
 RUN_ID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+# The UUID of the GPU that the server's worker process uses; see below.
+GPU_UUID=GPU-00000000-0000-0000-0000-000000000000
 stormlog infer collect-server \
-  --run-id "$RUN_ID" --pid 12345 --device-index 0 \
+  --run-id "$RUN_ID" --pid 12345 --device-uuid "$GPU_UUID" \
   --interval 0.1 --duration 60 --output artifacts/server.jsonl &
 stormlog infer profile \
   --run-id "$RUN_ID" --base-url http://127.0.0.1:8000/v1 \
@@ -173,16 +175,39 @@ stormlog infer analyze artifacts/client.jsonl \
 ```
 
 The collector requires `psutil` (a core dependency) and, for GPU counters, an
-NVIDIA driver exposing NVML v2. Use `--no-gpu` for process RSS only. Pass
-`--device-uuid` when device index alone is ambiguous; a MIG UUID selects an
-instance. `--replica-id` and `--rank` attach additional identity. The collector
-records the actual host, boot ID, PID, process start, GPU UUID, and MIG identity on
-each counter. It stops if the process restarts or the GPU identity changes.
-An NVML read failure produces a `missing` sample with a null value.
-For servers with separate HTTP and GPU worker processes, target the worker PID
-that owns the GPU work. The direct-route assertion then includes the operator's
-knowledge that the addressed HTTP server uses that worker. Stormlog does not
-infer this relationship from a matching GPU index.
+NVIDIA driver exposing NVML v2. Use `--no-gpu` for process RSS only. The
+collector records the actual host, boot ID, PID, process start, GPU UUID, and
+MIG identity on each counter. `--replica-id` and `--rank` attach additional
+identity. For servers with separate HTTP and GPU worker processes, target the
+worker PID that owns the GPU work. The direct-route assertion then includes the
+operator's knowledge that the addressed HTTP server uses that worker. Stormlog
+does not infer this relationship from a matching GPU index.
+
+Select the GPU with `--device-uuid`. `nvidia-smi --query-compute-apps=pid,gpu_uuid --format=csv`
+lists the GPU that each process uses, and a MIG UUID selects an instance.
+`--device-index` is NVML's index, which follows PCI bus order. It is not the
+server's CUDA device number: CUDA orders GPUs fastest first by default, and
+`CUDA_VISIBLE_DEVICES` renumbers them, so a server's `cuda:0` can be NVML index
+3. When collection starts, the collector checks that NVML lists the server PID
+on the selected GPU and prints a warning if it does not. If a child of the
+server process owns the GPU work, the warning names that PID. Inside a container
+NVML can report host PIDs, so treat the warning as a prompt to check rather than
+proof of a wrong GPU.
+
+One collector watches one GPU, and the join accepts one server identity. A
+server that spreads a model across several GPUs, such as vLLM with tensor
+parallelism of 2 or more, therefore cannot be joined yet; see
+[multi-GPU server joins](https://github.com/Silas-Asamoah/stormlog/issues/241).
+
+Collection ends when `--duration` elapses, on Ctrl+C or SIGTERM, when the server
+process exits, or when the GPU UUID changes. Every completed poll is kept, and
+the command prints the stop reason. Ctrl+C and SIGTERM are a normal stop. When
+the server process exits, the collector writes one `invalid` sample, prints a
+warning, and exits 0, because stopping the server after a run is routine. A
+changed GPU UUID also writes an `invalid` sample, and the command exits 1. A
+reading that fails without evidence of a different process or GPU, such as an
+NVML error or a psutil permission error, is recorded as `missing` with a null
+value, and collection continues.
 
 For a profiler on another host, copy the server JSONL to the analysis host and
 provide a measured server-to-client clock offset and an uncertainty bound:
@@ -198,24 +223,46 @@ stormlog infer analyze artifacts/client.jsonl \
 synchronization service or a two-way timestamp probe near the run. If the
 hosts or boot IDs differ, or either boot ID is unavailable, and no alignment is
 supplied, the report lists server targets
-but does not join their samples to client request windows. The uncertainty
-must fit inside the request window for a sample to count. `--direct-server`
-is an explicit assertion that every request in the profile reached this one
-serving process. Do not use it for a load balancer that can route to multiple
-replicas. Multiple server identities, a different run ID, or a restart prevent
-the case-window join. These checks do not prove per-request memory ownership:
-other requests and processes can use the GPU during the same window.
+but does not join their samples to client request windows. On the same host and
+boot, no offset is needed, and a `--clock-uncertainty-ns` you supply is applied
+as given. The uncertainty must fit inside the request window for a sample to
+count. `--direct-server` is an explicit assertion that every request in the
+profile reached this one serving process. Do not use it for a load balancer that
+can route to multiple replicas. Multiple server identities or a different run ID
+prevent the case-window join; the client report is still produced, with the
+reason under `telemetry.server_join`. An `invalid` sample marks the point where
+the observed process or GPU stopped being the one the collector started with.
+Samples before it still count, and a case is left out only if its window could
+extend past the last poll that confirmed the identity, allowing for the clock
+uncertainty. These checks do not prove per-request memory ownership: other
+requests and processes can use the GPU during the same window.
 
 The server artifact uses [versioned `infer.telemetry_sample` records](schemas/inference_telemetry_v1.schema.json),
 one counter per record. `scope` identifies `server_process`, `gpu_device`, or `gpu_instance`;
 `counter_owner`, `source`, `provenance`, `interval_ms`, `state`, and the
 identity explain what the number means. The report's
 `memory.server_observations` gives `maximum_recorded_bytes` and counts of
-valid, missing, stale, and invalid samples for each metric. A maximum is the
+valid, missing, stale, and invalid samples for each metric, using only samples
+inside the case's counted window. A maximum is the
 largest recorded value at the chosen cadence, not the true peak. The 100 ms
 default is a starting point for short requests with direct NVML reads; it is
 not a universal sampling rule. Slower collectors and exporters may miss short
 peaks or report cached/averaged values.
+
+Each case also has `memory.server_coverage`. Its `status` is `observed`,
+`partial`, or `empty`, and `counted_window_ns` gives the client-clock span in
+which samples count. A `partial` or `empty` case carries a `reason`:
+
+| Reason | Meaning |
+| --- | --- |
+| `window_shorter_than_uncertainty` | The case is shorter than twice the clock uncertainty, so no sample is certainly inside it |
+| `identity_invalidated` | The case could extend past the last poll that confirmed the server process and GPU |
+| `no_collector_coverage` | No collector poll falls inside the counted window |
+| `collector_started_after_window_start` | The collector's first poll came more than one interval after the window began |
+| `collector_stopped_before_window_end` | The collector's last poll came more than one interval before the window ended |
+
+`telemetry.server_join.case_coverage` counts the cases in each status, and the
+text report prints the status for every case.
 
 | Counter | Scope and owner | Collector support |
 | --- | --- | --- |
