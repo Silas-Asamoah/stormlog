@@ -38,7 +38,12 @@ from stormlog.infer.server_collector import (
     next_poll_time,
     read_process_rss,
 )
-from stormlog.infer.telemetry import ServerIdentity, TelemetrySample, load_telemetry
+from stormlog.infer.telemetry import (
+    ServerIdentity,
+    TelemetrySample,
+    load_telemetry,
+    validate_group_membership,
+)
 
 SCHEMA = json.loads(
     (
@@ -171,6 +176,8 @@ def _drop(key: str) -> Callable[[dict[str, Any]], None]:
         _set_identity(replica_id=""),
         _set_identity(device_uuid=None),
         _set_identity(device_uuid=None, gpu_instance_id="MIG-a"),
+        _set_identity(group_id="tp", rank=0, world_size=None),
+        _set_identity(world_size=2),
         _set(
             metric="instance_memory_used_bytes",
             scope="gpu_instance",
@@ -595,7 +602,7 @@ def test_compute_process_query_grows_the_buffer() -> None:
 
 
 def _run_collect_cli(
-    result_factory: Callable[..., CollectionResult],
+    result_factory: Callable[..., CollectionResult], *extra: str
 ) -> tuple[int, str, str]:
     stdout, stderr = io.StringIO(), io.StringIO()
     with mock.patch(
@@ -603,7 +610,16 @@ def _run_collect_cli(
     ):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = infer_main(
-                ["collect-server", "--run-id", "r", "--pid", "1", "--output", "o"]
+                [
+                    "collect-server",
+                    "--run-id",
+                    "r",
+                    "--pid",
+                    "1",
+                    "--output",
+                    "o",
+                    *extra,
+                ]
             )
     return code, stdout.getvalue(), stderr.getvalue()
 
@@ -650,3 +666,70 @@ def test_collect_cli_turns_ctrl_c_into_a_clean_stop() -> None:
     assert code == 0
     assert "(stopped: stop_requested)" in stdout
     assert signal.getsignal(signal.SIGINT) is before
+
+
+@pytest.mark.parametrize(
+    ("group_id", "rank", "world_size", "message"),
+    [
+        (None, None, 2, "world_size requires group_id"),
+        ("", 0, 2, "group_id must be a non-empty string"),
+        ("tp", 0, 0, "positive world_size"),
+        ("tp", None, 2, "rank below world_size"),
+        ("tp", 2, 2, "rank below world_size"),
+    ],
+)
+def test_group_members_need_a_rank_within_the_world_size(
+    tmp_path: Path,
+    group_id: str | None,
+    rank: int | None,
+    world_size: int | None,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        validate_group_membership(group_id, rank, world_size)
+    path = tmp_path / "never.jsonl"
+    with pytest.raises(ValueError, match=message):
+        collect_server_telemetry(
+            run_id="run-live",
+            pid=os.getpid(),
+            output_path=path,
+            rank=rank,
+            group_id=group_id,
+            world_size=world_size,
+            gpu_source=_FakeGpu(),
+        )
+    assert not path.exists()
+
+
+def test_collector_records_group_membership(tmp_path: Path) -> None:
+    path = tmp_path / "member.jsonl"
+    collect_server_telemetry(
+        run_id="run-live",
+        pid=os.getpid(),
+        output_path=path,
+        interval_seconds=0.01,
+        duration_seconds=0.015,
+        rank=1,
+        group_id="tp",
+        world_size=2,
+        gpu_source=_FakeGpu(),
+    )
+    samples = load_telemetry(path)
+    assert {
+        (s.identity.group_id, s.identity.rank, s.identity.world_size) for s in samples
+    } == {("tp", 1, 2)}
+    _assert_schema_valid(samples)
+
+
+def test_collect_cli_passes_group_flags() -> None:
+    seen: dict[str, Any] = {}
+
+    def collect(**options: Any) -> CollectionResult:
+        seen.update(options)
+        return CollectionResult(1, STOP_DURATION_ELAPSED)
+
+    code, _stdout, _stderr = _run_collect_cli(
+        collect, "--group-id", "tp", "--rank", "1", "--world-size", "2"
+    )
+    assert code == 0
+    assert (seen["group_id"], seen["rank"], seen["world_size"]) == ("tp", 1, 2)
