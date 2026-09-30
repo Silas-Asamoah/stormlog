@@ -718,3 +718,18 @@ def test_alignment_from_another_run_never_places_samples(tmp_path: Path) -> None
     join = report["telemetry"]["server_join"]
     assert [item["event_id"] for item in join["clock_alignments"]] == ["own"]
     assert join["ignored_clock_alignments"] == ["foreign"]
+
+
+def test_uncertainty_alone_is_refused_across_hosts(tmp_path: Path) -> None:
+    # Dropping the operator's stated uncertainty would count samples too
+    # close to the window edges, so the join refuses instead.
+    report = _aligned_report(
+        tmp_path,
+        [_alignment_record("probe-1")],
+        _server_sample(),
+        clock_uncertainty_ns=500,
+    )
+    assert report["telemetry"]["server_join"] == {
+        "status": "unjoined",
+        "reason": "clock_offset_required",
+    }

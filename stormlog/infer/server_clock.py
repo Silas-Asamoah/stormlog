@@ -207,8 +207,9 @@ def build_server_clock(
     pair of domains; the replaced records are listed in ``overridden``. Records
     from another run never place samples; they are listed in ``ignored``.
     """
-    if offset_ns is not None and uncertainty_ns is None:
-        return "clock_uncertainty_required"
+    issue = _flag_issue(offset_ns, uncertainty_ns, server_domain == client_domain)
+    if issue is not None:
+        return issue
     if server_domain == client_domain:
         return _same_clock(
             run_id, server_domain, client_domain, offset_ns, uncertainty_ns
@@ -231,6 +232,18 @@ def build_server_clock(
         (operator,),
         overridden=tuple(item.event_id for item in pair),
     )
+
+
+def _flag_issue(
+    offset_ns: int | None, uncertainty_ns: int | None, shared_clock: bool
+) -> str | None:
+    """Reject clock flags that cannot describe this pair of clocks."""
+    if offset_ns is not None and uncertainty_ns is None:
+        return "clock_uncertainty_required"
+    if not shared_clock and offset_ns is None and uncertainty_ns is not None:
+        # An uncertainty alone describes one shared clock; never drop it silently.
+        return "clock_offset_required"
+    return None
 
 
 def _recorded_clock(

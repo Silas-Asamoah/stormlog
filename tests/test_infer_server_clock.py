@@ -102,7 +102,11 @@ def _place(clock: ServerClock | str, timestamp_ns: int) -> Placement:
     [
         ({}, "clock_alignment_required"),
         ({"offset_ns": 5}, "clock_uncertainty_required"),
-        ({"uncertainty_ns": 5}, "clock_alignment_required"),
+        ({"uncertainty_ns": 5}, "clock_offset_required"),
+        (
+            {"uncertainty_ns": 5, "recorded": (_alignment("probe"),)},
+            "clock_offset_required",
+        ),
         (
             {
                 "server_domain": "host/unix_epoch_ns",
