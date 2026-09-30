@@ -257,8 +257,10 @@ A joined report lists every alignment it applied in
 uncertainty, window and number of samples), and counts the samples that no
 single record covered under `unaligned_samples`; those samples are left out.
 `clock_offset_ns` is set when one alignment placed every joined sample, and
-`clock_uncertainty_ns` is the largest uncertainty applied. The uncertainty must
-fit inside the request window for a sample to count.
+`clock_uncertainty_ns` is the largest uncertainty applied. Each sample keeps
+the uncertainty of the alignment that placed it and counts only if that
+uncertainty fits inside the request window, so a loose alignment late in a run
+does not remove samples that a precise earlier alignment placed.
 
 `--direct-server` is an explicit assertion that every request in the
 profile reached this one serving process. Do not use it for a load balancer that

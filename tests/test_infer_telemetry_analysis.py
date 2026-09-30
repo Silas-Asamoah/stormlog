@@ -673,3 +673,33 @@ def test_malformed_alignment_record_is_rejected(tmp_path: Path) -> None:
     record["uncertainty_ns"] = -1
     with pytest.raises(ValueError, match="uncertainty_ns"):
         _aligned_report(tmp_path, [record], _server_sample())
+
+
+def test_each_sample_keeps_its_own_alignment_uncertainty(tmp_path: Path) -> None:
+    # A precise early alignment must not inherit a later, looser one's margin.
+    report = _aligned_report(
+        tmp_path,
+        [
+            _alignment_record("early", uncertainty_ns=1, valid_to_ns=1_000),
+            _alignment_record("late", uncertainty_ns=1_000, valid_from_ns=1_000),
+        ],
+        _server_sample(observed_at_ns=150),
+        _server_sample(observed_at_ns=5_000),
+        _server_sample(observed_at_ns=6_500),
+        windows={"case-a": (100, 300), "case-b": (4_000, 7_000)},
+    )
+    assert report["telemetry"]["server_join"]["clock_uncertainty_ns"] == 1_000
+    cases = report["cases"]
+    assert cases["case-a"]["memory"]["server_coverage"] == {
+        "status": "observed",
+        "reason": None,
+        "counted_window_ns": [101, 299],
+    }
+    counts = {
+        case_id: case["memory"]["server_observations"]["device_memory_used_bytes"][
+            "valid_samples"
+        ]
+        for case_id, case in cases.items()
+    }
+    # 6,500 lies within 1,000 of case-b's end, so its own uncertainty excludes it.
+    assert counts == {"case-a": 1, "case-b": 1}
