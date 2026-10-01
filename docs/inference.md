@@ -86,12 +86,12 @@ stormlog infer profile \
 | `replay` | The offsets in `--arrival-trace` | `replay` |
 
 In the open-loop modes, the schedule is fixed before the run starts and the
-first request goes out at 0. A phase can schedule at most 1,000,000 arrivals. `--requests` caps the number of arrivals,
-`--duration` keeps the arrivals before the window closes, and a replay with
-neither sends the whole trace. A replay trace is JSON lines with `offset_ms`
-(milliseconds), or a Stormlog inference artifact. From an artifact, the
-measured requests of one case are replayed: pick the case with
-`--arrival-trace-case` when there are several.
+first request goes out at 0. A phase can schedule at most 1,000,000 arrivals.
+`--requests` caps the number of arrivals, `--duration` keeps the arrivals
+before the window closes, and a replay with neither sends the whole trace. A
+replay trace is JSON lines with `offset_ms` (milliseconds), or a Stormlog
+inference artifact. From an artifact, the measured requests of one case are
+replayed: pick the case with `--arrival-trace-case` when there are several.
 
 `--max-in-flight` (default 128) limits how many requests can be outstanding
 at once. When every slot is busy, `--overflow wait` (default) holds the
@@ -111,8 +111,9 @@ rate it drew rather than `--rate`. It is null for a closed loop, and for a
 case whose arrivals all came at one instant, such as a single request or a
 single burst. When requests were held, latency measured from the send leaves
 out the time they waited.
-`latency_ms.e2e_from_intended_*` measures from when each request was due, so
-that delay stays visible.
+`latency_ms.e2e_from_intended_*` measures from each request's intended
+arrival, so that delay stays visible. The text report shows its p95 for every
+open-loop case.
 
 ### Measured window and drain
 
@@ -171,19 +172,26 @@ stormlog infer profile \
 Nonces come from the seed, the case and the phase, so a run can be repeated
 exactly. Neither another case nor the warmup shares a prefix with the measured
 requests, except in `repeat` mode, where cases with the same input length send
-the same text. Because a repeated run sends the same prompts, running the same
-workload twice against one server makes the second run start with those
-prompts already cached. To measure each run from a cold cache, reset the cache
-before each case (see below) or change `--seed` between runs. The server's chat template still adds the same tokens to every
-request, so even `unique` prompts share those. Each request records its
-`prompt_mode`, `prompt_id`, `prefix_group`, `shared_prefix_tokens` and
-`prompt_digest`. Each case reports how many distinct prompts and prefix groups
-it used, and the range of shared prefix lengths. The nonce takes about eight
-subword tokens, so `unique` and `shared-prefix` need `--input-tokens` of at
-least 32 to hit the target length and prefix share; the CLI warns below that. A prompt is built
-when its request is sent and its text is dropped once the request is done, so
-a long schedule neither waits for all of its prompts to be built nor keeps
-them in memory.
+the same text. The server's chat template still adds the same tokens to every
+request, so even `unique` prompts share those. Because a repeated run sends the
+same prompts, running the same workload twice against one server makes the
+second run start with those prompts already cached. To measure each run from a
+cold cache, reset the cache before each case (see below) or change `--seed`
+between runs; the CLI warns when neither is done.
+
+Each request records its `prompt_mode`, `prompt_id`, `prefix_group`,
+`shared_prefix_tokens` and `prompt_digest`. Each case reports how many distinct
+prompts and prefix groups it used, and the range of shared prefix lengths. Each
+phase window's `prompts_digest` covers the prompts of every scheduled arrival in
+schedule order, dropped ones included, so two runs of one schedule share it
+whatever their overflow policy. In a closed loop with `--duration`, it covers
+the prompts actually sent.
+
+The nonce takes about eight subword tokens, so `unique` and `shared-prefix` need
+`--input-tokens` of at least 32 to hit the target length and prefix share; the
+CLI warns below that. A prompt is built when its request is sent and its text is
+dropped once the request is done, so a long schedule neither waits for all of
+its prompts to be built nor keeps them in memory.
 
 ### Cache state
 
