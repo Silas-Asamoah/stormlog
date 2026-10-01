@@ -76,20 +76,35 @@ async def dispatch_schedule(
     started = time.perf_counter()
     started_ns = time.time_ns()
     tasks: list[asyncio.Task[None]] = []
-    for index, offset in enumerate(offsets):
-        delay = started + offset - time.perf_counter()
-        if delay > 0:
-            await asyncio.sleep(delay)
-        arrival = Arrival(
-            index, mode, started_ns + round(offset * 1e9), held_for_slot=limiter.full
-        )
-        if overflow == "drop" and arrival.held_for_slot:
-            drop(arrival)
-            continue
-        in_flight = await limiter.acquire()
-        arrival = replace(arrival, in_flight_at_dispatch=in_flight)
-        tasks.append(asyncio.create_task(_release_after(send(arrival), limiter)))
+    try:
+        for index, offset in enumerate(offsets):
+            delay = started + offset - time.perf_counter()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            arrival = Arrival(
+                index,
+                mode,
+                started_ns + round(offset * 1e9),
+                held_for_slot=limiter.full,
+            )
+            if overflow == "drop" and arrival.held_for_slot:
+                drop(arrival)
+                continue
+            in_flight = await limiter.acquire()
+            arrival = replace(arrival, in_flight_at_dispatch=in_flight)
+            tasks.append(asyncio.create_task(_release_after(send(arrival), limiter)))
+    except asyncio.CancelledError:
+        # Stopped part-way: the requests already sent finish cancelling first.
+        await cancel_all(tasks)
+        raise
     return Dispatch(started_at_ns=started_ns, tasks=tasks)
+
+
+async def cancel_all(tasks: Sequence[asyncio.Task[None]]) -> None:
+    """Cancel tasks and wait until each has finished cancelling."""
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _release_after(request: Awaitable[None], limiter: InFlightLimiter) -> None:

@@ -666,3 +666,44 @@ def test_fallback_token_counts_never_run_on_the_event_loop(tmp_path: Path) -> No
     # Exact counts of what was sent, and of every answer, happen on pool threads.
     assert len(counted) == 4 and len(answers) == 4
     assert all(name.startswith("stormlog-infer") for name in counted + answers)
+
+
+@pytest.mark.parametrize(
+    ("rate", "in_flight"),
+    [
+        # Every arrival sent; the run is waiting for them to finish.
+        (100.0, 3),
+        # Still dispatching: one request sent, two still to come.
+        (2.0, 1),
+    ],
+)
+def test_cancelling_a_run_records_the_requests_in_flight(
+    tmp_path: Path, rate: float, in_flight: int
+) -> None:
+    config = dataclasses.replace(
+        _profiler(tmp_path).config,
+        arrival_mode="fixed-rate",
+        rates=(rate,),
+        request_count=3,
+    )
+    profiler = InferenceProfiler(config)
+    profiler.client = SleepingClient(1.0)  # type: ignore[assignment]
+
+    async def interrupt() -> None:
+        run = asyncio.create_task(profiler._run_async())
+        await asyncio.sleep(0.25)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+
+    try:
+        asyncio.run(interrupt())
+    finally:
+        profiler.request_executor.shutdown(wait=True)
+    lines = (tmp_path / "infer.jsonl").read_text().splitlines()
+    records = [json.loads(line) for line in lines]
+    requests = [r for r in records if r["event_type"] == "infer.request"]
+    assert [r["status"] for r in requests] == ["cancelled"] * in_flight
+    # Written before the artifact closed, ahead of the session's last word.
+    assert records[-1]["event_type"] == "infer.session"
+    assert records[-1]["status"] == "interrupted"

@@ -31,7 +31,7 @@ from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .host_clock import host_boot_id, wall_clock_domain
-from .open_loop import Arrival, InFlightLimiter, dispatch_schedule
+from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
 from .openai_client import (
     ChatCompletionResult,
     EndpointHTTPError,
@@ -868,7 +868,12 @@ async def _drain(tasks: list[asyncio.Task[None]], *, timeout: float | None) -> N
     """
     if not tasks:
         return
-    _done, pending = await asyncio.wait(tasks, timeout=timeout)
+    try:
+        _done, pending = await asyncio.wait(tasks, timeout=timeout)
+    except asyncio.CancelledError:
+        # Ctrl+C: requests record themselves while the artifact is still open.
+        await cancel_all(tasks)
+        raise
     for task in pending:
         task.cancel()
     for result in await asyncio.gather(*tasks, return_exceptions=True):
