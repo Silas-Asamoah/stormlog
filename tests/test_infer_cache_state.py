@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,9 +28,11 @@ from tests.infer_workload_helpers import SleepingClient, run_profile_with_fake_c
 class _ResetHandler(BaseHTTPRequestHandler):
     calls: list[str] = []
     authorizations: list[str | None] = []
+    called_at: list[float] = []
 
     def do_POST(self) -> None:  # noqa: N802
         type(self).calls.append(self.path)
+        type(self).called_at.append(time.time())
         type(self).authorizations.append(self.headers.get("Authorization"))
         status = 200 if self.path == "/reset_prefix_cache" else 404
         self.send_response(status)
@@ -44,6 +47,7 @@ class _ResetHandler(BaseHTTPRequestHandler):
 def _reset_server() -> Iterator[str]:
     _ResetHandler.calls = []
     _ResetHandler.authorizations = []
+    _ResetHandler.called_at = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ResetHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -258,3 +262,22 @@ def test_cli_warns_that_repeated_seeds_send_cached_prompts(
 ) -> None:
     _code, stderr = _cli(tmp_path, *flags)
     assert ("prompts are the same for every run with --seed 0" in stderr) is warned
+
+
+def test_a_reset_waits_for_calls_the_last_case_gave_up_on(tmp_path: Path) -> None:
+    with _reset_server() as base:
+        _requests, _report, client = run_profile_with_fake_client(
+            tmp_path,
+            latency_seconds=0.01,
+            first_latencies=(0.5,),
+            input_tokens=(8, 16),
+            request_count=None,
+            duration_seconds=0.05,
+            drain_timeout_seconds=0.05,
+            cache_state="cold",
+            cache_reset_url=f"{base}/reset_prefix_cache",
+        )
+        resets = list(_ResetHandler.called_at)
+    # The first case's only call was abandoned; the second reset follows it.
+    assert len(resets) == 2
+    assert resets[1] >= client.finished_at[0]

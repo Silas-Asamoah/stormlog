@@ -267,6 +267,9 @@ class InferenceProfiler:
         case: WorkloadCase,
         writer: JsonlEventWriter,
     ) -> None:
+        # Let calls the previous case gave up on finish first, so the cache
+        # reset does not land while they are still running on the server.
+        abandoned: _AbandonedWait | None = await self._wait_for_abandoned()
         reset = None
         if self.config.cache_reset_url is not None:
             reset = await asyncio.to_thread(
@@ -296,7 +299,9 @@ class InferenceProfiler:
                 phase="warmup",
                 total_requests=self.config.warmup_requests,
                 duration_seconds=None,
+                abandoned=abandoned,
             )
+            abandoned = None
 
         await self._run_phase(
             case=case,
@@ -304,6 +309,7 @@ class InferenceProfiler:
             phase="measured",
             total_requests=self.config.request_count,
             duration_seconds=self.config.duration_seconds,
+            abandoned=abandoned,
         )
 
     async def _run_phase(
@@ -314,7 +320,9 @@ class InferenceProfiler:
         phase: str,
         total_requests: int | None,
         duration_seconds: float | None,
+        abandoned: "_AbandonedWait | None" = None,
     ) -> None:
+        """Run one phase; ``abandoned`` is a wait already done for it."""
         prompts = PromptSource(
             self.prompt_spec,
             counter=self.token_counter,
@@ -325,7 +333,8 @@ class InferenceProfiler:
         )
         request = _PhaseRequest(case, writer, prompts, phase)
         prompts.warm()
-        abandoned = await self._wait_for_abandoned()
+        if abandoned is None:
+            abandoned = await self._wait_for_abandoned()
         if case.arrival.open_loop:
             window = await self._run_open_phase(
                 request, total_requests, duration_seconds

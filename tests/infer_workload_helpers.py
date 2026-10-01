@@ -24,6 +24,7 @@ class SleepingClient:
         self.latency_seconds = latency_seconds
         self.first_latencies = list(first_latencies)
         self.calls = 0
+        self.finished_at: list[float] = []
         self.active = 0
         self.max_active = 0
         self.lock = threading.Lock()
@@ -49,6 +50,7 @@ class SleepingClient:
         time.sleep(latency)
         with self.lock:
             self.active -= 1
+            self.finished_at.append(time.time())
         return ChatCompletionResult(
             text="ok",
             started_at_ns=started_at_ns,
