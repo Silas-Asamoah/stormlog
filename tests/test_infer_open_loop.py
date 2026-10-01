@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import io
 import json
+import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -581,3 +583,31 @@ def test_older_artifacts_print_no_missing_peak() -> None:
         {"mode": "closed", "offered": 2, "sent": 2, "failed": {"error": 2}}
     )
     assert lines == ["  arrivals: closed, offered 2, sent 2, error 2"]
+
+
+def test_running_calls_can_be_read_while_threads_finish() -> None:
+    profiler = _profiler(Path(tempfile.mkdtemp()))
+    pool = ThreadPoolExecutor(max_workers=8)
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def read_repeatedly() -> None:
+        while not stop.is_set():
+            try:
+                profiler._running_calls()
+            except RuntimeError as exc:  # "Set changed size during iteration"
+                errors.append(exc)
+                return
+
+    reader = threading.Thread(target=read_repeatedly)
+    reader.start()
+    try:
+        # Without the lock this fails on every run at this size.
+        for _ in range(2_000):
+            profiler._track(pool.submit(int))
+    finally:
+        pool.shutdown(wait=True)
+        stop.set()
+        reader.join()
+    assert errors == []
+    assert profiler._running_calls() == []

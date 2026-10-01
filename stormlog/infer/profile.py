@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 import urllib.error
 from collections.abc import Callable
@@ -89,6 +90,8 @@ class InferenceProfiler:
         # Requests on the pool, including ones a drain deadline gave up on:
         # their HTTP calls keep running until they finish or time out.
         self._unfinished: set[Future[Any]] = set()
+        # Pool threads remove finished calls while the event loop reads the set.
+        self._unfinished_lock = threading.Lock()
         self._opened_artifact = False
 
     def run(self) -> dict[str, Any]:
@@ -352,6 +355,19 @@ class InferenceProfiler:
             )
         )
 
+    def _track(self, call: Future[Any]) -> None:
+        with self._unfinished_lock:
+            self._unfinished.add(call)
+        call.add_done_callback(self._untrack)
+
+    def _untrack(self, call: Future[Any]) -> None:
+        with self._unfinished_lock:
+            self._unfinished.discard(call)
+
+    def _running_calls(self) -> list[Future[Any]]:
+        with self._unfinished_lock:
+            return [future for future in self._unfinished if not future.done()]
+
     async def _wait_for_abandoned(self) -> "_AbandonedWait":
         """Let requests an earlier drain gave up on finish before a phase starts.
 
@@ -359,7 +375,7 @@ class InferenceProfiler:
         phase that started alongside them would queue behind them and measure
         their load as its own. Each call is bounded by the request timeout.
         """
-        running = [future for future in self._unfinished if not future.done()]
+        running = self._running_calls()
         if not running:
             return _AbandonedWait()
         started = time.perf_counter()
@@ -582,8 +598,7 @@ class InferenceProfiler:
                 stream_include_usage=self.config.stream_include_usage,
             ),
         )
-        self._unfinished.add(call)
-        call.add_done_callback(self._unfinished.discard)
+        self._track(call)
         outcome = await asyncio.wrap_future(call)
         if outcome.error is None:
             try:
