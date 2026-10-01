@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
@@ -24,7 +25,7 @@ from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .host_clock import host_boot_id, wall_clock_domain
-from .openai_client import OpenAIChatCompletionsClient
+from .openai_client import EndpointHTTPError, OpenAIChatCompletionsClient
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter, generate_prompt
 
@@ -360,6 +361,7 @@ class InferenceProfiler:
             )
         except Exception as exc:
             ended_at_ns = time.time_ns()
+            status, http_status = classify_failure(exc)
             return InferenceRequestEvent(
                 session_id=self.session.session_id,
                 request_id=request_id,
@@ -373,7 +375,7 @@ class InferenceProfiler:
                 target_input_tokens=case.input_tokens,
                 target_output_tokens=case.output_tokens,
                 stream=self.config.stream,
-                status="error",
+                status=status,
                 e2e_latency_ms=(time.perf_counter() - started_perf) * 1000.0,
                 ttft_ms=None,
                 first_chunk_latency_ms=None,
@@ -382,7 +384,31 @@ class InferenceProfiler:
                 prompt_token_exact=prompt_count.exact,
                 error_type=type(exc).__name__,
                 error_message=str(exc),
+                http_status=http_status,
             )
+
+
+# The server declined the request: rate limited or overloaded.
+REJECTED_HTTP_STATUSES = frozenset({429, 503})
+
+
+def classify_failure(exc: BaseException) -> tuple[str, int | None]:
+    """Return the request status for a failure and its HTTP status, if any."""
+    http_status = exc.status if isinstance(exc, EndpointHTTPError) else None
+    if http_status in REJECTED_HTTP_STATUSES:
+        return "rejected", http_status
+    if _is_timeout(exc):
+        return "timeout", http_status
+    return "error", http_status
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    # urllib wraps a connect timeout in URLError.
+    return isinstance(exc, urllib.error.URLError) and isinstance(
+        exc.reason, TimeoutError
+    )
 
 
 class _RequestCounter:

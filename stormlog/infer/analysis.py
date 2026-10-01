@@ -71,6 +71,7 @@ def analyze_inference_events(
             "successful_requests": len(ok_requests),
             "failed_requests": len(failed),
             "failure_rate": (len(failed) / len(requests)) if requests else 0.0,
+            "failures_by_status": _failures_by_status(failed),
             "case_count": len(cases),
         },
         "cases": cases,
@@ -82,6 +83,11 @@ def analyze_inference_events(
     }
 
 
+def _failures_by_status(failed: list[dict[str, Any]]) -> dict[str, int]:
+    counts = Counter(str(record.get("status")) for record in failed)
+    return dict(sorted(counts.items()))
+
+
 def format_analysis_text(report: dict[str, Any]) -> str:
     """Render an inference analysis report as text."""
     summary = report.get("summary", {})
@@ -90,7 +96,8 @@ def format_analysis_text(report: dict[str, Any]) -> str:
         "-" * 28,
         f"Total requests: {summary.get('total_requests', 0)}",
         f"Successful requests: {summary.get('successful_requests', 0)}",
-        f"Failed requests: {summary.get('failed_requests', 0)}",
+        f"Failed requests: {summary.get('failed_requests', 0)}"
+        + _failure_breakdown(summary.get("failures_by_status")),
         f"Failure rate: {float(summary.get('failure_rate', 0.0)):.2%}",
     ]
     cases = report.get("cases", {})
@@ -103,6 +110,13 @@ def format_analysis_text(report: dict[str, Any]) -> str:
         for case_id, case in cases.items():
             lines.extend(_case_lines(case_id, case))
     return "\n".join(lines)
+
+
+def _failure_breakdown(by_status: Any) -> str:
+    if not isinstance(by_status, dict) or not by_status:
+        return ""
+    parts = ", ".join(f"{status} {count}" for status, count in by_status.items())
+    return f" ({parts})"
 
 
 def _server_status_lines(join: dict[str, Any]) -> list[str]:

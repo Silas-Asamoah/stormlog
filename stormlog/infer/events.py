@@ -41,6 +41,7 @@ class InferenceRequestEvent:
     finish_reason: str | None = None
     error_type: str | None = None
     error_message: str | None = None
+    http_status: int | None = None
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)

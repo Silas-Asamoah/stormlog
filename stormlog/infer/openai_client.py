@@ -11,6 +11,14 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator, Literal
 
 
+class EndpointHTTPError(RuntimeError):
+    """The endpoint answered with an HTTP error status."""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(f"HTTP {status}: {message}")
+        self.status = status
+
+
 @dataclass(frozen=True)
 class ChatCompletionResult:
     """Parsed response and client-observed timing metadata."""
@@ -97,7 +105,7 @@ class OpenAIChatCompletionsClient:
                 )
         except urllib.error.HTTPError as exc:
             message = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"HTTP {exc.code}: {message}") from exc
+            raise EndpointHTTPError(exc.code, message) from exc
 
     def _read_json_response(
         self,
