@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import stat
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
@@ -230,22 +231,34 @@ def _validate_attachment_references(
 
 def _append_events(artifact: Path, serialized_events: tuple[str, ...]) -> None:
     """Atomically replace the artifact with its complete staged contents."""
-    temporary: Path | None = None
+    existing = artifact.read_bytes()
+    # A last line without its newline would absorb the first record.
+    separator = b"\n" if existing and not existing.endswith(b"\n") else b""
+    records = (record.encode("utf-8") + b"\n" for record in serialized_events)
+    _replace_file(artifact, (existing, separator, *records))
+
+
+def _replace_file(target: Path, chunks: Iterable[bytes]) -> None:
+    """Write ``chunks`` beside ``target``, then rename the result over it.
+
+    The staged file keeps an existing target's permissions. A new target gets
+    the permissions of any newly created file: the staged file is opened with
+    mode 0o666, so the process umask applies. A ``tempfile`` file would be
+    readable by its owner only, and the rename would keep that mode.
+    """
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb", dir=artifact.parent, delete=False
-        ) as handle:
-            temporary = Path(handle.name)
-            handle.write(artifact.read_bytes())
-            for record in serialized_events:
-                handle.write(record.encode("utf-8"))
-                handle.write(b"\n")
+        with os.fdopen(os.open(temporary, flags, 0o666), "wb") as handle:
+            for chunk in chunks:
+                handle.write(chunk)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, artifact)
+        if target.exists():
+            os.chmod(temporary, stat.S_IMODE(target.stat().st_mode))
+        os.replace(temporary, target)
     finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
 
 
 def link_trace_activities(
@@ -435,18 +448,8 @@ def _add_attachment(rows: list[dict[str, Any]], candidate: dict[str, Any]) -> No
 
 def _write_envelope(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent, delete=False
-        ) as handle:
-            temporary = Path(handle.name)
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-        os.replace(temporary, path)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    _replace_file(path, (text.encode("utf-8"),))
 
 
 __all__ = [

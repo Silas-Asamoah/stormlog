@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/telemetry_event_v4.schema.json",
   "title": "TelemetryEvent v4",
-  "description": "Capability-aware canonical telemetry event with nullable memory counters.",
+  "description": "Capability-aware canonical telemetry event with nullable memory counters. The loader also checks rules this schema cannot state: rank and local_rank are below world_size, device_used_bytes and device_free_bytes do not exceed device_total_bytes, and integers have no decimal point or exponent.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -28,14 +28,14 @@
   ],
   "properties": {
     "schema_version": {"type": "integer", "const": 4},
-    "session_id": {"type": "string", "minLength": 1},
+    "session_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
     "timestamp_ns": {"type": "integer", "minimum": 0},
-    "event_type": {"type": "string", "minLength": 1},
-    "collector": {"type": "string", "minLength": 1},
+    "event_type": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "collector": {"type": "string", "minLength": 1, "pattern": "\\S"},
     "sampling_interval_ms": {"type": "integer", "minimum": 0},
     "pid": {"type": "integer", "minimum": -1},
-    "host": {"type": "string", "minLength": 1},
-    "job_id": {"type": ["string", "null"], "minLength": 1},
+    "host": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "job_id": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"},
     "rank": {"type": "integer", "minimum": 0},
     "local_rank": {"type": "integer", "minimum": 0},
     "world_size": {"type": "integer", "minimum": 1},
@@ -73,9 +73,9 @@
             "supports_bounded_profiling"
           ],
           "properties": {
-            "backend": {"type": "string", "minLength": 1},
-            "telemetry_collector": {"type": "string", "minLength": 1},
-            "sampling_source": {"type": "string", "minLength": 1},
+            "backend": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "telemetry_collector": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "sampling_source": {"type": "string", "minLength": 1, "pattern": "\\S"},
             "supports_allocator_allocated": {"type": "boolean"},
             "supports_allocator_reserved": {"type": "boolean"},
             "supports_allocator_active": {"type": "boolean"},
@@ -91,5 +91,132 @@
         }
       }
     }
-  }
+  },
+  "$comment": "A counter whose capability is false must be null.",
+  "allOf": [
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_allocator_allocated"],
+                "properties": {"supports_allocator_allocated": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "allocator_allocated_bytes": {"type": "null"},
+          "allocator_change_bytes": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_allocator_reserved"],
+                "properties": {"supports_allocator_reserved": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"allocator_reserved_bytes": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_allocator_active"],
+                "properties": {"supports_allocator_active": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"allocator_active_bytes": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_allocator_inactive"],
+                "properties": {"supports_allocator_inactive": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"allocator_inactive_bytes": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_device_used"],
+                "properties": {"supports_device_used": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"device_used_bytes": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_device_free"],
+                "properties": {"supports_device_free": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"device_free_bytes": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_device_total"],
+                "properties": {"supports_device_total": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"device_total_bytes": {"type": "null"}}}
+    }
+  ]
 }

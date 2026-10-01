@@ -340,6 +340,14 @@ default is a starting point for short requests with direct NVML reads; it is
 not a universal sampling rule. Slower collectors and exporters may miss short
 peaks or report cached/averaged values.
 
+A record that passes the schema can still fail to load, because JSON Schema
+cannot compare two values or tell `100` from `100.0`. The loader also requires
+that `clock_domain` is exactly `{host}/{boot_id}/unix_epoch_ns`, or
+`{host}/unix_epoch_ns` when `boot_id` is null; that a group member's `rank` is
+below its `world_size`; and that integers are written without a decimal point
+or exponent. A float cannot hold a nanosecond timestamp exactly: near the
+current time, adjacent float64 values are 256 ns apart.
+
 Each case also has `memory.server_coverage`. Its `status` is `observed`,
 `partial`, or `empty`, and `counted_window_ns` gives the client-clock span in
 which samples count. A `partial` or `empty` case carries a `reason`:
