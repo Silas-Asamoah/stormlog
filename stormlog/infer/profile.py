@@ -16,6 +16,7 @@ from typing import Any
 from .. import __version__
 from ..session import (
     SESSION_STATUS_INCOMPLETE,
+    SESSION_STATUS_INTERRUPTED,
     create_session_summary,
     finalize_session_summary,
     new_session_id,
@@ -73,6 +74,7 @@ class InferenceProfiler:
         # Requests on the pool, including ones a drain deadline gave up on:
         # their HTTP calls keep running until they finish or time out.
         self._unfinished: set[Future[Any]] = set()
+        self._opened_artifact = False
 
     def run(self) -> dict[str, Any]:
         """Run profiling and return an aggregate report."""
@@ -83,7 +85,28 @@ class InferenceProfiler:
 
     async def _run_async(self) -> dict[str, Any]:
         output_path = Path(self.config.output_path)
+        try:
+            await self._capture(output_path)
+        except BaseException as exc:
+            # A crash or Ctrl+C still ends the artifact with a session record,
+            # once this run has opened it; an older file at the path is left be.
+            if self._opened_artifact:
+                self._write_terminal_session(
+                    output_path=output_path, report=None, status=_stop_status(exc)
+                )
+            raise
+
+        try:
+            report = analyze_inference_events(output_path)
+        except Exception:
+            self._write_terminal_session(output_path=output_path, report=None)
+            raise
+        self._write_terminal_session(output_path=output_path, report=report)
+        return report
+
+    async def _capture(self, output_path: Path) -> None:
         with JsonlEventWriter(output_path) as writer:
+            self._opened_artifact = True
             writer.append(
                 {
                     "schema_version": 1,
@@ -138,14 +161,6 @@ class InferenceProfiler:
                 stop_sampling.set()
                 await sample_task
 
-        try:
-            report = analyze_inference_events(output_path)
-        except Exception:
-            self._write_terminal_session(output_path=output_path, report=None)
-            raise
-        self._write_terminal_session(output_path=output_path, report=report)
-        return report
-
     def _artifact_identity(self) -> ArtifactIdentityEvent:
         session = self.session
         boot_id = host_boot_id()
@@ -177,13 +192,11 @@ class InferenceProfiler:
         *,
         output_path: Path,
         report: dict[str, Any] | None,
+        status: str = SESSION_STATUS_INCOMPLETE,
     ) -> None:
         session = self.session
         if report is None:
-            session = update_session_summary(
-                session,
-                status=SESSION_STATUS_INCOMPLETE,
-            )
+            session = update_session_summary(session, status=status)
         completed_session = finalize_session_summary(session)
         with output_path.open("a", encoding="utf-8") as handle:
             if report is not None:
@@ -782,6 +795,12 @@ async def _drain(tasks: list[asyncio.Task[None]], *, timeout: float | None) -> N
     for result in await asyncio.gather(*tasks, return_exceptions=True):
         if isinstance(result, Exception):
             raise result
+
+
+def _stop_status(exc: BaseException) -> str:
+    if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
+        return SESSION_STATUS_INTERRUPTED
+    return SESSION_STATUS_INCOMPLETE
 
 
 def _lag_ms(arrival: Arrival, sent_at_ns: int) -> float:

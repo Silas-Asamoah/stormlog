@@ -475,3 +475,87 @@ def test_settings_that_repeat_a_case_are_rejected(
     assert code == 1
     assert "two workload cases would share the ID" in stderr
     assert not (tmp_path / "infer.jsonl").exists()
+
+
+class _InterruptingClient:
+    def complete(self, **_kwargs: Any) -> ChatCompletionResult:
+        raise KeyboardInterrupt
+
+
+def _last_session(path: Path) -> dict[str, Any]:
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    sessions = [r for r in records if r.get("event_type") == "infer.session"]
+    assert records[-1] is sessions[-1]
+    return dict(sessions[-1])
+
+
+def _profiler(tmp_path: Path) -> InferenceProfiler:
+    return InferenceProfiler(
+        ProfileConfig(
+            endpoint="http://127.0.0.1:1/v1/chat/completions",
+            model="fake-model",
+            concurrency=(1,),
+            input_tokens=(8,),
+            output_tokens=(4,),
+            request_count=2,
+            output_path=str(tmp_path / "infer.jsonl"),
+            stream=False,
+            system_sampler="none",
+            tokenizer="none",
+        )
+    )
+
+
+def test_a_crash_mid_run_ends_the_artifact_as_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profiler = _profiler(tmp_path)
+    profiler.client = SleepingClient(0.0)  # type: ignore[assignment]
+
+    async def broken_case(**_kwargs: Any) -> None:
+        raise RuntimeError("bug in the run loop")
+
+    monkeypatch.setattr(profiler, "_run_case", broken_case)
+    with pytest.raises(RuntimeError, match="bug in the run loop"):
+        profiler.run()
+    assert _last_session(tmp_path / "infer.jsonl")["status"] == "incomplete"
+
+
+def test_ctrl_c_ends_the_artifact_as_interrupted(tmp_path: Path) -> None:
+    profiler = _profiler(tmp_path)
+    profiler.client = _InterruptingClient()  # type: ignore[assignment]
+    with pytest.raises(KeyboardInterrupt):
+        profiler.run()
+    assert _last_session(tmp_path / "infer.jsonl")["status"] == "interrupted"
+
+
+def test_the_cli_exits_130_on_ctrl_c(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "stormlog.infer.profile.OpenAIChatCompletionsClient",
+        lambda **_kwargs: _InterruptingClient(),
+    )
+    code, stderr = _profile_cli(tmp_path)
+    assert code == 130
+    assert stderr.strip() == "Interrupted"
+
+
+def test_a_run_that_cannot_open_its_artifact_writes_nothing(tmp_path: Path) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("not a directory")
+    profiler = InferenceProfiler(
+        ProfileConfig(
+            endpoint="http://127.0.0.1:1/v1/chat/completions",
+            model="fake-model",
+            concurrency=(1,),
+            input_tokens=(8,),
+            output_tokens=(4,),
+            output_path=str(blocker / "infer.jsonl"),
+            system_sampler="none",
+            tokenizer="none",
+        )
+    )
+    with pytest.raises(OSError):
+        profiler.run()
+    assert blocker.read_text() == "not a directory"

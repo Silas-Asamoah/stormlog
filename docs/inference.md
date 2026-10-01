@@ -130,6 +130,12 @@ before it starts, rather than measuring their load as its own. Its
 `abandoned_requests`. A lower `--drain-timeout` ends a phase sooner, but not
 the run.
 
+Ctrl+C stops a profile with exit code 130. Requests still running are
+recorded as `cancelled`, and the artifact ends with an `infer.session` record
+whose status is `interrupted`. A run that fails for another reason ends with
+status `incomplete`. Either way, the requests recorded before the stop can
+still be analyzed.
+
 Request outcomes:
 
 | `status` | Meaning |
