@@ -12,6 +12,9 @@ from .mode_commands import (
     expected_artifacts,
     microbenchmark_command,
     process_roles,
+    vllm_command,
+    vllm_expected_artifacts,
+    vllm_process_roles,
 )
 from .models import ExperimentMode, WorkloadId
 
@@ -94,13 +97,24 @@ def build_plan(
                     configuration_id, workload_id.value, mode, repetition
                 )
                 directory = artifact_root / configuration_id / "trials" / identity
-                command = microbenchmark_command(
-                    mode,
-                    workload,
-                    directory,
-                    cupti_library=cupti_library,
-                    vendor=vendor,
-                )
+                if workload_id is WorkloadId.VLLM:
+                    if vendor != "nvidia":
+                        raise ValueError("the pinned vLLM adapter requires NVIDIA")
+                    command = vllm_command(mode, directory, cupti_library=cupti_library)
+                    artifacts = vllm_expected_artifacts(mode)
+                    roles = vllm_process_roles(mode)
+                    pressure_controls: dict[str, Any] = {}
+                else:
+                    command = microbenchmark_command(
+                        mode,
+                        workload,
+                        directory,
+                        cupti_library=cupti_library,
+                        vendor=vendor,
+                    )
+                    artifacts = expected_artifacts(mode, vendor)
+                    roles = process_roles(mode)
+                    pressure_controls = _pressure_controls(workload, mode)
                 trials.append(
                     {
                         "trial_id": identity,
@@ -113,19 +127,17 @@ def build_plan(
                             "environment": dict(command.environment),
                             "timeout_seconds": command.timeout_seconds,
                         },
-                        "expected_artifacts": [
-                            row.__dict__ for row in expected_artifacts(mode, vendor)
-                        ],
+                        "expected_artifacts": [row.__dict__ for row in artifacts],
                         "process_roles": [
                             {
                                 "role": row.role.value,
                                 "discovery": row.discovery,
                                 "argv_contains": row.argv_contains,
                             }
-                            for row in process_roles(mode)
+                            for row in roles
                         ],
                         "measurement_range_id": workload.measurement_range_id,
-                        "pressure_controls": _pressure_controls(workload, mode),
+                        "pressure_controls": pressure_controls,
                     }
                 )
     return {

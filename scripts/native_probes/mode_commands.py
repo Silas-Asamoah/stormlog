@@ -71,6 +71,131 @@ def microbenchmark_command(
     )
 
 
+def vllm_command(
+    mode: ExperimentMode,
+    artifact_directory: Path,
+    *,
+    cupti_library: Path | None = None,
+) -> CommandSpec:
+    """Build a fresh-server, fixed-arrival vLLM trial command."""
+    supported = {
+        ExperimentMode.OFF,
+        ExperimentMode.PUBLIC_ENGINE,
+        ExperimentMode.PROTON,
+        ExperimentMode.DIRECT_CUPTI,
+        ExperimentMode.TRUSTED,
+    }
+    if mode not in supported:
+        raise ValueError(f"{mode.value} has no vLLM session adapter")
+    directory = artifact_directory.resolve()
+    base = (
+        sys.executable,
+        "-m",
+        "scripts.native_probes.workloads.vllm_open_loop",
+        "--mode",
+        mode.value,
+        "--output",
+        str(directory / "vllm"),
+    )
+    if mode is ExperimentMode.DIRECT_CUPTI:
+        if cupti_library is None:
+            raise ValueError("direct-cupti requires a pinned injection library")
+        return _direct_cupti(base, directory / "vllm", cupti_library, 256 * 1024 * 1024)
+    return CommandSpec(base, {}, 1800.0)
+
+
+def vllm_expected_artifacts(mode: ExperimentMode) -> tuple[ArtifactExpectation, ...]:
+    """Require request accounting and profiler output from the vLLM adapter."""
+    common = (
+        ArtifactExpectation(
+            "vllm-request", "input", "vllm/request.json", "helper_agent", "json"
+        ),
+        ArtifactExpectation(
+            "vllm-schedule", "input", "vllm/schedule.json", "helper_agent", "json"
+        ),
+        ArtifactExpectation(
+            "vllm-requests", "raw_log", "vllm/requests.jsonl", "helper_agent", "jsonl"
+        ),
+        ArtifactExpectation(
+            "vllm-warmup", "raw_log", "vllm/warmup.jsonl", "helper_agent", "jsonl"
+        ),
+        ArtifactExpectation(
+            "vllm-server-stdout", "log", "vllm/server-stdout.log", "target", "text"
+        ),
+        ArtifactExpectation(
+            "vllm-server-stderr", "log", "vllm/server-stderr.log", "target", "text"
+        ),
+        ArtifactExpectation(
+            "vllm-server-command",
+            "command",
+            "vllm/server-command.json",
+            "helper_agent",
+            "json",
+        ),
+        ArtifactExpectation(
+            "vllm-server-exit",
+            "status",
+            "vllm/server-exit.json",
+            "helper_agent",
+            "json",
+        ),
+        ArtifactExpectation(
+            "vllm-versions", "status", "vllm/versions.json", "helper_agent", "json"
+        ),
+        ArtifactExpectation(
+            "vllm-environment",
+            "status",
+            "vllm/server-environment.json",
+            "helper_agent",
+            "json",
+        ),
+        ArtifactExpectation(
+            "vllm-resource-samples",
+            "raw_log",
+            "vllm/resource-samples.jsonl",
+            "helper_agent",
+            "jsonl",
+        ),
+    )
+    profiler = {
+        ExperimentMode.PUBLIC_ENGINE: ("public-engine", "target", "torch-profiler"),
+        ExperimentMode.PROTON: ("proton", "target", "proton-trace"),
+        ExperimentMode.DIRECT_CUPTI: ("cupti", "target", "stormlog-cupti-v1"),
+        ExperimentMode.TRUSTED: ("nsys", "profiler_wrapper", "vendor-native"),
+    }
+    if mode not in profiler:
+        return common
+    path, producer, format_name = profiler[mode]
+    return (
+        *common,
+        ArtifactExpectation(
+            "vllm-profiler",
+            "raw_trace",
+            f"vllm/{path}",
+            producer,
+            format_name,
+            True,
+            True,
+            mode is ExperimentMode.DIRECT_CUPTI,
+        ),
+    )
+
+
+def vllm_process_roles(mode: ExperimentMode) -> tuple[ProcessRoleSpec, ...]:
+    """Account for client, server, and optional profiler wrapper separately."""
+    roles = [
+        ProcessRoleSpec(ProcessRole.HELPER_AGENT, "root"),
+        ProcessRoleSpec(ProcessRole.TARGET, "descendant_argv_contains", "vllm"),
+    ]
+    if mode is ExperimentMode.TRUSTED:
+        roles.append(
+            ProcessRoleSpec(
+                ProcessRole.PROFILER_WRAPPER, "descendant_argv_contains", "nsys"
+            )
+        )
+    return tuple(roles)
+
+
 def _workload_argv(workload: Workload) -> tuple[str, ...]:
     return (
         sys.executable,

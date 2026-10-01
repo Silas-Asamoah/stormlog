@@ -87,7 +87,7 @@ def run_trial(
         "ground_truth": (
             workload_result.get("ground_truth") if workload_result else None
         ),
-        "loss": {},
+        "loss": (workload_result.get("loss", {}) if workload_result else {}),
         "pressure_controls": dict(spec.pressure_controls),
         "artifacts": artifacts,
         "limitations": _limitations(
