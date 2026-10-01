@@ -105,8 +105,12 @@ Every request records its `arrival_mode`, `request_index` and
 intended), whether it was `held_for_slot`, and its `in_flight_at_dispatch`.
 Each case's `arrivals` block in the report counts what was offered, sent,
 completed, dropped and held. It also gives failures by status, peak
-in-flight, the offered rate and dispatch-lag percentiles. When requests were
-held, latency measured from the send leaves out the time they waited.
+in-flight, the offered rate and dispatch-lag percentiles. The offered rate is
+measured from the arrivals actually scheduled, so a Poisson case shows the
+rate it drew rather than `--rate`. It is null for a closed loop, and for a
+case whose arrivals all came at one instant, such as a single request or a
+single burst. When requests were held, latency measured from the send leaves
+out the time they waited.
 `latency_ms.e2e_from_intended_*` measures from when each request was due, so
 that delay stays visible.
 
@@ -208,9 +212,15 @@ one of:
 - nothing reset the cache.
 
 A failed reset is recorded and the run continues. Each case also has a
-`run_kind`: `cold_start` when a cold cache was requested and no warmup ran,
-`steady_state` when warmup ran, and `unspecified` otherwise. Compare runs of
-the same kind.
+`run_kind`, which names how the run was designed:
+
+- `cold_start`: a cold cache was requested, no warmup ran, and no reset
+  failed;
+- `steady_state`: warmup ran;
+- `unspecified`: anything else, including a cold start whose reset failed.
+
+The label is not evidence about the cache. One warmup request is enough to
+make a case `steady_state`. Compare runs of the same kind.
 
 ### Workload record
 

@@ -85,11 +85,18 @@ def _redact(url: str) -> str:
     return f"{parts.scheme}://{host}{parts.path}{query}"
 
 
-def run_kind(requested: str, warmup_requests: int) -> str:
-    """Whether a case measures a cold start or a warmed-up steady state."""
+def run_kind(
+    requested: str, warmup_requests: int, reset: CacheReset | None = None
+) -> str:
+    """Whether a case was designed as a cold start or a warmed-up steady state.
+
+    This names the run's design, not evidence about the cache. A cold start
+    whose reset failed is unspecified: the failure shows the cache was not
+    cleared.
+    """
     if warmup_requests > 0:
         return "steady_state"
-    if requested == COLD:
+    if requested == COLD and (reset is None or reset.succeeded):
         return "cold_start"
     return UNSPECIFIED
 
@@ -112,7 +119,7 @@ def cache_state_record(
         "reset": reset.to_record() if reset is not None else None,
         "verified": UNVERIFIED,
         "reason": _reason(requested, reset),
-        "run_kind": run_kind(requested, warmup_requests),
+        "run_kind": run_kind(requested, warmup_requests, reset),
     }
 
 

@@ -12,7 +12,12 @@ from typing import Any
 import pytest
 
 from stormlog.infer.analysis import format_analysis_text
-from stormlog.infer.cache_state import cache_summary, reset_cache, run_kind
+from stormlog.infer.cache_state import (
+    CacheReset,
+    cache_summary,
+    reset_cache,
+    run_kind,
+)
 from stormlog.infer.cli import main as infer_main
 from tests.infer_workload_helpers import run_profile_with_fake_client
 
@@ -82,6 +87,13 @@ def test_run_kind_separates_cold_starts_from_steady_states(
     requested: str, warmup: int, kind: str
 ) -> None:
     assert run_kind(requested, warmup) == kind
+
+
+def test_a_failed_reset_is_not_labelled_a_cold_start() -> None:
+    failed = CacheReset("http://host/reset", at_ns=1, status=404, error="HTTP 404")
+    succeeded = CacheReset("http://host/reset", at_ns=1, status=200)
+    assert run_kind("cold", 0, failed) == "unspecified"
+    assert run_kind("cold", 0, succeeded) == "cold_start"
 
 
 def test_each_case_resets_the_cache_and_records_its_state(tmp_path: Path) -> None:
