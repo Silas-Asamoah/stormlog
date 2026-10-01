@@ -169,6 +169,14 @@ def _drop(key: str) -> Callable[[dict[str, Any]], None]:
     return lambda record: record.pop(key)
 
 
+def _group_without(key: str) -> Callable[[dict[str, Any]], None]:
+    def mutate(record: dict[str, Any]) -> None:
+        record["identity"].update(group_id="tp", rank=0, world_size=2)
+        del record["identity"][key]
+
+    return mutate
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -177,6 +185,8 @@ def _drop(key: str) -> Callable[[dict[str, Any]], None]:
         _set_identity(device_uuid=None),
         _set_identity(device_uuid=None, gpu_instance_id="MIG-a"),
         _set_identity(group_id="tp", rank=0, world_size=None),
+        _group_without("world_size"),
+        _group_without("rank"),
         _set_identity(world_size=2),
         _set(
             metric="instance_memory_used_bytes",

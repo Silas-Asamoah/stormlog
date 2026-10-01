@@ -76,6 +76,7 @@
             "required": ["group_id"]
           },
           "then": {
+            "required": ["rank", "world_size"],
             "properties": {
               "world_size": { "type": "integer" },
               "rank": { "type": "integer" }
