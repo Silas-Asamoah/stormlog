@@ -7,6 +7,7 @@ import importlib
 import importlib.metadata
 import logging
 from dataclasses import dataclass
+from pathlib import PurePath
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
@@ -96,11 +97,12 @@ class TransformersTokenCounter:
 
     def identity(self) -> dict[str, Any]:
         init_kwargs = getattr(self._tokenizer, "init_kwargs", None) or {}
+        name = getattr(self._tokenizer, "name_or_path", None) or self._model
         return {
             "source": self.source,
             "exact": True,
-            "name": getattr(self._tokenizer, "name_or_path", None) or self._model,
-            "revision": init_kwargs.get("_commit_hash"),
+            "name": name,
+            "revision": init_kwargs.get("_commit_hash") or _hub_revision(name),
             "library_version": self._version,
         }
 
@@ -110,6 +112,26 @@ class TransformersTokenCounter:
         if not isinstance(template, str) or not template:
             return None
         return hashlib.sha256(template.encode("utf-8")).hexdigest()[:16]
+
+
+def _hub_revision(repo_id: str) -> str | None:
+    """The commit of a Hugging Face Hub tokenizer in the local cache.
+
+    transformers 5 no longer keeps the commit on the tokenizer, but the cache
+    stores each download under ``snapshots/<commit>/``. A tokenizer loaded
+    from a local directory has no revision.
+    """
+    try:
+        hub = importlib.import_module("huggingface_hub")
+        path = hub.try_to_load_from_cache(repo_id, "tokenizer_config.json")
+    except Exception:
+        return None
+    if not isinstance(path, str):
+        return None
+    parts = PurePath(path).parts
+    if "snapshots" not in parts or parts.index("snapshots") + 1 >= len(parts):
+        return None
+    return str(parts[parts.index("snapshots") + 1])
 
 
 def build_token_counter(
