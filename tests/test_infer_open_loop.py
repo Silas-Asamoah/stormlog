@@ -327,6 +327,10 @@ def test_every_phase_records_its_window(tmp_path: Path) -> None:
             ["--arrival", "fixed-rate", "--rate", "1e9", "--duration", "0.01"],
             "more than 1,000,000 requests",
         ),
+        (
+            ["--arrival", "fixed-rate", "--rate", "10", "--warmup-requests", "2000000"],
+            "more than 1,000,000 requests",
+        ),
     ],
 )
 def test_arrival_flags_are_checked_before_any_request(

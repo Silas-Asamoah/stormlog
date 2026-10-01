@@ -165,7 +165,7 @@ def _bounded(
         if len(bounded) == MAX_ARRIVALS:
             raise ValueError(
                 f"the arrival schedule has more than {MAX_ARRIVALS:,} requests; "
-                "check --rate, --duration and --requests"
+                "check --rate, --duration, --requests and --warmup-requests"
             )
         bounded.append(offset)
     return bounded

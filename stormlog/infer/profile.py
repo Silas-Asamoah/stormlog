@@ -67,14 +67,7 @@ class InferenceProfiler:
         self.sampler = build_system_sampler(config.system_sampler)
         # Built now so a bad setting fails before the artifact is opened.
         self.prompt_spec = config.prompt_spec()
-        for case in config.cases():
-            if case.arrival.open_loop:
-                arrival_offsets(
-                    case.arrival,
-                    count=config.request_count,
-                    duration_seconds=config.duration_seconds,
-                    seed=config.seed,
-                )
+        self._check_schedules()
         self.client = OpenAIChatCompletionsClient(
             endpoint=config.endpoint,
             model=config.model,
@@ -93,6 +86,21 @@ class InferenceProfiler:
         # Pool threads remove finished calls while the event loop reads the set.
         self._unfinished_lock = threading.Lock()
         self._opened_artifact = False
+
+    def _check_schedules(self) -> None:
+        """Refuse an open-loop schedule above the arrival cap up front."""
+        config = self.config
+        phases = [(config.request_count, config.duration_seconds)]
+        if config.warmup_requests > 0:
+            phases.append((config.warmup_requests, None))
+        for case in config.cases():
+            for count, duration_seconds in phases if case.arrival.open_loop else ():
+                arrival_offsets(
+                    case.arrival,
+                    count=count,
+                    duration_seconds=duration_seconds,
+                    seed=config.seed,
+                )
 
     def run(self) -> dict[str, Any]:
         """Run profiling and return an aggregate report."""
