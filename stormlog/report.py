@@ -26,9 +26,19 @@ REPORT_FORMAT = "stormlog.report"
 REPORT_SCHEMA_VERSION = 1
 REPORT_FILENAME = "report.json"
 
-# Mirrors the patterns in docs/schemas/stormlog_report_v1.schema.json.
-_REPORT_KIND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
-_FINDING_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.]*$")
+# Mirrors the patterns in docs/schemas/stormlog_report_v1.schema.json. They
+# are applied with fullmatch, i.e. with the ECMA-262 anchoring JSON Schema
+# specifies: no trailing newline is tolerated.
+_REPORT_KIND_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
+_FINDING_ID_PATTERN = re.compile(r"[a-z][a-z0-9_.]*")
+_POINTER_PATTERN = re.compile(r"|/[^\n]*")
+
+_TOOL_KEYS = frozenset({"name", "command", "version", "argv"})
+_VERDICT_KEYS = frozenset({"status", "exit_code", "summary"})
+_FINDING_KEYS = frozenset(
+    {"id", "kind", "severity", "title", "message", "metrics", "evidence"}
+)
+_ARTIFACT_KEYS = frozenset({"kind", "path", "format", "schema_version"})
 
 SEVERITY_INFO = "info"
 SEVERITY_WARNING = "warning"
@@ -246,10 +256,9 @@ def _validate_header(report: Mapping[str, Any]) -> None:
     missing = [key for key in _REQUIRED_KEYS if key not in report]
     if missing:
         raise ValueError(f"report is missing required fields: {', '.join(missing)}")
-    unknown = sorted(set(report) - _KNOWN_KEYS)
-    if unknown:
-        raise ValueError(f"report has unknown fields: {', '.join(unknown)}")
-    if report["schema_version"] != REPORT_SCHEMA_VERSION:
+    _reject_unknown(report, _KNOWN_KEYS, "report")
+    version = report["schema_version"]
+    if not _is_integer_value(version) or int(version) != REPORT_SCHEMA_VERSION:
         raise ValueError(f"schema_version must be {REPORT_SCHEMA_VERSION}")
     if report["format"] != REPORT_FORMAT:
         raise ValueError(f"format must be {REPORT_FORMAT!r}")
@@ -260,26 +269,27 @@ def _validate_header(report: Mapping[str, Any]) -> None:
 def _validate_tool(tool: Any) -> None:
     if not isinstance(tool, Mapping):
         raise ValueError("tool must be an object")
+    _reject_unknown(tool, _TOOL_KEYS, "tool")
     _require_nonempty_string(tool, "name", prefix="tool")
     _require_nonempty_string(tool, "command", prefix="tool")
     _require_nullable_nonempty_string(tool, "version", prefix="tool")
-    argv = tool.get("argv")
-    if argv is not None and (
-        not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv)
-    ):
-        raise ValueError("tool.argv must be a list of strings")
+    if "argv" in tool:
+        argv = tool["argv"]
+        if not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
+            raise ValueError("tool.argv must be a list of strings")
 
 
 def _validate_verdict(verdict: Any) -> None:
     if not isinstance(verdict, Mapping):
         raise ValueError("verdict must be an object")
+    _reject_unknown(verdict, _VERDICT_KEYS, "verdict")
     status = verdict.get("status")
-    if status not in VERDICT_STATUSES:
+    if not isinstance(status, str) or status not in VERDICT_STATUSES:
         raise ValueError(f"verdict.status {status!r} is not a verdict status")
     exit_code = verdict.get("exit_code")
-    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+    if not isinstance(exit_code, (int, float)) or not _is_integer_value(exit_code):
         raise ValueError("verdict.exit_code must be an integer")
-    if verdict_status(exit_code) != status:
+    if verdict_status(int(exit_code)) != status:
         raise ValueError(
             f"verdict.status {status!r} does not pair with exit_code {exit_code}"
         )
@@ -289,10 +299,12 @@ def _validate_verdict(verdict: Any) -> None:
 def _validate_finding(finding: Any, label: str) -> None:
     if not isinstance(finding, Mapping):
         raise ValueError(f"{label} must be an object")
+    _reject_unknown(finding, _FINDING_KEYS, label)
     _require_pattern(finding, "id", _FINDING_ID_PATTERN, prefix=label)
     for key in ("kind", "title"):
         _require_nonempty_string(finding, key, prefix=label)
-    if finding.get("severity") not in SEVERITIES:
+    severity = finding.get("severity")
+    if not isinstance(severity, str) or severity not in SEVERITIES:
         raise ValueError(f"{label}.severity must be one of {sorted(SEVERITIES)}")
     if "message" in finding and not isinstance(finding["message"], (str, type(None))):
         raise ValueError(f"{label}.message must be a string or null")
@@ -308,34 +320,53 @@ def _validate_finding(finding: Any, label: str) -> None:
 def _validate_evidence(evidence: Any, label: str) -> None:
     if not isinstance(evidence, Mapping):
         raise ValueError(f"{label} must be an object")
-    unknown = sorted(set(evidence) - _EVIDENCE_KEYS)
-    if unknown:
-        raise ValueError(f"{label} has unknown fields: {', '.join(unknown)}")
+    _reject_unknown(evidence, _EVIDENCE_KEYS, label)
     _require_nonempty_string(evidence, "kind", prefix=label)
     for key in ("path", "session_id", "record_id"):
         _require_nullable_nonempty_string(evidence, key, prefix=label)
     _validate_pointer(evidence.get("pointer"), f"{label}.pointer")
     for key in ("start_ns", "end_ns"):
         _validate_nullable_int(evidence.get(key), f"{label}.{key}", minimum=0)
+    description = evidence.get("description")
+    if description is not None and not isinstance(description, str):
+        raise ValueError(f"{label}.description must be a string or null")
 
 
 def _validate_pointer(pointer: Any, label: str) -> None:
     if pointer is None:
         return
-    if not isinstance(pointer, str) or (pointer and not pointer.startswith("/")):
-        raise ValueError(f"{label} must be a JSON pointer")
+    if not isinstance(pointer, str) or _POINTER_PATTERN.fullmatch(pointer) is None:
+        raise ValueError(f"{label} must be a single-line JSON pointer")
 
 
 def _validate_nullable_int(value: Any, label: str, *, minimum: int) -> None:
     if value is None:
         return
-    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+    if not _is_integer_value(value) or value < minimum:
         raise ValueError(f"{label} must be an integer >= {minimum}")
+
+
+def _is_integer_value(value: Any) -> bool:
+    """True for JSON integers: ints (not bools) and integral floats like 3.0."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    return isinstance(value, float) and value.is_integer()
+
+
+def _reject_unknown(
+    payload: Mapping[str, Any], allowed: frozenset[str], label: str
+) -> None:
+    unknown = sorted(str(key) for key in set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"{label} has unknown fields: {', '.join(unknown)}")
 
 
 def _validate_artifact(artifact: Any, label: str) -> None:
     if not isinstance(artifact, Mapping):
         raise ValueError(f"{label} must be an object")
+    _reject_unknown(artifact, _ARTIFACT_KEYS, label)
     _require_nonempty_string(artifact, "kind", prefix=label)
     _require_nonempty_string(artifact, "path", prefix=label)
     _require_nullable_nonempty_string(artifact, "format", prefix=label)
@@ -396,8 +427,8 @@ def _require_pattern(
 ) -> None:
     _require_nonempty_string(payload, key, prefix=prefix)
     label = f"{prefix}.{key}" if prefix else key
-    if pattern.match(payload[key]) is None:
-        raise ValueError(f"{label} must match {pattern.pattern}")
+    if pattern.fullmatch(payload[key]) is None:
+        raise ValueError(f"{label} must match ^{pattern.pattern}$")
 
 
 __all__ = [

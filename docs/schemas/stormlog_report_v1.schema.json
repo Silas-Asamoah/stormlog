@@ -210,7 +210,7 @@
         },
         "pointer": {
           "type": ["string", "null"],
-          "pattern": "^(|/.*)$"
+          "pattern": "^(|/[^\\n]*)$"
         },
         "session_id": {
           "type": ["string", "null"],
