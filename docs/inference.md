@@ -207,11 +207,18 @@ warmup settings. It also holds the decoding settings sent, the requested cache
 state, and the tokenizer that sized the prompts, with its name, revision and
 library version when known.
 
-The record's `workload_digest` covers all of that. It leaves out the endpoint
-and model, so the same workload sent to two engine configurations has the
-same digest. The API key is never recorded. The server applies the chat
-template, and the record says so. When a local transformers tokenizer has a
-template, the record keeps that template's digest as a hint only.
+The record's `workload_digest` covers what decides the requests a run sends:
+the cases, arrivals, prompts, warmup, decoding settings, seed, tokenizer and
+requested cache state. For open-loop arrivals it also covers
+`--max-in-flight` and `--overflow`. It leaves out the endpoint, model,
+timeouts and reset URL, so the same workload sent to two engine
+configurations has the same digest. `--extra-body` numbers are compared by
+value, so `0` and `0.0` count as the same.
+
+The API key is never recorded, and the reset URL is recorded without its
+credentials or query string. The server applies the chat template, and the
+record says so. When a local transformers tokenizer has a template, the
+record keeps that template's digest as a hint only.
 
 Pass sampling settings with `--extra-body`, a JSON object merged into every
 request:

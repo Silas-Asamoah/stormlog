@@ -24,7 +24,7 @@ from ..session import (
 )
 from .analysis import analyze_inference_events
 from .arrivals import CLOSED, arrival_offsets
-from .cache_state import cache_state_record, reset_cache
+from .cache_state import cache_state_record, redact_url, reset_cache
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
@@ -110,7 +110,7 @@ class InferenceProfiler:
                         "overflow": self.config.overflow,
                         "prompts": self.prompt_spec.to_record(),
                         "cache_state": self.config.cache_state,
-                        "cache_reset_url": self.config.cache_reset_url,
+                        "cache_reset_url": redact_url(self.config.cache_reset_url),
                     },
                 }
             )

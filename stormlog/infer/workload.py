@@ -1,9 +1,11 @@
 """The workload record: what traffic a run sent, so it can be repeated.
 
-The digest covers everything that decides the requests a run sends: the
-cases, arrivals, prompts, warmup, decoding settings, seed and tokenizer. It
-leaves out the endpoint and model, so the same workload sent to two engine
-configurations has the same digest. The API key is never recorded.
+The digest covers what decides the requests a run sends: the cases,
+arrivals, prompts, warmup, decoding settings, seed, tokenizer and requested
+cache state. It leaves out the endpoint, model, timeouts and reset URL, so
+the same workload sent to two engine configurations has the same digest.
+The API key is never recorded, and the reset URL is recorded without its
+credentials or query string.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import hashlib
 import json
 from typing import Any
 
+from .cache_state import redact_url
 from .config import ProfileConfig
 from .prompts import GENERATOR_VERSION, REPEAT, PromptSpec
 from .tokens import TokenCounter
@@ -30,7 +33,7 @@ def workload_record(
         "schema_version": 1,
         "event_type": "infer.workload",
         "session_id": session_id,
-        "workload_digest": _digest(spec),
+        "workload_digest": _digest(_traffic(spec, open_loop=_open_loop(config))),
         **spec,
         "chat_template": chat_template_identity(counter),
     }
@@ -77,9 +80,48 @@ def workload_spec(
         "tokenizer": tokenizer_identity(counter),
         "cache": {
             "requested": config.cache_state,
-            "reset_url": config.cache_reset_url,
+            "reset_url": redact_url(config.cache_reset_url),
         },
     }
+
+
+def _open_loop(config: ProfileConfig) -> bool:
+    return any(case.arrival.open_loop for case in config.cases())
+
+
+def _traffic(spec: dict[str, Any], *, open_loop: bool) -> dict[str, Any]:
+    """The parts of the workload that decide which requests are sent, and when.
+
+    Timeouts, the drain deadline and the reset URL describe how a run was
+    measured and where, not what it sent. The in-flight limit and overflow
+    policy only shape traffic for open-loop arrivals.
+    """
+    measurement = spec["measurement"]
+    shaping = ["request_count", "duration_seconds"]
+    if open_loop:
+        shaping += ["max_in_flight", "overflow"]
+    return {
+        "seed": spec["seed"],
+        "generator": spec["generator"],
+        "cases": spec["cases"],
+        "measurement": {field: measurement[field] for field in shaping},
+        "prompts": spec["prompts"],
+        "warmup": spec["warmup"],
+        "decoding": _numbers_as_values(spec["decoding"]),
+        "tokenizer": spec["tokenizer"],
+        "cache_requested": spec["cache"]["requested"],
+    }
+
+
+def _numbers_as_values(value: Any) -> Any:
+    """Make 0 and 0.0 the same, as a server reading the JSON would."""
+    if isinstance(value, dict):
+        return {key: _numbers_as_values(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_numbers_as_values(item) for item in value]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
 
 
 def tokenizer_identity(counter: TokenCounter) -> dict[str, Any]:

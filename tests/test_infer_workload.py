@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from stormlog.infer.analysis import format_analysis_text
+from stormlog.infer.cache_state import redact_url
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.openai_client import (
     OpenAIChatCompletionsClient,
@@ -65,6 +66,68 @@ def test_the_digest_changes_with_anything_that_shapes_the_requests(
     base = _workload(tmp_path / "base", request_count=2)
     changed = _workload(tmp_path / "changed", request_count=2, **changes)
     assert changed["workload_digest"] != base["workload_digest"]
+
+
+@pytest.mark.parametrize(
+    ("base", "changed"),
+    [
+        # Closed loopback ports refuse at once, so the resets fail quickly.
+        (
+            {"cache_reset_url": "http://127.0.0.1:1/reset_prefix_cache"},
+            {"cache_reset_url": "http://127.0.0.1:2/flush_cache"},
+        ),
+        ({"timeout_seconds": 60.0}, {"timeout_seconds": 120.0}),
+        ({}, {"drain_timeout_seconds": 5.0}),
+        # A closed loop ignores the open-loop limit and overflow policy.
+        ({"max_in_flight": 4}, {"max_in_flight": 128, "overflow": "drop"}),
+        ({"extra_body": {"temperature": 0}}, {"extra_body": {"temperature": 0.0}}),
+    ],
+)
+def test_the_digest_ignores_how_and_where_a_run_was_measured(
+    tmp_path: Path, base: dict[str, Any], changed: dict[str, Any]
+) -> None:
+    common = {"request_count": 1, "cache_state": "cold"}
+    first = _workload(tmp_path / "a", **common, **base)
+    second = _workload(tmp_path / "b", **common, **changed)
+    assert first["workload_digest"] == second["workload_digest"]
+
+
+def test_the_open_loop_limit_shapes_the_traffic(tmp_path: Path) -> None:
+    common: dict[str, Any] = {
+        "request_count": 2,
+        "arrival_mode": "fixed-rate",
+        "rates": (50.0,),
+    }
+    first = _workload(tmp_path / "a", max_in_flight=1, **common)
+    second = _workload(tmp_path / "b", max_in_flight=2, **common)
+    assert first["workload_digest"] != second["workload_digest"]
+
+
+def test_reset_urls_are_recorded_without_credentials_or_query(
+    tmp_path: Path,
+) -> None:
+    secret_url = "http://user:hunter2@127.0.0.1:1/reset?token=SECRET123"
+    record = _workload(
+        tmp_path, request_count=1, cache_state="cold", cache_reset_url=secret_url
+    )
+    artifact = (tmp_path / "infer.jsonl").read_text()
+    assert "SECRET123" not in artifact and "hunter2" not in artifact
+    assert record["cache"]["reset_url"] == "http://127.0.0.1:1/reset?<redacted>"
+
+
+@pytest.mark.parametrize(
+    ("url", "recorded"),
+    [
+        ("http://host:8000/reset_prefix_cache", "http://host:8000/reset_prefix_cache"),
+        ("https://u:p@host/flush_cache?k=v", "https://host/flush_cache?<redacted>"),
+        ("http://[::1]:8000/reset", "http://[::1]:8000/reset"),
+        (None, None),
+    ],
+)
+def test_redact_url_keeps_only_scheme_host_port_and_path(
+    url: str | None, recorded: str | None
+) -> None:
+    assert redact_url(url) == recorded
 
 
 def test_the_record_lists_settings_and_never_the_api_key(tmp_path: Path) -> None:

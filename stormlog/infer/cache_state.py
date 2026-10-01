@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
@@ -46,14 +47,35 @@ class CacheReset:
 def reset_cache(url: str, *, timeout_seconds: float) -> CacheReset:
     """POST to a reset endpoint and record what happened; never raises."""
     at_ns = time.time_ns()
+    recorded = _redact(url)
     request = urllib.request.Request(url, data=b"", method="POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            return CacheReset(url, at_ns, status=int(response.status))
+            return CacheReset(recorded, at_ns, status=int(response.status))
     except urllib.error.HTTPError as exc:
-        return CacheReset(url, at_ns, status=exc.code, error=f"HTTP {exc.code}")
+        return CacheReset(recorded, at_ns, status=exc.code, error=f"HTTP {exc.code}")
     except OSError as exc:
-        return CacheReset(url, at_ns, error=f"{type(exc).__name__}: {exc}")
+        return CacheReset(recorded, at_ns, error=f"{type(exc).__name__}: {exc}")
+
+
+def redact_url(url: str | None) -> str | None:
+    """A URL as it may be recorded: no credentials and no query string.
+
+    Either can carry a token, so an artifact keeps only the scheme, host,
+    port and path, and marks a removed query.
+    """
+    return None if url is None else _redact(url)
+
+
+def _redact(url: str) -> str:
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    if parts.port is not None:
+        host = f"{host}:{parts.port}"
+    query = "?<redacted>" if parts.query else ""
+    return f"{parts.scheme}://{host}{parts.path}{query}"
 
 
 def run_kind(requested: str, warmup_requests: int) -> str:
