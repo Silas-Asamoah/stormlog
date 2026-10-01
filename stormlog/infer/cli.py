@@ -5,13 +5,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
+import threading
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from .analysis import analyze_inference_events, format_analysis_text
 from .config import ProfileConfig, parse_int_list, resolve_endpoint
 from .profile import run_profile
+from .server_collector import (
+    STOP_GPU_IDENTITY_CHANGED,
+    STOP_SERVER_PROCESS_ENDED,
+    CollectionResult,
+    collect_server_telemetry,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -26,6 +34,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_profile(args)
         if args.infer_command == "analyze":
             return cmd_analyze(args)
+        if args.infer_command == "collect-server":
+            return cmd_collect_server(args)
     except BrokenPipeError:
         return 1
     except Exception as exc:
@@ -59,6 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="OpenAI-compatible /v1 base URL",
     )
     profile_parser.add_argument("--model", required=True, help="Model name")
+    profile_parser.add_argument(
+        "--run-id", default=None, help="Shared run ID for an on-host collector"
+    )
     profile_parser.add_argument(
         "--concurrency",
         default="1",
@@ -196,23 +209,97 @@ def build_parser() -> argparse.ArgumentParser:
         default="txt",
         help="Report format (default: txt)",
     )
+    analyze_parser.add_argument(
+        "--server-telemetry",
+        action="append",
+        default=[],
+        metavar="JSONL",
+        help="On-host collector artifact; may be supplied more than once",
+    )
+    analyze_parser.add_argument(
+        "--direct-server",
+        action="store_true",
+        help="Assert requests went to the single server identity in telemetry",
+    )
+    analyze_parser.add_argument(
+        "--clock-offset-ns",
+        type=int,
+        default=None,
+        help=(
+            "Server timestamp plus this offset equals client timestamp; "
+            "replaces infer.clock_alignment records for the same clocks"
+        ),
+    )
+    analyze_parser.add_argument(
+        "--clock-uncertainty-ns",
+        type=int,
+        default=None,
+        help=(
+            "Absolute uncertainty of --clock-offset-ns; on one host and boot "
+            "it may be given alone"
+        ),
+    )
+    collector_parser = subparsers.add_parser(
+        "collect-server",
+        help="Collect scoped process and NVML memory on the inference host",
+    )
+    collector_parser.add_argument(
+        "--run-id", required=True, help="Run ID also passed to `infer profile`"
+    )
+    collector_parser.add_argument(
+        "--pid",
+        required=True,
+        type=int,
+        help="Server process to watch; use the worker that owns the GPU work",
+    )
+    collector_parser.add_argument("--output", required=True, help="JSONL path")
+    collector_parser.add_argument(
+        "--interval", type=float, default=0.1, help="Seconds between polls"
+    )
+    collector_parser.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        help="Stop after this many seconds (default: until Ctrl+C or SIGTERM)",
+    )
+    collector_parser.add_argument(
+        "--device-index",
+        type=int,
+        default=0,
+        help="NVML index (PCI bus order, not the server's CUDA ordinal)",
+    )
+    collector_parser.add_argument(
+        "--device-uuid",
+        default=None,
+        help="GPU or MIG UUID; preferred over --device-index",
+    )
+    collector_parser.add_argument(
+        "--no-gpu", action="store_true", help="Collect process RSS only"
+    )
+    collector_parser.add_argument("--replica-id", default=None)
+    collector_parser.add_argument(
+        "--rank",
+        type=int,
+        default=None,
+        help="This process's rank; required with --group-id",
+    )
+    collector_parser.add_argument(
+        "--group-id",
+        default=None,
+        help="Shared by every collector of one server, e.g. its tensor-parallel workers",
+    )
+    collector_parser.add_argument(
+        "--world-size",
+        type=int,
+        default=None,
+        help="Number of group members; each rank 0..N-1 needs a collector",
+    )
     return parser
 
 
 def cmd_profile(args: argparse.Namespace) -> int:
     """Run active inference profiling."""
-    if args.duration is not None and args.duration <= 0:
-        raise ValueError("--duration must be > 0")
-    if args.requests is not None and args.requests <= 0:
-        raise ValueError("--requests must be >= 1")
-    if args.duration is not None and args.requests != 1:
-        raise ValueError("Use either --duration or --requests, not both")
-    if args.timeout <= 0:
-        raise ValueError("--timeout must be > 0")
-    if args.warmup_requests < 0:
-        raise ValueError("--warmup-requests must be >= 0")
-    if args.sample_interval <= 0:
-        raise ValueError("--sample-interval must be > 0")
+    _validate_profile_arguments(args)
 
     endpoint = resolve_endpoint(endpoint=args.endpoint, base_url=args.base_url)
     config = ProfileConfig(
@@ -240,6 +327,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         strict_token_counts=bool(args.strict_token_counts),
         system_sampler=args.system_sampler,
         sample_interval_seconds=float(args.sample_interval),
+        run_id=args.run_id,
         seed=int(args.seed),
     )
     report = run_profile(config)
@@ -261,7 +349,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if not input_path.exists():
         print(f"Error: Input file '{args.input_file}' not found", file=sys.stderr)
         return 1
-    report = analyze_inference_events(input_path)
+    report = analyze_inference_events(
+        input_path,
+        server_telemetry_paths=args.server_telemetry,
+        direct_server=args.direct_server,
+        clock_offset_ns=args.clock_offset_ns,
+        clock_uncertainty_ns=args.clock_uncertainty_ns,
+    )
     if args.format == "json":
         payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
     else:
@@ -274,3 +368,85 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     else:
         print(payload, end="")
     return 0
+
+
+def cmd_collect_server(args: argparse.Namespace) -> int:
+    """Collect telemetry on the server while a profile uses the same run ID."""
+    stop_event = threading.Event()
+    previous_handlers = _stop_on_signals(stop_event)
+    try:
+        result = collect_server_telemetry(
+            run_id=args.run_id,
+            pid=args.pid,
+            output_path=args.output,
+            interval_seconds=args.interval,
+            duration_seconds=args.duration,
+            device_index=args.device_index,
+            device_uuid=args.device_uuid,
+            no_gpu=args.no_gpu,
+            replica_id=args.replica_id,
+            rank=args.rank,
+            group_id=args.group_id,
+            world_size=args.world_size,
+            stop_event=stop_event,
+            on_warning=_print_warning,
+        )
+    finally:
+        _restore_signal_handlers(previous_handlers)
+    print(
+        f"Collected {result.polls} server polls to: {Path(args.output)} "
+        f"(stopped: {result.stop_reason})"
+    )
+    return _collection_exit_code(result)
+
+
+def _collection_exit_code(result: CollectionResult) -> int:
+    if result.stop_reason == STOP_GPU_IDENTITY_CHANGED:
+        print(
+            f"Error: GPU identity changed ({result.detail}); later polls were "
+            "not recorded and later case windows will not be joined",
+            file=sys.stderr,
+        )
+        return 1
+    if result.stop_reason == STOP_SERVER_PROCESS_ENDED:
+        _print_warning(
+            f"{result.detail}; case windows that extend past the last "
+            "confirmed poll will not be joined"
+        )
+    return 0
+
+
+def _print_warning(message: str) -> None:
+    print(f"Warning: {message}", file=sys.stderr)
+
+
+def _stop_on_signals(stop_event: threading.Event) -> dict[int, Any]:
+    """Turn Ctrl+C and SIGTERM into a clean stop instead of a traceback."""
+    if threading.current_thread() is not threading.main_thread():
+        return {}
+    previous: dict[int, Any] = {}
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous[signum] = signal.signal(
+            signum, lambda _signum, _frame: stop_event.set()
+        )
+    return previous
+
+
+def _restore_signal_handlers(previous: dict[int, Any]) -> None:
+    for signum, handler in previous.items():
+        signal.signal(signum, handler)
+
+
+def _validate_profile_arguments(args: argparse.Namespace) -> None:
+    if args.duration is not None and args.duration <= 0:
+        raise ValueError("--duration must be > 0")
+    if args.requests is not None and args.requests <= 0:
+        raise ValueError("--requests must be >= 1")
+    if args.duration is not None and args.requests != 1:
+        raise ValueError("Use either --duration or --requests, not both")
+    if args.timeout <= 0:
+        raise ValueError("--timeout must be > 0")
+    if args.warmup_requests < 0:
+        raise ValueError("--warmup-requests must be >= 0")
+    if args.sample_interval <= 0:
+        raise ValueError("--sample-interval must be > 0")

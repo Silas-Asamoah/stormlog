@@ -98,37 +98,15 @@ def export_tracking_run_to_mlflow(
             )
 
         if config.log_artifacts:
-            if output_file is not None:
-                log_file_artifact(
-                    mlflow,
-                    artifact_path=f"stormlog-track-output-{safe_session}",
-                    path=output_file,
-                )
-
-            if sink_dir is not None:
-                log_directory_artifact(
-                    mlflow,
-                    artifact_path=f"stormlog-telemetry-sink-{safe_session}",
-                    path=sink_dir,
-                )
-
-            if oom_dir is not None:
-                log_directory_artifact(
-                    mlflow,
-                    artifact_path=f"stormlog-oom-dump-{safe_session}",
-                    path=oom_dir,
-                )
-
-            if (
-                attribution_bundle_dir is not None
-                and attribution_dir is not None
-                and attribution_dir != oom_dir
-            ):
-                log_directory_artifact(
-                    mlflow,
-                    artifact_path=f"stormlog-attribution-bundle-{safe_session}",
-                    path=attribution_dir,
-                )
+            _log_tracking_artifacts(
+                mlflow,
+                safe_session=safe_session,
+                output_file=output_file,
+                sink_dir=sink_dir,
+                oom_dir=oom_dir,
+                attribution_dir=attribution_dir,
+                attribution_bundle_dir=attribution_bundle_dir,
+            )
 
         if config.log_attribution and attribution_dir is not None:
             update_summary(
@@ -314,3 +292,46 @@ def _rows_as_columns(columns: list[str], rows: list[list[Any]]) -> dict[str, lis
 
 def _is_missing(value: float) -> bool:
     return math.isnan(value)
+
+
+def _log_tracking_artifacts(
+    mlflow: Any,
+    *,
+    safe_session: str,
+    output_file: Path | None,
+    sink_dir: Path | None,
+    oom_dir: Path | None,
+    attribution_dir: Path | None,
+    attribution_bundle_dir: str | Path | None,
+) -> None:
+    if output_file is not None:
+        log_file_artifact(
+            mlflow,
+            artifact_path=f"stormlog-track-output-{safe_session}",
+            path=output_file,
+        )
+
+    if sink_dir is not None:
+        log_directory_artifact(
+            mlflow,
+            artifact_path=f"stormlog-telemetry-sink-{safe_session}",
+            path=sink_dir,
+        )
+
+    if oom_dir is not None:
+        log_directory_artifact(
+            mlflow,
+            artifact_path=f"stormlog-oom-dump-{safe_session}",
+            path=oom_dir,
+        )
+
+    if (
+        attribution_bundle_dir is not None
+        and attribution_dir is not None
+        and attribution_dir != oom_dir
+    ):
+        log_directory_artifact(
+            mlflow,
+            artifact_path=f"stormlog-attribution-bundle-{safe_session}",
+            path=attribution_dir,
+        )

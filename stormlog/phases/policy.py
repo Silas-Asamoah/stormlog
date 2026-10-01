@@ -51,38 +51,15 @@ def attribute_active_spans(
     if not spans:
         return None
 
-    if origin_phase_scope_id:
-        exact_matches = [
-            span for span in spans if span.scope_id == origin_phase_scope_id
-        ]
-        if len(exact_matches) == 1:
-            return _build_unique_attribution(exact_matches[0], source="exact")
+    origin_attribution = _attribute_origin_spans(
+        spans,
+        origin_thread_id=origin_thread_id,
+        origin_phase_scope_id=origin_phase_scope_id,
+    )
+    if origin_attribution is not None:
+        return origin_attribution
 
-    if origin_thread_id is not None:
-        thread_spans = [span for span in spans if span.thread_id == origin_thread_id]
-        if thread_spans:
-            return _build_unique_attribution(
-                _most_recent_active_span(thread_spans),
-                source="thread_local",
-            )
-
-    thread_matches: list["PhaseSpan"] = []
-    ambiguous_labels: set[str] = set()
-    deepest_by_thread: dict[int, list["PhaseSpan"]] = {}
-    for span in spans:
-        deepest_by_thread.setdefault(span.thread_id, []).append(span)
-
-    for thread_spans in deepest_by_thread.values():
-        max_depth = max(item.depth for item in thread_spans)
-        deepest = [item for item in thread_spans if item.depth == max_depth]
-        labels = {format_phase_path(item.path) for item in deepest}
-        if len(labels) != 1:
-            ambiguous_labels.update(labels)
-            continue
-        thread_matches.append(
-            max(deepest, key=lambda item: (item.sequence, item.scope_id))
-        )
-
+    thread_matches, ambiguous_labels = _deepest_thread_matches(spans)
     if not thread_matches and not ambiguous_labels:
         return None
 
@@ -101,6 +78,54 @@ def attribute_active_spans(
         )
 
     return _build_unique_attribution(thread_matches[0], source="heuristic")
+
+
+def _attribute_origin_spans(
+    spans: Sequence["PhaseSpan"],
+    *,
+    origin_thread_id: int | None,
+    origin_phase_scope_id: str | None,
+) -> PhaseAttribution | None:
+    """Prefer an exact scope identity, falling back to its originating thread."""
+    if origin_phase_scope_id:
+        exact_matches = [
+            span for span in spans if span.scope_id == origin_phase_scope_id
+        ]
+        if len(exact_matches) == 1:
+            return _build_unique_attribution(exact_matches[0], source="exact")
+
+    if origin_thread_id is not None:
+        thread_spans = [span for span in spans if span.thread_id == origin_thread_id]
+        if thread_spans:
+            return _build_unique_attribution(
+                _most_recent_active_span(thread_spans),
+                source="thread_local",
+            )
+    return None
+
+
+def _deepest_thread_matches(
+    spans: Sequence["PhaseSpan"],
+) -> tuple[list["PhaseSpan"], set[str]]:
+    """Choose deepest spans per thread while retaining conflicting path labels."""
+    thread_matches: list["PhaseSpan"] = []
+    ambiguous_labels: set[str] = set()
+    deepest_by_thread: dict[int, list["PhaseSpan"]] = {}
+    for span in spans:
+        deepest_by_thread.setdefault(span.thread_id, []).append(span)
+
+    for thread_spans in deepest_by_thread.values():
+        max_depth = max(item.depth for item in thread_spans)
+        deepest = [item for item in thread_spans if item.depth == max_depth]
+        labels = {format_phase_path(item.path) for item in deepest}
+        if len(labels) != 1:
+            ambiguous_labels.update(labels)
+            continue
+        thread_matches.append(
+            max(deepest, key=lambda item: (item.sequence, item.scope_id))
+        )
+
+    return thread_matches, ambiguous_labels
 
 
 def resolve_phase_for_event(
@@ -182,13 +207,7 @@ def merge_phase_attributions(
     merged_paths = sorted(set(first_paths) | set(second_paths))
     if len(merged_paths) == 1:
         phase_path = merged_paths[0]
-        if (
-            first.phase_resolution == "unique"
-            and second.phase_resolution == "unique"
-            and first.phase_path == second.phase_path
-            and first.scope_id == second.scope_id
-            and first.thread_id == second.thread_id
-        ):
+        if _same_unique_scope(first, second):
             return first
         return PhaseAttribution(
             phase_resolution="ambiguous",
@@ -314,6 +333,16 @@ def _coerce_rank(value: Any) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _same_unique_scope(first: PhaseAttribution, second: PhaseAttribution) -> bool:
+    return (
+        first.phase_resolution == "unique"
+        and second.phase_resolution == "unique"
+        and first.phase_path == second.phase_path
+        and first.scope_id == second.scope_id
+        and first.thread_id == second.thread_id
+    )
 
 
 __all__ = [

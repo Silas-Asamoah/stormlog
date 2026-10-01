@@ -140,6 +140,24 @@ def test_fragmentation_ratio_is_zero_when_fully_allocated() -> None:
     assert fields["fragmentation_ratio"] == pytest.approx(0.0)
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("as_mapping", [True, False])
+def test_fragmentation_ratio_honors_explicit_capability(
+    enabled: bool, as_mapping: bool
+) -> None:
+    event = _make_event(allocated=100, reserved=1000)
+    event.metadata["memory_capabilities"] = {"supports_fragmentation_analysis": enabled}
+    source = event.__dict__ if as_mapping else event
+
+    fields = compute_event_fields(source)
+
+    assert fields["fragmentation_ratio"] == (0.9 if enabled else None)
+    assert fields["allocator_gap_bytes"] == 900
+    assert compute_session_fields([source])["avg_fragmentation_ratio"] == (
+        0.9 if enabled else None
+    )
+
+
 # ---------------------------------------------------------------------------
 # compute_event_fields — is_degraded_collector
 # ---------------------------------------------------------------------------

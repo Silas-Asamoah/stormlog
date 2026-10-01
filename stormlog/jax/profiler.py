@@ -465,19 +465,8 @@ class JAXMemoryProfiler:
                 function_profiles=profiles,
             )
 
-        memory_available = all(
-            snapshot.device_memory_available for snapshot in snapshots
-        )
-        unavailable_reason = next(
-            (
-                snapshot.device_memory_unavailable_reason
-                for snapshot in snapshots
-                if not snapshot.device_memory_available
-            ),
-            None,
-        )
-        memories = (
-            [s.device_memory_bytes for s in snapshots] if memory_available else []
+        memories, memory_available, unavailable_reason = _snapshot_memory_values(
+            snapshots
         )
         return ProfileResult(
             start_time=snapshots[0].timestamp,
@@ -580,3 +569,19 @@ def get_profile_summaries(
     if limit is not None:
         summaries = summaries[:limit]
     return summaries
+
+
+def _snapshot_memory_values(
+    snapshots: List[MemorySnapshot],
+) -> tuple[List[int], bool, Optional[str]]:
+    memory_available = all(snapshot.device_memory_available for snapshot in snapshots)
+    unavailable_reason = next(
+        (
+            snapshot.device_memory_unavailable_reason
+            for snapshot in snapshots
+            if not snapshot.device_memory_available
+        ),
+        None,
+    )
+    memories = [s.device_memory_bytes for s in snapshots] if memory_available else []
+    return memories, memory_available, unavailable_reason

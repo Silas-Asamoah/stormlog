@@ -175,6 +175,12 @@ The v0.4 harness reads:
 - `docs/benchmarks/v0.4_baseline.json`
 - `docs/benchmarks/v0.4_tolerances.json`
 
+Telemetry v4 intentionally repeats the complete memory-capability declaration
+in each canonical event so standalone JSONL records remain self-describing. The
+v0.4 PR tolerances include that bounded serialization and retained-record cost
+for the PyTorch and TensorFlow CPU reference lanes; event-count, file-count,
+rollover, and CPU-overhead gates remain unchanged.
+
 Update these files only with an intentional benchmark refresh. Run the harness
 with the same profile and config as CI, inspect the new metrics, then commit the
 asset update separately from unrelated code.

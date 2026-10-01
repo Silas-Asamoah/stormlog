@@ -26,6 +26,23 @@ matplotlib.use("Agg")
 
 _GB = 1024**3
 
+_DEVICE_ONLY_CAPABILITIES = {
+    "backend": "future",
+    "telemetry_collector": "stormlog.future_tracker",
+    "sampling_source": "future.device_memory",
+    "supports_allocator_allocated": False,
+    "supports_allocator_reserved": False,
+    "supports_allocator_active": False,
+    "supports_allocator_inactive": False,
+    "supports_device_used": True,
+    "supports_device_free": True,
+    "supports_device_total": True,
+    "supports_native_allocator_history": False,
+    "supports_fragmentation_analysis": False,
+    "supports_allocator_attribution": False,
+    "supports_bounded_profiling": False,
+}
+
 
 def _build_cross_rank_events() -> list:
     events = []
@@ -332,6 +349,52 @@ def test_cmd_analyze_reports_cross_rank_findings_and_writes_artifacts(
     assert report["cross_rank_analysis"]["first_cause_suspects"][0]["rank"] == 2
 
 
+def test_cmd_analyze_explains_device_only_capability_limits(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    records = []
+    for index in range(3):
+        record = telemetry_event_to_dict(
+            build_gap_event(
+                index=index,
+                allocator_allocated=1,
+                allocator_reserved=1,
+                device_used=40 + index,
+                device_total=100,
+                collector="stormlog.future_tracker",
+            )
+        )
+        record.update(
+            {
+                "schema_version": 4,
+                "session_id": "device-only-cli",
+                "allocator_allocated_bytes": None,
+                "allocator_reserved_bytes": None,
+                "allocator_change_bytes": None,
+            }
+        )
+        record["metadata"] = {"memory_capabilities": dict(_DEVICE_ONLY_CAPABILITIES)}
+        records.append(record)
+    input_path = tmp_path / "device-only.json"
+    input_path.write_text(json.dumps(records), encoding="utf-8")
+
+    exit_code = cmd_analyze(
+        argparse.Namespace(
+            input_file=str(input_path),
+            output=None,
+            format="json",
+            visualization=False,
+            plot_dir=None,
+            session_id=None,
+        )
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Capability warning:" in output
+    assert "does not expose allocator counters" in output
+
+
 def test_cmd_analyze_surfaces_phase_summaries_when_present(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -551,6 +614,66 @@ def test_cmd_analyze_malformed_telemetry_returns_failure(
 
     assert exit_code == 1
     assert "Error parsing telemetry events:" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "load_error", [ValueError("bad events"), RuntimeError("bad events")]
+)
+@pytest.mark.parametrize(
+    ("filename", "payload", "expected_code", "expected_message"),
+    [
+        (
+            "results.json",
+            '{"results": []}',
+            0,
+            "Notes: JSON payload does not contain telemetry events",
+        ),
+        (
+            "events.json",
+            '{"events": []}',
+            1,
+            "Error parsing telemetry events: bad events",
+        ),
+        (
+            "events.jsonl",
+            '{"results": []}',
+            1,
+            "Error parsing telemetry events: bad events",
+        ),
+        ("broken.json", "{", 1, "Error loading input file:"),
+    ],
+)
+def test_cmd_analyze_loader_failure_preserves_json_fallback_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    load_error: Exception,
+    filename: str,
+    payload: str,
+    expected_code: int,
+    expected_message: str,
+) -> None:
+    input_path = tmp_path / filename
+    input_path.write_text(payload, encoding="utf-8")
+
+    def fail_to_load(*args: Any, **kwargs: Any) -> Any:
+        raise load_error
+
+    monkeypatch.setattr(
+        gpumemprof_cli, "_import_runtime_symbols", lambda *args: (fail_to_load,)
+    )
+    exit_code = cmd_analyze(
+        argparse.Namespace(
+            input_file=str(input_path),
+            output=None,
+            format="json",
+            visualization=False,
+            plot_dir=str(tmp_path / "plots"),
+        )
+    )
+
+    assert exit_code == expected_code
+    assert expected_message in capsys.readouterr().out
 
 
 def test_main_exits_nonzero_for_analyze_failures(

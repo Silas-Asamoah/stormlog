@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 
 @dataclass(frozen=True)
@@ -146,13 +146,7 @@ class OpenAIChatCompletionsClient:
         usage: dict[str, Any] | None = None
         finish_reason: str | None = None
 
-        for raw_line in response:
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line or not line.startswith("data:"):
-                continue
-            data = line.removeprefix("data:").strip()
-            if data == "[DONE]":
-                break
+        for data in _stream_data(response):
             now_perf = time.perf_counter()
             if first_chunk_perf is None:
                 first_chunk_perf = now_perf
@@ -161,12 +155,9 @@ class OpenAIChatCompletionsClient:
             if isinstance(chunk.get("usage"), dict):
                 usage = chunk["usage"]
             choice = _first_choice(chunk)
-            if isinstance(choice, dict) and choice.get("finish_reason") is not None:
-                finish_reason = str(choice.get("finish_reason"))
-            delta = choice.get("delta") if isinstance(choice, dict) else None
-            piece = ""
-            if isinstance(delta, dict):
-                piece = str(delta.get("content") or "")
+            chunk_finish_reason, piece = _stream_choice_fields(choice)
+            if chunk_finish_reason is not None:
+                finish_reason = chunk_finish_reason
             if not piece:
                 continue
             content_parts.append(piece)
@@ -215,3 +206,25 @@ def _validate_http_endpoint(endpoint: str) -> None:
     parsed = urllib.parse.urlparse(endpoint)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("endpoint must use http:// or https://")
+
+
+def _stream_data(response: Any) -> Iterator[str]:
+    for raw_line in response:
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        if not line or not line.startswith("data:"):
+            continue
+        data = line.removeprefix("data:").strip()
+        if data == "[DONE]":
+            break
+        yield data
+
+
+def _stream_choice_fields(choice: dict[str, Any]) -> tuple[str | None, str]:
+    finish_reason: str | None = None
+    if isinstance(choice, dict) and choice.get("finish_reason") is not None:
+        finish_reason = str(choice.get("finish_reason"))
+    delta = choice.get("delta") if isinstance(choice, dict) else None
+    piece = ""
+    if isinstance(delta, dict):
+        piece = str(delta.get("content") or "")
+    return finish_reason, piece

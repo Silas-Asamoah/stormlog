@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Capability-aware PyTorch device memory sampling with typed per-counter and
+  allocator-feature declarations, plus injected collector support for future
+  device-only runtimes.
+- Canonical `TelemetryEventV4` exports with nullable memory counters and v2/v3
+  artifact upgrades.
+- Explicit device-only CLI/TUI diagnostics with device usage timelines and
+  unavailable allocator analysis warnings.
 - Launch QA scenario modules under `examples/scenarios/` for CPU telemetry, MPS telemetry, OOM flight recorder coverage, and TensorFlow end-to-end telemetry/diagnose checks.
 - Capability matrix orchestrator (`python -m examples.cli.capability_matrix`) with smoke/full modes, target selection (`auto|cpu|mps|both`), OOM mode controls, and machine-readable reports.
 - Scenario smoke tests (`tests/test_examples_scenarios.py`) and updated TUI pilot coverage for launch quick actions.

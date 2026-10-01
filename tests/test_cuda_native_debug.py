@@ -9,6 +9,65 @@ import pytest
 import stormlog.cuda_native_debug as native_debug
 
 
+def test_module_name_index_prioritizes_modules_and_tolerates_broken_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Tensor:
+        def __init__(self, pointer: int | None, device: int = 0, cuda: bool = True):
+            self.pointer = pointer
+            self.is_cuda = cuda
+            self.device = SimpleNamespace(index=device)
+
+    class Module:
+        def named_parameters(self, *, recurse: bool) -> list[tuple[str, Tensor]]:
+            assert recurse is True
+            return [
+                ("layer.weight", Tensor(100)),
+                ("cpu.weight", Tensor(200, cuda=False)),
+                ("other.weight", Tensor(300, device=1)),
+                ("missing.weight", Tensor(None)),
+            ]
+
+        def named_buffers(self, *, recurse: bool) -> list[tuple[str, Tensor]]:
+            assert recurse is True
+            return [("layer.running_mean", Tensor(400))]
+
+    class BrokenModule(Module):
+        def named_buffers(self, *, recurse: bool) -> list[tuple[str, Tensor]]:
+            raise RuntimeError("partially constructed module")
+
+    objects = [
+        {
+            "python_weight": Tensor(100),
+            "python_buffer": Tensor(400),
+            "python_only": Tensor(500),
+            "__hidden": Tensor(600),
+            7: Tensor(700),
+            "cpu": Tensor(800, cuda=False),
+            "other": Tensor(900, device=1),
+            "missing": Tensor(None),
+            "not_tensor": object(),
+        },
+        BrokenModule(),
+        Module(),
+    ]
+    monkeypatch.setattr(
+        native_debug,
+        "torch",
+        SimpleNamespace(nn=SimpleNamespace(Module=Module), Tensor=Tensor),
+    )
+    monkeypatch.setattr(native_debug.gc, "get_objects", lambda: objects)
+    monkeypatch.setattr(
+        native_debug, "_safe_storage_ptr", lambda tensor: tensor.pointer
+    )
+
+    assert native_debug._collect_module_name_index(0) == {
+        100: {"layer.weight"},
+        400: {"layer.running_mean"},
+        500: {"python_only"},
+    }
+
+
 def test_start_and_stop_cuda_memory_history_use_expected_torch_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

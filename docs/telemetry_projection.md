@@ -6,7 +6,7 @@ Stormlog uses a telemetry-first internal projection to give runtime capture,
 append-only sink persistence, artifact loading, live display, and offline
 analysis one shared event model.
 
-`TelemetryEvent v3` remains Stormlog's canonical persisted event schema for
+`TelemetryEvent v4` remains Stormlog's canonical persisted event schema for
 artifacts, append-only sink segments, exports, and loader output. The
 backend-neutral envelope described here is an internal projection over that
 schema, implemented in `stormlog.telemetry_model` and exposed through
@@ -20,7 +20,7 @@ compact tracker-local events on the hot path, then normalize at tracker or
 loader edges before persistence, display, or analysis fan-out.
 
 The current implementation takes the first migration step: it keeps persisted
-records on `TelemetryEvent v3`, then projects those records into
+records on `TelemetryEvent v4`, then projects those records into
 `ProjectedTelemetryRecord` for live and loaded sessions. Future sink migrations
 can persist the projected envelope directly after benchmark gates prove the
 runtime cost is acceptable.
@@ -29,7 +29,7 @@ runtime cost is acceptable.
 
 Stormlog currently has several event shapes and normalization boundaries:
 
-- `TelemetryEventV3` is the stable memory telemetry contract used by artifact
+- `TelemetryEventV4` is the stable memory telemetry contract used by artifact
   exports and loader output.
 - Tracker `TrackingEvent` values stay lightweight for runtime capture and are
   normalized through `_telemetry_record_from_event(...)`.
@@ -71,7 +71,7 @@ immutable event envelope with these fields:
   fields.
 
 The projection keeps backend-specific details out of top-level fields. Memory
-counters from `TelemetryEvent v3`, collector health metadata, phase metadata,
+counters from `TelemetryEvent v4`, collector health metadata, phase metadata,
 and future backend details are represented as attributes, resources, or
 correlation fields.
 
@@ -99,21 +99,21 @@ projection step.
 ## Projection Versioning
 
 `TELEMETRY_PROJECTION_SCHEMA_VERSION` versions only the internal projected
-envelope. It is separate from `TelemetryEvent v3` and does not change artifact
+envelope. It is separate from `TelemetryEvent v4` and does not change artifact
 compatibility by itself.
 
 When the projection shape changes incompatibly, update the version constant,
 the `ProjectedTelemetryRecord.schema_version` type annotation, serialization
 tests, this document, and compatibility behavior together. Compatibility code
 should be explicit about whether it can read both projection versions or must
-re-project from the persisted `TelemetryEvent v3` source.
+re-project from the persisted `TelemetryEvent v4` source.
 
 ## Data Flow
 
 The current flow is:
 
 1. Trackers capture compact runtime events or tracker-local records.
-2. Existing normalizers produce `TelemetryEvent v3` records for exports, sink
+2. Existing normalizers produce `TelemetryEvent v4` records for exports, sink
    writes, loaders, and TUI adapters.
 3. `project_telemetry_event(...)` projects V3 records into
    `ProjectedTelemetryRecord`.
@@ -133,7 +133,7 @@ queue depth, and sink throughput before it can claim the same hot-path cost.
 Stormlog preserves existing compatibility boundaries:
 
 - Existing V2, V3, and legacy artifacts remain loadable.
-- `TelemetryEvent v3` remains the persisted artifact and append-only sink
+- `TelemetryEvent v4` remains the persisted artifact and append-only sink
   record format.
 - Legacy artifact upcasting stays in loader and normalizer code.
 - Telemetry projection is additive and does not change CLI, TUI, or Python API
@@ -220,7 +220,7 @@ sinks, loaders, UI adapters, and analysis code.
 
 ### Phase 1: Telemetry Projection
 
-- Keep `TelemetryEvent v3` as the persisted artifact format.
+- Keep `TelemetryEvent v4` as the persisted artifact format.
 - Project V3 records into `ProjectedTelemetryRecord`.
 - Expose projected telemetry records from loaded sessions and live TUI sessions.
 - Cover projection behavior with deterministic tests.
@@ -282,7 +282,7 @@ sinks, loaders, UI adapters, and analysis code.
 ## Non-Goals
 
 - Rewriting every tracker to emit fully normalized records immediately.
-- Changing the existing `TelemetryEvent v3` JSON schema.
+- Changing the existing `TelemetryEvent v4` JSON schema.
 - Designing a new external protocol.
 - Changing user-facing CLI, TUI, or Python API behavior.
 - Optimizing for every future backend-specific field up front.

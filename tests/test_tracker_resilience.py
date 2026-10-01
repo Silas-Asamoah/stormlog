@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from collections import deque
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Iterator, cast
@@ -9,12 +10,18 @@ from typing import Any, Callable, Iterator, cast
 import pytest
 
 import stormlog.tracker as tracker_mod
+from stormlog.cli import _tracker_monitor_summary
 from stormlog.collector_health import (
     COLLECTOR_HEALTH_DEGRADED,
     COLLECTOR_HEALTH_HEALTHY,
     COLLECTOR_HEALTH_UNHEALTHY,
 )
-from stormlog.device_collectors import DeviceMemorySample, DeviceMemorySampleResult
+from stormlog.device_collectors import (
+    DeviceMemoryCapabilities,
+    DeviceMemoryCollector,
+    DeviceMemorySample,
+    DeviceMemorySampleResult,
+)
 from stormlog.phases import parse_phase_boundary
 from stormlog.telemetry_sink import TelemetrySinkConfig
 
@@ -75,6 +82,30 @@ class _SequencedCollector:
         if self._results:
             self._last = self._results.popleft()
         return self._last
+
+
+class _DeviceOnlyCollector(DeviceMemoryCollector):
+    def __init__(self, sample: DeviceMemorySample) -> None:
+        self._sample = sample
+
+    def name(self) -> str:
+        return "future"
+
+    def is_available(self) -> bool:
+        return True
+
+    def sample(self) -> DeviceMemorySample:
+        return self._sample
+
+    def capabilities(self) -> DeviceMemoryCapabilities:
+        return DeviceMemoryCapabilities(
+            backend="future",
+            telemetry_collector="stormlog.future_tracker",
+            sampling_source="future.device_memory",
+            supports_device_used=True,
+            supports_device_free=True,
+            supports_device_total=True,
+        )
 
 
 class _NoOpThread:
@@ -236,6 +267,177 @@ def _build_tracker(
         enable_alerts=False,
         **kwargs,
     )
+
+
+def _device_only_sample(*, used: int = 3500) -> DeviceMemorySample:
+    return DeviceMemorySample(
+        allocated_bytes=None,
+        reserved_bytes=None,
+        used_bytes=used,
+        free_bytes=4000 - used,
+        total_bytes=4000,
+        active_bytes=None,
+        inactive_bytes=None,
+        device_id=0,
+    )
+
+
+def test_memory_tracker_accepts_injected_device_only_collector() -> None:
+    tracker = tracker_mod.MemoryTracker(
+        collector=_DeviceOnlyCollector(_device_only_sample()),
+        sampling_interval=0.01,
+    )
+
+    tracker._run_tracking_iteration(0)
+
+    event_types = [event.event_type for event in tracker.get_events()]
+    assert "sample" in event_types
+    assert "warning" in event_types
+    assert "allocation" not in event_types
+    assert "deallocation" not in event_types
+    assert "peak" not in event_types
+    stats = tracker.get_statistics()
+    assert stats["current_memory_allocated"] is None
+    assert stats["current_memory_reserved"] is None
+    assert stats["current_device_used"] == 3500
+    assert stats["peak_device_used"] == 3500
+    assert stats["peak_memory"] is None
+    assert stats["total_allocations"] is None
+    assert stats["allocations_per_second"] is None
+    assert stats["memory_utilization_percent"] == 87.5
+    sample_event = next(
+        event for event in tracker.get_events() if event.event_type == "sample"
+    )
+    record = tracker._telemetry_record_from_event(sample_event)
+    assert record["allocator_allocated_bytes"] is None
+    assert record["allocator_reserved_bytes"] is None
+    assert record["device_used_bytes"] == 3500
+    assert (
+        record["metadata"]["memory_capabilities"]["supports_fragmentation_analysis"]
+        is False
+    )
+
+
+@pytest.mark.parametrize("device_only", [False, True])
+def test_monitor_summary_handles_nullable_tracker_lifecycle(
+    monkeypatch: pytest.MonkeyPatch, device_only: bool
+) -> None:
+    monkeypatch.setattr(tracker_mod.threading, "Thread", _NoOpThread)
+    if device_only:
+        tracker = tracker_mod.MemoryTracker(
+            collector=_DeviceOnlyCollector(_device_only_sample()), enable_alerts=False
+        )
+    else:
+        collector = _SequencedCollector(
+            [
+                DeviceMemorySampleResult(sample=_sample(allocated=64, reserved=256)),
+                DeviceMemorySampleResult(sample=_sample(allocated=100, reserved=256)),
+                DeviceMemorySampleResult(sample=_sample(allocated=150, reserved=256)),
+            ]
+        )
+        tracker = _build_tracker(monkeypatch, collector)
+    tracker.start_tracking()
+    try:
+        last_allocated = tracker._run_tracking_iteration(0)
+        tracker._run_tracking_iteration(last_allocated)
+    finally:
+        tracker.stop_tracking()
+
+    assert tracker.get_events()[0].memory_allocated is None
+    assert _tracker_monitor_summary(tracker)["memory_change_from_baseline"] == (
+        None if device_only else 50
+    )
+
+
+def test_memory_tracker_rejects_device_and_collector_together() -> None:
+    with pytest.raises(ValueError, match="cannot be provided together"):
+        tracker_mod.MemoryTracker(
+            device="cuda:0",
+            collector=_DeviceOnlyCollector(_device_only_sample()),
+        )
+
+
+@pytest.mark.parametrize("initial_state", ["failure", "partial", "known"])
+def test_device_only_tracker_refreshes_capacity_after_initial_sample(
+    monkeypatch: pytest.MonkeyPatch, initial_state: str
+) -> None:
+    recovered = _device_only_sample(used=3960)
+    initial = {
+        "failure": DeviceMemorySampleResult(
+            sample=None, core_error="initial collection failed"
+        ),
+        "partial": DeviceMemorySampleResult(
+            sample=replace(recovered, total_bytes=None, free_bytes=None),
+            partial_fields=("device_total_bytes", "device_free_bytes"),
+        ),
+        "known": DeviceMemorySampleResult(
+            sample=replace(recovered, total_bytes=8000, free_bytes=4040)
+        ),
+    }[initial_state]
+    results = iter([initial, DeviceMemorySampleResult(sample=recovered)])
+    collector = _DeviceOnlyCollector(recovered)
+    monkeypatch.setattr(collector, "sample_with_diagnostics", lambda: next(results))
+    tracker = tracker_mod.MemoryTracker(collector=collector)
+
+    tracker._run_tracking_iteration(0)
+
+    stats = tracker.get_statistics()
+    assert tracker.total_memory == 4000
+    assert stats["device_total"] == 4000
+    assert stats["memory_utilization_percent"] == 99.0
+    assert stats["collector_health_status"] == COLLECTOR_HEALTH_HEALTHY
+    alerts = tracker.get_alerts()
+    assert any(
+        event.event_type == "critical" and "99.0%" in (event.context or "")
+        for event in alerts
+    )
+
+
+def test_device_only_tracker_keeps_capacity_when_sample_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample = _device_only_sample()
+    invalid = replace(sample, allocated_bytes=1, total_bytes=8000, free_bytes=4500)
+    results = iter(
+        [
+            DeviceMemorySampleResult(sample=sample),
+            DeviceMemorySampleResult(sample=invalid),
+        ]
+    )
+    collector = _DeviceOnlyCollector(sample)
+    monkeypatch.setattr(collector, "sample_with_diagnostics", lambda: next(results))
+    tracker = tracker_mod.MemoryTracker(collector=collector)
+
+    tracker._run_tracking_iteration(0)
+
+    assert tracker.total_memory == 4000
+    assert tracker.get_statistics()["collector_health_status"] == (
+        COLLECTOR_HEALTH_UNHEALTHY
+    )
+
+
+def test_memory_tracker_degrades_on_capability_sample_mismatch() -> None:
+    invalid_sample = DeviceMemorySample(
+        allocated_bytes=1,
+        reserved_bytes=None,
+        used_bytes=2,
+        free_bytes=3998,
+        total_bytes=4000,
+        active_bytes=None,
+        inactive_bytes=None,
+        device_id=0,
+    )
+    tracker = tracker_mod.MemoryTracker(
+        collector=_DeviceOnlyCollector(invalid_sample),
+        sampling_interval=0.01,
+    )
+
+    tracker._run_tracking_iteration(0)
+
+    assert tracker.get_statistics()["collector_health_status"] == (
+        COLLECTOR_HEALTH_UNHEALTHY
+    )
+    assert all(event.event_type != "sample" for event in tracker.get_events())
 
 
 def test_memory_tracker_recovers_after_transient_collector_failure(
@@ -633,7 +835,7 @@ def test_memory_tracker_start_tracking_resets_collector_session_state(
     assert stats["current_memory_allocated"] is None
     assert tracker.stats["last_memory_check"] == 0
     assert tracker.get_events()[-1].event_type == "start"
-    assert tracker.get_events()[-1].memory_allocated == 0
+    assert tracker.get_events()[-1].memory_allocated is None
 
 
 def test_memory_tracker_hides_stale_current_stats_when_unhealthy(

@@ -43,38 +43,10 @@ def tracking_dashboard_html(
         max_value=chart_max,
     )
 
-    cards = [
-        ("samples", str(len(rows))),
-        (
-            "peak allocated",
-            _format_bytes(max(allocated_series)) if allocated_series else "n/a",
-        ),
-        (
-            "peak reserved",
-            _format_bytes(max(reserved_series)) if reserved_series else "n/a",
-        ),
-        (
-            "max utilization",
-            f"{max(utilization_values):.1f}%" if utilization_values else "n/a",
-        ),
-    ]
-    card_html = "".join(
-        f"<div class='card'><div class='label'>{html.escape(label)}</div>"
-        f"<div class='value'>{html.escape(value)}</div></div>"
-        for label, value in cards
+    card_html = _dashboard_cards(
+        rows, allocated_series, reserved_series, utilization_values
     )
-    alerts_html = "".join(
-        "<tr>"
-        f"<td>{html.escape(_format_alert_sample_index(row.get('sample_index')))}</td>"
-        f"<td>{html.escape(str(row.get('event_type', '')))}</td>"
-        f"<td>{html.escape(_format_alert_elapsed_seconds(row.get('elapsed_seconds')))}</td>"
-        f"<td>{html.escape(str(row.get('context') or ''))}</td>"
-        "</tr>"
-        for row in alert_rows
-    )
-    alerts_body = (
-        alerts_html or "<tr><td colspan='4'>No alert events captured.</td></tr>"
-    )
+    alerts_body = _dashboard_alerts(alert_rows)
     return (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
         "<style>"
@@ -167,3 +139,48 @@ def _format_alert_elapsed_seconds(value: Any) -> str:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return f"{float(value):.2f}"
     return "n/a"
+
+
+def _dashboard_cards(
+    rows: Sequence[Mapping[str, Any]],
+    allocated_series: Sequence[int],
+    reserved_series: Sequence[int],
+    utilization_values: Sequence[float],
+) -> str:
+    cards = [
+        ("samples", str(len(rows))),
+        (
+            "peak allocated",
+            _format_bytes(max(allocated_series)) if allocated_series else "n/a",
+        ),
+        (
+            "peak reserved",
+            _format_bytes(max(reserved_series)) if reserved_series else "n/a",
+        ),
+        (
+            "max utilization",
+            f"{max(utilization_values):.1f}%" if utilization_values else "n/a",
+        ),
+    ]
+    card_html = "".join(
+        f"<div class='card'><div class='label'>{html.escape(label)}</div>"
+        f"<div class='value'>{html.escape(value)}</div></div>"
+        for label, value in cards
+    )
+    return card_html
+
+
+def _dashboard_alerts(alert_rows: Sequence[Mapping[str, Any]]) -> str:
+    alerts_html = "".join(
+        "<tr>"
+        f"<td>{html.escape(_format_alert_sample_index(row.get('sample_index')))}</td>"
+        f"<td>{html.escape(str(row.get('event_type', '')))}</td>"
+        f"<td>{html.escape(_format_alert_elapsed_seconds(row.get('elapsed_seconds')))}</td>"
+        f"<td>{html.escape(str(row.get('context') or ''))}</td>"
+        "</tr>"
+        for row in alert_rows
+    )
+    alerts_body = (
+        alerts_html or "<tr><td colspan='4'>No alert events captured.</td></tr>"
+    )
+    return alerts_body

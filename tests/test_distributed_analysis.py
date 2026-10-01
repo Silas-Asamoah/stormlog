@@ -189,6 +189,55 @@ def _canonicalize_phase_events(events: list[Any], *, session_id: str) -> list[An
 
 
 class TestCrossRankMerge:
+    @pytest.mark.parametrize(
+        ("rank_one_values", "world_size", "confidence", "onset_offset"),
+        [
+            ([1 * _GB, int(1.4 * _GB), int(1.4 * _GB)], 2, "medium", 1),
+            ([1 * _GB, 1 * _GB, int(1.4 * _GB)], 2, "high", 2),
+            ([1 * _GB, 1 * _GB, int(1.4 * _GB)], 3, "low", 2),
+            ([1 * _GB, 1 * _GB, 1 * _GB], 2, "low", None),
+            ([1 * _GB], 2, "low", None),
+        ],
+    )
+    def test_first_cause_confidence_tracks_support_and_sampling(
+        self,
+        rank_one_values: list[int],
+        world_size: int,
+        confidence: str,
+        onset_offset: int | None,
+    ) -> None:
+        events = _build_rank_series(
+            rank=0,
+            world_size=world_size,
+            device_used_values=[1 * _GB, int(1.4 * _GB), int(1.4 * _GB)],
+        ) + _build_rank_series(
+            rank=1,
+            world_size=world_size,
+            device_used_values=rank_one_values,
+        )
+
+        _, analysis = analyze_cross_rank_events(events)
+
+        first = analysis.suspects[0]
+        assert first.rank == 0
+        assert first.confidence == confidence
+        assert analysis.cluster_onset_timestamp_ns == (
+            BASE_NS + onset_offset * INTERVAL_NS if onset_offset is not None else None
+        )
+        assert first.evidence["supporting_ranks_at_or_before_onset"] == len(
+            analysis.suspects
+        )
+        assert first.phase_attribution is None
+        if onset_offset is None:
+            assert first.lead_over_cluster_onset_ns == 0
+            assert analysis.notes[-1] == (
+                "Only one rank produced a qualifying spike; confidence is limited."
+            )
+        if len(rank_one_values) == 1:
+            assert analysis.notes[0] == (
+                "Some ranks have fewer than two samples and cannot contribute to spike detection: 1."
+            )
+
     def test_merge_aligns_ranks_by_first_sample_offset(self) -> None:
         events = []
         events.extend(

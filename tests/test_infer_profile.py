@@ -15,6 +15,11 @@ from unittest import mock
 from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
+from stormlog.infer.correlation_events import (
+    ArtifactIdentityEvent,
+    load_inference_artifact,
+)
+from stormlog.infer.host_clock import wall_clock_domain
 from stormlog.infer.openai_client import (
     ChatCompletionResult,
     OpenAIChatCompletionsClient,
@@ -137,6 +142,49 @@ def _fake_server() -> Iterator[str]:
 
 
 class InferenceProfileTests(unittest.TestCase):
+    def test_stream_parser_preserves_content_timing_and_done_boundary(self) -> None:
+        client = OpenAIChatCompletionsClient(
+            endpoint="http://localhost/v1/chat/completions",
+            model="test",
+            timeout_seconds=1,
+        )
+        response = iter(
+            [
+                b": heartbeat\n",
+                b"\n",
+                b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n',
+                b'data: {"choices": [{"delta": {"content": "hello"}}]}\n',
+                b'data: {"choices": [{"delta": {"content": " world"}, "finish_reason": "stop"}], "usage": {"total_tokens": 7}}\n',
+                b"data: [DONE]\n",
+                b"data: invalid trailing record\n",
+            ]
+        )
+        with (
+            mock.patch(
+                "stormlog.infer.openai_client.time.perf_counter",
+                side_effect=[1.0, 2.0, 3.0, 4.0],
+            ),
+            mock.patch("stormlog.infer.openai_client.time.time_ns", return_value=500),
+        ):
+            result = client._read_streaming_response(
+                response=response, started_at_ns=100, started_perf=0.0
+            )
+        self.assertEqual(
+            result,
+            ChatCompletionResult(
+                text="hello world",
+                started_at_ns=100,
+                ended_at_ns=500,
+                e2e_latency_ms=4000.0,
+                ttft_ms=2000.0,
+                first_chunk_latency_ms=1000.0,
+                chunk_interarrival_ms=[1000.0],
+                usage={"total_tokens": 7},
+                finish_reason="stop",
+            ),
+        )
+        self.assertEqual(next(response), b"data: invalid trailing record\n")
+
     def test_profile_streaming_endpoint_writes_request_events(self) -> None:
         with _fake_server() as endpoint:
             with tempfile.TemporaryDirectory() as directory:
@@ -187,6 +235,33 @@ class InferenceProfileTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(measured), 2)
                 self.assertEqual(len(warmup), 1)
+                artifact_identity = [
+                    record
+                    for record in records
+                    if record.get("event_type") == "infer.artifact"
+                ]
+                session_id = measured[0]["session_id"]
+                self.assertEqual(len(artifact_identity), 1)
+                self.assertEqual(artifact_identity[0]["schema_version"], 2)
+                self.assertIn("boot_id", artifact_identity[0]["metadata"])
+                context = artifact_identity[0]["context"]
+                self.assertEqual(
+                    context["clock_domain"],
+                    wall_clock_domain(
+                        context["host"], artifact_identity[0]["metadata"]["boot_id"]
+                    ),
+                )
+                self.assertEqual(
+                    artifact_identity[0]["context"]["session_id"], session_id
+                )
+                self.assertTrue(artifact_identity[0]["context"]["run_id"])
+                self.assertTrue(
+                    any(
+                        isinstance(record, ArtifactIdentityEvent)
+                        and record.context.session_id == session_id
+                        for record in load_inference_artifact(output)
+                    )
+                )
                 first = measured[0]
                 self.assertEqual(first["status"], "ok")
                 self.assertEqual(first["timestamp_ns"], first["started_at_ns"])

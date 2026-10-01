@@ -4,8 +4,50 @@ from __future__ import annotations
 
 import pytest
 
-from stormlog.analyzer import MemoryAnalyzer
+from stormlog.analyzer import MemoryAnalyzer, MemoryPattern, PerformanceInsight
 from stormlog.profiler import MemorySnapshot, ProfileResult
+
+
+@pytest.mark.parametrize("events", [None, []])
+def test_optimization_report_preserves_empty_telemetry_sections(
+    events: list | None,
+) -> None:
+    result = _make_result(0.5, 3.0, 100)
+
+    report = MemoryAnalyzer().generate_optimization_report([result], events=events)
+
+    assert report["summary"] == {
+        "total_functions_analyzed": 1,
+        "total_function_calls": 1,
+        "total_memory_allocated": 100,
+        "total_execution_time": 0.5,
+        "analysis_timestamp": 3.5,
+    }
+    assert list(report)[:7] == [
+        "summary",
+        "critical_issues",
+        "high_impact_insights",
+        "all_patterns",
+        "all_insights",
+        "recommendations",
+        "optimization_score",
+    ]
+    assert ("gap_analysis" in report) == (events is not None)
+    assert ("collective_attribution" in report) == (events is not None)
+    assert "cross_rank_analysis" not in report
+
+
+def test_empty_optimization_report_has_no_analysis_timestamp() -> None:
+    report = MemoryAnalyzer().generate_optimization_report([])
+
+    assert report["summary"] == {
+        "total_functions_analyzed": 0,
+        "total_function_calls": 0,
+        "total_memory_allocated": 0,
+        "total_execution_time": 0,
+        "analysis_timestamp": None,
+    }
+    assert report["optimization_score"]["score"] == 100
 
 
 def _make_snapshot(timestamp: float, allocated_memory: int) -> MemorySnapshot:
@@ -56,6 +98,50 @@ def test_zero_execution_times_do_not_crash_performance_analysis(
     method = getattr(analyzer, method_name)
 
     assert method(results) is not None
+
+
+@pytest.mark.parametrize(
+    "severities,impacts,score,grade",
+    [
+        ([], [], 100, "A"),
+        (["warning"], [], 90, "A"),
+        (["critical"], [], 80, "B"),
+        (["critical", "warning"], [], 70, "C"),
+        (["critical", "critical"], [], 60, "D"),
+        (["critical"] * 6, [], 0, "F"),
+        (["other"], ["high", "medium", "other"], 69, "D"),
+    ],
+)
+def test_optimization_score_preserves_penalties_and_grade_boundaries(
+    severities: list[str], impacts: list[str], score: int, grade: str
+) -> None:
+    patterns = [
+        MemoryPattern("test", "", severity, [], {}, []) for severity in severities
+    ]
+    insights = [
+        PerformanceInsight("test", "", "", impact, 1.0, {}, []) for impact in impacts
+    ]
+    result = MemoryAnalyzer()._calculate_optimization_score(patterns, insights)
+    assert result["score"] == score
+    assert result["grade"] == grade
+    assert result["issues_found"] == len(patterns) + len(insights)
+
+
+def test_execution_insights_keep_slow_detection_before_variance() -> None:
+    results = []
+    for name, times in [("fast", [1.0] * 5), ("slow", [1.0] * 4 + [16.0])]:
+        for index, duration in enumerate(times):
+            result = _make_result(duration, float(index))
+            result.function_name = name
+            results.append(result)
+    insights = MemoryAnalyzer()._analyze_execution_times(results)
+    assert [item.title for item in insights] == [
+        "Slow Function Detection",
+        "Inconsistent Execution Times",
+    ]
+    assert insights[0].data["slow_functions"] == ["slow"]
+    assert insights[0].data["slowest_time"] == 4.0
+    assert insights[1].data["variable_functions"] == ["slow"]
 
 
 def test_memory_leak_detection_ignores_mostly_freeing_function() -> None:

@@ -138,6 +138,39 @@ Project conventions:
   and public Python APIs unless a breaking change is explicitly planned.
 - Add comments only when they clarify non-obvious behavior.
 
+### Cyclomatic Complexity
+
+All scoped Python functions and methods must have Radon complexity **10 or
+less** (grade A or B). The CI complexity job checks `stormlog/` and the checker
+itself, including nested functions and methods of local classes. Class aggregate
+scores are excluded. Tests and examples are outside this gate.
+
+```bash
+python3 -m pip install -r requirements-complexity.txt
+python3 scripts/check_complexity.py
+python3 scripts/check_complexity.py --json
+```
+
+The legacy exception map in `.ci/complexity-baseline.json` is empty. Keep it
+empty: do not add grace entries or raise the limit. A regression test enforces
+this policy. Prefer cohesive helpers and focused tests that preserve behavior,
+outputs, and error handling. CI checks the gate on Python 3.10, 3.12, 3.13,
+and 3.14.
+
+For compatibility with older branches, the checker still supports pruning
+resolved or deleted legacy entries:
+
+```bash
+python3 scripts/check_complexity.py --update-baseline
+```
+
+This command runs the full check first and refuses to add new exceptions or
+accept changed complex callables. It only prunes resolved or deleted entries.
+Radon is pinned to 6.0.1 so measurements remain reproducible. Exit status is 0
+for a pass, 1 for complexity violations, and 2 for invalid source, configuration,
+or file access. The JSON report includes status, counts, and each violation's
+source location and score.
+
 Use conventional commit messages:
 
 ```text

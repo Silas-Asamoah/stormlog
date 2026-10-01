@@ -155,14 +155,7 @@ def resolve_run(
         mlflow.set_tags(tags)
         return mlflow, active_run, False
 
-    if config.tracking_uri is not None:
-        mlflow.set_tracking_uri(config.tracking_uri)
-        if config.tracking_uri.startswith("file:"):
-            print(
-                "Hint: a file: tracking URI requires MLFLOW_ALLOW_FILE_STORE=true "
-                "on MLflow >= 3.13.0; consider sqlite:///mlflow.db for offline storage.",
-                file=sys.stderr,
-            )
+    _configure_tracking_uri(mlflow, config.tracking_uri)
 
     start_kwargs: dict[str, Any] = {}
     if config.run_id is not None:
@@ -254,3 +247,14 @@ def _normalized_optional_string(value: Any) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _configure_tracking_uri(mlflow: Any, tracking_uri: str | None) -> None:
+    if tracking_uri is not None:
+        mlflow.set_tracking_uri(tracking_uri)
+        if tracking_uri.startswith("file:"):
+            print(
+                "Hint: a file: tracking URI requires MLFLOW_ALLOW_FILE_STORE=true "
+                "on MLflow >= 3.13.0; consider sqlite:///mlflow.db for offline storage.",
+                file=sys.stderr,
+            )

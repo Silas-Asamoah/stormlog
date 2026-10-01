@@ -13,16 +13,7 @@ def _is_protobuf_version_error(exc: Exception) -> bool:
 
 def parse_jax_memory_profile(file_path: str) -> Dict[str, Any]:
     """Parse a JAX .prof (gzipped pprof protobuf) using the official protobuf schema."""
-    try:
-        from . import profile_pb2
-    except Exception as exc:
-        if not isinstance(exc, ImportError) and not _is_protobuf_version_error(exc):
-            raise
-        raise ImportError(
-            "JAX memory profile parsing requires protobuf>=6.31.1 for the "
-            "bundled profile schema. Install stormlog[jax] in a compatible "
-            "environment."
-        ) from exc
+    profile_pb2 = _load_profile_schema()
 
     path = Path(file_path)
     try:
@@ -33,7 +24,7 @@ def parse_jax_memory_profile(file_path: str) -> Dict[str, Any]:
     except PermissionError as exc:
         raise PermissionError(f"JAX memory profile is not readable: {path}") from exc
 
-    profile = profile_pb2.Profile()  # type: ignore
+    profile = profile_pb2.Profile()
     profile.ParseFromString(data)
 
     string_table = profile.string_table
@@ -66,3 +57,18 @@ def parse_jax_memory_profile(file_path: str) -> Dict[str, Any]:
         samples.append({"stack": stack, "values": list(sample.value)})
 
     return {"samples": samples}
+
+
+def _load_profile_schema() -> Any:
+    try:
+        from . import profile_pb2
+    except Exception as exc:
+        if not isinstance(exc, ImportError) and not _is_protobuf_version_error(exc):
+            raise
+        raise ImportError(
+            "JAX memory profile parsing requires protobuf>=6.31.1 for the "
+            "bundled profile schema. Install stormlog[jax] in a compatible "
+            "environment."
+        ) from exc
+
+    return profile_pb2

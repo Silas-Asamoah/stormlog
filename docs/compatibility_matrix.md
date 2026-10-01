@@ -5,7 +5,7 @@
 This matrix reflects the current behavior of the repository and is versioned for the v0.2 documentation refresh.
 
 - Matrix version: `v0.2`
-- Last verified: `2026-03-05`
+- Last verified: `2026-09-05`
 - Source of truth:
   - `pyproject.toml` (`requires-python >=3.10`, framework dependency floors)
   - CLI entry points in `pyproject.toml`
@@ -34,12 +34,13 @@ This matrix reflects the current behavior of the repository and is versioned for
 
 ### PyTorch APIs (`stormlog`)
 
-| Runtime backend | Typical platform | Telemetry collector | `device_total/free` support | Notes |
+| Runtime backend | Telemetry collector | Allocator counters | Device used/free/total | Allocator-native analysis |
 | --- | --- | --- | --- | --- |
-| `cuda` | NVIDIA + CUDA | `stormlog.cuda_tracker` | ✅ | Uses `torch.cuda.memory_*` |
-| `rocm` | AMD + ROCm (Linux) | `stormlog.rocm_tracker` | ✅ | Uses HIP-backed `torch.cuda.memory_*` |
-| `mps` | Apple Silicon (macOS) | `stormlog.mps_tracker` | Partial | Depends on `torch.mps.recommended_max_memory()` availability |
-| `cpu` | Any host | `stormlog.cpu_tracker` | N/A | `CPUMemoryProfiler` / `CPUMemoryTracker` fallback |
+| `cuda` | `stormlog.cuda_tracker` | ✅ | ✅ | history, fragmentation, attribution, bounded profiling |
+| `rocm` | `stormlog.rocm_tracker` | ✅ | ✅ | history, fragmentation, attribution, bounded profiling |
+| `mps` | `stormlog.mps_tracker` | allocated/reserved | used; free/total when `recommended_max_memory()` is available | fragmentation |
+| injected device-only | collector-defined | N/A | capability-defined | explicitly unavailable |
+| `cpu` | `stormlog.cpu_tracker` | N/A | process/system memory contract | dedicated CPU profiler/tracker |
 
 ### TensorFlow APIs (`stormlog.tensorflow`)
 
@@ -56,8 +57,8 @@ This matrix reflects the current behavior of the repository and is versioned for
 - The documented CLI-only pip workflow is exercised from the built wheel in a fresh environment by the `artifact-cli-smoke` job in `.github/workflows/ci.yml`.
 - Source-only example-module smoke remains covered by the `examples-smoke` job in `.github/workflows/ci.yml`.
 - CI currently validates framework test matrices, wheel smoke, source example smoke, TUI gates, lint, docs, and package build lanes.
-- Backend capability metadata emitted in tracker exports includes:
-  - `backend`
-  - `supports_device_total`
-  - `supports_device_free`
-  - `sampling_source`
+- V4 tracker exports include the complete typed capability object under
+  `metadata["memory_capabilities"]`. The legacy flat backend, device total/free,
+  and sampling-source keys remain for compatibility.
+- Device-only CLI and TUI diagnostics plot device-used memory, show allocator
+  values as `N/A`, and explain that allocator-native analyses are unavailable.

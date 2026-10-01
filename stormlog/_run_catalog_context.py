@@ -109,6 +109,13 @@ def run_matches(row: RunRow, filters: RunFilter) -> bool:
         return False
     if filters.rank is not None and filters.rank not in row.ranks:
         return False
+    return _source_matches(row, filters)
+
+
+def _source_matches(
+    row: RunRow | RunAttachmentRow,
+    filters: RunFilter | RunAttachmentFilter,
+) -> bool:
     if (
         filters.source_namespace is not None
         and row.source_namespace != filters.source_namespace
@@ -132,16 +139,15 @@ def run_attachment_matches(
         return False
     if filters.rank is not None and row.rank != filters.rank:
         return False
+    return _attachment_source_matches(row, filters)
+
+
+def _attachment_source_matches(
+    row: RunAttachmentRow, filters: RunAttachmentFilter
+) -> bool:
     if filters.kind is not None and row.kind != filters.kind:
         return False
-    if (
-        filters.source_namespace is not None
-        and row.source_namespace != filters.source_namespace
-    ):
-        return False
-    if filters.source_ref is not None and row.source_ref != filters.source_ref:
-        return False
-    return True
+    return _source_matches(row, filters)
 
 
 def _explicit_run_contexts(
@@ -151,17 +157,7 @@ def _explicit_run_contexts(
     session_by_id = _first_session_by_id(sessions)
     contexts: dict[str, RunContext] = {}
     for envelope in envelopes:
-        member_ids = {session.session_id for session in envelope.sessions}
-        members = [
-            session_by_id[session_id]
-            for session_id in member_ids
-            if session_id in session_by_id
-        ]
-        if not members and envelope.job_id is not None:
-            members = [
-                session for session in sessions if session.job_id == envelope.job_id
-            ]
-        members.sort(key=lambda session: (session.started_at_ns, session.session_id))
+        members = _envelope_members(envelope, sessions, session_by_id)
         contexts[envelope.run_id] = RunContext(
             run_id=envelope.run_id,
             explicit=True,
@@ -187,6 +183,23 @@ def _explicit_run_contexts(
             metadata=envelope.metadata,
         )
     return contexts
+
+
+def _envelope_members(
+    envelope: CatalogRunEnvelope,
+    sessions: Sequence[SessionRowLike],
+    session_by_id: Mapping[str, SessionRowLike],
+) -> list[SessionRowLike]:
+    member_ids = {session.session_id for session in envelope.sessions}
+    members = [
+        session_by_id[session_id]
+        for session_id in member_ids
+        if session_id in session_by_id
+    ]
+    if not members and envelope.job_id is not None:
+        members = [session for session in sessions if session.job_id == envelope.job_id]
+    members.sort(key=lambda session: (session.started_at_ns, session.session_id))
+    return members
 
 
 def _implicit_run_contexts(

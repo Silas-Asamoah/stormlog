@@ -80,45 +80,16 @@ def export_tracking_run_to_wandb(
             )
 
         if config.log_artifacts:
-            if output_file is not None:
-                log_file_artifact(
-                    wandb,
-                    run,
-                    artifact_name=f"stormlog-track-output-{safe_session}",
-                    artifact_type="stormlog-track-output",
-                    path=output_file,
-                )
-
-            if sink_dir is not None:
-                log_directory_artifact(
-                    wandb,
-                    run,
-                    artifact_name=f"stormlog-telemetry-sink-{safe_session}",
-                    artifact_type="stormlog-telemetry-sink",
-                    path=sink_dir,
-                )
-
-            if oom_dir is not None:
-                log_directory_artifact(
-                    wandb,
-                    run,
-                    artifact_name=f"stormlog-oom-dump-{safe_session}",
-                    artifact_type="stormlog-oom-dump",
-                    path=oom_dir,
-                )
-
-            if (
-                attribution_bundle_dir is not None
-                and attribution_dir is not None
-                and attribution_dir != oom_dir
-            ):
-                log_directory_artifact(
-                    wandb,
-                    run,
-                    artifact_name=f"stormlog-attribution-bundle-{safe_session}",
-                    artifact_type="stormlog-attribution-bundle",
-                    path=attribution_dir,
-                )
+            _log_tracking_artifacts(
+                wandb,
+                run,
+                safe_session=safe_session,
+                output_file=output_file,
+                sink_dir=sink_dir,
+                oom_dir=oom_dir,
+                attribution_dir=attribution_dir,
+                attribution_bundle_dir=attribution_bundle_dir,
+            )
 
         if config.log_attribution and attribution_dir is not None:
             update_summary(
@@ -363,17 +334,9 @@ def tracking_timeline_rows(events: Sequence[Any]) -> list[dict[str, Any]]:
         device_used = event_int_value(event, "device_used", "device_used_bytes")
         device_total = event_int_value(event, "device_total", "device_total_bytes")
 
-        if device_used is None:
-            candidates = [value for value in (allocated, reserved) if value is not None]
-            device_used = max(candidates) if candidates else None
-
-        utilization_percent: float | None = None
-        if (
-            isinstance(device_used, int)
-            and isinstance(device_total, int)
-            and device_total > 0
-        ):
-            utilization_percent = (float(device_used) / float(device_total)) * 100.0
+        device_used, utilization_percent = _device_usage(
+            device_used, device_total, allocated, reserved
+        )
 
         timeline_rows.append(
             {
@@ -496,3 +459,76 @@ def _tracking_dashboard_root(
     if sink_dir is not None:
         return sink_dir
     return None
+
+
+def _log_tracking_artifacts(
+    wandb: Any,
+    run: Any,
+    *,
+    safe_session: str,
+    output_file: Path | None,
+    sink_dir: Path | None,
+    oom_dir: Path | None,
+    attribution_dir: Path | None,
+    attribution_bundle_dir: str | Path | None,
+) -> None:
+    if output_file is not None:
+        log_file_artifact(
+            wandb,
+            run,
+            artifact_name=f"stormlog-track-output-{safe_session}",
+            artifact_type="stormlog-track-output",
+            path=output_file,
+        )
+
+    if sink_dir is not None:
+        log_directory_artifact(
+            wandb,
+            run,
+            artifact_name=f"stormlog-telemetry-sink-{safe_session}",
+            artifact_type="stormlog-telemetry-sink",
+            path=sink_dir,
+        )
+
+    if oom_dir is not None:
+        log_directory_artifact(
+            wandb,
+            run,
+            artifact_name=f"stormlog-oom-dump-{safe_session}",
+            artifact_type="stormlog-oom-dump",
+            path=oom_dir,
+        )
+
+    if (
+        attribution_bundle_dir is not None
+        and attribution_dir is not None
+        and attribution_dir != oom_dir
+    ):
+        log_directory_artifact(
+            wandb,
+            run,
+            artifact_name=f"stormlog-attribution-bundle-{safe_session}",
+            artifact_type="stormlog-attribution-bundle",
+            path=attribution_dir,
+        )
+
+
+def _device_usage(
+    device_used: int | None,
+    device_total: int | None,
+    allocated: int | None,
+    reserved: int | None,
+) -> tuple[int | None, float | None]:
+    if device_used is None:
+        candidates = [value for value in (allocated, reserved) if value is not None]
+        device_used = max(candidates) if candidates else None
+
+    utilization_percent: float | None = None
+    if (
+        isinstance(device_used, int)
+        and isinstance(device_total, int)
+        and device_total > 0
+    ):
+        utilization_percent = (float(device_used) / float(device_total)) * 100.0
+
+    return device_used, utilization_percent

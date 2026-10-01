@@ -5,12 +5,46 @@ from __future__ import annotations
 import sys
 from argparse import Namespace
 from contextlib import nullcontext
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
 import stormlog.cli as gpumemprof_cli
 from stormlog.session import create_session_summary
+
+
+@pytest.mark.parametrize(
+    ("measurements", "expected"),
+    [
+        ([("start", None), ("sample", 100), ("sample", 150), ("stop", 150)], 50),
+        ([("start", 999), ("sample", 100), ("sample", 150), ("stop", 999)], 50),
+        ([("sample", 150), ("sample", 100)], -50),
+        ([("sample", 0), ("sample", 0)], 0),
+        ([("sample", 100), ("sample", None), ("sample", 150), ("stop", None)], 50),
+        ([("start", None), ("sample", None), ("stop", None)], None),
+        ([("start", 100), ("stop", 150)], None),
+        ([("sample", 150)], 0),
+        ([], None),
+    ],
+)
+def test_monitor_summary_uses_measured_allocator_endpoints(
+    measurements: list[tuple[str, int | None]], expected: int | None
+) -> None:
+    tracker = Mock()
+    tracker.get_statistics.return_value = {"peak_memory": 150, "peak_device_used": 200}
+    tracker.get_events.return_value = [
+        SimpleNamespace(event_type=event_type, memory_allocated=allocated)
+        for event_type, allocated in measurements
+    ]
+
+    summary = gpumemprof_cli._tracker_monitor_summary(tracker)
+
+    assert summary["memory_change_from_baseline"] == expected
+    assert summary["snapshots_collected"] == len(measurements)
+    assert summary["peak_memory_usage"] == 150
+    assert summary["peak_device_usage"] == 200
 
 
 def test_main_parses_oom_track_flags(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -41,6 +41,12 @@ _SYMBOL_TO_MODULE = {
     ),
     "classify_oom_exception": (".oom_flight_recorder", "classify_oom_exception"),
     "TelemetryEventV2": (".telemetry", "TelemetryEventV2"),
+    "TelemetryEventV3": (".telemetry", "TelemetryEventV3"),
+    "TelemetryEventV4": (".telemetry", "TelemetryEventV4"),
+    "DeviceMemoryCapabilities": (
+        ".device_collectors",
+        "DeviceMemoryCapabilities",
+    ),
     "DeviceMemoryCollector": (".device_collectors", "DeviceMemoryCollector"),
     "DeviceMemorySample": (".device_collectors", "DeviceMemorySample"),
     "build_device_memory_collector": (
@@ -146,6 +152,9 @@ __all__ = [
     "OOMExceptionClassification",
     "classify_oom_exception",
     "TelemetryEventV2",
+    "TelemetryEventV3",
+    "TelemetryEventV4",
+    "DeviceMemoryCapabilities",
     "DeviceMemoryCollector",
     "DeviceMemorySample",
     "build_device_memory_collector",

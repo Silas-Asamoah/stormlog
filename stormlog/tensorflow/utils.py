@@ -334,6 +334,25 @@ def suggest_optimizations(profile_result: Any) -> List[str]:
                 "Use tf.config.experimental.set_virtual_device_configuration() to limit GPU memory"
             )
 
+    _append_function_suggestions(profile_result, suggestions)
+
+    # TensorFlow-specific optimizations
+    suggestions.extend(
+        [
+            "Use tf.data.Dataset.map() with num_parallel_calls=tf.data.AUTOTUNE for preprocessing",
+            "Enable XLA compilation with tf.config.optimizer.set_jit(True)",
+            "Consider using tf.distribute.Strategy for multi-GPU training",
+            "Use tf.keras.callbacks.ReduceLROnPlateau to prevent overfitting and reduce memory over time",
+        ]
+    )
+
+    # Remove duplicates while preserving order
+    unique_suggestions = list(dict.fromkeys(suggestions))
+
+    return unique_suggestions[:10]  # Return top 10 suggestions
+
+
+def _append_function_suggestions(profile_result: Any, suggestions: List[str]) -> None:
     # Function-specific suggestions
     if hasattr(profile_result, "function_profiles"):
         for func_name, profile in profile_result.function_profiles.items():
@@ -349,26 +368,6 @@ def suggest_optimizations(profile_result: Any) -> List[str]:
                 suggestions.append(
                     f"Function '{func_name}' called frequently - consider @tf.function decoration"
                 )
-
-    # TensorFlow-specific optimizations
-    suggestions.extend(
-        [
-            "Use tf.data.Dataset.map() with num_parallel_calls=tf.data.AUTOTUNE for preprocessing",
-            "Enable XLA compilation with tf.config.optimizer.set_jit(True)",
-            "Consider using tf.distribute.Strategy for multi-GPU training",
-            "Use tf.keras.callbacks.ReduceLROnPlateau to prevent overfitting and reduce memory over time",
-        ]
-    )
-
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_suggestions = []
-    for suggestion in suggestions:
-        if suggestion not in seen:
-            seen.add(suggestion)
-            unique_suggestions.append(suggestion)
-
-    return unique_suggestions[:10]  # Return top 10 suggestions
 
 
 def generate_summary_report(profile_result: Any) -> str:
@@ -407,23 +406,7 @@ def generate_summary_report(profile_result: Any) -> str:
     report.append(f"Total Memory Deallocations: {profile_result.total_deallocations}")
     report.append("")
 
-    # Function profiling
-    if (
-        hasattr(profile_result, "function_profiles")
-        and profile_result.function_profiles
-    ):
-        report.append("Function Profiling:")
-        report.append("-" * 20)
-        for func_name, profile in profile_result.function_profiles.items():
-            report.append(f"  {func_name}:")
-            report.append(f"    Calls: {profile.get('calls', 0)}")
-            report.append(
-                f"    Peak Memory: {format_memory(profile.get('peak_memory', 0) * 1024 * 1024)}"
-            )
-            report.append(
-                f"    Total Duration: {profile.get('total_duration', 0):.3f}s"
-            )
-            report.append("")
+    _append_function_report(profile_result, report)
 
     # Fragmentation analysis
     if hasattr(profile_result, "snapshots") and len(profile_result.snapshots) > 1:
@@ -434,17 +417,7 @@ def generate_summary_report(profile_result: Any) -> str:
         report.append(f"  Fragmentation Trend: {frag_info['fragmentation_trend']:.3f}")
         report.append("")
 
-    # Tensor lifecycle
-    if hasattr(profile_result, "tensor_lifecycle") and profile_result.tensor_lifecycle:
-        active_tensors = profile_result.tensor_lifecycle.get("active", {})
-        if active_tensors:
-            report.append("Tensor Information:")
-            report.append("-" * 18)
-            report.append(f"  Active Tensors: {active_tensors.get('count', 0)}")
-            report.append(
-                f"  Total Tensor Memory: {format_memory(active_tensors.get('total_size_mb', 0) * 1024 * 1024)}"
-            )
-            report.append("")
+    _append_tensor_report(profile_result, report)
 
     # Optimization suggestions
     suggestions = suggest_optimizations(profile_result)
@@ -471,6 +444,40 @@ def generate_summary_report(profile_result: Any) -> str:
         report.append("  GPU: Not available")
 
     return "\n".join(report)
+
+
+def _append_function_report(profile_result: Any, report: List[str]) -> None:
+    # Function profiling
+    if (
+        hasattr(profile_result, "function_profiles")
+        and profile_result.function_profiles
+    ):
+        report.append("Function Profiling:")
+        report.append("-" * 20)
+        for func_name, profile in profile_result.function_profiles.items():
+            report.append(f"  {func_name}:")
+            report.append(f"    Calls: {profile.get('calls', 0)}")
+            report.append(
+                f"    Peak Memory: {format_memory(profile.get('peak_memory', 0) * 1024 * 1024)}"
+            )
+            report.append(
+                f"    Total Duration: {profile.get('total_duration', 0):.3f}s"
+            )
+            report.append("")
+
+
+def _append_tensor_report(profile_result: Any, report: List[str]) -> None:
+    # Tensor lifecycle
+    if hasattr(profile_result, "tensor_lifecycle") and profile_result.tensor_lifecycle:
+        active_tensors = profile_result.tensor_lifecycle.get("active", {})
+        if active_tensors:
+            report.append("Tensor Information:")
+            report.append("-" * 18)
+            report.append(f"  Active Tensors: {active_tensors.get('count', 0)}")
+            report.append(
+                f"  Total Tensor Memory: {format_memory(active_tensors.get('total_size_mb', 0) * 1024 * 1024)}"
+            )
+            report.append("")
 
 
 def optimize_tensorflow_memory() -> List[str]:

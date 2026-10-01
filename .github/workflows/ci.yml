@@ -182,6 +182,34 @@ jobs:
               run: |
                   python3 -m mypy stormlog/
 
+    complexity:
+        if: github.event_name != 'schedule'
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                python-version: ["3.10", "3.12", "3.13", "3.14"]
+        permissions:
+            contents: read
+
+        steps:
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  persist-credentials: false
+
+            - name: Set up Python
+              uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+              with:
+                  python-version: ${{ matrix.python-version }}
+
+            - name: Install complexity tools
+              run: python3 -m pip install -r requirements-complexity.txt pytest==8.4.2
+
+            - name: Test complexity gate
+              run: python3 -m pytest tests/test_complexity_gate.py -q
+
+            - name: Check cyclomatic complexity
+              run: python3 scripts/check_complexity.py --json
+
     workflow-audit:
         if: github.event_name != 'schedule'
         runs-on: ubuntu-latest

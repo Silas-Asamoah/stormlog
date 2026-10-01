@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import stormlog.query as query_api
 import stormlog.run_catalog as run_catalog_api
 from stormlog.session import (
@@ -1050,6 +1052,128 @@ def test_query_events_limit_applies_after_global_sort(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0].event.session_id == "session-early"
     assert rows[0].event.timestamp_ns == 100
+
+
+@pytest.mark.parametrize(
+    ("filters", "timestamps"),
+    [
+        (query_api.EventFilter(time_start_ns=0, time_end_ns=0), [0]),
+        (query_api.EventFilter(time_start_ns=1, time_end_ns=2), [1, 2]),
+        (query_api.EventFilter(time_start_ns=2, time_end_ns=1), []),
+        (query_api.EventFilter(rank=0, has_alert=False), [0, 1, 2]),
+        (query_api.EventFilter(rank=1), []),
+        (query_api.EventFilter(session_id="missing"), []),
+        (query_api.EventFilter(status="completed"), []),
+    ],
+)
+def test_query_event_filter_boundaries(
+    tmp_path: Path, filters: query_api.EventFilter, timestamps: list[int]
+) -> None:
+    path = tmp_path / "track.json"
+    _write_json_events(
+        path,
+        [
+            _event_record(session_id="session-a", timestamp_ns=value)
+            for value in range(3)
+        ],
+    )
+
+    rows = query_api.open([path]).query_events(filters)
+
+    assert [row.event.timestamp_ns for row in rows] == timestamps
+
+
+def test_event_filters_short_circuit_before_alert_classification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "track.json"
+    _write_json_events(path, [_event_record(session_id="session-a", timestamp_ns=1)])
+    store = query_api.open([path])
+
+    def unexpected_alert_classification(event: Any) -> bool:
+        raise AssertionError("earlier filters must reject before classifying alerts")
+
+    monkeypatch.setattr(query_api, "is_alert_event", unexpected_alert_classification)
+
+    assert store.query_events(query_api.EventFilter(rank=1, has_alert=True)) == []
+    assert (
+        store.query_events(query_api.EventFilter(time_start_ns=2, has_alert=True)) == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("session_id", "job_id", "scope", "conflict"),
+    [
+        ("anchor-session", "other-job", "local", False),
+        ("other-session", "anchor-job", "local", True),
+        ("other-session", "anchor-job", "distributed", False),
+        ("other-session", "other-job", "distributed", True),
+        (None, None, "local", False),
+        (None, "other-job", "distributed", True),
+    ],
+)
+def test_correlation_identity_conflicts(
+    session_id: str | None, job_id: str | None, scope: str, conflict: bool
+) -> None:
+    evidence = query_api.CorrelationEvidence(
+        evidence_id="test",
+        kind="telemetry_event",
+        title="test",
+        session_id=session_id,
+        job_id=job_id,
+        rank=None,
+        world_size=None,
+        start_ns=None,
+        end_ns=None,
+        source_path="test",
+        source_kind="telemetry_json",
+    )
+
+    assert (
+        query_api._has_identity_conflict(
+            evidence,
+            {"session_id": "anchor-session", "job_id": "anchor-job"},
+            scope,
+        )
+        is conflict
+    )
+
+
+def test_discovery_preserves_root_and_nested_manifest_priority(tmp_path: Path) -> None:
+    hybrid = {
+        "command_line": "stormlog diagnose",
+        "files": [],
+        "risk_detected": False,
+        "session_id": "session-a",
+        "segments": [],
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(hybrid), encoding="utf-8")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "manifest.json").write_text(json.dumps(hybrid), encoding="utf-8")
+
+    catalog = query_api.ArtifactCatalog([tmp_path])
+
+    assert [(source.path, source.source_kind) for source in catalog.sources] == [
+        (tmp_path, "diagnose_bundle"),
+        (tmp_path, "sink"),
+        (nested, "diagnose_bundle"),
+    ]
+
+
+@pytest.mark.parametrize("metadata", ['{"backend": "cuda"}', "{bad", "[]"])
+def test_csv_normalization_preserves_metadata_and_numeric_fallback(
+    metadata: str,
+) -> None:
+    normalized = query_api._normalize_csv_record(
+        {"rank": " 1e0 ", "timestamp_ns": "1700000000000000123", "metadata": metadata}
+    )
+
+    assert normalized["rank"] == 1
+    assert normalized["timestamp_ns"] == 1_700_000_000_000_000_123
+    assert normalized["metadata"] == (
+        {"backend": "cuda"} if metadata.startswith('{"') else {}
+    )
 
 
 def test_query_all_exports_run_contracts() -> None:

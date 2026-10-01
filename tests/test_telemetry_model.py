@@ -130,13 +130,13 @@ def test_projected_record_accepts_legacy_mapping_through_existing_normalizer() -
     assert projected.resource["collector"] == "stormlog.cpu_tracker"
 
 
-def test_projected_record_does_not_advertise_unknown_future_backend() -> None:
+def test_projected_record_preserves_unknown_future_backend() -> None:
     record = _v3_record()
     record["metadata"] = {"backend": "tpu"}
 
     projected = project_telemetry_event(record)
 
-    assert projected.source_kind == "cuda"
+    assert projected.source_kind == "tpu"
     assert projected.attributes["backend"] == "tpu"
 
 

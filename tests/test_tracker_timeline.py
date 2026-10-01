@@ -59,6 +59,9 @@ def test_memory_timeline_uses_last_event_from_each_nonempty_bucket() -> None:
         "timestamps": [0.0, 1.0, 3.0],
         "allocated": [20, 30, 40],
         "reserved": [40, 60, 80],
+        "device_used": [None, None, None],
+        "device_free": [None, None, None],
+        "device_total": [None, None, None],
     }
 
 

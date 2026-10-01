@@ -139,7 +139,7 @@ def test_tf_tracker_emits_v3_event_records(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert result.events
     first = result.events[0]
-    assert first["schema_version"] == 3
+    assert first["schema_version"] == 4
     assert isinstance(first["session_id"], str)
     assert first["session_id"]
     assert first["collector"] == "stormlog.tensorflow.memory_tracker"
@@ -214,7 +214,7 @@ def test_tf_cli_track_output_normalizes_legacy_events(
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["events"]
     event = payload["events"][0]
-    assert event["schema_version"] == 3
+    assert event["schema_version"] == 4
     assert isinstance(event["session_id"], str)
     assert event["session_id"]
     assert event["collector"] == "stormlog.tensorflow.memory_tracker"
@@ -570,7 +570,7 @@ def test_tf_tracker_streams_events_to_append_only_sink(
     assert payload["allocator_allocated_bytes"] == 32 * 1024 * 1024
     stats = tracker.get_statistics()
     assert stats["final_retained_files"] == 1
-    assert stats["rollover_count"] == 0
+    assert stats["rollover_count"] == 1
 
 
 def test_tf_tracker_disables_sink_after_append_failure(

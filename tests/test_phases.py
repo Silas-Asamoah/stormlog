@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from typing import Any
 
 import pytest
 
@@ -21,6 +22,118 @@ phase_attribution_to_payload = phases.phase_attribution_to_payload
 summarize_phase_attribution = phases.summarize_phase_attribution
 
 from stormlog.telemetry import SCHEMA_VERSION_V3, telemetry_event_from_record
+
+
+def _boundary_record_input() -> dict[str, Any]:
+    return {
+        "event_type": PHASE_ENTER_EVENT,
+        "session_id": "session-1",
+        "timestamp_ns": 100,
+        "metadata": _phase_scope(
+            action="enter",
+            name=" train ",
+            path=["train"],
+            scope_id="scope-1",
+            sequence=1,
+            thread_id=11,
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("action", "exit"),
+        ("action", None),
+        ("name", "  "),
+        ("name", 12),
+        ("scope_id", None),
+        ("thread_name", 12),
+        ("path", ("train",)),
+        ("path", [None, 12, ""]),
+        ("sequence", "1"),
+        ("thread_id", "11"),
+        ("parent_scope_id", 1),
+    ],
+)
+def test_parse_phase_boundary_rejects_malformed_scope_fields(
+    field: str, value: Any
+) -> None:
+    event = _boundary_record_input()
+    event["metadata"][PHASE_SCOPE_METADATA_KEY][field] = value
+
+    assert phases.parse_phase_boundary(event) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("event_type", "sample"),
+        ("metadata", []),
+        ("metadata", {PHASE_SCOPE_METADATA_KEY: []}),
+        ("session_id", None),
+        ("timestamp_ns", "100"),
+    ],
+)
+def test_parse_phase_boundary_rejects_malformed_event_fields(
+    field: str, value: Any
+) -> None:
+    event = _boundary_record_input()
+    event[field] = value
+
+    assert phases.parse_phase_boundary(event) is None
+
+
+def test_parse_phase_boundary_normalizes_path_and_preserves_integer_booleans() -> None:
+    event = _boundary_record_input()
+    scope = event["metadata"][PHASE_SCOPE_METADATA_KEY]
+    scope.update(
+        path=["train", 12, "", " ", "step"],
+        depth="wrong",
+        sequence=True,
+        thread_id=False,
+        attributes=[("ignored", 1)],
+    )
+
+    boundary = phases.parse_phase_boundary(event)
+
+    assert boundary is not None
+    assert boundary.name == "train"
+    assert boundary.path == ("train", " ", "step")
+    assert boundary.depth == 3
+    assert boundary.sequence is True
+    assert boundary.thread_id is False
+    assert boundary.attributes == {}
+
+
+def test_phase_attribution_preserves_ambiguity_when_scope_ids_are_duplicated() -> None:
+    spans = [
+        phases.PhaseSpan(
+            session_id="session-1",
+            rank=0,
+            thread_id=thread_id,
+            thread_name=f"thread-{thread_id}",
+            scope_id="duplicate",
+            path=("train",),
+            start_ns=0,
+            end_ns=100,
+            sequence=sequence,
+        )
+        for thread_id, sequence in ((11, 1), (22, 2))
+    ]
+
+    ambiguous = phases.attribute_active_spans(spans, origin_phase_scope_id="duplicate")
+    assert ambiguous is not None
+    assert ambiguous.phase_resolution == "ambiguous"
+    assert ambiguous.phase_paths == ["train"]
+    assert ambiguous.phase_summary is None
+
+    thread_local = phases.attribute_active_spans(
+        spans, origin_phase_scope_id="duplicate", origin_thread_id=11
+    )
+    assert thread_local is not None
+    assert thread_local.phase_source == "thread_local"
+    assert thread_local.thread_id == 11
 
 
 def _make_event(
@@ -417,6 +530,39 @@ def test_merge_phase_attributions_keeps_same_label_multi_thread_overlap_ambiguou
     assert merged.phase_resolution == "ambiguous"
     assert merged.phase_paths == ["train / step"]
     assert merged.phase_path is None
+
+
+@pytest.mark.parametrize(
+    "overrides,resolution,paths",
+    [
+        ({}, "unique", ["train"]),
+        ({"scope_id": "other"}, "ambiguous", ["train"]),
+        ({"thread_id": 12}, "ambiguous", ["train"]),
+        ({"phase_resolution": "ambiguous"}, "ambiguous", ["train"]),
+        (
+            {"phase_path": "eval", "phase_paths": ["eval"]},
+            "ambiguous",
+            ["eval", "train"],
+        ),
+    ],
+)
+def test_merge_phase_attributions_preserves_unique_scope_identity(
+    overrides: dict[str, Any], resolution: str, paths: list[str]
+) -> None:
+    fields = dict(
+        phase_resolution="unique",
+        phase_path="train",
+        phase_paths=["train"],
+        scope_id="scope",
+        thread_id=11,
+    )
+    first = PhaseAttribution(**fields)
+    second = PhaseAttribution(**(fields | overrides))
+    merged = merge_phase_attributions(first, second)
+    assert merged is not None
+    assert merged.phase_resolution == resolution
+    assert merged.phase_paths == paths
+    assert (merged is first) is (resolution == "unique")
 
 
 def test_summarize_phase_attribution_marks_ambiguous_single_label() -> None:

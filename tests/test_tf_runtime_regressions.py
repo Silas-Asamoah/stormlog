@@ -20,6 +20,32 @@ import stormlog.tensorflow.tracker as tf_tracker
 from stormlog.collective_attribution import CollectiveAttributionEvidence
 
 
+@pytest.mark.parametrize(
+    ("peak", "growth", "expected"),
+    [(4000, 100, 10.0), (4001, 101, 7.5), (8000, 200, 7.5), (8001, 201, 5.0)],
+)
+def test_tf_efficiency_preserves_strict_thresholds(
+    peak: float, growth: float, expected: float
+) -> None:
+    result = SimpleNamespace(peak_memory_mb=peak, memory_growth_rate=growth)
+    assert tf_analyzer.MemoryAnalyzer().analyze_efficiency(result) == expected
+
+
+def test_tf_leak_findings_preserve_order_and_zero_start() -> None:
+    result = SimpleNamespace(
+        memory_usage=[0.0] * 5 + list(range(1, 16)),
+        timestamps=list(range(20)),
+        memory_growth_rate=3.5,
+    )
+    findings = tf_analyzer.MemoryAnalyzer().detect_memory_leaks(result)
+    assert [finding["type"] for finding in findings] == [
+        "monotonic_increase",
+        "insufficient_cleanup",
+    ]
+    assert findings[0]["growth_rate"] == 3.5
+    assert findings[1]["description"] == "Final memory 13.0MB is infx initial memory"
+
+
 def test_tf_cmd_analyze_rejects_mismatched_timestamps(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

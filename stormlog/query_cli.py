@@ -8,9 +8,12 @@ import json
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .correlation import DEFAULT_CORRELATION_WINDOW_NS
+
+if TYPE_CHECKING:
+    from .query import QueryStore
 
 
 @dataclass(frozen=True)
@@ -38,144 +41,193 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     try:
-        if args.command == "runs":
-            rows = [
-                row.as_dict()
-                for row in store.list_runs(
-                    query_api.RunFilter(
-                        run_id=args.run_id,
-                        session_id=args.session_id,
-                        job_id=args.job_id,
-                        rank=args.rank,
-                        source_namespace=args.source_namespace,
-                        source_ref=args.source_ref,
-                    )
-                )
-            ]
-            _emit_rows(rows, output_mode, _RUN_COLUMNS)
-        elif args.command == "attachments":
-            rows = [
-                row.as_dict()
-                for row in store.list_run_attachments(
-                    query_api.RunAttachmentFilter(
-                        run_id=args.run_id,
-                        session_id=args.session_id,
-                        job_id=args.job_id,
-                        rank=args.rank,
-                        kind=args.kind,
-                        source_namespace=args.source_namespace,
-                        source_ref=args.source_ref,
-                    )
-                )
-            ]
-            _emit_rows(rows, output_mode, _ATTACHMENT_COLUMNS)
-        elif args.command == "sessions":
-            rows = [
-                row.as_dict()
-                for row in store.list_sessions(
-                    query_api.SessionFilter(
-                        session_id=args.session_id,
-                        status=args.status,
-                        job_id=args.job_id,
-                        rank=args.rank,
-                        world_size=args.world_size,
-                        has_oom_bundle=args.has_oom_bundle,
-                        source_kind=args.source_kind,
-                    )
-                )
-            ]
-            _emit_rows(rows, output_mode, _SESSION_COLUMNS)
-        elif args.command == "events":
-            rows = [
-                row.as_dict()
-                for row in store.query_events(
-                    query_api.EventFilter(
-                        session_id=args.session_id,
-                        event_type=args.event_type,
-                        rank=args.rank,
-                        collector=args.collector,
-                        status=args.status,
-                        time_start_ns=args.time_start_ns,
-                        time_end_ns=args.time_end_ns,
-                        has_alert=args.has_alert,
-                        collector_health_status=args.collector_health_status,
-                        backend=args.backend,
-                        limit=args.limit,
-                    )
-                )
-            ]
-            _emit_rows(rows, output_mode, _EVENT_COLUMNS)
-        elif args.command == "ooms":
-            rows = [
-                row.as_dict()
-                for row in store.list_oom_bundles(
-                    query_api.OOMBundleFilter(
-                        session_id=args.session_id,
-                        backend=args.backend,
-                        reason=args.reason,
-                        created_after=args.created_after,
-                        created_before=args.created_before,
-                    )
-                )
-            ]
-            _emit_rows(rows, output_mode, _OOM_COLUMNS)
-        elif args.command == "issues":
-            if output_mode.csv:
-                print(
-                    "Error: --csv is not supported for issue queries", file=sys.stderr
-                )
-                return 2
-            rows = [
-                row.as_dict()
-                for row in store.list_issues(
-                    query_api.IssueFilter(
-                        fingerprint_id=args.fingerprint_id,
-                        kind=args.kind,
-                        state=args.state,
-                        severity=args.severity,
-                        session_id=args.session_id,
-                    )
-                )
-            ]
-            _emit_rows(rows, output_mode, _ISSUE_COLUMNS)
-        elif args.command == "summary":
-            if output_mode.csv:
-                print(
-                    "Error: --csv is not supported for summary queries", file=sys.stderr
-                )
-                return 2
-            rows = [
-                row.as_dict()
-                for row in store.summarize(args.metric, group_by=args.group_by)
-            ]
-            _emit_rows(rows, output_mode, _SUMMARY_COLUMNS)
-        elif args.command == "correlate":
-            result = store.correlate(
-                query_api.CorrelationFilter(
-                    session_id=args.session_id,
-                    job_id=args.job_id,
-                    rank=args.rank,
-                    scope=args.scope,
-                    at_ns=args.at_ns,
-                    record_id=args.record_id,
-                    window_ns=args.window_ns,
-                    kinds=tuple(args.kind or ()),
-                    limit=args.limit,
-                )
-            )
-            if output_mode.json:
-                print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
-            else:
-                _emit_rows(
-                    [row.as_dict() for row in result.evidence],
-                    output_mode,
-                    _CORRELATION_COLUMNS,
-                )
+        return int(args.query_handler(store, args, output_mode))
     except BrokenPipeError:
         return 1
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+
+def _query_runs(
+    store: QueryStore, args: argparse.Namespace, output_mode: _OutputMode
+) -> int:
+    from . import query as query_api
+
+    rows = [
+        row.as_dict()
+        for row in store.list_runs(
+            query_api.RunFilter(
+                run_id=args.run_id,
+                session_id=args.session_id,
+                job_id=args.job_id,
+                rank=args.rank,
+                source_namespace=args.source_namespace,
+                source_ref=args.source_ref,
+            )
+        )
+    ]
+    _emit_rows(rows, output_mode, _RUN_COLUMNS)
+    return 0
+
+
+def _query_attachments(
+    store: QueryStore, args: argparse.Namespace, output_mode: _OutputMode
+) -> int:
+    from . import query as query_api
+
+    rows = [
+        row.as_dict()
+        for row in store.list_run_attachments(
+            query_api.RunAttachmentFilter(
+                run_id=args.run_id,
+                session_id=args.session_id,
+                job_id=args.job_id,
+                rank=args.rank,
+                kind=args.kind,
+                source_namespace=args.source_namespace,
+                source_ref=args.source_ref,
+            )
+        )
+    ]
+    _emit_rows(rows, output_mode, _ATTACHMENT_COLUMNS)
+    return 0
+
+
+def _query_sessions(
+    store: QueryStore, args: argparse.Namespace, output_mode: _OutputMode
+) -> int:
+    from . import query as query_api
+
+    rows = [
+        row.as_dict()
+        for row in store.list_sessions(
+            query_api.SessionFilter(
+                session_id=args.session_id,
+                status=args.status,
+                job_id=args.job_id,
+                rank=args.rank,
+                world_size=args.world_size,
+                has_oom_bundle=args.has_oom_bundle,
+                source_kind=args.source_kind,
+            )
+        )
+    ]
+    _emit_rows(rows, output_mode, _SESSION_COLUMNS)
+    return 0
+
+
+def _query_events(
+    store: QueryStore, args: argparse.Namespace, output_mode: _OutputMode
+) -> int:
+    from . import query as query_api
+
+    rows = [
+        row.as_dict()
+        for row in store.query_events(
+            query_api.EventFilter(
+                session_id=args.session_id,
+                event_type=args.event_type,
+                rank=args.rank,
+                collector=args.collector,
+                status=args.status,
+                time_start_ns=args.time_start_ns,
+                time_end_ns=args.time_end_ns,
+                has_alert=args.has_alert,
+                collector_health_status=args.collector_health_status,
+                backend=args.backend,
+                limit=args.limit,
+            )
+        )
+    ]
+    _emit_rows(rows, output_mode, _EVENT_COLUMNS)
+    return 0
+
+
+def _query_ooms(
+    store: QueryStore, args: argparse.Namespace, output_mode: _OutputMode
+) -> int:
+    from . import query as query_api
+
+    rows = [
+        row.as_dict()
+        for row in store.list_oom_bundles(
+            query_api.OOMBundleFilter(
+                session_id=args.session_id,
+                backend=args.backend,
+                reason=args.reason,
+                created_after=args.created_after,
+                created_before=args.created_before,
+            )
+        )
+    ]
+    _emit_rows(rows, output_mode, _OOM_COLUMNS)
+    return 0
+
+
+def _query_issues(
+    store: QueryStore, args: argparse.Namespace, output_mode: _OutputMode
+) -> int:
+    from . import query as query_api
+
+    if output_mode.csv:
+        print("Error: --csv is not supported for issue queries", file=sys.stderr)
+        return 2
+    rows = [
+        row.as_dict()
+        for row in store.list_issues(
+            query_api.IssueFilter(
+                fingerprint_id=args.fingerprint_id,
+                kind=args.kind,
+                state=args.state,
+                severity=args.severity,
+                session_id=args.session_id,
+            )
+        )
+    ]
+    _emit_rows(rows, output_mode, _ISSUE_COLUMNS)
+    return 0
+
+
+def _query_summary(
+    store: QueryStore, args: argparse.Namespace, output_mode: _OutputMode
+) -> int:
+    if output_mode.csv:
+        print("Error: --csv is not supported for summary queries", file=sys.stderr)
+        return 2
+    rows = [
+        row.as_dict() for row in store.summarize(args.metric, group_by=args.group_by)
+    ]
+    _emit_rows(rows, output_mode, _SUMMARY_COLUMNS)
+    return 0
+
+
+def _query_correlate(
+    store: QueryStore, args: argparse.Namespace, output_mode: _OutputMode
+) -> int:
+    from . import query as query_api
+
+    result = store.correlate(
+        query_api.CorrelationFilter(
+            session_id=args.session_id,
+            job_id=args.job_id,
+            rank=args.rank,
+            scope=args.scope,
+            at_ns=args.at_ns,
+            record_id=args.record_id,
+            window_ns=args.window_ns,
+            kinds=tuple(args.kind or ()),
+            limit=args.limit,
+        )
+    )
+    if output_mode.json:
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+    else:
+        _emit_rows(
+            [row.as_dict() for row in result.evidence],
+            output_mode,
+            _CORRELATION_COLUMNS,
+        )
     return 0
 
 
@@ -187,6 +239,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", help="Query targets")
 
     runs = subparsers.add_parser("runs", help="List run envelopes")
+    runs.set_defaults(query_handler=_query_runs)
     _add_paths(runs)
     _add_output_flags(runs, include_csv=True)
     runs.add_argument("--run-id")
@@ -200,6 +253,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "attachments",
         help="List run-indexed local and external attachments",
     )
+    attachments.set_defaults(query_handler=_query_attachments)
     _add_paths(attachments)
     _add_output_flags(attachments, include_csv=True)
     attachments.add_argument("--run-id")
@@ -211,6 +265,7 @@ def _build_parser() -> argparse.ArgumentParser:
     attachments.add_argument("--source-ref")
 
     sessions = subparsers.add_parser("sessions", help="List artifact sessions")
+    sessions.set_defaults(query_handler=_query_sessions)
     _add_paths(sessions)
     _add_output_flags(sessions, include_csv=True)
     sessions.add_argument("--session-id")
@@ -227,6 +282,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     events = subparsers.add_parser("events", help="Query telemetry events")
+    events.set_defaults(query_handler=_query_events)
     _add_paths(events)
     _add_output_flags(events, include_csv=True)
     events.add_argument("--session-id", "--session", dest="session_id")
@@ -247,6 +303,7 @@ def _build_parser() -> argparse.ArgumentParser:
     events.add_argument("--limit", type=int)
 
     ooms = subparsers.add_parser("ooms", help="List OOM dump bundles")
+    ooms.set_defaults(query_handler=_query_ooms)
     _add_paths(ooms)
     _add_output_flags(ooms, include_csv=True)
     ooms.add_argument("--session-id", "--session", dest="session_id")
@@ -256,6 +313,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ooms.add_argument("--created-before")
 
     issues = subparsers.add_parser("issues", help="List grouped recurring issues")
+    issues.set_defaults(query_handler=_query_issues)
     _add_paths(issues)
     _add_output_flags(issues, include_csv=False)
     issues.add_argument("--fingerprint-id")
@@ -276,6 +334,7 @@ def _build_parser() -> argparse.ArgumentParser:
     issues.add_argument("--session-id", "--session", dest="session_id")
 
     summary = subparsers.add_parser("summary", help="Run built-in summaries")
+    summary.set_defaults(query_handler=_query_summary)
     _add_paths(summary)
     _add_output_flags(summary, include_csv=False)
     summary.add_argument(
@@ -302,6 +361,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "correlate",
         help="Find evidence correlated with a timestamp or telemetry record",
     )
+    correlate.set_defaults(query_handler=_query_correlate)
     _add_paths(correlate)
     _add_output_flags(correlate, include_csv=False)
     anchor = correlate.add_mutually_exclusive_group(required=True)
