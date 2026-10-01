@@ -108,6 +108,9 @@ class ProfileConfig:
     arrival_trace: ArrivalTrace | None = None
     max_in_flight: int = 128
     overflow: Literal["wait", "drop"] = "wait"
+    # After the measured window, how long in-flight requests may finish.
+    # None means the request timeout.
+    drain_timeout_seconds: float | None = None
 
     def arrival_specs(self) -> list[ArrivalSpec]:
         """One arrival shape per case group: per rate, or a single shape."""

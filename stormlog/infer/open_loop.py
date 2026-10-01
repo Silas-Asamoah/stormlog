@@ -50,6 +50,14 @@ class InFlightLimiter:
         self._slots.release()
 
 
+@dataclass(frozen=True)
+class Dispatch:
+    """The requests a schedule sent, and when the schedule started."""
+
+    started_at_ns: int
+    tasks: list[asyncio.Task[None]]
+
+
 async def dispatch_schedule(
     offsets: Sequence[float],
     *,
@@ -58,13 +66,14 @@ async def dispatch_schedule(
     overflow: Overflow,
     send: Callable[[Arrival], Awaitable[None]],
     drop: Callable[[Arrival], None],
-) -> list[asyncio.Task[None]]:
+) -> Dispatch:
     """Start each request at its offset from now, in seconds.
 
     With ``overflow="wait"`` an arrival that finds every slot busy is held
     until one frees up; while it waits, later arrivals fall behind schedule
     too, which their dispatch lag shows. With ``"drop"`` it is handed to
-    ``drop`` and never sent. Returns the tasks of the requests that were sent.
+    ``drop`` and never sent. Returns once every arrival has been sent or
+    dropped; the requests themselves may still be running.
     """
     started = time.perf_counter()
     started_ns = time.time_ns()
@@ -82,7 +91,7 @@ async def dispatch_schedule(
         in_flight = await limiter.acquire()
         arrival = replace(arrival, in_flight_at_dispatch=in_flight)
         tasks.append(asyncio.create_task(_release_after(send(arrival), limiter)))
-    return tasks
+    return Dispatch(started_at_ns=started_ns, tasks=tasks)
 
 
 async def _release_after(request: Awaitable[None], limiter: InFlightLimiter) -> None:

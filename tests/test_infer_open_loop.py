@@ -238,6 +238,70 @@ def test_replay_from_the_cli_sends_every_recorded_arrival(tmp_path: Path) -> Non
     assert sessions[0]["config"]["arrivals"][0]["trace"]["arrivals"] == 3
 
 
+def _windows(tmp_path: Path) -> list[dict[str, Any]]:
+    lines = (tmp_path / "infer.jsonl").read_text().splitlines()
+    records = [json.loads(line) for line in lines]
+    return [r for r in records if r.get("event_type") == "infer.case_window"]
+
+
+def test_requests_still_running_at_the_drain_deadline_are_cancelled(
+    tmp_path: Path,
+) -> None:
+    requests, report, _client = _profile(
+        tmp_path,
+        latency_seconds=0.5,
+        arrival_mode="fixed-rate",
+        rates=(100.0,),
+        request_count=2,
+        drain_timeout_seconds=0.1,
+    )
+    assert [r["status"] for r in requests] == ["cancelled", "cancelled"]
+    assert all(r["e2e_latency_ms"] is None for r in requests)
+    arrivals = report["cases"]["fixed100_in8_out4"]["arrivals"]
+    assert arrivals["sent"] == 2 and arrivals["failed"] == {"cancelled": 2}
+    assert 0.08 <= arrivals["drain_seconds"] < 0.4
+    assert report["summary"]["failures_by_status"] == {"cancelled": 2}
+    (window,) = _windows(tmp_path)
+    assert (window["phase"], window["scheduled_arrivals"]) == ("measured", 2)
+    assert window["drain_timeout_seconds"] == 0.1
+
+
+def test_a_closed_loop_duration_drains_then_cancels(tmp_path: Path) -> None:
+    requests, report, _client = _profile(
+        tmp_path,
+        latency_seconds=0.4,
+        request_count=None,
+        duration_seconds=0.05,
+        drain_timeout_seconds=0.05,
+    )
+    assert [r["status"] for r in requests] == ["cancelled"]
+    arrivals = report["cases"]["c1_in8_out4"]["arrivals"]
+    assert arrivals["window_seconds"] == pytest.approx(0.05)
+    assert arrivals["failed"] == {"cancelled": 1}
+    # A cancellation is worth showing even in a closed loop.
+    assert "cancelled 1" in format_analysis_text(report)
+
+
+def test_every_phase_records_its_window(tmp_path: Path) -> None:
+    _requests, report, _client = _profile(
+        tmp_path, latency_seconds=0.02, request_count=3, warmup_requests=1
+    )
+    windows = _windows(tmp_path)
+    assert [w["phase"] for w in windows] == ["warmup", "measured"]
+    for window in windows:
+        assert (
+            window["started_at_ns"]
+            <= window["window_ended_at_ns"]
+            <= window["drained_at_ns"]
+        )
+        # The default drain timeout is the request timeout.
+        assert window["drain_timeout_seconds"] == 60.0
+    arrivals = report["cases"]["c1_in8_out4"]["arrivals"]
+    # The window closes when the last request is sent, then the drain runs.
+    assert arrivals["drain_seconds"] >= 0.015
+    assert arrivals["failed"] == {}
+
+
 @pytest.mark.parametrize(
     ("flags", "message"),
     [
@@ -256,6 +320,7 @@ def test_replay_from_the_cli_sends_every_recorded_arrival(tmp_path: Path) -> Non
         ),
         (["--arrival", "fixed-rate", "--rate", "0"], "rate values must be > 0"),
         (["--duration", "1", "--requests", "2"], "either --duration or --requests"),
+        (["--drain-timeout", "0"], "--drain-timeout must be > 0"),
     ],
 )
 def test_arrival_flags_are_checked_before_any_request(
@@ -295,7 +360,7 @@ def test_dispatcher_drops_only_while_every_slot_is_busy() -> None:
             sent.append(arrival)
             await asyncio.sleep(0.1)
 
-        tasks = await dispatch_schedule(
+        dispatch = await dispatch_schedule(
             [0.0, 0.02, 0.2],
             mode="fixed-rate",
             limiter=limiter,
@@ -303,7 +368,7 @@ def test_dispatcher_drops_only_while_every_slot_is_busy() -> None:
             send=send,
             drop=dropped.append,
         )
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*dispatch.tasks)
         assert limiter.active == 0 and limiter.peak == 1
 
     _run(scenario())

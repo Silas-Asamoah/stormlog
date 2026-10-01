@@ -255,10 +255,31 @@ class InferenceProfiler:
     ) -> None:
         request = _PhaseRequest(case, writer, prompt, prompt_count, phase)
         if case.arrival.open_loop:
-            await self._run_open_phase(request, total_requests, duration_seconds)
-            return
+            window = await self._run_open_phase(
+                request, total_requests, duration_seconds
+            )
+        else:
+            window = await self._run_closed_phase(
+                request, total_requests, duration_seconds
+            )
+        writer.append(
+            window.to_record(
+                session_id=self.session.session_id,
+                request=request,
+                drain_timeout_seconds=self._drain_timeout(),
+            )
+        )
+
+    async def _run_closed_phase(
+        self,
+        request: "_PhaseRequest",
+        total_requests: int | None,
+        duration_seconds: float | None,
+    ) -> "_PhaseWindow":
+        case = request.case
         if total_requests is None and duration_seconds is None:
             total_requests = 1
+        started_at_ns = time.time_ns()
         counter = _RequestCounter(limit=total_requests)
         limiter = InFlightLimiter(case.concurrency)
         end_time = (
@@ -278,7 +299,14 @@ class InferenceProfiler:
             )
             for index in range(case.concurrency)
         ]
-        await asyncio.gather(*tasks)
+        if duration_seconds is None:
+            # Every request counts, so each one finishes or times out.
+            await _drain(tasks, timeout=None)
+            window_ended_at_ns = counter.last_issued_at_ns or time.time_ns()
+        else:
+            await _drain(tasks, timeout=duration_seconds + self._drain_timeout())
+            window_ended_at_ns = started_at_ns + round(duration_seconds * 1e9)
+        return _PhaseWindow(started_at_ns, window_ended_at_ns, time.time_ns())
 
     async def _worker(
         self,
@@ -305,21 +333,20 @@ class InferenceProfiler:
                 in_flight_at_dispatch=in_flight,
             )
             try:
-                event = await self._run_one_request(
-                    request_id=f"{case.case_id}_{phase}_{worker_id}_{request_index}",
-                    request=request,
-                    arrival=arrival,
+                await self._send(
+                    f"{case.case_id}_{phase}_{worker_id}_{request_index}",
+                    request,
+                    arrival,
                 )
             finally:
                 limiter.release()
-            request.writer.append(event.to_record())
 
     async def _run_open_phase(
         self,
         request: "_PhaseRequest",
         total_requests: int | None,
         duration_seconds: float | None,
-    ) -> None:
+    ) -> "_PhaseWindow":
         case = request.case
         offsets = arrival_offsets(
             case.arrival,
@@ -329,12 +356,8 @@ class InferenceProfiler:
         )
 
         async def send(arrival: Arrival) -> None:
-            event = await self._run_one_request(
-                request_id=f"{case.case_id}_{request.phase}_{arrival.index}",
-                request=request,
-                arrival=arrival,
-            )
-            request.writer.append(event.to_record())
+            request_id = f"{case.case_id}_{request.phase}_{arrival.index}"
+            await self._send(request_id, request, arrival)
 
         def drop(arrival: Arrival) -> None:
             event = self._dropped_event(
@@ -344,7 +367,7 @@ class InferenceProfiler:
             )
             request.writer.append(event.to_record())
 
-        tasks = await dispatch_schedule(
+        dispatch = await dispatch_schedule(
             offsets,
             mode=case.arrival.mode,
             limiter=InFlightLimiter(case.concurrency),
@@ -352,7 +375,43 @@ class InferenceProfiler:
             send=send,
             drop=drop,
         )
-        await asyncio.gather(*tasks)
+        window_ended_at_ns = (
+            dispatch.started_at_ns + round(duration_seconds * 1e9)
+            if duration_seconds is not None
+            else time.time_ns()
+        )
+        await _drain(dispatch.tasks, timeout=self._drain_timeout())
+        return _PhaseWindow(
+            dispatch.started_at_ns,
+            window_ended_at_ns,
+            time.time_ns(),
+            scheduled_arrivals=len(offsets),
+        )
+
+    async def _send(
+        self, request_id: str, request: "_PhaseRequest", arrival: Arrival
+    ) -> None:
+        """Send one request and record it, or record that it was cancelled."""
+        sent_at_ns = time.time_ns()
+        try:
+            event = await self._run_one_request(
+                request_id=request_id, request=request, arrival=arrival
+            )
+        except asyncio.CancelledError:
+            cancelled = self._cancelled_event(
+                request_id=request_id,
+                request=request,
+                arrival=arrival,
+                sent_at_ns=sent_at_ns,
+            )
+            request.writer.append(cancelled.to_record())
+            raise
+        request.writer.append(event.to_record())
+
+    def _drain_timeout(self) -> float:
+        if self.config.drain_timeout_seconds is not None:
+            return self.config.drain_timeout_seconds
+        return self.config.timeout_seconds
 
     def _request_fields(
         self,
@@ -461,6 +520,32 @@ class InferenceProfiler:
                 http_status=http_status,
             )
 
+    def _cancelled_event(
+        self,
+        *,
+        request_id: str,
+        request: "_PhaseRequest",
+        arrival: Arrival,
+        sent_at_ns: int,
+    ) -> InferenceRequestEvent:
+        """A request still running when the drain deadline passed."""
+        return InferenceRequestEvent(
+            **self._request_fields(
+                request_id=request_id,
+                request=request,
+                arrival=arrival,
+                prompt_count=request.prompt_count,
+            ),
+            started_at_ns=sent_at_ns,
+            ended_at_ns=time.time_ns(),
+            dispatch_lag_ms=_lag_ms(arrival, sent_at_ns),
+            status="cancelled",
+            e2e_latency_ms=None,
+            ttft_ms=None,
+            first_chunk_latency_ms=None,
+            error_message="still in flight when the drain deadline passed",
+        )
+
     def _dropped_event(
         self,
         *,
@@ -498,6 +583,58 @@ class _PhaseRequest:
     phase: str
 
 
+@dataclass(frozen=True)
+class _PhaseWindow:
+    """When a phase's arrivals ran and when its last request finished.
+
+    The window is when requests arrive: until the duration ends, or until
+    the last scheduled or counted request is sent. The drain follows, until
+    every request has finished or been cancelled at the drain deadline.
+    """
+
+    started_at_ns: int
+    window_ended_at_ns: int
+    drained_at_ns: int
+    scheduled_arrivals: int | None = None
+
+    def to_record(
+        self,
+        *,
+        session_id: str,
+        request: _PhaseRequest,
+        drain_timeout_seconds: float,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "event_type": "infer.case_window",
+            "session_id": session_id,
+            "case_id": request.case.case_id,
+            "phase": request.phase,
+            "arrival_mode": request.case.arrival.mode,
+            "started_at_ns": self.started_at_ns,
+            "window_ended_at_ns": self.window_ended_at_ns,
+            "drained_at_ns": self.drained_at_ns,
+            "drain_timeout_seconds": drain_timeout_seconds,
+            "scheduled_arrivals": self.scheduled_arrivals,
+        }
+
+
+async def _drain(tasks: list[asyncio.Task[None]], *, timeout: float | None) -> None:
+    """Wait for requests to finish, cancelling any still running at the timeout.
+
+    A cancelled request records itself as cancelled. Other failures inside a
+    task are bugs and propagate.
+    """
+    if not tasks:
+        return
+    _done, pending = await asyncio.wait(tasks, timeout=timeout)
+    for task in pending:
+        task.cancel()
+    for result in await asyncio.gather(*tasks, return_exceptions=True):
+        if isinstance(result, Exception):
+            raise result
+
+
 def _lag_ms(arrival: Arrival, sent_at_ns: int) -> float:
     return (sent_at_ns - arrival.intended_at_ns) / 1_000_000.0
 
@@ -529,6 +666,7 @@ class _RequestCounter:
     def __init__(self, *, limit: int | None) -> None:
         self.limit = limit
         self.value = 0
+        self.last_issued_at_ns: int | None = None
         self.lock = asyncio.Lock()
 
     async def next(self) -> int | None:
@@ -537,6 +675,8 @@ class _RequestCounter:
                 return None
             current = self.value
             self.value += 1
+            if self.value == self.limit:
+                self.last_issued_at_ns = time.time_ns()
             return current
 
 

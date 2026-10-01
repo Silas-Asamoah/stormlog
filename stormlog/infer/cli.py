@@ -354,6 +354,16 @@ def _add_arrival_arguments(parser: argparse.ArgumentParser) -> None:
         help="Open-loop limit on outstanding requests (default: 128)",
     )
     parser.add_argument(
+        "--drain-timeout",
+        type=float,
+        default=None,
+        help=(
+            "Seconds that requests still running when the measured window ends "
+            "may take to finish before they are recorded as cancelled "
+            "(default: --timeout)"
+        ),
+    )
+    parser.add_argument(
         "--overflow",
         choices=["wait", "drop"],
         default="wait",
@@ -420,6 +430,7 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         arrival_trace=_arrival_trace(args),
         max_in_flight=int(args.max_in_flight),
         overflow=args.overflow,
+        drain_timeout_seconds=args.drain_timeout,
     )
 
 
@@ -564,6 +575,8 @@ def _validate_arrival_arguments(args: argparse.Namespace) -> None:
         )
     if args.max_in_flight < 1:
         raise ValueError("--max-in-flight must be >= 1")
+    if args.drain_timeout is not None and args.drain_timeout <= 0:
+        raise ValueError("--drain-timeout must be > 0")
 
 
 def _flag_for(mode: str, modes: Any, value: object, flag: str) -> None:

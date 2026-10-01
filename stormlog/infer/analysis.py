@@ -58,8 +58,11 @@ def analyze_inference_events(
         case_id = str(record.get("case_id", "unknown"))
         grouped.setdefault(case_id, []).append(record)
 
+    windows = _measured_windows(records)
     cases = {
-        case_id: _case_report(case_requests, samples, timelines, "group" in join)
+        case_id: _case_report(
+            case_requests, samples, timelines, "group" in join, windows.get(case_id)
+        )
         for case_id, case_requests in sorted(grouped.items())
     }
     if timelines:
@@ -88,13 +91,23 @@ def _case_report(
     samples: list[dict[str, Any]],
     timelines: list[tuple[_Member, _ServerTimeline]],
     grouped: bool,
+    window: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Summarize one case: latency from its completed requests, arrivals from all."""
     ok = [record for record in case_requests if record.get("status") == "ok"]
     report = _summarize_requests(ok, samples=_samples_for_request_window(samples, ok))
-    report["arrivals"] = arrival_summary(case_requests)
+    report["arrivals"] = arrival_summary(case_requests, window)
     report["memory"].update(_server_case_memory(timelines, ok, grouped))
     return report
+
+
+def _measured_windows(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        str(record.get("case_id")): record
+        for record in records
+        if record.get("event_type") == "infer.case_window"
+        and record.get("phase") == "measured"
+    }
 
 
 def _failures_by_status(failed: list[dict[str, Any]]) -> dict[str, int]:

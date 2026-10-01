@@ -11,11 +11,15 @@ from .report_stats import int_value, is_number, number_values, percentile
 UNSENT_STATUSES = frozenset({"dropped"})
 
 
-def arrival_summary(requests: list[dict[str, Any]]) -> dict[str, Any]:
+def arrival_summary(
+    requests: list[dict[str, Any]], window: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Count what was offered, sent and completed, and how late requests left.
 
     ``requests`` are all the measured requests of one case, whatever their
-    outcome. A closed loop has no offered rate: the server's speed sets it.
+    outcome, and ``window`` is the case's ``infer.case_window`` record when
+    the artifact has one. A closed loop has no offered rate: the server's
+    speed sets it.
     """
     statuses = Counter(str(record.get("status")) for record in requests)
     unsent = sum(statuses[status] for status in UNSENT_STATUSES)
@@ -42,6 +46,7 @@ def arrival_summary(requests: list[dict[str, Any]]) -> dict[str, Any]:
             None if mode == "closed" else _offered_rate(requests)
         ),
         "dispatch_lag_ms": _spread(number_values(requests, "dispatch_lag_ms")),
+        **_window_seconds(window),
     }
 
 
@@ -86,6 +91,21 @@ def _outcome_counts(arrivals: dict[str, Any]) -> list[str]:
         **(arrivals.get("failed") or {}),
     }
     return [f"{label} {count}" for label, count in counts.items() if count]
+
+
+def _window_seconds(window: dict[str, Any] | None) -> dict[str, float | None]:
+    """How long arrivals ran, and how long the requests after them took."""
+    bounds = [
+        (window or {}).get(field)
+        for field in ("started_at_ns", "window_ended_at_ns", "drained_at_ns")
+    ]
+    if not all(is_number(bound) for bound in bounds):
+        return {"window_seconds": None, "drain_seconds": None}
+    started, ended, drained = (int_value(bound) for bound in bounds)
+    return {
+        "window_seconds": max(ended - started, 0) / 1e9,
+        "drain_seconds": max(drained - ended, 0) / 1e9,
+    }
 
 
 def _arrival_mode(requests: list[dict[str, Any]]) -> str:
