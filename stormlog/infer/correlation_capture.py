@@ -236,7 +236,11 @@ def _append_events(artifact: Path, serialized_events: tuple[str, ...]) -> None:
             mode="wb", dir=artifact.parent, delete=False
         ) as handle:
             temporary = Path(handle.name)
-            handle.write(artifact.read_bytes())
+            existing = artifact.read_bytes()
+            handle.write(existing)
+            if existing and not existing.endswith(b"\n"):
+                # A last line without its newline would absorb the first record.
+                handle.write(b"\n")
             for record in serialized_events:
                 handle.write(record.encode("utf-8"))
                 handle.write(b"\n")
