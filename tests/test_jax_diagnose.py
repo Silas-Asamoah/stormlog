@@ -15,6 +15,7 @@ from stormlog.jax.diagnose import (
     run_diagnose,
     run_timeline_capture,
 )
+from stormlog.report import load_report
 from tests.jax_test_helpers import fake_jax_runtime, jax_mark  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("fake_jax_runtime")
@@ -186,6 +187,10 @@ def test_run_diagnose(tmp_path: Path) -> None:
     assert timeline_file.exists()
     assert summary_file.exists()
     assert manifest_file.exists()
+    report = load_report(artifact_dir / "report.json")
+    assert report["verdict"]["exit_code"] == exit_code
+    assert report["tool"]["name"] == "jaxmemprof"
+    assert "report.json" in {item["path"] for item in report["artifacts"]}
 
     with open(manifest_file) as f:
         manifest = json.load(f)

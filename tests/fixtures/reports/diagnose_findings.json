@@ -60,12 +60,7 @@
     "num_ooms": 1
   },
   "artifacts": [
-    {
-      "kind": "diagnose_manifest",
-      "path": "manifest.json",
-      "format": "stormlog.diagnose_manifest",
-      "schema_version": 2
-    },
+    {"kind": "diagnose_manifest", "path": "manifest.json", "schema_version": 2},
     {"kind": "diagnose_summary", "path": "diagnostic_summary.json"},
     {"kind": "environment", "path": "environment.json"},
     {"kind": "telemetry_timeline", "path": "telemetry_timeline.json"}

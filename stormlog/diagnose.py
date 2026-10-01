@@ -18,7 +18,9 @@ from .device_collectors import (
     build_device_memory_collector,
     detect_torch_runtime_backend,
 )
+from .diagnose_report import build_diagnose_report
 from .exit_codes import ExitCode, completed_with_findings
+from .report import REPORT_FILENAME, write_report
 from .session import (
     SESSION_STATUS_COMPLETED,
     SESSION_STATUS_INCOMPLETE,
@@ -39,6 +41,10 @@ from .utils import (
 HIGH_UTILIZATION_RATIO = 0.85
 FRAGMENTATION_WARNING_RATIO = 0.3
 MANIFEST_VERSION = 2
+_RISK_THRESHOLDS = {
+    "high_utilization": HIGH_UTILIZATION_RATIO,
+    "fragmentation_warning": FRAGMENTATION_WARNING_RATIO,
+}
 
 
 def _default_str(obj: Any) -> str:
@@ -394,7 +400,21 @@ def run_diagnose(
 
         exit_code = int(completed_with_findings(risk_detected))
 
-        # 4. Manifest (last, so it can include exit_code and risk_detected)
+        # 4. Verdict report (stormlog.report v1)
+        write_report(
+            artifact_dir / REPORT_FILENAME,
+            build_diagnose_report(
+                tool_name="gpumemprof",
+                summary=summary,
+                exit_code=exit_code,
+                session_id=session_summary.session_id,
+                files=[*files_written, REPORT_FILENAME, "manifest.json"],
+                thresholds=_RISK_THRESHOLDS,
+            ),
+        )
+        files_written.append(REPORT_FILENAME)
+
+        # 5. Manifest (last, so it can include exit_code and risk_detected)
         session_summary = update_session_summary(
             session_summary,
             status=SESSION_STATUS_COMPLETED,

@@ -11,6 +11,7 @@ import pytest
 import stormlog.tensorflow.cli as tfmemprof_cli
 import stormlog.tensorflow.diagnose as diagnose_module
 from stormlog.exit_codes import ExitCode
+from stormlog.report import load_report
 
 
 def _patch_tfmemprof_diagnose_env(
@@ -148,6 +149,11 @@ def test_tfmemprof_diagnose_produces_artifact_bundle(
     assert "risk_detected" in manifest
     for name in manifest["files"]:
         assert (artifact_dir / name).exists()
+    report = load_report(artifact_dir / "report.json")
+    assert report["verdict"]["exit_code"] == exit_code
+    assert report["tool"]["name"] == "tfmemprof"
+    assert report["session_id"] == manifest["session_id"]
+    assert "report.json" in manifest["files"]
 
     with open(artifact_dir / "diagnostic_summary.json") as f:
         summary = json.load(f)

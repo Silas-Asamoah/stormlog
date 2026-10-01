@@ -93,12 +93,13 @@ def test_build_report_output_is_accepted() -> None:
         ],
         metrics={"utilization_ratio": 0.9, "total_bytes": None},
         artifacts=[
+            Artifact(kind="diagnose_manifest", path="manifest.json", schema_version=2),
             Artifact(
-                kind="diagnose_manifest",
-                path="manifest.json",
-                format="stormlog.diagnose_manifest",
+                kind="telemetry_sink",
+                path="sink/manifest.json",
+                format="stormlog.append_only_telemetry_sink",
                 schema_version=2,
-            )
+            ),
         ],
         recommendations=["Reduce batch size."],
         session_id="session-1",

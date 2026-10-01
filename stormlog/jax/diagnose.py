@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from stormlog.derived_fields import compute_event_fields
+from stormlog.diagnose_report import build_diagnose_report
 from stormlog.exit_codes import ExitCode, completed_with_findings
+from stormlog.report import REPORT_FILENAME, write_report
 from stormlog.session import (
     SESSION_STATUS_COMPLETED,
     SESSION_STATUS_INCOMPLETE,
@@ -324,7 +326,21 @@ def run_diagnose(
 
         exit_code = int(completed_with_findings(risk_detected))
 
-        # 4. Manifest
+        # 4. Verdict report (stormlog.report v1)
+        write_report(
+            artifact_dir / REPORT_FILENAME,
+            build_diagnose_report(
+                tool_name="jaxmemprof",
+                summary=summary,
+                exit_code=exit_code,
+                session_id=session_summary.session_id,
+                files=[*files_written, REPORT_FILENAME, "manifest.json"],
+                thresholds={"high_utilization": HIGH_UTILIZATION_RATIO},
+            ),
+        )
+        files_written.append(REPORT_FILENAME)
+
+        # 5. Manifest
         session_summary = update_session_summary(
             session_summary,
             status=SESSION_STATUS_COMPLETED,

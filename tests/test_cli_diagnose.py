@@ -7,12 +7,26 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator, cast
 
+import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
 
 import stormlog.cli as gpumemprof_cli
 import stormlog.diagnose as diagnose_module
 import stormlog.tracker as tracker_module
 from stormlog.exit_codes import ExitCode
+from stormlog.report import load_report
+
+
+def _report_schema() -> dict[str, object]:
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "schemas"
+        / "stormlog_report_v1.schema.json"
+    )
+    payload = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
 
 
 def _patch_diagnose_env(
@@ -122,10 +136,27 @@ def test_diagnose_produces_artifact_bundle_with_duration_zero(
     assert (artifact_dir / "diagnostic_summary.json").exists()
     assert (artifact_dir / "telemetry_timeline.json").exists()
     assert (artifact_dir / "manifest.json").exists()
+    report = load_report(artifact_dir / "report.json")
+    jsonschema.Draft202012Validator(_report_schema()).validate(report)
+    assert report["verdict"]["exit_code"] == exit_code
+    assert report["tool"] == {
+        "name": "gpumemprof",
+        "command": "diagnose",
+        "version": report["tool"]["version"],
+    }
+    assert {item["path"] for item in report["artifacts"]} == {
+        "environment.json",
+        "telemetry_timeline.json",
+        "diagnostic_summary.json",
+        "report.json",
+        "manifest.json",
+    }
 
     with open(artifact_dir / "manifest.json") as f:
         manifest = json.load(f)
     assert "files" in manifest
+    assert "report.json" in manifest["files"]
+    assert report["session_id"] == manifest["session_id"]
     assert "exit_code" in manifest
     assert "risk_detected" in manifest
     assert "environment.json" in manifest["files"]
