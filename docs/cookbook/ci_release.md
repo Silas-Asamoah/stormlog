@@ -78,6 +78,10 @@ python -m examples.cli.benchmark_harness \
   --output artifacts/benchmarks/latest_v0.4_regression.json
 ```
 
+On Linux CI runners add `--overhead-scratch-root /dev/shm/stormlog-benchmark`
+so the overhead trials run on RAM-backed storage; otherwise the runner's disk
+latency enters `runtime_overhead_pct`.
+
 ## Budget-gated benchmark run
 
 ```bash

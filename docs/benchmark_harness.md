@@ -77,7 +77,9 @@ python -m examples.cli.benchmark_harness \
   --output artifacts/benchmarks/latest_v0.4_regression.json
 ```
 
-This is the policy used by the pull-request memory gate in CI.
+This is the policy used by the pull-request memory gate in CI, which also
+passes `--overhead-scratch-root /dev/shm/stormlog-benchmark` so the overhead
+trials run on RAM-backed storage (see "Overhead measurement" below).
 The checked-in regression assets intentionally cover only the default `pr`
 profile.
 
@@ -127,6 +129,27 @@ the short-run checks and long-run checks use the same benchmark policy model.
 - `rollover_count`, `pruned_segment_count`, `pruned_bytes`: sink churn under sustained load.
 - `history_dropped_*`: bounded-history eviction counts surfaced by the runtime.
 - `collector_failure_event_count`: degraded/recovered collector transitions seen during the run.
+
+### Overhead measurement
+
+Each overhead trial times the unprofiled workload and then the same workload
+with the runtime emitting one sample per iteration; the trial at the 25th
+percentile of wall overhead is reported so a single runner stall does not win.
+The tracked run emits its samples synchronously, so every sink flush (a write,
+an `fsync`, and a manifest rewrite every 50 events) lands on the workload's
+critical path. The unprofiled reference does no I/O at all, which means the
+storage latency of the trial directory enters `runtime_overhead_pct` directly
+and dominates it on shared runners with slow disks, while `cpu_overhead_pct`
+is unaffected.
+
+Pass `--overhead-scratch-root` pointing at a RAM-backed filesystem (CI uses
+`/dev/shm/stormlog-benchmark`) to keep the trials' sink I/O out of the wall
+measurement. In real use the tracker flushes from its own thread, off the
+workload's path, so this is the more faithful comparison. The selected trial
+is still promoted into `--artifact-root`, and the scratch root is recorded in
+the report as `config.overhead_scratch_root` and `overhead.scratch_root`.
+Regressions that add wall time per sample (a sleep, a lock wait) still fail
+the gate; see the injected-sleep test in `tests/test_benchmark_harness.py`.
 
 ### Soak RSS measurement window
 
