@@ -108,6 +108,19 @@ def test_tf_cmd_analyze_rejects_unreadable_input(
     assert expected_message in capsys.readouterr().out
 
 
+def test_tf_main_interrupt_outside_capture_loop_exits_interrupted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def interrupted(_args: Namespace) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(tf_cli, "cmd_info", interrupted)
+    monkeypatch.setattr(tf_cli.sys, "argv", ["tfmemprof", "info"])
+
+    assert tf_cli.main() == ExitCode.INTERRUPTED
+    assert "cancelled" in capsys.readouterr().err
+
+
 def test_tf_cmd_analyze_missing_input_returns_invalid_input(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

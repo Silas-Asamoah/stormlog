@@ -779,7 +779,16 @@ Cookbook:
         parser.print_help()
         return 0
 
-    # Execute command
+    try:
+        return _dispatch(args)
+    except KeyboardInterrupt:
+        # monitor/track treat Ctrl+C as their stop key inside the capture
+        # loop; anywhere else it is an interrupted run.
+        print("\nOperation cancelled by user", file=sys.stderr)
+        return ExitCode.INTERRUPTED
+
+
+def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "info":
         return cmd_info(args)
     elif args.command == "monitor":
@@ -790,9 +799,8 @@ Cookbook:
         return cmd_analyze(args)
     elif args.command == "diagnose":
         return cmd_diagnose(args)
-    else:
-        print(f"Unknown command: {args.command}")
-        return ExitCode.USAGE
+    print(f"Unknown command: {args.command}")
+    return ExitCode.USAGE
 
 
 def _print_gpu_info(gpu_info: Dict[str, Any], backend_info: Dict[str, Any]) -> None:
