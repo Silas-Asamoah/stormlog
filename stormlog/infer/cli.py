@@ -33,6 +33,7 @@ from .server_collector import (
     STOP_GPU_IDENTITY_CHANGED,
     STOP_SERVER_PROCESS_ENDED,
     CollectionResult,
+    NvmlUnavailableError,
     collect_server_telemetry,
 )
 
@@ -639,6 +640,10 @@ def cmd_collect_server(args: argparse.Namespace) -> int:
             stop_event=stop_event,
             on_warning=_print_warning,
         )
+    except NvmlUnavailableError as exc:
+        raise InferUsageError(
+            f"{exc}; pass --no-gpu to collect without GPU memory"
+        ) from exc
     finally:
         _restore_signal_handlers(previous_handlers)
     print(
@@ -650,18 +655,19 @@ def cmd_collect_server(args: argparse.Namespace) -> int:
 
 def _collection_exit_code(result: CollectionResult) -> int:
     if result.stop_reason == STOP_GPU_IDENTITY_CHANGED:
+        # What was recorded is sound; the server's GPU changed under it.
         print(
-            f"Error: GPU identity changed ({result.detail}); later polls were "
+            f"Findings: GPU identity changed ({result.detail}); later polls were "
             "not recorded and later case windows will not be joined",
             file=sys.stderr,
         )
-        return 1
+        return int(ExitCode.FINDINGS)
     if result.stop_reason == STOP_SERVER_PROCESS_ENDED:
         _print_warning(
             f"{result.detail}; case windows that extend past the last "
             "confirmed poll will not be joined"
         )
-    return 0
+    return int(ExitCode.OK)
 
 
 def _print_warning(message: str) -> None:

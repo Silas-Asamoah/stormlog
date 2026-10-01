@@ -3,8 +3,10 @@
 import contextlib
 import io
 import json
+import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -126,3 +128,90 @@ def test_analyze_exits_error_when_it_cannot_write_its_output(tmp_path: Path) -> 
     )
     assert code == ExitCode.ERROR
     assert stderr.startswith("Error: ")
+
+
+def _collect(tmp_path: Path, *flags: str) -> tuple[int, str]:
+    return _infer(
+        "collect-server",
+        "--run-id",
+        "run-1",
+        "--output",
+        str(tmp_path / "server.jsonl"),
+        *flags,
+    )
+
+
+@pytest.mark.parametrize(
+    ("flags", "message"),
+    [
+        (["--pid", "0"], "a positive pid are required"),
+        (["--pid", "1", "--interval", "0"], "interval must be"),
+        (["--pid", "1", "--world-size", "2"], "world_size requires group_id"),
+        (["--pid", "999999999", "--no-gpu"], "no process with pid 999999999"),
+    ],
+)
+def test_collect_server_exits_usage_for_options_it_cannot_use(
+    tmp_path: Path, flags: list[str], message: str
+) -> None:
+    code, stderr = _collect(tmp_path, *flags)
+    assert code == ExitCode.USAGE
+    assert message in stderr
+    assert not (tmp_path / "server.jsonl").exists()
+
+
+def test_collect_server_without_nvml_says_to_pass_no_gpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_library(_name: str) -> None:
+        raise OSError("libnvidia-ml.so.1: cannot open shared object file")
+
+    monkeypatch.setattr("stormlog.infer.server_collector.ctypes.CDLL", no_library)
+    code, stderr = _collect(tmp_path, "--pid", str(os.getpid()), "--duration", "1")
+    assert code == ExitCode.USAGE
+    assert "NVML is unavailable on this host; pass --no-gpu" in stderr
+
+
+class _FakeNvml:
+    """An NVML library whose device lookups return one error code."""
+
+    def __init__(self, lookup_code: int) -> None:
+        self.lookup_code = lookup_code
+
+    def __getattr__(self, name: str) -> Any:
+        def call(*_args: object) -> int:
+            return self.lookup_code if "GetHandleBy" in name else 0
+
+        return call
+
+
+@pytest.mark.parametrize(
+    ("flags", "lookup_code", "expected", "message"),
+    [
+        (["--device-index", "7"], 2, ExitCode.USAGE, "--device-index 7: no such GPU"),
+        (
+            ["--device-uuid", "GPU-missing"],
+            6,
+            ExitCode.USAGE,
+            "--device-uuid GPU-missing: no such GPU",
+        ),
+        # Anything else NVML reports is not the caller's doing.
+        (["--device-index", "0"], 999, ExitCode.ERROR, "lookup failed (code 999)"),
+    ],
+)
+def test_collect_server_names_a_gpu_the_host_does_not_have(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flags: list[str],
+    lookup_code: int,
+    expected: ExitCode,
+    message: str,
+) -> None:
+    monkeypatch.setattr(
+        "stormlog.infer.server_collector.ctypes.CDLL",
+        lambda _name: _FakeNvml(lookup_code),
+    )
+    code, stderr = _collect(
+        tmp_path, "--pid", str(os.getpid()), "--duration", "1", *flags
+    )
+    assert code == expected
+    assert message in stderr
