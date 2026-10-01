@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 import urllib.error
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -65,6 +65,9 @@ class InferenceProfiler:
             max_workers=max(case.concurrency for case in config.cases()),
             thread_name_prefix="stormlog-infer",
         )
+        # Requests on the pool, including ones a drain deadline gave up on:
+        # their HTTP calls keep running until they finish or time out.
+        self._unfinished: set[Future[Any]] = set()
 
     def run(self) -> dict[str, Any]:
         """Run profiling and return an aggregate report."""
@@ -282,6 +285,7 @@ class InferenceProfiler:
             input_tokens=case.input_tokens,
         )
         request = _PhaseRequest(case, writer, prompts, phase)
+        abandoned = await self._wait_for_abandoned()
         if case.arrival.open_loop:
             window = await self._run_open_phase(
                 request, total_requests, duration_seconds
@@ -295,7 +299,29 @@ class InferenceProfiler:
                 session_id=self.session.session_id,
                 request=request,
                 drain_timeout_seconds=self._drain_timeout(),
+                abandoned=abandoned,
             )
+        )
+
+    async def _wait_for_abandoned(self) -> "_AbandonedWait":
+        """Let requests an earlier drain gave up on finish before a phase starts.
+
+        Their HTTP calls still hold pool threads and server capacity, so a
+        phase that started alongside them would queue behind them and measure
+        their load as its own. Each call is bounded by the request timeout.
+        """
+        running = [future for future in self._unfinished if not future.done()]
+        if not running:
+            return _AbandonedWait()
+        started = time.perf_counter()
+        await asyncio.wait(
+            [asyncio.wrap_future(future) for future in running],
+            timeout=self.config.timeout_seconds + 1.0,
+        )
+        return _AbandonedWait(
+            running_at_start=len(running),
+            waited_seconds=time.perf_counter() - started,
+            still_running=sum(1 for future in running if not future.done()),
         )
 
     async def _run_closed_phase(
@@ -497,17 +523,18 @@ class InferenceProfiler:
         started_at_ns = time.time_ns()
         started_perf = time.perf_counter()
         try:
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                self.request_executor,
+            call = self.request_executor.submit(
                 partial(
                     self.client.complete,
                     prompt=prompt.text,
                     output_tokens=case.output_tokens,
                     stream=self.config.stream,
                     stream_include_usage=self.config.stream_include_usage,
-                ),
+                )
             )
+            self._unfinished.add(call)
+            call.add_done_callback(self._unfinished.discard)
+            result = await asyncio.wrap_future(call)
             output_count = _resolve_output_count(
                 result.usage,
                 result.text,
@@ -622,6 +649,22 @@ class _PhaseRequest:
 
 
 @dataclass(frozen=True)
+class _AbandonedWait:
+    """Requests from an earlier drain still running when a phase was ready."""
+
+    running_at_start: int = 0
+    waited_seconds: float = 0.0
+    still_running: int = 0
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "running_at_start": self.running_at_start,
+            "waited_seconds": self.waited_seconds,
+            "still_running": self.still_running,
+        }
+
+
+@dataclass(frozen=True)
 class _PhaseWindow:
     """When a phase's arrivals ran and when its last request finished.
 
@@ -641,6 +684,7 @@ class _PhaseWindow:
         session_id: str,
         request: _PhaseRequest,
         drain_timeout_seconds: float,
+        abandoned: _AbandonedWait,
     ) -> dict[str, Any]:
         return {
             "schema_version": 1,
@@ -655,6 +699,7 @@ class _PhaseWindow:
             "drain_timeout_seconds": drain_timeout_seconds,
             "scheduled_arrivals": self.scheduled_arrivals,
             "prompts_digest": request.prompts.digest(),
+            "abandoned_requests": abandoned.to_record(),
         }
 
 

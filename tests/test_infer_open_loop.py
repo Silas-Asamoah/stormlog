@@ -219,6 +219,49 @@ def test_a_closed_loop_duration_drains_then_cancels(tmp_path: Path) -> None:
     assert "cancelled 1" in format_analysis_text(report)
 
 
+def test_a_phase_waits_for_requests_an_earlier_drain_gave_up_on(
+    tmp_path: Path,
+) -> None:
+    requests, _report, client = run_profile_with_fake_client(
+        tmp_path,
+        latency_seconds=0.01,
+        first_latencies=(0.5,),
+        arrival_mode="fixed-rate",
+        rates=(10.0,),
+        max_in_flight=1,
+        request_count=1,
+        warmup_requests=1,
+        drain_timeout_seconds=0.05,
+    )
+    # The warmup request was given up on; the measured one still ran.
+    statuses = {r["phase"]: r["status"] for r in requests}
+    assert statuses == {"warmup": "cancelled", "measured": "ok"}
+    assert client.calls == 2
+    measured = [w for w in _windows(tmp_path) if w["phase"] == "measured"]
+    abandoned = measured[0]["abandoned_requests"]
+    assert abandoned["running_at_start"] == 1 and abandoned["still_running"] == 0
+    assert abandoned["waited_seconds"] >= 0.3
+
+
+def test_the_next_case_waits_after_a_closed_loop_duration(tmp_path: Path) -> None:
+    requests, _report, _client = run_profile_with_fake_client(
+        tmp_path,
+        latency_seconds=0.01,
+        first_latencies=(0.5,),
+        input_tokens=(8, 16),
+        request_count=None,
+        duration_seconds=0.05,
+        drain_timeout_seconds=0.05,
+    )
+    by_case: dict[str, list[str]] = {}
+    for record in requests:
+        by_case.setdefault(record["case_id"], []).append(record["status"])
+    assert by_case["c1_in8_out4"] == ["cancelled"]
+    assert "ok" in by_case["c1_in16_out4"]
+    second = [w for w in _windows(tmp_path) if w["case_id"] == "c1_in16_out4"]
+    assert second[0]["abandoned_requests"]["running_at_start"] == 1
+
+
 def test_every_phase_records_its_window(tmp_path: Path) -> None:
     _requests, report, _client = run_profile_with_fake_client(
         tmp_path, latency_seconds=0.02, request_count=3, warmup_requests=1

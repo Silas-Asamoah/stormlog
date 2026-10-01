@@ -122,6 +122,14 @@ each one finishes or times out. Every phase writes an `infer.case_window`
 record, and each case's `arrivals` block reports `window_seconds` and
 `drain_seconds`.
 
+`cancelled` means Stormlog stopped waiting, not that the request stopped. The
+HTTP call keeps running, on the server and on a client thread, until it
+finishes or reaches `--timeout`. So the next phase waits for those calls
+before it starts, rather than measuring their load as its own. Its
+`infer.case_window` record says how many it waited for and for how long, under
+`abandoned_requests`. A lower `--drain-timeout` ends a phase sooner, but not
+the run.
+
 Request outcomes:
 
 | `status` | Meaning |
@@ -131,7 +139,7 @@ Request outcomes:
 | `rejected` | The server answered HTTP 429 or 503; `http_status` says which |
 | `error` | Any other failure, with `http_status` when there was one |
 | `dropped` | `--overflow drop` turned the arrival away; it was never sent |
-| `cancelled` | Still running when the drain deadline passed |
+| `cancelled` | Still running when the drain deadline passed; the call itself runs on until it finishes or times out |
 
 ### Prompts and prefix sharing
 
