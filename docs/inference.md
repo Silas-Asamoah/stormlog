@@ -153,7 +153,10 @@ stormlog infer profile \
 Nonces come from the seed, the case and the phase, so a run can be repeated
 exactly. Neither another case nor the warmup shares a prefix with the measured
 requests, except in `repeat` mode, where cases with the same input length send
-the same text. The server's chat template still adds the same tokens to every
+the same text. Because a repeated run sends the same prompts, running the same
+workload twice against one server makes the second run start with those
+prompts already cached. To measure each run from a cold cache, reset the cache
+before each case (see below) or change `--seed` between runs. The server's chat template still adds the same tokens to every
 request, so even `unique` prompts share those. Each request records its
 `prompt_mode`, `prompt_id`, `prefix_group` and `prompt_digest`, and each case
 reports how many distinct prompts and prefix groups it used.
