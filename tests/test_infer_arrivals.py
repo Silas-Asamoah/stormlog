@@ -160,3 +160,10 @@ def test_malformed_traces_are_rejected(
     path = _write_lines(tmp_path / "trace.jsonl", records)
     with pytest.raises(ValueError, match=message):
         load_arrival_trace(path)
+
+
+def test_an_absurd_schedule_is_refused() -> None:
+    spec = ArrivalSpec(mode="fixed-rate", rate_per_second=1e9)
+    with pytest.raises(ValueError, match="more than 1,000,000 requests"):
+        _offsets(spec, duration_seconds=0.01)
+    assert len(_offsets(spec, count=1_000_000)) == 1_000_000

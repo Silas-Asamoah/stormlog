@@ -237,3 +237,48 @@ def test_prompt_flags_are_checked_before_any_request(
     assert code == 1
     assert message in stderr.getvalue()
     assert not (tmp_path / "never.jsonl").exists()
+
+
+class _CountingCounter:
+    """Counts how many texts are tokenized, and how many tokens in all."""
+
+    source = "counting"
+    exact = False
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.tokens = 0
+
+    def count_text(self, text: str) -> TokenCount:
+        value = EstimatedTokenCounter().count_text(text).value
+        self.calls += 1
+        self.tokens += value
+        return TokenCount(value=value, source=self.source, exact=False)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        PromptSpec(mode="unique"),
+        PromptSpec(mode="shared-prefix", shared_prefix_ratio=0.5, prefix_groups=4),
+    ],
+)
+def test_building_a_prompt_tokenizes_only_its_nonce(spec: PromptSpec) -> None:
+    counter = _CountingCounter()
+    source = _source(spec, counter=counter, input_tokens=2048)
+    source.prepare(range(20))
+    warm_tokens = counter.tokens
+    source.prepare(range(20, 1020))
+    # A thousand 2048-token prompts cost a few tokens each to build.
+    assert (counter.tokens - warm_tokens) / 1000 < 10
+
+
+def test_used_prompts_keep_only_their_digest() -> None:
+    source = _source(PromptSpec(mode="unique"))
+    for index in range(200):
+        assert source.take(index).text.startswith("[")
+        source.forget(index)
+    assert source._prompts == {}
+    again = _source(PromptSpec(mode="unique"))
+    again.prepare(range(200))
+    assert source.digest() == again.digest()

@@ -59,6 +59,14 @@ class InferenceProfiler:
         self.sampler = build_system_sampler(config.system_sampler)
         # Built now so a bad setting fails before the artifact is opened.
         self.prompt_spec = config.prompt_spec()
+        for case in config.cases():
+            if case.arrival.open_loop:
+                arrival_offsets(
+                    case.arrival,
+                    count=config.request_count,
+                    duration_seconds=config.duration_seconds,
+                    seed=config.seed,
+                )
         self.client = OpenAIChatCompletionsClient(
             endpoint=config.endpoint,
             model=config.model,
@@ -351,8 +359,6 @@ class InferenceProfiler:
         case = request.case
         if total_requests is None and duration_seconds is None:
             total_requests = 1
-        if total_requests is not None:
-            request.prompts.prepare(range(total_requests))
         started_at_ns = time.time_ns()
         counter = _RequestCounter(limit=total_requests)
         limiter = InFlightLimiter(case.concurrency)
@@ -428,7 +434,6 @@ class InferenceProfiler:
             duration_seconds=duration_seconds,
             seed=self.config.seed,
         )
-        request.prompts.prepare(range(len(offsets)))
 
         async def send(arrival: Arrival) -> None:
             request_id = f"{case.case_id}_{request.phase}_{arrival.index}"
@@ -440,6 +445,7 @@ class InferenceProfiler:
                 request=request,
                 arrival=arrival,
             )
+            request.prompts.forget(arrival.index)
             request.writer.append(event.to_record())
 
         dispatch = await dispatch_schedule(
@@ -480,7 +486,10 @@ class InferenceProfiler:
                 sent_at_ns=sent_at_ns,
             )
             request.writer.append(cancelled.to_record())
+            request.prompts.forget(arrival.index)
             raise
+        # Keep only the prompt's digest once its request is done.
+        request.prompts.forget(arrival.index)
         request.writer.append(event.to_record())
 
     def _drain_timeout(self) -> float:
@@ -494,6 +503,7 @@ class InferenceProfiler:
         request_id: str,
         request: "_PhaseRequest",
         arrival: Arrival,
+        prompt: Prompt,
         prompt_count: TokenCount | None = None,
     ) -> dict[str, Any]:
         """Fields every request event carries, whatever its outcome.
@@ -502,7 +512,6 @@ class InferenceProfiler:
         reported one.
         """
         case = request.case
-        prompt = request.prompts.prompt(arrival.index)
         prompt_count = prompt_count or prompt.count
         return {
             "session_id": self.session.session_id,
@@ -537,7 +546,7 @@ class InferenceProfiler:
         arrival: Arrival,
     ) -> InferenceRequestEvent:
         case = request.case
-        prompt: Prompt = request.prompts.prompt(arrival.index)
+        prompt = request.prompts.take(arrival.index)
         call = self.request_executor.submit(
             _timed_call,
             partial(
@@ -556,7 +565,7 @@ class InferenceProfiler:
                 return self._ok_event(request_id, request, arrival, prompt, outcome)
             except Exception as exc:
                 outcome = replace(outcome, error=exc)
-        return self._failure_event(request_id, request, arrival, outcome)
+        return self._failure_event(request_id, request, arrival, prompt, outcome)
 
     def _ok_event(
         self,
@@ -573,7 +582,7 @@ class InferenceProfiler:
             result.text,
             self.token_counter,
         )
-        prompt_count = _resolve_prompt_count(result.usage, prompt.count)
+        prompt_count = _server_prompt_count(result.usage) or prompt.count
         total_tokens = _resolve_total_tokens(
             result.usage,
             prompt_count,
@@ -584,6 +593,7 @@ class InferenceProfiler:
                 request_id=request_id,
                 request=request,
                 arrival=arrival,
+                prompt=prompt,
                 prompt_count=prompt_count,
             ),
             started_at_ns=result.started_at_ns,
@@ -606,6 +616,7 @@ class InferenceProfiler:
         request_id: str,
         request: "_PhaseRequest",
         arrival: Arrival,
+        prompt: Prompt,
         outcome: "_TimedCall",
     ) -> InferenceRequestEvent:
         error = outcome.error
@@ -616,6 +627,7 @@ class InferenceProfiler:
                 request_id=request_id,
                 request=request,
                 arrival=arrival,
+                prompt=prompt,
             ),
             started_at_ns=outcome.started_at_ns,
             ended_at_ns=outcome.ended_at_ns,
@@ -643,6 +655,7 @@ class InferenceProfiler:
                 request_id=request_id,
                 request=request,
                 arrival=arrival,
+                prompt=request.prompts.take(arrival.index),
             ),
             started_at_ns=sent_at_ns,
             ended_at_ns=time.time_ns(),
@@ -668,6 +681,7 @@ class InferenceProfiler:
                 request_id=request_id,
                 request=request,
                 arrival=arrival,
+                prompt=request.prompts.take(arrival.index),
             ),
             started_at_ns=now_ns,
             ended_at_ns=now_ns,
@@ -853,17 +867,14 @@ def run_profile(config: ProfileConfig) -> dict[str, Any]:
     return InferenceProfiler(config).run()
 
 
-def _resolve_prompt_count(
-    usage: dict[str, Any] | None,
-    fallback: TokenCount,
-) -> TokenCount:
+def _server_prompt_count(usage: dict[str, Any] | None) -> TokenCount | None:
     if usage and isinstance(usage.get("prompt_tokens"), int):
         return TokenCount(
             value=int(usage["prompt_tokens"]),
             source="server_usage",
             exact=True,
         )
-    return fallback
+    return None
 
 
 def _resolve_output_count(

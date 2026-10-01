@@ -24,6 +24,8 @@ BURST = "burst"
 REPLAY = "replay"
 ARRIVAL_MODES = (CLOSED, FIXED_RATE, POISSON, BURST, REPLAY)
 RATE_MODES = frozenset({FIXED_RATE, POISSON})
+# A larger schedule is almost always a typo in --rate or --duration.
+MAX_ARRIVALS = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -160,6 +162,11 @@ def _bounded(
             break
         if duration_seconds is not None and offset >= duration_seconds:
             break
+        if len(bounded) == MAX_ARRIVALS:
+            raise ValueError(
+                f"the arrival schedule has more than {MAX_ARRIVALS:,} requests; "
+                "check --rate, --duration and --requests"
+            )
         bounded.append(offset)
     return bounded
 

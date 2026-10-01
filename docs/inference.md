@@ -86,7 +86,7 @@ stormlog infer profile \
 | `replay` | The offsets in `--arrival-trace` | `replay` |
 
 In the open-loop modes, the schedule is fixed before the run starts and the
-first request goes out at 0. `--requests` caps the number of arrivals,
+first request goes out at 0. A phase can schedule at most 1,000,000 arrivals. `--requests` caps the number of arrivals,
 `--duration` keeps the arrivals before the window closes, and a replay with
 neither sends the whole trace. A replay trace is JSON lines with `offset_ms`
 (milliseconds), or a Stormlog inference artifact. From an artifact, the
@@ -173,7 +173,10 @@ prompts already cached. To measure each run from a cold cache, reset the cache
 before each case (see below) or change `--seed` between runs. The server's chat template still adds the same tokens to every
 request, so even `unique` prompts share those. Each request records its
 `prompt_mode`, `prompt_id`, `prefix_group` and `prompt_digest`, and each case
-reports how many distinct prompts and prefix groups it used.
+reports how many distinct prompts and prefix groups it used. A prompt is built
+when its request is sent and its text is dropped once the request is done, so
+a long schedule neither waits for all of its prompts to be built nor keeps
+them in memory.
 
 ### Cache state
 
