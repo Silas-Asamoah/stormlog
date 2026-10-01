@@ -45,6 +45,7 @@ class OpenAIChatCompletionsClient:
         timeout_seconds: float,
         api_key: str | None = None,
         max_tokens_field: Literal["max_tokens", "max_completion_tokens"] = "max_tokens",
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         _validate_http_endpoint(endpoint)
         self.endpoint = endpoint
@@ -52,6 +53,7 @@ class OpenAIChatCompletionsClient:
         self.timeout_seconds = timeout_seconds
         self.api_key = api_key
         self.max_tokens_field = max_tokens_field
+        self.extra_body = validate_extra_body(extra_body, max_tokens_field)
 
     def complete(
         self,
@@ -62,6 +64,7 @@ class OpenAIChatCompletionsClient:
         stream_include_usage: bool,
     ) -> ChatCompletionResult:
         payload = {
+            **self.extra_body,
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": stream,
@@ -198,6 +201,21 @@ class OpenAIChatCompletionsClient:
             usage=usage,
             finish_reason=finish_reason,
         )
+
+
+def validate_extra_body(
+    extra_body: dict[str, Any] | None, max_tokens_field: str
+) -> dict[str, Any]:
+    """Extra request fields may add settings but not replace the ones Stormlog sets."""
+    if extra_body is None:
+        return {}
+    if not isinstance(extra_body, dict):
+        raise ValueError("extra request fields must be a JSON object")
+    owned = {"model", "messages", "stream", "stream_options", max_tokens_field}
+    clashes = sorted(owned & set(extra_body))
+    if clashes:
+        raise ValueError(f"extra request fields cannot set {', '.join(clashes)}")
+    return dict(extra_body)
 
 
 def _first_choice(payload: Any) -> dict[str, Any]:

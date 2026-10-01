@@ -30,7 +30,13 @@ from .server_clock import (
 from .server_group import members as group_members
 from .server_group import membership_issue
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
-from .workload_report import length_summary, prompt_lines, prompt_summary
+from .workload_report import (
+    length_summary,
+    prompt_lines,
+    prompt_summary,
+    workload_lines,
+    workload_summary,
+)
 
 
 def analyze_inference_events(
@@ -68,6 +74,7 @@ def analyze_inference_events(
             "case_count": len(cases),
         },
         "cases": cases,
+        "workload": workload_summary(records),
         "telemetry": {
             "client_observation_scope": "client_local",
             "server_join": join,
@@ -152,6 +159,7 @@ def format_analysis_text(report: dict[str, Any]) -> str:
     ]
     cases = report.get("cases", {})
     join = report.get("telemetry", {}).get("server_join", {})
+    lines.extend(workload_lines(report.get("workload")))
     lines.append("Memory observations: client-local")
     lines.extend(_server_status_lines(join))
     if isinstance(cases, dict) and cases:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from .arrivals import BURST, CLOSED, RATE_MODES, REPLAY, ArrivalSpec, ArrivalTrace
 from .cache_state import UNSPECIFIED
@@ -117,6 +117,8 @@ class ProfileConfig:
     shared_prefix_ratio: float | None = None
     prefix_groups: int | None = None
     cache_state: str = UNSPECIFIED
+    # Extra request fields, e.g. {"temperature": 0, "ignore_eos": true}.
+    extra_body: dict[str, Any] | None = None
     # POSTed before each case, e.g. vLLM /reset_prefix_cache or SGLang /flush_cache.
     cache_reset_url: str | None = None
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
+import importlib.metadata
 import logging
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,9 @@ class EstimatedTokenCounter:
         chunks = [chunk for chunk in text.replace("\n", " ").split(" ") if chunk]
         return TokenCount(value=max(1, len(chunks)), source=self.source, exact=False)
 
+    def identity(self) -> dict[str, Any]:
+        return {"source": self.source, "exact": False, "name": "whitespace words"}
+
 
 class TiktokenCounter:
     """Token counter backed by tiktoken."""
@@ -54,6 +59,7 @@ class TiktokenCounter:
             self._encoding = tiktoken.encoding_for_model(model)
         else:
             self._encoding = tiktoken.get_encoding("cl100k_base")
+        self._version = getattr(tiktoken, "__version__", None)
 
     def count_text(self, text: str) -> TokenCount:
         return TokenCount(
@@ -61,6 +67,14 @@ class TiktokenCounter:
             source=self.source,
             exact=True,
         )
+
+    def identity(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "exact": True,
+            "name": getattr(self._encoding, "name", None),
+            "library_version": self._version,
+        }
 
 
 class TransformersTokenCounter:
@@ -73,10 +87,29 @@ class TransformersTokenCounter:
         transformers = importlib.import_module("transformers")
         auto_tokenizer = transformers.AutoTokenizer
         self._tokenizer = auto_tokenizer.from_pretrained(model)
+        self._model = model
+        self._version = getattr(transformers, "__version__", None)
 
     def count_text(self, text: str) -> TokenCount:
         token_ids = self._tokenizer.encode(text, add_special_tokens=False)
         return TokenCount(value=len(token_ids), source=self.source, exact=True)
+
+    def identity(self) -> dict[str, Any]:
+        init_kwargs = getattr(self._tokenizer, "init_kwargs", None) or {}
+        return {
+            "source": self.source,
+            "exact": True,
+            "name": getattr(self._tokenizer, "name_or_path", None) or self._model,
+            "revision": init_kwargs.get("_commit_hash"),
+            "library_version": self._version,
+        }
+
+    def chat_template_digest(self) -> str | None:
+        """Digest of the local tokenizer's chat template, if it has one."""
+        template = getattr(self._tokenizer, "chat_template", None)
+        if not isinstance(template, str) or not template:
+            return None
+        return hashlib.sha256(template.encode("utf-8")).hexdigest()[:16]
 
 
 def build_token_counter(

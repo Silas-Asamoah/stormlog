@@ -58,3 +58,35 @@ def _distribution(values: list[float]) -> dict[str, float | None]:
         "p95": percentile(values, 95),
         "max": max(values, default=None),
     }
+
+
+WORKLOAD_FIELDS = (
+    "workload_digest",
+    "seed",
+    "generator",
+    "prompts",
+    "warmup",
+    "decoding",
+    "tokenizer",
+    "chat_template",
+)
+
+
+def workload_summary(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The run's workload record, or None for artifacts written before it."""
+    for record in records:
+        if record.get("event_type") == "infer.workload":
+            return {field: record.get(field) for field in WORKLOAD_FIELDS}
+    return None
+
+
+def workload_lines(workload: Any) -> list[str]:
+    if not isinstance(workload, dict):
+        return []
+    digest = str(workload.get("workload_digest") or "")[:12]
+    prompts = (workload.get("prompts") or {}).get("mode")
+    tokenizer = (workload.get("tokenizer") or {}).get("source")
+    return [
+        f"Workload: {digest}, seed {workload.get('seed')}, prompts {prompts}, "
+        f"tokenizer {tokenizer}"
+    ]

@@ -414,6 +414,14 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--extra-body",
+        default=None,
+        help=(
+            "JSON object of extra request fields, such as "
+            '\'{"temperature": 0, "ignore_eos": true}\'; recorded with the workload'
+        ),
+    )
+    parser.add_argument(
         "--cache-reset-url",
         default=None,
         help=(
@@ -490,7 +498,20 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         prefix_groups=args.prefix_groups,
         cache_state=args.cache_state,
         cache_reset_url=args.cache_reset_url,
+        extra_body=_extra_body(args.extra_body),
     )
+
+
+def _extra_body(raw: str | None) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--extra-body is not valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError("--extra-body must be a JSON object")
+    return value
 
 
 def _request_count(args: argparse.Namespace) -> int | None:

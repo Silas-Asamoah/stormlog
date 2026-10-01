@@ -33,6 +33,7 @@ from .openai_client import EndpointHTTPError, OpenAIChatCompletionsClient
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter
+from .workload import workload_record
 
 
 class InferenceProfiler:
@@ -58,6 +59,7 @@ class InferenceProfiler:
             timeout_seconds=config.timeout_seconds,
             api_key=config.api_key,
             max_tokens_field=config.max_tokens_field,
+            extra_body=config.extra_body,
         )
         self.request_executor = ThreadPoolExecutor(
             max_workers=max(case.concurrency for case in config.cases()),
@@ -105,6 +107,14 @@ class InferenceProfiler:
                 }
             )
             writer.append(self._artifact_identity().to_record())
+            writer.append(
+                workload_record(
+                    self.config,
+                    session_id=self.session.session_id,
+                    counter=self.token_counter,
+                    prompt_spec=self.prompt_spec,
+                )
+            )
             stop_sampling = asyncio.Event()
             sample_task = asyncio.create_task(
                 self._sample_system_loop(
