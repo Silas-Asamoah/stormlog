@@ -17,9 +17,11 @@ Inference workload control for
 ([#248](https://github.com/Silas-Asamoah/stormlog/pull/248)), the exit-code
 and report contract for
 [#33](https://github.com/Silas-Asamoah/stormlog/issues/33)
-([#249](https://github.com/Silas-Asamoah/stormlog/pull/249)), and
+([#249](https://github.com/Silas-Asamoah/stormlog/pull/249)),
 `stormlog infer` adopting the same exit-code table
-([#250](https://github.com/Silas-Asamoah/stormlog/pull/250)).
+([#250](https://github.com/Silas-Asamoah/stormlog/pull/250)), and a fix for
+the flaky benchmark memory gates
+([#252](https://github.com/Silas-Asamoah/stormlog/pull/252)).
 
 ### Added
 
@@ -159,6 +161,20 @@ and report contract for
   ([#248](https://github.com/Silas-Asamoah/stormlog/pull/248))
 
 ### Fixed
+
+- The benchmark harness's memory gates no longer fail on runner noise:
+  - The soak's RSS checks (`max_rss_delta_bytes`, `rss_growth_per_24h_equiv`)
+    now read memory inside the sample loop, after a warmup. Before, they
+    read it after the session closed, when building rollups left an
+    allocator-dependent residue of 40–70 MB. That residue is now reported
+    as `finalization_rss_delta_bytes` but not gated.
+  - A new `--overhead-scratch-root` runs the overhead trials on RAM-backed
+    storage. CI passes `/dev/shm`, so runner disk latency no longer
+    inflates `runtime_overhead_pct`.
+
+  Soak RSS values from earlier reports were measured after finalization,
+  so they are not comparable.
+  ([#252](https://github.com/Silas-Asamoah/stormlog/pull/252))
 
 - `stormlog infer profile` rejects a case matrix in which two cases would
   share one ID, for example `--concurrency 1,1` or a repeated
