@@ -91,8 +91,11 @@ New exports always emit these fields. For single-process runs, the defaults are:
 - `device_used_bytes` and `device_free_bytes` cannot exceed `device_total_bytes`
 - integers are written without a decimal point or exponent: `1024`, not
   `1024.0`
+- `session_id`, `event_type`, `collector`, `host`, a non-null `job_id`, and the
+  string fields of `metadata.memory_capabilities` must contain a character
+  other than whitespace
 
-The JSON Schema checks the capability rule. It cannot compare two values or
+The JSON Schema checks the capability and whitespace rules. It cannot compare two values or
 tell `1024` from `1024.0`, so only the loader checks the rank, device total,
 and integer rules. A record that passes the schema can still fail to load.
 

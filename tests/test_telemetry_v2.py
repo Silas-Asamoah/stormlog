@@ -6,6 +6,7 @@ import csv
 import json
 from collections import UserDict
 from pathlib import Path
+from typing import Any
 
 import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
@@ -194,20 +195,51 @@ _COUNTER_CAPABILITIES = [
 ]
 
 
+def _v4_record() -> dict[str, Any]:
+    record = telemetry_event_to_dict(_make_valid_event())
+    record["schema_version"] = SCHEMA_VERSION_V4
+    record["session_id"] = "session"
+    return telemetry_event_to_dict(telemetry_event_from_record(record))
+
+
 @pytest.mark.parametrize(("counter", "capability"), _COUNTER_CAPABILITIES)
 def test_v4_schema_rejects_counter_declared_unsupported(
     counter: str, capability: str
 ) -> None:
-    record = telemetry_event_to_dict(_make_valid_event())
-    record["schema_version"] = SCHEMA_VERSION_V4
-    record["session_id"] = "session"
-    record = telemetry_event_to_dict(telemetry_event_from_record(record))
+    record = _v4_record()
     record["metadata"]["memory_capabilities"][capability] = False
     for other, other_capability in _COUNTER_CAPABILITIES:
         if other_capability == capability and other != counter:
             record[other] = None
 
     with pytest.raises(ValueError, match=f"{counter} must be null"):
+        validate_telemetry_record(record)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V4))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("session_id",),
+        ("event_type",),
+        ("collector",),
+        ("host",),
+        ("job_id",),
+        ("metadata", "memory_capabilities", "backend"),
+        ("metadata", "memory_capabilities", "telemetry_collector"),
+        ("metadata", "memory_capabilities", "sampling_source"),
+    ],
+    ids=".".join,
+)
+def test_v4_schema_rejects_whitespace_only_strings(path: tuple[str, ...]) -> None:
+    record = _v4_record()
+    parent = record
+    for key in path[:-1]:
+        parent = parent[key]
+    parent[path[-1]] = " \t"
+
+    with pytest.raises(ValueError, match="must be a non-empty string"):
         validate_telemetry_record(record)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(instance=record, schema=_schema(SCHEMA_VERSION_V4))
