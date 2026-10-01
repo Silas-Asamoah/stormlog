@@ -11,7 +11,7 @@ import pytest
 
 from stormlog.infer.analysis import format_analysis_text
 from stormlog.infer.cli import main as infer_main
-from stormlog.infer.prompts import PromptSource, PromptSpec
+from stormlog.infer.prompts import Prompt, PromptSource, PromptSpec
 from stormlog.infer.tokens import EstimatedTokenCounter, TokenCount, generate_prompt
 from tests.infer_workload_helpers import run_profile_with_fake_client
 
@@ -54,6 +54,28 @@ def test_repeat_mode_keeps_the_prompt_stormlog_always_sent() -> None:
     warmup = _source(PromptSpec(), seed=3, phase="warmup")
     assert warmup.prompt(0).text == expected
     assert source.prompt(0).prompt_id == "repeat"
+
+
+def test_phases_given_one_cache_build_the_repeated_prompt_once() -> None:
+    built: list[int] = []
+
+    class Counting(EstimatedTokenCounter):
+        def count_text(self, text: str) -> TokenCount:
+            built.append(len(text))
+            return super().count_text(text)
+
+    repeated: dict[tuple[int, int], Prompt] = {}
+    phases = [
+        _source(PromptSpec(), counter=Counting(), phase=phase, repeated=repeated)
+        for phase in ("warmup", "measured")
+    ]
+    first = phases[0].prompt(0)
+    calls = len(built)
+    assert phases[1].prompt(0) is first and len(built) == calls
+    # Another length, or another seed, is a different prompt.
+    other = _source(PromptSpec(), input_tokens=32, repeated=repeated).prompt(0)
+    reseeded = _source(PromptSpec(), seed=9, repeated=repeated).prompt(0)
+    assert other.text != first.text and reseeded.text != first.text
 
 
 @pytest.mark.parametrize("counter", [EstimatedTokenCounter(), _CharacterCounter()])

@@ -68,6 +68,8 @@ class InferenceProfiler:
         # Built now so a bad setting fails before the artifact is opened.
         self.prompt_spec = config.prompt_spec()
         self._check_schedules()
+        # The repeated prompt by (seed, length): it is the same in every phase.
+        self._repeated_prompts: dict[tuple[int, int], Prompt] = {}
         self.client = OpenAIChatCompletionsClient(
             endpoint=config.endpoint,
             model=config.model,
@@ -341,6 +343,7 @@ class InferenceProfiler:
             case_id=case.case_id,
             phase=phase,
             input_tokens=case.input_tokens,
+            repeated=self._repeated_prompts,
         )
         request = _PhaseRequest(case, writer, prompts, phase)
         prompts.warm()

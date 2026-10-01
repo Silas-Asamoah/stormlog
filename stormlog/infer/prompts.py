@@ -127,6 +127,7 @@ class PromptSource:
         case_id: str,
         phase: str,
         input_tokens: int,
+        repeated: dict[tuple[int, int], Prompt] | None = None,
     ) -> None:
         self.spec = spec
         self.counter = counter
@@ -140,7 +141,8 @@ class PromptSource:
         # Filler text and its token count, by the count it was built to reach.
         self._fillers: dict[int, tuple[str, int]] = {}
         self._word_tokens: list[int] | None = None
-        self._repeated: Prompt | None = None
+        # The repeated prompt by (seed, length), shared by phases given one dict.
+        self._repeated = {} if repeated is None else repeated
 
     def prompt(self, index: int) -> Prompt:
         """Build, or return the built, prompt for one request."""
@@ -196,13 +198,14 @@ class PromptSource:
 
     def _repeat(self) -> Prompt:
         # The same text Stormlog has always generated for this length.
-        if self._repeated is None:
+        key = (self.seed, self.input_tokens)
+        if key not in self._repeated:
             text = generate_prompt(
                 self.input_tokens, self.counter, seed=self.seed + self.input_tokens
             )
             exact = self.counter.count_text(text)
-            self._repeated = Prompt(text, REPEAT, self.counter, planned=exact)
-        return self._repeated
+            self._repeated[key] = Prompt(text, REPEAT, self.counter, planned=exact)
+        return self._repeated[key]
 
     def _shared(self, index: int) -> Prompt:
         group = self._group(index)
