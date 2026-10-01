@@ -8,6 +8,7 @@ from unittest import mock
 
 import pytest
 
+from stormlog.exit_codes import ExitCode
 from stormlog.jax.diagnose import (
     build_diagnostic_summary,
     collect_environment,
@@ -173,7 +174,7 @@ def test_run_diagnose(tmp_path: Path) -> None:
 
     assert artifact_dir.exists()
     assert artifact_dir.is_dir()
-    assert exit_code in (0, 2)
+    assert exit_code in (ExitCode.OK, ExitCode.FINDINGS)
 
     # Check files
     env_file = artifact_dir / "environment.json"

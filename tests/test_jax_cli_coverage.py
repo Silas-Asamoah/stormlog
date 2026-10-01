@@ -9,6 +9,7 @@ from unittest import mock
 
 import pytest
 
+from stormlog.exit_codes import ExitCode
 from stormlog.jax import cli
 
 
@@ -39,7 +40,7 @@ def _configure_tracker_loader(mock_loader: mock.Mock) -> mock.Mock:
 def test_cmd_analyze_no_file(capsys: Any) -> None:
     args = argparse.Namespace(input="nonexistent_file.json")
     with mock.patch("stormlog.jax.cli.Path.exists", return_value=False):
-        assert cli.cmd_analyze(args) == 1
+        assert cli.cmd_analyze(args) == ExitCode.INVALID_INPUT
 
 
 def test_cmd_analyze_bad_json(capsys: Any) -> None:
@@ -48,7 +49,7 @@ def test_cmd_analyze_bad_json(capsys: Any) -> None:
         mock.patch("stormlog.jax.cli.Path.exists", return_value=True),
         mock.patch("stormlog.jax.cli.Path.open", side_effect=Exception("parse error")),
     ):
-        assert cli.cmd_analyze(args) == 1
+        assert cli.cmd_analyze(args) == ExitCode.INVALID_INPUT
 
 
 def test_cmd_analyze_success_no_plot(capsys: Any, tmp_path: Any) -> None:
@@ -97,10 +98,10 @@ def test_cmd_analyze_reports_memory_growth_in_mb_per_second(tmp_path: Any) -> No
 
 def test_cmd_diagnose_bad_args(capsys: Any) -> None:
     args = argparse.Namespace(duration=-1, interval=0.5)
-    assert cli.cmd_diagnose(args) == 1
+    assert cli.cmd_diagnose(args) == ExitCode.USAGE
 
     args = argparse.Namespace(duration=5, interval=-1)
-    assert cli.cmd_diagnose(args) == 1
+    assert cli.cmd_diagnose(args) == ExitCode.USAGE
 
 
 def test_cmd_diagnose_jax_not_available(capsys: Any) -> None:
@@ -109,14 +110,14 @@ def test_cmd_diagnose_jax_not_available(capsys: Any) -> None:
         mock.patch("stormlog.jax.cli.JAX_AVAILABLE", False),
         mock.patch("stormlog.jax.cli._load_run_diagnose") as mock_loader,
     ):
-        assert cli.cmd_diagnose(args) == 1
+        assert cli.cmd_diagnose(args) == ExitCode.USAGE
         mock_loader.assert_not_called()
 
 
 def test_cmd_diagnose_wandb_none(capsys: Any) -> None:
     args = argparse.Namespace(duration=5, interval=0.5)
     with mock.patch("stormlog.jax.cli._resolve_wandb_config", return_value=None):
-        assert cli.cmd_diagnose(args) == 1
+        assert cli.cmd_diagnose(args) == ExitCode.USAGE
 
 
 def test_cmd_diagnose_oserror(capsys: Any) -> None:
@@ -130,7 +131,33 @@ def test_cmd_diagnose_oserror(capsys: Any) -> None:
             return_value=mock.Mock(side_effect=OSError("test error")),
         ),
     ):
-        assert cli.cmd_diagnose(args) == 1
+        assert cli.cmd_diagnose(args) == ExitCode.ERROR
+
+
+def test_cmd_diagnose_output_not_a_directory_is_usage(capsys: Any) -> None:
+    args = argparse.Namespace(duration=5, interval=0.5, output="file.txt", device=0)
+    config = mock.Mock()
+    config.enabled = False
+    with (
+        mock.patch("stormlog.jax.cli._resolve_wandb_config", return_value=config),
+        mock.patch("stormlog.jax.cli._resolve_mlflow_config", return_value=config),
+        mock.patch(
+            "stormlog.jax.cli._load_run_diagnose",
+            return_value=mock.Mock(
+                side_effect=ValueError("Output path exists but is not a directory")
+            ),
+        ),
+    ):
+        assert cli.cmd_diagnose(args) == ExitCode.USAGE
+    assert "not a directory" in capsys.readouterr().err
+
+
+def test_cmd_analyze_non_object_json(capsys: Any, tmp_path: Any) -> None:
+    input_path = tmp_path / "list.json"
+    input_path.write_text("[1, 2, 3]", encoding="utf-8")
+    args = argparse.Namespace(input=str(input_path))
+    assert cli.cmd_analyze(args) == ExitCode.INVALID_INPUT
+    assert "does not contain a JSON object" in capsys.readouterr().err
 
 
 def test_cmd_diagnose_success(capsys: Any, tmp_path: Any) -> None:
@@ -142,7 +169,7 @@ def test_cmd_diagnose_success(capsys: Any, tmp_path: Any) -> None:
         mock.patch("stormlog.jax.cli._resolve_wandb_config", return_value=config),
         mock.patch(
             "stormlog.jax.cli._load_run_diagnose",
-            return_value=mock.Mock(return_value=(tmp_path, 2)),
+            return_value=mock.Mock(return_value=(tmp_path, 3)),
         ),
     ):
         # Test finding manifest
@@ -152,7 +179,7 @@ def test_cmd_diagnose_success(capsys: Any, tmp_path: Any) -> None:
         summary_file = tmp_path / "diagnostic_summary.json"
         summary_file.write_text('{"risk_flags": {"test_risk": true}}')
 
-        assert cli.cmd_diagnose(args) == 2
+        assert cli.cmd_diagnose(args) == ExitCode.FINDINGS
 
         # Test 0 exit code
         with mock.patch(
@@ -199,7 +226,7 @@ def test_cmd_track_jax_not_available(capsys: Any) -> None:
         mock.patch("stormlog.jax.cli.JAX_AVAILABLE", False),
         mock.patch("stormlog.jax.cli._load_memory_tracker") as mock_loader,
     ):
-        assert cli.cmd_track(args) == 1
+        assert cli.cmd_track(args) == ExitCode.USAGE
         mock_loader.assert_not_called()
 
 
@@ -209,7 +236,7 @@ def test_cmd_track_wandb_none(capsys: Any) -> None:
         mock.patch("stormlog.jax.cli.JAX_AVAILABLE", True),
         mock.patch("stormlog.jax.cli._resolve_wandb_config", return_value=None),
     ):
-        assert cli.cmd_track(args) == 1
+        assert cli.cmd_track(args) == ExitCode.USAGE
 
 
 def test_cmd_track_keyboard_interrupt(capsys: Any, tmp_path: Any) -> None:
@@ -323,7 +350,7 @@ def test_cmd_monitor_jax_not_available(capsys: Any) -> None:
         mock.patch("stormlog.jax.cli.JAX_AVAILABLE", False),
         mock.patch("stormlog.jax.cli._load_memory_tracker") as mock_loader,
     ):
-        assert cli.cmd_monitor(args) == 1
+        assert cli.cmd_monitor(args) == ExitCode.USAGE
         mock_loader.assert_not_called()
 
 
