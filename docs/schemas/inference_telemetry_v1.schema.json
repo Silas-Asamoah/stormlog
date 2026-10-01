@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://stormlog.readthedocs.io/en/latest/schemas/inference_telemetry_v1.schema.json",
   "title": "Stormlog inference host telemetry sample v1",
+  "description": "One counter reading from an inference host. The loader also checks rules this schema cannot state: clock_domain is exactly {host}/{boot_id}/unix_epoch_ns ({host}/unix_epoch_ns without a boot ID), a group member's rank is below world_size, and integers have no decimal point or exponent.",
   "type": "object",
   "additionalProperties": false,
   "required": [
