@@ -424,3 +424,37 @@ def test_failures_are_timed_from_when_their_thread_starts(tmp_path: Path) -> Non
     # The wait for the thread counts as dispatch lag, as it does for successes.
     assert rejected[0]["dispatch_lag_ms"] >= 150
     assert rejected[0]["e2e_latency_ms"] < 100
+
+
+def _profile_cli(tmp_path: Path, *flags: str) -> tuple[int, str]:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+        code = infer_main(
+            [
+                "profile",
+                "--endpoint",
+                "http://127.0.0.1:1/v1/chat/completions",
+                "--model",
+                "fake-model",
+                "--timeout",
+                "0.5",
+                "--system-sampler",
+                "none",
+                "--tokenizer",
+                "none",
+                "--output",
+                str(tmp_path / "infer.jsonl"),
+                *flags,
+            ]
+        )
+    return code, stderr.getvalue()
+
+
+def test_earlier_command_lines_keep_their_meaning(tmp_path: Path) -> None:
+    # --requests 1 was the default, so it could always be given with --duration.
+    _code, stderr = _profile_cli(tmp_path, "--duration", "0.05", "--requests", "1")
+    assert "either --duration or --requests" not in stderr
+    assert (tmp_path / "infer.jsonl").exists()
+    code, stderr = _profile_cli(tmp_path / "empty", "--concurrency", "")
+    assert code == 1
+    assert "concurrency must contain at least one value" in stderr

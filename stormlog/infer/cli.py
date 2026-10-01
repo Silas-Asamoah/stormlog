@@ -458,7 +458,10 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         endpoint=endpoint,
         model=args.model,
         concurrency=tuple(
-            parse_int_list(args.concurrency or "1", field_name="concurrency")
+            parse_int_list(
+                "1" if args.concurrency is None else args.concurrency,
+                field_name="concurrency",
+            )
         ),
         input_tokens=tuple(
             parse_int_list(args.input_tokens, field_name="input-tokens")
@@ -628,7 +631,9 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--duration must be > 0")
     if args.requests is not None and args.requests <= 0:
         raise ValueError("--requests must be >= 1")
-    if args.duration is not None and args.requests is not None:
+    # --requests 1 was the default, so command lines that combined it with
+    # --duration keep working.
+    if args.duration is not None and args.requests not in (None, 1):
         raise ValueError("Use either --duration or --requests, not both")
     _validate_arrival_arguments(args)
     _validate_prompt_arguments(args)
