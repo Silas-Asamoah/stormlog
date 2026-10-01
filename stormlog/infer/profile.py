@@ -543,15 +543,15 @@ class InferenceProfiler:
         request: "_PhaseRequest",
         arrival: Arrival,
         prompt: Prompt,
-        prompt_count: TokenCount | None = None,
+        prompt_count: TokenCount,
     ) -> dict[str, Any]:
         """Fields every request event carries, whatever its outcome.
 
-        ``prompt_count`` replaces the generated prompt's count when the server
-        reported one.
+        ``prompt_count`` is the server's count when it reported one, an exact
+        count made on the request's thread, or the planned size for a
+        request that never completed.
         """
         case = request.case
-        prompt_count = prompt_count or prompt.count
         return {
             "session_id": self.session.session_id,
             "request_id": request_id,
@@ -589,7 +589,8 @@ class InferenceProfiler:
         case = request.case
         prompt = request.prompts.take(arrival.index)
         call = self.request_executor.submit(
-            _timed_call,
+            self._call_and_count,
+            prompt,
             partial(
                 self.client.complete,
                 prompt=prompt.text,
@@ -607,6 +608,27 @@ class InferenceProfiler:
                 outcome = replace(outcome, error=exc)
         return self._failure_event(request_id, request, arrival, prompt, outcome)
 
+    def _call_and_count(
+        self, prompt: Prompt, call: Callable[[], ChatCompletionResult]
+    ) -> "_TimedCall":
+        """Make the call, then any token counts it needs, on this pool thread.
+
+        Counting a long prompt or answer takes milliseconds; on the event
+        loop that time would delay every other request's dispatch.
+        """
+        outcome = _timed_call(call)
+        result = outcome.result
+        try:
+            if result is None:
+                return replace(outcome, prompt_count=prompt.count)
+            output_count = _resolve_output_count(
+                result.usage, result.text, self.token_counter
+            )
+            prompt_count = _server_prompt_count(result.usage) or prompt.count
+        except Exception as exc:
+            return replace(outcome, error=exc, prompt_count=prompt.planned_count)
+        return replace(outcome, prompt_count=prompt_count, output_count=output_count)
+
     def _ok_event(
         self,
         request_id: str,
@@ -616,13 +638,9 @@ class InferenceProfiler:
         outcome: "_TimedCall",
     ) -> InferenceRequestEvent:
         result = outcome.result
-        assert result is not None
-        output_count = _resolve_output_count(
-            result.usage,
-            result.text,
-            self.token_counter,
-        )
-        prompt_count = _server_prompt_count(result.usage) or prompt.count
+        output_count = outcome.output_count
+        prompt_count = outcome.prompt_count
+        assert result is not None and output_count and prompt_count
         total_tokens = _resolve_total_tokens(
             result.usage,
             prompt_count,
@@ -668,6 +686,7 @@ class InferenceProfiler:
                 request=request,
                 arrival=arrival,
                 prompt=prompt,
+                prompt_count=outcome.prompt_count or prompt.planned_count,
             ),
             started_at_ns=outcome.started_at_ns,
             ended_at_ns=outcome.ended_at_ns,
@@ -690,12 +709,14 @@ class InferenceProfiler:
         sent_at_ns: int,
     ) -> InferenceRequestEvent:
         """A request still running when the drain deadline passed."""
+        prompt = request.prompts.take(arrival.index)
         return InferenceRequestEvent(
             **self._request_fields(
                 request_id=request_id,
                 request=request,
                 arrival=arrival,
-                prompt=request.prompts.take(arrival.index),
+                prompt=prompt,
+                prompt_count=prompt.planned_count,
             ),
             started_at_ns=sent_at_ns,
             ended_at_ns=time.time_ns(),
@@ -715,13 +736,15 @@ class InferenceProfiler:
         arrival: Arrival,
     ) -> InferenceRequestEvent:
         """A request the in-flight limit turned away; it was never sent."""
+        prompt = request.prompts.take(arrival.index)
         now_ns = time.time_ns()
         return InferenceRequestEvent(
             **self._request_fields(
                 request_id=request_id,
                 request=request,
                 arrival=arrival,
-                prompt=request.prompts.take(arrival.index),
+                prompt=prompt,
+                prompt_count=prompt.planned_count,
             ),
             started_at_ns=now_ns,
             ended_at_ns=now_ns,
@@ -752,6 +775,8 @@ class _TimedCall:
     elapsed_ms: float
     result: ChatCompletionResult | None = None
     error: Exception | None = None
+    prompt_count: TokenCount | None = None
+    output_count: TokenCount | None = None
 
 
 def _timed_call(call: Callable[[], ChatCompletionResult]) -> _TimedCall:

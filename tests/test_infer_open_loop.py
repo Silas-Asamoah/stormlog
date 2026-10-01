@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import io
 import json
 import tempfile
@@ -20,6 +21,7 @@ from stormlog.infer.config import ProfileConfig
 from stormlog.infer.open_loop import Arrival, InFlightLimiter, dispatch_schedule
 from stormlog.infer.openai_client import ChatCompletionResult, EndpointHTTPError
 from stormlog.infer.profile import InferenceProfiler
+from stormlog.infer.tokens import EstimatedTokenCounter, TokenCount
 from tests.infer_workload_helpers import SleepingClient, run_profile_with_fake_client
 
 
@@ -77,6 +79,8 @@ def test_drop_overflow_records_unsent_requests(tmp_path: Path) -> None:
     dropped = [r for r in requests if r["status"] == "dropped"]
     assert all(r["e2e_latency_ms"] is None for r in dropped)
     assert all("in-flight limit of 1" in r["error_message"] for r in dropped)
+    # Never sent, so never tokenized exactly: the size is the planned one.
+    assert all(r["prompt_tokens"] and not r["prompt_token_exact"] for r in dropped)
     arrivals = report["cases"]["fixed100_in8_out4"]["arrivals"]
     assert (arrivals["offered"], arrivals["sent"], arrivals["dropped"]) == (3, 1, 2)
     # A dropped arrival was never held: it never got a slot.
@@ -205,6 +209,7 @@ def test_requests_still_running_at_the_drain_deadline_are_cancelled(
     )
     assert [r["status"] for r in requests] == ["cancelled", "cancelled"]
     assert all(r["e2e_latency_ms"] is None for r in requests)
+    assert all(r["prompt_tokens"] and not r["prompt_token_exact"] for r in requests)
     arrivals = report["cases"]["fixed100_in8_out4"]["arrivals"]
     assert arrivals["sent"] == 2 and arrivals["failed"] == {"cancelled": 2}
     assert 0.08 <= arrivals["drain_seconds"] < 0.4
@@ -611,3 +616,53 @@ def test_running_calls_can_be_read_while_threads_finish() -> None:
         reader.join()
     assert errors == []
     assert profiler._running_calls() == []
+
+
+class _ThreadSpyCounter:
+    """Counts tokens like the estimate and notes which thread asked."""
+
+    source = "estimated"
+    exact = False
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def count_text(self, text: str) -> TokenCount:
+        self.calls.append((threading.current_thread().name, text))
+        return EstimatedTokenCounter().count_text(text)
+
+
+class _NoUsageClient(SleepingClient):
+    """Reports no usage, so the profiler has to count tokens itself."""
+
+    def __init__(self) -> None:
+        super().__init__(0.0)
+        self.prompts: list[str] = []
+
+    def complete(self, **kwargs: Any) -> ChatCompletionResult:
+        self.prompts.append(kwargs["prompt"])
+        result = super().complete(**kwargs)
+        return dataclasses.replace(result, usage=None, text="an answer " * 20)
+
+
+def test_fallback_token_counts_never_run_on_the_event_loop(tmp_path: Path) -> None:
+    profiler = InferenceProfiler(
+        dataclasses.replace(
+            _profiler(tmp_path).config,
+            prompt_mode="unique",
+            input_tokens=(64,),
+            request_count=4,
+        )
+    )
+    counter = _ThreadSpyCounter()
+    client = _NoUsageClient()
+    profiler.token_counter = counter
+    profiler.client = client  # type: ignore[assignment]
+    profiler.run()
+    sent = set(client.prompts)
+    assert len(sent) == 4
+    counted = [thread for thread, text in counter.calls if text in sent]
+    answers = [thread for thread, text in counter.calls if text.startswith("an answer")]
+    # Exact counts of what was sent, and of every answer, happen on pool threads.
+    assert len(counted) == 4 and len(answers) == 4
+    assert all(name.startswith("stormlog-infer") for name in counted + answers)

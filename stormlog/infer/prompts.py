@@ -90,19 +90,25 @@ class PromptSpec:
 class Prompt:
     """One request's prompt and what it shares with others.
 
-    Its exact token count is only worked out when something reads it: most
-    servers report the prompt's tokens themselves.
+    ``planned`` is the size the generator aimed for, known without
+    tokenizing the prompt. The exact ``count`` is only worked out when
+    something reads it: most servers report the prompt's tokens themselves.
     """
 
     text: str
     prompt_id: str
     counter: TokenCounter = field(repr=False, compare=False)
+    planned: TokenCount | None = None
     prefix_group: int | None = None
     shared_prefix_tokens: int | None = None
 
     @cached_property
     def count(self) -> TokenCount:
         return self.counter.count_text(self.text)
+
+    @property
+    def planned_count(self) -> TokenCount:
+        return self.planned or self.count
 
     @cached_property
     def digest(self) -> str:
@@ -131,8 +137,8 @@ class PromptSource:
         self._digests: dict[int, str] = {}
         # Each group's prefix text and its token count.
         self._prefixes: dict[int, tuple[str, int]] = {}
-        # Filler text by token count, shared by every prompt that needs it.
-        self._fillers: dict[int, str] = {}
+        # Filler text and its token count, by the count it was built to reach.
+        self._fillers: dict[int, tuple[str, int]] = {}
         self._word_tokens: list[int] | None = None
         self._repeated: Prompt | None = None
 
@@ -184,8 +190,8 @@ class PromptSource:
             return self._repeat()
         if self.spec.mode == UNIQUE:
             nonce = self._nonce(f"request:{index}")
-            text = self._extend(f"[{nonce}]", self.input_tokens)
-            return Prompt(text, f"r-{nonce}", self.counter)
+            text, planned = self._extend(f"[{nonce}]", self.input_tokens)
+            return Prompt(text, f"r-{nonce}", self.counter, self._planned(planned))
         return self._shared(index)
 
     def _repeat(self) -> Prompt:
@@ -194,7 +200,8 @@ class PromptSource:
             text = generate_prompt(
                 self.input_tokens, self.counter, seed=self.seed + self.input_tokens
             )
-            self._repeated = Prompt(text, REPEAT, self.counter)
+            exact = self.counter.count_text(text)
+            self._repeated = Prompt(text, REPEAT, self.counter, planned=exact)
         return self._repeated
 
     def _shared(self, index: int) -> Prompt:
@@ -203,11 +210,12 @@ class PromptSource:
         nonce = self._nonce(f"request:{index}")
         marker = f"[{nonce}]"
         used = prefix_tokens + self._count(marker)
-        text = self._extend(f"{prefix} {marker}", self.input_tokens, used=used)
+        text, planned = self._extend(f"{prefix} {marker}", self.input_tokens, used)
         return Prompt(
             text,
             f"g{group}-{nonce}",
             self.counter,
+            self._planned(planned),
             prefix_group=group,
             shared_prefix_tokens=prefix_tokens,
         )
@@ -216,24 +224,29 @@ class PromptSource:
         if group not in self._prefixes:
             ratio = self.spec.shared_prefix_ratio or 0.0
             tokens = max(1, round(ratio * self.input_tokens))
-            text = self._extend(f"[{self._nonce(f'prefix:{group}')}]", tokens)
+            text, _ = self._extend(f"[{self._nonce(f'prefix:{group}')}]", tokens)
             self._prefixes[group] = (text, self._count(text))
         return self._prefixes[group]
 
-    def _extend(self, head: str, target_tokens: int, used: int | None = None) -> str:
-        """``head`` and then filler, sized so the whole has about the target.
+    def _extend(
+        self, head: str, target_tokens: int, used: int | None = None
+    ) -> tuple[str, int]:
+        """``head`` and then filler sized to reach the target, and the size.
 
         Only the head is tokenized for each prompt: the filler for each size
         is built once per phase. Token counts are treated as adding up across
         the space between them, which holds for whitespace estimates and,
-        apart from the odd merge, for subword tokenizers.
+        within a token, for subword tokenizers.
         """
         if used is None:
             used = self._count(head)
-        filler = self._filler(target_tokens - used)
-        return f"{head} {filler}" if filler else head
+        filler, filler_tokens = self._filler(target_tokens - used)
+        return (f"{head} {filler}" if filler else head), used + filler_tokens
 
-    def _filler(self, tokens: int) -> str:
+    def _planned(self, tokens: int) -> TokenCount:
+        return TokenCount(value=tokens, source=self.counter.source, exact=False)
+
+    def _filler(self, tokens: int) -> tuple[str, int]:
         """The fewest filler words that reach ``tokens``, built once per length.
 
         The word count is estimated from each filler word's own token count,
@@ -242,18 +255,20 @@ class PromptSource:
         counts do not add up.
         """
         if tokens <= 0:
-            return ""
+            return "", 0
         if tokens not in self._fillers:
             if self._word_tokens is None:
                 self._word_tokens = [
                     max(1, self._count(f" {word}")) for word in _FILLER
                 ]
             words = _estimated_words(tokens, self._word_tokens)
-            while words > 1 and self._count(_filler_words(words - 1)) >= tokens:
+            # Counted with the space before it, as it follows the head.
+            while words > 1 and self._count(" " + _filler_words(words - 1)) >= tokens:
                 words -= 1
-            while self._count(_filler_words(words)) < tokens:
+            while self._count(" " + _filler_words(words)) < tokens:
                 words += 1
-            self._fillers[tokens] = _filler_words(words)
+            text = _filler_words(words)
+            self._fillers[tokens] = (text, self._count(" " + text))
         return self._fillers[tokens]
 
     def _count(self, text: str) -> int:
