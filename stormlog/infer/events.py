@@ -22,7 +22,8 @@ class InferenceRequestEvent:
     ended_at_ns: int
     endpoint: str
     model: str
-    concurrency: int
+    # Closed-loop workers; None for open-loop arrivals, which use max_in_flight.
+    concurrency: int | None
     target_input_tokens: int
     target_output_tokens: int
     stream: bool
@@ -49,6 +50,7 @@ class InferenceRequestEvent:
     dispatch_lag_ms: float | None = None
     held_for_slot: bool | None = None
     in_flight_at_dispatch: int | None = None
+    max_in_flight: int | None = None
     # Which prompt was sent and what it shares with other requests.
     prompt_mode: str = "repeat"
     prompt_id: str | None = None

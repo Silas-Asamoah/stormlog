@@ -17,7 +17,7 @@ def arrival_summary(
     """Count what was offered, sent and completed, and how late requests left.
 
     ``requests`` are all the measured requests of one case, whatever their
-    outcome, and ``window`` is the case's ``infer.case_window`` record when
+    outcome, and ``window`` is the measured ``infer.phase_window`` record when
     the artifact has one. A closed loop has no offered rate: the server's
     speed sets it.
     """

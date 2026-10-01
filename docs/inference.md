@@ -118,7 +118,7 @@ request is sent. During the drain, requests that are still running may finish
 for up to `--drain-timeout` seconds (default: `--timeout`). Any request still
 running at that deadline is recorded as `cancelled`. A closed loop counted
 with `--requests` has no drain deadline: every request in it is measured, so
-each one finishes or times out. Every phase writes an `infer.case_window`
+each one finishes or times out. Every phase writes an `infer.phase_window`
 record, and each case's `arrivals` block reports `window_seconds` and
 `drain_seconds`.
 
@@ -126,7 +126,7 @@ record, and each case's `arrivals` block reports `window_seconds` and
 HTTP call keeps running, on the server and on a client thread, until it
 finishes or reaches `--timeout`. So the next phase waits for those calls
 before it starts, rather than measuring their load as its own. Its
-`infer.case_window` record says how many it waited for and for how long, under
+`infer.phase_window` record says how many it waited for and for how long, under
 `abandoned_requests`. A lower `--drain-timeout` ends a phase sooner, but not
 the run.
 

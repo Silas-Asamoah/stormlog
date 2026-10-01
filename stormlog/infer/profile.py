@@ -520,7 +520,8 @@ class InferenceProfiler:
             "phase": request.phase,
             "endpoint": self.config.endpoint,
             "model": self.config.model,
-            "concurrency": case.concurrency,
+            "concurrency": None if case.arrival.open_loop else case.concurrency,
+            "max_in_flight": case.concurrency if case.arrival.open_loop else None,
             "target_input_tokens": case.input_tokens,
             "target_output_tokens": case.output_tokens,
             "stream": self.config.stream,
@@ -780,7 +781,7 @@ class _PhaseWindow:
     ) -> dict[str, Any]:
         return {
             "schema_version": 1,
-            "event_type": "infer.case_window",
+            "event_type": "infer.phase_window",
             "session_id": session_id,
             "case_id": request.case.case_id,
             "phase": request.phase,

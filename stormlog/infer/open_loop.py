@@ -31,7 +31,6 @@ class InFlightLimiter:
             raise ValueError("in-flight limit must be >= 1")
         self.limit = limit
         self.active = 0
-        self.peak = 0
         self._slots = asyncio.Semaphore(limit)
 
     @property
@@ -42,7 +41,6 @@ class InFlightLimiter:
         """Wait for a free slot; return the in-flight count including this one."""
         await self._slots.acquire()
         self.active += 1
-        self.peak = max(self.peak, self.active)
         return self.active
 
     def release(self) -> None:

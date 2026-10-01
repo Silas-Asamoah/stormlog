@@ -50,7 +50,8 @@ def workload_spec(
                 "case_id": case.case_id,
                 "input_tokens": case.input_tokens,
                 "output_tokens": case.output_tokens,
-                "concurrency": case.concurrency,
+                "concurrency": None if case.arrival.open_loop else case.concurrency,
+                "max_in_flight": case.concurrency if case.arrival.open_loop else None,
                 "arrival": case.arrival.to_record(),
             }
             for case in config.cases()

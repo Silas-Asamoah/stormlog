@@ -34,6 +34,8 @@ def test_fixed_rate_keeps_sending_while_earlier_requests_run(tmp_path: Path) -> 
     gaps = [later - earlier for earlier, later in zip(intended, intended[1:])]
     assert gaps == [20_000_000] * 4
     assert {r["arrival_mode"] for r in requests} == {"fixed-rate"}
+    # An open loop has an in-flight limit, not a number of workers.
+    assert {(r["concurrency"], r["max_in_flight"]) for r in requests} == {(None, 128)}
     assert sorted(r["request_index"] for r in requests) == [0, 1, 2, 3, 4]
     assert all(r["dispatch_lag_ms"] >= 0 for r in requests)
     case = report["cases"]["fixed50_in8_out4"]
@@ -112,6 +114,7 @@ def test_closed_loop_records_arrivals_without_an_offered_rate(tmp_path: Path) ->
         tmp_path, latency_seconds=0.01, concurrency=(2,), request_count=4
     )
     assert {r["arrival_mode"] for r in requests} == {"closed"}
+    assert {(r["concurrency"], r["max_in_flight"]) for r in requests} == {(2, None)}
     assert all(1 <= r["in_flight_at_dispatch"] <= 2 for r in requests)
     assert all(r["dispatch_lag_ms"] >= 0 for r in requests)
     arrivals = report["cases"]["c2_in8_out4"]["arrivals"]
@@ -183,7 +186,7 @@ def test_replay_from_the_cli_sends_every_recorded_arrival(tmp_path: Path) -> Non
 def _windows(tmp_path: Path) -> list[dict[str, Any]]:
     lines = (tmp_path / "infer.jsonl").read_text().splitlines()
     records = [json.loads(line) for line in lines]
-    return [r for r in records if r.get("event_type") == "infer.case_window"]
+    return [r for r in records if r.get("event_type") == "infer.phase_window"]
 
 
 def test_requests_still_running_at_the_drain_deadline_are_cancelled(
@@ -358,10 +361,11 @@ def test_dispatcher_drops_only_while_every_slot_is_busy() -> None:
             drop=dropped.append,
         )
         await asyncio.gather(*dispatch.tasks)
-        assert limiter.active == 0 and limiter.peak == 1
+        assert limiter.active == 0
 
     _run(scenario())
     assert [a.index for a in sent] == [0, 2]
+    assert {a.in_flight_at_dispatch for a in sent} == {1}
     assert [a.index for a in dropped] == [1]
     assert dropped[0].held_for_slot and dropped[0].in_flight_at_dispatch is None
     assert not sent[1].held_for_slot

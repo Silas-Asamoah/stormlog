@@ -135,7 +135,7 @@ def _measured_windows(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]
     return {
         str(record.get("case_id")): record
         for record in records
-        if record.get("event_type") == "infer.case_window"
+        if record.get("event_type") == "infer.phase_window"
         and record.get("phase") == "measured"
     }
 

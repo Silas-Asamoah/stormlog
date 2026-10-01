@@ -167,7 +167,7 @@ def test_profiled_requests_record_the_prompt_they_sent(tmp_path: Path) -> None:
     windows = [
         json.loads(line)
         for line in (tmp_path / "infer.jsonl").read_text().splitlines()
-        if '"infer.case_window"' in line
+        if '"infer.phase_window"' in line
     ]
     assert prompts["prompts_digest"] == windows[-1]["prompts_digest"]
     assert "prompts: unique, 4 distinct" in format_analysis_text(report)
