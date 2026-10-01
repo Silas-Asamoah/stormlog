@@ -292,6 +292,7 @@ def test_tfmemprof_diagnose_fallback_manifest_preserves_risk_detected(
     _patch_tfmemprof_timeline_capture(monkeypatch)
     _patch_tfmemprof_build_summary(monkeypatch, risk_detected=True)
     recorded_risks: list[bool] = []
+    recorded_files: list[list[str]] = []
     call_count = {"value": 0}
 
     def _fake_write_manifest(
@@ -304,14 +305,15 @@ def test_tfmemprof_diagnose_fallback_manifest_preserves_risk_detected(
         session_summary: object,
         error: str | None = None,
     ) -> None:
-        _ = command_line, files_written, exit_code, session_summary, error
+        _ = command_line, session_summary, error
         recorded_risks.append(risk_detected)
+        recorded_files.append(list(files_written))
         manifest_path = artifact_dir / "manifest.json"
         if call_count["value"] == 0:
             call_count["value"] += 1
             raise OSError("disk full")
         manifest_path.write_text(
-            json.dumps({"risk_detected": risk_detected}),
+            json.dumps({"risk_detected": risk_detected, "exit_code": exit_code}),
             encoding="utf-8",
         )
 
@@ -329,6 +331,15 @@ def test_tfmemprof_diagnose_fallback_manifest_preserves_risk_detected(
     assert recorded_risks == [True, True]
     manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["risk_detected"] is True
+    assert manifest["exit_code"] == 1
+    report = load_report(artifact_dir / "report.json")
+    assert report["verdict"] == {
+        "status": "error",
+        "exit_code": 1,
+        "summary": "Bundle incomplete: disk full",
+    }
+    assert report["findings"] == []
+    assert "report.json" in recorded_files[1]
 
 
 def test_tfmemprof_diagnose_stdout_contains_artifact_and_status(

@@ -9,9 +9,13 @@ from typing import Any
 import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
 
-from stormlog.diagnose_report import build_diagnose_report
+from stormlog.diagnose_report import (
+    build_diagnose_report,
+    write_incomplete_bundle,
+    write_verdict_report,
+)
 from stormlog.exit_codes import ExitCode
-from stormlog.report import validate_report
+from stormlog.report import load_report, validate_report
 
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
@@ -158,6 +162,108 @@ def test_report_tolerates_partial_summaries() -> None:
         },
     ]
     assert report["payload"]["backend"] is None
+
+
+def test_incomplete_report_claims_no_findings() -> None:
+    report = build_diagnose_report(
+        tool_name="gpumemprof",
+        summary=_summary(),
+        exit_code=ExitCode.ERROR,
+        session_id="session-5",
+        files=["environment.json", "report.json", "manifest.json"],
+        error="disk full",
+    )
+
+    _assert_valid(report)
+    assert report["verdict"] == {
+        "status": "error",
+        "exit_code": 1,
+        "summary": "Bundle incomplete: disk full",
+    }
+    assert report["findings"] == []
+    assert report["payload"]["risk_flags"]["oom_occurred"] is True
+    assert report["metrics"]["num_ooms"] == 1
+
+
+def test_write_incomplete_bundle_rewrites_report_then_manifest(
+    tmp_path: Path,
+) -> None:
+    write_verdict_report(
+        tmp_path,
+        tool_name="gpumemprof",
+        summary=_summary(),
+        exit_code=ExitCode.FINDINGS,
+        session_id="session-6",
+        files=["report.json", "manifest.json"],
+    )
+    manifests: list[list[str]] = []
+
+    write_incomplete_bundle(
+        tmp_path,
+        tool_name="gpumemprof",
+        summary=_summary(),
+        session_id="session-6",
+        files_written=["environment.json", "report.json"],
+        error="disk full",
+        thresholds=None,
+        write_manifest=manifests.append,
+    )
+
+    report = load_report(tmp_path / "report.json")
+    assert report["verdict"]["exit_code"] == 1
+    assert report["verdict"]["summary"] == "Bundle incomplete: disk full"
+    assert [item["path"] for item in report["artifacts"]] == [
+        "environment.json",
+        "report.json",
+        "manifest.json",
+    ]
+    assert manifests == [["environment.json", "report.json", "manifest.json"]]
+
+
+def test_write_incomplete_bundle_removes_a_stale_report_it_cannot_rewrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "report.json").write_text('{"verdict": "stale"}', encoding="utf-8")
+    manifests: list[list[str]] = []
+
+    def _fail(*args: Any, **kwargs: Any) -> None:
+        raise OSError("disk full again")
+
+    monkeypatch.setattr("stormlog.diagnose_report.write_verdict_report", _fail)
+
+    write_incomplete_bundle(
+        tmp_path,
+        tool_name="gpumemprof",
+        summary={},
+        session_id="session-7",
+        files_written=["environment.json", "report.json"],
+        error="disk full",
+        thresholds=None,
+        write_manifest=manifests.append,
+    )
+
+    assert not (tmp_path / "report.json").exists()
+    assert manifests == [["environment.json", "manifest.json"]]
+
+
+def test_write_incomplete_bundle_swallows_a_failed_manifest_write(
+    tmp_path: Path,
+) -> None:
+    def _fail(files: list[str]) -> None:
+        raise OSError("still full")
+
+    write_incomplete_bundle(
+        tmp_path,
+        tool_name="gpumemprof",
+        summary={},
+        session_id="session-8",
+        files_written=[],
+        error="disk full",
+        thresholds=None,
+        write_manifest=_fail,
+    )
+
+    assert load_report(tmp_path / "report.json")["verdict"]["exit_code"] == 1
 
 
 def test_report_refuses_a_verdict_that_contradicts_the_summary() -> None:

@@ -8,9 +8,12 @@ evidence pointers back into the bundle.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
+from .exit_codes import ExitCode
 from .report import (
     REPORT_FILENAME,
     REPORT_FORMAT,
@@ -21,11 +24,13 @@ from .report import (
     Evidence,
     Finding,
     build_report,
+    write_report,
 )
 
 DIAGNOSE_REPORT_KIND = "diagnose"
 DIAGNOSE_MANIFEST_SCHEMA_VERSION = 2
 SUMMARY_FILENAME = "diagnostic_summary.json"
+MANIFEST_FILENAME = "manifest.json"
 
 # risk flag -> (finding kind, severity, title, summary metric for the flag)
 _RISK_FLAG_FINDINGS: Mapping[str, tuple[str, str, str, str]] = {
@@ -77,20 +82,27 @@ def build_diagnose_report(
     files: Sequence[str],
     thresholds: Mapping[str, float] | None = None,
     tool_version: str | None = None,
+    error: str | None = None,
 ) -> dict[str, Any]:
     """Return the report dict for one diagnose bundle.
 
     ``thresholds`` maps a risk flag to the threshold the command applied, so
-    the finding can show the observed value next to it.
+    the finding can show the observed value next to it. ``error`` marks an
+    incomplete bundle: the verdict summary names the failure and no findings
+    are claimed, because the summary may never have been written.
     """
     risk_flags = _risk_flags(summary)
-    findings = [
-        _finding(flag, summary, session_id, (thresholds or {}).get(flag))
-        for flag, raised in risk_flags.items()
-        if raised
-    ]
+    findings: list[Finding] = []
+    if error is None:
+        findings = [
+            _finding(flag, summary, session_id, (thresholds or {}).get(flag))
+            for flag, raised in risk_flags.items()
+            if raised
+        ]
     raised_flags = [finding.kind for finding in findings]
-    if raised_flags:
+    if error is not None:
+        verdict_summary = f"Bundle incomplete: {error}"
+    elif raised_flags:
         verdict_summary = "Memory risk detected: " + ", ".join(raised_flags)
     else:
         verdict_summary = "No memory risk detected"
@@ -108,6 +120,72 @@ def build_diagnose_report(
         payload={"backend": summary.get("backend"), "risk_flags": dict(risk_flags)},
         tool_version=tool_version,
     )
+
+
+def write_verdict_report(
+    artifact_dir: Path,
+    *,
+    tool_name: str,
+    summary: Mapping[str, Any],
+    exit_code: int,
+    session_id: str,
+    files: Sequence[str],
+    thresholds: Mapping[str, float] | None = None,
+    error: str | None = None,
+) -> None:
+    """Build and write ``report.json`` for one diagnose bundle."""
+    write_report(
+        artifact_dir / REPORT_FILENAME,
+        build_diagnose_report(
+            tool_name=tool_name,
+            summary=summary,
+            exit_code=exit_code,
+            session_id=session_id,
+            files=files,
+            thresholds=thresholds,
+            error=error,
+        ),
+    )
+
+
+def write_incomplete_bundle(
+    artifact_dir: Path,
+    *,
+    tool_name: str,
+    summary: Mapping[str, Any],
+    session_id: str,
+    files_written: Sequence[str],
+    error: str,
+    thresholds: Mapping[str, float] | None,
+    write_manifest: Callable[[list[str]], None],
+) -> None:
+    """Best-effort fallback after a write failure inside ``run_diagnose``.
+
+    Rewrites ``report.json`` with an ``ERROR`` verdict so it never contradicts
+    the exit code the process returns, then writes the manifest through
+    ``write_manifest`` with the final file list. A stale report that cannot be
+    rewritten is removed rather than left claiming a completed verdict.
+    """
+    files = [name for name in files_written if name != REPORT_FILENAME]
+    try:
+        write_verdict_report(
+            artifact_dir,
+            tool_name=tool_name,
+            summary=summary,
+            exit_code=int(ExitCode.ERROR),
+            session_id=session_id,
+            files=[*files, REPORT_FILENAME, MANIFEST_FILENAME],
+            thresholds=thresholds,
+            error=error,
+        )
+        files.append(REPORT_FILENAME)
+    except (OSError, ValueError):
+        with suppress(OSError):
+            (artifact_dir / REPORT_FILENAME).unlink()
+    if MANIFEST_FILENAME not in files:
+        files.append(MANIFEST_FILENAME)
+    with suppress(OSError):
+        write_manifest(files)
 
 
 def _risk_flags(summary: Mapping[str, Any]) -> dict[str, bool]:
@@ -179,4 +257,10 @@ def _artifact(name: str) -> Artifact:
     return Artifact(kind=_ARTIFACT_KINDS.get(name, "file"), path=name)
 
 
-__all__ = ["DIAGNOSE_REPORT_KIND", "build_diagnose_report"]
+__all__ = [
+    "DIAGNOSE_REPORT_KIND",
+    "MANIFEST_FILENAME",
+    "build_diagnose_report",
+    "write_incomplete_bundle",
+    "write_verdict_report",
+]

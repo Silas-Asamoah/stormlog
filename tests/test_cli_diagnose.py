@@ -327,6 +327,8 @@ def test_diagnose_fallback_manifest_preserves_risk_detected(
     _patch_diagnose_env(monkeypatch, cuda_available=True, risk_detected=True)
     _patch_timeline_capture(monkeypatch)
     recorded_risks: list[bool] = []
+    recorded_files: list[list[str]] = []
+    recorded_exit_codes: list[int] = []
     call_count = {"value": 0}
 
     def _fake_write_manifest(
@@ -340,21 +342,16 @@ def test_diagnose_fallback_manifest_preserves_risk_detected(
         native_history: bool,
         error: str | None = None,
     ) -> None:
-        _ = (
-            command_line,
-            files_written,
-            exit_code,
-            session_summary,
-            native_history,
-            error,
-        )
+        _ = (command_line, session_summary, native_history, error)
         recorded_risks.append(risk_detected)
+        recorded_files.append(list(files_written))
+        recorded_exit_codes.append(exit_code)
         manifest_path = artifact_dir / "manifest.json"
         if call_count["value"] == 0:
             call_count["value"] += 1
             raise OSError("disk full")
         manifest_path.write_text(
-            json.dumps({"risk_detected": risk_detected}),
+            json.dumps({"risk_detected": risk_detected, "exit_code": exit_code}),
             encoding="utf-8",
         )
 
@@ -370,6 +367,17 @@ def test_diagnose_fallback_manifest_preserves_risk_detected(
 
     assert exit_code == 1
     assert recorded_risks == [True, True]
+    assert recorded_exit_codes == [3, 1]
+    # The report written before the failed manifest said findings/3; the
+    # fallback must rewrite it so it never contradicts the exit code.
+    report = load_report(artifact_dir / "report.json")
+    assert report["verdict"]["exit_code"] == 1
+    assert report["verdict"]["status"] == "error"
+    assert report["verdict"]["summary"] == "Bundle incomplete: disk full"
+    assert report["findings"] == []
+    assert report["payload"]["risk_flags"]["oom_occurred"] is True
+    assert "report.json" in recorded_files[1]
+    assert "manifest.json" in recorded_files[1]
     manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["risk_detected"] is True
 

@@ -198,3 +198,56 @@ def test_run_diagnose(tmp_path: Path) -> None:
     assert manifest["schema_version"] == 2
     assert "session_id" in manifest
     assert "test_cmd" in manifest["command_line"]
+
+
+@jax_mark
+def test_run_diagnose_fallback_rewrites_report_on_partial_write(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed manifest write must leave report.json saying error/1, not pass/0."""
+    import stormlog.jax.diagnose as diagnose_module
+
+    recorded_files: list[list[str]] = []
+    call_count = {"value": 0}
+
+    def _fake_write_manifest(
+        artifact_dir: Path,
+        *,
+        command_line: str,
+        files_written: list[str],
+        exit_code: int,
+        risk_detected: bool,
+        session_summary: object,
+        error: str | None = None,
+    ) -> None:
+        _ = command_line, session_summary, error
+        recorded_files.append(list(files_written))
+        if call_count["value"] == 0:
+            call_count["value"] += 1
+            raise OSError("disk full")
+        (artifact_dir / "manifest.json").write_text(
+            json.dumps({"risk_detected": risk_detected, "exit_code": exit_code}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(diagnose_module, "_write_manifest", _fake_write_manifest)
+
+    artifact_dir, exit_code = run_diagnose(
+        output=str(tmp_path),
+        device_index=0,
+        duration=0,
+        interval=0.05,
+        command_line="jaxmemprof diagnose",
+    )
+
+    assert exit_code == 1
+    manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["exit_code"] == 1
+    report = load_report(artifact_dir / "report.json")
+    assert report["verdict"] == {
+        "status": "error",
+        "exit_code": 1,
+        "summary": "Bundle incomplete: disk full",
+    }
+    assert report["findings"] == []
+    assert "report.json" in recorded_files[1]
