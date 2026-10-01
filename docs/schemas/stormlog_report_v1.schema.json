@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/stormlog_report_v1.schema.json",
+  "title": "Stormlog Report v1",
+  "description": "Versioned verdict envelope written by Stormlog commands for CI jobs and agents. The envelope carries the verdict, findings with evidence pointers, flat metrics and artifact pointers; tool-specific detail lives in payload and is versioned by the producing command.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "format",
+    "report_kind",
+    "generated_at_utc",
+    "tool",
+    "verdict",
+    "findings"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "format": {
+      "type": "string",
+      "const": "stormlog.report"
+    },
+    "report_kind": {
+      "description": "Payload family, for example diagnose. Documented per producing command.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "generated_at_utc": {
+      "description": "ISO 8601 timestamp in UTC.",
+      "type": "string",
+      "minLength": 1
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "command"],
+      "properties": {
+        "name": {
+          "description": "Console script, for example gpumemprof.",
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "description": "Subcommand, for example diagnose.",
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "verdict": {
+      "$ref": "#/$defs/verdict"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "metrics": {
+      "$ref": "#/$defs/metrics"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "session_id": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "run_id": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "payload": {
+      "description": "Tool-specific detail. Its shape is owned and versioned by the producing command and is not constrained by this schema.",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "exit_code", "summary"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "error",
+            "usage",
+            "findings",
+            "gate_failed",
+            "invalid_input",
+            "interrupted"
+          ]
+        },
+        "exit_code": {
+          "description": "The process exit code the producing command returned. Paired with status by the exit-code contract.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "pass"}}},
+          "then": {"properties": {"exit_code": {"const": 0}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "error"}}},
+          "then": {"properties": {"exit_code": {"const": 1}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "usage"}}},
+          "then": {"properties": {"exit_code": {"const": 2}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "findings"}}},
+          "then": {"properties": {"exit_code": {"const": 3}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "gate_failed"}}},
+          "then": {"properties": {"exit_code": {"const": 4}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "invalid_input"}}},
+          "then": {"properties": {"exit_code": {"const": 5}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "interrupted"}}},
+          "then": {"properties": {"exit_code": {"const": 130}}}
+        }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "severity", "title", "evidence"],
+      "properties": {
+        "id": {
+          "description": "Stable identifier, for example diagnose.high_utilization.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.]*$"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "critical"]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": ["string", "null"]
+        },
+        "metrics": {
+          "$ref": "#/$defs/metrics"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "description": "Pointer to the data behind a finding. Paths resolve against the directory that holds the report; pointer is a JSON pointer inside that file.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "pointer": {
+          "type": ["string", "null"],
+          "pattern": "^(|/.*)$"
+        },
+        "session_id": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "record_id": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "start_ns": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "end_ns": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "description": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "artifact": {
+      "description": "A file the command wrote or relied on, with its own format and schema version when it has one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "format": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "schema_version": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["number", "null"]
+      }
+    }
+  }
+}
