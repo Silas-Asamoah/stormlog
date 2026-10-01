@@ -151,6 +151,11 @@ the report as `config.overhead_scratch_root` and `overhead.scratch_root`.
 Regressions that add wall time per sample (a sleep, a lock wait) still fail
 the gate; see the injected-sleep test in `tests/test_benchmark_harness.py`.
 
+The v0.4 baseline was recorded before `--overhead-scratch-root` existed, so
+its `runtime_overhead_pct` includes about 43 points of disk wait (778.51
+runtime versus 735.28 CPU). Record the next baseline with the same flag CI
+uses; issue #255 tracks that re-baseline.
+
 ### Soak RSS measurement window
 
 The soak reads process RSS at 50 evenly spaced checkpoints while samples are
