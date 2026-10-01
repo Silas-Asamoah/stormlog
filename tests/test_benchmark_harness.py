@@ -617,6 +617,91 @@ def test_regression_gate_catches_injected_sleep_per_sample(
     assert checks[metric]["passed"] is True, checks
 
 
+# Off-CPU cost per emitted sample at which the shipped v0.4 regression gate
+# flips for runtime_overhead_pct, given a tracked run at the baseline's CPU
+# overhead and a 0.10 s unprofiled workload: (778.51 + 150 - 735.28) points of
+# a 0.10 s reference spread over 5,000 samples. A baseline or tolerance change
+# that moves this number changes the gate's resolution and must be deliberate.
+OVERHEAD_GATE_OFF_CPU_THRESHOLD_US_PER_SAMPLE = 38.6
+
+
+def _overhead_metrics_for_off_cpu_cost(
+    off_cpu_us_per_sample: float,
+    *,
+    cpu_overhead_pct: float,
+    sample_count: int,
+    unprofiled_seconds: float = 0.10,
+) -> dict[str, float]:
+    """Synthetic trial timings: a CPU-bound reference plus an off-CPU cost."""
+    tracked_cpu = unprofiled_seconds * (1.0 + cpu_overhead_pct / 100.0)
+    tracked_wall = tracked_cpu + off_cpu_us_per_sample * 1e-6 * sample_count
+    unprofiled = {
+        "wall_seconds": unprofiled_seconds,
+        "cpu_seconds": unprofiled_seconds,
+        "artifact_size_bytes": 0,
+    }
+    tracked = {
+        "wall_seconds": tracked_wall,
+        "cpu_seconds": tracked_cpu,
+        "artifact_size_bytes": 0,
+    }
+    return benchmark_harness._build_overhead_metrics(unprofiled, tracked)
+
+
+def test_regression_gate_resolution_for_off_cpu_cost_per_sample() -> None:
+    baseline = benchmark_harness.load_regression_baseline(
+        benchmark_harness._default_runtime_baseline_path()
+    )
+    tolerances = benchmark_harness.load_regression_tolerances(
+        benchmark_harness._default_runtime_tolerances_path()
+    )
+    runtime_metric = "gpumemprof_cpu.runtime_overhead_pct"
+    cpu_metric = "gpumemprof_cpu.cpu_overhead_pct"
+    sample_count = benchmark_harness._overhead_sample_count(
+        benchmark_harness._RUNTIME_SPECS["gpumemprof_cpu"],
+        benchmark_harness.DEFAULT_ITERATIONS,
+    )
+    assert sample_count == 5_000
+
+    implied_threshold_us = (
+        (
+            baseline["metrics"][runtime_metric]
+            + tolerances[runtime_metric]
+            - baseline["metrics"][cpu_metric]
+        )
+        / 100.0
+        * 0.10
+        / sample_count
+        * 1e6
+    )
+    assert implied_threshold_us == pytest.approx(
+        OVERHEAD_GATE_OFF_CPU_THRESHOLD_US_PER_SAMPLE, abs=0.1
+    )
+
+    def _gate(off_cpu_us_per_sample: float) -> dict[str, dict[str, object]]:
+        metrics = _overhead_metrics_for_off_cpu_cost(
+            off_cpu_us_per_sample,
+            cpu_overhead_pct=baseline["metrics"][cpu_metric],
+            sample_count=sample_count,
+        )
+        return benchmark_harness.evaluate_regressions(
+            {
+                runtime_metric: metrics["runtime_overhead_pct"],
+                cpu_metric: metrics["cpu_overhead_pct"],
+            },
+            baseline["metrics"],
+            tolerances,
+        )
+
+    below = _gate(38.0)
+    above = _gate(39.0)
+
+    assert below[cpu_metric]["delta"] == pytest.approx(0.0, abs=1e-9)
+    assert below[runtime_metric]["passed"] is True, below
+    assert above[cpu_metric]["passed"] is True, above
+    assert above[runtime_metric]["passed"] is False, above
+
+
 def test_run_tracked_scenario_finalizes_session_on_emit_failure(
     tmp_path: Path,
 ) -> None:
