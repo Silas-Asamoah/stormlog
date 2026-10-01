@@ -1,6 +1,8 @@
 """Optional engine and trace capture integration with the run catalog."""
 
 import json
+import os
+import stat
 from dataclasses import replace
 from pathlib import Path
 
@@ -308,6 +310,39 @@ def test_capture_starts_a_new_line_after_an_unterminated_artifact(
     records = load_inference_artifact(artifact)
     assert isinstance(records[0], LegacyInferenceRecord)
     assert [type(record) for record in records[1:]] == [CapabilityEvent] * 2
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_capture_keeps_file_permissions(tmp_path: Path) -> None:
+    umask = os.umask(0)
+    os.umask(umask)
+    first = tmp_path / "first.jsonl"
+    _legacy_artifact(first)
+    first.chmod(0o640)
+    envelope = tmp_path / "stormlog_run.json"
+    session = create_session_summary(source="test", session_id="session-1")
+
+    append_inference_capture(
+        first, run_id="run-1", session=session, envelope_path=envelope
+    )
+
+    assert stat.S_IMODE(first.stat().st_mode) == 0o640
+    # A new envelope gets the permissions of any new file, not owner-only.
+    assert stat.S_IMODE(envelope.stat().st_mode) == 0o666 & ~umask
+
+    envelope.chmod(0o604)
+    second = tmp_path / "second.jsonl"
+    _legacy_artifact(second)
+    append_inference_capture(
+        second, run_id="run-1", session=session, envelope_path=envelope
+    )
+
+    assert stat.S_IMODE(envelope.stat().st_mode) == 0o604
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "first.jsonl",
+        "second.jsonl",
+        "stormlog_run.json",
+    ]
 
 
 def test_rejects_wrong_run_before_writing_artifact(tmp_path: Path) -> None:
