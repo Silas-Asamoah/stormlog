@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from typing import Literal
+
+from .arrivals import BURST, CLOSED, RATE_MODES, REPLAY, ArrivalSpec, ArrivalTrace
 
 DEFAULT_ENDPOINT_PATH = "/chat/completions"
 
@@ -38,14 +41,38 @@ def resolve_endpoint(*, endpoint: str | None, base_url: str | None) -> str:
     return base_url.rstrip("/") + DEFAULT_ENDPOINT_PATH
 
 
+def parse_float_list(value: str, *, field_name: str) -> list[float]:
+    """Parse a comma-separated list of positive, finite numbers."""
+    parsed: list[float] = []
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        try:
+            number = float(item)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must contain numbers") from exc
+        if not math.isfinite(number) or number <= 0:
+            raise ValueError(f"{field_name} values must be > 0")
+        parsed.append(number)
+    if not parsed:
+        raise ValueError(f"{field_name} must contain at least one value")
+    return parsed
+
+
 @dataclass(frozen=True)
 class WorkloadCase:
-    """One inference profiling workload shape."""
+    """One inference profiling workload shape.
+
+    For an open-loop case, ``concurrency`` is the in-flight limit: the most
+    requests that may be outstanding at once.
+    """
 
     case_id: str
     concurrency: int
     input_tokens: int
     output_tokens: int
+    arrival: ArrivalSpec = field(default_factory=ArrivalSpec)
 
 
 @dataclass(frozen=True)
@@ -74,19 +101,57 @@ class ProfileConfig:
     system_sampler: str = "auto"
     sample_interval_seconds: float = 1.0
     run_id: str | None = None
+    arrival_mode: str = CLOSED
+    rates: tuple[float, ...] = ()
+    burst_size: int | None = None
+    burst_interval_seconds: float | None = None
+    arrival_trace: ArrivalTrace | None = None
+    max_in_flight: int = 128
+    overflow: Literal["wait", "drop"] = "wait"
+
+    def arrival_specs(self) -> list[ArrivalSpec]:
+        """One arrival shape per case group: per rate, or a single shape."""
+        if self.arrival_mode in RATE_MODES:
+            return [
+                ArrivalSpec(mode=self.arrival_mode, rate_per_second=rate)
+                for rate in self.rates
+            ]
+        return [
+            ArrivalSpec(
+                mode=self.arrival_mode,
+                burst_size=self.burst_size if self.arrival_mode == BURST else None,
+                burst_interval_seconds=(
+                    self.burst_interval_seconds if self.arrival_mode == BURST else None
+                ),
+                trace=self.arrival_trace if self.arrival_mode == REPLAY else None,
+            )
+        ]
 
     def cases(self) -> list[WorkloadCase]:
-        cases: list[WorkloadCase] = []
-        for concurrency in self.concurrency:
-            for input_tokens in self.input_tokens:
-                for output_tokens in self.output_tokens:
-                    case_id = f"c{concurrency}_in{input_tokens}_out{output_tokens}"
-                    cases.append(
-                        WorkloadCase(
-                            case_id=case_id,
-                            concurrency=concurrency,
-                            input_tokens=input_tokens,
-                            output_tokens=output_tokens,
-                        )
-                    )
-        return cases
+        if self.arrival_mode == CLOSED:
+            return [
+                self._case(f"c{concurrency}", concurrency, ArrivalSpec(), tokens)
+                for concurrency in self.concurrency
+                for tokens in self._token_shapes()
+            ]
+        return [
+            self._case(spec.case_label(), self.max_in_flight, spec, tokens)
+            for spec in self.arrival_specs()
+            for tokens in self._token_shapes()
+        ]
+
+    def _token_shapes(self) -> list[tuple[int, int]]:
+        return [(i, o) for i in self.input_tokens for o in self.output_tokens]
+
+    @staticmethod
+    def _case(
+        label: str, concurrency: int, arrival: ArrivalSpec, tokens: tuple[int, int]
+    ) -> WorkloadCase:
+        input_tokens, output_tokens = tokens
+        return WorkloadCase(
+            case_id=f"{label}_in{input_tokens}_out{output_tokens}",
+            concurrency=concurrency,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            arrival=arrival,
+        )

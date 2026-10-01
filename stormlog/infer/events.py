@@ -42,6 +42,13 @@ class InferenceRequestEvent:
     error_type: str | None = None
     error_message: str | None = None
     http_status: int | None = None
+    # How the request was scheduled and when it actually went out.
+    arrival_mode: str = "closed"
+    request_index: int | None = None
+    intended_at_ns: int | None = None
+    dispatch_lag_ms: float | None = None
+    held_for_slot: bool | None = None
+    in_flight_at_dispatch: int | None = None
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)

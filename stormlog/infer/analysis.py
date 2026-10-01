@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .arrival_report import arrival_lines, arrival_summary, latency_from_intended_ms
 from .correlation_accounting import AlignedTimestamp
 from .host_clock import is_boot_qualified
 from .report_stats import int_value as _int_value
@@ -53,19 +54,14 @@ def analyze_inference_events(
     ok_requests = [record for record in requests if record.get("status") == "ok"]
 
     grouped: dict[str, list[dict[str, Any]]] = {}
-    for record in ok_requests:
+    for record in requests:
         case_id = str(record.get("case_id", "unknown"))
         grouped.setdefault(case_id, []).append(record)
 
-    cases = {}
-    for case_id, case_requests in sorted(grouped.items()):
-        cases[case_id] = _summarize_requests(
-            case_requests,
-            samples=_samples_for_request_window(samples, case_requests),
-        )
-        cases[case_id]["memory"].update(
-            _server_case_memory(timelines, case_requests, "group" in join)
-        )
+    cases = {
+        case_id: _case_report(case_requests, samples, timelines, "group" in join)
+        for case_id, case_requests in sorted(grouped.items())
+    }
     if timelines:
         join["case_coverage"] = _coverage_counts(cases)
     failed = [record for record in requests if record.get("status") != "ok"]
@@ -85,6 +81,20 @@ def analyze_inference_events(
             "server_targets": _server_targets(server_samples),
         },
     }
+
+
+def _case_report(
+    case_requests: list[dict[str, Any]],
+    samples: list[dict[str, Any]],
+    timelines: list[tuple[_Member, _ServerTimeline]],
+    grouped: bool,
+) -> dict[str, Any]:
+    """Summarize one case: latency from its completed requests, arrivals from all."""
+    ok = [record for record in case_requests if record.get("status") == "ok"]
+    report = _summarize_requests(ok, samples=_samples_for_request_window(samples, ok))
+    report["arrivals"] = arrival_summary(case_requests)
+    report["memory"].update(_server_case_memory(timelines, ok, grouped))
+    return report
 
 
 def _failures_by_status(failed: list[dict[str, Any]]) -> dict[str, int]:
@@ -179,6 +189,8 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
         f"output={_fmt(throughput.get('output_tokens_per_second'))} tok/s, "
         f"requests={_fmt(throughput.get('requests_per_second'))} req/s"
     ]
+    if isinstance(case, dict):
+        lines.extend(arrival_lines(case.get("arrivals")))
     memory = case.get("memory", {}) if isinstance(case, dict) else {}
     lines.extend(_server_case_lines(memory))
     return lines
@@ -252,6 +264,7 @@ def _summarize_requests(
     samples: list[dict[str, Any]],
 ) -> dict[str, Any]:
     e2e = _number_values(requests, "e2e_latency_ms")
+    from_intended = latency_from_intended_ms(requests)
     ttft = _number_values(requests, "ttft_ms")
     first_chunk = _number_values(requests, "first_chunk_latency_ms")
     output_tokens = sum(_int_value(record.get("output_tokens")) for record in requests)
@@ -274,6 +287,9 @@ def _summarize_requests(
             "e2e_p50": _percentile(e2e, 50),
             "e2e_p95": _percentile(e2e, 95),
             "e2e_p99": _percentile(e2e, 99),
+            "e2e_from_intended_p50": _percentile(from_intended, 50),
+            "e2e_from_intended_p95": _percentile(from_intended, 95),
+            "e2e_from_intended_p99": _percentile(from_intended, 99),
             "ttft_p50": _percentile(ttft, 50),
             "ttft_p95": _percentile(ttft, 95),
             "ttft_p99": _percentile(ttft, 99),

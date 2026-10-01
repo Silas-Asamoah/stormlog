@@ -12,7 +12,16 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .analysis import analyze_inference_events, format_analysis_text
-from .config import ProfileConfig, parse_int_list, resolve_endpoint
+from .arrivals import (
+    ARRIVAL_MODES,
+    BURST,
+    CLOSED,
+    RATE_MODES,
+    REPLAY,
+    ArrivalTrace,
+    load_arrival_trace,
+)
+from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
 from .profile import run_profile
 from .server_collector import (
     STOP_GPU_IDENTITY_CHANGED,
@@ -74,8 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     profile_parser.add_argument(
         "--concurrency",
-        default="1",
-        help="Comma-separated concurrency levels (default: 1)",
+        default=None,
+        help="Comma-separated closed-loop concurrency levels (default: 1)",
     )
     profile_parser.add_argument(
         "--input-tokens",
@@ -96,8 +105,11 @@ def build_parser() -> argparse.ArgumentParser:
     profile_parser.add_argument(
         "--requests",
         type=int,
-        default=1,
-        help="Total measured request count per workload case (default: 1)",
+        default=None,
+        help=(
+            "Total measured request count per workload case (default: 1; "
+            "a replay sends the whole trace)"
+        ),
     )
     profile_parser.add_argument(
         "--output",
@@ -190,8 +202,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--seed",
         type=int,
         default=0,
-        help="Deterministic prompt seed (default: 0)",
+        help="Seed for prompts and Poisson arrivals (default: 0)",
     )
+    _add_arrival_arguments(profile_parser)
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -297,15 +310,84 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_arrival_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--arrival",
+        choices=ARRIVAL_MODES,
+        default=CLOSED,
+        help=(
+            "How requests arrive. closed (default) sends the next request when "
+            "a worker is free; the others send on a fixed schedule"
+        ),
+    )
+    parser.add_argument(
+        "--rate",
+        default=None,
+        help="Comma-separated requests/second for fixed-rate and poisson arrivals",
+    )
+    parser.add_argument(
+        "--burst-size", type=int, default=None, help="Requests per burst"
+    )
+    parser.add_argument(
+        "--burst-interval",
+        type=float,
+        default=None,
+        help="Seconds between bursts",
+    )
+    parser.add_argument(
+        "--arrival-trace",
+        default=None,
+        help=(
+            "Arrivals to replay: JSON lines with offset_ms, or a Stormlog "
+            "inference artifact"
+        ),
+    )
+    parser.add_argument(
+        "--arrival-trace-case",
+        default=None,
+        help="Measured case to replay from an inference artifact",
+    )
+    parser.add_argument(
+        "--max-in-flight",
+        type=int,
+        default=128,
+        help="Open-loop limit on outstanding requests (default: 128)",
+    )
+    parser.add_argument(
+        "--overflow",
+        choices=["wait", "drop"],
+        default="wait",
+        help=(
+            "When every in-flight slot is busy, wait for one (default, and the "
+            "wait is recorded) or drop the arrival"
+        ),
+    )
+
+
 def cmd_profile(args: argparse.Namespace) -> int:
     """Run active inference profiling."""
     _validate_profile_arguments(args)
+    report = run_profile(_profile_config(args))
+    print(format_analysis_text(report))
+    print(f"Artifact saved to: {Path(args.output)}")
+    summary = report.get("summary", {})
+    if (
+        int(summary.get("total_requests", 0)) > 0
+        and int(summary.get("successful_requests", 0)) == 0
+    ):
+        print("Error: no measured inference requests succeeded", file=sys.stderr)
+        return 1
+    return 0
 
+
+def _profile_config(args: argparse.Namespace) -> ProfileConfig:
     endpoint = resolve_endpoint(endpoint=args.endpoint, base_url=args.base_url)
-    config = ProfileConfig(
+    return ProfileConfig(
         endpoint=endpoint,
         model=args.model,
-        concurrency=tuple(parse_int_list(args.concurrency, field_name="concurrency")),
+        concurrency=tuple(
+            parse_int_list(args.concurrency or "1", field_name="concurrency")
+        ),
         input_tokens=tuple(
             parse_int_list(args.input_tokens, field_name="input-tokens")
         ),
@@ -313,7 +395,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
             parse_int_list(args.output_tokens, field_name="output-tokens")
         ),
         duration_seconds=args.duration,
-        request_count=None if args.duration is not None else args.requests,
+        request_count=_request_count(args),
         stream=bool(args.stream),
         stream_include_usage=bool(args.stream_usage),
         timeout_seconds=float(args.timeout),
@@ -329,18 +411,31 @@ def cmd_profile(args: argparse.Namespace) -> int:
         sample_interval_seconds=float(args.sample_interval),
         run_id=args.run_id,
         seed=int(args.seed),
+        arrival_mode=args.arrival,
+        rates=(
+            tuple(parse_float_list(args.rate, field_name="rate")) if args.rate else ()
+        ),
+        burst_size=args.burst_size,
+        burst_interval_seconds=args.burst_interval,
+        arrival_trace=_arrival_trace(args),
+        max_in_flight=int(args.max_in_flight),
+        overflow=args.overflow,
     )
-    report = run_profile(config)
-    print(format_analysis_text(report))
-    print(f"Artifact saved to: {Path(args.output)}")
-    summary = report.get("summary", {})
-    if (
-        int(summary.get("total_requests", 0)) > 0
-        and int(summary.get("successful_requests", 0)) == 0
-    ):
-        print("Error: no measured inference requests succeeded", file=sys.stderr)
-        return 1
-    return 0
+
+
+def _request_count(args: argparse.Namespace) -> int | None:
+    """Measured requests per case; None means the duration or trace decides."""
+    if args.duration is not None:
+        return None
+    if args.requests is not None:
+        return int(args.requests)
+    return None if args.arrival == REPLAY else 1
+
+
+def _arrival_trace(args: argparse.Namespace) -> ArrivalTrace | None:
+    if args.arrival != REPLAY:
+        return None
+    return load_arrival_trace(args.arrival_trace, case_id=args.arrival_trace_case)
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
@@ -442,11 +537,37 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--duration must be > 0")
     if args.requests is not None and args.requests <= 0:
         raise ValueError("--requests must be >= 1")
-    if args.duration is not None and args.requests != 1:
+    if args.duration is not None and args.requests is not None:
         raise ValueError("Use either --duration or --requests, not both")
+    _validate_arrival_arguments(args)
     if args.timeout <= 0:
         raise ValueError("--timeout must be > 0")
     if args.warmup_requests < 0:
         raise ValueError("--warmup-requests must be >= 0")
     if args.sample_interval <= 0:
         raise ValueError("--sample-interval must be > 0")
+
+
+def _validate_arrival_arguments(args: argparse.Namespace) -> None:
+    """Name the flag a setting belongs to before the arrival spec checks values."""
+    mode = args.arrival
+    _flag_for(mode, RATE_MODES, args.rate, "--rate")
+    _flag_for(mode, {BURST}, args.burst_size, "--burst-size")
+    _flag_for(mode, {BURST}, args.burst_interval, "--burst-interval")
+    _flag_for(mode, {REPLAY}, args.arrival_trace, "--arrival-trace")
+    if args.arrival_trace_case is not None and mode != REPLAY:
+        raise ValueError("--arrival-trace-case only applies to --arrival replay")
+    if args.concurrency is not None and mode != CLOSED:
+        raise ValueError(
+            "--concurrency applies to --arrival closed; open-loop arrivals "
+            "use --max-in-flight"
+        )
+    if args.max_in_flight < 1:
+        raise ValueError("--max-in-flight must be >= 1")
+
+
+def _flag_for(mode: str, modes: Any, value: object, flag: str) -> None:
+    if mode in modes and value is None:
+        raise ValueError(f"--arrival {mode} needs {flag}")
+    if mode not in modes and value is not None:
+        raise ValueError(f"{flag} does not apply to --arrival {mode}")

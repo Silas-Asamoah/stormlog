@@ -7,6 +7,7 @@ import json
 import time
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -21,10 +22,12 @@ from ..session import (
     update_session_summary,
 )
 from .analysis import analyze_inference_events
+from .arrivals import CLOSED, arrival_offsets
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .host_clock import host_boot_id, wall_clock_domain
+from .open_loop import Arrival, InFlightLimiter, dispatch_schedule
 from .openai_client import EndpointHTTPError, OpenAIChatCompletionsClient
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter, generate_prompt
@@ -53,7 +56,7 @@ class InferenceProfiler:
             max_tokens_field=config.max_tokens_field,
         )
         self.request_executor = ThreadPoolExecutor(
-            max_workers=max(config.concurrency),
+            max_workers=max(case.concurrency for case in config.cases()),
             thread_name_prefix="stormlog-infer",
         )
 
@@ -86,6 +89,11 @@ class InferenceProfiler:
                         "stream_include_usage": self.config.stream_include_usage,
                         "tokenizer": self.config.tokenizer,
                         "system_sampler": self.sampler.name,
+                        "arrivals": [
+                            spec.to_record() for spec in self.config.arrival_specs()
+                        ],
+                        "max_in_flight": self.config.max_in_flight,
+                        "overflow": self.config.overflow,
                     },
                 }
             )
@@ -245,9 +253,14 @@ class InferenceProfiler:
         total_requests: int | None,
         duration_seconds: float | None,
     ) -> None:
+        request = _PhaseRequest(case, writer, prompt, prompt_count, phase)
+        if case.arrival.open_loop:
+            await self._run_open_phase(request, total_requests, duration_seconds)
+            return
         if total_requests is None and duration_seconds is None:
             total_requests = 1
         counter = _RequestCounter(limit=total_requests)
+        limiter = InFlightLimiter(case.concurrency)
         end_time = (
             time.monotonic() + duration_seconds
             if duration_seconds is not None
@@ -257,12 +270,9 @@ class InferenceProfiler:
             asyncio.create_task(
                 self._worker(
                     worker_id=index,
-                    case=case,
-                    writer=writer,
-                    prompt=prompt,
-                    prompt_count=prompt_count,
-                    phase=phase,
+                    request=request,
                     counter=counter,
+                    limiter=limiter,
                     end_time=end_time,
                 )
             )
@@ -274,39 +284,115 @@ class InferenceProfiler:
         self,
         *,
         worker_id: int,
-        case: WorkloadCase,
-        writer: JsonlEventWriter,
-        prompt: str,
-        prompt_count: TokenCount,
-        phase: str,
+        request: "_PhaseRequest",
         counter: "_RequestCounter",
+        limiter: InFlightLimiter,
         end_time: float | None,
     ) -> None:
+        case, phase = request.case, request.phase
         while True:
             if end_time is not None and time.monotonic() >= end_time:
                 return
             request_index = await counter.next()
             if request_index is None:
                 return
-            request_id = f"{case.case_id}_{phase}_{worker_id}_{request_index}"
-            event = await self._run_one_request(
-                request_id=request_id,
-                case=case,
-                prompt=prompt,
-                prompt_count=prompt_count,
-                phase=phase,
+            # In a closed loop a request is due as soon as its worker is free.
+            in_flight = await limiter.acquire()
+            arrival = Arrival(
+                index=request_index,
+                mode=CLOSED,
+                intended_at_ns=time.time_ns(),
+                in_flight_at_dispatch=in_flight,
             )
-            writer.append(event.to_record())
+            try:
+                event = await self._run_one_request(
+                    request_id=f"{case.case_id}_{phase}_{worker_id}_{request_index}",
+                    request=request,
+                    arrival=arrival,
+                )
+            finally:
+                limiter.release()
+            request.writer.append(event.to_record())
+
+    async def _run_open_phase(
+        self,
+        request: "_PhaseRequest",
+        total_requests: int | None,
+        duration_seconds: float | None,
+    ) -> None:
+        case = request.case
+        offsets = arrival_offsets(
+            case.arrival,
+            count=total_requests,
+            duration_seconds=duration_seconds,
+            seed=self.config.seed,
+        )
+
+        async def send(arrival: Arrival) -> None:
+            event = await self._run_one_request(
+                request_id=f"{case.case_id}_{request.phase}_{arrival.index}",
+                request=request,
+                arrival=arrival,
+            )
+            request.writer.append(event.to_record())
+
+        def drop(arrival: Arrival) -> None:
+            event = self._dropped_event(
+                request_id=f"{case.case_id}_{request.phase}_{arrival.index}",
+                request=request,
+                arrival=arrival,
+            )
+            request.writer.append(event.to_record())
+
+        tasks = await dispatch_schedule(
+            offsets,
+            mode=case.arrival.mode,
+            limiter=InFlightLimiter(case.concurrency),
+            overflow=self.config.overflow,
+            send=send,
+            drop=drop,
+        )
+        await asyncio.gather(*tasks)
+
+    def _request_fields(
+        self,
+        *,
+        request_id: str,
+        request: "_PhaseRequest",
+        arrival: Arrival,
+        prompt_count: TokenCount,
+    ) -> dict[str, Any]:
+        """Fields every request event carries, whatever its outcome."""
+        case = request.case
+        return {
+            "session_id": self.session.session_id,
+            "request_id": request_id,
+            "case_id": case.case_id,
+            "phase": request.phase,
+            "endpoint": self.config.endpoint,
+            "model": self.config.model,
+            "concurrency": case.concurrency,
+            "target_input_tokens": case.input_tokens,
+            "target_output_tokens": case.output_tokens,
+            "stream": self.config.stream,
+            "prompt_tokens": prompt_count.value,
+            "prompt_token_source": prompt_count.source,
+            "prompt_token_exact": prompt_count.exact,
+            "arrival_mode": arrival.mode,
+            "request_index": arrival.index,
+            "intended_at_ns": arrival.intended_at_ns,
+            "held_for_slot": arrival.held_for_slot,
+            "in_flight_at_dispatch": arrival.in_flight_at_dispatch,
+        }
 
     async def _run_one_request(
         self,
         *,
         request_id: str,
-        case: WorkloadCase,
-        prompt: str,
-        prompt_count: TokenCount,
-        phase: str,
+        request: "_PhaseRequest",
+        arrival: Arrival,
     ) -> InferenceRequestEvent:
+        case = request.case
         started_at_ns = time.time_ns()
         started_perf = time.perf_counter()
         try:
@@ -315,7 +401,7 @@ class InferenceProfiler:
                 self.request_executor,
                 partial(
                     self.client.complete,
-                    prompt=prompt,
+                    prompt=request.prompt,
                     output_tokens=case.output_tokens,
                     stream=self.config.stream,
                     stream_include_usage=self.config.stream_include_usage,
@@ -326,33 +412,27 @@ class InferenceProfiler:
                 result.text,
                 self.token_counter,
             )
-            prompt_count = _resolve_prompt_count(result.usage, prompt_count)
+            prompt_count = _resolve_prompt_count(result.usage, request.prompt_count)
             total_tokens = _resolve_total_tokens(
                 result.usage,
                 prompt_count,
                 output_count,
             )
             return InferenceRequestEvent(
-                session_id=self.session.session_id,
-                request_id=request_id,
-                case_id=case.case_id,
-                phase=phase,
+                **self._request_fields(
+                    request_id=request_id,
+                    request=request,
+                    arrival=arrival,
+                    prompt_count=prompt_count,
+                ),
                 started_at_ns=result.started_at_ns,
                 ended_at_ns=result.ended_at_ns,
-                endpoint=self.config.endpoint,
-                model=self.config.model,
-                concurrency=case.concurrency,
-                target_input_tokens=case.input_tokens,
-                target_output_tokens=case.output_tokens,
-                stream=self.config.stream,
+                dispatch_lag_ms=_lag_ms(arrival, result.started_at_ns),
                 status="ok",
                 e2e_latency_ms=result.e2e_latency_ms,
                 ttft_ms=result.ttft_ms,
                 first_chunk_latency_ms=result.first_chunk_latency_ms,
                 chunk_interarrival_ms=result.chunk_interarrival_ms,
-                prompt_tokens=prompt_count.value,
-                prompt_token_source=prompt_count.source,
-                prompt_token_exact=prompt_count.exact,
                 output_tokens=output_count.value,
                 output_token_source=output_count.source,
                 output_token_exact=output_count.exact,
@@ -363,29 +443,63 @@ class InferenceProfiler:
             ended_at_ns = time.time_ns()
             status, http_status = classify_failure(exc)
             return InferenceRequestEvent(
-                session_id=self.session.session_id,
-                request_id=request_id,
-                case_id=case.case_id,
-                phase=phase,
+                **self._request_fields(
+                    request_id=request_id,
+                    request=request,
+                    arrival=arrival,
+                    prompt_count=request.prompt_count,
+                ),
                 started_at_ns=started_at_ns,
                 ended_at_ns=ended_at_ns,
-                endpoint=self.config.endpoint,
-                model=self.config.model,
-                concurrency=case.concurrency,
-                target_input_tokens=case.input_tokens,
-                target_output_tokens=case.output_tokens,
-                stream=self.config.stream,
+                dispatch_lag_ms=_lag_ms(arrival, started_at_ns),
                 status=status,
                 e2e_latency_ms=(time.perf_counter() - started_perf) * 1000.0,
                 ttft_ms=None,
                 first_chunk_latency_ms=None,
-                prompt_tokens=prompt_count.value,
-                prompt_token_source=prompt_count.source,
-                prompt_token_exact=prompt_count.exact,
                 error_type=type(exc).__name__,
                 error_message=str(exc),
                 http_status=http_status,
             )
+
+    def _dropped_event(
+        self,
+        *,
+        request_id: str,
+        request: "_PhaseRequest",
+        arrival: Arrival,
+    ) -> InferenceRequestEvent:
+        """A request the in-flight limit turned away; it was never sent."""
+        now_ns = time.time_ns()
+        return InferenceRequestEvent(
+            **self._request_fields(
+                request_id=request_id,
+                request=request,
+                arrival=arrival,
+                prompt_count=request.prompt_count,
+            ),
+            started_at_ns=now_ns,
+            ended_at_ns=now_ns,
+            status="dropped",
+            e2e_latency_ms=None,
+            ttft_ms=None,
+            first_chunk_latency_ms=None,
+            error_message=f"in-flight limit of {request.case.concurrency} reached",
+        )
+
+
+@dataclass(frozen=True)
+class _PhaseRequest:
+    """What every request of one case phase shares."""
+
+    case: WorkloadCase
+    writer: JsonlEventWriter
+    prompt: str
+    prompt_count: TokenCount
+    phase: str
+
+
+def _lag_ms(arrival: Arrival, sent_at_ns: int) -> float:
+    return (sent_at_ns - arrival.intended_at_ns) / 1_000_000.0
 
 
 # The server declined the request: rate limited or overloaded.
