@@ -189,9 +189,12 @@ the prompts actually sent.
 
 The nonce takes about eight subword tokens, so `unique` and `shared-prefix` need
 `--input-tokens` of at least 32 to hit the target length and prefix share; the
-CLI warns below that. A prompt is built when its request is sent and its text is
-dropped once the request is done, so a long schedule neither waits for all of
-its prompts to be built nor keeps them in memory.
+CLI warns below that. Prompts land within a token of the target, and each
+request records the length it actually sent: the server's count when it reports
+one, otherwise Stormlog's own count. A dropped or cancelled request records the
+planned length, marked as not exact. A prompt is built when its request is sent
+and its text is dropped once the request is done, so a long schedule neither
+waits for all of its prompts to be built nor keeps them in memory.
 
 ### Cache state
 
