@@ -8,6 +8,7 @@ import importlib
 import json
 import math
 import shutil
+import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
@@ -18,6 +19,7 @@ from typing import Any, Optional, TypedDict
 import psutil
 
 from stormlog.cpu_profiler import CPUMemoryTracker
+from stormlog.exit_codes import ExitCode
 from stormlog.telemetry_sink import TelemetrySinkConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1474,7 +1476,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Return a non-zero exit code when any gate fails.",
+        help="Exit with GATE_FAILED (4) when any gate fails instead of 0.",
     )
     args = parser.parse_args(argv)
 
@@ -1483,26 +1485,35 @@ def main(argv: Optional[list[str]] = None) -> int:
         and args.profile != DEFAULT_PROFILE
         and (args.baseline is None or args.tolerances is None)
     ):
-        raise ValueError(
+        parser.error(
             "Regression defaults are only checked in for the pr profile; "
             "pass --baseline and --tolerances explicitly for other profiles."
         )
 
     baseline_path = args.baseline or _default_runtime_baseline_path()
     tolerances_path = args.tolerances or _default_runtime_tolerances_path()
-    report = run_benchmark_harness(
-        profile=args.profile,
-        mode=args.mode,
-        iterations=args.iterations,
-        allocation_kb=args.allocation_kb,
-        gate_mode=args.gate_mode,
-        budgets_path=args.budgets if args.gate_mode == "budget" else None,
-        baseline_path=baseline_path if args.gate_mode == "regression" else None,
-        tolerances_path=tolerances_path if args.gate_mode == "regression" else None,
-        artifact_root=args.artifact_root,
-        output_path=args.output,
-        overhead_scratch_root=args.overhead_scratch_root,
-    )
+    try:
+        report = run_benchmark_harness(
+            profile=args.profile,
+            mode=args.mode,
+            iterations=args.iterations,
+            allocation_kb=args.allocation_kb,
+            gate_mode=args.gate_mode,
+            budgets_path=args.budgets if args.gate_mode == "budget" else None,
+            baseline_path=baseline_path if args.gate_mode == "regression" else None,
+            tolerances_path=(
+                tolerances_path if args.gate_mode == "regression" else None
+            ),
+            artifact_root=args.artifact_root,
+            output_path=args.output,
+            overhead_scratch_root=args.overhead_scratch_root,
+        )
+    except (OSError, ValueError) as exc:
+        # Missing or malformed budget/baseline/tolerance assets, a baseline
+        # whose config does not match this run, or a metric without a
+        # threshold. json.JSONDecodeError is a ValueError.
+        print(f"Error: {exc}", file=sys.stderr)
+        return ExitCode.INVALID_INPUT
 
     print(f"Operability report written to: {args.output}")
     for line in format_regression_summary(report):
@@ -1516,8 +1527,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"Overall status: {'PASS' if report['passed'] else 'FAIL'}")
 
     if args.check and not report["passed"]:
-        return 1
-    return 0
+        return ExitCode.GATE_FAILED
+    return ExitCode.OK
 
 
 if __name__ == "__main__":

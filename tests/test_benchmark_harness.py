@@ -2,11 +2,12 @@ import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import pytest
 
 from examples.cli import benchmark_harness
+from stormlog.exit_codes import ExitCode
 
 
 class _UnusedRuntimeSession(benchmark_harness.RuntimeSession):
@@ -302,11 +303,10 @@ def test_runtime_asset_paths_follow_benchmark_naming() -> None:
     )
 
 
-def test_main_requires_explicit_regression_assets_for_non_default_profiles() -> None:
-    with pytest.raises(
-        ValueError,
-        match="Regression defaults are only checked in for the pr profile",
-    ):
+def test_main_requires_explicit_regression_assets_for_non_default_profiles(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
         benchmark_harness.main(
             [
                 "--profile",
@@ -315,6 +315,125 @@ def test_main_requires_explicit_regression_assets_for_non_default_profiles() -> 
                 "regression",
             ]
         )
+
+    assert excinfo.value.code == ExitCode.USAGE
+    assert (
+        "Regression defaults are only checked in for the pr profile"
+        in capsys.readouterr().err
+    )
+
+
+_BUDGET_METRICS = (
+    "runtime_overhead_pct",
+    "cpu_overhead_pct",
+    "artifact_growth_bytes",
+    "rss_growth_per_24h_equiv",
+    "max_rss_delta_bytes",
+    "final_retained_bytes",
+    "final_retained_files",
+    "collector_failure_event_count",
+    "history_dropped_events",
+    "history_dropped_samples",
+    "history_dropped_alerts",
+    "rollover_count",
+    "pruned_segment_count",
+    "pruned_bytes",
+)
+
+
+def _budgets_for_all_runtimes(value: float) -> dict[str, float]:
+    return {
+        f"{runtime}.{metric}": value
+        for runtime in ("gpumemprof_cpu", "tfmemprof_cpu")
+        for metric in _BUDGET_METRICS
+    }
+
+
+def _main_budget_argv(tmp_path: Path, budgets_path: Path, *extra: str) -> list[str]:
+    return [
+        "--check",
+        "--profile",
+        "pr",
+        "--mode",
+        "all",
+        "--gate-mode",
+        "budget",
+        "--budgets",
+        str(budgets_path),
+        "--output",
+        str(tmp_path / "report.json"),
+        "--artifact-root",
+        str(tmp_path / "artifacts"),
+        *extra,
+    ]
+
+
+def test_main_returns_ok_when_every_budget_passes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    budgets_path = tmp_path / "budgets.json"
+    _write_budget_file(budgets_path, _budgets_for_all_runtimes(1_000_000.0))
+
+    assert benchmark_harness.main(_main_budget_argv(tmp_path, budgets_path)) == 0
+    assert (tmp_path / "report.json").exists()
+
+
+def test_main_returns_gate_failed_when_check_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    budgets_path = tmp_path / "budgets.json"
+    _write_budget_file(budgets_path, _budgets_for_all_runtimes(-1.0))
+
+    exit_code = benchmark_harness.main(_main_budget_argv(tmp_path, budgets_path))
+
+    assert exit_code == ExitCode.GATE_FAILED
+    assert int(exit_code) == 4
+    assert "Overall status: FAIL" in capsys.readouterr().out
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["passed"] is False
+
+
+def test_main_without_check_exits_ok_even_when_a_budget_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    budgets_path = tmp_path / "budgets.json"
+    _write_budget_file(budgets_path, _budgets_for_all_runtimes(-1.0))
+    argv = [
+        arg for arg in _main_budget_argv(tmp_path, budgets_path) if arg != "--check"
+    ]
+
+    assert benchmark_harness.main(argv) == 0
+
+
+@pytest.mark.parametrize(
+    ("prepare", "expected_message"),
+    [
+        (lambda path: None, "No such file"),
+        (lambda path: path.write_text("{", encoding="utf-8"), "Expecting"),
+        (
+            lambda path: _write_budget_file(path, {"only.one": 1.0}, version="v0.3"),
+            "Budget file version must be v0.4",
+        ),
+    ],
+)
+def test_main_returns_invalid_input_for_unusable_budget_assets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    prepare: Callable[[Path], object],
+    expected_message: str,
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    budgets_path = tmp_path / "budgets.json"
+    prepare(budgets_path)
+
+    exit_code = benchmark_harness.main(_main_budget_argv(tmp_path, budgets_path))
+
+    assert exit_code == ExitCode.INVALID_INPUT
+    assert expected_message in capsys.readouterr().err
 
 
 def test_unprofiled_scenario_summary_persists_final_artifact_size(
