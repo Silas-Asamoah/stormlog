@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -14,7 +16,10 @@ from scripts.native_probes.planning import build_plan
 from scripts.native_probes.workloads.vllm_open_loop import (
     MEASURED_REQUESTS,
     REVISION,
+    _cupti_capture_status,
     _memory_metrics,
+    _request,
+    _result,
     _server_argv,
     offer_requests,
     request_body,
@@ -107,6 +112,94 @@ def test_unknown_resource_domain_is_not_reported_as_zero() -> None:
     assert metrics["host_rss_valid_samples"] == 0
     assert metrics["host_rss_measured_peak_bytes"] is None
     assert metrics["gpu_memory_bytes"] is None
+
+
+def test_incomplete_stream_is_a_failed_offered_request() -> None:
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            return iter([b'data: {"choices": [{"delta": {"content": "x"}}]}\n'])
+
+    with patch(
+        "scripts.native_probes.workloads.vllm_open_loop.urllib.request.urlopen",
+        return_value=Response(),
+    ):
+        row = _request("http://127.0.0.1:8000", "id", 1)
+
+    assert row["status"] == "error"
+    assert row["error"] == "stream ended before [DONE]"
+
+
+def test_cupti_capture_requires_every_target_and_clean_flush(tmp_path: Path) -> None:
+    cupti = tmp_path / "cupti"
+    cupti.mkdir()
+    (cupti / "activity.ndjson").write_text('{"kind":"kernel"}\n')
+    status = {
+        "pid": 12,
+        "finalized": True,
+        "initialization_error": None,
+        "delivered_records": 1,
+        "cupti_dropped_records": 0,
+        "local_dropped_records": 0,
+        "bytes_dropped": 0,
+    }
+    (cupti / "cupti_status.json").write_text(json.dumps(status))
+    samples = [{"processes": [{"pid": 12, "role": "target"}]}]
+
+    capture, loss = _cupti_capture_status(tmp_path, samples)
+    assert capture["complete"] is True
+    assert loss["vendor_activity"]["lost_records"] == 0
+
+    samples[0]["processes"].append({"pid": 13, "role": "target"})
+    capture, _ = _cupti_capture_status(tmp_path, samples)
+    assert capture["complete"] is False
+    assert "13" in capture["errors"][0]
+
+    samples[0]["processes"].pop()
+    status["local_dropped_records"] = 2
+    (cupti / "cupti_status.json").write_text(json.dumps(status))
+    capture, loss = _cupti_capture_status(tmp_path, samples)
+    assert capture["complete"] is False
+    assert loss["vendor_activity"]["lost_records"] == 2
+
+
+def test_result_metrics_are_normalizable() -> None:
+    from scripts.native_probes.normalization import _validated_trial_metrics
+
+    row = {"status": "ok", "e2e_latency_ms": 10, "ttft_ms": 2}
+    result = _result([row], 1, 1_000_000_001)
+    result["metrics"]["server_exited_early_count"] = 0
+    assert _validated_trial_metrics(result) == result["metrics"]
+
+
+def test_proposal_stays_unapproved_and_matches_adapter() -> None:
+    root = Path(__file__).resolve().parents[1]
+    proposal = json.loads(
+        (root / "benchmarks/native_probes/final_run_proposal.json").read_text()
+    )
+    approved = json.loads(
+        (root / "benchmarks/native_probes/experiment.json").read_text()
+    )
+
+    assert proposal["status"] == "proposed_not_approved"
+    assert all(
+        proposal["approval"][key] is None
+        for key in ("numeric_policy", "workload", "paid_hardware")
+    )
+    assert approved["acceptance_thresholds"]["latency_perturbation_max"] is None
+    assert proposal["vllm"]["model_revision"] == REVISION
+    assert (
+        proposal["vllm"]["request"]["user_message"]
+        == request_body()["messages"][0]["content"]
+    )
+    assert (
+        proposal["vllm"]["arrivals"]["measured_offered_requests"] == MEASURED_REQUESTS
+    )
 
 
 def test_vllm_plan_separates_modes_and_rejects_unimplemented_modes(

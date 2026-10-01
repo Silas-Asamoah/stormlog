@@ -56,6 +56,7 @@ def _request(endpoint: str, request_id: str, timeout: float) -> dict[str, Any]:
     started = time.time_ns()
     first_chunk: int | None = None
     usage: dict[str, Any] | None = None
+    completed = False
     try:
         request = urllib.request.Request(
             endpoint + "/v1/chat/completions",
@@ -69,15 +70,28 @@ def _request(endpoint: str, request_id: str, timeout: float) -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             for raw in response:
                 line = raw.strip()
-                if not line.startswith(b"data: ") or line == b"data: [DONE]":
+                if line == b"data: [DONE]":
+                    completed = True
+                    continue
+                if not line.startswith(b"data: "):
                     continue
                 payload = json.loads(line[6:])
+                if payload.get("error"):
+                    raise ValueError(f"stream error: {payload['error']}")
                 if payload.get("choices") and first_chunk is None:
                     first_chunk = time.time_ns()
                 if isinstance(payload.get("usage"), dict):
                     usage = payload["usage"]
-        status = "ok" if first_chunk is not None else "error"
-        error = None if first_chunk is not None else "stream contained no choices"
+        status = "ok" if first_chunk is not None and completed else "error"
+        error = (
+            None
+            if status == "ok"
+            else (
+                "stream ended before [DONE]"
+                if not completed
+                else "stream contained no choices"
+            )
+        )
     except (OSError, ValueError) as exc:
         status = "timeout" if isinstance(exc, TimeoutError) else "error"
         error = f"{type(exc).__name__}: {exc}"
@@ -325,6 +339,92 @@ def _memory_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _cupti_capture_status(
+    output: Path, samples: list[dict[str, Any]]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Require a finalized capture for every observed target process."""
+    observed = sorted(
+        {
+            row["pid"]
+            for sample in samples
+            for row in sample.get("processes", [])
+            if row.get("role") == "target"
+        }
+    )
+    reports: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for path in sorted((output / "cupti").rglob("cupti_status.json")):
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(report, dict):
+                raise ValueError("status is not an object")
+            report["status_path"] = str(path.relative_to(output))
+            reports.append(report)
+        except (OSError, ValueError) as exc:
+            errors.append(f"{path.relative_to(output)}: {type(exc).__name__}: {exc}")
+    reported = [row.get("pid") for row in reports]
+    if not reports:
+        errors.append("no CUPTI status report")
+    if len(reported) != len(set(reported)):
+        errors.append("duplicate CUPTI process status")
+    missing = sorted(set(observed) - set(reported))
+    if missing:
+        errors.append(f"observed target processes without CUPTI status: {missing}")
+    if not observed:
+        errors.append("no target process observed during measurement")
+    dropped = 0
+    delivered = 0
+    for report in reports:
+        if report.get("finalized") is not True or report.get("initialization_error"):
+            errors.append(f"CUPTI process {report.get('pid')} did not finalize cleanly")
+        for key in (
+            "delivered_records",
+            "cupti_dropped_records",
+            "local_dropped_records",
+            "bytes_dropped",
+        ):
+            value = report.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                errors.append(f"CUPTI process {report.get('pid')} has invalid {key}")
+        if all(
+            isinstance(report.get(key), int) and not isinstance(report.get(key), bool)
+            for key in (
+                "delivered_records",
+                "cupti_dropped_records",
+                "local_dropped_records",
+            )
+        ):
+            delivered += report["delivered_records"]
+            dropped += report["cupti_dropped_records"] + report["local_dropped_records"]
+        trace = Path(report["status_path"]).parent / "activity.ndjson"
+        if not (output / trace).is_file() or (output / trace).stat().st_size == 0:
+            errors.append(f"CUPTI process {report.get('pid')} has no activity trace")
+        if report.get("bytes_dropped"):
+            errors.append(f"CUPTI process {report.get('pid')} dropped output bytes")
+    complete = not errors and dropped == 0 and delivered > 0
+    if dropped:
+        errors.append(f"CUPTI reported {dropped} dropped records")
+    if delivered == 0:
+        errors.append("CUPTI delivered no activity records")
+    capture = {
+        "observed_target_pids": observed,
+        "reported_pids": reported,
+        "status_reports": reports,
+        "errors": errors,
+        "complete": complete,
+    }
+    loss = {
+        "vendor_activity": {
+            "status": "reported" if complete or dropped else "unknown",
+            "delivered_records": delivered,
+            "lost_records": dropped if reports else None,
+            "expected_records": delivered + dropped if reports else None,
+            "reason": "; ".join(errors) if errors else None,
+        }
+    }
+    return capture, loss
+
+
 def _result(
     rows: list[dict[str, Any]], started_ns: int, ended_ns: int
 ) -> dict[str, Any]:
@@ -496,19 +596,26 @@ def run(mode: str, output: Path, port: int) -> int:
             raise RuntimeError(f"{mode} produced no profiler output")
     if mode == "trusted" and not any((output / "nsys").glob("*.nsys-rep")):
         raise RuntimeError("Nsight Systems report is missing")
-    if mode == "direct-cupti" and not any(
-        path.is_file() for path in (output / "cupti").rglob("*")
-    ):
-        raise RuntimeError("direct CUPTI output is missing")
     result = _result(rows, started_ns, ended_ns)
     result["metrics"]["warmup_offered_requests"] = len(warmup)
     result["metrics"]["warmup_successful_requests"] = sum(
         row["status"] == "ok" for row in warmup
     )
     result["metrics"].update(_memory_metrics(samples))
-    result["metrics"]["server_exited_early"] = server_exited_early
+    result["metrics"]["server_exited_early_count"] = int(server_exited_early)
+    if mode == "direct-cupti":
+        capture, loss = _cupti_capture_status(output, samples)
+        (output / "cupti-capture-status.json").write_text(
+            json.dumps(capture, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        result["loss"] = loss
+        result["measurement_window"]["flush_completed"] = capture["complete"]
     print(json.dumps(result, sort_keys=True))
-    return 1 if server_exited_early else 0
+    return (
+        1
+        if server_exited_early or (mode == "direct-cupti" and not capture["complete"])
+        else 0
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
