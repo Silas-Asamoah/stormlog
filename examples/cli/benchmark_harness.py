@@ -32,6 +32,10 @@ DEFAULT_ITERATIONS = 5_000
 DEFAULT_ALLOCATION_KB = 512
 DEFAULT_OVERHEAD_TRIAL_COUNT = 5
 DEFAULT_OVERHEAD_TRIAL_QUANTILE = 0.25
+# The soak reads RSS at this many evenly spaced checkpoints. The first
+# checkpoint is the warmup boundary: it becomes the RSS baseline so allocator,
+# flush-thread, and first-segment setup are excluded from growth metrics.
+SOAK_RSS_CHECKPOINT_COUNT = 50
 REFERENCE_INTERVAL_SECONDS = 0.1
 DEFAULT_RETENTION_VALIDATION = {
     "flush_every_events": 50,
@@ -499,14 +503,33 @@ def _promote_overhead_scenario(
     return _finalize_scenario_summary(target_dir, promoted)
 
 
+def _overhead_trial_root(
+    spec: RuntimeSpec,
+    runtime_dir: Path,
+    scratch_root: Optional[Path],
+) -> Path:
+    """Return the directory that holds the overhead trials while they run.
+
+    Trials time the tracked workload with the sink's flush and fsync calls on
+    the workload's critical path, so the trial directory's storage latency goes
+    straight into ``runtime_overhead_pct``. A RAM-backed scratch root (for
+    example ``/dev/shm`` on Linux) keeps shared-runner disk latency out of the
+    measurement; the selected trial is still promoted into ``runtime_dir``.
+    """
+    if scratch_root is None:
+        return runtime_dir / ".overhead_trials"
+    return scratch_root / spec.name / "overhead_trials"
+
+
 def _run_overhead_report(
     spec: RuntimeSpec,
     runtime_dir: Path,
     *,
     iterations: int,
     allocation_kb: int,
+    scratch_root: Optional[Path] = None,
 ) -> dict[str, Any]:
-    trial_root = runtime_dir / ".overhead_trials"
+    trial_root = _overhead_trial_root(spec, runtime_dir, scratch_root)
     if trial_root.exists():
         shutil.rmtree(trial_root)
 
@@ -556,6 +579,9 @@ def _run_overhead_report(
     finally:
         if trial_root.exists():
             shutil.rmtree(trial_root, ignore_errors=True)
+        if scratch_root is not None:
+            with suppress(OSError):
+                trial_root.parent.rmdir()
 
     return {
         "scenarios": {
@@ -567,6 +593,58 @@ def _run_overhead_report(
         "trial_quantile": DEFAULT_OVERHEAD_TRIAL_QUANTILE,
         "selected_trial": int(selected_trial["trial_number"]),
         "trial_metrics": [dict(trial["metrics"]) for trial in trial_reports],
+        "scratch_root": str(scratch_root) if scratch_root is not None else None,
+    }
+
+
+def _soak_rss_checkpoints(sample_count: int) -> list[int]:
+    """Return the sample indices after which the soak reads process RSS.
+
+    The first index is the warmup boundary and supplies the RSS baseline; the
+    last index is always the final sample so the measured window ends with the
+    soak loop itself.
+    """
+    stride = max(sample_count // SOAK_RSS_CHECKPOINT_COUNT, 1)
+    checkpoints = list(range(stride - 1, sample_count, stride))
+    if checkpoints[-1] != sample_count - 1:
+        checkpoints.append(sample_count - 1)
+    return checkpoints
+
+
+def _soak_rss_metrics(
+    rss_points: Sequence[int],
+    *,
+    checkpoints: Sequence[int],
+    sample_count: int,
+    interval_seconds: float,
+    rss_after_finish: int,
+) -> dict[str, float | int]:
+    """Derive soak RSS metrics from the in-loop checkpoint readings only.
+
+    Session finalization (sink close, rollup load-back, history export) is a
+    one-shot transient whose residual RSS depends on allocator behaviour, not
+    on steady-state growth, so it is reported separately and never gated.
+    """
+    baseline_rss = int(rss_points[0])
+    final_rss = int(rss_points[-1])
+    final_delta = final_rss - baseline_rss
+    warmup_sample_count = int(checkpoints[0]) + 1
+    measured_sample_count = sample_count - warmup_sample_count
+    measured_seconds = measured_sample_count * interval_seconds
+    return {
+        "rss_warmup_sample_count": warmup_sample_count,
+        "rss_measured_sample_count": measured_sample_count,
+        "rss_measured_equivalent_seconds": measured_seconds,
+        "rss_checkpoint_count": len(rss_points),
+        "rss_baseline_bytes": baseline_rss,
+        "rss_final_bytes": final_rss,
+        "rss_delta_bytes": final_delta,
+        "rss_growth_per_24h_equiv": (
+            (final_delta / measured_seconds) * 86400.0 if measured_seconds else 0.0
+        ),
+        "max_rss_delta_bytes": float(max(value - baseline_rss for value in rss_points)),
+        "rss_after_finish_bytes": rss_after_finish,
+        "finalization_rss_delta_bytes": rss_after_finish - final_rss,
     }
 
 
@@ -594,15 +672,15 @@ def _run_soak_scenario(
             ),
         )
         equivalent_seconds = sample_count * spec.default_interval
-        baseline_rss = _process_rss_bytes()
-        rss_points = [baseline_rss]
-        checkpoint_stride = max(sample_count // 50, 1)
+        checkpoints = _soak_rss_checkpoints(sample_count)
+        pending_checkpoints = set(checkpoints)
+        rss_points: list[int] = []
 
         wall_start = time.perf_counter()
         cpu_start = time.process_time()
         for index in range(sample_count):
             session.emit_sample(index)
-            if index % checkpoint_stride == 0 or index == sample_count - 1:
+            if index in pending_checkpoints:
                 rss_points.append(_process_rss_bytes())
         wall_seconds = time.perf_counter() - wall_start
         cpu_seconds = time.process_time() - cpu_start
@@ -616,12 +694,9 @@ def _run_soak_scenario(
         raise
 
     assert session_report is not None
-    final_rss = _process_rss_bytes()
-    rss_points.append(final_rss)
-    max_delta = max(value - baseline_rss for value in rss_points)
-    final_delta = final_rss - baseline_rss
+    rss_after_finish = _process_rss_bytes()
     stats = dict(session_report["stats"])
-    summary = {
+    summary: dict[str, Any] = {
         "name": f"{spec.name}_soak",
         "profile": profile,
         "sample_count": sample_count,
@@ -632,13 +707,13 @@ def _run_soak_scenario(
         "collector_failure_event_count": int(
             session_report["collector_failure_event_count"]
         ),
-        "rss_baseline_bytes": baseline_rss,
-        "rss_final_bytes": final_rss,
-        "rss_delta_bytes": final_delta,
-        "rss_growth_per_24h_equiv": (
-            (final_delta / equivalent_seconds) * 86400.0 if equivalent_seconds else 0.0
+        **_soak_rss_metrics(
+            rss_points,
+            checkpoints=checkpoints,
+            sample_count=sample_count,
+            interval_seconds=spec.default_interval,
+            rss_after_finish=rss_after_finish,
         ),
-        "max_rss_delta_bytes": float(max_delta),
         "stats": stats,
         "artifact_dir": str(scenario_dir),
         "output_path": str(session_report["output_path"]),
@@ -1174,6 +1249,7 @@ def _run_runtime_report(
     mode: str,
     iterations: int,
     allocation_kb: int,
+    overhead_scratch_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     runtime_report: dict[str, Any] = {
         "status": "ok",
@@ -1185,6 +1261,7 @@ def _run_runtime_report(
             runtime_dir,
             iterations=iterations,
             allocation_kb=allocation_kb,
+            scratch_root=overhead_scratch_root,
         )
     if mode in {"soak", "all"}:
         soak = _run_soak_scenario(
@@ -1205,6 +1282,9 @@ def _run_runtime_report(
             "artifact_size_bytes": soak["artifact_size_bytes"],
             "rss_growth_per_24h_equiv": soak["rss_growth_per_24h_equiv"],
             "max_rss_delta_bytes": soak["max_rss_delta_bytes"],
+            "rss_warmup_sample_count": soak["rss_warmup_sample_count"],
+            "rss_measured_sample_count": soak["rss_measured_sample_count"],
+            "finalization_rss_delta_bytes": soak["finalization_rss_delta_bytes"],
             "collector_failure_event_count": soak["collector_failure_event_count"],
             "history_dropped_events": int(
                 soak["stats"].get("history_dropped_events", 0)
@@ -1250,6 +1330,7 @@ def run_benchmark_harness(
     iterations: int = DEFAULT_ITERATIONS,
     allocation_kb: int = DEFAULT_ALLOCATION_KB,
     runtime_names: Optional[list[str]] = None,
+    overhead_scratch_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     if profile not in PROFILE_EQUIVALENT_HOURS:
         raise ValueError(f"Unsupported profile: {profile}")
@@ -1264,6 +1345,8 @@ def run_benchmark_harness(
         raise ValueError(f"Unknown runtimes: {', '.join(sorted(missing_runtimes))}")
 
     artifact_root.mkdir(parents=True, exist_ok=True)
+    if overhead_scratch_root is not None:
+        overhead_scratch_root.mkdir(parents=True, exist_ok=True)
     runtime_reports: dict[str, dict[str, Any]] = {}
     for runtime_name in selected_runtime_names:
         runtime_dir = artifact_root / runtime_name
@@ -1276,6 +1359,7 @@ def run_benchmark_harness(
                 mode=mode,
                 iterations=iterations,
                 allocation_kb=allocation_kb,
+                overhead_scratch_root=overhead_scratch_root,
             )
         except Exception as exc:
             runtime_reports[runtime_name] = {
@@ -1291,6 +1375,9 @@ def run_benchmark_harness(
         "profile_equivalent_hours": PROFILE_EQUIVALENT_HOURS[profile],
         "runtimes": _runtime_config(profile, iterations, selected_runtime_names),
         "retention_validation": dict(DEFAULT_RETENTION_VALIDATION),
+        "overhead_scratch_root": (
+            str(overhead_scratch_root) if overhead_scratch_root is not None else None
+        ),
     }
     metrics = _flatten_metrics(runtime_reports)
     report: dict[str, Any] = {
@@ -1372,6 +1459,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--baseline", type=Path, default=None)
     parser.add_argument("--tolerances", type=Path, default=None)
     parser.add_argument("--artifact-root", type=Path, default=DEFAULT_ARTIFACT_ROOT)
+    parser.add_argument(
+        "--overhead-scratch-root",
+        type=Path,
+        default=None,
+        help=(
+            "Directory that holds overhead trials while they run, ideally on a "
+            "RAM-backed filesystem such as /dev/shm so storage latency does not "
+            "enter runtime_overhead_pct. Selected trials are promoted into "
+            "--artifact-root."
+        ),
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
     parser.add_argument(
         "--check",
@@ -1403,6 +1501,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         tolerances_path=tolerances_path if args.gate_mode == "regression" else None,
         artifact_root=args.artifact_root,
         output_path=args.output,
+        overhead_scratch_root=args.overhead_scratch_root,
     )
 
     print(f"Operability report written to: {args.output}")

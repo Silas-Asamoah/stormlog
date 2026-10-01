@@ -77,7 +77,9 @@ python -m examples.cli.benchmark_harness \
   --output artifacts/benchmarks/latest_v0.4_regression.json
 ```
 
-This is the policy used by the pull-request memory gate in CI.
+This is the policy used by the pull-request memory gate in CI, which also
+passes `--overhead-scratch-root /dev/shm/stormlog-benchmark` so the overhead
+trials run on RAM-backed storage (see "Overhead measurement" below).
 The checked-in regression assets intentionally cover only the default `pr`
 profile.
 
@@ -118,13 +120,60 @@ the short-run checks and long-run checks use the same benchmark policy model.
 - `runtime_overhead_pct`: wall-clock overhead of the tracked default mode vs the unprofiled workload.
 - `cpu_overhead_pct`: CPU-time overhead of the tracked default mode vs the unprofiled workload.
 - `artifact_growth_bytes`: tracked-output size minus the unprofiled output size.
-- `rss_growth_per_24h_equiv`: RSS delta normalized to a 24-hour-equivalent run.
-- `max_rss_delta_bytes`: largest observed RSS increase above the soak baseline.
+- `rss_growth_per_24h_equiv`: in-loop RSS delta (last soak sample minus the
+  warmup baseline) normalized to a 24-hour-equivalent run.
+- `max_rss_delta_bytes`: largest RSS increase above the warmup baseline seen at
+  any soak checkpoint.
 - `final_retained_files`: retained append-only segment count after pruning.
 - `final_retained_bytes`: retained append-only bytes after pruning.
 - `rollover_count`, `pruned_segment_count`, `pruned_bytes`: sink churn under sustained load.
 - `history_dropped_*`: bounded-history eviction counts surfaced by the runtime.
 - `collector_failure_event_count`: degraded/recovered collector transitions seen during the run.
+
+### Overhead measurement
+
+Each overhead trial times the unprofiled workload and then the same workload
+with the runtime emitting one sample per iteration; the trial at the 25th
+percentile of wall overhead is reported so a single runner stall does not win.
+The tracked run emits its samples synchronously, so every sink flush (a write,
+an `fsync`, and a manifest rewrite every 50 events) lands on the workload's
+critical path. The unprofiled reference does no I/O at all, which means the
+storage latency of the trial directory enters `runtime_overhead_pct` directly
+and dominates it on shared runners with slow disks, while `cpu_overhead_pct`
+is unaffected.
+
+Pass `--overhead-scratch-root` pointing at a RAM-backed filesystem (CI uses
+`/dev/shm/stormlog-benchmark`) to keep the trials' sink I/O out of the wall
+measurement. In real use the tracker flushes from its own thread, off the
+workload's path, so this is the more faithful comparison. The selected trial
+is still promoted into `--artifact-root`, and the scratch root is recorded in
+the report as `config.overhead_scratch_root` and `overhead.scratch_root`.
+Regressions that add wall time per sample (a sleep, a lock wait) still fail
+the gate; see the injected-sleep test in `tests/test_benchmark_harness.py`.
+
+The v0.4 baseline was recorded before `--overhead-scratch-root` existed, so
+its `runtime_overhead_pct` includes about 43 points of disk wait (778.51
+runtime versus 735.28 CPU). Record the next baseline with the same flag CI
+uses; issue #255 tracks that re-baseline.
+
+### Soak RSS measurement window
+
+The soak reads process RSS at 50 evenly spaced checkpoints while samples are
+emitted. The first checkpoint (2% of the samples) is the warmup boundary and
+becomes `rss_baseline_bytes`; the last checkpoint is the final sample and
+becomes `rss_final_bytes`. Both RSS gates are computed from those in-loop
+readings only, and the 24-hour extrapolation uses the measured window
+(`rss_measured_equivalent_seconds`), not the whole soak.
+
+Session finalization is deliberately outside that window. Closing the sink
+loads every retained segment back into memory to build rollups and the runtime
+then exports its bounded history, which is a one-shot transient of a few
+hundred megabytes on the PR profile. How much of it stays resident afterwards
+depends on the allocator, not on tracker growth, so the harness reports it as
+`finalization_rss_delta_bytes` (and `rss_after_finish_bytes`) for inspection
+without gating it. A genuine leak shows up as a positive slope across the
+checkpoints and still fails the gate; see the synthetic leak test in
+`tests/test_benchmark_harness.py`.
 
 ## Output format
 
