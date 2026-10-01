@@ -32,6 +32,10 @@ DEFAULT_ITERATIONS = 5_000
 DEFAULT_ALLOCATION_KB = 512
 DEFAULT_OVERHEAD_TRIAL_COUNT = 5
 DEFAULT_OVERHEAD_TRIAL_QUANTILE = 0.25
+# The soak reads RSS at this many evenly spaced checkpoints. The first
+# checkpoint is the warmup boundary: it becomes the RSS baseline so allocator,
+# flush-thread, and first-segment setup are excluded from growth metrics.
+SOAK_RSS_CHECKPOINT_COUNT = 50
 REFERENCE_INTERVAL_SECONDS = 0.1
 DEFAULT_RETENTION_VALIDATION = {
     "flush_every_events": 50,
@@ -570,6 +574,57 @@ def _run_overhead_report(
     }
 
 
+def _soak_rss_checkpoints(sample_count: int) -> list[int]:
+    """Return the sample indices after which the soak reads process RSS.
+
+    The first index is the warmup boundary and supplies the RSS baseline; the
+    last index is always the final sample so the measured window ends with the
+    soak loop itself.
+    """
+    stride = max(sample_count // SOAK_RSS_CHECKPOINT_COUNT, 1)
+    checkpoints = list(range(stride - 1, sample_count, stride))
+    if checkpoints[-1] != sample_count - 1:
+        checkpoints.append(sample_count - 1)
+    return checkpoints
+
+
+def _soak_rss_metrics(
+    rss_points: Sequence[int],
+    *,
+    checkpoints: Sequence[int],
+    sample_count: int,
+    interval_seconds: float,
+    rss_after_finish: int,
+) -> dict[str, float | int]:
+    """Derive soak RSS metrics from the in-loop checkpoint readings only.
+
+    Session finalization (sink close, rollup load-back, history export) is a
+    one-shot transient whose residual RSS depends on allocator behaviour, not
+    on steady-state growth, so it is reported separately and never gated.
+    """
+    baseline_rss = int(rss_points[0])
+    final_rss = int(rss_points[-1])
+    final_delta = final_rss - baseline_rss
+    warmup_sample_count = int(checkpoints[0]) + 1
+    measured_sample_count = sample_count - warmup_sample_count
+    measured_seconds = measured_sample_count * interval_seconds
+    return {
+        "rss_warmup_sample_count": warmup_sample_count,
+        "rss_measured_sample_count": measured_sample_count,
+        "rss_measured_equivalent_seconds": measured_seconds,
+        "rss_checkpoint_count": len(rss_points),
+        "rss_baseline_bytes": baseline_rss,
+        "rss_final_bytes": final_rss,
+        "rss_delta_bytes": final_delta,
+        "rss_growth_per_24h_equiv": (
+            (final_delta / measured_seconds) * 86400.0 if measured_seconds else 0.0
+        ),
+        "max_rss_delta_bytes": float(max(value - baseline_rss for value in rss_points)),
+        "rss_after_finish_bytes": rss_after_finish,
+        "finalization_rss_delta_bytes": rss_after_finish - final_rss,
+    }
+
+
 def _run_soak_scenario(
     spec: RuntimeSpec,
     scenario_dir: Path,
@@ -594,15 +649,15 @@ def _run_soak_scenario(
             ),
         )
         equivalent_seconds = sample_count * spec.default_interval
-        baseline_rss = _process_rss_bytes()
-        rss_points = [baseline_rss]
-        checkpoint_stride = max(sample_count // 50, 1)
+        checkpoints = _soak_rss_checkpoints(sample_count)
+        pending_checkpoints = set(checkpoints)
+        rss_points: list[int] = []
 
         wall_start = time.perf_counter()
         cpu_start = time.process_time()
         for index in range(sample_count):
             session.emit_sample(index)
-            if index % checkpoint_stride == 0 or index == sample_count - 1:
+            if index in pending_checkpoints:
                 rss_points.append(_process_rss_bytes())
         wall_seconds = time.perf_counter() - wall_start
         cpu_seconds = time.process_time() - cpu_start
@@ -616,12 +671,9 @@ def _run_soak_scenario(
         raise
 
     assert session_report is not None
-    final_rss = _process_rss_bytes()
-    rss_points.append(final_rss)
-    max_delta = max(value - baseline_rss for value in rss_points)
-    final_delta = final_rss - baseline_rss
+    rss_after_finish = _process_rss_bytes()
     stats = dict(session_report["stats"])
-    summary = {
+    summary: dict[str, Any] = {
         "name": f"{spec.name}_soak",
         "profile": profile,
         "sample_count": sample_count,
@@ -632,13 +684,13 @@ def _run_soak_scenario(
         "collector_failure_event_count": int(
             session_report["collector_failure_event_count"]
         ),
-        "rss_baseline_bytes": baseline_rss,
-        "rss_final_bytes": final_rss,
-        "rss_delta_bytes": final_delta,
-        "rss_growth_per_24h_equiv": (
-            (final_delta / equivalent_seconds) * 86400.0 if equivalent_seconds else 0.0
+        **_soak_rss_metrics(
+            rss_points,
+            checkpoints=checkpoints,
+            sample_count=sample_count,
+            interval_seconds=spec.default_interval,
+            rss_after_finish=rss_after_finish,
         ),
-        "max_rss_delta_bytes": float(max_delta),
         "stats": stats,
         "artifact_dir": str(scenario_dir),
         "output_path": str(session_report["output_path"]),
@@ -1205,6 +1257,9 @@ def _run_runtime_report(
             "artifact_size_bytes": soak["artifact_size_bytes"],
             "rss_growth_per_24h_equiv": soak["rss_growth_per_24h_equiv"],
             "max_rss_delta_bytes": soak["max_rss_delta_bytes"],
+            "rss_warmup_sample_count": soak["rss_warmup_sample_count"],
+            "rss_measured_sample_count": soak["rss_measured_sample_count"],
+            "finalization_rss_delta_bytes": soak["finalization_rss_delta_bytes"],
             "collector_failure_event_count": soak["collector_failure_event_count"],
             "history_dropped_events": int(
                 soak["stats"].get("history_dropped_events", 0)

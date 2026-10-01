@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal
+from typing import Any, Literal
 
 import pytest
 
@@ -468,9 +468,9 @@ def test_run_tracked_scenario_finalizes_session_on_emit_failure(
 @pytest.mark.parametrize(
     ("rss_delta_bytes", "expected_daily_growth", "budget_passed"),
     [
-        pytest.param(-16_384, -3_538_944_000.0, True, id="decreasing-rss"),
+        pytest.param(-16_384, -4_718_592_000.0, True, id="decreasing-rss"),
         pytest.param(0, 0.0, True, id="stable-rss"),
-        pytest.param(16_384, 3_538_944_000.0, False, id="growth-exceeds-budget"),
+        pytest.param(16_384, 4_718_592_000.0, False, id="growth-exceeds-budget"),
     ],
 )
 def test_run_soak_scenario_normalizes_rss_growth_and_enforces_budget(
@@ -482,15 +482,17 @@ def test_run_soak_scenario_normalizes_rss_growth_and_enforces_budget(
 ) -> None:
     monkeypatch.setitem(benchmark_harness.PROFILE_EQUIVALENT_HOURS, "pr", 0.0001)
     baseline_rss = 128 * 1024 * 1024
-    # Baseline, four checkpoints (including a transient peak), then final RSS.
+    # Four samples, one checkpoint each: the warmup checkpoint supplies the
+    # baseline, then a transient peak, a return to baseline, and the final
+    # in-loop reading. The last reading is taken after session.finish() and
+    # must not feed the growth metrics.
     rss_readings = iter(
         [
             baseline_rss,
-            baseline_rss,
             baseline_rss + 65_536,
             baseline_rss,
-            baseline_rss,
             baseline_rss + rss_delta_bytes,
+            baseline_rss + rss_delta_bytes + 100 * 1024 * 1024,
         ]
     )
     monkeypatch.setattr(
@@ -508,11 +510,16 @@ def test_run_soak_scenario_normalizes_rss_growth_and_enforces_budget(
 
     assert summary["sample_count"] == 4
     assert summary["equivalent_seconds"] == pytest.approx(0.4)
+    assert summary["rss_warmup_sample_count"] == 1
+    assert summary["rss_measured_sample_count"] == 3
+    assert summary["rss_measured_equivalent_seconds"] == pytest.approx(0.3)
+    assert summary["rss_checkpoint_count"] == 4
     assert summary["rss_baseline_bytes"] == baseline_rss
     assert summary["rss_final_bytes"] == baseline_rss + rss_delta_bytes
     assert summary["rss_delta_bytes"] == rss_delta_bytes
     assert summary["max_rss_delta_bytes"] == 65_536.0
     assert summary["rss_growth_per_24h_equiv"] == pytest.approx(expected_daily_growth)
+    assert summary["finalization_rss_delta_bytes"] == 100 * 1024 * 1024
 
     metric = "gpumemprof_cpu.rss_growth_per_24h_equiv"
     checks = benchmark_harness.evaluate_budgets(
@@ -520,6 +527,133 @@ def test_run_soak_scenario_normalizes_rss_growth_and_enforces_budget(
         {metric: 1_000_000_000.0},
     )
     assert checks[metric]["passed"] is budget_passed
+
+
+class _RssModelRuntimeSession(benchmark_harness.RuntimeSession):
+    """Session whose simulated RSS is driven by sample and finish activity."""
+
+    def __init__(
+        self,
+        *,
+        base_rss: int,
+        startup_bytes: int = 0,
+        leak_bytes_per_sample: int = 0,
+        finish_bytes: int = 0,
+    ) -> None:
+        self.rss = base_rss
+        self.startup_bytes = startup_bytes
+        self.leak_bytes_per_sample = leak_bytes_per_sample
+        self.finish_bytes = finish_bytes
+
+    def start(self) -> None:
+        return None
+
+    def emit_sample(self, index: int) -> None:
+        if index == 0:
+            self.rss += self.startup_bytes
+        self.rss += self.leak_bytes_per_sample
+
+    def finish(self) -> dict[str, object]:
+        self.rss += self.finish_bytes
+        return {
+            "stats": {},
+            "event_count": 0,
+            "collector_failure_event_count": 0,
+            "output_path": "",
+        }
+
+
+def _soak_with_rss_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    session: _RssModelRuntimeSession,
+) -> dict[str, Any]:
+    monkeypatch.setattr(benchmark_harness, "_process_rss_bytes", lambda: session.rss)
+    spec = benchmark_harness.RuntimeSpec(
+        name="gpumemprof_cpu",
+        default_interval=0.1,
+        factory=lambda artifact_dir, interval, sink_overrides: session,
+    )
+    return benchmark_harness._run_soak_scenario(spec, tmp_path / "soak", profile="pr")
+
+
+def test_soak_rss_checkpoints_cover_warmup_and_final_sample() -> None:
+    checkpoints = benchmark_harness._soak_rss_checkpoints(216_000)
+    assert len(checkpoints) == benchmark_harness.SOAK_RSS_CHECKPOINT_COUNT
+    assert checkpoints[0] == 4_319
+    assert checkpoints[-1] == 215_999
+    assert benchmark_harness._soak_rss_checkpoints(1) == [0]
+    assert benchmark_harness._soak_rss_checkpoints(4) == [0, 1, 2, 3]
+    # A sample count that is not a multiple of the stride still ends on the
+    # final sample.
+    assert benchmark_harness._soak_rss_checkpoints(101)[-1] == 100
+
+
+def test_run_soak_scenario_excludes_finalization_and_startup_from_rss_growth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # A real CPU session loads every retained sink segment back into memory
+    # while closing (rollups) and exports its history; the residual RSS after
+    # that transient is allocator-dependent and must not be read as a leak.
+    session = _RssModelRuntimeSession(
+        base_rss=40 * 1024 * 1024,
+        startup_bytes=16 * 1024 * 1024,
+        finish_bytes=70 * 1024 * 1024,
+    )
+
+    summary = _soak_with_rss_model(monkeypatch, tmp_path, session)
+
+    assert summary["sample_count"] == 216_000
+    assert summary["rss_warmup_sample_count"] == 4_320
+    assert summary["rss_measured_sample_count"] == 211_680
+    assert summary["rss_baseline_bytes"] == 56 * 1024 * 1024
+    assert summary["max_rss_delta_bytes"] == 0.0
+    assert summary["rss_delta_bytes"] == 0
+    assert summary["rss_growth_per_24h_equiv"] == 0.0
+    assert summary["rss_after_finish_bytes"] == 126 * 1024 * 1024
+    assert summary["finalization_rss_delta_bytes"] == 70 * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    ("leak_bytes_per_sample", "expected_passed"),
+    [
+        pytest.param(64, True, id="below-tolerance"),
+        pytest.param(1_024, False, id="synthetic-leak"),
+    ],
+)
+def test_regression_gate_catches_synthetic_soak_leak(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    leak_bytes_per_sample: int,
+    expected_passed: bool,
+) -> None:
+    session = _RssModelRuntimeSession(
+        base_rss=40 * 1024 * 1024,
+        leak_bytes_per_sample=leak_bytes_per_sample,
+        finish_bytes=70 * 1024 * 1024,
+    )
+
+    summary = _soak_with_rss_model(monkeypatch, tmp_path, session)
+
+    baseline = benchmark_harness.load_regression_baseline(
+        benchmark_harness._default_runtime_baseline_path()
+    )
+    tolerances = benchmark_harness.load_regression_tolerances(
+        benchmark_harness._default_runtime_tolerances_path()
+    )
+    metrics = {
+        "gpumemprof_cpu.max_rss_delta_bytes": float(summary["max_rss_delta_bytes"]),
+        "gpumemprof_cpu.rss_growth_per_24h_equiv": float(
+            summary["rss_growth_per_24h_equiv"]
+        ),
+    }
+    checks = benchmark_harness.evaluate_regressions(
+        metrics, baseline["metrics"], tolerances
+    )
+
+    assert summary["max_rss_delta_bytes"] == 211_680 * leak_bytes_per_sample
+    assert all(check["passed"] is expected_passed for check in checks.values()), checks
 
 
 def test_run_soak_scenario_finalizes_session_on_emit_failure(tmp_path: Path) -> None:
