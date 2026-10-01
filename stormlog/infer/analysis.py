@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .arrival_report import arrival_lines, arrival_summary, latency_from_intended_ms
+from .cache_state import cache_lines, cache_summary
 from .correlation_accounting import AlignedTimestamp
 from .host_clock import is_boot_qualified
 from .report_stats import int_value as _int_value
@@ -53,19 +54,7 @@ def analyze_inference_events(
     )
     timelines = [(member, _member_timeline(member)) for member in members]
     ok_requests = [record for record in requests if record.get("status") == "ok"]
-
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for record in requests:
-        case_id = str(record.get("case_id", "unknown"))
-        grouped.setdefault(case_id, []).append(record)
-
-    windows = _measured_windows(records)
-    cases = {
-        case_id: _case_report(
-            case_requests, samples, timelines, "group" in join, windows.get(case_id)
-        )
-        for case_id, case_requests in sorted(grouped.items())
-    }
+    cases = _case_reports(records, requests, samples, timelines, "group" in join)
     if timelines:
         join["case_coverage"] = _coverage_counts(cases)
     failed = [record for record in requests if record.get("status") != "ok"]
@@ -87,6 +76,27 @@ def analyze_inference_events(
     }
 
 
+def _case_reports(
+    records: list[dict[str, Any]],
+    requests: list[dict[str, Any]],
+    samples: list[dict[str, Any]],
+    timelines: list[tuple[_Member, _ServerTimeline]],
+    grouped: bool,
+) -> dict[str, dict[str, Any]]:
+    by_case: dict[str, list[dict[str, Any]]] = {}
+    for record in requests:
+        by_case.setdefault(str(record.get("case_id", "unknown")), []).append(record)
+    windows = _measured_windows(records)
+    cache_states = _case_records(records, "infer.cache_state")
+    cases = {}
+    for case_id, case_requests in sorted(by_case.items()):
+        cases[case_id] = _case_report(
+            case_requests, samples, timelines, grouped, windows.get(case_id)
+        )
+        cases[case_id]["cache"] = cache_summary(cache_states.get(case_id))
+    return cases
+
+
 def _case_report(
     case_requests: list[dict[str, Any]],
     samples: list[dict[str, Any]],
@@ -102,6 +112,16 @@ def _case_report(
     report["lengths"] = length_summary(ok)
     report["memory"].update(_server_case_memory(timelines, ok, grouped))
     return report
+
+
+def _case_records(
+    records: list[dict[str, Any]], event_type: str
+) -> dict[str, dict[str, Any]]:
+    return {
+        str(record.get("case_id")): record
+        for record in records
+        if record.get("event_type") == event_type
+    }
 
 
 def _measured_windows(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -208,6 +228,7 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
     if isinstance(case, dict):
         lines.extend(arrival_lines(case.get("arrivals")))
         lines.extend(prompt_lines(case.get("prompts")))
+        lines.extend(cache_lines(case.get("cache")))
     memory = case.get("memory", {}) if isinstance(case, dict) else {}
     lines.extend(_server_case_lines(memory))
     return lines

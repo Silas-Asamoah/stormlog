@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import threading
+import urllib.parse
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -21,6 +22,7 @@ from .arrivals import (
     ArrivalTrace,
     load_arrival_trace,
 )
+from .cache_state import CACHE_STATES, COLD, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
 from .profile import run_profile
 from .prompts import PROMPT_MODES, REPEAT, SHARED_PREFIX
@@ -207,6 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
+    _add_cache_arguments(profile_parser)
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -400,9 +403,34 @@ def _add_prompt_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--cache-state",
+        choices=CACHE_STATES,
+        default=UNSPECIFIED,
+        help=(
+            "Prefix-cache state each case should start from; cold is recorded "
+            "but cannot be verified yet"
+        ),
+    )
+    parser.add_argument(
+        "--cache-reset-url",
+        default=None,
+        help=(
+            "URL to POST before each case to clear the prefix cache, such as "
+            "vLLM /reset_prefix_cache or SGLang /flush_cache"
+        ),
+    )
+
+
 def cmd_profile(args: argparse.Namespace) -> int:
     """Run active inference profiling."""
     _validate_profile_arguments(args)
+    if args.cache_state == COLD and args.cache_reset_url is None:
+        _print_warning(
+            "--cache-state cold without --cache-reset-url: nothing will reset "
+            "the cache, and each case records its cache state as unverified"
+        )
     report = run_profile(_profile_config(args))
     print(format_analysis_text(report))
     print(f"Artifact saved to: {Path(args.output)}")
@@ -460,6 +488,8 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         prompt_mode=args.prompt_mode,
         shared_prefix_ratio=args.shared_prefix_ratio,
         prefix_groups=args.prefix_groups,
+        cache_state=args.cache_state,
+        cache_reset_url=args.cache_reset_url,
     )
 
 
@@ -581,6 +611,7 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
         raise ValueError("Use either --duration or --requests, not both")
     _validate_arrival_arguments(args)
     _validate_prompt_arguments(args)
+    _validate_http_url(args.cache_reset_url, "--cache-reset-url")
     if args.timeout <= 0:
         raise ValueError("--timeout must be > 0")
     if args.warmup_requests < 0:
@@ -628,3 +659,8 @@ def _validate_prompt_arguments(args: argparse.Namespace) -> None:
     )
     if args.prefix_groups is not None and args.prompt_mode != SHARED_PREFIX:
         raise ValueError("--prefix-groups only applies to --prompt-mode shared-prefix")
+
+
+def _validate_http_url(url: str | None, flag: str) -> None:
+    if url is not None and urllib.parse.urlparse(url).scheme not in {"http", "https"}:
+        raise ValueError(f"{flag} must use http:// or https://")

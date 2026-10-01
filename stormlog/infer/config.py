@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .arrivals import BURST, CLOSED, RATE_MODES, REPLAY, ArrivalSpec, ArrivalTrace
+from .cache_state import UNSPECIFIED
 from .prompts import REPEAT, PromptSpec
 
 DEFAULT_ENDPOINT_PATH = "/chat/completions"
@@ -115,6 +116,9 @@ class ProfileConfig:
     prompt_mode: str = REPEAT
     shared_prefix_ratio: float | None = None
     prefix_groups: int | None = None
+    cache_state: str = UNSPECIFIED
+    # POSTed before each case, e.g. vLLM /reset_prefix_cache or SGLang /flush_cache.
+    cache_reset_url: str | None = None
 
     def prompt_spec(self) -> PromptSpec:
         return PromptSpec(

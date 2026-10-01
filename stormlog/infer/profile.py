@@ -23,6 +23,7 @@ from ..session import (
 )
 from .analysis import analyze_inference_events
 from .arrivals import CLOSED, arrival_offsets
+from .cache_state import cache_state_record, reset_cache
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
@@ -98,6 +99,8 @@ class InferenceProfiler:
                         "max_in_flight": self.config.max_in_flight,
                         "overflow": self.config.overflow,
                         "prompts": self.prompt_spec.to_record(),
+                        "cache_state": self.config.cache_state,
+                        "cache_reset_url": self.config.cache_reset_url,
                     },
                 }
             )
@@ -218,6 +221,22 @@ class InferenceProfiler:
         case: WorkloadCase,
         writer: JsonlEventWriter,
     ) -> None:
+        reset = None
+        if self.config.cache_reset_url is not None:
+            reset = await asyncio.to_thread(
+                reset_cache,
+                self.config.cache_reset_url,
+                timeout_seconds=self.config.timeout_seconds,
+            )
+        writer.append(
+            cache_state_record(
+                session_id=self.session.session_id,
+                case_id=case.case_id,
+                requested=self.config.cache_state,
+                reset=reset,
+                warmup_requests=self.config.warmup_requests,
+            )
+        )
         if self.config.warmup_requests > 0:
             await self._run_phase(
                 case=case,
