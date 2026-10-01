@@ -458,3 +458,20 @@ def test_earlier_command_lines_keep_their_meaning(tmp_path: Path) -> None:
     code, stderr = _profile_cli(tmp_path / "empty", "--concurrency", "")
     assert code == 1
     assert "concurrency must contain at least one value" in stderr
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--arrival", "fixed-rate", "--rate", "2,2.0"],
+        ["--concurrency", "1,1"],
+        ["--input-tokens", "8,8"],
+    ],
+)
+def test_settings_that_repeat_a_case_are_rejected(
+    tmp_path: Path, flags: list[str]
+) -> None:
+    code, stderr = _profile_cli(tmp_path, *flags)
+    assert code == 1
+    assert "two workload cases would share the ID" in stderr
+    assert not (tmp_path / "infer.jsonl").exists()

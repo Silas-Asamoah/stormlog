@@ -148,6 +148,18 @@ class ProfileConfig:
         ]
 
     def cases(self) -> list[WorkloadCase]:
+        cases = self._matrix()
+        ids = [case.case_id for case in cases]
+        repeated = sorted({case_id for case_id in ids if ids.count(case_id) > 1})
+        if repeated:
+            # Two cases with one ID would merge their requests and records.
+            raise ValueError(
+                f"two workload cases would share the ID {repeated[0]}; list each "
+                "concurrency, rate and token length once"
+            )
+        return cases
+
+    def _matrix(self) -> list[WorkloadCase]:
         if self.arrival_mode == CLOSED:
             return [
                 self._case(f"c{concurrency}", concurrency, ArrivalSpec(), tokens)
