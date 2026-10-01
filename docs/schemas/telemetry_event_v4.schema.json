@@ -91,5 +91,132 @@
         }
       }
     }
-  }
+  },
+  "$comment": "A counter whose capability is false must be null.",
+  "allOf": [
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_allocator_allocated"],
+                "properties": {"supports_allocator_allocated": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "allocator_allocated_bytes": {"type": "null"},
+          "allocator_change_bytes": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_allocator_reserved"],
+                "properties": {"supports_allocator_reserved": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"allocator_reserved_bytes": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_allocator_active"],
+                "properties": {"supports_allocator_active": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"allocator_active_bytes": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_allocator_inactive"],
+                "properties": {"supports_allocator_inactive": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"allocator_inactive_bytes": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_device_used"],
+                "properties": {"supports_device_used": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"device_used_bytes": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_device_free"],
+                "properties": {"supports_device_free": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"device_free_bytes": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "required": ["metadata"],
+        "properties": {
+          "metadata": {
+            "required": ["memory_capabilities"],
+            "properties": {
+              "memory_capabilities": {
+                "required": ["supports_device_total"],
+                "properties": {"supports_device_total": {"const": false}}
+              }
+            }
+          }
+        }
+      },
+      "then": {"properties": {"device_total_bytes": {"type": "null"}}}
+    }
+  ]
 }
