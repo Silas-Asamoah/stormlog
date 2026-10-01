@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
@@ -47,10 +48,12 @@ def _context(**changes: object) -> CorrelationContext:
         "provenance": "reported",
     }
     values.update(changes)
-    return CorrelationContext(**values)
+    return CorrelationContext(**cast(Any, values))
 
 
-def test_v2_records_round_trip_through_existing_jsonl_writer(tmp_path) -> None:
+def test_v2_records_round_trip_through_existing_jsonl_writer(
+    tmp_path: Path,
+) -> None:
     context = _context()
     request = EntityRef("client", "logical-request")
     attempt = EntityRef("client", "attempt-2")
@@ -143,7 +146,9 @@ def test_v2_records_round_trip_through_existing_jsonl_writer(tmp_path) -> None:
     }
 
 
-def test_legacy_records_remain_readable_without_server_evidence(tmp_path) -> None:
+def test_legacy_records_remain_readable_without_server_evidence(
+    tmp_path: Path,
+) -> None:
     legacy = {
         "schema_version": 1,
         "event_type": "infer.request",

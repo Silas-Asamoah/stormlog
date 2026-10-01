@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -86,7 +87,7 @@ class _Engine:
 
 
 class _Trace:
-    def __init__(self, trace_path) -> None:
+    def __init__(self, trace_path: Path) -> None:
         self.trace_path = trace_path
 
     def collect(self, *, run_id: str, session_id: str) -> TraceCapture:
@@ -123,7 +124,7 @@ class _Trace:
         )
 
 
-def _legacy_artifact(path) -> None:
+def _legacy_artifact(path: Path) -> None:
     path.write_text(
         json.dumps(
             {
@@ -138,7 +139,7 @@ def _legacy_artifact(path) -> None:
     )
 
 
-def test_optional_capture_joins_scoped_ids_and_indexes_trace(tmp_path) -> None:
+def test_optional_capture_joins_scoped_ids_and_indexes_trace(tmp_path: Path) -> None:
     artifact = tmp_path / "infer.jsonl"
     _legacy_artifact(artifact)
     trace_path = tmp_path / "worker.trace"
@@ -193,7 +194,9 @@ def test_optional_capture_joins_scoped_ids_and_indexes_trace(tmp_path) -> None:
     assert len(envelope["attachments"]) == 2
 
 
-def test_capture_rejects_conflicting_existing_event_before_writing(tmp_path) -> None:
+def test_capture_rejects_conflicting_existing_event_before_writing(
+    tmp_path: Path,
+) -> None:
     artifact = tmp_path / "infer.jsonl"
     _legacy_artifact(artifact)
     envelope_path = tmp_path / "stormlog_run.json"
@@ -211,7 +214,9 @@ def test_capture_rejects_conflicting_existing_event_before_writing(tmp_path) -> 
     class ConflictingEngine(_Engine):
         def collect(self, *, run_id: str, session_id: str) -> EngineCapture:
             capture = super().collect(run_id=run_id, session_id=session_id)
-            iteration = replace(capture.events[0], end_ns=201)
+            original = capture.events[0]
+            assert isinstance(original, IterationEvent)
+            iteration = replace(original, end_ns=201)
             return replace(capture, events=(iteration, *capture.events[1:]))
 
     with pytest.raises(ValueError, match="conflicting"):
@@ -227,7 +232,9 @@ def test_capture_rejects_conflicting_existing_event_before_writing(tmp_path) -> 
     assert envelope_path.read_bytes() == envelope_before
 
 
-def test_capture_serializes_all_events_before_mutating_artifacts(tmp_path) -> None:
+def test_capture_serializes_all_events_before_mutating_artifacts(
+    tmp_path: Path,
+) -> None:
     artifact = tmp_path / "infer.jsonl"
     _legacy_artifact(artifact)
     envelope_path = tmp_path / "stormlog_run.json"
@@ -262,7 +269,9 @@ def test_capture_serializes_all_events_before_mutating_artifacts(tmp_path) -> No
     assert envelope_path.read_bytes() == envelope_before
 
 
-def test_missing_adapters_are_recorded_without_fake_server_events(tmp_path) -> None:
+def test_missing_adapters_are_recorded_without_fake_server_events(
+    tmp_path: Path,
+) -> None:
     artifact = tmp_path / "infer.jsonl"
     _legacy_artifact(artifact)
     session = create_session_summary(source="test", session_id="session-1")
@@ -281,7 +290,7 @@ def test_missing_adapters_are_recorded_without_fake_server_events(tmp_path) -> N
     assert not any(isinstance(r, IterationEvent) for r in records)
 
 
-def test_rejects_wrong_run_before_writing_artifact(tmp_path) -> None:
+def test_rejects_wrong_run_before_writing_artifact(tmp_path: Path) -> None:
     artifact = tmp_path / "infer.jsonl"
     _legacy_artifact(artifact)
     before = artifact.read_bytes()
@@ -330,13 +339,12 @@ def test_ambiguous_or_unscoped_correlation_stays_unresolved() -> None:
     )
 
     assert link_trace_activities((seed, other_seed), (trace,)) == (trace,)
-    assert (
-        link_trace_activities(
-            (seed,),
-            (replace(trace, correlation_scope=EntityRef("runtime-0", "other")),),
-        )[0].attribution_status
-        == "unresolved"
+    [unresolved] = link_trace_activities(
+        (seed,),
+        (replace(trace, correlation_scope=EntityRef("runtime-0", "other")),),
     )
+    assert isinstance(unresolved, ActivityReferenceEvent)
+    assert unresolved.attribution_status == "unresolved"
 
 
 def test_capability_outcomes_must_be_subsets() -> None:

@@ -1,0 +1,158 @@
+{
+  "acceptance_thresholds": {
+    "approval_required_before_paid_hardware": true,
+    "correlation_coverage_min": null,
+    "event_loss_max": null,
+    "latency_perturbation_max": null,
+    "memory_reduction_min": null,
+    "reason": "Issue #221 calls for empirically selected budgets but provides no numeric pass thresholds.",
+    "sample_sufficiency_min": null,
+    "source": "https://github.com/Silas-Asamoah/stormlog/issues/221",
+    "status": "requires_maintainer_approval"
+  },
+  "artifact_kind": "native_probe_final_configuration_handoff",
+  "build": {
+    "cmake_build": [
+      "cmake",
+      "--build",
+      "build/native-cupti",
+      "--config",
+      "Release"
+    ],
+    "cmake_configure": [
+      "cmake",
+      "-S",
+      "native/cupti",
+      "-B",
+      "build/native-cupti",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCUDAToolkit_ROOT=/usr/local/cuda"
+    ],
+    "observed_binary_sha256": "643062710adb4eaf7ba07efeb82acda0db192fb7abad0143c8868a72a33f69f0",
+    "source": "native/cupti from exact pinned PR #237 revision"
+  },
+  "cloud": {
+    "capacity": "on_demand",
+    "current_state": "Paused",
+    "gpu": "L4",
+    "machine_id": 522535,
+    "provider": "JarvisLabs",
+    "region": "IN2",
+    "reuse": "resume only this compatible paused instance; verify machine ID and versions after resume",
+    "template": "pytorch"
+  },
+  "cupti_launch": {
+    "environment": {
+      "CUDA_INJECTION64_PATH": "<absolute path to pinned built library>",
+      "STORMLOG_CUPTI_ACTIVITIES": "driver,runtime,kernel,memcpy,memset,synchronization",
+      "STORMLOG_CUPTI_MAX_BYTES": "268435456",
+      "STORMLOG_CUPTI_OUTPUT_DIR": "<fresh existing owner-only absolute directory per trial>"
+    },
+    "precondition": "Create the unique output directory with mode 0700 before launching each target; reject reuse or overwrite.",
+    "required_status": "finalized true, initialization_error null, explicit delivered and dropped counts, complete activity.ndjson"
+  },
+  "evidence_policy": {
+    "download_before_pause": true,
+    "historical_evidence_relocations": "benchmarks/native_probes/evidence_relocations.json",
+    "immutable_run_ids": true,
+    "raw_ignored": true,
+    "raw_root": "artifacts/native-probes",
+    "required": [
+      "environment",
+      "exact_commands",
+      "versions",
+      "exit_codes",
+      "plan",
+      "run_index",
+      "all_trial_manifests",
+      "raw_trace_paths_and_sha256",
+      "normalized_measurements",
+      "analysis",
+      "capability_matrix"
+    ],
+    "retain_failures_unsupported_and_dropped_records": true,
+    "tracked_root": "benchmarks/native_probes"
+  },
+  "pilot_evidence": "benchmarks/native_probes/evidence/pilot-118-l4-522535-01.json",
+  "pilot_evidence_sha256": "ec38cb1c65322685920a0df38168ea7b50f2a625000594a0ff002c6d7fcc8f69",
+  "pilot_exclusion": "All pilot trial timings and trace counts are configuration evidence only and must not enter final estimates or threshold selection.",
+  "protocol": {
+    "buffer": {
+      "consumer_delay_ms": 0,
+      "flush_interval_ms": 100,
+      "output_bound_bytes": 268435456,
+      "postprocessor_delay_ms": 0,
+      "producer_bytes": 8388608,
+      "transport_bytes": 8388608
+    },
+    "measurement_range_id": "stormlog-native-probe-measured",
+    "nvidia_microbenchmark_modes": [
+      "off",
+      "public-pytorch",
+      "trusted",
+      "direct-cupti",
+      "detailed-counter"
+    ],
+    "repetitions_minimum": 5,
+    "restart_target_between_trials": true,
+    "seed": 118,
+    "single_cloud_instance": true,
+    "timeout_seconds": 600,
+    "trial_order": "seeded_shuffle_then_rotated_and_reversed_counterbalance",
+    "unmeasured_warmup_runs": 1,
+    "workloads": {
+      "vllm": {
+        "arrival_schedule": null,
+        "cache_settings": null,
+        "graph_mode": null,
+        "model_revision": null,
+        "purpose": "matched inference after microbenchmark correctness gates",
+        "request_trace": null,
+        "status": "requires_hardware_run_configuration",
+        "tokenizer_revision": null
+      },
+      "w1-eager": {
+        "matrix_size": 512,
+        "measured_iterations": 1000,
+        "purpose": "separate asynchronous host launch from device execution",
+        "warmup_iterations": 100
+      },
+      "w2-overlap": {
+        "measured_iterations": 1000,
+        "overlap_elements": 1048576,
+        "overlap_operations": 8,
+        "purpose": "overlapping streams with bounded identical work",
+        "warmup_iterations": 100
+      },
+      "w2-serialized": {
+        "measured_iterations": 1000,
+        "overlap_elements": 1048576,
+        "overlap_operations": 8,
+        "purpose": "serialized control for w2-overlap",
+        "warmup_iterations": 100
+      },
+      "w3-graph": {
+        "measured_iterations": 1000,
+        "purpose": "graph capture and replay, unsupported retained explicitly",
+        "warmup_iterations": 100
+      },
+      "w4-stress": {
+        "launches_per_iteration": 100,
+        "measured_iterations": 1000,
+        "purpose": "high event rate and explicit loss and truncation",
+        "warmup_iterations": 100
+      }
+    }
+  },
+  "remaining_blockers": [
+    "Numeric final acceptance thresholds are null and require maintainer approval before any final measurement run.",
+    "W2/W3/W4, profiler coexistence, and inference workload details remain unqualified by this W1 pilot.",
+    "Container template digest was unavailable; verify exact runtime and helper versions on resume."
+  ],
+  "schema_version": 1,
+  "source_revisions": {
+    "cupti_pr_237": "d4ea783b7ef98aa2f0e3bfbcffc169e4612fd3a9",
+    "experiment": "9a97fd4db10a4d027194e4a2353265d497cca59d"
+  },
+  "status": "technical_configuration_locked_final_run_blocked_on_threshold_approval"
+}
