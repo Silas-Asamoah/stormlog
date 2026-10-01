@@ -80,15 +80,23 @@ def arrival_lines(arrivals: Any, latency: Any = None) -> list[str]:
         f"offered {arrivals.get('offered')}",
         f"sent {arrivals.get('sent')}",
         *_outcome_counts(arrivals),
-        f"peak in flight {arrivals.get('peak_in_flight')}",
+        *_timing_parts(arrivals, latency or {}),
     ]
+    return ["  arrivals: " + ", ".join(parts)]
+
+
+def _timing_parts(arrivals: dict[str, Any], latency: dict[str, Any]) -> list[str]:
+    parts = []
+    # Artifacts written before in-flight counts existed have no peak.
+    if arrivals.get("peak_in_flight") is not None:
+        parts.append(f"peak in flight {arrivals['peak_in_flight']}")
     lag = (arrivals.get("dispatch_lag_ms") or {}).get("p95")
     if is_number(lag):
         parts.append(f"dispatch lag p95 {lag:.2f} ms")
-    due = (latency or {}).get("e2e_from_intended_p95")
+    due = latency.get("e2e_from_intended_p95")
     if arrivals.get("mode") != "closed" and is_number(due):
         parts.append(f"E2E from due time p95 {due:.2f} ms")
-    return ["  arrivals: " + ", ".join(parts)]
+    return parts
 
 
 def _outcome_counts(arrivals: dict[str, Any]) -> list[str]:

@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from stormlog.infer.analysis import analyze_inference_events, format_analysis_text
+from stormlog.infer.arrival_report import arrival_lines
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
 from stormlog.infer.open_loop import Arrival, InFlightLimiter, dispatch_schedule
@@ -306,6 +307,12 @@ def test_every_phase_records_its_window(tmp_path: Path) -> None:
             ["--arrival", "fixed-rate", "--rate", "2", "--max-in-flight", "0"],
             "--max-in-flight must be >= 1",
         ),
+        (["--max-in-flight", "4"], "--max-in-flight applies to open-loop"),
+        (["--overflow", "drop"], "--overflow applies to open-loop"),
+        (
+            ["--arrival", "replay", "--arrival-trace", "/no/such/trace.jsonl"],
+            "--arrival-trace /no/such/trace.jsonl: No such file or directory",
+        ),
         (["--arrival", "fixed-rate", "--rate", "0"], "rate values must be > 0"),
         (["--duration", "1", "--requests", "2"], "either --duration or --requests"),
         (["--drain-timeout", "0"], "--drain-timeout must be > 0"),
@@ -567,3 +574,10 @@ def test_a_run_that_cannot_open_its_artifact_writes_nothing(tmp_path: Path) -> N
     with pytest.raises(OSError):
         profiler.run()
     assert blocker.read_text() == "not a directory"
+
+
+def test_older_artifacts_print_no_missing_peak() -> None:
+    lines = arrival_lines(
+        {"mode": "closed", "offered": 2, "sent": 2, "failed": {"error": 2}}
+    )
+    assert lines == ["  arrivals: closed, offered 2, sent 2, error 2"]

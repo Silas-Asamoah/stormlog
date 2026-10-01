@@ -358,7 +358,7 @@ def _add_arrival_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-in-flight",
         type=int,
-        default=128,
+        default=None,
         help="Open-loop limit on outstanding requests (default: 128)",
     )
     parser.add_argument(
@@ -374,7 +374,7 @@ def _add_arrival_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--overflow",
         choices=["wait", "drop"],
-        default="wait",
+        default=None,
         help=(
             "When every in-flight slot is busy, wait for one (default, and the "
             "wait is recorded) or drop the arrival"
@@ -496,8 +496,8 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         burst_size=args.burst_size,
         burst_interval_seconds=args.burst_interval,
         arrival_trace=_arrival_trace(args),
-        max_in_flight=int(args.max_in_flight),
-        overflow=args.overflow,
+        max_in_flight=128 if args.max_in_flight is None else int(args.max_in_flight),
+        overflow=args.overflow or "wait",
         drain_timeout_seconds=args.drain_timeout,
         prompt_mode=args.prompt_mode,
         shared_prefix_ratio=args.shared_prefix_ratio,
@@ -532,7 +532,14 @@ def _request_count(args: argparse.Namespace) -> int | None:
 def _arrival_trace(args: argparse.Namespace) -> ArrivalTrace | None:
     if args.arrival != REPLAY:
         return None
-    return load_arrival_trace(args.arrival_trace, case_id=args.arrival_trace_case)
+    try:
+        return load_arrival_trace(args.arrival_trace, case_id=args.arrival_trace_case)
+    except OSError as exc:
+        raise ValueError(
+            f"--arrival-trace {args.arrival_trace}: {exc.strerror or exc}"
+        ) from exc
+    except ValueError as exc:
+        raise ValueError(f"--arrival-trace {args.arrival_trace}: {exc}") from exc
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
@@ -658,12 +665,8 @@ def _validate_arrival_arguments(args: argparse.Namespace) -> None:
     _flag_for(mode, {REPLAY}, args.arrival_trace, "--arrival-trace")
     if args.arrival_trace_case is not None and mode != REPLAY:
         raise ValueError("--arrival-trace-case only applies to --arrival replay")
-    if args.concurrency is not None and mode != CLOSED:
-        raise ValueError(
-            "--concurrency applies to --arrival closed; open-loop arrivals "
-            "use --max-in-flight"
-        )
-    if args.max_in_flight < 1:
+    _validate_loop_flags(args)
+    if args.max_in_flight is not None and args.max_in_flight < 1:
         raise ValueError("--max-in-flight must be >= 1")
     if args.drain_timeout is not None and args.drain_timeout <= 0:
         raise ValueError("--drain-timeout must be > 0")
@@ -693,3 +696,19 @@ def _validate_prompt_arguments(args: argparse.Namespace) -> None:
 def _validate_http_url(url: str | None, flag: str) -> None:
     if url is not None and urllib.parse.urlparse(url).scheme not in {"http", "https"}:
         raise ValueError(f"{flag} must use http:// or https://")
+
+
+def _validate_loop_flags(args: argparse.Namespace) -> None:
+    """Closed loops take workers; open loops take an in-flight limit."""
+    if args.arrival == CLOSED:
+        for flag, value in (
+            ("--max-in-flight", args.max_in_flight),
+            ("--overflow", args.overflow),
+        ):
+            if value is not None:
+                raise ValueError(f"{flag} applies to open-loop --arrival modes")
+    elif args.concurrency is not None:
+        raise ValueError(
+            "--concurrency applies to --arrival closed; open-loop arrivals "
+            "use --max-in-flight"
+        )
