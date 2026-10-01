@@ -190,31 +190,54 @@ def _group_without(key: str) -> Callable[[dict[str, Any]], None]:
 @pytest.mark.parametrize(
     "mutate",
     [
-        _set_identity(boot_id=""),
-        _set_identity(replica_id=""),
-        _set_identity(device_uuid=None),
-        _set_identity(device_uuid=None, gpu_instance_id="MIG-a"),
-        _set_identity(group_id="tp", rank=0, world_size=None),
-        _group_without("world_size"),
-        _group_without("rank"),
-        _set_identity(world_size=2),
-        _set(
-            metric="instance_memory_used_bytes",
-            scope="gpu_instance",
-            counter_owner="gpu_instance",
+        pytest.param(_set_identity(boot_id=""), id="empty-boot-id"),
+        pytest.param(_set_identity(replica_id=""), id="empty-replica-id"),
+        pytest.param(_set_identity(device_uuid=None), id="gpu-metric-without-device"),
+        pytest.param(
+            _set_identity(device_uuid=None, gpu_instance_id="MIG-a"),
+            id="instance-without-device",
         ),
-        _set(scope="server_process"),
-        _set(counter_owner="allocator"),
-        _set(metric="process_rss_bytes"),
-        _set(clock_domain="server-a/monotonic_ns"),
+        pytest.param(
+            _set_identity(group_id="tp", rank=0, world_size=None),
+            id="group-with-null-world-size",
+        ),
+        pytest.param(_group_without("world_size"), id="group-without-world-size"),
+        pytest.param(_group_without("rank"), id="group-without-rank"),
+        pytest.param(_set_identity(world_size=2), id="world-size-without-group"),
+        pytest.param(
+            _set(
+                metric="instance_memory_used_bytes",
+                scope="gpu_instance",
+                counter_owner="gpu_instance",
+            ),
+            id="instance-metric-without-instance",
+        ),
+        pytest.param(_set(scope="server_process"), id="scope-not-matching-metric"),
+        pytest.param(_set(counter_owner="allocator"), id="owner-not-matching-metric"),
+        pytest.param(_set(metric="process_rss_bytes"), id="metric-not-matching-scope"),
+        pytest.param(
+            _set(clock_domain="server-a/monotonic_ns"), id="domain-not-wall-clock"
+        ),
         # Each identity part is one segment of the clock domain.
-        _set_with_domain("rack/a/unix_epoch_ns", host="rack/a"),
-        _set_with_domain("server-a/boot/1/unix_epoch_ns", boot_id="boot/1"),
+        pytest.param(
+            _set_with_domain("rack/a/unix_epoch_ns", host="rack/a"),
+            id="slash-in-host",
+        ),
+        pytest.param(
+            _set_with_domain("server-a/boot/1/unix_epoch_ns", boot_id="boot/1"),
+            id="slash-in-boot-id",
+        ),
         # The domain names the boot exactly when the identity has a boot ID.
-        _set_with_domain("server-a/unix_epoch_ns", boot_id="boot-1"),
-        _set(clock_domain="server-a/boot-1/unix_epoch_ns"),
-        _drop("detail"),
-        _drop("provenance"),
+        pytest.param(
+            _set_with_domain("server-a/unix_epoch_ns", boot_id="boot-1"),
+            id="boot-id-missing-from-domain",
+        ),
+        pytest.param(
+            _set(clock_domain="server-a/boot-1/unix_epoch_ns"),
+            id="boot-in-domain-without-boot-id",
+        ),
+        pytest.param(_drop("detail"), id="missing-detail"),
+        pytest.param(_drop("provenance"), id="missing-provenance"),
     ],
 )
 def test_schema_rejects_what_the_loader_rejects(
