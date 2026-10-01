@@ -13,8 +13,10 @@ The published schema is ``docs/schemas/stormlog_report_v1.schema.json``.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -210,9 +212,20 @@ def _now_utc() -> str:
 
 
 def write_report(path: Path, report: Mapping[str, Any]) -> None:
-    """Validate ``report`` and write it as indented JSON."""
+    """Validate ``report`` and write it as indented JSON.
+
+    The file is written next to ``path`` and renamed into place, so a reader
+    that arrives after a crash sees either the previous report or the new
+    one, never a truncated file.
+    """
     validate_report(report)
-    path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        tmp_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp_path, path)
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
 
 
 def load_report(path: Path) -> dict[str, Any]:

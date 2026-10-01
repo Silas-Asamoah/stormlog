@@ -274,6 +274,33 @@ def test_write_report_refuses_invalid_report(tmp_path: Path) -> None:
     assert not (tmp_path / "report.json").exists()
 
 
+def test_write_report_leaves_no_temp_file(tmp_path: Path) -> None:
+    write_report(tmp_path / "report.json", _fixture("diagnose_findings.json"))
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["report.json"]
+
+
+def test_write_report_keeps_the_previous_report_when_the_rename_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "report.json"
+    previous = _fixture("diagnose_findings.json")
+    write_report(path, previous)
+
+    def _fail(src: str, dst: str) -> None:
+        raise OSError("rename failed")
+
+    monkeypatch.setattr("stormlog.report.os.replace", _fail)
+    replacement = copy.deepcopy(previous)
+    replacement["verdict"] = {"status": "pass", "exit_code": 0, "summary": "ok"}
+
+    with pytest.raises(OSError, match="rename failed"):
+        write_report(path, replacement)
+
+    assert load_report(path) == previous
+    assert sorted(item.name for item in tmp_path.iterdir()) == ["report.json"]
+
+
 @pytest.mark.parametrize(
     ("content", "message"),
     [
