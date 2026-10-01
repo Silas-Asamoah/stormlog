@@ -98,11 +98,16 @@ class TransformersTokenCounter:
     def identity(self) -> dict[str, Any]:
         init_kwargs = getattr(self._tokenizer, "init_kwargs", None) or {}
         name = getattr(self._tokenizer, "name_or_path", None) or self._model
+        revision, revision_source = init_kwargs.get("_commit_hash"), "tokenizer"
+        if revision is None:
+            # What from_pretrained resolves today, looked up in the hub cache.
+            revision, revision_source = _hub_revision(name), "hub_cache"
         return {
             "source": self.source,
             "exact": True,
             "name": name,
-            "revision": init_kwargs.get("_commit_hash") or _hub_revision(name),
+            "revision": revision,
+            "revision_source": revision_source if revision else None,
             "library_version": self._version,
         }
 

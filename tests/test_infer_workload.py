@@ -261,6 +261,7 @@ def test_tokenizer_identity_names_the_library_and_revision(
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
     hf = TransformersTokenCounter(model="Qwen/Qwen2.5-0.5B-Instruct")
     assert tokenizer_identity(hf)["revision"] == "abc123"
+    assert tokenizer_identity(hf)["revision_source"] == "tokenizer"
 
     # transformers 5 drops the commit from the tokenizer; the hub cache has it.
     tokenizer.init_kwargs = {}
@@ -270,9 +271,11 @@ def test_tokenizer_identity_names_the_library_and_revision(
     )
     monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
     assert tokenizer_identity(hf)["revision"] == "7ae5576"
+    assert tokenizer_identity(hf)["revision_source"] == "hub_cache"
     # A tokenizer loaded from a local directory has no cached revision.
     fake_hub.try_to_load_from_cache = lambda repo, name: None
     assert tokenizer_identity(hf)["revision"] is None
+    assert tokenizer_identity(hf)["revision_source"] is None
     assert tokenizer_identity(hf)["library_version"] == "4.51.0"
     digest = hf.chat_template_digest()
     assert digest is not None and len(digest) == 16

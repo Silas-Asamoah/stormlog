@@ -51,7 +51,7 @@ def arrival_summary(
 
 
 def latency_from_intended_ms(requests: list[dict[str, Any]]) -> list[float]:
-    """End-to-end latency measured from when each request was due.
+    """End-to-end latency measured from each request's intended arrival.
 
     It includes any time a request waited before it was sent, which a
     latency measured from the send leaves out.
@@ -67,8 +67,8 @@ def latency_from_intended_ms(requests: list[dict[str, Any]]) -> list[float]:
 def arrival_lines(arrivals: Any, latency: Any = None) -> list[str]:
     """One text-report line for a case whose arrivals are worth showing.
 
-    An open-loop line also gives the latency measured from when requests
-    were due, which shows any time they waited before being sent.
+    An open-loop line also gives the latency measured from each request's
+    intended arrival, which shows any time it waited before being sent.
     """
     if not isinstance(arrivals, dict):
         return []
@@ -93,9 +93,9 @@ def _timing_parts(arrivals: dict[str, Any], latency: dict[str, Any]) -> list[str
     lag = (arrivals.get("dispatch_lag_ms") or {}).get("p95")
     if is_number(lag):
         parts.append(f"dispatch lag p95 {lag:.2f} ms")
-    due = latency.get("e2e_from_intended_p95")
-    if arrivals.get("mode") != "closed" and is_number(due):
-        parts.append(f"E2E from due time p95 {due:.2f} ms")
+    intended = latency.get("e2e_from_intended_p95")
+    if arrivals.get("mode") != "closed" and is_number(intended):
+        parts.append(f"E2E from intended arrival p95 {intended:.2f} ms")
     return parts
 
 
