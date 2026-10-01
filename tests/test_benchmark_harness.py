@@ -411,11 +411,24 @@ def test_main_without_check_exits_ok_even_when_a_budget_fails(
 @pytest.mark.parametrize(
     ("prepare", "expected_message"),
     [
-        (lambda path: None, "No such file"),
-        (lambda path: path.write_text("{", encoding="utf-8"), "Expecting"),
+        (lambda path: None, "cannot be read"),
+        (lambda path: path.write_text("{", encoding="utf-8"), "cannot be read"),
+        (lambda path: path.write_text("[]", encoding="utf-8"), "must be a JSON object"),
+        (lambda path: path.write_text("42", encoding="utf-8"), "must be a JSON object"),
         (
             lambda path: _write_budget_file(path, {"only.one": 1.0}, version="v0.3"),
             "Budget file version must be v0.4",
+        ),
+        (
+            lambda path: path.write_text(
+                json.dumps({"version": "v0.4", "budgets": {"a.b": "abc"}}),
+                encoding="utf-8",
+            ),
+            "is not a number",
+        ),
+        (
+            lambda path: _write_budget_file(path, {"only.one": 1.0}),
+            "Budget file missing metric keys",
         ),
     ],
 )
@@ -434,6 +447,49 @@ def test_main_returns_invalid_input_for_unusable_budget_assets(
 
     assert exit_code == ExitCode.INVALID_INPUT
     assert expected_message in capsys.readouterr().err
+
+
+def test_main_rejects_unusable_assets_before_running_any_scenario(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    runs: list[str] = []
+
+    def _record_run(spec: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        runs.append(str(spec))
+        raise AssertionError("scenarios must not run when an asset is unusable")
+
+    monkeypatch.setattr(benchmark_harness, "_run_runtime_report", _record_run)
+    budgets_path = tmp_path / "budgets.json"
+    budgets_path.write_text("[]", encoding="utf-8")
+
+    exit_code = benchmark_harness.main(_main_budget_argv(tmp_path, budgets_path))
+
+    assert exit_code == ExitCode.INVALID_INPUT
+    assert runs == []
+    assert not (tmp_path / "artifacts").exists()
+
+
+@pytest.mark.parametrize("broken", ["--artifact-root", "--output"])
+def test_main_returns_error_when_the_output_location_is_a_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    broken: str,
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    budgets_path = tmp_path / "budgets.json"
+    _write_budget_file(budgets_path, _budgets_for_all_runtimes(1_000_000.0))
+    blocker = tmp_path / "afile"
+    blocker.write_text("x", encoding="utf-8")
+    argv = _main_budget_argv(tmp_path, budgets_path)
+    index = argv.index(broken) + 1
+    argv[index] = str(blocker if broken == "--artifact-root" else blocker / "r.json")
+
+    exit_code = benchmark_harness.main(argv)
+
+    assert exit_code == ExitCode.ERROR
+    assert "Error:" in capsys.readouterr().err
 
 
 def test_unprofiled_scenario_summary_persists_final_artifact_size(
