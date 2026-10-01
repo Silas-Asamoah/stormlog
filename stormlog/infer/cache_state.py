@@ -44,11 +44,18 @@ class CacheReset:
         }
 
 
-def reset_cache(url: str, *, timeout_seconds: float) -> CacheReset:
-    """POST to a reset endpoint and record what happened; never raises."""
+def reset_cache(
+    url: str, *, timeout_seconds: float, api_key: str | None = None
+) -> CacheReset:
+    """POST to a reset endpoint and record what happened; never raises.
+
+    The API key, when there is one, goes along as it does with every
+    request, since the reset route usually sits behind the same server.
+    """
     at_ns = time.time_ns()
     recorded = _redact(url)
-    request = urllib.request.Request(url, data=b"", method="POST")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    request = urllib.request.Request(url, data=b"", headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             return CacheReset(recorded, at_ns, status=int(response.status))

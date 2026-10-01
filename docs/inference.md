@@ -184,7 +184,8 @@ them in memory.
 ### Cache state
 
 `--cache-state cold` records that each case should start with an empty prefix
-cache. `--cache-reset-url` is POSTed before each case to clear it. Examples are
+cache. `--cache-reset-url` is POSTed before each case to clear it, with the API
+key when one is set. Examples are
 vLLM's `/reset_prefix_cache`, which vLLM serves only when started with
 `VLLM_SERVER_DEV_MODE=1`, and SGLang's `/flush_cache`:
 

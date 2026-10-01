@@ -266,6 +266,7 @@ class InferenceProfiler:
                 reset_cache,
                 self.config.cache_reset_url,
                 timeout_seconds=self.config.timeout_seconds,
+                api_key=self.config.api_key,
             )
         writer.append(
             cache_state_record(

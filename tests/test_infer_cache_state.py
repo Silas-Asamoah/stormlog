@@ -19,9 +19,11 @@ from tests.infer_workload_helpers import run_profile_with_fake_client
 
 class _ResetHandler(BaseHTTPRequestHandler):
     calls: list[str] = []
+    authorizations: list[str | None] = []
 
     def do_POST(self) -> None:  # noqa: N802
         type(self).calls.append(self.path)
+        type(self).authorizations.append(self.headers.get("Authorization"))
         status = 200 if self.path == "/reset_prefix_cache" else 404
         self.send_response(status)
         self.send_header("Content-Length", "0")
@@ -34,6 +36,7 @@ class _ResetHandler(BaseHTTPRequestHandler):
 @contextlib.contextmanager
 def _reset_server() -> Iterator[str]:
     _ResetHandler.calls = []
+    _ResetHandler.authorizations = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ResetHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -175,3 +178,18 @@ def test_cli_rejects_a_reset_url_that_is_not_http(tmp_path: Path) -> None:
     assert code == 1
     assert "--cache-reset-url must use http:// or https://" in stderr
     assert not (tmp_path / "infer.jsonl").exists()
+
+
+def test_resets_carry_the_api_key(tmp_path: Path) -> None:
+    with _reset_server() as base:
+        run_profile_with_fake_client(
+            tmp_path,
+            latency_seconds=0.0,
+            request_count=1,
+            api_key="sk-test",
+            cache_state="cold",
+            cache_reset_url=f"{base}/reset_prefix_cache",
+        )
+        assert _ResetHandler.authorizations == ["Bearer sk-test"]
+        reset_cache(f"{base}/reset_prefix_cache", timeout_seconds=5)
+        assert _ResetHandler.authorizations[-1] is None
