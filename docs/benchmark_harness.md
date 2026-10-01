@@ -118,13 +118,34 @@ the short-run checks and long-run checks use the same benchmark policy model.
 - `runtime_overhead_pct`: wall-clock overhead of the tracked default mode vs the unprofiled workload.
 - `cpu_overhead_pct`: CPU-time overhead of the tracked default mode vs the unprofiled workload.
 - `artifact_growth_bytes`: tracked-output size minus the unprofiled output size.
-- `rss_growth_per_24h_equiv`: RSS delta normalized to a 24-hour-equivalent run.
-- `max_rss_delta_bytes`: largest observed RSS increase above the soak baseline.
+- `rss_growth_per_24h_equiv`: in-loop RSS delta (last soak sample minus the
+  warmup baseline) normalized to a 24-hour-equivalent run.
+- `max_rss_delta_bytes`: largest RSS increase above the warmup baseline seen at
+  any soak checkpoint.
 - `final_retained_files`: retained append-only segment count after pruning.
 - `final_retained_bytes`: retained append-only bytes after pruning.
 - `rollover_count`, `pruned_segment_count`, `pruned_bytes`: sink churn under sustained load.
 - `history_dropped_*`: bounded-history eviction counts surfaced by the runtime.
 - `collector_failure_event_count`: degraded/recovered collector transitions seen during the run.
+
+### Soak RSS measurement window
+
+The soak reads process RSS at 50 evenly spaced checkpoints while samples are
+emitted. The first checkpoint (2% of the samples) is the warmup boundary and
+becomes `rss_baseline_bytes`; the last checkpoint is the final sample and
+becomes `rss_final_bytes`. Both RSS gates are computed from those in-loop
+readings only, and the 24-hour extrapolation uses the measured window
+(`rss_measured_equivalent_seconds`), not the whole soak.
+
+Session finalization is deliberately outside that window. Closing the sink
+loads every retained segment back into memory to build rollups and the runtime
+then exports its bounded history, which is a one-shot transient of a few
+hundred megabytes on the PR profile. How much of it stays resident afterwards
+depends on the allocator, not on tracker growth, so the harness reports it as
+`finalization_rss_delta_bytes` (and `rss_after_finish_bytes`) for inspection
+without gating it. A genuine leak shows up as a positive slope across the
+checkpoints and still fails the gate; see the synthetic leak test in
+`tests/test_benchmark_harness.py`.
 
 ## Output format
 
