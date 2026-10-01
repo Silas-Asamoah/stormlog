@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Sequence
 
+from stormlog.diagnose_report import DiagnoseUsageError
 from stormlog.exit_codes import ExitCode
 from stormlog.telemetry import telemetry_event_from_record, telemetry_event_to_dict
 from stormlog.telemetry_sink import TelemetrySinkConfig
@@ -584,7 +585,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             interval=args.interval,
             command_line=command_line,
         )
-    except ValueError as exc:
+    except DiagnoseUsageError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return ExitCode.USAGE
     except OSError as exc:

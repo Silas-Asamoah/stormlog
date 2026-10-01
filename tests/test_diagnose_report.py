@@ -10,7 +10,9 @@ import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
 
 from stormlog.diagnose_report import (
+    DiagnoseUsageError,
     build_diagnose_report,
+    validate_output_directory,
     write_incomplete_bundle,
     write_verdict_report,
 )
@@ -264,6 +266,28 @@ def test_write_incomplete_bundle_swallows_a_failed_manifest_write(
     )
 
     assert load_report(tmp_path / "report.json")["verdict"]["exit_code"] == 1
+
+
+def test_validate_output_directory_accepts_missing_and_directory_paths(
+    tmp_path: Path,
+) -> None:
+    validate_output_directory(None)
+    validate_output_directory("")
+    validate_output_directory(str(tmp_path))
+    validate_output_directory(str(tmp_path / "new" / "nested" / "bundle"))
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_validate_output_directory_rejects_paths_under_a_file(
+    tmp_path: Path, nested: bool
+) -> None:
+    existing_file = tmp_path / "afile"
+    existing_file.write_text("x", encoding="utf-8")
+    target = existing_file / "bundle" if nested else existing_file
+
+    with pytest.raises(DiagnoseUsageError, match="not a directory"):
+        validate_output_directory(str(target))
+    assert issubclass(DiagnoseUsageError, ValueError)
 
 
 def test_report_refuses_a_verdict_that_contradicts_the_summary() -> None:

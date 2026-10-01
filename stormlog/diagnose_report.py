@@ -32,6 +32,35 @@ DIAGNOSE_MANIFEST_SCHEMA_VERSION = 2
 SUMMARY_FILENAME = "diagnostic_summary.json"
 MANIFEST_FILENAME = "manifest.json"
 
+
+class DiagnoseUsageError(ValueError):
+    """The diagnose request cannot be served as asked.
+
+    Raised for an invalid option, a runtime that does not support the
+    requested feature, or an output path that is not a directory. The CLIs
+    map it to ``ExitCode.USAGE``; any other exception from a diagnose run is
+    an ``ERROR``.
+    """
+
+
+def validate_output_directory(output: str | None) -> None:
+    """Reject an ``--output`` that is, or sits under, an existing non-directory.
+
+    Raises:
+        DiagnoseUsageError: when the nearest existing ancestor of ``output``
+            is not a directory.
+    """
+    if not output:
+        return
+    probe = Path(output).resolve()
+    while not probe.exists():
+        if probe.parent == probe:
+            return
+        probe = probe.parent
+    if not probe.is_dir():
+        raise DiagnoseUsageError(f"Output path is not a directory: {probe}")
+
+
 # risk flag -> (finding kind, severity, title, summary metric for the flag)
 _RISK_FLAG_FINDINGS: Mapping[str, tuple[str, str, str, str]] = {
     "oom_occurred": (
@@ -259,8 +288,10 @@ def _artifact(name: str) -> Artifact:
 
 __all__ = [
     "DIAGNOSE_REPORT_KIND",
+    "DiagnoseUsageError",
     "MANIFEST_FILENAME",
     "build_diagnose_report",
+    "validate_output_directory",
     "write_incomplete_bundle",
     "write_verdict_report",
 ]

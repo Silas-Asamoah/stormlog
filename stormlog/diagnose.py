@@ -18,7 +18,12 @@ from .device_collectors import (
     build_device_memory_collector,
     detect_torch_runtime_backend,
 )
-from .diagnose_report import write_incomplete_bundle, write_verdict_report
+from .diagnose_report import (
+    DiagnoseUsageError,
+    validate_output_directory,
+    write_incomplete_bundle,
+    write_verdict_report,
+)
 from .exit_codes import ExitCode, completed_with_findings
 from .report import REPORT_FILENAME
 from .session import (
@@ -320,11 +325,11 @@ def build_diagnostic_summary(
 def _validate_native_history_request() -> None:
     runtime_backend = detect_torch_runtime_backend()
     if runtime_backend != "cuda":
-        raise RuntimeError(
+        raise DiagnoseUsageError(
             "Native memory history is currently supported only for CUDA runtimes."
         )
     if not cuda_memory_history_supported():
-        raise RuntimeError(
+        raise DiagnoseUsageError(
             "Native CUDA memory history is unavailable in this PyTorch runtime."
         )
 
@@ -346,6 +351,7 @@ def run_diagnose(
     bundle could not be written completely.
     """
     _validate_native_history_options(native_history, native_history_max_entries)
+    validate_output_directory(output)
 
     try:
         artifact_dir = _create_artifact_dir(output, "stormlog-diagnose")
@@ -476,5 +482,5 @@ def _validate_native_history_options(
 ) -> None:
     if native_history:
         if native_history_max_entries <= 0:
-            raise ValueError("native_history_max_entries must be >= 1")
+            raise DiagnoseUsageError("native_history_max_entries must be >= 1")
         _validate_native_history_request()

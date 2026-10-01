@@ -411,10 +411,12 @@ def test_tfmemprof_diagnose_output_existing_dir_creates_timestamped_subdir(
     assert (subdirs[0] / "manifest.json").exists()
 
 
-def test_tfmemprof_diagnose_invalid_output_returns_one(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_tfmemprof_diagnose_output_not_a_directory_returns_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """When --output is an existing file (cannot create dir), returns 1."""
+    """--output pointing at an existing file is a usage error (2)."""
     existing_file = tmp_path / "existing_file"
     existing_file.write_text("x")
     _patch_tfmemprof_diagnose_env(monkeypatch, gpu_available=False)
@@ -428,7 +430,8 @@ def test_tfmemprof_diagnose_invalid_output_returns_one(
         interval=0.5,
     )
     exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
-    assert exit_code == 1
+    assert exit_code == ExitCode.USAGE
+    assert "not a directory" in capsys.readouterr().err
 
 
 def test_tfmemprof_build_summary_without_capacity_does_not_flag_high_utilization(

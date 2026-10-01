@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from stormlog.derived_fields import compute_event_fields
-from stormlog.diagnose_report import write_incomplete_bundle, write_verdict_report
+from stormlog.diagnose_report import (
+    validate_output_directory,
+    write_incomplete_bundle,
+    write_verdict_report,
+)
 from stormlog.exit_codes import ExitCode, completed_with_findings
 from stormlog.report import REPORT_FILENAME
 from stormlog.session import (
@@ -284,6 +288,7 @@ def run_diagnose(
     detected, FINDINGS (3) when memory risk was detected, ERROR (1) when the
     bundle could not be written completely.
     """
+    validate_output_directory(output)
     try:
         artifact_dir = _create_artifact_dir(output, "stormlog-tensorflow-diagnose")
     except OSError as e:

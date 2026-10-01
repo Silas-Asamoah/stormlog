@@ -20,6 +20,7 @@ except ImportError:
     TF_AVAILABLE = False
     tf = None
 
+from stormlog.diagnose_report import DiagnoseUsageError
 from stormlog.exit_codes import ExitCode
 from stormlog.mlflow_integration import (
     add_mlflow_arguments,
@@ -501,8 +502,9 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     """Produce a portable diagnostic bundle.
 
     Returns ``ExitCode.OK``, ``ExitCode.FINDINGS`` when memory risk was
-    detected, ``ExitCode.USAGE`` for invalid options or a missing extra, and
-    ``ExitCode.ERROR`` when the bundle could not be written.
+    detected, ``ExitCode.USAGE`` for invalid options, a missing extra, or an
+    output path that is not a directory, and ``ExitCode.ERROR`` when the
+    bundle could not be written.
     """
     if args.duration < 0:
         print("Error: --duration must be >= 0", file=sys.stderr)
@@ -527,11 +529,21 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             interval=args.interval,
             command_line=command_line,
         )
+    except DiagnoseUsageError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return ExitCode.USAGE
     except OSError:
         return ExitCode.ERROR
 
     _print_diagnose_summary(artifact_dir, exit_code)
+    _export_diagnose_integrations(artifact_dir, wandb_config, mlflow_config)
 
+    return exit_code
+
+
+def _export_diagnose_integrations(
+    artifact_dir: Path, wandb_config: Any, mlflow_config: Any
+) -> None:
     if wandb_config.enabled:
         try:
             export_diagnose_bundle_to_wandb(
@@ -553,8 +565,6 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             print("MLflow export completed.")
         except Exception as exc:
             _warn_mlflow_export_failure("tfmemprof diagnose", exc)
-
-    return exit_code
 
 
 def _print_diagnose_summary(artifact_dir: Path, exit_code: int) -> None:

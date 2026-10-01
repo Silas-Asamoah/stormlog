@@ -468,23 +468,50 @@ def test_diagnose_output_existing_dir_creates_timestamped_subdir(
     assert (subdirs[0] / "manifest.json").exists()
 
 
-def test_diagnose_invalid_output_returns_one(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("nested", [False, True])
+def test_diagnose_output_not_a_directory_returns_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    nested: bool,
 ) -> None:
-    """When --output is an existing file (cannot create dir), returns 1."""
+    """--output that is, or sits under, an existing file is a usage error (2)."""
     existing_file = tmp_path / "existing_file"
     existing_file.write_text("x")
     _patch_diagnose_env(monkeypatch, cuda_available=False)
     _patch_timeline_capture(monkeypatch)
 
+    output = existing_file / "bundle" if nested else existing_file
     args = SimpleNamespace(
-        output=str(existing_file),
+        output=str(output),
         device=None,
         duration=0,
         interval=0.5,
     )
     exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
-    assert exit_code == 1
+    assert exit_code == ExitCode.USAGE
+    assert "not a directory" in capsys.readouterr().err
+    assert existing_file.read_text() == "x"
+
+
+def test_diagnose_unexpected_runtime_error_is_not_a_usage_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Only DiagnoseUsageError maps to USAGE; a driver RuntimeError propagates."""
+
+    def _broken_run_diagnose(**kwargs: Any) -> None:
+        raise RuntimeError("CUDA driver error")
+
+    monkeypatch.setattr(diagnose_module, "run_diagnose", _broken_run_diagnose)
+    args = SimpleNamespace(
+        output=str(tmp_path),
+        device=None,
+        duration=0,
+        interval=0.5,
+    )
+
+    with pytest.raises(RuntimeError, match="CUDA driver error"):
+        gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
 
 def test_run_timeline_capture_uses_memory_tracker_for_mps(

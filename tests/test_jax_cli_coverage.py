@@ -9,6 +9,7 @@ from unittest import mock
 
 import pytest
 
+from stormlog.diagnose_report import DiagnoseUsageError
 from stormlog.exit_codes import ExitCode
 from stormlog.jax import cli
 
@@ -144,12 +145,30 @@ def test_cmd_diagnose_output_not_a_directory_is_usage(capsys: Any) -> None:
         mock.patch(
             "stormlog.jax.cli._load_run_diagnose",
             return_value=mock.Mock(
-                side_effect=ValueError("Output path exists but is not a directory")
+                side_effect=DiagnoseUsageError(
+                    "Output path exists but is not a directory"
+                )
             ),
         ),
     ):
         assert cli.cmd_diagnose(args) == ExitCode.USAGE
     assert "not a directory" in capsys.readouterr().err
+
+
+def test_cmd_diagnose_plain_value_error_is_not_a_usage_error(capsys: Any) -> None:
+    args = argparse.Namespace(duration=5, interval=0.5, output=None, device=0)
+    config = mock.Mock()
+    config.enabled = False
+    with (
+        mock.patch("stormlog.jax.cli._resolve_wandb_config", return_value=config),
+        mock.patch("stormlog.jax.cli._resolve_mlflow_config", return_value=config),
+        mock.patch(
+            "stormlog.jax.cli._load_run_diagnose",
+            return_value=mock.Mock(side_effect=ValueError("producer bug")),
+        ),
+        pytest.raises(ValueError, match="producer bug"),
+    ):
+        cli.cmd_diagnose(args)
 
 
 def test_cmd_analyze_non_object_json(capsys: Any, tmp_path: Any) -> None:

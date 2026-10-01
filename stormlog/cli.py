@@ -18,6 +18,7 @@ try:
     from .phases import summarize_phase_resolution
 except ImportError:  # pragma: no cover - phase package may land in another slice
     summarize_phase_resolution = None  # type: ignore[assignment]
+from .diagnose_report import DiagnoseUsageError
 from .exit_codes import ExitCode
 from .mlflow_integration import (
     add_mlflow_arguments,
@@ -1298,7 +1299,7 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
                 100000,
             ),
         )
-    except RuntimeError as exc:
+    except DiagnoseUsageError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return ExitCode.USAGE
     except OSError as exc:
