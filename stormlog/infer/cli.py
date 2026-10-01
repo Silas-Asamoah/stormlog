@@ -438,12 +438,13 @@ def cmd_profile(args: argparse.Namespace) -> int:
     """Run active inference profiling."""
     _validate_profile_arguments(args)
     _warn_about_short_prompts(args)
+    _warn_about_repeated_prompts(args)
     if args.cache_state == COLD and args.cache_reset_url is None:
         _print_warning(
             "--cache-state cold without --cache-reset-url: nothing will reset "
             "the cache, and each case records its cache state as unverified"
         )
-    report = run_profile(_profile_config(args))
+    report = run_profile(_profile_config(args), on_warning=_print_warning)
     print(format_analysis_text(report))
     print(f"Artifact saved to: {Path(args.output)}")
     summary = report.get("summary", {})
@@ -725,3 +726,13 @@ def _warn_about_short_prompts(args: argparse.Namespace) -> None:
             f"beside the nonce that --prompt-mode {args.prompt_mode} adds; "
             "prompts may exceed the target and the shared share may drift"
         )
+
+
+def _warn_about_repeated_prompts(args: argparse.Namespace) -> None:
+    if args.prompt_mode == REPEAT or args.cache_reset_url is not None:
+        return
+    _print_warning(
+        f"prompts are the same for every run with --seed {args.seed}; a server "
+        "that already served this workload starts with them cached. Pass "
+        "--cache-reset-url or change --seed to start cold"
+    )

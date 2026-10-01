@@ -19,7 +19,9 @@ from stormlog.infer.cache_state import (
     run_kind,
 )
 from stormlog.infer.cli import main as infer_main
-from tests.infer_workload_helpers import run_profile_with_fake_client
+from stormlog.infer.config import ProfileConfig
+from stormlog.infer.profile import InferenceProfiler
+from tests.infer_workload_helpers import SleepingClient, run_profile_with_fake_client
 
 
 class _ResetHandler(BaseHTTPRequestHandler):
@@ -146,7 +148,7 @@ def test_cases_without_a_requested_state_say_so_quietly(tmp_path: Path) -> None:
     )
     (record,) = _cache_records(tmp_path)
     assert (record["requested"], record["reset"]) == ("unspecified", None)
-    assert record["reason"] == "no cache state was requested"
+    assert record["reason"].startswith("no cache state was requested; earlier")
     assert "cache:" not in format_analysis_text(report)
 
 
@@ -205,3 +207,54 @@ def test_resets_carry_the_api_key(tmp_path: Path) -> None:
         assert _ResetHandler.authorizations == ["Bearer sk-test"]
         reset_cache(f"{base}/reset_prefix_cache", timeout_seconds=5)
         assert _ResetHandler.authorizations[-1] is None
+
+
+def test_a_failed_reset_is_reported_as_a_warning(tmp_path: Path) -> None:
+    warnings: list[str] = []
+    with _reset_server() as base:
+        profiler = InferenceProfiler(
+            ProfileConfig(
+                endpoint="http://127.0.0.1:1/v1/chat/completions",
+                model="fake-model",
+                concurrency=(1,),
+                input_tokens=(8,),
+                output_tokens=(4,),
+                request_count=1,
+                output_path=str(tmp_path / "infer.jsonl"),
+                stream=False,
+                system_sampler="none",
+                tokenizer="none",
+                cache_state="cold",
+                cache_reset_url=f"{base}/flush",
+            ),
+            on_warning=warnings.append,
+        )
+        profiler.client = SleepingClient(0.0)  # type: ignore[assignment]
+        profiler.run()
+    assert warnings == [
+        "cache reset failed before c1_in8_out4 (HTTP 404); the case is not a "
+        "cold start"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("flags", "warned"),
+    [
+        (["--prompt-mode", "unique"], True),
+        (
+            [
+                "--prompt-mode",
+                "unique",
+                "--cache-reset-url",
+                "http://127.0.0.1:1/reset_prefix_cache",
+            ],
+            False,
+        ),
+        ([], False),
+    ],
+)
+def test_cli_warns_that_repeated_seeds_send_cached_prompts(
+    tmp_path: Path, flags: list[str], warned: bool
+) -> None:
+    _code, stderr = _cli(tmp_path, *flags)
+    assert ("prompts are the same for every run with --seed 0" in stderr) is warned

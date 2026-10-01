@@ -45,8 +45,15 @@ from .workload import workload_record
 class InferenceProfiler:
     """Profile an OpenAI-compatible chat completions endpoint."""
 
-    def __init__(self, config: ProfileConfig, *, run_id: str | None = None) -> None:
+    def __init__(
+        self,
+        config: ProfileConfig,
+        *,
+        run_id: str | None = None,
+        on_warning: Callable[[str], None] | None = None,
+    ) -> None:
         self.config = config
+        self.on_warning = on_warning
         self.session = create_session_summary(source="stormlog.infer.profile")
         self.run_id = run_id or config.run_id or new_session_id()
         self.token_counter = build_token_counter(
@@ -268,6 +275,11 @@ class InferenceProfiler:
                 timeout_seconds=self.config.timeout_seconds,
                 api_key=self.config.api_key,
             )
+            if not reset.succeeded and self.on_warning is not None:
+                self.on_warning(
+                    f"cache reset failed before {case.case_id} "
+                    f"({reset.error or reset.status}); the case is not a cold start"
+                )
         writer.append(
             cache_state_record(
                 session_id=self.session.session_id,
@@ -865,9 +877,11 @@ class _RequestCounter:
             return current
 
 
-def run_profile(config: ProfileConfig) -> dict[str, Any]:
+def run_profile(
+    config: ProfileConfig, *, on_warning: Callable[[str], None] | None = None
+) -> dict[str, Any]:
     """Run an inference profile from a resolved config."""
-    return InferenceProfiler(config).run()
+    return InferenceProfiler(config, on_warning=on_warning).run()
 
 
 def _server_prompt_count(usage: dict[str, Any] | None) -> TokenCount | None:

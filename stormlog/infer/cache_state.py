@@ -130,7 +130,10 @@ def _reason(requested: str, reset: CacheReset | None) -> str:
         return "the cache reset succeeded, but no engine adapter can confirm it"
     if requested == COLD:
         return "nothing reset the cache, and no engine adapter can read it"
-    return "no cache state was requested"
+    return (
+        "no cache state was requested; earlier traffic, including an earlier "
+        "run with the same seed, decides what the cache holds"
+    )
 
 
 def cache_summary(record: dict[str, Any] | None) -> dict[str, Any]:
