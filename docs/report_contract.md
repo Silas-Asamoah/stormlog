@@ -67,12 +67,9 @@ heuristic detection by the tool. CI policy usually differs between the two.
 | `tfmemprof`/`jaxmemprof monitor`/`track` | done, or Ctrl+C inside the capture loop | TensorFlow/JAX not installed; missing extra | - | - | - | unexpected error | Ctrl+C outside the capture loop |
 | `stormlog query ...` | done | argparse error; `--csv` on a query that cannot emit CSV | - | - | - | unexpected error | Ctrl+C |
 | `examples.cli.benchmark_harness` | gates passed, or no `--check` | argparse error; regression defaults outside the `pr` profile | - | a budget or regression gate failed under `--check` | budget, baseline, or tolerance asset missing, unparsable, not an object, wrong version, non-numeric, or missing a metric; baseline config mismatch (file problems are checked before any scenario runs; a missing metric after) | unexpected error; `--artifact-root` or `--output` not writable | Ctrl+C |
-| `stormlog infer ...` | done | argparse error | - | - | - | every other failure, including bad input and all requests failing | Ctrl+C (`collect-server` exits 0) |
-
-`stormlog infer` has not adopted the table yet. Its codes are listed so a
-consumer knows that `1` there still mixes bad input, failed measurements,
-and crashes; see [Inference Profiling](inference.md) for the current
-`collect-server` behaviour.
+| `stormlog infer profile` | done, with at least one measured request succeeding | argparse error; a setting it cannot use, checked before anything is sent; a requested tokenizer that is not installed; an `--arrival-trace` case the trace does not have, or no `--arrival-trace-case` when it has several | no measured request succeeded | - | `--arrival-trace` missing, unparsable, or with invalid offsets | unexpected error | Ctrl+C (the artifact ends with an `interrupted` session record) |
+| `stormlog infer analyze` | done, including an artifact in which every request failed | argparse error | - | - | artifact or `--server-telemetry` file missing, unparsable, or invalid, including an artifact with no `infer.session` or `infer.request` records | unexpected error; `--output` not writable | Ctrl+C |
+| `stormlog infer collect-server` | duration elapsed, Ctrl+C or SIGTERM, or the server process ended | argparse error; options it cannot use; a `--pid` with no running process; a `--device-index` or `--device-uuid` the host does not have; no NVML library without `--no-gpu` | the GPU identity changed mid-run | - | - | unexpected error | - |
 
 ### Changes from earlier releases
 
@@ -101,6 +98,14 @@ These are breaking changes for callers that matched the old numbers:
 - The W&B export of a diagnose bundle logs the manifest's `exit_code` as
   the `stormlog_exit_code` metric, so dashboards keyed on `2` for memory
   risk now see `3`.
+- `stormlog infer` follows the table. Each of these used to exit `1`:
+  - `infer profile` exits `3` when no measured request succeeds, `2` for a
+    setting it cannot use, and `5` for an `--arrival-trace` it cannot read.
+  - `infer analyze` exits `5` for an artifact or `--server-telemetry` file
+    it cannot read.
+  - `infer collect-server` exits `3` when the GPU identity changes, and `2`
+    for options it cannot use, a `--pid` with no running process, a GPU the
+    host does not have, or a host without NVML.
 
 ## The report envelope
 

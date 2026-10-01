@@ -146,6 +146,15 @@ whose status is `interrupted`. A run that fails for another reason ends with
 status `incomplete`. Either way, the requests recorded before the stop can
 still be analyzed.
 
+`infer profile` returns codes from the
+[exit-code contract](report_contract.md):
+
+- `0` when the run completes and at least one measured request succeeds.
+- `3` when none succeeds; the artifact records each failure.
+- `2` for a setting it cannot use, before anything is sent.
+- `5` for an `--arrival-trace` it cannot read.
+- `1` for anything unexpected.
+
 Request outcomes:
 
 | `status` | Meaning |
@@ -288,6 +297,12 @@ The report includes:
 - failure rate
 - highest recorded client-local device memory when system telemetry is available
 - scoped server memory observations when a matching on-host collector artifact is supplied
+
+`infer analyze` exits `5` when the artifact or a `--server-telemetry` file is
+missing, unparsable, or invalid, which includes an artifact with no
+`infer.session` or `infer.request` records. Otherwise it exits `0`, even when
+every request in the artifact failed: analysis reports findings without
+failing.
 
 ## Token accounting
 
@@ -469,7 +484,11 @@ process exits, or when the GPU UUID changes. Every completed poll is kept, and
 the command prints the stop reason. Ctrl+C and SIGTERM are a normal stop. When
 the server process exits, the collector writes one `invalid` sample, prints a
 warning, and exits 0, because stopping the server after a run is routine. A
-changed GPU UUID also writes an `invalid` sample, and the command exits 1. A
+changed GPU UUID also writes an `invalid` sample, and the command exits 3
+(`FINDINGS`): the earlier polls are sound, but later case windows are not
+observed. Options it cannot use, a `--pid` with no running process, a
+`--device-index` or `--device-uuid` the host does not have, and a host without
+NVML (pass `--no-gpu` there) exit 2 before collection starts. A
 reading that fails without evidence of a different process or GPU, such as an
 NVML error or a psutil permission error, is recorded as `missing` with a null
 value, and collection continues.

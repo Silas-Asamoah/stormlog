@@ -45,8 +45,9 @@ stormlog
 
 Every command returns a code from one fixed table so CI jobs and agents can
 branch without parsing output: `0` ok, `1` unexpected error, `2` usage or
-unusable installation, `3` findings (memory risk detected), `4` a configured
-gate failed, `5` invalid input artifact, `130` interrupted. `diagnose` bundles
+unusable installation, `3` findings (memory risk detected, or an inference
+run in which no measured request succeeded), `4` a configured gate failed, `5`
+invalid input artifact, `130` interrupted. `diagnose` bundles
 also write a `report.json` verdict that pairs with the exit code. The full
 table, the per-command behaviour, and the report schema are in the
 [Report and Exit-Code Contract](report_contract.md).
