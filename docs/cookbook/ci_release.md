@@ -95,10 +95,21 @@ python -m examples.cli.benchmark_harness \
   --output artifacts/benchmarks/latest_v0.4_budget.json
 ```
 
+## Branch on exit codes, not on output
+
+Every Stormlog command returns a code from one fixed table. For the gates
+above: `0` passed, `4` a budget or regression gate failed under `--check`,
+`5` a budget, baseline, or tolerance asset is missing, malformed, or has the
+wrong version, `2` a usage error, `1` an unexpected failure. `diagnose`
+commands exit `3` when a risk flag is raised and write a `report.json`
+verdict into the bundle. The full table and the report schema are in the
+[Report and Exit-Code Contract](../report_contract.md).
+
 ## What to archive from CI
 
 - benchmark harness JSON output
-- sink directories or diagnose bundles for failed runs
+- sink directories or diagnose bundles for failed runs (each bundle's
+  `report.json` carries the verdict and findings)
 - any saved analysis reports used during triage
 
 ## What to do next

@@ -83,6 +83,12 @@ trials run on RAM-backed storage (see "Overhead measurement" below).
 The checked-in regression assets intentionally cover only the default `pr`
 profile.
 
+With `--check`, a failed gate exits `4` (`GATE_FAILED`); without it the
+report is still written and the command exits `0`. A missing, malformed, or
+wrong-version budget, baseline, or tolerance file exits `5`
+(`INVALID_INPUT`) with a one-line message. See the
+[Report and Exit-Code Contract](report_contract.md).
+
 ## Enforce Budgets
 
 ```bash
