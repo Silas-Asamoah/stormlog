@@ -64,8 +64,12 @@ def latency_from_intended_ms(requests: list[dict[str, Any]]) -> list[float]:
     return values
 
 
-def arrival_lines(arrivals: Any) -> list[str]:
-    """One text-report line for a case whose arrivals are worth showing."""
+def arrival_lines(arrivals: Any, latency: Any = None) -> list[str]:
+    """One text-report line for a case whose arrivals are worth showing.
+
+    An open-loop line also gives the latency measured from when requests
+    were due, which shows any time they waited before being sent.
+    """
     if not isinstance(arrivals, dict):
         return []
     eventful = arrivals.get("dropped") or arrivals.get("failed")
@@ -81,6 +85,9 @@ def arrival_lines(arrivals: Any) -> list[str]:
     lag = (arrivals.get("dispatch_lag_ms") or {}).get("p95")
     if is_number(lag):
         parts.append(f"dispatch lag p95 {lag:.2f} ms")
+    due = (latency or {}).get("e2e_from_intended_p95")
+    if arrivals.get("mode") != "closed" and is_number(due):
+        parts.append(f"E2E from due time p95 {due:.2f} ms")
     return ["  arrivals: " + ", ".join(parts)]
 
 

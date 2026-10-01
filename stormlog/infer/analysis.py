@@ -234,7 +234,7 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
         f"requests={_fmt(throughput.get('requests_per_second'))} req/s"
     ]
     if isinstance(case, dict):
-        lines.extend(arrival_lines(case.get("arrivals")))
+        lines.extend(arrival_lines(case.get("arrivals"), case.get("latency_ms")))
         lines.extend(prompt_lines(case.get("prompts")))
         lines.extend(cache_lines(case.get("cache")))
     memory = case.get("memory", {}) if isinstance(case, dict) else {}

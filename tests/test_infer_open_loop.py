@@ -98,6 +98,8 @@ def test_wait_overflow_delays_arrivals_and_records_the_wait(tmp_path: Path) -> N
     assert arrivals["peak_in_flight"] == 1
     text = format_analysis_text(report)
     assert "held for a slot 2" in text
+    # The text report shows the wait the send-time latency leaves out.
+    assert "E2E from due time p95" in text
 
 
 def test_closed_loop_records_arrivals_without_an_offered_rate(tmp_path: Path) -> None:
