@@ -86,8 +86,11 @@ profile.
 With `--check`, a failed gate exits `4` (`GATE_FAILED`); without it the
 report is still written and the command exits `0`. A missing, malformed,
 non-object, wrong-version, or incomplete budget, baseline, or tolerance
-file exits `5` (`INVALID_INPUT`) with a one-line message, and the assets are
-validated before any scenario runs so a typo does not cost the run. An
+file exits `5` (`INVALID_INPUT`) with a one-line message. Problems with a
+file itself (missing, unparsable, not an object, wrong version, non-numeric,
+baseline config mismatch) are caught before any scenario runs, so a typo
+does not cost the run; a budget for a metric the run never produced is
+caught after it. An
 `--artifact-root` or `--output` that cannot be written exits `1`. See the
 [Report and Exit-Code Contract](report_contract.md).
 

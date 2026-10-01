@@ -100,8 +100,9 @@ python -m examples.cli.benchmark_harness \
 Every Stormlog command returns a code from one fixed table. For the gates
 above: `0` passed, `4` a budget or regression gate failed under `--check`,
 `5` a budget, baseline, or tolerance asset is missing, malformed, or has the
-wrong version (checked before any scenario runs), `2` a usage error, `1` an
-unexpected failure or an unwritable output location. `diagnose` commands
+wrong version (file problems are caught before any scenario runs), `2` a
+usage error, `1` an unexpected failure or an unwritable output location.
+`diagnose` commands
 exit `3` when a risk flag is raised and write a `report.json` verdict into
 the bundle; an incomplete bundle's report says `error`/`1`. The full table
 and the report schema are in the
