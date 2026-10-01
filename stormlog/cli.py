@@ -18,6 +18,7 @@ try:
     from .phases import summarize_phase_resolution
 except ImportError:  # pragma: no cover - phase package may land in another slice
     summarize_phase_resolution = None  # type: ignore[assignment]
+from .exit_codes import ExitCode
 from .mlflow_integration import (
     add_mlflow_arguments,
     ensure_mlflow_available,
@@ -167,7 +168,7 @@ def _resolve_wandb_config_or_exit(args: argparse.Namespace) -> Any:
         ensure_wandb_available(config)
     except ImportError as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+        raise SystemExit(ExitCode.USAGE) from exc
     return config
 
 
@@ -183,7 +184,7 @@ def _resolve_mlflow_config_or_exit(args: argparse.Namespace) -> Any:
         ensure_mlflow_available(config)
     except ImportError as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+        raise SystemExit(ExitCode.USAGE) from exc
     return config
 
 
@@ -476,10 +477,10 @@ Cookbook:
             sys.exit(cmd_diagnose(args))
     except KeyboardInterrupt:
         print("\nOperation cancelled by user")
-        sys.exit(0)
+        sys.exit(ExitCode.INTERRUPTED)
     except Exception as e:
         print(f"Error: {e}")
-        sys.exit(1)
+        sys.exit(ExitCode.ERROR)
 
 
 def cmd_info(args: argparse.Namespace) -> None:
@@ -1206,12 +1207,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
     if not input_path.exists():
         print(f"Error: Input file '{input_file}' not found")
-        return 1
+        return ExitCode.INVALID_INPUT
 
     requested_session_id = getattr(args, "session_id", None)
     analysis_input = _load_analysis_input(input_path, requested_session_id)
     if analysis_input is None:
-        return 1
+        return ExitCode.INVALID_INPUT
     report = _generate_analysis_report(analysis_input, requested_session_id)
 
     summary_text = _build_analyze_summary(
@@ -1238,7 +1239,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if args.visualization:
         _render_analysis_visualization(args, analysis_input.events, report)
 
-    return 0
+    return ExitCode.OK
 
 
 def _render_analysis_visualization(
@@ -1268,9 +1269,14 @@ def _render_analysis_visualization(
 
 
 def cmd_diagnose(args: argparse.Namespace) -> int:
-    """Produce a portable diagnostic bundle. Returns 0 (OK), 1 (failure), or 2 (memory risk)."""
+    """Produce a portable diagnostic bundle.
+
+    Returns ``ExitCode.OK``, ``ExitCode.FINDINGS`` when memory risk was
+    detected, ``ExitCode.USAGE`` for invalid options or an unsupported
+    runtime, and ``ExitCode.ERROR`` when the bundle could not be written.
+    """
     if not _valid_diagnose_arguments(args):
-        return 1
+        return ExitCode.USAGE
 
     wandb_config = _resolve_wandb_config_or_exit(args)
     mlflow_config = _resolve_mlflow_config_or_exit(args)
@@ -1292,15 +1298,18 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
                 100000,
             ),
         )
-    except (OSError, RuntimeError) as exc:
+    except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        return 1
+        return ExitCode.USAGE
+    except OSError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return ExitCode.ERROR
 
     # Structured stdout summary
     print(f"Artifact: {artifact_dir}")
-    if exit_code == 0:
+    if exit_code == ExitCode.OK:
         status = "OK"
-    elif exit_code == 2:
+    elif exit_code == ExitCode.FINDINGS:
         status = "MEMORY_RISK"
     else:
         status = "FAILED"
