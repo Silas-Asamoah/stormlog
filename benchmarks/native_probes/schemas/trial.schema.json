@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/trial.schema.json",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/benchmarks/native_probes/schemas/trial.schema.json",
   "title": "Stormlog native probe experiment trial",
   "type": "object",
   "additionalProperties": false,

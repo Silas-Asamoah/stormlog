@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-_SCHEMAS = Path(__file__).with_name("schemas")
+_SCHEMAS = Path(__file__).resolve().parents[2] / "benchmarks/native_probes/schemas"
 _jsonschema = importlib.import_module("jsonschema")
 
 

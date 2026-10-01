@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from research.native_probes.runner import _is_device_activity_event
+from scripts.native_probes.runner import _is_device_activity_event
 
 
 @pytest.mark.skipif(

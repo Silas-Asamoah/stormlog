@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Silas-Asamoah/stormlog/research/native_probes/schemas/run_index.schema.json",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/benchmarks/native_probes/schemas/run_index.schema.json",
   "title": "Stormlog native probe run index",
   "type": "object",
   "additionalProperties": false,

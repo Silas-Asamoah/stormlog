@@ -88,7 +88,7 @@ def test_cli_rejects_malformed_normalize_and_analysis_inputs(tmp_path: Path) -> 
 
 
 def test_cli_rejects_forged_but_checksum_shaped_promotion(tmp_path: Path) -> None:
-    matrix = REPOSITORY / "research/native_probes/matrices/stormlog_validated.json"
+    matrix = REPOSITORY / "benchmarks/native_probes/matrices/stormlog_validated.json"
     matrix_copy = tmp_path / "matrix.json"
     matrix_copy.write_text(matrix.read_text(encoding="utf-8"), encoding="utf-8")
     value = json.loads(matrix_copy.read_text(encoding="utf-8"))
@@ -207,7 +207,7 @@ def _run_cli(
     *arguments: str | Path, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "research.native_probes.cli", *map(str, arguments)],
+        [sys.executable, "-m", "scripts.native_probes.cli", *map(str, arguments)],
         cwd=REPOSITORY,
         capture_output=True,
         text=True,

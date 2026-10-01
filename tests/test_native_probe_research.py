@@ -13,39 +13,39 @@ from typing import Sequence
 import jsonschema
 import pytest
 
-from research.native_probes.analysis import analyze_trials, paired_perturbations
-from research.native_probes.mode_commands import (
+from scripts.native_probes.analysis import analyze_trials, paired_perturbations
+from scripts.native_probes.mode_commands import (
     Workload,
     expected_artifacts,
     microbenchmark_command,
     process_roles,
 )
-from research.native_probes.models import (
+from scripts.native_probes.models import (
     ArtifactExpectation,
     CommandSpec,
     ExperimentMode,
     TrialSpec,
     WorkloadId,
 )
-from research.native_probes.normalization import (
+from scripts.native_probes.normalization import (
     classify_overlap,
     normalize_loss,
     normalize_trial,
     validate_measurement_window,
 )
-from research.native_probes.planning import build_plan, counterbalanced_order, trial_id
-from research.native_probes.preflight import collect_environment, write_manifest
-from research.native_probes.references import _safe_extract
-from research.native_probes.runner import _artifact, _artifact_digest, run_trial
-from research.native_probes.validation import (
+from scripts.native_probes.planning import build_plan, counterbalanced_order, trial_id
+from scripts.native_probes.preflight import collect_environment, write_manifest
+from scripts.native_probes.references import _safe_extract
+from scripts.native_probes.runner import _artifact, _artifact_digest, run_trial
+from scripts.native_probes.validation import (
     build_unvalidated_matrix,
     validate_matrix_promotions,
 )
-from research.native_probes.workloads.cuda_microbench import w2_contract
+from scripts.native_probes.workloads.cuda_microbench import w2_contract
 
 REPOSITORY = Path(__file__).resolve().parents[1]
-SCHEMAS = REPOSITORY / "research/native_probes/schemas"
-MATRICES = REPOSITORY / "research/native_probes/matrices"
+SCHEMAS = REPOSITORY / "benchmarks/native_probes/schemas"
+MATRICES = REPOSITORY / "benchmarks/native_probes/matrices"
 
 
 def test_preflight_is_explicit_about_unavailable_accelerators() -> None:
@@ -361,7 +361,7 @@ def test_runner_requires_timed_device_kernel_trace_event(tmp_path: Path) -> None
     }
     trace = tmp_path / "trace.json"
     trace.write_text(json.dumps(payload), encoding="utf-8")
-    from research.native_probes.runner import _usable_chrome_trace
+    from scripts.native_probes.runner import _usable_chrome_trace
 
     assert not _usable_chrome_trace(trace)
 
@@ -742,7 +742,7 @@ def test_matrix_promotion_requires_linked_executed_command(
 
 
 def test_readers_distinguish_immutable_v1_evidence_from_v2(tmp_path: Path) -> None:
-    from research.native_probes.cli import _validate
+    from scripts.native_probes.cli import _validate
 
     candidate = json.loads((MATRICES / "stormlog_validated.json").read_text())[
         "candidates"
@@ -829,8 +829,9 @@ def test_matrix_promotion_rejects_tampered_digest_and_symlink(tmp_path: Path) ->
     linked = _promotion_fixture(tmp_path / "linked", candidate["id"], claim)
     root = tmp_path / "linked"
     (root / "environment-link.json").symlink_to(root / "environment.json")
-    linked["evidence"] = _evidence_rows(root)
-    linked["evidence"][0]["path"] = "environment-link.json"
+    linked_evidence = _evidence_rows(root)
+    linked_evidence[0]["path"] = "environment-link.json"
+    linked["evidence"] = linked_evidence
     with pytest.raises(ValueError, match="symlink"):
         validate_matrix_promotions(matrix, [linked], root)
 
@@ -1083,8 +1084,7 @@ def _promotion_fixture(
         },
     }
     documents["trial"]["schema_version"] = 2
-    documents["trial"]["artifacts"][0]["path"] = str(raw_path)
-    from research.native_probes.cli import _validate
+    from scripts.native_probes.cli import _validate
 
     for name, schema_name in (
         ("environment", "environment.schema.json"),

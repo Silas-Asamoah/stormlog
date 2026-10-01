@@ -67,7 +67,7 @@ def microbenchmark_command(
         return _counter_command(base, artifact_directory, vendor)
     raise ValueError(
         f"{mode.value} requires a session-managed engine, eBPF, or programmable "
-        "probe adapter; use the exact commands in experiment_specification.md"
+        "probe adapter; use the exact commands in benchmarks/native_probes/experiment.json"
     )
 
 
@@ -75,7 +75,7 @@ def _workload_argv(workload: Workload) -> tuple[str, ...]:
     return (
         sys.executable,
         "-m",
-        "research.native_probes.workloads.cuda_microbench",
+        "scripts.native_probes.workloads.cuda_microbench",
         "--workload",
         workload.workload_id.value,
         "--warmup",
