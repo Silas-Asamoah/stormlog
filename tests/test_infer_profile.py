@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
+from stormlog.exit_codes import ExitCode
 from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
@@ -554,7 +555,7 @@ class InferenceProfileTests(unittest.TestCase):
                 self.assertEqual(request["output_token_source"], "estimated")
                 self.assertFalse(request["output_token_exact"])
 
-    def test_profile_returns_error_when_all_measured_requests_fail(self) -> None:
+    def test_profile_reports_findings_when_all_measured_requests_fail(self) -> None:
         with _fake_server() as endpoint:
             with tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "infer.jsonl"
@@ -583,7 +584,7 @@ class InferenceProfileTests(unittest.TestCase):
                             ]
                         )
 
-                self.assertEqual(exit_code, 1)
+                self.assertEqual(exit_code, ExitCode.FINDINGS)
                 self.assertIn(
                     "no measured inference requests succeeded",
                     stderr.getvalue(),

@@ -471,9 +471,14 @@ def cmd_profile(args: argparse.Namespace) -> int:
         int(summary.get("total_requests", 0)) > 0
         and int(summary.get("successful_requests", 0)) == 0
     ):
-        print("Error: no measured inference requests succeeded", file=sys.stderr)
-        return 1
-    return 0
+        # The run worked; what it measured is a server that failed every request.
+        print(
+            "Findings: no measured inference requests succeeded; "
+            "the report above gives failures by status",
+            file=sys.stderr,
+        )
+        return int(ExitCode.FINDINGS)
+    return int(ExitCode.OK)
 
 
 @contextmanager
