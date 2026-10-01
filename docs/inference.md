@@ -302,6 +302,12 @@ metadata with `stream_options.include_usage` by default. Use
 usage is unavailable, output token counts fall back to the configured tokenizer
 or estimate and the request event records that provenance.
 
+Fallback counts are made on each request's own thread, not on the thread that
+keeps the arrival schedule. A slow tokenizer can still compete with the
+schedule for the CPU when hundreds of long prompts a second need counting, so
+for open-loop runs at high rates prefer an endpoint that reports usage, and
+check the case's dispatch-lag percentiles.
+
 Core endpoint profiling does not require tokenizer packages. Install tokenizer
 extras when you want better prompt sizing and fallback counts:
 
