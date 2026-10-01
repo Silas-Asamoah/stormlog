@@ -120,12 +120,13 @@
     "tooling": {
       "implemented_cpu_tested": ["open-loop request schedule", "pinned request and server argv", "fresh server per trial", "start-stop profile controls", "raw request and resource records", "missing CUPTI process and incomplete stream fail-closed"],
       "requires_hardware_preflight": ["vLLM wheel, CUDA, CUPTI, and driver compatibility", "resolved tokenizer and KV dtype", "public-engine and Proton start-stop output", "Nsight capture", "direct CUPTI process isolation and all CUDA process coverage"],
-      "requires_tooling_before_final": ["measured GPU, pinned host, and collector buffer memory or explicit inconclusive claims", "SLO goodput definition and measurement", "fixed environment and dependency hashes", "separate per-process CUPTI output if vLLM has multiple CUDA processes"]
+      "requires_tooling_before_final": ["measured GPU, pinned host, and collector buffer memory or explicit inconclusive claims", "SLO goodput definition and measurement", "kernel correlation and external coverage analysis", "fixed environment and dependency hashes", "separate per-process CUPTI output if vLLM has multiple CUDA processes"]
     }
   },
   "readiness": {
     "local": ["verify current PR head and clean tree", "focused and full relevant tests", "schema and retained evidence hashes", "freeze approved thresholds and workload before final observations"],
-    "hardware_qualification": ["W1 host/device activity", "W2 observed overlap and serialized control", "W3 graph replay", "W4 pressure loss visibility", "coexistence", "packaging and privilege", "AMD as independent qualification lane where required"],
+    "hardware_qualification": ["screen all eight candidates across all 24 matrix fields and retain unsupported results", "W1 host/device activity", "W2 observed overlap and serialized control", "W3 graph replay", "W4 pressure loss visibility", "coexistence", "packaging and privilege", "AMD as independent qualification lane where required"],
+    "pressure_tooling_gap": "Current W4 workload records small-buffer, slow-consumer, flush, and postprocessor controls without inducing them; implement and verify each approved pressure variant before claiming W4 coverage.",
     "comparisons": ["profiler-off", "public PyTorch/Kineto", "direct CUPTI", "vLLM public-engine and Proton where applicable", "separate Nsight Systems correctness trials", "separate replay-aware detailed counters"],
     "artifacts": "fresh immutable IDs, exact commands, environment, versions, exits, failures, raw hashes, loss counters, download and verify before pause",
     "cloud": "one instance at a time; on-demand L4 preferred if compatible; pause immediately after work; other cloud only where necessary and separately authorized",
