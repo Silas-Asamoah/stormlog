@@ -6,8 +6,9 @@ import asyncio
 import json
 import time
 import urllib.error
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,11 @@ from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .host_clock import host_boot_id, wall_clock_domain
 from .open_loop import Arrival, InFlightLimiter, dispatch_schedule
-from .openai_client import EndpointHTTPError, OpenAIChatCompletionsClient
+from .openai_client import (
+    ChatCompletionResult,
+    EndpointHTTPError,
+    OpenAIChatCompletionsClient,
+)
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter
@@ -520,73 +525,96 @@ class InferenceProfiler:
     ) -> InferenceRequestEvent:
         case = request.case
         prompt: Prompt = request.prompts.prompt(arrival.index)
-        started_at_ns = time.time_ns()
-        started_perf = time.perf_counter()
-        try:
-            call = self.request_executor.submit(
-                partial(
-                    self.client.complete,
-                    prompt=prompt.text,
-                    output_tokens=case.output_tokens,
-                    stream=self.config.stream,
-                    stream_include_usage=self.config.stream_include_usage,
-                )
-            )
-            self._unfinished.add(call)
-            call.add_done_callback(self._unfinished.discard)
-            result = await asyncio.wrap_future(call)
-            output_count = _resolve_output_count(
-                result.usage,
-                result.text,
-                self.token_counter,
-            )
-            prompt_count = _resolve_prompt_count(result.usage, prompt.count)
-            total_tokens = _resolve_total_tokens(
-                result.usage,
-                prompt_count,
-                output_count,
-            )
-            return InferenceRequestEvent(
-                **self._request_fields(
-                    request_id=request_id,
-                    request=request,
-                    arrival=arrival,
-                    prompt_count=prompt_count,
-                ),
-                started_at_ns=result.started_at_ns,
-                ended_at_ns=result.ended_at_ns,
-                dispatch_lag_ms=_lag_ms(arrival, result.started_at_ns),
-                status="ok",
-                e2e_latency_ms=result.e2e_latency_ms,
-                ttft_ms=result.ttft_ms,
-                first_chunk_latency_ms=result.first_chunk_latency_ms,
-                chunk_interarrival_ms=result.chunk_interarrival_ms,
-                output_tokens=output_count.value,
-                output_token_source=output_count.source,
-                output_token_exact=output_count.exact,
-                total_tokens=total_tokens,
-                finish_reason=result.finish_reason,
-            )
-        except Exception as exc:
-            ended_at_ns = time.time_ns()
-            status, http_status = classify_failure(exc)
-            return InferenceRequestEvent(
-                **self._request_fields(
-                    request_id=request_id,
-                    request=request,
-                    arrival=arrival,
-                ),
-                started_at_ns=started_at_ns,
-                ended_at_ns=ended_at_ns,
-                dispatch_lag_ms=_lag_ms(arrival, started_at_ns),
-                status=status,
-                e2e_latency_ms=(time.perf_counter() - started_perf) * 1000.0,
-                ttft_ms=None,
-                first_chunk_latency_ms=None,
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-                http_status=http_status,
-            )
+        call = self.request_executor.submit(
+            _timed_call,
+            partial(
+                self.client.complete,
+                prompt=prompt.text,
+                output_tokens=case.output_tokens,
+                stream=self.config.stream,
+                stream_include_usage=self.config.stream_include_usage,
+            ),
+        )
+        self._unfinished.add(call)
+        call.add_done_callback(self._unfinished.discard)
+        outcome = await asyncio.wrap_future(call)
+        if outcome.error is None:
+            try:
+                return self._ok_event(request_id, request, arrival, prompt, outcome)
+            except Exception as exc:
+                outcome = replace(outcome, error=exc)
+        return self._failure_event(request_id, request, arrival, outcome)
+
+    def _ok_event(
+        self,
+        request_id: str,
+        request: "_PhaseRequest",
+        arrival: Arrival,
+        prompt: Prompt,
+        outcome: "_TimedCall",
+    ) -> InferenceRequestEvent:
+        result = outcome.result
+        assert result is not None
+        output_count = _resolve_output_count(
+            result.usage,
+            result.text,
+            self.token_counter,
+        )
+        prompt_count = _resolve_prompt_count(result.usage, prompt.count)
+        total_tokens = _resolve_total_tokens(
+            result.usage,
+            prompt_count,
+            output_count,
+        )
+        return InferenceRequestEvent(
+            **self._request_fields(
+                request_id=request_id,
+                request=request,
+                arrival=arrival,
+                prompt_count=prompt_count,
+            ),
+            started_at_ns=result.started_at_ns,
+            ended_at_ns=result.ended_at_ns,
+            dispatch_lag_ms=_lag_ms(arrival, result.started_at_ns),
+            status="ok",
+            e2e_latency_ms=result.e2e_latency_ms,
+            ttft_ms=result.ttft_ms,
+            first_chunk_latency_ms=result.first_chunk_latency_ms,
+            chunk_interarrival_ms=result.chunk_interarrival_ms,
+            output_tokens=output_count.value,
+            output_token_source=output_count.source,
+            output_token_exact=output_count.exact,
+            total_tokens=total_tokens,
+            finish_reason=result.finish_reason,
+        )
+
+    def _failure_event(
+        self,
+        request_id: str,
+        request: "_PhaseRequest",
+        arrival: Arrival,
+        outcome: "_TimedCall",
+    ) -> InferenceRequestEvent:
+        error = outcome.error
+        assert error is not None
+        status, http_status = classify_failure(error)
+        return InferenceRequestEvent(
+            **self._request_fields(
+                request_id=request_id,
+                request=request,
+                arrival=arrival,
+            ),
+            started_at_ns=outcome.started_at_ns,
+            ended_at_ns=outcome.ended_at_ns,
+            dispatch_lag_ms=_lag_ms(arrival, outcome.started_at_ns),
+            status=status,
+            e2e_latency_ms=outcome.elapsed_ms,
+            ttft_ms=None,
+            first_chunk_latency_ms=None,
+            error_type=type(error).__name__,
+            error_message=str(error),
+            http_status=http_status,
+        )
 
     def _cancelled_event(
         self,
@@ -646,6 +674,43 @@ class _PhaseRequest:
     writer: JsonlEventWriter
     prompts: PromptSource
     phase: str
+
+
+@dataclass(frozen=True)
+class _TimedCall:
+    """A client call timed on the thread that made it, whatever its outcome."""
+
+    started_at_ns: int
+    ended_at_ns: int
+    elapsed_ms: float
+    result: ChatCompletionResult | None = None
+    error: Exception | None = None
+
+
+def _timed_call(call: Callable[[], ChatCompletionResult]) -> _TimedCall:
+    """Run ``call`` on a pool thread; time starts when the thread picks it up.
+
+    Timing a failure from before the pool would add any wait for a free
+    thread to its dispatch lag in one place and not the other; a successful
+    call is already timed by the client on its own thread.
+    """
+    started_at_ns = time.time_ns()
+    started = time.perf_counter()
+    try:
+        result = call()
+    except Exception as exc:
+        return _TimedCall(
+            started_at_ns,
+            time.time_ns(),
+            (time.perf_counter() - started) * 1000.0,
+            error=exc,
+        )
+    return _TimedCall(
+        started_at_ns,
+        time.time_ns(),
+        (time.perf_counter() - started) * 1000.0,
+        result=result,
+    )
 
 
 @dataclass(frozen=True)

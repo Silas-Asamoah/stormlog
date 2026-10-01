@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import io
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +13,10 @@ import pytest
 
 from stormlog.infer.analysis import analyze_inference_events, format_analysis_text
 from stormlog.infer.cli import main as infer_main
+from stormlog.infer.config import ProfileConfig
 from stormlog.infer.open_loop import Arrival, InFlightLimiter, dispatch_schedule
+from stormlog.infer.openai_client import ChatCompletionResult, EndpointHTTPError
+from stormlog.infer.profile import InferenceProfiler
 from tests.infer_workload_helpers import SleepingClient, run_profile_with_fake_client
 
 
@@ -362,3 +367,60 @@ def test_dispatcher_drops_only_while_every_slot_is_busy() -> None:
 def test_limiter_rejects_a_limit_below_one() -> None:
     with pytest.raises(ValueError, match=">= 1"):
         InFlightLimiter(0)
+
+
+class _SlowThenRejectingClient:
+    """The first call succeeds slowly; later calls are rejected at once."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(
+        self,
+        *,
+        prompt: str,
+        output_tokens: int,
+        stream: bool,
+        stream_include_usage: bool,
+    ) -> ChatCompletionResult:
+        self.calls += 1
+        if self.calls > 1:
+            raise EndpointHTTPError(429, "slow down")
+        started_at_ns = time.time_ns()
+        time.sleep(0.2)
+        return ChatCompletionResult(
+            text="ok",
+            started_at_ns=started_at_ns,
+            ended_at_ns=time.time_ns(),
+            e2e_latency_ms=200.0,
+            ttft_ms=None,
+            first_chunk_latency_ms=None,
+        )
+
+
+def test_failures_are_timed_from_when_their_thread_starts(tmp_path: Path) -> None:
+    output = tmp_path / "infer.jsonl"
+    profiler = InferenceProfiler(
+        ProfileConfig(
+            endpoint="http://127.0.0.1:1/v1/chat/completions",
+            model="fake-model",
+            concurrency=(2,),
+            input_tokens=(8,),
+            output_tokens=(4,),
+            request_count=2,
+            output_path=str(output),
+            stream=False,
+            system_sampler="none",
+            tokenizer="none",
+        )
+    )
+    # One thread for two workers: the second request waits for the first.
+    profiler.request_executor = ThreadPoolExecutor(max_workers=1)
+    profiler.client = _SlowThenRejectingClient()  # type: ignore[assignment]
+    profiler.run()
+    records = [json.loads(line) for line in output.read_text().splitlines()]
+    rejected = [r for r in records if r.get("status") == "rejected"]
+    assert len(rejected) == 1
+    # The wait for the thread counts as dispatch lag, as it does for successes.
+    assert rejected[0]["dispatch_lag_ms"] >= 150
+    assert rejected[0]["e2e_latency_ms"] < 100
