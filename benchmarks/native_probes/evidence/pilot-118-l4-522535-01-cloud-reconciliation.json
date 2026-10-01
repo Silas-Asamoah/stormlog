@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_pilot_cloud_reconciliation",
+  "issue": 118,
+  "machine_id": 522535,
+  "original_evidence": "benchmarks/native_probes/evidence/pilot-118-l4-522535-01.json",
+  "original_evidence_sha256": "ec38cb1c65322685920a0df38168ea7b50f2a625000594a0ff002c6d7fcc8f69",
+  "original_runtime_entry": "unavailable_after_pause",
+  "provider": "JarvisLabs",
+  "provider_command": "jl get 522535 --json",
+  "provider_observations": [
+    {
+      "sequence": "earlier_paused_check",
+      "observed_utc": null,
+      "status": "Paused",
+      "runtime_display": "0 hours 29 minutes"
+    },
+    {
+      "sequence": "later_paused_check",
+      "observed_utc_window": [
+        "2026-10-01T03:37:33Z",
+        "2026-10-01T03:37:35Z"
+      ],
+      "status": "Paused",
+      "runtime_display": "0 hours 32 minutes",
+      "cost_display_usd": 0.0,
+      "gpu": "L4",
+      "template": "pytorch",
+      "is_spot": false,
+      "region": "IN2"
+    }
+  ],
+  "runtime_interpretation": "The runtime display increased while the instance remained paused, so it does not establish cumulative billable compute runtime.",
+  "cost_interpretation": "The paused-instance cost display of 0.0 does not establish cumulative billed cost. The original evidence records a USD 0.1437 balance decrease, which may include storage charges.",
+  "cumulative_billable_runtime": null,
+  "cumulative_billed_cost_usd": null
+}
