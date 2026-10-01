@@ -49,6 +49,11 @@ class InferenceRequestEvent:
     dispatch_lag_ms: float | None = None
     held_for_slot: bool | None = None
     in_flight_at_dispatch: int | None = None
+    # Which prompt was sent and what it shares with other requests.
+    prompt_mode: str = "repeat"
+    prompt_id: str | None = None
+    prefix_group: int | None = None
+    prompt_digest: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)

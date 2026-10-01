@@ -29,8 +29,9 @@ from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWrit
 from .host_clock import host_boot_id, wall_clock_domain
 from .open_loop import Arrival, InFlightLimiter, dispatch_schedule
 from .openai_client import EndpointHTTPError, OpenAIChatCompletionsClient
+from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
-from .tokens import TokenCount, TokenCounter, build_token_counter, generate_prompt
+from .tokens import TokenCount, TokenCounter, build_token_counter
 
 
 class InferenceProfiler:
@@ -48,6 +49,8 @@ class InferenceProfiler:
             strict=config.strict_token_counts,
         )
         self.sampler = build_system_sampler(config.system_sampler)
+        # Built now so a bad setting fails before the artifact is opened.
+        self.prompt_spec = config.prompt_spec()
         self.client = OpenAIChatCompletionsClient(
             endpoint=config.endpoint,
             model=config.model,
@@ -94,6 +97,7 @@ class InferenceProfiler:
                         ],
                         "max_in_flight": self.config.max_in_flight,
                         "overflow": self.config.overflow,
+                        "prompts": self.prompt_spec.to_record(),
                     },
                 }
             )
@@ -214,19 +218,10 @@ class InferenceProfiler:
         case: WorkloadCase,
         writer: JsonlEventWriter,
     ) -> None:
-        prompt = generate_prompt(
-            case.input_tokens,
-            self.token_counter,
-            seed=self.config.seed + case.input_tokens,
-        )
-        prompt_count = self.token_counter.count_text(prompt)
-
         if self.config.warmup_requests > 0:
             await self._run_phase(
                 case=case,
                 writer=writer,
-                prompt=prompt,
-                prompt_count=prompt_count,
                 phase="warmup",
                 total_requests=self.config.warmup_requests,
                 duration_seconds=None,
@@ -235,8 +230,6 @@ class InferenceProfiler:
         await self._run_phase(
             case=case,
             writer=writer,
-            prompt=prompt,
-            prompt_count=prompt_count,
             phase="measured",
             total_requests=self.config.request_count,
             duration_seconds=self.config.duration_seconds,
@@ -247,13 +240,19 @@ class InferenceProfiler:
         *,
         case: WorkloadCase,
         writer: JsonlEventWriter,
-        prompt: str,
-        prompt_count: TokenCount,
         phase: str,
         total_requests: int | None,
         duration_seconds: float | None,
     ) -> None:
-        request = _PhaseRequest(case, writer, prompt, prompt_count, phase)
+        prompts = PromptSource(
+            self.prompt_spec,
+            counter=self.token_counter,
+            seed=self.config.seed,
+            case_id=case.case_id,
+            phase=phase,
+            input_tokens=case.input_tokens,
+        )
+        request = _PhaseRequest(case, writer, prompts, phase)
         if case.arrival.open_loop:
             window = await self._run_open_phase(
                 request, total_requests, duration_seconds
@@ -279,6 +278,8 @@ class InferenceProfiler:
         case = request.case
         if total_requests is None and duration_seconds is None:
             total_requests = 1
+        if total_requests is not None:
+            request.prompts.prepare(range(total_requests))
         started_at_ns = time.time_ns()
         counter = _RequestCounter(limit=total_requests)
         limiter = InFlightLimiter(case.concurrency)
@@ -354,6 +355,7 @@ class InferenceProfiler:
             duration_seconds=duration_seconds,
             seed=self.config.seed,
         )
+        request.prompts.prepare(range(len(offsets)))
 
         async def send(arrival: Arrival) -> None:
             request_id = f"{case.case_id}_{request.phase}_{arrival.index}"
@@ -419,10 +421,16 @@ class InferenceProfiler:
         request_id: str,
         request: "_PhaseRequest",
         arrival: Arrival,
-        prompt_count: TokenCount,
+        prompt_count: TokenCount | None = None,
     ) -> dict[str, Any]:
-        """Fields every request event carries, whatever its outcome."""
+        """Fields every request event carries, whatever its outcome.
+
+        ``prompt_count`` replaces the generated prompt's count when the server
+        reported one.
+        """
         case = request.case
+        prompt = request.prompts.prompt(arrival.index)
+        prompt_count = prompt_count or prompt.count
         return {
             "session_id": self.session.session_id,
             "request_id": request_id,
@@ -442,6 +450,10 @@ class InferenceProfiler:
             "intended_at_ns": arrival.intended_at_ns,
             "held_for_slot": arrival.held_for_slot,
             "in_flight_at_dispatch": arrival.in_flight_at_dispatch,
+            "prompt_mode": request.prompts.spec.mode,
+            "prompt_id": prompt.prompt_id,
+            "prefix_group": prompt.prefix_group,
+            "prompt_digest": prompt.digest,
         }
 
     async def _run_one_request(
@@ -452,6 +464,7 @@ class InferenceProfiler:
         arrival: Arrival,
     ) -> InferenceRequestEvent:
         case = request.case
+        prompt: Prompt = request.prompts.prompt(arrival.index)
         started_at_ns = time.time_ns()
         started_perf = time.perf_counter()
         try:
@@ -460,7 +473,7 @@ class InferenceProfiler:
                 self.request_executor,
                 partial(
                     self.client.complete,
-                    prompt=request.prompt,
+                    prompt=prompt.text,
                     output_tokens=case.output_tokens,
                     stream=self.config.stream,
                     stream_include_usage=self.config.stream_include_usage,
@@ -471,7 +484,7 @@ class InferenceProfiler:
                 result.text,
                 self.token_counter,
             )
-            prompt_count = _resolve_prompt_count(result.usage, request.prompt_count)
+            prompt_count = _resolve_prompt_count(result.usage, prompt.count)
             total_tokens = _resolve_total_tokens(
                 result.usage,
                 prompt_count,
@@ -506,7 +519,6 @@ class InferenceProfiler:
                     request_id=request_id,
                     request=request,
                     arrival=arrival,
-                    prompt_count=request.prompt_count,
                 ),
                 started_at_ns=started_at_ns,
                 ended_at_ns=ended_at_ns,
@@ -534,7 +546,6 @@ class InferenceProfiler:
                 request_id=request_id,
                 request=request,
                 arrival=arrival,
-                prompt_count=request.prompt_count,
             ),
             started_at_ns=sent_at_ns,
             ended_at_ns=time.time_ns(),
@@ -560,7 +571,6 @@ class InferenceProfiler:
                 request_id=request_id,
                 request=request,
                 arrival=arrival,
-                prompt_count=request.prompt_count,
             ),
             started_at_ns=now_ns,
             ended_at_ns=now_ns,
@@ -578,8 +588,7 @@ class _PhaseRequest:
 
     case: WorkloadCase
     writer: JsonlEventWriter
-    prompt: str
-    prompt_count: TokenCount
+    prompts: PromptSource
     phase: str
 
 
@@ -616,6 +625,7 @@ class _PhaseWindow:
             "drained_at_ns": self.drained_at_ns,
             "drain_timeout_seconds": drain_timeout_seconds,
             "scheduled_arrivals": self.scheduled_arrivals,
+            "prompts_digest": request.prompts.digest(),
         }
 
 

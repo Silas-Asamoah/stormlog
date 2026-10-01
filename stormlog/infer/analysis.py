@@ -29,6 +29,7 @@ from .server_clock import (
 from .server_group import members as group_members
 from .server_group import membership_issue
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
+from .workload_report import length_summary, prompt_lines, prompt_summary
 
 
 def analyze_inference_events(
@@ -97,6 +98,8 @@ def _case_report(
     ok = [record for record in case_requests if record.get("status") == "ok"]
     report = _summarize_requests(ok, samples=_samples_for_request_window(samples, ok))
     report["arrivals"] = arrival_summary(case_requests, window)
+    report["prompts"] = prompt_summary(case_requests, window)
+    report["lengths"] = length_summary(ok)
     report["memory"].update(_server_case_memory(timelines, ok, grouped))
     return report
 
@@ -204,6 +207,7 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
     ]
     if isinstance(case, dict):
         lines.extend(arrival_lines(case.get("arrivals")))
+        lines.extend(prompt_lines(case.get("prompts")))
     memory = case.get("memory", {}) if isinstance(case, dict) else {}
     lines.extend(_server_case_lines(memory))
     return lines

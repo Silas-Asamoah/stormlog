@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .arrivals import BURST, CLOSED, RATE_MODES, REPLAY, ArrivalSpec, ArrivalTrace
+from .prompts import REPEAT, PromptSpec
 
 DEFAULT_ENDPOINT_PATH = "/chat/completions"
 
@@ -111,6 +112,16 @@ class ProfileConfig:
     # After the measured window, how long in-flight requests may finish.
     # None means the request timeout.
     drain_timeout_seconds: float | None = None
+    prompt_mode: str = REPEAT
+    shared_prefix_ratio: float | None = None
+    prefix_groups: int | None = None
+
+    def prompt_spec(self) -> PromptSpec:
+        return PromptSpec(
+            mode=self.prompt_mode,
+            shared_prefix_ratio=self.shared_prefix_ratio,
+            prefix_groups=self.prefix_groups,
+        )
 
     def arrival_specs(self) -> list[ArrivalSpec]:
         """One arrival shape per case group: per rate, or a single shape."""

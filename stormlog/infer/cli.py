@@ -23,6 +23,7 @@ from .arrivals import (
 )
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
 from .profile import run_profile
+from .prompts import PROMPT_MODES, REPEAT, SHARED_PREFIX
 from .server_collector import (
     STOP_GPU_IDENTITY_CHANGED,
     STOP_SERVER_PROCESS_ENDED,
@@ -205,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seed for prompts and Poisson arrivals (default: 0)",
     )
     _add_arrival_arguments(profile_parser)
+    _add_prompt_arguments(profile_parser)
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -374,6 +376,30 @@ def _add_arrival_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_prompt_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--prompt-mode",
+        choices=PROMPT_MODES,
+        default=REPEAT,
+        help=(
+            "repeat (default) sends one prompt per case; unique gives every "
+            "request its own prefix; shared-prefix gives groups a common prefix"
+        ),
+    )
+    parser.add_argument(
+        "--shared-prefix-ratio",
+        type=float,
+        default=None,
+        help="Share of each prompt's tokens in its group prefix, between 0 and 1",
+    )
+    parser.add_argument(
+        "--prefix-groups",
+        type=int,
+        default=None,
+        help="Number of distinct shared prefixes, assigned by seed (default: 1)",
+    )
+
+
 def cmd_profile(args: argparse.Namespace) -> int:
     """Run active inference profiling."""
     _validate_profile_arguments(args)
@@ -431,6 +457,9 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         max_in_flight=int(args.max_in_flight),
         overflow=args.overflow,
         drain_timeout_seconds=args.drain_timeout,
+        prompt_mode=args.prompt_mode,
+        shared_prefix_ratio=args.shared_prefix_ratio,
+        prefix_groups=args.prefix_groups,
     )
 
 
@@ -551,6 +580,7 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
     if args.duration is not None and args.requests is not None:
         raise ValueError("Use either --duration or --requests, not both")
     _validate_arrival_arguments(args)
+    _validate_prompt_arguments(args)
     if args.timeout <= 0:
         raise ValueError("--timeout must be > 0")
     if args.warmup_requests < 0:
@@ -579,8 +609,22 @@ def _validate_arrival_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--drain-timeout must be > 0")
 
 
-def _flag_for(mode: str, modes: Any, value: object, flag: str) -> None:
+def _flag_for(
+    mode: str, modes: Any, value: object, flag: str, option: str = "--arrival"
+) -> None:
     if mode in modes and value is None:
-        raise ValueError(f"--arrival {mode} needs {flag}")
+        raise ValueError(f"{option} {mode} needs {flag}")
     if mode not in modes and value is not None:
-        raise ValueError(f"{flag} does not apply to --arrival {mode}")
+        raise ValueError(f"{flag} does not apply to {option} {mode}")
+
+
+def _validate_prompt_arguments(args: argparse.Namespace) -> None:
+    _flag_for(
+        args.prompt_mode,
+        {SHARED_PREFIX},
+        args.shared_prefix_ratio,
+        "--shared-prefix-ratio",
+        "--prompt-mode",
+    )
+    if args.prefix_groups is not None and args.prompt_mode != SHARED_PREFIX:
+        raise ValueError("--prefix-groups only applies to --prompt-mode shared-prefix")

@@ -4,8 +4,6 @@ import asyncio
 import contextlib
 import io
 import json
-import threading
-import time
 from pathlib import Path
 from typing import Any
 
@@ -13,75 +11,12 @@ import pytest
 
 from stormlog.infer.analysis import analyze_inference_events, format_analysis_text
 from stormlog.infer.cli import main as infer_main
-from stormlog.infer.config import ProfileConfig
 from stormlog.infer.open_loop import Arrival, InFlightLimiter, dispatch_schedule
-from stormlog.infer.openai_client import ChatCompletionResult
-from stormlog.infer.profile import InferenceProfiler
-
-
-class _SleepingClient:
-    """Answers every request after a fixed delay and tracks concurrency."""
-
-    def __init__(self, latency_seconds: float) -> None:
-        self.latency_seconds = latency_seconds
-        self.active = 0
-        self.max_active = 0
-        self.lock = threading.Lock()
-
-    def complete(
-        self,
-        *,
-        prompt: str,
-        output_tokens: int,
-        stream: bool,
-        stream_include_usage: bool,
-    ) -> ChatCompletionResult:
-        started_at_ns = time.time_ns()
-        with self.lock:
-            self.active += 1
-            self.max_active = max(self.max_active, self.active)
-        time.sleep(self.latency_seconds)
-        with self.lock:
-            self.active -= 1
-        return ChatCompletionResult(
-            text="ok",
-            started_at_ns=started_at_ns,
-            ended_at_ns=time.time_ns(),
-            e2e_latency_ms=self.latency_seconds * 1000.0,
-            ttft_ms=None,
-            first_chunk_latency_ms=None,
-            usage={"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
-            finish_reason="stop",
-        )
-
-
-def _profile(
-    tmp_path: Path, latency_seconds: float, **changes: Any
-) -> tuple[list[dict[str, Any]], dict[str, Any], _SleepingClient]:
-    output = tmp_path / "infer.jsonl"
-    values: dict[str, Any] = {
-        "endpoint": "http://127.0.0.1:1/v1/chat/completions",
-        "model": "fake-model",
-        "concurrency": (1,),
-        "input_tokens": (8,),
-        "output_tokens": (4,),
-        "output_path": str(output),
-        "stream": False,
-        "system_sampler": "none",
-        "tokenizer": "none",
-    }
-    values.update(changes)
-    profiler = InferenceProfiler(ProfileConfig(**values))
-    client = _SleepingClient(latency_seconds)
-    profiler.client = client  # type: ignore[assignment]
-    report = profiler.run()
-    records = [json.loads(line) for line in output.read_text().splitlines()]
-    requests = [r for r in records if r.get("event_type") == "infer.request"]
-    return requests, report, client
+from tests.infer_workload_helpers import SleepingClient, run_profile_with_fake_client
 
 
 def test_fixed_rate_keeps_sending_while_earlier_requests_run(tmp_path: Path) -> None:
-    requests, report, client = _profile(
+    requests, report, client = run_profile_with_fake_client(
         tmp_path,
         latency_seconds=0.2,
         arrival_mode="fixed-rate",
@@ -105,7 +40,7 @@ def test_fixed_rate_keeps_sending_while_earlier_requests_run(tmp_path: Path) -> 
 
 
 def test_duration_keeps_arrivals_before_the_window_closes(tmp_path: Path) -> None:
-    requests, _report, _client = _profile(
+    requests, _report, _client = run_profile_with_fake_client(
         tmp_path,
         latency_seconds=0.01,
         arrival_mode="fixed-rate",
@@ -117,7 +52,7 @@ def test_duration_keeps_arrivals_before_the_window_closes(tmp_path: Path) -> Non
 
 
 def test_drop_overflow_records_unsent_requests(tmp_path: Path) -> None:
-    requests, report, client = _profile(
+    requests, report, client = run_profile_with_fake_client(
         tmp_path,
         latency_seconds=0.3,
         arrival_mode="fixed-rate",
@@ -142,7 +77,7 @@ def test_drop_overflow_records_unsent_requests(tmp_path: Path) -> None:
 
 
 def test_wait_overflow_delays_arrivals_and_records_the_wait(tmp_path: Path) -> None:
-    requests, report, client = _profile(
+    requests, report, client = run_profile_with_fake_client(
         tmp_path,
         latency_seconds=0.1,
         arrival_mode="burst",
@@ -166,7 +101,7 @@ def test_wait_overflow_delays_arrivals_and_records_the_wait(tmp_path: Path) -> N
 
 
 def test_closed_loop_records_arrivals_without_an_offered_rate(tmp_path: Path) -> None:
-    requests, report, _client = _profile(
+    requests, report, _client = run_profile_with_fake_client(
         tmp_path, latency_seconds=0.01, concurrency=(2,), request_count=4
     )
     assert {r["arrival_mode"] for r in requests} == {"closed"}
@@ -180,7 +115,7 @@ def test_closed_loop_records_arrivals_without_an_offered_rate(tmp_path: Path) ->
 
 
 def test_open_loop_warmup_is_recorded_but_not_counted(tmp_path: Path) -> None:
-    requests, report, _client = _profile(
+    requests, report, _client = run_profile_with_fake_client(
         tmp_path,
         latency_seconds=0.01,
         arrival_mode="poisson",
@@ -201,7 +136,7 @@ def test_replay_from_the_cli_sends_every_recorded_arrival(tmp_path: Path) -> Non
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(
                 "stormlog.infer.profile.OpenAIChatCompletionsClient",
-                lambda **_kwargs: _SleepingClient(0.01),
+                lambda **_kwargs: SleepingClient(0.01),
             )
             code = infer_main(
                 [
@@ -247,7 +182,7 @@ def _windows(tmp_path: Path) -> list[dict[str, Any]]:
 def test_requests_still_running_at_the_drain_deadline_are_cancelled(
     tmp_path: Path,
 ) -> None:
-    requests, report, _client = _profile(
+    requests, report, _client = run_profile_with_fake_client(
         tmp_path,
         latency_seconds=0.5,
         arrival_mode="fixed-rate",
@@ -267,7 +202,7 @@ def test_requests_still_running_at_the_drain_deadline_are_cancelled(
 
 
 def test_a_closed_loop_duration_drains_then_cancels(tmp_path: Path) -> None:
-    requests, report, _client = _profile(
+    requests, report, _client = run_profile_with_fake_client(
         tmp_path,
         latency_seconds=0.4,
         request_count=None,
@@ -283,7 +218,7 @@ def test_a_closed_loop_duration_drains_then_cancels(tmp_path: Path) -> None:
 
 
 def test_every_phase_records_its_window(tmp_path: Path) -> None:
-    _requests, report, _client = _profile(
+    _requests, report, _client = run_profile_with_fake_client(
         tmp_path, latency_seconds=0.02, request_count=3, warmup_requests=1
     )
     windows = _windows(tmp_path)
