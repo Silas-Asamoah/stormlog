@@ -18,6 +18,7 @@ import stormlog.tensorflow.context_profiler as tf_context
 import stormlog.tensorflow.profiler as tf_profiler
 import stormlog.tensorflow.tracker as tf_tracker
 from stormlog.collective_attribution import CollectiveAttributionEvidence
+from stormlog.exit_codes import ExitCode
 
 
 @pytest.mark.parametrize(
@@ -73,8 +74,55 @@ def test_tf_cmd_analyze_rejects_mismatched_timestamps(
         )
     )
 
-    assert exit_code == 1
+    assert exit_code == ExitCode.INVALID_INPUT
     assert "must have equal length" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_message"),
+    [
+        ("{", "Failed to load results"),
+        ("[1, 2]", "does not contain a JSON object"),
+    ],
+)
+def test_tf_cmd_analyze_rejects_unreadable_input(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    payload: str,
+    expected_message: str,
+) -> None:
+    input_path = tmp_path / "tf_results.json"
+    input_path.write_text(payload, encoding="utf-8")
+
+    exit_code = tf_cli.cmd_analyze(
+        Namespace(
+            input=str(input_path),
+            detect_leaks=False,
+            optimize=False,
+            visualize=False,
+            report=None,
+        )
+    )
+
+    assert exit_code == ExitCode.INVALID_INPUT
+    assert expected_message in capsys.readouterr().out
+
+
+def test_tf_cmd_analyze_missing_input_returns_invalid_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    exit_code = tf_cli.cmd_analyze(
+        Namespace(
+            input=str(tmp_path / "missing.json"),
+            detect_leaks=False,
+            optimize=False,
+            visualize=False,
+            report=None,
+        )
+    )
+
+    assert exit_code == ExitCode.INVALID_INPUT
+    assert "not found" in capsys.readouterr().out
 
 
 def test_tf_profile_inference_batches_dataset_inputs(

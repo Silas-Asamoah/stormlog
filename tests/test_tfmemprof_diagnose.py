@@ -10,6 +10,7 @@ import pytest
 
 import stormlog.tensorflow.cli as tfmemprof_cli
 import stormlog.tensorflow.diagnose as diagnose_module
+from stormlog.exit_codes import ExitCode
 
 
 def _patch_tfmemprof_diagnose_env(
@@ -128,7 +129,7 @@ def test_tfmemprof_diagnose_produces_artifact_bundle(
     )
     exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
-    assert exit_code in (0, 2)
+    assert exit_code in (ExitCode.OK, ExitCode.FINDINGS)
     dirs = list(tmp_path.iterdir())
     assert len(dirs) == 1
     artifact_dir = dirs[0]
@@ -155,10 +156,10 @@ def test_tfmemprof_diagnose_produces_artifact_bundle(
     assert "suggestions" in summary
 
 
-def test_tfmemprof_diagnose_invalid_duration_returns_one(
+def test_tfmemprof_diagnose_invalid_duration_returns_usage(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Invalid --duration < 0 returns 1."""
+    """Invalid --duration < 0 returns USAGE (2)."""
     args = SimpleNamespace(
         output=None,
         device="/GPU:0",
@@ -166,15 +167,15 @@ def test_tfmemprof_diagnose_invalid_duration_returns_one(
         interval=0.5,
     )
     exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
-    assert exit_code == 1
+    assert exit_code == ExitCode.USAGE
     err = capsys.readouterr().err
     assert "duration" in err.lower()
 
 
-def test_tfmemprof_diagnose_invalid_interval_returns_one(
+def test_tfmemprof_diagnose_invalid_interval_returns_usage(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Invalid --interval <= 0 returns 1."""
+    """Invalid --interval <= 0 returns USAGE (2)."""
     args = SimpleNamespace(
         output=None,
         device="/GPU:0",
@@ -182,7 +183,7 @@ def test_tfmemprof_diagnose_invalid_interval_returns_one(
         interval=0,
     )
     exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
-    assert exit_code == 1
+    assert exit_code == ExitCode.USAGE
     err = capsys.readouterr().err
     assert "interval" in err.lower()
 
@@ -254,10 +255,10 @@ def test_tfmemprof_diagnose_exports_bundle_to_wandb(
     assert exported["kwargs"]["artifact_dir"] == artifact_dir
 
 
-def test_tfmemprof_diagnose_exit_code_two_when_risk_detected(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_tfmemprof_diagnose_exit_code_findings_when_risk_detected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """When risk is detected, returns 2."""
+    """When risk is detected, returns FINDINGS (3)."""
     _patch_tfmemprof_diagnose_env(monkeypatch, gpu_available=True, risk_detected=True)
     _patch_tfmemprof_timeline_capture(monkeypatch)
     _patch_tfmemprof_build_summary(monkeypatch, risk_detected=True)
@@ -269,7 +270,13 @@ def test_tfmemprof_diagnose_exit_code_two_when_risk_detected(
         interval=0.5,
     )
     exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
-    assert exit_code == 2
+    assert exit_code == ExitCode.FINDINGS
+    assert int(exit_code) == 3
+    assert "Status: MEMORY_RISK (exit_code=3)" in capsys.readouterr().out
+    manifest = json.loads(
+        (next(tmp_path.iterdir()) / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["exit_code"] == 3
 
 
 def test_tfmemprof_diagnose_fallback_manifest_preserves_risk_detected(
@@ -470,8 +477,8 @@ def test_tfmemprof_diagnose_same_second_creates_unique_artifact_dirs(
     code_two = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     subdirs = sorted([path.name for path in out_dir.iterdir() if path.is_dir()])
-    assert code_one in (0, 2)
-    assert code_two in (0, 2)
+    assert code_one in (ExitCode.OK, ExitCode.FINDINGS)
+    assert code_two in (ExitCode.OK, ExitCode.FINDINGS)
     assert len(subdirs) == 2
     assert subdirs[0].startswith("stormlog-tensorflow-diagnose-20260215-120000")
     assert subdirs[1].startswith("stormlog-tensorflow-diagnose-20260215-120000")

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from stormlog.derived_fields import compute_event_fields
+from stormlog.exit_codes import ExitCode, completed_with_findings
 from stormlog.session import (
     SESSION_STATUS_COMPLETED,
     SESSION_STATUS_INCOMPLETE,
@@ -276,7 +277,9 @@ def run_diagnose(
     """
     Build the full diagnostic bundle and write all artifact files.
     Returns (artifact_dir, exit_code).
-    exit_code: 0 = success no risk, 1 = failure, 2 = success with memory risk.
+    exit_code follows ``stormlog.exit_codes``: OK (0) when no risk was
+    detected, FINDINGS (3) when memory risk was detected, ERROR (1) when the
+    bundle could not be written completely.
     """
     try:
         artifact_dir = _create_artifact_dir(output, "stormlog-tensorflow-diagnose")
@@ -315,7 +318,7 @@ def run_diagnose(
             json.dump(summary, f, indent=2, default=_default_str)
         files_written.append("diagnostic_summary.json")
 
-        exit_code = 2 if risk_detected else 0
+        exit_code = int(completed_with_findings(risk_detected))
 
         # 4. Manifest
         session_summary = update_session_summary(
@@ -334,7 +337,7 @@ def run_diagnose(
         )
     except OSError as e:
         print(f"Error: Failed to write diagnostic artifact: {e}", file=sys.stderr)
-        exit_code = 1
+        exit_code = int(ExitCode.ERROR)
         if not files_written:
             raise
         session_summary = update_session_summary(
