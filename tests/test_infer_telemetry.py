@@ -169,6 +169,16 @@ def _drop(key: str) -> Callable[[dict[str, Any]], None]:
     return lambda record: record.pop(key)
 
 
+def _set_with_domain(
+    clock_domain: str, **identity: object
+) -> Callable[[dict[str, Any]], None]:
+    def mutate(record: dict[str, Any]) -> None:
+        record["identity"].update(identity)
+        record["clock_domain"] = clock_domain
+
+    return mutate
+
+
 def _group_without(key: str) -> Callable[[dict[str, Any]], None]:
     def mutate(record: dict[str, Any]) -> None:
         record["identity"].update(group_id="tp", rank=0, world_size=2)
@@ -197,6 +207,12 @@ def _group_without(key: str) -> Callable[[dict[str, Any]], None]:
         _set(counter_owner="allocator"),
         _set(metric="process_rss_bytes"),
         _set(clock_domain="server-a/monotonic_ns"),
+        # Each identity part is one segment of the clock domain.
+        _set_with_domain("rack/a/unix_epoch_ns", host="rack/a"),
+        _set_with_domain("server-a/boot/1/unix_epoch_ns", boot_id="boot/1"),
+        # The domain names the boot exactly when the identity has a boot ID.
+        _set_with_domain("server-a/unix_epoch_ns", boot_id="boot-1"),
+        _set(clock_domain="server-a/boot-1/unix_epoch_ns"),
         _drop("detail"),
         _drop("provenance"),
     ],

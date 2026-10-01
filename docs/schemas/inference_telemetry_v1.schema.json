@@ -51,14 +51,18 @@
         "boot_id"
       ],
       "properties": {
-        "host": { "type": "string", "minLength": 1 },
+        "host": { "type": "string", "minLength": 1, "pattern": "^[^/]+$" },
         "pid": { "type": "integer", "minimum": 1 },
         "process_start_ns": { "type": "integer", "minimum": 1 },
         "device_uuid": { "type": ["string", "null"], "minLength": 1 },
         "gpu_instance_id": { "type": ["string", "null"], "minLength": 1 },
         "replica_id": { "type": ["string", "null"], "minLength": 1 },
         "rank": { "type": ["integer", "null"], "minimum": 0 },
-        "boot_id": { "type": ["string", "null"], "minLength": 1 },
+        "boot_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "pattern": "^[^/]+$"
+        },
         "group_id": { "type": ["string", "null"], "minLength": 1 },
         "world_size": { "type": ["integer", "null"], "minimum": 1 }
       },
@@ -108,6 +112,25 @@
     "provenance": { "enum": ["observed", "reported", "estimated"] }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "identity": {
+            "properties": { "boot_id": { "type": "string" } },
+            "required": ["boot_id"]
+          }
+        },
+        "required": ["identity"]
+      },
+      "then": {
+        "properties": {
+          "clock_domain": { "pattern": "^[^/]+/[^/]+/unix_epoch_ns$" }
+        }
+      },
+      "else": {
+        "properties": { "clock_domain": { "pattern": "^[^/]+/unix_epoch_ns$" } }
+      }
+    },
     {
       "if": { "properties": { "state": { "const": "valid" } } },
       "then": { "properties": { "value_bytes": { "type": "integer" } } },
