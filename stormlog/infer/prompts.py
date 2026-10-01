@@ -31,6 +31,9 @@ REPEAT = "repeat"
 UNIQUE = "unique"
 SHARED_PREFIX = "shared-prefix"
 PROMPT_MODES = (REPEAT, UNIQUE, SHARED_PREFIX)
+# A nonce takes about eight subword tokens, so shorter prompts overshoot
+# their target and cannot hold a set prefix share.
+MIN_CONTROLLED_TOKENS = 32
 # Bump when the generated text changes, so digests from older runs are not
 # mistaken for the same prompts.
 GENERATOR_VERSION = 2
@@ -95,6 +98,7 @@ class Prompt:
     prompt_id: str
     counter: TokenCounter = field(repr=False, compare=False)
     prefix_group: int | None = None
+    shared_prefix_tokens: int | None = None
 
     @cached_property
     def count(self) -> TokenCount:
@@ -185,7 +189,13 @@ class PromptSource:
         marker = f"[{nonce}]"
         used = prefix_tokens + self._count(marker)
         text = self._extend(f"{prefix} {marker}", self.input_tokens, used=used)
-        return Prompt(text, f"g{group}-{nonce}", self.counter, prefix_group=group)
+        return Prompt(
+            text,
+            f"g{group}-{nonce}",
+            self.counter,
+            prefix_group=group,
+            shared_prefix_tokens=prefix_tokens,
+        )
 
     def _prefix(self, group: int) -> tuple[str, int]:
         if group not in self._prefixes:

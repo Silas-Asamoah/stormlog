@@ -536,6 +536,7 @@ class InferenceProfiler:
             "prompt_mode": request.prompts.spec.mode,
             "prompt_id": prompt.prompt_id,
             "prefix_group": prompt.prefix_group,
+            "shared_prefix_tokens": prompt.shared_prefix_tokens,
             "prompt_digest": prompt.digest,
         }
 

@@ -172,8 +172,11 @@ workload twice against one server makes the second run start with those
 prompts already cached. To measure each run from a cold cache, reset the cache
 before each case (see below) or change `--seed` between runs. The server's chat template still adds the same tokens to every
 request, so even `unique` prompts share those. Each request records its
-`prompt_mode`, `prompt_id`, `prefix_group` and `prompt_digest`, and each case
-reports how many distinct prompts and prefix groups it used. A prompt is built
+`prompt_mode`, `prompt_id`, `prefix_group`, `shared_prefix_tokens` and
+`prompt_digest`. Each case reports how many distinct prompts and prefix groups
+it used, and the range of shared prefix lengths. The nonce takes about eight
+subword tokens, so `unique` and `shared-prefix` need `--input-tokens` of at
+least 32 to hit the target length and prefix share; the CLI warns below that. A prompt is built
 when its request is sent and its text is dropped once the request is done, so
 a long schedule neither waits for all of its prompts to be built nor keeps
 them in memory.

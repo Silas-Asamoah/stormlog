@@ -55,6 +55,7 @@ class InferenceRequestEvent:
     prompt_mode: str = "repeat"
     prompt_id: str | None = None
     prefix_group: int | None = None
+    shared_prefix_tokens: int | None = None
     prompt_digest: str | None = None
 
     def to_record(self) -> dict[str, Any]:

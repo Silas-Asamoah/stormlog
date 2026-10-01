@@ -25,7 +25,7 @@ from .arrivals import (
 from .cache_state import CACHE_STATES, COLD, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
 from .profile import run_profile
-from .prompts import PROMPT_MODES, REPEAT, SHARED_PREFIX
+from .prompts import MIN_CONTROLLED_TOKENS, PROMPT_MODES, REPEAT, SHARED_PREFIX
 from .server_collector import (
     STOP_GPU_IDENTITY_CHANGED,
     STOP_SERVER_PROCESS_ENDED,
@@ -437,6 +437,7 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
 def cmd_profile(args: argparse.Namespace) -> int:
     """Run active inference profiling."""
     _validate_profile_arguments(args)
+    _warn_about_short_prompts(args)
     if args.cache_state == COLD and args.cache_reset_url is None:
         _print_warning(
             "--cache-state cold without --cache-reset-url: nothing will reset "
@@ -711,4 +712,16 @@ def _validate_loop_flags(args: argparse.Namespace) -> None:
         raise ValueError(
             "--concurrency applies to --arrival closed; open-loop arrivals "
             "use --max-in-flight"
+        )
+
+
+def _warn_about_short_prompts(args: argparse.Namespace) -> None:
+    if args.prompt_mode == REPEAT:
+        return
+    lengths = parse_int_list(args.input_tokens, field_name="input-tokens")
+    if min(lengths) < MIN_CONTROLLED_TOKENS:
+        _print_warning(
+            f"--input-tokens below {MIN_CONTROLLED_TOKENS} leaves little room "
+            f"beside the nonce that --prompt-mode {args.prompt_mode} adds; "
+            "prompts may exceed the target and the shared share may drift"
         )

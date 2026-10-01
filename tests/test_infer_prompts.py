@@ -188,9 +188,13 @@ def test_shared_prefix_requests_record_their_group(tmp_path: Path) -> None:
         prefix_groups=2,
     )
     assert {r["prefix_group"] for r in requests} == {0, 1}
+    # Half of a 64-token prompt is the group prefix, give or take a token.
+    assert all(31 <= r["shared_prefix_tokens"] <= 33 for r in requests)
     prompts = report["cases"]["c1_in64_out4"]["prompts"]
     assert prompts["prefix_groups_used"] == 2
-    assert "over 2 prefix groups" in format_analysis_text(report)
+    assert 31 <= prompts["shared_prefix_tokens"]["min"] <= 33
+    text = format_analysis_text(report)
+    assert "over 2 prefix groups, shared prefixes up to" in text
 
 
 def test_repeat_mode_reports_one_distinct_prompt(tmp_path: Path) -> None:
@@ -282,3 +286,30 @@ def test_used_prompts_keep_only_their_digest() -> None:
     again = _source(PromptSpec(mode="unique"))
     again.prepare(range(200))
     assert source.digest() == again.digest()
+
+
+def test_short_prompts_with_nonces_get_a_warning(tmp_path: Path) -> None:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+        infer_main(
+            [
+                "profile",
+                "--endpoint",
+                "http://127.0.0.1:1/v1/chat/completions",
+                "--model",
+                "fake-model",
+                "--input-tokens",
+                "16",
+                "--prompt-mode",
+                "unique",
+                "--timeout",
+                "0.5",
+                "--system-sampler",
+                "none",
+                "--tokenizer",
+                "none",
+                "--output",
+                str(tmp_path / "infer.jsonl"),
+            ]
+        )
+    assert "--input-tokens below 32" in stderr.getvalue()

@@ -14,10 +14,15 @@ def prompt_summary(
     sent = [record for record in requests if record.get("status") != "dropped"]
     # Artifacts written before prompt modes existed repeated one prompt.
     modes = {str(record.get("prompt_mode", "repeat")) for record in sent}
+    prefix_tokens = number_values(sent, "shared_prefix_tokens")
     return {
         "mode": _one_value(modes),
         "distinct_prompts": _distinct(sent, "prompt_digest"),
         "prefix_groups_used": _distinct(sent, "prefix_group"),
+        "shared_prefix_tokens": {
+            "min": min(prefix_tokens, default=None),
+            "max": max(prefix_tokens, default=None),
+        },
         "prompts_digest": (window or {}).get("prompts_digest"),
     }
 
@@ -40,6 +45,9 @@ def prompt_lines(prompts: Any) -> list[str]:
     line = f"  prompts: {prompts['mode']}, {prompts.get('distinct_prompts')} distinct"
     if prompts.get("prefix_groups_used"):
         line += f" over {prompts['prefix_groups_used']} prefix groups"
+    shared = (prompts.get("shared_prefix_tokens") or {}).get("max")
+    if shared is not None:
+        line += f", shared prefixes up to {shared:.0f} tokens"
     return [line]
 
 
