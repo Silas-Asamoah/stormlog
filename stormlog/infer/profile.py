@@ -324,6 +324,7 @@ class InferenceProfiler:
             input_tokens=case.input_tokens,
         )
         request = _PhaseRequest(case, writer, prompts, phase)
+        prompts.warm()
         abandoned = await self._wait_for_abandoned()
         if case.arrival.open_loop:
             window = await self._run_open_phase(

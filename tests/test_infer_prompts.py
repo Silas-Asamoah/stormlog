@@ -64,11 +64,11 @@ def test_unique_prompts_differ_from_the_first_token(counter: Any) -> None:
     assert len(set(nonces)) == 50
     assert all(p.text.startswith(f"[{n}] ") for p, n in zip(prompts, nonces))
     for prompt in prompts:
-        # Reaches the target with the fewest filler words.
-        assert counter.count_text(prompt.text).value >= 64
-        assert counter.count_text(prompt.text.rsplit(" ", 1)[0]).value < 64
         assert prompt.count == counter.count_text(prompt.text)
         assert prompt.prefix_group is None
+        # The filler is checked against the counter, so each prompt reaches
+        # the target, overshooting only where the nonce and filler meet.
+        assert 64 <= prompt.count.value <= 66
 
 
 def test_prompts_are_reproducible_and_scoped_to_case_and_phase() -> None:
@@ -270,11 +270,15 @@ class _CountingCounter:
 def test_building_a_prompt_tokenizes_only_its_nonce(spec: PromptSpec) -> None:
     counter = _CountingCounter()
     source = _source(spec, counter=counter, input_tokens=2048)
-    source.prepare(range(20))
+    source.warm()
     warm_tokens = counter.tokens
-    source.prepare(range(20, 1020))
-    # A thousand 2048-token prompts cost a few tokens each to build.
+    source.prepare(range(1000))
+    # Once warm, a thousand 2048-token prompts cost a few tokens each.
     assert (counter.tokens - warm_tokens) / 1000 < 10
+    # Warming hands out no prompts, so the phase digest is untouched.
+    fresh = _source(spec, input_tokens=2048)
+    fresh.prepare(range(1000))
+    assert source.digest() == fresh.digest()
 
 
 def test_used_prompts_keep_only_their_digest() -> None:

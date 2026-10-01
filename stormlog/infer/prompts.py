@@ -133,6 +133,7 @@ class PromptSource:
         self._prefixes: dict[int, tuple[str, int]] = {}
         # Filler text by token count, shared by every prompt that needs it.
         self._fillers: dict[int, str] = {}
+        self._word_tokens: list[int] | None = None
         self._repeated: Prompt | None = None
 
     def prompt(self, index: int) -> Prompt:
@@ -151,6 +152,20 @@ class PromptSource:
     def forget(self, index: int) -> None:
         """Drop a used prompt's text; its digest stays for the phase digest."""
         self._prompts.pop(index, None)
+
+    def warm(self, sample: int = 64) -> None:
+        """Do a phase's one-off prompt work before its clock starts.
+
+        That is the repeated prompt, every group prefix, and the filler for
+        each length the first ``sample`` nonces leave room for. Each later
+        prompt then only tokenizes its short nonce. The sample prompts are
+        not handed out, so they are not part of the phase digest.
+        """
+        for index in range(sample):
+            self._build(index)
+        if self.spec.mode == SHARED_PREFIX:
+            for group in range(self.spec.groups):
+                self._prefix(group)
 
     def prepare(self, indices: Iterable[int]) -> None:
         """Build prompts ahead of use."""
@@ -219,10 +234,26 @@ class PromptSource:
         return f"{head} {filler}" if filler else head
 
     def _filler(self, tokens: int) -> str:
+        """The fewest filler words that reach ``tokens``, built once per length.
+
+        The word count is estimated from each filler word's own token count,
+        which subword tokenizers add up across spaces, then checked against
+        the counter: usually two counts, a few more for a counter whose
+        counts do not add up.
+        """
         if tokens <= 0:
             return ""
         if tokens not in self._fillers:
-            self._fillers[tokens] = _sized("", tokens, self.counter, 0)
+            if self._word_tokens is None:
+                self._word_tokens = [
+                    max(1, self._count(f" {word}")) for word in _FILLER
+                ]
+            words = _estimated_words(tokens, self._word_tokens)
+            while words > 1 and self._count(_filler_words(words - 1)) >= tokens:
+                words -= 1
+            while self._count(_filler_words(words)) < tokens:
+                words += 1
+            self._fillers[tokens] = _filler_words(words)
         return self._fillers[tokens]
 
     def _count(self, text: str) -> int:
@@ -236,21 +267,16 @@ class PromptSource:
         return _digest(f"{self._namespace}:{label}")[:12]
 
 
-def _sized(head: str, target_tokens: int, counter: TokenCounter, start: int) -> str:
-    """``head`` plus the fewest filler words that reach ``target_tokens``."""
-    words = [_FILLER[(start + i) % len(_FILLER)] for i in range(target_tokens * 2)]
+def _estimated_words(tokens: int, word_tokens: list[int]) -> int:
+    words = total = 0
+    while total < tokens:
+        total += word_tokens[words % len(word_tokens)]
+        words += 1
+    return words
 
-    def text(count: int) -> str:
-        return (head + " ".join(words[:count])).rstrip()
 
-    low, high = 0, len(words)
-    while low < high:
-        middle = (low + high) // 2
-        if counter.count_text(text(middle)).value >= target_tokens:
-            high = middle
-        else:
-            low = middle + 1
-    return text(low)
+def _filler_words(count: int) -> str:
+    return " ".join(_FILLER[index % len(_FILLER)] for index in range(count))
 
 
 def _digest(text: str) -> str:
