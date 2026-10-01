@@ -596,7 +596,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     input_path = Path(args.input_file)
     if not input_path.exists():
         print(f"Error: Input file '{args.input_file}' not found", file=sys.stderr)
-        return 1
+        return int(ExitCode.INVALID_INPUT)
     report = analyze_inference_events(
         input_path,
         server_telemetry_paths=args.server_telemetry,
@@ -615,7 +615,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         print(f"Analysis report saved to: {output_path}")
     else:
         print(payload, end="")
-    return 0
+    return int(ExitCode.OK)
 
 
 def cmd_collect_server(args: argparse.Namespace) -> int:

@@ -12,6 +12,7 @@ from typing import Any
 from .arrival_report import arrival_lines, arrival_summary, latency_from_intended_ms
 from .cache_state import cache_lines, cache_summary
 from .correlation_accounting import AlignedTimestamp
+from .errors import InferInputError
 from .host_clock import is_boot_qualified
 from .report_stats import int_value as _int_value
 from .report_stats import is_number as _is_number
@@ -290,9 +291,27 @@ def _server_metric_line(
     )
 
 
+# Every profile writes a session record first; requests follow.
+_ARTIFACT_EVENT_TYPES = frozenset({"infer.session", "infer.request"})
+
+
 def _load_jsonl(path: str | Path) -> list[dict[str, Any]]:
+    """Read an inference artifact; a file that cannot be read is invalid input."""
+    try:
+        records = _read_jsonl(Path(path))
+    except (OSError, ValueError) as exc:
+        raise InferInputError(f"{path}: {_reason(exc)}") from exc
+    if not any(record.get("event_type") in _ARTIFACT_EVENT_TYPES for record in records):
+        raise InferInputError(
+            f"{path}: not an inference artifact (no infer.session or "
+            "infer.request records)"
+        )
+    return records
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    with Path(path).open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
             line = raw_line.strip()
             if not line:
@@ -302,6 +321,12 @@ def _load_jsonl(path: str | Path) -> list[dict[str, Any]]:
                 raise ValueError(f"Line {line_number} is not a JSON object")
             records.append(payload)
     return records
+
+
+def _reason(exc: Exception) -> str:
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    return str(exc)
 
 
 def _summarize_requests(
@@ -433,8 +458,15 @@ def _partition_inference_records(
 def _load_server_samples(paths: Iterable[str | Path]) -> list[TelemetrySample]:
     """Load every artifact; drop exact duplicates, e.g. a file passed twice."""
     return list(
-        dict.fromkeys(sample for path in paths for sample in load_telemetry(path))
+        dict.fromkeys(sample for path in paths for sample in _server_samples(path))
     )
+
+
+def _server_samples(path: str | Path) -> list[TelemetrySample]:
+    try:
+        return load_telemetry(path)
+    except (OSError, ValueError) as exc:
+        raise InferInputError(f"--server-telemetry {path}: {_reason(exc)}") from exc
 
 
 @dataclass(frozen=True)
