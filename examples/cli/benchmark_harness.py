@@ -503,14 +503,33 @@ def _promote_overhead_scenario(
     return _finalize_scenario_summary(target_dir, promoted)
 
 
+def _overhead_trial_root(
+    spec: RuntimeSpec,
+    runtime_dir: Path,
+    scratch_root: Optional[Path],
+) -> Path:
+    """Return the directory that holds the overhead trials while they run.
+
+    Trials time the tracked workload with the sink's flush and fsync calls on
+    the workload's critical path, so the trial directory's storage latency goes
+    straight into ``runtime_overhead_pct``. A RAM-backed scratch root (for
+    example ``/dev/shm`` on Linux) keeps shared-runner disk latency out of the
+    measurement; the selected trial is still promoted into ``runtime_dir``.
+    """
+    if scratch_root is None:
+        return runtime_dir / ".overhead_trials"
+    return scratch_root / spec.name / "overhead_trials"
+
+
 def _run_overhead_report(
     spec: RuntimeSpec,
     runtime_dir: Path,
     *,
     iterations: int,
     allocation_kb: int,
+    scratch_root: Optional[Path] = None,
 ) -> dict[str, Any]:
-    trial_root = runtime_dir / ".overhead_trials"
+    trial_root = _overhead_trial_root(spec, runtime_dir, scratch_root)
     if trial_root.exists():
         shutil.rmtree(trial_root)
 
@@ -560,6 +579,9 @@ def _run_overhead_report(
     finally:
         if trial_root.exists():
             shutil.rmtree(trial_root, ignore_errors=True)
+        if scratch_root is not None:
+            with suppress(OSError):
+                trial_root.parent.rmdir()
 
     return {
         "scenarios": {
@@ -571,6 +593,7 @@ def _run_overhead_report(
         "trial_quantile": DEFAULT_OVERHEAD_TRIAL_QUANTILE,
         "selected_trial": int(selected_trial["trial_number"]),
         "trial_metrics": [dict(trial["metrics"]) for trial in trial_reports],
+        "scratch_root": str(scratch_root) if scratch_root is not None else None,
     }
 
 
@@ -1226,6 +1249,7 @@ def _run_runtime_report(
     mode: str,
     iterations: int,
     allocation_kb: int,
+    overhead_scratch_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     runtime_report: dict[str, Any] = {
         "status": "ok",
@@ -1237,6 +1261,7 @@ def _run_runtime_report(
             runtime_dir,
             iterations=iterations,
             allocation_kb=allocation_kb,
+            scratch_root=overhead_scratch_root,
         )
     if mode in {"soak", "all"}:
         soak = _run_soak_scenario(
@@ -1305,6 +1330,7 @@ def run_benchmark_harness(
     iterations: int = DEFAULT_ITERATIONS,
     allocation_kb: int = DEFAULT_ALLOCATION_KB,
     runtime_names: Optional[list[str]] = None,
+    overhead_scratch_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     if profile not in PROFILE_EQUIVALENT_HOURS:
         raise ValueError(f"Unsupported profile: {profile}")
@@ -1319,6 +1345,8 @@ def run_benchmark_harness(
         raise ValueError(f"Unknown runtimes: {', '.join(sorted(missing_runtimes))}")
 
     artifact_root.mkdir(parents=True, exist_ok=True)
+    if overhead_scratch_root is not None:
+        overhead_scratch_root.mkdir(parents=True, exist_ok=True)
     runtime_reports: dict[str, dict[str, Any]] = {}
     for runtime_name in selected_runtime_names:
         runtime_dir = artifact_root / runtime_name
@@ -1331,6 +1359,7 @@ def run_benchmark_harness(
                 mode=mode,
                 iterations=iterations,
                 allocation_kb=allocation_kb,
+                overhead_scratch_root=overhead_scratch_root,
             )
         except Exception as exc:
             runtime_reports[runtime_name] = {
@@ -1346,6 +1375,9 @@ def run_benchmark_harness(
         "profile_equivalent_hours": PROFILE_EQUIVALENT_HOURS[profile],
         "runtimes": _runtime_config(profile, iterations, selected_runtime_names),
         "retention_validation": dict(DEFAULT_RETENTION_VALIDATION),
+        "overhead_scratch_root": (
+            str(overhead_scratch_root) if overhead_scratch_root is not None else None
+        ),
     }
     metrics = _flatten_metrics(runtime_reports)
     report: dict[str, Any] = {
@@ -1427,6 +1459,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--baseline", type=Path, default=None)
     parser.add_argument("--tolerances", type=Path, default=None)
     parser.add_argument("--artifact-root", type=Path, default=DEFAULT_ARTIFACT_ROOT)
+    parser.add_argument(
+        "--overhead-scratch-root",
+        type=Path,
+        default=None,
+        help=(
+            "Directory that holds overhead trials while they run, ideally on a "
+            "RAM-backed filesystem such as /dev/shm so storage latency does not "
+            "enter runtime_overhead_pct. Selected trials are promoted into "
+            "--artifact-root."
+        ),
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
     parser.add_argument(
         "--check",
@@ -1458,6 +1501,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         tolerances_path=tolerances_path if args.gate_mode == "regression" else None,
         artifact_root=args.artifact_root,
         output_path=args.output,
+        overhead_scratch_root=args.overhead_scratch_root,
     )
 
     print(f"Operability report written to: {args.output}")

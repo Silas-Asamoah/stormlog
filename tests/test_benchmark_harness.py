@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -243,8 +244,10 @@ def _install_fake_runtimes(monkeypatch: pytest.MonkeyPatch) -> None:
         mode: str,
         iterations: int,
         allocation_kb: int,
+        overhead_scratch_root: Path | None = None,
     ) -> dict[str, object]:
         _ = runtime_dir, profile, mode, iterations, allocation_kb
+        _ = overhead_scratch_root
         return runtime_reports[spec.name]
 
     monkeypatch.setattr(
@@ -441,6 +444,177 @@ def test_run_overhead_report_uses_low_quantile_wall_overhead_trial(
     )
     assert Path(report["scenarios"]["tracked_default"]["output_path"]).exists()
     assert not (tmp_path / "gpumemprof_cpu" / ".overhead_trials").exists()
+    assert report["scratch_root"] is None
+
+
+def test_run_overhead_report_runs_trials_under_scratch_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scratch_root = tmp_path / "scratch"
+    runtime_dir = tmp_path / "artifacts" / "gpumemprof_cpu"
+    trial_dirs: list[Path] = []
+
+    def _fake_unprofiled_scenario(
+        scenario_dir: Path,
+        *,
+        iterations: int,
+        allocation_kb: int,
+    ) -> dict[str, object]:
+        _ = iterations, allocation_kb
+        trial_dirs.append(scenario_dir)
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+        return benchmark_harness._finalize_scenario_summary(
+            scenario_dir,
+            {
+                "name": "unprofiled",
+                "wall_seconds": 0.1,
+                "cpu_seconds": 0.1,
+                "checksum": 1,
+                "artifact_dir": str(scenario_dir),
+            },
+        )
+
+    def _fake_tracked_scenario(
+        spec: benchmark_harness.RuntimeSpec,
+        scenario_dir: Path,
+        *,
+        iterations: int,
+        allocation_kb: int,
+        sample_count: int,
+        sink_overrides: benchmark_harness.SinkOverrides | None = None,
+    ) -> dict[str, object]:
+        _ = spec, iterations, allocation_kb, sample_count, sink_overrides
+        trial_dirs.append(scenario_dir)
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+        output_path = scenario_dir / "events.json"
+        output_path.write_text("{}", encoding="utf-8")
+        return benchmark_harness._finalize_scenario_summary(
+            scenario_dir,
+            {
+                "name": "gpumemprof_cpu",
+                "wall_seconds": 0.2,
+                "cpu_seconds": 0.2,
+                "checksum": 1,
+                "sample_count": 1,
+                "emitted_samples": 1,
+                "event_count": 1,
+                "collector_failure_event_count": 0,
+                "stats": {},
+                "artifact_dir": str(scenario_dir),
+                "output_path": str(output_path),
+            },
+        )
+
+    monkeypatch.setattr(
+        benchmark_harness, "_run_unprofiled_scenario", _fake_unprofiled_scenario
+    )
+    monkeypatch.setattr(
+        benchmark_harness, "_run_tracked_scenario", _fake_tracked_scenario
+    )
+    monkeypatch.setattr(benchmark_harness, "DEFAULT_OVERHEAD_TRIAL_COUNT", 2)
+
+    report = benchmark_harness._run_overhead_report(
+        benchmark_harness.RuntimeSpec(
+            name="gpumemprof_cpu",
+            default_interval=0.1,
+            factory=lambda artifact_dir, interval, sink_overrides: _UnusedRuntimeSession(),
+        ),
+        runtime_dir,
+        iterations=10,
+        allocation_kb=64,
+        scratch_root=scratch_root,
+    )
+
+    assert len(trial_dirs) == 4
+    assert all(
+        path.is_relative_to(scratch_root / "gpumemprof_cpu" / "overhead_trials")
+        for path in trial_dirs
+    )
+    assert report["scratch_root"] == str(scratch_root)
+    unprofiled_dir = Path(report["scenarios"]["unprofiled"]["artifact_dir"])
+    tracked_dir = Path(report["scenarios"]["tracked_default"]["artifact_dir"])
+    assert unprofiled_dir == runtime_dir / "overhead" / "unprofiled"
+    assert tracked_dir == runtime_dir / "overhead" / "tracked_default"
+    assert (unprofiled_dir / "summary.json").exists()
+    assert Path(report["scenarios"]["tracked_default"]["output_path"]).exists()
+    assert not (scratch_root / "gpumemprof_cpu").exists()
+    assert not (runtime_dir / ".overhead_trials").exists()
+
+
+class _SleepingRuntimeSession(benchmark_harness.RuntimeSession):
+    """Session whose only per-sample cost is an injected sleep."""
+
+    def __init__(self, sleep_seconds: float) -> None:
+        self.sleep_seconds = sleep_seconds
+
+    def start(self) -> None:
+        return None
+
+    def emit_sample(self, index: int) -> None:
+        _ = index
+        if self.sleep_seconds:
+            time.sleep(self.sleep_seconds)
+
+    def finish(self) -> dict[str, object]:
+        return {
+            "stats": {},
+            "event_count": 0,
+            "collector_failure_event_count": 0,
+            "output_path": "",
+        }
+
+
+def _overhead_pct_for_session(
+    tmp_path: Path, session: benchmark_harness.RuntimeSession
+) -> float:
+    spec = benchmark_harness.RuntimeSpec(
+        name="gpumemprof_cpu",
+        default_interval=0.1,
+        factory=lambda artifact_dir, interval, sink_overrides: session,
+    )
+    report = benchmark_harness._run_overhead_report(
+        spec,
+        tmp_path / "gpumemprof_cpu",
+        iterations=500,
+        allocation_kb=64,
+        scratch_root=tmp_path / "scratch",
+    )
+    return float(report["metrics"]["runtime_overhead_pct"])
+
+
+def test_regression_gate_catches_injected_sleep_per_sample(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(benchmark_harness, "DEFAULT_OVERHEAD_TRIAL_COUNT", 2)
+    baseline = benchmark_harness.load_regression_baseline(
+        benchmark_harness._default_runtime_baseline_path()
+    )
+    tolerances = benchmark_harness.load_regression_tolerances(
+        benchmark_harness._default_runtime_tolerances_path()
+    )
+    metric = "gpumemprof_cpu.runtime_overhead_pct"
+
+    healthy = _overhead_pct_for_session(
+        tmp_path / "healthy", _SleepingRuntimeSession(0.0)
+    )
+    # 1 ms per sample over 500 samples adds 0.5 s of wall time to a workload
+    # that takes a few milliseconds, so the ratio climbs by thousands of points
+    # regardless of how fast the machine is.
+    regressed = _overhead_pct_for_session(
+        tmp_path / "regressed", _SleepingRuntimeSession(0.001)
+    )
+
+    assert regressed - healthy > float(tolerances[metric])
+    checks = benchmark_harness.evaluate_regressions(
+        {metric: regressed}, baseline["metrics"], tolerances
+    )
+    assert checks[metric]["passed"] is False, checks
+    checks = benchmark_harness.evaluate_regressions(
+        {metric: healthy}, baseline["metrics"], tolerances
+    )
+    assert checks[metric]["passed"] is True, checks
 
 
 def test_run_tracked_scenario_finalizes_session_on_emit_failure(
