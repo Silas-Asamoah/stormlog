@@ -32,8 +32,10 @@ How to read the table from a pipeline:
 - `2` or `5`: fix the invocation, the environment, or the producing step.
   Retrying the same command will not help.
 - `1`: treat as a tool failure and keep the output for a bug report.
-- `130`: the capture was cut short; the artifact's session status says
-  `interrupted` where one was written.
+- `130`: the run was cut short. `monitor` and `track` finalise their
+  artifact with session status `interrupted`; `diagnose` leaves a partial
+  bundle with neither `manifest.json` nor `report.json`, so treat the
+  directory as incomplete.
 
 `FINDINGS` and `GATE_FAILED` are separate because a gate is a deterministic
 comparison against a threshold you configured, while a finding is a
@@ -58,12 +60,13 @@ heuristic detection by the tool. CI policy usually differs between the two.
 
 | Command | 0 | 2 | 3 | 4 | 5 | 1 | 130 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `gpumemprof diagnose` | no risk | bad `--duration`/`--interval`, `--native-history` off CUDA, missing extra | risk flag raised | - | - | bundle not writable | Ctrl+C |
-| `tfmemprof diagnose`, `jaxmemprof diagnose` | no risk | as above, plus a missing runtime or an `--output` that is a file | risk flag raised | - | - | bundle not writable | Ctrl+C |
-| `gpumemprof analyze`, `tfmemprof analyze`, `jaxmemprof analyze` | done | `tfmemprof analyze` without `--input` | - | - | missing, unparsable, or non-telemetry input; session id not found | unexpected error | Ctrl+C |
-| `gpumemprof monitor`/`track`, `tfmemprof`/`jaxmemprof monitor`/`track` | done, or Ctrl+C inside the capture loop | missing runtime or extra | - | - | - | unexpected error | Ctrl+C outside the capture loop |
+| `gpumemprof diagnose` | no risk | bad `--duration`/`--interval`, `--native-history` off CUDA, PyTorch not installed, missing extra, `--output` that is (or is under) a file | risk flag raised | - | - | bundle not writable; any other unexpected error (report and manifest say `error`/1) | Ctrl+C (partial bundle, no report) |
+| `tfmemprof diagnose`, `jaxmemprof diagnose` | no risk | as above, with TensorFlow/JAX not installed | risk flag raised | - | - | as above | as above |
+| `gpumemprof analyze`, `tfmemprof analyze`, `jaxmemprof analyze` | done, including a JSON document with no telemetry events (a note is printed) | `tfmemprof analyze` without `--input` | - | - | missing file; unparsable JSON; (tf/jax) JSON that is not an object; requested session id not found | unexpected error | Ctrl+C |
+| `gpumemprof monitor`/`track` | done, or Ctrl+C inside the capture loop; without PyTorch they fall back to the CPU tracker | missing W&B/MLflow extra | - | - | - | unexpected error | Ctrl+C outside the capture loop |
+| `tfmemprof`/`jaxmemprof monitor`/`track` | done, or Ctrl+C inside the capture loop | TensorFlow/JAX not installed; missing extra | - | - | - | unexpected error | Ctrl+C outside the capture loop |
 | `stormlog query ...` | done | argparse error; `--csv` on a query that cannot emit CSV | - | - | - | unexpected error | Ctrl+C |
-| `examples.cli.benchmark_harness` | gates passed, or no `--check` | argparse error; regression defaults outside the `pr` profile | - | a budget or regression gate failed under `--check` | missing, unparsable, or wrong-version asset; baseline config mismatch | unexpected error | Ctrl+C |
+| `examples.cli.benchmark_harness` | gates passed, or no `--check` | argparse error; regression defaults outside the `pr` profile | - | a budget or regression gate failed under `--check` | budget, baseline, or tolerance asset missing, unparsable, not an object, wrong version, non-numeric, or missing a metric; baseline config mismatch (checked before any scenario runs) | unexpected error; `--artifact-root` or `--output` not writable | Ctrl+C |
 | `stormlog infer ...` | done | argparse error | - | - | - | every other failure, including bad input and all requests failing | Ctrl+C (`collect-server` exits 0) |
 
 `stormlog infer` has not adopted the table yet. Its codes are listed so a
@@ -84,10 +87,20 @@ These are breaking changes for callers that matched the old numbers:
 - Invalid diagnose options and a missing runtime or extra exit `2`. They
   used to exit `1`.
 - `gpumemprof` exits `130` when interrupted outside a capture loop. It used
-  to exit `0`.
+  to exit `0`. `tfmemprof` and `jaxmemprof` print "Operation cancelled by
+  user" instead of a traceback (the code was already `130`).
+- All three `diagnose` commands exit `2` when `--output` is, or sits under,
+  an existing file. `gpumemprof` and `tfmemprof` used to exit `1`.
+- `gpumemprof` exits `2` when PyTorch is not installed and a command needs
+  it. It used to exit `1`.
 - `examples.cli.benchmark_harness --check` exits `4` for a failed gate and
-  `5` for an unusable asset. Both used to exit `1`. CI only checks for a
-  non-zero code, so the workflow is unchanged.
+  `5` for an unusable asset. Both used to exit `1`. An unwritable
+  `--artifact-root` or `--output` exits `1` with a message instead of a
+  traceback. CI only checks for a non-zero code, so the workflow is
+  unchanged.
+- The W&B export of a diagnose bundle logs the manifest's `exit_code` as
+  the `stormlog_exit_code` metric, so dashboards keyed on `2` for memory
+  risk now see `3`.
 
 ## The report envelope
 
@@ -117,6 +130,15 @@ Evidence pointers reuse the vocabulary of `stormlog query correlate` rows:
 `kind`, optional `path` (relative to the directory that holds the report),
 optional `pointer` (a JSON pointer inside that file), `session_id`,
 `record_id`, `start_ns`, `end_ns`, and a `description`.
+
+`tool.argv` is optional and must not carry secrets: a producer that records
+it redacts credentials (for example a tracking URI with a token) or omits
+the field. The diagnose producer does not record `argv`; the bundle
+manifest's pre-existing `command_line` field is the place that does.
+
+A bundle the command could not finish still gets a report: its verdict is
+`error`/`1` with the summary `Bundle incomplete: <reason>` and no findings,
+so a report never claims a verdict the process did not return.
 
 ### Example: a diagnose bundle with findings
 
@@ -187,10 +209,11 @@ against the same fixtures so they cannot drift.
 
 ### Compatibility and versioning
 
-- `schema_version` changes only for breaking changes: removing or re-typing
-  a field, or changing what an enum value means. Within a version, new
-  optional fields may be added; a consumer that validates with the schema
-  matching the `schema_version` it reads will never see an unknown field.
+- Every object in the envelope is closed (`additionalProperties: false`),
+  so any change to its shape is a new `schema_version`, including adding an
+  optional field. A consumer that validates with the schema matching the
+  `schema_version` it reads therefore never sees an unknown field, and a
+  v1 consumer can reject a v2 report by its `schema_version` alone.
 - `payload` is versioned by the producing command and documented under its
   `report_kind`. A change to a payload is not a change to the envelope.
 - `verdict.exit_code` always equals the exit code the producing process
