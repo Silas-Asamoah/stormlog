@@ -41,6 +41,16 @@ def test_main_unexpected_exception_exits_error(
     assert "Error: collector exploded" in capsys.readouterr().out
 
 
+def test_main_missing_runtime_exits_usage(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def no_torch(_args: argparse.Namespace) -> None:
+        raise ImportError("The diagnose command requires PyTorch.")
+
+    assert _run_main_with(monkeypatch, no_torch, "info") == ExitCode.USAGE
+    assert "requires PyTorch" in capsys.readouterr().err
+
+
 def test_main_usage_error_exits_usage(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         gpumemprof_cli.sys, "argv", ["gpumemprof", "diagnose", "--duration", "abc"]

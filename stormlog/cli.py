@@ -479,6 +479,11 @@ Cookbook:
     except KeyboardInterrupt:
         print("\nOperation cancelled by user")
         sys.exit(ExitCode.INTERRUPTED)
+    except ImportError as e:
+        # A missing framework runtime or optional extra: this installation
+        # cannot serve the request, which the contract files under USAGE.
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(ExitCode.USAGE)
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(ExitCode.ERROR)
