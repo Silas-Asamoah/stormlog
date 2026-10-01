@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from stormlog.exit_codes import ExitCode
 from stormlog.infer.analysis import analyze_inference_events, format_analysis_text
 from stormlog.infer.arrival_report import arrival_lines
 from stormlog.infer.cli import main as infer_main
@@ -351,10 +352,6 @@ def test_every_phase_records_its_window(tmp_path: Path) -> None:
         ),
         (["--max-in-flight", "4"], "--max-in-flight applies to open-loop"),
         (["--overflow", "drop"], "--overflow applies to open-loop"),
-        (
-            ["--arrival", "replay", "--arrival-trace", "/no/such/trace.jsonl"],
-            "--arrival-trace /no/such/trace.jsonl: No such file or directory",
-        ),
         (["--arrival", "fixed-rate", "--rate", "0"], "rate values must be > 0"),
         (["--duration", "1", "--requests", "2"], "either --duration or --requests"),
         (["--drain-timeout", "0"], "--drain-timeout must be > 0"),
@@ -385,9 +382,51 @@ def test_arrival_flags_are_checked_before_any_request(
                 *flags,
             ]
         )
-    assert code == 1
+    assert code == ExitCode.USAGE
     assert message in stderr.getvalue()
     assert not (tmp_path / "never.jsonl").exists()
+
+
+def _two_case_artifact(path: Path) -> Path:
+    records = [
+        {"event_type": "infer.request", "phase": "measured", "case_id": case}
+        | {"status": "ok", "intended_at_ns": ns}
+        for case, ns in (("a", 1), ("a", 2), ("b", 3))
+    ]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    return path
+
+
+@pytest.mark.parametrize(
+    ("content", "extra", "expected", "message"),
+    [
+        (None, [], ExitCode.INVALID_INPUT, "No such file or directory"),
+        ("{not json\n", [], ExitCode.INVALID_INPUT, "Expecting property name"),
+        ("[1]\n", [], ExitCode.INVALID_INPUT, "line 1 is not a JSON object"),
+        ('{"offset_ms": -1}\n', [], ExitCode.INVALID_INPUT, "offset_ms must be"),
+        # A readable artifact; the command line has to say which case to replay.
+        ("two cases", [], ExitCode.USAGE, "choose one case with"),
+        ("two cases", ["--arrival-trace-case", "c"], ExitCode.USAGE, "no measured"),
+    ],
+)
+def test_an_arrival_trace_it_cannot_use_is_reported_by_cause(
+    tmp_path: Path,
+    content: str | None,
+    extra: list[str],
+    expected: ExitCode,
+    message: str,
+) -> None:
+    trace = tmp_path / "trace.jsonl"
+    if content == "two cases":
+        _two_case_artifact(trace)
+    elif content is not None:
+        trace.write_text(content)
+    code, stderr = _profile_cli(
+        tmp_path, "--arrival", "replay", "--arrival-trace", str(trace), *extra
+    )
+    assert code == expected
+    assert f"--arrival-trace {trace}: " in stderr and message in stderr
+    assert not (tmp_path / "infer.jsonl").exists()
 
 
 def _run(coroutine: Any) -> Any:
@@ -609,7 +648,7 @@ def test_earlier_command_lines_keep_their_meaning(tmp_path: Path) -> None:
     assert "either --duration or --requests" not in stderr
     assert (tmp_path / "infer.jsonl").exists()
     code, stderr = _profile_cli(tmp_path / "empty", "--concurrency", "")
-    assert code == 1
+    assert code == ExitCode.USAGE
     assert "concurrency must contain at least one value" in stderr
 
 
@@ -625,7 +664,7 @@ def test_settings_that_repeat_a_case_are_rejected(
     tmp_path: Path, flags: list[str]
 ) -> None:
     code, stderr = _profile_cli(tmp_path, *flags)
-    assert code == 1
+    assert code == ExitCode.USAGE
     assert "two workload cases would share the ID" in stderr
     assert not (tmp_path / "infer.jsonl").exists()
 

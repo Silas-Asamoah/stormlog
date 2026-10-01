@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .errors import InferUsageError
+
 CLOSED = "closed"
 FIXED_RATE = "fixed-rate"
 POISSON = "poisson"
@@ -229,13 +231,14 @@ def _artifact_arrivals(records: list[dict[str, Any]]) -> dict[str, list[int]]:
 
 
 def _select_case(arrivals: dict[str, list[int]], case_id: str | None) -> str:
+    # The artifact is fine here; which of its cases to replay is the caller's call.
     if case_id is not None:
         if case_id not in arrivals:
-            raise ValueError(f"arrival trace has no measured case {case_id!r}")
+            raise InferUsageError(f"arrival trace has no measured case {case_id!r}")
         return case_id
     if len(arrivals) > 1:
         cases = ", ".join(sorted(arrivals))
-        raise ValueError(f"choose one case with --arrival-trace-case: {cases}")
+        raise InferUsageError(f"choose one case with --arrival-trace-case: {cases}")
     return next(iter(arrivals))
 
 

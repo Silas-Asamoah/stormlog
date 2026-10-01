@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from stormlog.exit_codes import ExitCode
 from stormlog.infer.analysis import format_analysis_text
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.prompts import Prompt, PromptSource, PromptSpec
@@ -260,7 +261,7 @@ def test_prompt_flags_are_checked_before_any_request(
                 *flags,
             ]
         )
-    assert code == 1
+    assert code == ExitCode.USAGE
     assert message in stderr.getvalue()
     assert not (tmp_path / "never.jsonl").exists()
 

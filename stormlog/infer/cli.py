@@ -9,9 +9,11 @@ import signal
 import sys
 import threading
 import urllib.parse
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
+from ..exit_codes import ExitCode
 from .analysis import analyze_inference_events, format_analysis_text
 from .arrivals import (
     ARRIVAL_MODES,
@@ -24,7 +26,8 @@ from .arrivals import (
 )
 from .cache_state import CACHE_STATES, COLD, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
-from .profile import run_profile
+from .errors import InferInputError, InferUsageError
+from .profile import InferenceProfiler
 from .prompts import MIN_CONTROLLED_TOKENS, PROMPT_MODES, REPEAT, SHARED_PREFIX
 from .server_collector import (
     STOP_GPU_IDENTITY_CHANGED,
@@ -35,28 +38,41 @@ from .server_collector import (
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the inference CLI."""
+    """Run the inference CLI and return a code from ``stormlog.exit_codes``."""
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.infer_command is None:
         parser.print_help()
-        return 0
+        return int(ExitCode.OK)
     try:
-        if args.infer_command == "profile":
-            return cmd_profile(args)
-        if args.infer_command == "analyze":
-            return cmd_analyze(args)
-        if args.infer_command == "collect-server":
-            return cmd_collect_server(args)
+        return _run_command(parser, args)
     except BrokenPipeError:
-        return 1
+        return int(ExitCode.ERROR)
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
-        return 130
+        return int(ExitCode.INTERRUPTED)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        return 1
+        return int(_exit_code_for(exc))
+
+
+def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    if args.infer_command == "profile":
+        return cmd_profile(args)
+    if args.infer_command == "analyze":
+        return cmd_analyze(args)
+    if args.infer_command == "collect-server":
+        return cmd_collect_server(args)
     parser.error(f"Unsupported infer command: {args.infer_command}")
+
+
+def _exit_code_for(exc: Exception) -> ExitCode:
+    """Usage and input errors have their own codes; anything else is a failure."""
+    if isinstance(exc, InferUsageError):
+        return ExitCode.USAGE
+    if isinstance(exc, InferInputError):
+        return ExitCode.INVALID_INPUT
+    return ExitCode.ERROR
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -436,7 +452,8 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
 
 def cmd_profile(args: argparse.Namespace) -> int:
     """Run active inference profiling."""
-    _validate_profile_arguments(args)
+    with _usage_errors():
+        _validate_profile_arguments(args)
     _warn_about_short_prompts(args)
     _warn_about_repeated_prompts(args)
     if args.cache_state == COLD and args.cache_reset_url is None:
@@ -444,7 +461,9 @@ def cmd_profile(args: argparse.Namespace) -> int:
             "--cache-state cold without --cache-reset-url: nothing will reset "
             "the cache, and each case records its cache state as unverified"
         )
-    report = run_profile(_profile_config(args), on_warning=_print_warning)
+    with _usage_errors():
+        profiler = InferenceProfiler(_profile_config(args), on_warning=_print_warning)
+    report = profiler.run()
     print(format_analysis_text(report))
     print(f"Artifact saved to: {Path(args.output)}")
     summary = report.get("summary", {})
@@ -455,6 +474,27 @@ def cmd_profile(args: argparse.Namespace) -> int:
         print("Error: no measured inference requests succeeded", file=sys.stderr)
         return 1
     return 0
+
+
+@contextmanager
+def _usage_errors() -> Iterator[None]:
+    """Report a setting the profile cannot use as a usage error.
+
+    Flags are checked, and the profile built from them, before anything is
+    sent, so a ``ValueError`` here is about the settings. A missing optional
+    package, such as an explicitly requested tokenizer, is a usage error too.
+    An input file the settings name keeps its ``InferInputError``.
+    """
+    try:
+        yield
+    except (InferUsageError, InferInputError):
+        raise
+    except ValueError as exc:
+        raise InferUsageError(str(exc)) from exc
+    except ImportError as exc:
+        raise InferUsageError(
+            f"{exc}; install it or choose another --tokenizer or --system-sampler"
+        ) from exc
 
 
 def _profile_config(args: argparse.Namespace) -> ProfileConfig:
@@ -537,11 +577,13 @@ def _arrival_trace(args: argparse.Namespace) -> ArrivalTrace | None:
     try:
         return load_arrival_trace(args.arrival_trace, case_id=args.arrival_trace_case)
     except OSError as exc:
-        raise ValueError(
+        raise InferInputError(
             f"--arrival-trace {args.arrival_trace}: {exc.strerror or exc}"
         ) from exc
+    except InferUsageError as exc:
+        raise InferUsageError(f"--arrival-trace {args.arrival_trace}: {exc}") from exc
     except ValueError as exc:
-        raise ValueError(f"--arrival-trace {args.arrival_trace}: {exc}") from exc
+        raise InferInputError(f"--arrival-trace {args.arrival_trace}: {exc}") from exc
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
