@@ -18,7 +18,11 @@ from stormlog.infer.correlation_events import (
     EntityRef,
     load_inference_artifact,
 )
-from stormlog.infer.trace_import import TraceFileCollector, trace_attachment_id
+from stormlog.infer.trace_import import (
+    TraceFileCollector,
+    parse_device_uuids,
+    trace_attachment_id,
+)
 from stormlog.infer.trace_kineto import link_gpu_event
 from stormlog.infer.trace_nsys import load_nsys_sqlite, split_global_id
 
@@ -330,3 +334,70 @@ def test_a_null_where_a_number_belongs_is_a_malformed_export(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="malformed Nsight Systems SQLite export"):
         load_nsys_sqlite(path)
+
+
+def _unnamed(tmp_path: Path) -> Path:
+    return _without_device_table(
+        _export(tmp_path / "run.sqlite"),
+        [(0, "NVIDIA A30", "aaaa-0000"), (1, "NVIDIA L4", "bbbb-1111")],
+    )
+
+
+@pytest.mark.parametrize("given", ["0=GPU-x", "run.sqlite:0=GPU-x"])
+def test_one_uuid_is_not_applied_to_several_processes_in_a_report(
+    tmp_path: Path, given: str
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+
+    code = main(
+        ["import-trace", str(artifact), str(_unnamed(tmp_path)), "--device-uuid", given]
+    )
+
+    assert code == int(ExitCode.USAGE)
+    assert not any(
+        isinstance(r, ActivityReferenceEvent) for r in load_inference_artifact(artifact)
+    )
+
+
+def test_a_uuid_for_one_process_report_device_is_used(tmp_path: Path) -> None:
+    path = _unnamed(tmp_path)
+    with closing(sqlite3.connect(path)) as db:
+        for table in ("CUPTI_ACTIVITY_KIND_KERNEL", "CUPTI_ACTIVITY_KIND_MEMCPY"):
+            db.execute(f"delete from {table} where globalPid = ?", (_gid(200, 0),))
+        db.commit()
+
+    capture = TraceFileCollector(
+        [path], device_uuids=parse_device_uuids(["0=GPU-x"])
+    ).collect(run_id="r", session_id="s")
+
+    assert capture.summary is not None
+    device = capture.summary["traces"][0]["devices"]["100/0"]
+    assert (device["device_uuid"], device["device_uuid_source"]) == ("GPU-x", "option")
+
+
+def test_a_uuid_that_contradicts_the_report_is_refused(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    export = _export(tmp_path / "run.sqlite")
+
+    wrong = main(
+        ["import-trace", str(artifact), str(export), "--device-uuid", "0=GPU-wrong"]
+    )
+
+    assert wrong == int(ExitCode.USAGE)
+
+
+def test_report_uuids_are_marked_as_coming_from_the_trace(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+
+    code = main(["import-trace", str(artifact), str(_export(tmp_path / "run.sqlite"))])
+
+    assert code == int(ExitCode.OK)
+    assert "process 100 device 0 (GPU-bbbb-1111)" in capsys.readouterr().out
+    capture = TraceFileCollector([_export(tmp_path / "again.sqlite")]).collect(
+        run_id="r", session_id="s"
+    )
+    assert capture.summary is not None
+    devices = capture.summary["traces"][0]["devices"].values()
+    assert {d["device_uuid_source"] for d in devices} == {"trace"}

@@ -230,6 +230,8 @@ class TraceFileCollector:
                 device_uuids=self.device_uuids.for_trace(path),
                 detail=self.detail,
             )
+        except InferUsageError:
+            raise
         except (ValueError, OSError) as exc:
             raise InferInputError(f"{path}: {exc}") from exc
 
@@ -237,32 +239,49 @@ class TraceFileCollector:
 def _check_shared_devices(
     paths: Sequence[Path], captures: Sequence[TraceCapture], uuids: DeviceUuids
 ) -> None:
-    """Refuse a shared mapping for an ordinal that several processes used.
+    """Refuse a ``--device-uuid`` ordinal that several processes used.
 
-    A process is its host name, rank, and launching pids. Containers that share
-    a host name and pid namespace layout can still look alike, which is why the
-    docs recommend the per-trace form for traces from separate containers.
+    A process is its host name, rank, and pid (for formats that hold several,
+    such as Nsight Systems reports) or launching pids. Only UUIDs taken from
+    the option count; a UUID the trace names is the process's own. Containers
+    that share a host name and pid namespace layout can still look alike,
+    which is why the docs recommend the per-trace form for traces from
+    separate containers.
     """
-    users: dict[int, set[tuple[Any, ...]]] = {}
+    users: dict[tuple[str | None, int], set[tuple[Any, ...]]] = {}
     for path, capture in zip(paths, captures):
         summary = capture.summary or {}
-        process = (
-            summary.get("host"),
-            summary.get("rank"),
-            tuple(summary.get("processes", ())),
-        )
         own = uuids.scoped(path)
-        for key in summary.get("devices", {}):
-            index = int(key) if str(key).isdigit() else None
-            if index in uuids.shared and index not in own:
-                users.setdefault(index, set()).add(process)
-    for index, processes in sorted(users.items()):
-        if len(processes) > 1:
-            raise InferUsageError(
-                f"--device-uuid {index}=...: traces from different processes use "
-                f"device {index}, which each process may map to a different GPU; "
-                f"give a UUID per trace as TRACE_FILE:{index}=UUID"
+        for key, device in summary.get("devices", {}).items():
+            if device.get("device_uuid_source") != "option":
+                continue
+            pid, index = _split_device_key(str(key))
+            scope = str(path) if index in own else None
+            process = (
+                summary.get("host"),
+                summary.get("rank"),
+                pid if pid is not None else tuple(summary.get("processes", ())),
             )
+            users.setdefault((scope, index), set()).add(process)
+    for (scope, index), processes in sorted(users.items(), key=str):
+        if len(processes) > 1:
+            raise InferUsageError(_shared_device_message(scope, index))
+
+
+def _split_device_key(key: str) -> tuple[int | None, int]:
+    """(pid, ordinal) from a summary device key: ``"0"`` or ``"<pid>/0"``."""
+    pid, _, ordinal = key.rpartition("/")
+    return (int(pid) if pid else None), int(ordinal)
+
+
+def _shared_device_message(scope: str | None, index: int) -> str:
+    given = f"{scope}:{index}" if scope else str(index)
+    return (
+        f"--device-uuid {given}=...: several processes use device {index}, which "
+        "each may map to a different GPU; give a UUID per trace as "
+        f"TRACE_FILE:{index}=UUID, or for an Nsight Systems report re-export it "
+        "with nsys 2025.1 or later so it names each process's GPUs"
+    )
 
 
 def _load(path: Path, file_format: str) -> KinetoTrace:

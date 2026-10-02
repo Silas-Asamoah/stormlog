@@ -33,6 +33,7 @@ from typing import Any, Literal
 from .. import __version__
 from .correlation_capture import CaptureCapabilities, TraceAttachment, TraceCapture
 from .correlation_events import ActivityReferenceEvent, CorrelationContext, EntityRef
+from .errors import InferUsageError
 from .trace_ranges import parse_iteration_range
 
 PRODUCER_ID = "stormlog.trace.kineto"
@@ -187,6 +188,7 @@ def capture_trace(
     detail: Detail = "launch",
 ) -> TraceCapture:
     """Build the capture for a loaded trace of any supported format."""
+    _check_given_uuids(trace, device_uuids or {})
     trace_key = attachment.attachment_id if attachment else _trace_key(trace, path)
     builder = _EventBuilder(
         trace=trace,
@@ -208,6 +210,21 @@ def capture_trace(
         attachments=(attachment,) if attachment else (),
         summary=_summary(trace, groups, builder, detail, path),
     )
+
+
+def _check_given_uuids(trace: KinetoTrace, given: Mapping[int, str]) -> None:
+    """Refuse a ``--device-uuid`` that contradicts a UUID the trace names."""
+    seen: set[tuple[int | None, int | None]] = set()
+    for event in trace.gpu_events:
+        if event.device_uuid is None or (event.pid, event.device) in seen:
+            continue
+        seen.add((event.pid, event.device))
+        wanted = given.get(event.device) if event.device is not None else None
+        if wanted is not None and wanted != event.device_uuid:
+            raise InferUsageError(
+                f"--device-uuid {event.device}={wanted}: the trace names "
+                f"process {event.pid}'s device {event.device} {event.device_uuid}"
+            )
 
 
 # ---------------------------------------------------------------- parsing
@@ -622,10 +639,20 @@ def _device_entry(
         or (trace.device_names.get(device) if device is not None else None),
         "device_uuid": events[0].device_uuid
         or (builder.device_uuids.get(device) if device is not None else None),
+        "device_uuid_source": _uuid_source(builder, events[0]),
         "busy_ns": sum(end - start for start, end in busy),
         "launch_span_ns": sum(end - start for start, end in records),
         "summed_ns": sum(event.end_ns - event.start_ns for event in events),
     }
+
+
+def _uuid_source(builder: _EventBuilder, event: GpuEvent) -> str | None:
+    """Where a device's UUID came from: the trace itself or ``--device-uuid``."""
+    if event.device_uuid is not None:
+        return "trace"
+    if event.device is not None and event.device in builder.device_uuids:
+        return "option"
+    return None
 
 
 __all__ = [

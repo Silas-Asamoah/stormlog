@@ -980,8 +980,10 @@ def _print_trace_summary(summary: dict[str, Any]) -> None:
         print(f"  unresolved ({reason}): {count}")
     for device, values in summary["devices"].items():
         uuid = values["device_uuid"] or "unknown UUID, not measured"
+        pid, _, ordinal = str(device).rpartition("/")
+        label = f"process {pid} device {ordinal}" if pid else f"device {device}"
         print(
-            f"  device {device} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
+            f"  {label} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
             f"summed {values['summed_ns'] / 1e6:.3f} ms"
         )
     for note in summary.get("notes", []):
