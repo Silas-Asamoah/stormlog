@@ -79,14 +79,21 @@ def metrics_api_key(
     return None
 
 
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
 def _origin(url: str) -> tuple[str, str, int | None] | None:
-    """Scheme, host and port as written; None for a URL without a usable port."""
+    """Lowercase scheme and host plus the effective port, so ``https://h`` and
+    ``https://h:443`` are one origin; None for a URL without a usable port."""
     parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
     try:
         port = parts.port
     except ValueError:
         return None
-    return (parts.scheme.lower(), (parts.hostname or "").lower(), port)
+    if port is None:
+        port = _DEFAULT_PORTS.get(scheme)
+    return (scheme, (parts.hostname or "").lower(), port)
 
 
 @dataclass(frozen=True)

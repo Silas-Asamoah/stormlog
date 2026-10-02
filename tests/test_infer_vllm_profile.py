@@ -366,6 +366,14 @@ class TestScraperUnits:
             metrics_api_key(endpoint, "HTTP://HOST:8000/m", "k", warnings.append) == "k"
         )
         assert metrics_api_key(endpoint, "http://other:8000/m", None) is None
+        # A default port written out, or left out, is the same origin.
+        for same_origin in (
+            ("https://host/v1", "https://host:443/metrics"),
+            ("https://host:443/v1", "https://host/metrics"),
+            ("http://host/v1", "http://host:80/metrics"),
+            ("http://host:80/v1", "HTTP://Host/metrics"),
+        ):
+            assert metrics_api_key(*same_origin, "k", warnings.append) == "k"
         assert warnings == []
         for other in (
             "http://host:9000/metrics",
@@ -373,6 +381,9 @@ class TestScraperUnits:
             "http://other:8000/metrics",
         ):
             assert metrics_api_key(endpoint, other, "k", warnings.append) is None
+        # Scheme and port each count: http on 80 is not https on 443.
+        assert metrics_api_key("https://host/v1", "http://host/metrics", "k") is None
+        assert metrics_api_key("https://host/v1", "https://host:80/m", "k") is None
         assert len(warnings) == 3 and all("not sent" in w for w in warnings)
 
     def test_resolve_metrics_url(self) -> None:
