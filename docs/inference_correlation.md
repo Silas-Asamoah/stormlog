@@ -300,13 +300,15 @@ stormlog infer import-trace infer.jsonl run.sqlite
   `nvidia-smi`'s. Exports from nsys 2025.1 and later map each process's device
   numbers to GPUs, so renumbering needs no `--device-uuid`. Older exporters,
   such as nsys 2024.4's, do not write that mapping. A report from one of them
-  that lists one GPU is still named, since nsys lists every GPU on the host.
-  With several GPUs, the devices stay unmeasured and the import says to
-  re-export the report with a newer nsys, which adds the mapping.
+  that lists one GPU still names each process's device 0, since nsys lists
+  every GPU on the host. With several GPUs, the devices stay unmeasured and the
+  import says to re-export the report with a newer nsys, which adds the
+  mapping. Any device the report does not name is listed in a summary note.
 - **`--device-uuid` only fills gaps.** It is used for a device the report does
-  not name. A UUID that contradicts the report's is refused. So is one ordinal
-  given for several processes in a report, since `TRACE_FILE:` cannot pick one
-  process inside a report.
+  not name. A UUID that contradicts the report's is refused, and a UUID the
+  report names cannot be overridden. One ordinal given for several processes
+  in a report is refused too, since `TRACE_FILE:` cannot pick one process
+  inside a report.
 - **A `.nsys-rep` file is registered, not read.** Its format is not public, so
   the import notes that it must be exported to SQLite first.
 - **Event loss is unknown** (`null`), as for Kineto traces: the exported tables

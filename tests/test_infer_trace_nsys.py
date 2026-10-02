@@ -484,3 +484,34 @@ def test_an_export_without_nvtx_ranges_imports_unlinked_work(tmp_path: Path) -> 
     assert {link_gpu_event(trace, e).reason for e in trace.gpu_events} == {
         "launch_outside_iteration_range"
     }
+
+
+def test_a_one_gpu_report_names_only_device_zero(tmp_path: Path) -> None:
+    path = _without_device_table(
+        _export(tmp_path / "old.sqlite"), [(0, "NVIDIA A30", "aaaa-0000")]
+    )
+    with closing(sqlite3.connect(path)) as db:
+        db.execute(
+            "update CUPTI_ACTIVITY_KIND_KERNEL set deviceId = 1 where globalPid = ?",
+            (_gid(200, 0),),
+        )
+        db.commit()
+
+    trace = load_nsys_sqlite(path)
+
+    uuids = {(e.pid, e.device): e.device_uuid for e in trace.gpu_events}
+    assert uuids == {(100, 0): "GPU-aaaa-0000", (200, 1): None}
+    assert trace.notes == ["the report does not name the GPU of process 200 device 1"]
+
+
+def test_a_process_missing_from_the_device_table_is_named_in_a_note(
+    tmp_path: Path,
+) -> None:
+    path = _export(tmp_path / "run.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("delete from TARGET_INFO_CUDA_DEVICE where pid = 200")
+        db.commit()
+
+    trace = load_nsys_sqlite(path)
+
+    assert trace.notes == ["the report does not name the GPU of process 200 device 0"]

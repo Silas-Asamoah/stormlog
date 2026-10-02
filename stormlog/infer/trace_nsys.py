@@ -90,6 +90,8 @@ def _load(db: sqlite3.Connection, path: Path) -> KinetoTrace:
             trace.gpu_events.extend(
                 _gpu_events(db, table, kind, strings, devices, trace)
             )
+    if not devices.note:
+        trace.notes.extend(_unnamed_devices_note(trace.gpu_events))
     if "CUPTI_ACTIVITY_KIND_RUNTIME" in tables:
         trace.launches.update(_launches(db, strings))
     _count_graph_rows(db, tables, trace)
@@ -137,7 +139,11 @@ class _Devices:
             found = self.by_process.get((pid, device))
             if found is not None:
                 return found
-        return self.only_gpu or (None, None)
+        # A process on a one-GPU host sees that GPU as device 0; another
+        # ordinal (a MIG instance, say) breaks the premise, so it stays unnamed.
+        if device == 0 and self.only_gpu is not None:
+            return self.only_gpu
+        return (None, None)
 
 
 def _devices(db: sqlite3.Connection, tables: set[str]) -> _Devices:
@@ -156,6 +162,18 @@ def _devices(db: sqlite3.Connection, tables: set[str]) -> _Devices:
             "are; re-export the report with nsys 2025.1 or later to name them"
         )
     return devices
+
+
+def _unnamed_devices_note(events: list[GpuEvent]) -> list[str]:
+    unnamed = sorted(
+        {(e.pid, e.device) for e in events if e.device_uuid is None},
+        key=str,
+    )
+    if not unnamed:
+        return []
+    listed = ", ".join(f"process {pid} device {device}" for pid, device in unnamed[:5])
+    more = f" and {len(unnamed) - 5} more" if len(unnamed) > 5 else ""
+    return [f"the report does not name the GPU of {listed}{more}"]
 
 
 def _gpus(db: sqlite3.Connection) -> dict[int, tuple[str | None, str | None]]:
