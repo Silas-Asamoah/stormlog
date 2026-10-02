@@ -73,6 +73,9 @@ def test_ci_wires_memory_regression_gate_job() -> None:
     assert "artifacts/benchmarks/ci_regression.json" in job_block
     assert "artifacts/benchmarks/ci_scenarios" in job_block
     assert "--iterations 5000" in job_block
+    # Overhead trials must run on RAM-backed storage so runner disk latency
+    # stays out of runtime_overhead_pct.
+    assert "--overhead-scratch-root /dev/shm/stormlog-benchmark" in job_block
     assert re.search(
         r"uses: actions/upload-artifact@[0-9a-f]{40}\s+# v4\.",
         job_block,
@@ -92,6 +95,7 @@ def test_ci_wires_memory_operability_budget_job() -> None:
     assert "--gate-mode budget" in job_block
     assert "docs/benchmarks/v0.4_operating_budget.json" in job_block
     assert "--iterations 5000" in job_block
+    assert "--overhead-scratch-root /dev/shm/stormlog-benchmark" in job_block
     assert re.search(
         r"uses: actions/upload-artifact@[0-9a-f]{40}\s+# v4\.",
         job_block,

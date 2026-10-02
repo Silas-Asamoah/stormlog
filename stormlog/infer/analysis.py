@@ -7,10 +7,17 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import Any
 
+from .arrival_report import arrival_lines, arrival_summary, latency_from_intended_ms
+from .cache_state import cache_lines, cache_summary
 from .correlation_accounting import AlignedTimestamp
+from .errors import InferInputError
 from .host_clock import is_boot_qualified
+from .report_stats import int_value as _int_value
+from .report_stats import is_number as _is_number
+from .report_stats import number_values as _number_values
+from .report_stats import percentile as _percentile
 from .server_clock import (
     AMBIGUOUS,
     UNCOVERED,
@@ -24,6 +31,13 @@ from .server_clock import (
 from .server_group import members as group_members
 from .server_group import membership_issue
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
+from .workload_report import (
+    length_summary,
+    prompt_lines,
+    prompt_summary,
+    workload_lines,
+    workload_summary,
+)
 
 
 def analyze_inference_events(
@@ -47,21 +61,7 @@ def analyze_inference_events(
     )
     timelines = [(member, _member_timeline(member)) for member in members]
     ok_requests = [record for record in requests if record.get("status") == "ok"]
-
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for record in ok_requests:
-        case_id = str(record.get("case_id", "unknown"))
-        grouped.setdefault(case_id, []).append(record)
-
-    cases = {}
-    for case_id, case_requests in sorted(grouped.items()):
-        cases[case_id] = _summarize_requests(
-            case_requests,
-            samples=_samples_for_request_window(samples, case_requests),
-        )
-        cases[case_id]["memory"].update(
-            _server_case_memory(timelines, case_requests, "group" in join)
-        )
+    cases = _case_reports(records, requests, samples, timelines, "group" in join)
     if timelines:
         join["case_coverage"] = _coverage_counts(cases)
     failed = [record for record in requests if record.get("status") != "ok"]
@@ -71,15 +71,79 @@ def analyze_inference_events(
             "successful_requests": len(ok_requests),
             "failed_requests": len(failed),
             "failure_rate": (len(failed) / len(requests)) if requests else 0.0,
+            "failures_by_status": _failures_by_status(failed),
             "case_count": len(cases),
         },
         "cases": cases,
+        "workload": workload_summary(records),
         "telemetry": {
             "client_observation_scope": "client_local",
             "server_join": join,
             "server_targets": _server_targets(server_samples),
         },
     }
+
+
+def _case_reports(
+    records: list[dict[str, Any]],
+    requests: list[dict[str, Any]],
+    samples: list[dict[str, Any]],
+    timelines: list[tuple[_Member, _ServerTimeline]],
+    grouped: bool,
+) -> dict[str, dict[str, Any]]:
+    by_case: dict[str, list[dict[str, Any]]] = {}
+    for record in requests:
+        by_case.setdefault(str(record.get("case_id", "unknown")), []).append(record)
+    windows = _measured_windows(records)
+    cache_states = _case_records(records, "infer.cache_state")
+    cases = {}
+    for case_id, case_requests in sorted(by_case.items()):
+        cases[case_id] = _case_report(
+            case_requests, samples, timelines, grouped, windows.get(case_id)
+        )
+        cases[case_id]["cache"] = cache_summary(cache_states.get(case_id))
+    return cases
+
+
+def _case_report(
+    case_requests: list[dict[str, Any]],
+    samples: list[dict[str, Any]],
+    timelines: list[tuple[_Member, _ServerTimeline]],
+    grouped: bool,
+    window: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Summarize one case: latency from its completed requests, arrivals from all."""
+    ok = [record for record in case_requests if record.get("status") == "ok"]
+    report = _summarize_requests(ok, samples=_samples_for_request_window(samples, ok))
+    report["arrivals"] = arrival_summary(case_requests, window)
+    report["prompts"] = prompt_summary(case_requests, window)
+    report["lengths"] = length_summary(ok)
+    report["memory"].update(_server_case_memory(timelines, ok, grouped))
+    return report
+
+
+def _case_records(
+    records: list[dict[str, Any]], event_type: str
+) -> dict[str, dict[str, Any]]:
+    return {
+        str(record.get("case_id")): record
+        for record in records
+        if record.get("event_type") == event_type
+    }
+
+
+def _measured_windows(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        str(record.get("case_id")): record
+        for record in records
+        if record.get("event_type") == "infer.phase_window"
+        and record.get("phase") == "measured"
+    }
+
+
+def _failures_by_status(failed: list[dict[str, Any]]) -> dict[str, int]:
+    counts = Counter(str(record.get("status")) for record in failed)
+    return dict(sorted(counts.items()))
 
 
 def format_analysis_text(report: dict[str, Any]) -> str:
@@ -90,11 +154,13 @@ def format_analysis_text(report: dict[str, Any]) -> str:
         "-" * 28,
         f"Total requests: {summary.get('total_requests', 0)}",
         f"Successful requests: {summary.get('successful_requests', 0)}",
-        f"Failed requests: {summary.get('failed_requests', 0)}",
+        f"Failed requests: {summary.get('failed_requests', 0)}"
+        + _failure_breakdown(summary.get("failures_by_status")),
         f"Failure rate: {float(summary.get('failure_rate', 0.0)):.2%}",
     ]
     cases = report.get("cases", {})
     join = report.get("telemetry", {}).get("server_join", {})
+    lines.extend(workload_lines(report.get("workload")))
     lines.append("Memory observations: client-local")
     lines.extend(_server_status_lines(join))
     if isinstance(cases, dict) and cases:
@@ -103,6 +169,13 @@ def format_analysis_text(report: dict[str, Any]) -> str:
         for case_id, case in cases.items():
             lines.extend(_case_lines(case_id, case))
     return "\n".join(lines)
+
+
+def _failure_breakdown(by_status: Any) -> str:
+    if not isinstance(by_status, dict) or not by_status:
+        return ""
+    parts = ", ".join(f"{status} {count}" for status, count in by_status.items())
+    return f" ({parts})"
 
 
 def _server_status_lines(join: dict[str, Any]) -> list[str]:
@@ -161,6 +234,10 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
         f"output={_fmt(throughput.get('output_tokens_per_second'))} tok/s, "
         f"requests={_fmt(throughput.get('requests_per_second'))} req/s"
     ]
+    if isinstance(case, dict):
+        lines.extend(arrival_lines(case.get("arrivals"), case.get("latency_ms")))
+        lines.extend(prompt_lines(case.get("prompts")))
+        lines.extend(cache_lines(case.get("cache")))
     memory = case.get("memory", {}) if isinstance(case, dict) else {}
     lines.extend(_server_case_lines(memory))
     return lines
@@ -214,9 +291,27 @@ def _server_metric_line(
     )
 
 
+# Every profile writes a session record first; requests follow.
+_ARTIFACT_EVENT_TYPES = frozenset({"infer.session", "infer.request"})
+
+
 def _load_jsonl(path: str | Path) -> list[dict[str, Any]]:
+    """Read an inference artifact; a file that cannot be read is invalid input."""
+    try:
+        records = _read_jsonl(Path(path))
+    except (OSError, ValueError) as exc:
+        raise InferInputError(f"{path}: {_reason(exc)}") from exc
+    if not any(record.get("event_type") in _ARTIFACT_EVENT_TYPES for record in records):
+        raise InferInputError(
+            f"{path}: not an inference artifact (no infer.session or "
+            "infer.request records)"
+        )
+    return records
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    with Path(path).open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
             line = raw_line.strip()
             if not line:
@@ -228,12 +323,19 @@ def _load_jsonl(path: str | Path) -> list[dict[str, Any]]:
     return records
 
 
+def _reason(exc: Exception) -> str:
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    return str(exc)
+
+
 def _summarize_requests(
     requests: list[dict[str, Any]],
     *,
     samples: list[dict[str, Any]],
 ) -> dict[str, Any]:
     e2e = _number_values(requests, "e2e_latency_ms")
+    from_intended = latency_from_intended_ms(requests)
     ttft = _number_values(requests, "ttft_ms")
     first_chunk = _number_values(requests, "first_chunk_latency_ms")
     output_tokens = sum(_int_value(record.get("output_tokens")) for record in requests)
@@ -256,6 +358,9 @@ def _summarize_requests(
             "e2e_p50": _percentile(e2e, 50),
             "e2e_p95": _percentile(e2e, 95),
             "e2e_p99": _percentile(e2e, 99),
+            "e2e_from_intended_p50": _percentile(from_intended, 50),
+            "e2e_from_intended_p95": _percentile(from_intended, 95),
+            "e2e_from_intended_p99": _percentile(from_intended, 99),
             "ttft_p50": _percentile(ttft, 50),
             "ttft_p95": _percentile(ttft, 95),
             "ttft_p99": _percentile(ttft, 99),
@@ -327,40 +432,6 @@ def _peak_sample_value(samples: list[dict[str, Any]], field: str) -> int | None:
     )
 
 
-def _number_values(records: Iterable[dict[str, Any]], field: str) -> list[float]:
-    values: list[float] = []
-    for record in records:
-        value = record.get(field)
-        if _is_number(value):
-            values.append(float(value))
-    return values
-
-
-def _percentile(values: list[float], percentile: int) -> float | None:
-    if not values:
-        return None
-    sorted_values = sorted(values)
-    if len(sorted_values) == 1:
-        return sorted_values[0]
-    rank = (percentile / 100.0) * (len(sorted_values) - 1)
-    lower = int(rank)
-    upper = min(lower + 1, len(sorted_values) - 1)
-    weight = rank - lower
-    return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
-
-
-def _int_value(value: Any) -> int:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    return 0
-
-
-def _is_number(value: Any) -> TypeGuard[int | float]:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
 def _fmt(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f"{float(value):.2f}"
@@ -387,8 +458,15 @@ def _partition_inference_records(
 def _load_server_samples(paths: Iterable[str | Path]) -> list[TelemetrySample]:
     """Load every artifact; drop exact duplicates, e.g. a file passed twice."""
     return list(
-        dict.fromkeys(sample for path in paths for sample in load_telemetry(path))
+        dict.fromkeys(sample for path in paths for sample in _server_samples(path))
     )
+
+
+def _server_samples(path: str | Path) -> list[TelemetrySample]:
+    try:
+        return load_telemetry(path)
+    except (OSError, ValueError) as exc:
+        raise InferInputError(f"--server-telemetry {path}: {_reason(exc)}") from exc
 
 
 @dataclass(frozen=True)

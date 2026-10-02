@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "format": "stormlog.report",
+  "report_kind": "diagnose",
+  "generated_at_utc": "2026-10-01T12:00:00Z",
+  "tool": {
+    "name": "gpumemprof",
+    "command": "diagnose",
+    "version": "0.4.0",
+    "argv": ["gpumemprof", "diagnose", "--duration", "0", "--output", "./diag"]
+  },
+  "verdict": {
+    "status": "findings",
+    "exit_code": 3,
+    "summary": "Memory risk detected: oom_occurred, high_utilization"
+  },
+  "findings": [
+    {
+      "id": "diagnose.oom_occurred",
+      "kind": "oom",
+      "severity": "critical",
+      "title": "The allocator recorded out-of-memory events",
+      "message": "torch.cuda.memory_stats reported 1 OOM event on device 0",
+      "metrics": {"num_ooms": 1},
+      "evidence": [
+        {
+          "kind": "diagnose_summary",
+          "path": "diagnostic_summary.json",
+          "pointer": "/risk_flags/oom_occurred"
+        },
+        {
+          "kind": "session",
+          "session_id": "9f1c2a4e-5b6d-4c7e-8f90-1a2b3c4d5e6f"
+        }
+      ]
+    },
+    {
+      "id": "diagnose.high_utilization",
+      "kind": "high_utilization",
+      "severity": "warning",
+      "title": "Device memory utilization is above the risk threshold",
+      "message": null,
+      "metrics": {"utilization_ratio": 0.9, "threshold": 0.85},
+      "evidence": [
+        {
+          "kind": "diagnose_summary",
+          "path": "diagnostic_summary.json",
+          "pointer": "/utilization_ratio"
+        }
+      ]
+    }
+  ],
+  "metrics": {
+    "allocated_bytes": 966367641,
+    "reserved_bytes": 1020054732,
+    "peak_bytes": 966367641,
+    "total_bytes": 1073741824,
+    "utilization_ratio": 0.9,
+    "fragmentation_ratio": 0.05,
+    "num_ooms": 1
+  },
+  "artifacts": [
+    {"kind": "diagnose_manifest", "path": "manifest.json", "schema_version": 2},
+    {"kind": "diagnose_summary", "path": "diagnostic_summary.json"},
+    {"kind": "environment", "path": "environment.json"},
+    {"kind": "telemetry_timeline", "path": "telemetry_timeline.json"}
+  ],
+  "recommendations": [
+    "Reduce batch size or enable activation checkpointing."
+  ],
+  "session_id": "9f1c2a4e-5b6d-4c7e-8f90-1a2b3c4d5e6f",
+  "run_id": null,
+  "payload": {
+    "risk_flags": {
+      "oom_occurred": true,
+      "high_utilization": true,
+      "fragmentation_warning": false
+    }
+  }
+}

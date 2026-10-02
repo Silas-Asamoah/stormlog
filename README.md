@@ -198,6 +198,9 @@ These example-module commands require a source checkout plus `pip install -e .`.
 - run `python -m examples.cli.quickstart`
 - run `python -m examples.cli.capability_matrix --mode smoke --target both --oom-mode simulated`
 - archive the emitted artifacts for later triage in the TUI
+- branch on the fixed exit-code table and read `diagnose` bundles'
+  `report.json` verdicts; see the
+  [Report and Exit-Code Contract](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/report_contract.md)
 
 ## Terminal UI
 

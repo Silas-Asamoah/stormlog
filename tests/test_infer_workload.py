@@ -1,0 +1,335 @@
+"""The workload record: what traffic a run sent, so it can be repeated."""
+
+import contextlib
+import io
+import json
+import sys
+import types
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from stormlog.exit_codes import ExitCode
+from stormlog.infer.analysis import format_analysis_text
+from stormlog.infer.arrivals import load_arrival_trace
+from stormlog.infer.cache_state import redact_url
+from stormlog.infer.cli import main as infer_main
+from stormlog.infer.openai_client import (
+    OpenAIChatCompletionsClient,
+    validate_extra_body,
+)
+from stormlog.infer.tokens import TiktokenCounter, TransformersTokenCounter
+from stormlog.infer.workload import tokenizer_identity
+from tests.infer_workload_helpers import run_profile_with_fake_client
+
+
+def _workload(tmp_path: Path, **changes: Any) -> dict[str, Any]:
+    run_profile_with_fake_client(tmp_path, latency_seconds=0.0, **changes)
+    for line in (tmp_path / "infer.jsonl").read_text().splitlines():
+        record = json.loads(line)
+        if record.get("event_type") == "infer.workload":
+            return dict(record)
+    raise AssertionError("no infer.workload record")
+
+
+def test_the_digest_names_the_traffic_not_the_target(tmp_path: Path) -> None:
+    base = _workload(tmp_path / "a", request_count=2)
+    other_target = _workload(
+        tmp_path / "b",
+        request_count=2,
+        endpoint="http://10.0.0.2:9000/v1/chat/completions",
+        model="another-model",
+    )
+    assert base["workload_digest"] == other_target["workload_digest"]
+    assert len(base["workload_digest"]) == 64
+    assert base["generator"] == {"name": "stormlog.synthetic", "version": 2}
+    assert base["chat_template"] == {
+        "applied_by": "server",
+        "client_template_digest": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"seed": 1},
+        {"prompt_mode": "unique"},
+        {"input_tokens": (16,)},
+        {"warmup_requests": 1},
+        {"extra_body": {"temperature": 0}},
+        {"arrival_mode": "poisson", "rates": (2.0,)},
+        {"cache_state": "cold"},
+    ],
+)
+def test_the_digest_changes_with_anything_that_shapes_the_requests(
+    tmp_path: Path, changes: dict[str, Any]
+) -> None:
+    base = _workload(tmp_path / "base", request_count=2)
+    changed = _workload(tmp_path / "changed", request_count=2, **changes)
+    assert changed["workload_digest"] != base["workload_digest"]
+
+
+@pytest.mark.parametrize(
+    ("base", "changed"),
+    [
+        # Closed loopback ports refuse at once, so the resets fail quickly.
+        (
+            {"cache_reset_url": "http://127.0.0.1:1/reset_prefix_cache"},
+            {"cache_reset_url": "http://127.0.0.1:2/flush_cache"},
+        ),
+        ({"timeout_seconds": 60.0}, {"timeout_seconds": 120.0}),
+        ({}, {"drain_timeout_seconds": 5.0}),
+        # A closed loop ignores the open-loop limit and overflow policy.
+        ({"max_in_flight": 4}, {"max_in_flight": 128, "overflow": "drop"}),
+        ({"extra_body": {"temperature": 0}}, {"extra_body": {"temperature": 0.0}}),
+    ],
+)
+def test_the_digest_ignores_how_and_where_a_run_was_measured(
+    tmp_path: Path, base: dict[str, Any], changed: dict[str, Any]
+) -> None:
+    common = {"request_count": 1, "cache_state": "cold"}
+    first = _workload(tmp_path / "a", **common, **base)
+    second = _workload(tmp_path / "b", **common, **changed)
+    assert first["workload_digest"] == second["workload_digest"]
+
+
+def test_the_open_loop_limit_shapes_the_traffic(tmp_path: Path) -> None:
+    common: dict[str, Any] = {
+        "request_count": 2,
+        "arrival_mode": "fixed-rate",
+        "rates": (50.0,),
+    }
+    first = _workload(tmp_path / "a", max_in_flight=1, **common)
+    second = _workload(tmp_path / "b", max_in_flight=2, **common)
+    assert first["workload_digest"] != second["workload_digest"]
+
+
+def _offset_trace(path: Path, offsets_ms: tuple[int, ...]) -> Path:
+    path.write_text("".join(f'{{"offset_ms": {ms}}}\n' for ms in offsets_ms))
+    return path
+
+
+def _artifact_trace(path: Path, case_id: str, offsets_ms: tuple[int, ...]) -> Path:
+    requests = [
+        {
+            "event_type": "infer.request",
+            "phase": "measured",
+            "case_id": case_id,
+            "status": "ok",
+            "intended_at_ns": 5_000_000_000 + ms * 1_000_000,
+        }
+        for ms in offsets_ms
+    ]
+    path.write_text("".join(json.dumps(request) + "\n" for request in requests))
+    return path
+
+
+def test_the_digest_ignores_where_a_replay_trace_came_from(tmp_path: Path) -> None:
+    from_trace = _workload(
+        tmp_path / "a",
+        arrival_mode="replay",
+        arrival_trace=load_arrival_trace(
+            _offset_trace(tmp_path / "t.jsonl", (0, 10, 25))
+        ),
+    )
+    from_artifact = _workload(
+        tmp_path / "b",
+        arrival_mode="replay",
+        arrival_trace=load_arrival_trace(
+            _artifact_trace(
+                tmp_path / "earlier.jsonl", "fixed100_in8_out4", (0, 10, 25)
+            )
+        ),
+    )
+    # The same arrivals are the same traffic, wherever they were read from.
+    assert from_trace["workload_digest"] == from_artifact["workload_digest"]
+    traces = [w["cases"][0]["arrival"]["trace"] for w in (from_trace, from_artifact)]
+    assert [t["source"] for t in traces] == ["offset_ms trace", "stormlog artifact"]
+    assert [t["case_id"] for t in traces] == [None, "fixed100_in8_out4"]
+    other_offsets = _workload(
+        tmp_path / "c",
+        arrival_mode="replay",
+        arrival_trace=load_arrival_trace(
+            _offset_trace(tmp_path / "o.jsonl", (0, 10, 30))
+        ),
+    )
+    assert other_offsets["workload_digest"] != from_trace["workload_digest"]
+
+
+def test_reset_urls_are_recorded_without_credentials_or_query(
+    tmp_path: Path,
+) -> None:
+    secret_url = "http://user:hunter2@127.0.0.1:1/reset?token=SECRET123"
+    record = _workload(
+        tmp_path, request_count=1, cache_state="cold", cache_reset_url=secret_url
+    )
+    artifact = (tmp_path / "infer.jsonl").read_text()
+    assert "SECRET123" not in artifact and "hunter2" not in artifact
+    assert record["cache"]["reset_url"] == "http://127.0.0.1:1/reset?<redacted>"
+
+
+@pytest.mark.parametrize(
+    ("url", "recorded"),
+    [
+        ("http://host:8000/reset_prefix_cache", "http://host:8000/reset_prefix_cache"),
+        ("https://u:p@host/flush_cache?k=v", "https://host/flush_cache?<redacted>"),
+        ("http://[::1]:8000/reset", "http://[::1]:8000/reset"),
+        (None, None),
+    ],
+)
+def test_redact_url_keeps_only_scheme_host_port_and_path(
+    url: str | None, recorded: str | None
+) -> None:
+    assert redact_url(url) == recorded
+
+
+def test_the_record_lists_settings_and_never_the_api_key(tmp_path: Path) -> None:
+    record = _workload(
+        tmp_path,
+        request_count=2,
+        api_key="sk-secret-value",
+        extra_body={"temperature": 0, "ignore_eos": True},
+        warmup_requests=3,
+        prompt_mode="unique",
+    )
+    assert "sk-secret-value" not in (tmp_path / "infer.jsonl").read_text()
+    assert record["decoding"]["extra_body"] == {"temperature": 0, "ignore_eos": True}
+    assert record["decoding"]["other_settings"] == "server defaults"
+    assert record["warmup"] == {"requests": 3, "prompts": "separate"}
+    assert record["tokenizer"]["source"] == "estimated"
+    assert [case["case_id"] for case in record["cases"]] == ["c1_in8_out4"]
+    assert record["measurement"]["request_count"] == 2
+
+
+def test_the_report_carries_the_workload(tmp_path: Path) -> None:
+    _requests, report, _client = run_profile_with_fake_client(
+        tmp_path, latency_seconds=0.0, request_count=1, seed=7
+    )
+    workload = report["workload"]
+    assert workload["seed"] == 7 and workload["prompts"] == {"mode": "repeat"}
+    digest = workload["workload_digest"][:12]
+    assert f"Workload: {digest}, seed 7, prompts repeat" in format_analysis_text(report)
+
+
+class _Response:
+    def __init__(self, body: dict[str, Any]) -> None:
+        self.body = json.dumps(body).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self.body
+
+    def __enter__(self) -> "_Response":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+def test_extra_fields_reach_the_request_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[dict[str, Any]] = []
+
+    def urlopen(request: Any, timeout: float) -> _Response:
+        sent.append(json.loads(request.data))
+        return _Response({"choices": [{"message": {"content": "hi"}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    client = OpenAIChatCompletionsClient(
+        endpoint="http://127.0.0.1:1/v1/chat/completions",
+        model="m",
+        timeout_seconds=1,
+        extra_body={"temperature": 0, "ignore_eos": True},
+    )
+    client.complete(
+        prompt="p", output_tokens=4, stream=False, stream_include_usage=False
+    )
+    assert sent[0]["temperature"] == 0 and sent[0]["ignore_eos"] is True
+    assert (sent[0]["model"], sent[0]["max_tokens"]) == ("m", 4)
+
+
+@pytest.mark.parametrize("field", ["model", "messages", "stream", "max_tokens"])
+def test_extra_fields_cannot_replace_what_stormlog_sets(field: str) -> None:
+    with pytest.raises(ValueError, match=f"cannot set {field}"):
+        validate_extra_body({field: 1}, "max_tokens")
+    # The other output cap field is not one Stormlog sets for this run.
+    assert validate_extra_body({"max_completion_tokens": 1}, "max_tokens") == {
+        "max_completion_tokens": 1
+    }
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ("{temperature: 0}", "--extra-body is not valid JSON"),
+        ("[1, 2]", "--extra-body must be a JSON object"),
+        ('{"stream": false}', "cannot set stream"),
+    ],
+)
+def test_cli_rejects_bad_extra_bodies_before_writing(
+    tmp_path: Path, raw: str, message: str
+) -> None:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        code = infer_main(
+            [
+                "profile",
+                "--endpoint",
+                "http://127.0.0.1:1/v1/chat/completions",
+                "--model",
+                "fake-model",
+                "--extra-body",
+                raw,
+                "--output",
+                str(tmp_path / "never.jsonl"),
+            ]
+        )
+    assert code == ExitCode.USAGE
+    assert message in stderr.getvalue()
+    assert not (tmp_path / "never.jsonl").exists()
+
+
+def test_tokenizer_identity_names_the_library_and_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    encoding = types.SimpleNamespace(name="o200k_base", encode=lambda text: [1])
+    fake_tiktoken = types.SimpleNamespace(
+        __version__="0.9.0", get_encoding=lambda name: encoding
+    )
+    monkeypatch.setitem(sys.modules, "tiktoken", fake_tiktoken)
+    counter = TiktokenCounter(model=None, encoding_name="o200k_base")
+    assert tokenizer_identity(counter) == {
+        "source": "tiktoken",
+        "exact": True,
+        "name": "o200k_base",
+        "library_version": "0.9.0",
+    }
+
+    tokenizer = types.SimpleNamespace(
+        name_or_path="Qwen/Qwen2.5-0.5B-Instruct",
+        init_kwargs={"_commit_hash": "abc123"},
+        chat_template="{% for m in messages %}{{ m.content }}{% endfor %}",
+        encode=lambda text, add_special_tokens: [1],
+    )
+    auto = types.SimpleNamespace(from_pretrained=lambda model: tokenizer)
+    fake_transformers = types.SimpleNamespace(__version__="4.51.0", AutoTokenizer=auto)
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+    hf = TransformersTokenCounter(model="Qwen/Qwen2.5-0.5B-Instruct")
+    assert tokenizer_identity(hf)["revision"] == "abc123"
+    assert tokenizer_identity(hf)["revision_source"] == "tokenizer"
+
+    # transformers 5 drops the commit from the tokenizer; the hub cache has it.
+    tokenizer.init_kwargs = {}
+    snapshot = "/cache/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae5576"
+    fake_hub = types.SimpleNamespace(
+        try_to_load_from_cache=lambda repo, name: f"{snapshot}/{name}"
+    )
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+    assert tokenizer_identity(hf)["revision"] == "7ae5576"
+    assert tokenizer_identity(hf)["revision_source"] == "hub_cache"
+    # A tokenizer loaded from a local directory has no cached revision.
+    fake_hub.try_to_load_from_cache = lambda repo, name: None
+    assert tokenizer_identity(hf)["revision"] is None
+    assert tokenizer_identity(hf)["revision_source"] is None
+    assert tokenizer_identity(hf)["library_version"] == "4.51.0"
+    digest = hf.chat_template_digest()
+    assert digest is not None and len(digest) == 16

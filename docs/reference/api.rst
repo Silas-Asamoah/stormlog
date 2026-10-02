@@ -6,6 +6,9 @@ Generated API Modules
    :recursive:
 
    stormlog
+   stormlog.exit_codes
+   stormlog.report
+   stormlog.diagnose_report
    stormlog.profiler
    stormlog.tracker
    stormlog.telemetry

@@ -7,11 +7,26 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator, cast
 
+import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
 
 import stormlog.cli as gpumemprof_cli
 import stormlog.diagnose as diagnose_module
 import stormlog.tracker as tracker_module
+from stormlog.exit_codes import ExitCode
+from stormlog.report import load_report
+
+
+def _report_schema() -> dict[str, object]:
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "schemas"
+        / "stormlog_report_v1.schema.json"
+    )
+    payload = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
 
 
 def _patch_diagnose_env(
@@ -110,7 +125,7 @@ def test_diagnose_produces_artifact_bundle_with_duration_zero(
     )
     exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
-    assert exit_code in (0, 2)
+    assert exit_code in (ExitCode.OK, ExitCode.FINDINGS)
     dirs = list(tmp_path.iterdir())
     assert len(dirs) == 1
     artifact_dir = dirs[0]
@@ -121,10 +136,27 @@ def test_diagnose_produces_artifact_bundle_with_duration_zero(
     assert (artifact_dir / "diagnostic_summary.json").exists()
     assert (artifact_dir / "telemetry_timeline.json").exists()
     assert (artifact_dir / "manifest.json").exists()
+    report = load_report(artifact_dir / "report.json")
+    jsonschema.Draft202012Validator(_report_schema()).validate(report)
+    assert report["verdict"]["exit_code"] == exit_code
+    assert report["tool"] == {
+        "name": "gpumemprof",
+        "command": "diagnose",
+        "version": report["tool"]["version"],
+    }
+    assert {item["path"] for item in report["artifacts"]} == {
+        "environment.json",
+        "telemetry_timeline.json",
+        "diagnostic_summary.json",
+        "report.json",
+        "manifest.json",
+    }
 
     with open(artifact_dir / "manifest.json") as f:
         manifest = json.load(f)
     assert "files" in manifest
+    assert "report.json" in manifest["files"]
+    assert report["session_id"] == manifest["session_id"]
     assert "exit_code" in manifest
     assert "risk_detected" in manifest
     assert "environment.json" in manifest["files"]
@@ -165,10 +197,10 @@ def test_diagnose_artifact_completeness_with_timeline(
     assert len(timeline["allocated"]) == 3
 
 
-def test_diagnose_invalid_duration_returns_one(
+def test_diagnose_invalid_duration_returns_usage(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Invalid --duration < 0 returns 1 and prints error."""
+    """Invalid --duration < 0 returns USAGE (2) and prints error."""
     args = SimpleNamespace(
         output=None,
         device=None,
@@ -176,15 +208,15 @@ def test_diagnose_invalid_duration_returns_one(
         interval=0.5,
     )
     exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
-    assert exit_code == 1
+    assert exit_code == ExitCode.USAGE
     err = capsys.readouterr().err
     assert "duration" in err.lower()
 
 
-def test_diagnose_invalid_interval_returns_one(
+def test_diagnose_invalid_interval_returns_usage(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Invalid --interval <= 0 returns 1 and prints error."""
+    """Invalid --interval <= 0 returns USAGE (2) and prints error."""
     args = SimpleNamespace(
         output=None,
         device=None,
@@ -192,7 +224,7 @@ def test_diagnose_invalid_interval_returns_one(
         interval=0,
     )
     exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
-    assert exit_code == 1
+    assert exit_code == ExitCode.USAGE
     err = capsys.readouterr().err
     assert "interval" in err.lower()
 
@@ -265,10 +297,10 @@ def test_diagnose_exports_bundle_to_wandb(
     assert exported["kwargs"]["artifact_dir"] == artifact_dir
 
 
-def test_diagnose_exit_code_two_when_risk_detected(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_diagnose_exit_code_findings_when_risk_detected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """When risk is detected (e.g. high utilization, OOM), returns 2."""
+    """When risk is detected (e.g. high utilization, OOM), returns FINDINGS (3)."""
     _patch_diagnose_env(monkeypatch, cuda_available=True, risk_detected=True)
     _patch_timeline_capture(monkeypatch)
 
@@ -279,7 +311,14 @@ def test_diagnose_exit_code_two_when_risk_detected(
         interval=0.5,
     )
     exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
-    assert exit_code == 2
+    assert exit_code == ExitCode.FINDINGS
+    assert int(exit_code) == 3
+    assert "Status: MEMORY_RISK (exit_code=3)" in capsys.readouterr().out
+    manifest = json.loads(
+        (next(tmp_path.iterdir()) / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["exit_code"] == 3
+    assert manifest["risk_detected"] is True
 
 
 def test_diagnose_fallback_manifest_preserves_risk_detected(
@@ -288,6 +327,8 @@ def test_diagnose_fallback_manifest_preserves_risk_detected(
     _patch_diagnose_env(monkeypatch, cuda_available=True, risk_detected=True)
     _patch_timeline_capture(monkeypatch)
     recorded_risks: list[bool] = []
+    recorded_files: list[list[str]] = []
+    recorded_exit_codes: list[int] = []
     call_count = {"value": 0}
 
     def _fake_write_manifest(
@@ -301,21 +342,16 @@ def test_diagnose_fallback_manifest_preserves_risk_detected(
         native_history: bool,
         error: str | None = None,
     ) -> None:
-        _ = (
-            command_line,
-            files_written,
-            exit_code,
-            session_summary,
-            native_history,
-            error,
-        )
+        _ = (command_line, session_summary, native_history, error)
         recorded_risks.append(risk_detected)
+        recorded_files.append(list(files_written))
+        recorded_exit_codes.append(exit_code)
         manifest_path = artifact_dir / "manifest.json"
         if call_count["value"] == 0:
             call_count["value"] += 1
             raise OSError("disk full")
         manifest_path.write_text(
-            json.dumps({"risk_detected": risk_detected}),
+            json.dumps({"risk_detected": risk_detected, "exit_code": exit_code}),
             encoding="utf-8",
         )
 
@@ -331,6 +367,17 @@ def test_diagnose_fallback_manifest_preserves_risk_detected(
 
     assert exit_code == 1
     assert recorded_risks == [True, True]
+    assert recorded_exit_codes == [3, 1]
+    # The report written before the failed manifest said findings/3; the
+    # fallback must rewrite it so it never contradicts the exit code.
+    report = load_report(artifact_dir / "report.json")
+    assert report["verdict"]["exit_code"] == 1
+    assert report["verdict"]["status"] == "error"
+    assert report["verdict"]["summary"] == "Bundle incomplete: disk full"
+    assert report["findings"] == []
+    assert report["payload"]["risk_flags"]["oom_occurred"] is True
+    assert "report.json" in recorded_files[1]
+    assert "manifest.json" in recorded_files[1]
     manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["risk_detected"] is True
 
@@ -421,23 +468,50 @@ def test_diagnose_output_existing_dir_creates_timestamped_subdir(
     assert (subdirs[0] / "manifest.json").exists()
 
 
-def test_diagnose_invalid_output_returns_one(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("nested", [False, True])
+def test_diagnose_output_not_a_directory_returns_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    nested: bool,
 ) -> None:
-    """When --output is an existing file (cannot create dir), returns 1."""
+    """--output that is, or sits under, an existing file is a usage error (2)."""
     existing_file = tmp_path / "existing_file"
     existing_file.write_text("x")
     _patch_diagnose_env(monkeypatch, cuda_available=False)
     _patch_timeline_capture(monkeypatch)
 
+    output = existing_file / "bundle" if nested else existing_file
     args = SimpleNamespace(
-        output=str(existing_file),
+        output=str(output),
         device=None,
         duration=0,
         interval=0.5,
     )
     exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
-    assert exit_code == 1
+    assert exit_code == ExitCode.USAGE
+    assert "not a directory" in capsys.readouterr().err
+    assert existing_file.read_text() == "x"
+
+
+def test_diagnose_unexpected_runtime_error_is_not_a_usage_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Only DiagnoseUsageError maps to USAGE; a driver RuntimeError propagates."""
+
+    def _broken_run_diagnose(**kwargs: Any) -> None:
+        raise RuntimeError("CUDA driver error")
+
+    monkeypatch.setattr(diagnose_module, "run_diagnose", _broken_run_diagnose)
+    args = SimpleNamespace(
+        output=str(tmp_path),
+        device=None,
+        duration=0,
+        interval=0.5,
+    )
+
+    with pytest.raises(RuntimeError, match="CUDA driver error"):
+        gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
 
 def test_run_timeline_capture_uses_memory_tracker_for_mps(
@@ -539,8 +613,8 @@ def test_diagnose_same_second_creates_unique_artifact_dirs(
     code_two = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
     subdirs = sorted([path.name for path in out_dir.iterdir() if path.is_dir()])
-    assert code_one in (0, 2)
-    assert code_two in (0, 2)
+    assert code_one in (ExitCode.OK, ExitCode.FINDINGS)
+    assert code_two in (ExitCode.OK, ExitCode.FINDINGS)
     assert len(subdirs) == 2
     assert subdirs[0].startswith("stormlog-diagnose-20260215-120000")
     assert subdirs[1].startswith("stormlog-diagnose-20260215-120000")
@@ -628,7 +702,7 @@ def test_diagnose_native_history_rejects_non_cuda_runtime(
 
     exit_code = gpumemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
 
-    assert exit_code == 1
+    assert exit_code == ExitCode.USAGE
     err = capsys.readouterr().err
     assert "only for CUDA runtimes" in err
 

@@ -22,6 +22,7 @@ import psutil
 import pytest
 from jsonschema import Draft202012Validator
 
+from stormlog.exit_codes import ExitCode
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.host_clock import is_boot_qualified, wall_clock_domain
 from stormlog.infer.server_collector import (
@@ -682,13 +683,13 @@ def test_collect_cli_reports_why_collection_stopped() -> None:
     assert stderr == ""
 
 
-def test_collect_cli_fails_when_the_gpu_identity_changed() -> None:
+def test_collect_cli_reports_a_gpu_identity_change_as_a_finding() -> None:
     code, stdout, stderr = _run_collect_cli(
         lambda **_: CollectionResult(3, STOP_GPU_IDENTITY_CHANGED, "device changed")
     )
-    assert code == 1
+    assert code == ExitCode.FINDINGS
     assert "(stopped: gpu_identity_changed)" in stdout
-    assert "Error: GPU identity changed (device changed)" in stderr
+    assert "Findings: GPU identity changed (device changed)" in stderr
 
 
 def test_collect_cli_warns_when_the_server_process_ended() -> None:

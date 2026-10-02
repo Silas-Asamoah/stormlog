@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
+from stormlog.exit_codes import ExitCode
 from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
@@ -22,9 +24,10 @@ from stormlog.infer.correlation_events import (
 from stormlog.infer.host_clock import wall_clock_domain
 from stormlog.infer.openai_client import (
     ChatCompletionResult,
+    EndpointHTTPError,
     OpenAIChatCompletionsClient,
 )
-from stormlog.infer.profile import InferenceProfiler
+from stormlog.infer.profile import InferenceProfiler, classify_failure
 from stormlog.infer.samplers import NvidiaSmiSampler
 
 
@@ -46,8 +49,14 @@ class _FakeOpenAIHandler(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
         if "always-fail" in str(payload.get("model")):
             body = json.dumps({"error": {"message": "forced failure"}}).encode("utf-8")
-            self._send_json(body, status=503)
+            self._send_json(body, status=500)
             return
+        if "rate-limited" in str(payload.get("model")):
+            body = json.dumps({"error": {"message": "slow down"}}).encode("utf-8")
+            self._send_json(body, status=429)
+            return
+        if "slow" in str(payload.get("model")):
+            time.sleep(0.3)
         if "no-usage" in str(payload.get("model")):
             body = json.dumps(
                 {
@@ -546,7 +555,7 @@ class InferenceProfileTests(unittest.TestCase):
                 self.assertEqual(request["output_token_source"], "estimated")
                 self.assertFalse(request["output_token_exact"])
 
-    def test_profile_returns_error_when_all_measured_requests_fail(self) -> None:
+    def test_profile_reports_findings_when_all_measured_requests_fail(self) -> None:
         with _fake_server() as endpoint:
             with tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "infer.jsonl"
@@ -575,7 +584,7 @@ class InferenceProfileTests(unittest.TestCase):
                             ]
                         )
 
-                self.assertEqual(exit_code, 1)
+                self.assertEqual(exit_code, ExitCode.FINDINGS)
                 self.assertIn(
                     "no measured inference requests succeeded",
                     stderr.getvalue(),
@@ -592,6 +601,59 @@ class InferenceProfileTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(measured), 2)
                 self.assertTrue(all(record["status"] == "error" for record in measured))
+
+    def test_failures_are_classified_as_rejected_timeout_or_error(self) -> None:
+        cases = {
+            "rate-limited-model": ("rejected", 429),
+            "slow-model": ("timeout", None),
+            "always-fail-model": ("error", 500),
+        }
+        with _fake_server() as endpoint:
+            for model, (status, http_status) in cases.items():
+                with self.subTest(model=model), tempfile.TemporaryDirectory() as d:
+                    output = Path(d) / "infer.jsonl"
+                    InferenceProfiler(
+                        ProfileConfig(
+                            endpoint=endpoint,
+                            model=model,
+                            concurrency=(1,),
+                            input_tokens=(8,),
+                            output_tokens=(4,),
+                            request_count=2,
+                            output_path=str(output),
+                            stream=False,
+                            timeout_seconds=0.05,
+                            system_sampler="none",
+                            tokenizer="none",
+                        )
+                    ).run()
+                    measured = [
+                        record
+                        for record in _records(output)
+                        if record.get("event_type") == "infer.request"
+                    ]
+                    self.assertEqual(
+                        {(r["status"], r["http_status"]) for r in measured},
+                        {(status, http_status)},
+                    )
+                    report = analyze_inference_events(output)
+                    self.assertEqual(
+                        report["summary"]["failures_by_status"], {status: 2}
+                    )
+
+    def test_failure_classification_reads_http_status_and_timeouts(self) -> None:
+        self.assertEqual(
+            classify_failure(EndpointHTTPError(503, "busy")), ("rejected", 503)
+        )
+        self.assertEqual(
+            classify_failure(EndpointHTTPError(500, "bug")), ("error", 500)
+        )
+        self.assertEqual(classify_failure(TimeoutError("read")), ("timeout", None))
+        connect_timeout = urllib.error.URLError(TimeoutError("connect"))
+        self.assertEqual(classify_failure(connect_timeout), ("timeout", None))
+        refused = urllib.error.URLError(ConnectionRefusedError())
+        self.assertEqual(classify_failure(refused), ("error", None))
+        self.assertEqual(classify_failure(ValueError("bad")), ("error", None))
 
     def test_profile_marks_session_incomplete_when_analysis_fails(self) -> None:
         with _fake_server() as endpoint:
@@ -755,6 +817,10 @@ class InferenceProfileTests(unittest.TestCase):
         self.assertEqual(sample.device_name, "GPU-1")
         self.assertEqual(sample.device_used_bytes, 3000 * 1024 * 1024)
         self.assertEqual(sample.gpu_utilization_percent, 42.0)
+
+
+def _records(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 class _BlockingClient:

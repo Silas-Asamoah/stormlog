@@ -42,8 +42,8 @@ The profiler sends controlled traffic for each workload case in the matrix:
 - streaming or non-streaming mode
 
 `--requests` is the total measured request count per workload case, shared
-across the configured workers. `--duration` instead runs each workload case for
-the requested wall-clock window.
+across the configured workers (default: 1). `--duration` instead runs each
+workload case for the requested wall-clock window.
 
 Warmup requests are recorded but excluded from analysis:
 
@@ -55,6 +55,230 @@ stormlog infer profile \
   --requests 50 \
   --output artifacts/infer_with_warmup.jsonl
 ```
+
+## Control the workload
+
+By default, the profiler runs a closed loop and repeats one prompt per case.
+Each worker sends its next request when its previous one finishes, so a slower
+server receives less traffic, and after the first request most of the prompt
+can come from the engine's prefix cache. Both behaviours are useful, but a
+comparison between engine configurations needs to choose them on purpose. The
+options below control arrivals, prompts, and cache state. Every run records
+what it used.
+
+### Arrivals
+
+```bash
+stormlog infer profile \
+  --base-url http://localhost:8000/v1 \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --arrival poisson --rate 2,4,8 --duration 120 \
+  --prompt-mode unique \
+  --output artifacts/infer_poisson.jsonl
+```
+
+| `--arrival` | When requests are sent | Case ID prefix |
+| --- | --- | --- |
+| `closed` (default) | When a worker is free; `--concurrency` sets the workers | `c4` |
+| `fixed-rate` | Evenly spaced at each `--rate` (requests/second) | `fixed2` |
+| `poisson` | Exponential gaps at each `--rate`, drawn from `--seed` | `poisson2` |
+| `burst` | `--burst-size` requests every `--burst-interval` seconds | `burst8x1s` |
+| `replay` | The offsets in `--arrival-trace` | `replay` |
+
+In the open-loop modes, the schedule is fixed before the run starts and the
+first request goes out at 0. A phase can schedule at most 1,000,000 arrivals.
+`--requests` caps the number of arrivals, `--duration` keeps the arrivals
+before the window closes, and a replay with neither sends the whole trace. A
+replay trace is JSON lines with `offset_ms` (milliseconds), or a Stormlog
+inference artifact. From an artifact, the measured requests of one case are
+replayed: pick the case with `--arrival-trace-case` when there are several.
+
+`--max-in-flight` (default 128) limits how many requests can be outstanding
+at once. When every slot is busy, `--overflow wait` (default) holds the
+arrival until a slot frees up, and the arrivals behind it fall behind too; in
+a `--duration` run the hold ends at the drain deadline (see below).
+`--overflow drop` records the arrival as `dropped` and never sends it. A
+closed loop takes `--concurrency` instead; `--max-in-flight` and `--overflow`
+apply only to the open-loop modes.
+
+Every request records its `arrival_mode`, `request_index` and
+`intended_at_ns`. It also records its `dispatch_lag_ms` (sent minus
+intended), whether it was `held_for_slot`, and its `in_flight_at_dispatch`.
+Each case's `arrivals` block in the report counts what was offered, sent,
+completed, dropped and held. It also gives failures by status, peak
+in-flight, the offered rate and dispatch-lag percentiles. The offered rate is
+measured from the arrivals actually scheduled, so a Poisson case shows the
+rate it drew rather than `--rate`. It is null for a closed loop, and for a
+case whose arrivals all came at one instant, such as a single request or a
+single burst. When requests were held, latency measured from the send leaves
+out the time they waited.
+`latency_ms.e2e_from_intended_*` measures from each request's intended
+arrival, so that delay stays visible. The text report shows its p95 for every
+open-loop case.
+
+### Measured window and drain
+
+Each phase has a window, when requests arrive, and a drain after it. The
+window ends when `--duration` runs out, or when the last scheduled or counted
+request is sent. During the drain, requests that are still running may finish
+for up to `--drain-timeout` seconds (default: `--timeout`), measured from the
+window end. Any request still running at that deadline is recorded as
+`cancelled`, and an open-loop arrival that `--overflow wait` was still holding
+for a slot is recorded as `dropped`: the window has closed, so it is never
+sent. An open loop counted with `--requests` sends every arrival, held ones
+included, before its window closes, so its drain starts after the last send.
+A closed loop counted with `--requests` has no drain deadline: every request
+in it is measured, so each one finishes or times out. Every phase writes an
+`infer.phase_window` record, and each case's `arrivals` block reports
+`window_seconds` and `drain_seconds`.
+
+`cancelled` means Stormlog stopped waiting, not that the request stopped. The
+HTTP call keeps running, on the server and on a client thread, until it
+finishes or reaches `--timeout`. So the next phase waits for those calls
+before it starts, rather than measuring their load as its own. Its
+`infer.phase_window` record says how many it waited for and for how long, under
+`abandoned_requests`. A lower `--drain-timeout` ends a phase sooner, but not
+the run.
+
+Ctrl+C stops a profile with exit code 130. Requests still running are
+recorded as `cancelled`, and the artifact ends with an `infer.session` record
+whose status is `interrupted`. A run that fails for another reason ends with
+status `incomplete`. Either way, the requests recorded before the stop can
+still be analyzed.
+
+`infer profile` returns codes from the
+[exit-code contract](report_contract.md):
+
+- `0` when the run completes and at least one measured request succeeds.
+- `3` when none succeeds; the artifact records each failure.
+- `2` for a setting it cannot use, before anything is sent.
+- `5` for an `--arrival-trace` it cannot read.
+- `1` for anything unexpected.
+
+Request outcomes:
+
+| `status` | Meaning |
+| --- | --- |
+| `ok` | The request completed |
+| `timeout` | The client gave up after `--timeout` |
+| `rejected` | The server answered HTTP 429 or 503; `http_status` says which |
+| `error` | Any other failure, with `http_status` when there was one |
+| `dropped` | Never sent: `--overflow drop` turned the arrival away, or the drain deadline passed while `--overflow wait` held it; `error_message` says which |
+| `cancelled` | Still running when the drain deadline passed; the call itself runs on until it finishes or times out |
+
+### Prompts and prefix sharing
+
+```bash
+stormlog infer profile \
+  --base-url http://localhost:8000/v1 \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --input-tokens 2048 --requests 200 \
+  --prompt-mode shared-prefix --shared-prefix-ratio 0.75 --prefix-groups 4 \
+  --output artifacts/infer_shared_prefix.jsonl
+```
+
+| `--prompt-mode` | What requests share |
+| --- | --- |
+| `repeat` (default) | One prompt for the whole case, warmup included, as in earlier versions |
+| `unique` | Nothing: each request starts with its own nonce |
+| `shared-prefix` | A group prefix covering `--shared-prefix-ratio` of the tokens, one of `--prefix-groups` groups chosen by seed |
+
+Nonces come from the seed, the case and the phase, so a run can be repeated
+exactly. Neither another case nor the warmup shares a prefix with the measured
+requests, except in `repeat` mode, where cases with the same input length send
+the same text. The server's chat template still adds the same tokens to every
+request, so even `unique` prompts share those. Because a repeated run sends the
+same prompts, running the same workload twice against one server makes the
+second run start with those prompts already cached. To measure each run from a
+cold cache, reset the cache before each case (see below) or change `--seed`
+between runs; the CLI warns when neither is done.
+
+Each request records its `prompt_mode`, `prompt_id`, `prefix_group`,
+`shared_prefix_tokens` and `prompt_digest`. Each case reports how many distinct
+prompts and prefix groups it used, and the range of shared prefix lengths. Each
+phase window's `prompts_digest` covers the prompts of every scheduled arrival in
+schedule order, dropped ones included, so two runs of one schedule share it
+whatever their overflow policy. In a closed loop with `--duration`, it covers
+the prompts actually sent.
+
+The nonce takes about eight subword tokens, so `unique` and `shared-prefix` need
+`--input-tokens` of at least 32 to hit the target length and prefix share; the
+CLI warns below that. Prompts land within a token of the target, and each
+request records the length it actually sent: the server's count when it reports
+one, otherwise Stormlog's own count. A dropped or cancelled request records the
+planned length, marked as not exact. A prompt is built when its request is sent
+and its text is dropped once the request is done, so a long schedule neither
+waits for all of its prompts to be built nor keeps them in memory.
+
+### Cache state
+
+`--cache-state cold` records that each case should start with an empty prefix
+cache. `--cache-reset-url` is POSTed before each case to clear it, with the API
+key when one is set. Examples are
+vLLM's `/reset_prefix_cache`, which vLLM serves only when started with
+`VLLM_SERVER_DEV_MODE=1`, and SGLang's `/flush_cache`:
+
+```bash
+stormlog infer profile \
+  --base-url http://localhost:8000/v1 \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --prompt-mode unique \
+  --cache-state cold --cache-reset-url http://localhost:8000/reset_prefix_cache \
+  --output artifacts/infer_cold.jsonl
+```
+
+Asking for a cold cache is not proof that the cache was empty. No engine
+adapter can read the cache yet, so each case's `infer.cache_state` record and
+the report's `cache` block say `unverified`, with the reason. The reason is
+one of:
+
+- the reset succeeded but cannot be confirmed;
+- the reset failed, with its HTTP status or error;
+- nothing reset the cache.
+
+A failed reset is recorded and the run continues. Each case also has a
+`run_kind`, which names how the run was designed:
+
+- `cold_start`: a cold cache was requested, no warmup ran, and no reset
+  failed;
+- `steady_state`: warmup ran;
+- `unspecified`: anything else, including a cold start whose reset failed.
+
+The label is not evidence about the cache. One warmup request is enough to
+make a case `steady_state`. Compare runs of the same kind.
+
+### Workload record
+
+Every run writes an `infer.workload` record. It holds the seed, the prompt
+generator version, the cases and their arrival shapes, and the measurement and
+warmup settings. It also holds the decoding settings sent, the requested cache
+state, and the tokenizer that sized the prompts, with its name, revision and
+library version when known.
+
+The record's `workload_digest` covers what decides the requests a run sends:
+the cases, arrivals, prompts, warmup, decoding settings, seed, tokenizer and
+requested cache state. For open-loop arrivals it also covers
+`--max-in-flight` and `--overflow`. It leaves out the endpoint, model,
+timeouts and reset URL, so the same workload sent to two engine
+configurations has the same digest. `--extra-body` numbers are compared by
+value, so `0` and `0.0` count as the same.
+
+The API key is never recorded, and the reset URL is recorded without its
+credentials or query string. The server applies the chat template, and the
+record says so. When a local transformers tokenizer has a template, the
+record keeps that template's digest as a hint only.
+
+Pass sampling settings with `--extra-body`, a JSON object merged into every
+request:
+
+```bash
+stormlog infer profile ... --extra-body '{"temperature": 0, "ignore_eos": true}'
+```
+
+`--extra-body` cannot replace the fields Stormlog sets itself: `model`,
+`messages`, `stream`, `stream_options` and the output cap. Any setting that
+isn't passed is recorded as a server default. For each case, the report gives
+the prompt and output token distributions of the completed requests.
 
 ## Analyze an artifact
 
@@ -74,6 +298,12 @@ The report includes:
 - highest recorded client-local device memory when system telemetry is available
 - scoped server memory observations when a matching on-host collector artifact is supplied
 
+`infer analyze` exits `5` when the artifact or a `--server-telemetry` file is
+missing, unparsable, or invalid, which includes an artifact with no
+`infer.session` or `infer.request` records. Otherwise it exits `0`, even when
+every request in the artifact failed: analysis reports findings without
+failing.
+
 ## Token accounting
 
 Server usage metadata is preferred whenever the endpoint returns it. If usage is
@@ -91,6 +321,12 @@ metadata with `stream_options.include_usage` by default. Use
 `--no-stream-usage` for endpoints that reject that request field. If streaming
 usage is unavailable, output token counts fall back to the configured tokenizer
 or estimate and the request event records that provenance.
+
+Fallback counts are made on each request's own thread, not on the thread that
+keeps the arrival schedule. A slow tokenizer can still compete with the
+schedule for the CPU when hundreds of long prompts a second need counting, so
+for open-loop runs at high rates prefer an endpoint that reports usage, and
+check the case's dispatch-lag percentiles.
 
 Core endpoint profiling does not require tokenizer packages. Install tokenizer
 extras when you want better prompt sizing and fallback counts:
@@ -248,7 +484,11 @@ process exits, or when the GPU UUID changes. Every completed poll is kept, and
 the command prints the stop reason. Ctrl+C and SIGTERM are a normal stop. When
 the server process exits, the collector writes one `invalid` sample, prints a
 warning, and exits 0, because stopping the server after a run is routine. A
-changed GPU UUID also writes an `invalid` sample, and the command exits 1. A
+changed GPU UUID also writes an `invalid` sample, and the command exits 3
+(`FINDINGS`): the earlier polls are sound, but later case windows are not
+observed. Options it cannot use, a `--pid` with no running process, a
+`--device-index` or `--device-uuid` the host does not have, and a host without
+NVML (pass `--no-gpu` there) exit 2 before collection starts. A
 reading that fails without evidence of a different process or GPU, such as an
 NVML error or a psutil permission error, is recorded as `missing` with a null
 value, and collection continues.
