@@ -131,7 +131,6 @@
         "present",
         "absent",
         "optional_absent",
-        "optional_present",
         "deprecated_present",
         "removed_present",
         "unknown",

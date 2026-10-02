@@ -128,6 +128,25 @@ class TestScrapeRecord:
         with pytest.raises(ValueError):
             _scrape(**changes)
 
+    def test_record_written_before_the_review_fixes_still_validates(self) -> None:
+        # Written by the code at eb5ad3f from the same metrics text, before
+        # discovery.optional_present and the string spelling of non-finite
+        # values existed. schema_version is still 1, so the record must stay
+        # valid and loadable: a key it lacks is never a required one.
+        payload = json.loads(
+            (FIXTURES / "q05_c08_scrape_record_eb5ad3f.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert payload["schema_version"] == 1
+        assert "optional_present" not in payload["discovery"]
+        VALIDATOR.validate(payload)
+        record = VllmScrapeRecord.from_record(payload)
+        assert record.discovery is not None
+        assert record.discovery.optional_present == ()
+        assert record.to_record()["discovery"]["optional_present"] == []
+        assert record.scrape == _scrape().scrape
+
     def test_wrong_envelope_is_rejected(self) -> None:
         payload = _scrape().to_record()
         payload["schema_version"] = 2
