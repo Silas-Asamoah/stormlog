@@ -41,6 +41,7 @@ from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter
 from .vllm_scraper import VllmMetricsScraper
+from .vllm_spans import OtlpSpanReceiver, span_capability_event
 from .vllm_telemetry import MARKER_PHASE_END, MARKER_PHASE_START
 from .workload import workload_record
 
@@ -91,6 +92,8 @@ class InferenceProfiler:
         self._unfinished_lock = threading.Lock()
         self._opened_artifact = False
         self.vllm_scraper = self._build_vllm_scraper()
+        self.span_receiver: OtlpSpanReceiver | None = None
+        self._span_receiver_error: str | None = None
 
     def _build_vllm_scraper(self) -> VllmMetricsScraper | None:
         """The ``/metrics`` scraper when native vLLM telemetry is on."""
@@ -156,6 +159,7 @@ class InferenceProfiler:
         return report
 
     async def _capture(self, output_path: Path) -> None:
+        self._start_span_receiver()
         with JsonlEventWriter(output_path) as writer:
             self._opened_artifact = True
             writer.append(
@@ -190,6 +194,11 @@ class InferenceProfiler:
                             if self.vllm_scraper is not None
                             else None
                         ),
+                        "vllm_spans": (
+                            self.span_receiver.config_record()
+                            if self.span_receiver is not None
+                            else None
+                        ),
                     },
                 }
             )
@@ -210,17 +219,79 @@ class InferenceProfiler:
                     stop_event=stop_sampling,
                 )
             )
+            stop_spans = asyncio.Event()
+            span_task = asyncio.create_task(
+                self._drain_spans_loop(writer=writer, stop_event=stop_spans)
+            )
             try:
                 for case in self.config.cases():
                     await self._run_case(case=case, writer=writer)
             finally:
                 stop_sampling.set()
                 await sample_task
-            if self.vllm_scraper is not None:
-                capability = self.vllm_scraper.capability_event(
-                    self._artifact_identity().context
+                stop_spans.set()
+                await span_task
+                self._stop_span_receiver(writer)
+            self._write_capabilities(writer)
+
+    def _start_span_receiver(self) -> None:
+        """Bind the OTLP receiver before any request can produce a span."""
+        listen = self.config.vllm_spans_listen
+        if listen is None:
+            return
+        try:
+            receiver = OtlpSpanReceiver(
+                listen=listen, session_id=self.session.session_id, run_id=self.run_id
+            )
+            receiver.start()
+        except OSError as exc:
+            self._span_receiver_error = f"{type(exc).__name__}: {exc}"
+            if self.on_warning is not None:
+                self.on_warning(
+                    f"vLLM span receiver could not listen on {listen}: "
+                    f"{self._span_receiver_error}; spans are not collected"
                 )
-                writer.append(capability.to_record())
+            return
+        self.span_receiver = receiver
+
+    def _stop_span_receiver(self, writer: JsonlEventWriter) -> None:
+        receiver = self.span_receiver
+        if receiver is None:
+            return
+        receiver.stop()
+        for record in receiver.drain():
+            writer.append(record.to_record())
+
+    async def _drain_spans_loop(
+        self, *, writer: JsonlEventWriter, stop_event: asyncio.Event
+    ) -> None:
+        """Move received spans onto the artifact from the event loop thread."""
+        receiver = self.span_receiver
+        if receiver is None:
+            return
+        while not stop_event.is_set():
+            for record in receiver.drain():
+                writer.append(record.to_record())
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=0.25)
+            except asyncio.TimeoutError:
+                pass
+
+    def _write_capabilities(self, writer: JsonlEventWriter) -> None:
+        """Say what the engine exposed, once the run knows."""
+        if self.vllm_scraper is None and self.config.vllm_spans_listen is None:
+            return
+        context = self._artifact_identity().context
+        if self.vllm_scraper is not None:
+            writer.append(self.vllm_scraper.capability_event(context).to_record())
+        if self.config.vllm_spans_listen is not None:
+            event = span_capability_event(
+                context,
+                receiver=self.span_receiver,
+                listen=self.config.vllm_spans_listen,
+                error=self._span_receiver_error,
+            )
+            writer.append(event.to_record())
 
     def _artifact_identity(self) -> ArtifactIdentityEvent:
         session = self.session

@@ -125,6 +125,9 @@ class ProfileConfig:
     # None leaves native telemetry off.
     vllm_metrics_url: str | None = None
     vllm_metrics_interval_seconds: float = 1.0
+    # HOST:PORT for an OTLP/HTTP receiver that collects vLLM's request spans
+    # while the profile runs; None runs no receiver.
+    vllm_spans_listen: str | None = None
 
     def prompt_spec(self) -> PromptSpec:
         return PromptSpec(

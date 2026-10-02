@@ -38,6 +38,7 @@ from .server_collector import (
     collect_server_telemetry,
 )
 from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
+from .vllm_spans import DEFAULT_SPANS_LISTEN, parse_listen_address
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -247,6 +248,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="SECONDS",
         help="Seconds between vLLM metrics scrapes inside a phase (default: 1)",
+    )
+    profile_parser.add_argument(
+        "--vllm-spans-listen",
+        nargs="?",
+        const=DEFAULT_SPANS_LISTEN,
+        default=None,
+        metavar="HOST:PORT",
+        help=(
+            "Receive vLLM's OpenTelemetry request spans over OTLP/HTTP at "
+            "HOST:PORT (default 127.0.0.1:4318) for the length of the run; "
+            "start vLLM with --otlp-traces-endpoint pointing at it"
+        ),
     )
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
@@ -578,6 +591,7 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         vllm_metrics_interval_seconds=(
             1.0 if args.vllm_metrics_interval is None else args.vllm_metrics_interval
         ),
+        vllm_spans_listen=args.vllm_spans_listen,
     )
 
 
@@ -747,6 +761,8 @@ def _validate_vllm_metrics_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--vllm-metrics-interval only applies with --vllm-metrics")
     if not math.isfinite(interval) or interval < 0.1:
         raise ValueError("--vllm-metrics-interval must be a number of seconds >= 0.1")
+    if args.vllm_spans_listen is not None:
+        parse_listen_address(args.vllm_spans_listen)
 
 
 def _validate_arrival_arguments(args: argparse.Namespace) -> None:
