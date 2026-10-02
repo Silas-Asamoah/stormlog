@@ -77,8 +77,9 @@ variable to set, so an empty span count explains itself.
 The receiver exists only while the profile runs. Spans vLLM exports when no
 receiver is listening, such as its startup spans or the spans of traffic
 between runs, fail on the server side and are dropped there; the exporter
-retries a failed batch with backoff for up to about a minute, which can hold
-back the next batch. For short runs, start vLLM with
+retries a failed batch with backoff for up to its export timeout
+(`OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`, 10 s by default in opentelemetry-sdk
+1.44.0), which can hold back the next batch. For short runs, start vLLM with
 `OTEL_BSP_SCHEDULE_DELAY=1000` so batches leave every second, and keep
 `--vllm-spans-drain` at or above that delay. The report's `spans` block
 counts requests without a span, so a late batch is visible, never silent.
@@ -231,12 +232,13 @@ for how GPU time is accounted separately.
 
 | Component | Verified | Supported | Not supported |
 | --- | --- | --- | --- |
-| `vllm.metrics` | vLLM 0.30.0, CUDA backend, single and data-parallel engines (`engine` label) | the fields in the metric map; unknown series kept raw | per-request attribution from scrapes |
+| `vllm.metrics` | vLLM 0.30.0, CUDA backend, one engine | the fields in the metric map, one block per `engine` label (data-parallel engines are kept apart by construction, not verified on a DP server); unknown series kept raw | per-request attribution from scrapes |
 | `vllm.spans` | vLLM 0.30.0 over OTLP/HTTP protobuf (`infer-otlp` extra, `opentelemetry-proto>=1.20`) and JSON; OTLP JSON and JSONL files | `llm_request` spans and their native attributes; join by `X-Request-Id` | `time_in_model_forward`, `time_in_model_execute` (never set in 0.30.0); gRPC export; protobuf without the extra |
 | vLLM profiler controls | see [Inference execution correlation](inference_correlation.md) | `/start_profile`, `/stop_profile` orchestration lives with the GPU trace capture work | starting a profile without `--profiler-config` at server start |
 
-Other engines, tensor-parallel scrapes from several API servers behind a load
-balancer, and vLLM versions other than 0.30.0 are untested. A scrape taken
+Other engines, data-parallel servers, tensor-parallel scrapes from several
+API servers behind a load balancer, and vLLM versions other than 0.30.0 are
+untested. A scrape taken
 through a load balancer can mix engines; the `engine` label and
 `process_start_time_seconds` tell the report when that happened, and it
 leaves the window unresolved rather than mixing them.
@@ -245,7 +247,8 @@ leaves the window unresolved rather than mixing them.
 
 `examples/cli/vllm_native_telemetry.py` runs the same workload with unique
 prompts, with shared-prefix prompts, and at a concurrency that saturates the
-scheduler, then prints the telemetry blocks side by side: prefix-cache hits
+scheduler, each run under its own seed so no run warms the prefix cache for
+the next, then prints the telemetry blocks side by side: prefix-cache hits
 rise with shared prefixes, queue depth and queue time rise under saturation,
 and the KV occupancy follows. The differences are what the engine reports;
 the example does not claim that one caused the other.

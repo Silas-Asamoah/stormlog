@@ -36,8 +36,11 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ARTIFACTS = REPO_ROOT / "artifacts" / "examples" / "vllm_native_telemetry"
 
+# Each run gets its own seed: prompts come from the seed, so a shared one
+# would let a later run's prefill hit the prefix cache an earlier run filled,
+# and the prefix-cache comparison would be about run order, not workload.
 WORKLOADS: tuple[tuple[str, list[str]], ...] = (
-    ("unique", ["--prompt-mode", "unique"]),
+    ("unique", ["--prompt-mode", "unique", "--seed", "1"]),
     (
         "shared_prefix",
         [
@@ -47,9 +50,11 @@ WORKLOADS: tuple[tuple[str, list[str]], ...] = (
             "0.75",
             "--prefix-groups",
             "2",
+            "--seed",
+            "2",
         ],
     ),
-    ("saturated", ["--prompt-mode", "unique"]),
+    ("saturated", ["--prompt-mode", "unique", "--seed", "3"]),
 )
 
 
