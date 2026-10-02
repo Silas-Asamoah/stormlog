@@ -17,12 +17,12 @@ marks the derived stage windows as estimates.
 
 from __future__ import annotations
 
-import gzip
 import json
 import queue
 import socket
 import threading
 import time
+import zlib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -428,6 +428,26 @@ class ReceiverStats:
 
 
 MAX_BODY_BYTES = 32 * 1024 * 1024
+
+
+def gunzip_capped(body: bytes, cap: int) -> bytes | None:
+    """Inflate a gzip body, or None when its output would exceed ``cap``.
+
+    A gzip member a few hundred kilobytes long can hold gigabytes of zeros,
+    so the decoder is asked for at most ``cap + 1`` bytes: one byte over the
+    cap, or input left unconsumed, refuses the body without inflating it
+    whole. A stream cut before its trailer raises ``ValueError``; a
+    malformed one raises ``zlib.error``.
+    """
+    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = decoder.decompress(body, cap + 1)
+    if len(out) > cap or decoder.unconsumed_tail:
+        return None
+    if not decoder.eof:
+        raise ValueError("truncated gzip body")
+    return out
+
+
 _GRPC_PREFACE = b"PRI * HTTP/2.0"
 GRPC_HINT = (
     "an export arrived as gRPC (HTTP/2 preface); start vLLM with "
@@ -564,12 +584,21 @@ class OtlpSpanReceiver:
                 handler, 415, b"only gzip or identity Content-Encoding", "text/plain"
             )
             return None
+        return self._gunzip(handler, body)
+
+    def _gunzip(self, handler: BaseHTTPRequestHandler, body: bytes) -> bytes | None:
+        """The inflated body, within the same cap as a plain one."""
         try:
-            return gzip.decompress(body)
-        except (OSError, EOFError, ValueError):
+            inflated = gunzip_capped(body, MAX_BODY_BYTES)
+        except (zlib.error, ValueError):
             self._count("decode_failures")
             _respond(handler, 400, b"bad gzip body", "text/plain")
             return None
+        if inflated is None:
+            self._count("oversized")
+            _respond(handler, 413, b"decompressed body over the cap", "text/plain")
+            return None
+        return inflated
 
     def _count(self, name: str) -> None:
         with self._lock:

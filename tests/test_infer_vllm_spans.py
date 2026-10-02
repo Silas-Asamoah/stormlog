@@ -14,6 +14,7 @@ import socket
 import threading
 import urllib.error
 import urllib.request
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
@@ -33,6 +34,7 @@ from stormlog.infer.vllm_spans import (
     RawSpan,
     decode_otlp_json,
     decode_otlp_protobuf,
+    gunzip_capped,
     parse_listen_address,
     read_span_file,
     span_clock_domain,
@@ -501,6 +503,52 @@ class TestReceiverRobustness:
             metadata = receiver.capability_metadata()
         assert metadata["decode_failures"] == 1
         assert metadata["unsupported_media"] == 1
+
+    def test_a_gzip_bomb_is_refused_at_the_cap_not_after_inflating(self) -> None:
+        import gzip
+
+        # 64 MiB of zeros gzip to about 64 KB: under the raw cap, twice the
+        # inflated one. It is refused as oversized, not read as a bad body.
+        bomb = gzip.compress(bytes(64 * 1024 * 1024))
+        assert len(bomb) < 128 * 1024
+        with _receiver() as receiver:
+            request = urllib.request.Request(
+                f"http://{receiver.listen}/v1/traces",
+                data=bomb,
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                },
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as exc_info:
+                urllib.request.urlopen(request, timeout=30)
+            assert exc_info.value.code == 413
+            assert (
+                _post(
+                    f"http://{receiver.listen}/v1/traces",
+                    JSON_EXPORT,
+                    "application/json",
+                )
+                == 200
+            )
+            metadata = receiver.capability_metadata()
+        assert metadata["oversized"] == 1
+        assert metadata["decode_failures"] == 0
+        assert metadata["spans"] == 1
+
+    def test_gunzip_capped_stops_at_the_cap(self) -> None:
+        import gzip
+
+        payload = bytes(range(256)) * 16  # 4 KiB, incompressible enough
+        body = gzip.compress(payload)
+        assert gunzip_capped(body, len(payload)) == payload
+        assert gunzip_capped(body, len(payload) - 1) is None
+        # A stream cut before its trailer is an error, not a short result.
+        with pytest.raises(ValueError):
+            gunzip_capped(body[:-4], len(payload))
+        with pytest.raises(zlib.error):
+            gunzip_capped(b"\x1f\x8bnot gzip", len(payload))
 
     def test_a_handler_bug_is_counted_not_fatal(
         self, monkeypatch: pytest.MonkeyPatch

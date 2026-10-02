@@ -104,7 +104,8 @@ joins to a request by the recorded value and never by a rebuilt string.
   resource attribute when it has one; vLLM's resource has none, so spans the
   receiver collects are named by the peer address the export came from,
   such as `127.0.0.1/unix_epoch_ns`, which never counts as the client's
-  clock. Bodies may be gzip-encoded; a body over 32 MiB is refused with 413.
+  clock. Bodies may be gzip-encoded; a body over 32 MiB, as sent or once
+  inflated, is refused with 413 before it is held whole in memory.
 - `infer.capabilities` for `vllm.metrics` and `vllm.spans`: what was
   supported, enabled and collected, with the engine's unknown, retired and
   removed series, scrape and span counts, and the receiver's decode failures.
