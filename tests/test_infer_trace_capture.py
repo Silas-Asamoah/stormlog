@@ -720,3 +720,22 @@ def test_warmup_tracing_needs_warmup_requests(tmp_path: Path) -> None:
         )
     assert code == int(ExitCode.USAGE)
     assert "--trace-phase warmup needs --warmup-requests >= 1" in stderr.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("name", "worker"),
+    [
+        ("rank0.1790.pt.trace.json.gz", True),
+        ("dp0_pp0_tp0_dcp0_ep0_rank0.1790.pt.trace.json.gz", True),
+        ("host_1.async_llm.1790.pt.trace.json.gz", False),
+        ("profiler_out_0.txt", False),
+    ],
+)
+def test_worker_trace_names_include_parallel_group_prefixes(
+    tmp_path: Path, name: str, worker: bool
+) -> None:
+    from stormlog.infer.trace_capture import _worker_traces
+
+    (tmp_path / name).write_text("{}", encoding="utf-8")
+
+    assert bool(_worker_traces(tmp_path)) is worker

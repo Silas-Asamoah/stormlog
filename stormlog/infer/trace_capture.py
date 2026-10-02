@@ -43,8 +43,10 @@ from .trace_kineto import SUPPORTED, Detail
 VLLM_TORCH = "vllm-torch"
 TRACE_MODES = (VLLM_TORCH,)
 TRACE_PHASES = ("measured", "warmup")
-# vLLM worker traces; the API server's own trace is named "*.async_llm.*".
-WORKER_TRACE_GLOB = "rank*.pt.trace.json*"
+# vLLM names worker traces rank<N>.*, or dp<D>_pp<P>_tp<T>_dcp<C>_ep<E>_rank<N>.*
+# when every parallel group exists (MoE models); the API server's own trace is
+# named *.async_llm.* and is not GPU work.
+TRACE_GLOB = "*.pt.trace.json*"
 
 
 @dataclass(frozen=True)
@@ -399,7 +401,17 @@ async def _finish_timer(timer: asyncio.Task[None] | None, window: TraceWindow) -
 
 
 def _worker_traces(directory: Path) -> list[Path]:
-    return [path for path in directory.glob(WORKER_TRACE_GLOB) if path.is_file()]
+    return [
+        path
+        for path in directory.glob(TRACE_GLOB)
+        if path.is_file() and _is_worker_trace(path.name)
+    ]
+
+
+def _is_worker_trace(name: str) -> bool:
+    return ".async_llm." not in name and (
+        name.startswith("rank") or "_rank" in name.split(".", 1)[0]
+    )
 
 
 __all__ = [

@@ -633,7 +633,7 @@ What must be set when the server starts, and what Stormlog does while it runs:
 | Server start | `--profiler-config.profiler=torch` and `--profiler-config.torch_profiler_dir=DIR` | you |
 | Server start | `--profiler-config.torch_profiler_with_stack=false` (Python stacks per operator are the largest overhead) and `--profiler-config.ignore_frontend=true` (no second profiler in the API server) | you; recommended |
 | During the run | `POST /start_profile` and `/stop_profile` around the window | Stormlog |
-| After the run | read the new `rank*.pt.trace.json*` files in `DIR` and import them | Stormlog, when `--trace-dir` is readable from the client |
+| After the run | read the new worker trace files in `DIR` and import them | Stormlog, when `--trace-dir` is readable from the client |
 
 ```bash
 stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
@@ -663,7 +663,9 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
   `stormlog infer import-trace`. If `--trace` was requested and no trace could
   be imported, the trace collector's `infer.capabilities` record says so, with
   each window's reason.
-- **Files.** Only worker traces (`rank*.pt.trace.json*`) that appear during the
+- **Files.** Only worker traces (`rank<N>.*.pt.trace.json*`, or
+  `dp<D>_pp<P>_tp<T>_dcp<C>_ep<E>_rank<N>.*` for models where vLLM creates every
+  parallel group, such as MoE models) that appear during the
   window are imported; the API server's `*.async_llm.*` trace is ignored. A file
   larger than `--trace-max-bytes` is registered in the run envelope but not
   parsed. Without `--trace-dir`, the traces stay on the server; import them
