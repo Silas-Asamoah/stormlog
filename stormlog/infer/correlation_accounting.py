@@ -338,7 +338,7 @@ def activity_busy_intervals(
 def _offset_intervals(
     raw: object, start: int, end: int
 ) -> list[tuple[int, int]] | None:
-    if not isinstance(raw, (list, tuple)):
+    if not isinstance(raw, (list, tuple)) or not raw:
         return None
     intervals: list[tuple[int, int]] = []
     cursor = 0

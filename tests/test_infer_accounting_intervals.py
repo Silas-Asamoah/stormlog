@@ -66,6 +66,7 @@ def test_launch_intervals_replace_the_span_in_gpu_time() -> None:
     "intervals",
     [
         "0,30",
+        [],
         [[0, 30], [20, 10]],
         [[0, 150]],
         [[0, -1]],
