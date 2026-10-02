@@ -11,9 +11,12 @@ accounting rules are shared:
   correlation ID.
 - Iteration ranges are NVTX ranges named ``stormlog.iteration/...``; emit
   them with ``iteration_range(..., nvtx=True)``.
-- GPU UUIDs come from the report itself: ``TARGET_INFO_CUDA_DEVICE`` maps a
-  process's CUDA device to a GPU and ``TARGET_INFO_GPU`` names its UUID, so
-  ``CUDA_VISIBLE_DEVICES`` renumbering is handled.
+- A GPU event's ``deviceId`` is the CUDA device ordinal inside its process,
+  after ``CUDA_VISIBLE_DEVICES``. ``TARGET_INFO_CUDA_DEVICE`` maps each
+  process's ordinals to ``TARGET_INFO_GPU`` rows, which name the UUIDs. Older
+  exporters (nsys 2024.4) do not write that table; a report of such an export
+  that lists one GPU still names it, since nsys lists every GPU on the host.
+  Otherwise the devices stay unnamed: re-export the report with a newer nsys.
 
 Record CUDA graphs with ``--cuda-graph-trace=node``. At the default graph-level
 tracing nsys writes one row per graph instead of its kernels, which this reader
@@ -25,6 +28,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +59,9 @@ def load_nsys_sqlite(path: str | Path) -> KinetoTrace:
             return _load(db, path)
     except sqlite3.DatabaseError as exc:
         raise ValueError(f"not an Nsight Systems SQLite export: {exc}") from exc
+    except TypeError as exc:
+        # A NULL where a column is expected to hold a number.
+        raise ValueError(f"malformed Nsight Systems SQLite export: {exc}") from exc
 
 
 def _load(db: sqlite3.Connection, path: Path) -> KinetoTrace:
@@ -70,13 +77,17 @@ def _load(db: sqlite3.Connection, path: Path) -> KinetoTrace:
         world_size=None,
         engine_version=None,
         cupti_version=None,
-        device_names=_device_names(db, tables),
+        device_names={},
         source="nsys",
     )
-    uuids = _device_uuids(db, tables)
+    devices = _devices(db, tables)
+    if devices.note:
+        trace.notes.append(devices.note)
     for table, kind in GPU_TABLES.items():
         if table in tables:
-            trace.gpu_events.extend(_gpu_events(db, table, kind, strings, uuids, trace))
+            trace.gpu_events.extend(
+                _gpu_events(db, table, kind, strings, devices, trace)
+            )
     for table in LAUNCH_TABLES:
         if table in tables:
             trace.launches.update(_launches(db, table, strings))
@@ -107,36 +118,59 @@ def _meta(
     return str(row[0]) if row else None
 
 
-def _device_names(db: sqlite3.Connection, tables: set[str]) -> dict[int, str]:
-    if "TARGET_INFO_GPU" not in tables:
-        return {}
+@dataclass
+class _Devices:
+    """The GPU (UUID and name) behind each process's CUDA device ordinal."""
+
+    by_process: dict[tuple[int, int], tuple[str | None, str | None]] = field(
+        default_factory=dict
+    )
+    only_gpu: tuple[str | None, str | None] | None = None
+    note: str | None = None
+
+    def lookup(
+        self, pid: int | None, device: int | None
+    ) -> tuple[str | None, str | None]:
+        if pid is not None and device is not None:
+            found = self.by_process.get((pid, device))
+            if found is not None:
+                return found
+        return self.only_gpu or (None, None)
+
+
+def _devices(db: sqlite3.Connection, tables: set[str]) -> _Devices:
+    gpus = _gpus(db) if "TARGET_INFO_GPU" in tables else {}
+    # nsys lists every GPU on the host, so one listed GPU is the one any
+    # process used, whatever its CUDA_VISIBLE_DEVICES.
+    devices = _Devices(only_gpu=next(iter(gpus.values())) if len(gpus) == 1 else None)
+    if "TARGET_INFO_CUDA_DEVICE" in tables:
+        query = "select pid, cudaId, gpuId from TARGET_INFO_CUDA_DEVICE"
+        for pid, cuda_id, gpu_id in db.execute(query):
+            if None not in (pid, cuda_id, gpu_id) and int(gpu_id) in gpus:
+                devices.by_process[(int(pid), int(cuda_id))] = gpus[int(gpu_id)]
+    elif len(gpus) > 1:
+        devices.note = (
+            "this export does not say which GPU each process's CUDA devices "
+            "are; re-export the report with nsys 2025.1 or later to name them"
+        )
+    return devices
+
+
+def _gpus(db: sqlite3.Connection) -> dict[int, tuple[str | None, str | None]]:
+    """UUID and name per nsys GPU id; ids do not follow nvidia-smi order."""
+    query = "select id, name, uuid from TARGET_INFO_GPU"
     return {
-        int(gpu): str(name)
-        for gpu, name in db.execute("select id, name from TARGET_INFO_GPU")
+        int(gpu): (_nvml_uuid(uuid), str(name) if name is not None else None)
+        for gpu, name, uuid in db.execute(query)
+        if gpu is not None
     }
 
 
-def _device_uuids(
-    db: sqlite3.Connection, tables: set[str]
-) -> dict[tuple[int, int], str]:
-    """GPU UUID per (pid, CUDA device), NVML-style with a ``GPU-`` prefix."""
-    if not {"TARGET_INFO_GPU", "TARGET_INFO_CUDA_DEVICE"} <= tables:
-        return {}
-    gpus = {
-        int(gpu): str(uuid)
-        for gpu, uuid in db.execute("select id, uuid from TARGET_INFO_GPU")
-        if uuid
-    }
-    mapping = {}
-    for gpu_id, cuda_id, pid in db.execute(
-        "select gpuId, cudaId, pid from TARGET_INFO_CUDA_DEVICE"
-    ):
-        uuid = gpus.get(int(gpu_id))
-        if uuid:
-            mapping[(int(pid), int(cuda_id))] = (
-                uuid if uuid.startswith(("GPU-", "MIG-")) else f"GPU-{uuid}"
-            )
-    return mapping
+def _nvml_uuid(uuid: Any) -> str | None:
+    if not uuid:
+        return None
+    text = str(uuid)
+    return text if text.startswith(("GPU-", "MIG-")) else f"GPU-{text}"
 
 
 def _gpu_events(
@@ -144,7 +178,7 @@ def _gpu_events(
     table: str,
     kind: str,
     strings: dict[int, str],
-    uuids: dict[tuple[int, int], str],
+    devices: _Devices,
     trace: KinetoTrace,
 ) -> Iterator[GpuEvent]:
     columns = _columns(db, table)
@@ -157,6 +191,7 @@ def _gpu_events(
         query
     ):
         pid = split_global_id(int(global_pid))[0] if global_pid is not None else None
+        uuid, device_name = devices.lookup(pid, _int(device))
         yield GpuEvent(
             start_ns=trace.base_ns + int(start),
             end_ns=trace.base_ns + int(end),
@@ -167,11 +202,8 @@ def _gpu_events(
             correlation=_int(correlation) or None,
             graph_id=None,
             pid=pid,
-            device_uuid=(
-                uuids.get((pid, int(device)))
-                if pid is not None and device is not None
-                else None
-            ),
+            device_uuid=uuid,
+            device_name=device_name,
         )
 
 

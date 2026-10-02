@@ -69,6 +69,7 @@ class GpuEvent:
     # trace is one process, so its GPU events leave these unset.
     pid: int | None = None
     device_uuid: str | None = None
+    device_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,8 @@ class KinetoTrace:
     spans: dict[tuple[int, int], list[IterationSpan]] = field(default_factory=dict)
     span_starts: dict[tuple[int, int], list[float]] = field(default_factory=dict)
     longest_span_us: dict[tuple[int, int], float] = field(default_factory=dict)
+    # What the reader could not import or resolve, for the import summary.
+    notes: list[str] = field(default_factory=list)
 
 
 def load_kineto_trace(path: str | Path) -> KinetoTrace:
@@ -579,6 +582,7 @@ def _summary(
         "devices": _device_summary(trace, builder),
         "event_loss": None,
         "event_loss_note": "the trace does not report dropped CUPTI records",
+        "notes": list(trace.notes),
     }
 
 
@@ -601,20 +605,27 @@ def _device_summary(
     by_device: dict[str, list[GpuEvent]] = defaultdict(list)
     for event in trace.gpu_events:
         by_device[_device_key(event)].append(event)
-    summary = {}
-    for key, events in sorted(by_device.items()):
-        device = events[0].device
-        busy = merge_intervals((event.start_ns, event.end_ns) for event in events)
-        records = merge_intervals(builder.record_spans.get(key, []))
-        summary[key] = {
-            "name": trace.device_names.get(device) if device is not None else None,
-            "device_uuid": events[0].device_uuid
-            or (builder.device_uuids.get(device) if device is not None else None),
-            "busy_ns": sum(end - start for start, end in busy),
-            "launch_span_ns": sum(end - start for start, end in records),
-            "summed_ns": sum(event.end_ns - event.start_ns for event in events),
-        }
-    return summary
+    return {
+        key: _device_entry(trace, builder, key, events)
+        for key, events in sorted(by_device.items())
+    }
+
+
+def _device_entry(
+    trace: KinetoTrace, builder: _EventBuilder, key: str, events: list[GpuEvent]
+) -> dict[str, Any]:
+    device = events[0].device
+    busy = merge_intervals((event.start_ns, event.end_ns) for event in events)
+    records = merge_intervals(builder.record_spans.get(key, []))
+    return {
+        "name": events[0].device_name
+        or (trace.device_names.get(device) if device is not None else None),
+        "device_uuid": events[0].device_uuid
+        or (builder.device_uuids.get(device) if device is not None else None),
+        "busy_ns": sum(end - start for start, end in busy),
+        "launch_span_ns": sum(end - start for start, end in records),
+        "summed_ns": sum(event.end_ns - event.start_ns for event in events),
+    }
 
 
 __all__ = [

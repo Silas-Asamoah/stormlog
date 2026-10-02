@@ -233,3 +233,100 @@ def test_cli_rejects_a_sqlite_file_that_is_not_an_export(tmp_path: Path) -> None
     assert main(["import-trace", str(artifact), str(other)]) == int(
         ExitCode.INVALID_INPUT
     )
+
+
+def _without_device_table(path: Path, gpus: list[tuple[int, str, str]]) -> Path:
+    """An nsys 2024.4-style export: no TARGET_INFO_CUDA_DEVICE.
+
+    Its context table has an ``hwId`` that is 0 for every process, whichever
+    GPU it ran on (checked on a two-GPU host), so it names no GPU.
+    """
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("drop table TARGET_INFO_CUDA_DEVICE")
+        db.execute("delete from TARGET_INFO_GPU")
+        db.executemany("insert into TARGET_INFO_GPU values (?, ?, ?)", gpus)
+        db.execute(
+            "create table TARGET_INFO_CUDA_CONTEXT_INFO (processId integer, "
+            "deviceId integer, hwId integer, contextId integer)"
+        )
+        db.executemany(
+            "insert into TARGET_INFO_CUDA_CONTEXT_INFO values (?, 0, 0, 1)",
+            [(100,), (200,)],
+        )
+        db.commit()
+    return path
+
+
+def test_without_a_device_table_several_gpus_stay_unnamed(tmp_path: Path) -> None:
+    path = _without_device_table(
+        _export(tmp_path / "old.sqlite"),
+        [(0, "NVIDIA A30", "aaaa-0000"), (1, "NVIDIA L4", "bbbb-1111")],
+    )
+
+    trace = load_nsys_sqlite(path)
+
+    assert {event.device_uuid for event in trace.gpu_events} == {None}
+    assert {event.device_name for event in trace.gpu_events} == {None}
+    assert len(trace.notes) == 1 and "re-export" in trace.notes[0]
+
+
+def test_cli_prints_why_devices_stay_unnamed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _without_device_table(
+        _export(tmp_path / "old.sqlite"),
+        [(0, "NVIDIA A30", "aaaa-0000"), (1, "NVIDIA L4", "bbbb-1111")],
+    )
+
+    code = main(["import-trace", str(_artifact(tmp_path / "infer.jsonl")), str(path)])
+
+    assert code == int(ExitCode.OK)
+    out = capsys.readouterr().out
+    assert "unknown UUID, not measured" in out
+    assert "note: this export does not say which GPU" in out
+
+
+def test_without_a_device_table_a_single_gpu_is_named(tmp_path: Path) -> None:
+    path = _without_device_table(
+        _export(tmp_path / "old.sqlite"), [(0, "NVIDIA A30", "aaaa-0000")]
+    )
+
+    trace = load_nsys_sqlite(path)
+
+    assert {event.device_uuid for event in trace.gpu_events} == {"GPU-aaaa-0000"}
+    assert trace.notes == []
+
+
+def test_device_names_follow_each_process_mapping(tmp_path: Path) -> None:
+    path = _export(tmp_path / "run.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("update TARGET_INFO_GPU set name = 'NVIDIA L4' where id = 1")
+        db.commit()
+
+    capture = TraceFileCollector([path]).collect(run_id="r", session_id="s")
+
+    assert capture.summary is not None
+    devices = capture.summary["traces"][0]["devices"]
+    assert devices["100/0"]["name"] == "NVIDIA L4"
+    assert devices["200/0"]["name"] == "NVIDIA A30"
+
+
+def test_a_device_row_without_a_gpu_is_skipped(tmp_path: Path) -> None:
+    path = _export(tmp_path / "run.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("update TARGET_INFO_CUDA_DEVICE set gpuId = NULL where pid = 200")
+        db.commit()
+
+    uuids = {e.pid: e.device_uuid for e in load_nsys_sqlite(path).gpu_events}
+
+    assert uuids == {100: "GPU-bbbb-1111", 200: None}
+
+
+def test_a_null_where_a_number_belongs_is_a_malformed_export(tmp_path: Path) -> None:
+    path = _export(tmp_path / "run.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("update CUPTI_ACTIVITY_KIND_KERNEL set start = NULL")
+        db.commit()
+
+    with pytest.raises(ValueError, match="malformed Nsight Systems SQLite export"):
+        load_nsys_sqlite(path)

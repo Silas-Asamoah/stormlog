@@ -984,3 +984,5 @@ def _print_trace_summary(summary: dict[str, Any]) -> None:
             f"  device {device} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
             f"summed {values['summed_ns'] / 1e6:.3f} ms"
         )
+    for note in summary.get("notes", []):
+        print(f"  note: {note}")
