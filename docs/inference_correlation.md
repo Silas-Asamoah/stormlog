@@ -144,8 +144,10 @@ including the `rank*.pt.trace.json.gz` files vLLM writes after
 `/start_profile` and `/stop_profile`, and appends their GPU work to an existing
 inference artifact as `infer.activity_ref` records. The artifact must contain
 an `infer.artifact` record, which supplies the run and session. Each trace is
-registered by reference in the run envelope. A trace already registered at the
-same path is skipped, so running the command twice does not duplicate records.
+registered by reference in the run envelope. A trace this artifact already
+imported from the same file is skipped, so running the command twice does not
+duplicate records; a trace that was only registered, for example over a size
+bound, can still be imported.
 
 ```bash
 stormlog infer import-trace infer.jsonl rank0.pt.trace.json.gz \

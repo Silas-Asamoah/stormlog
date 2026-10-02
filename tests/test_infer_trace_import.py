@@ -247,3 +247,30 @@ def test_combined_capture_unions_what_each_trace_collected(tmp_path: Path) -> No
     assert len(capture.attachments) == 2
     assert capture.summary is not None
     assert [t["linked_gpu_events"] for t in capture.summary["traces"]] == [1, 0]
+
+
+def test_imports_through_a_symlinked_directory_store_paths_that_open(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # /scratch -> /mnt/nvme/scratch, as on many GPU clusters.
+    real = tmp_path / "mnt" / "nvme" / "scratch"
+    (real / "run").mkdir(parents=True)
+    linked = tmp_path / "scratch"
+    linked.symlink_to(real, target_is_directory=True)
+    artifact = _artifact(linked / "run" / "infer.jsonl")
+    trace = _trace(linked / "run" / "rank0.pt.trace.json", "T0")
+
+    assert main(["import-trace", str(artifact), str(trace)]) == int(ExitCode.OK)
+    capsys.readouterr()
+    assert main(["import-trace", str(artifact), str(trace)]) == int(ExitCode.OK)
+
+    assert "already imported into this run" in capsys.readouterr().out
+    envelope = linked / "run" / "stormlog_run.json"
+    row = next(
+        r
+        for r in json.loads(envelope.read_text())["attachments"]
+        if r["attachment_id"] == "kineto:rank0.pt.trace.json"
+    )
+    assert (envelope.parent / row["path"]).is_file()
+    records = load_inference_artifact(artifact)
+    assert len([r for r in records if isinstance(r, ActivityReferenceEvent)]) == 1

@@ -438,7 +438,9 @@ def _trace_attachment_row(
         trace_path = envelope.parent / trace_path
     if attachment.storage == "copy" and not trace_path.is_file():
         raise ValueError("copied trace path must exist")
-    row["path"] = os.path.relpath(trace_path, envelope.parent)
+    # Relative between resolved paths: a lexical relpath that climbs out of a
+    # symlinked directory (/scratch -> /mnt/nvme/scratch) would not open.
+    row["path"] = os.path.relpath(trace_path.resolve(), envelope.parent.resolve())
     return row
 
 

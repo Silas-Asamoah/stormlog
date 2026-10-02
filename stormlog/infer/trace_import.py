@@ -7,13 +7,11 @@ trace is registered in the run envelope and its GPU activity is appended as
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from ..run_catalog import RUN_ENVELOPE_FILENAME
 from ..session import create_session_summary
 from .correlation_capture import (
     CaptureCapabilities,
@@ -21,7 +19,11 @@ from .correlation_capture import (
     TraceCapture,
     append_inference_capture,
 )
-from .correlation_events import ArtifactIdentityEvent, load_inference_artifact
+from .correlation_events import (
+    ArtifactIdentityEvent,
+    CapabilityEvent,
+    load_inference_artifact,
+)
 from .errors import InferInputError, InferUsageError
 from .trace_kineto import SUPPORTED, Detail, import_kineto_trace
 
@@ -136,14 +138,14 @@ def import_traces_into_artifact(
 ) -> TraceCapture:
     """Append the traces' GPU activity to ``artifact`` and return what was added.
 
-    A trace already registered in the run envelope at the same path is skipped
-    and listed in the summary's ``already_imported``; importing it again would
-    only duplicate its records.
+    A trace this artifact already imported from the same file is skipped and
+    listed in the summary's ``already_imported``; importing it again would only
+    duplicate its records. A trace that was only registered, for example over a
+    size bound, can still be imported.
     """
     run_id, session_id = artifact_run_identity(artifact)
-    envelope = Path(envelope_path or Path(artifact).parent / RUN_ENVELOPE_FILENAME)
-    registered = _registered_trace_paths(envelope)
-    skipped = [str(t) for t in traces if Path(t).resolve() in registered]
+    imported = imported_trace_paths(artifact)
+    skipped = [str(t) for t in traces if Path(t).resolve() in imported]
     pending = [t for t in traces if str(t) not in skipped]
     if not pending:
         return _nothing_imported(skipped)
@@ -174,21 +176,27 @@ def import_traces_into_artifact(
     return replace(captured[0], summary=summary)
 
 
-def _registered_trace_paths(envelope: Path) -> set[Path]:
-    """Resolved paths of the Kineto traces the run envelope already lists."""
-    if not envelope.is_file():
-        return set()
-    try:
-        rows = json.loads(envelope.read_text(encoding="utf-8")).get("attachments", [])
-    except (ValueError, AttributeError) as exc:
-        raise InferInputError(f"{envelope}: unreadable run envelope ({exc})") from exc
-    return {
-        (envelope.parent / row["path"]).resolve()
-        for row in rows
-        if isinstance(row, dict)
-        and str(row.get("attachment_id", "")).startswith("kineto:")
-        and row.get("path")
-    }
+def imported_trace_paths(artifact: str | Path) -> set[Path]:
+    """Resolved paths of the traces whose GPU activity the artifact already holds.
+
+    Read from the trace collectors' capability summaries, which name each
+    trace's file; a trace registered without being parsed does not count.
+    """
+    paths: set[Path] = set()
+    for record in load_inference_artifact(artifact):
+        if (
+            isinstance(record, CapabilityEvent)
+            and record.component == "trace_collector"
+        ):
+            summary = record.metadata.get("summary") or {}
+            paths.update(
+                Path(trace["path"])
+                for trace in summary.get("traces", [])
+                if isinstance(trace, dict)
+                and trace.get("path")
+                and not trace.get("skipped")
+            )
+    return paths
 
 
 def _nothing_imported(skipped: list[str]) -> TraceCapture:
@@ -203,5 +211,6 @@ __all__ = [
     "artifact_run_identity",
     "combine_captures",
     "import_traces_into_artifact",
+    "imported_trace_paths",
     "parse_device_uuids",
 ]

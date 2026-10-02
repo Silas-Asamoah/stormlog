@@ -171,7 +171,7 @@ def import_kineto_trace(
         capabilities=_capabilities(trace),
         events=events,
         attachments=(attachment,) if attachment else (),
-        summary=_summary(trace, groups, builder, detail),
+        summary=_summary(trace, groups, builder, detail, path),
     )
 
 
@@ -489,6 +489,7 @@ def _summary(
     groups: dict[GroupKey, list[GpuEvent]],
     builder: _EventBuilder,
     detail: Detail,
+    path: str | Path,
 ) -> dict[str, Any]:
     reasons: Counter[str] = Counter()
     linked = 0
@@ -501,6 +502,7 @@ def _summary(
     return {
         "format": "kineto",
         "detail": detail,
+        "path": str(Path(path).resolve()),
         "trace_id": trace.trace_id,
         "engine_version": trace.engine_version,
         "cupti_version": trace.cupti_version,
