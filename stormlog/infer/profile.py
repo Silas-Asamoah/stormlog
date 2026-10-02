@@ -489,15 +489,17 @@ class InferenceProfiler:
             request_id = f"{case.case_id}_{request.phase}_{arrival.index}"
             await self._send(request_id, request, arrival)
 
-        def drop(arrival: Arrival) -> None:
+        def drop(arrival: Arrival, reason: str) -> None:
             event = self._dropped_event(
                 request_id=f"{case.case_id}_{request.phase}_{arrival.index}",
                 request=request,
                 arrival=arrival,
+                reason=reason,
             )
             request.prompts.forget(arrival.index)
             request.writer.append(event.to_record())
 
+        drain_timeout = self._drain_timeout()
         dispatch = await dispatch_schedule(
             offsets,
             mode=case.arrival.mode,
@@ -505,13 +507,22 @@ class InferenceProfiler:
             overflow=self.config.overflow,
             send=send,
             drop=drop,
+            deadline=(
+                duration_seconds + drain_timeout
+                if duration_seconds is not None
+                else None
+            ),
         )
-        window_ended_at_ns = (
-            dispatch.started_at_ns + round(duration_seconds * 1e9)
-            if duration_seconds is not None
-            else time.time_ns()
-        )
-        await _drain(dispatch.tasks, timeout=self._drain_timeout())
+        if duration_seconds is None:
+            # Counted arrivals are all sent, held ones included, so the
+            # window closes with the last send and the whole drain follows.
+            window_ended_at_ns = time.time_ns()
+        else:
+            # The drain is measured from the window end: arrivals held past
+            # it have used up part of it, or all of it.
+            window_ended_at_ns = dispatch.started_at_ns + round(duration_seconds * 1e9)
+            drain_timeout += (window_ended_at_ns - time.time_ns()) / 1e9
+        await _drain(dispatch.tasks, timeout=max(drain_timeout, 0.0))
         return _PhaseWindow(
             dispatch.started_at_ns,
             window_ended_at_ns,
@@ -745,8 +756,13 @@ class InferenceProfiler:
         request_id: str,
         request: "_PhaseRequest",
         arrival: Arrival,
+        reason: str,
     ) -> InferenceRequestEvent:
-        """A request the in-flight limit turned away; it was never sent."""
+        """A request that was never sent; ``reason`` says why.
+
+        The in-flight limit turned it away, or it was still waiting for a
+        slot when the drain deadline passed.
+        """
         prompt = request.prompts.take(arrival.index)
         now_ns = time.time_ns()
         return InferenceRequestEvent(
@@ -763,7 +779,7 @@ class InferenceProfiler:
             e2e_latency_ms=None,
             ttft_ms=None,
             first_chunk_latency_ms=None,
-            error_message=f"in-flight limit of {request.case.concurrency} reached",
+            error_message=reason,
         )
 
 
@@ -838,7 +854,9 @@ class _PhaseWindow:
 
     The window is when requests arrive: until the duration ends, or until
     the last scheduled or counted request is sent. The drain follows, until
-    every request has finished or been cancelled at the drain deadline.
+    every request has finished or the drain deadline has passed, when the
+    requests still running are cancelled and the open-loop arrivals still
+    waiting for a slot are dropped.
     """
 
     started_at_ns: int

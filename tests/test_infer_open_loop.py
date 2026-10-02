@@ -18,7 +18,12 @@ from stormlog.infer.analysis import analyze_inference_events, format_analysis_te
 from stormlog.infer.arrival_report import arrival_lines
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
-from stormlog.infer.open_loop import Arrival, InFlightLimiter, dispatch_schedule
+from stormlog.infer.open_loop import (
+    Arrival,
+    InFlightLimiter,
+    cancel_all,
+    dispatch_schedule,
+)
 from stormlog.infer.openai_client import ChatCompletionResult, EndpointHTTPError
 from stormlog.infer.profile import InferenceProfiler
 from stormlog.infer.tokens import EstimatedTokenCounter, TokenCount
@@ -235,6 +240,36 @@ def test_a_closed_loop_duration_drains_then_cancels(tmp_path: Path) -> None:
     assert "cancelled 1" in format_analysis_text(report)
 
 
+def test_a_duration_run_stops_sending_at_the_drain_deadline(tmp_path: Path) -> None:
+    # Five arrivals in a 50 ms window, one slot, and a request that outlives
+    # the window and the 100 ms drain: four arrivals are still waiting for the
+    # slot when the drain deadline passes.
+    requests, report, client = run_profile_with_fake_client(
+        tmp_path,
+        latency_seconds=0.5,
+        arrival_mode="fixed-rate",
+        rates=(100.0,),
+        request_count=None,
+        duration_seconds=0.05,
+        max_in_flight=1,
+        overflow="wait",
+        drain_timeout_seconds=0.1,
+    )
+    assert client.calls == 1
+    ordered = sorted(requests, key=lambda r: r["request_index"])
+    assert [r["status"] for r in ordered] == ["cancelled"] + ["dropped"] * 4
+    for record in ordered[1:]:
+        assert record["held_for_slot"] and record["in_flight_at_dispatch"] is None
+        assert "drain deadline" in record["error_message"]
+    arrivals = report["cases"]["fixed100_in8_out4"]["arrivals"]
+    assert (arrivals["offered"], arrivals["sent"], arrivals["dropped"]) == (5, 1, 4)
+    assert arrivals["failed"] == {"cancelled": 1}
+    assert arrivals["window_seconds"] == pytest.approx(0.05)
+    # Without the deadline the drain would last the four held requests: 2 s.
+    assert 0.08 <= arrivals["drain_seconds"] < 1.0
+    assert "dropped 4, cancelled 1" in format_analysis_text(report)
+
+
 def test_a_phase_waits_for_requests_an_earlier_drain_gave_up_on(
     tmp_path: Path,
 ) -> None:
@@ -361,7 +396,7 @@ def _run(coroutine: Any) -> Any:
 
 def test_dispatcher_drops_only_while_every_slot_is_busy() -> None:
     sent: list[Arrival] = []
-    dropped: list[Arrival] = []
+    dropped: list[tuple[Arrival, str]] = []
 
     async def scenario() -> None:
         limiter = InFlightLimiter(1)
@@ -376,7 +411,7 @@ def test_dispatcher_drops_only_while_every_slot_is_busy() -> None:
             limiter=limiter,
             overflow="drop",
             send=send,
-            drop=dropped.append,
+            drop=lambda arrival, reason: dropped.append((arrival, reason)),
         )
         await asyncio.gather(*dispatch.tasks)
         assert limiter.active == 0
@@ -384,10 +419,48 @@ def test_dispatcher_drops_only_while_every_slot_is_busy() -> None:
     _run(scenario())
     assert [a.index for a in sent] == [0, 2]
     assert {a.in_flight_at_dispatch for a in sent} == {1}
-    assert [a.index for a in dropped] == [1]
-    assert dropped[0].held_for_slot and dropped[0].in_flight_at_dispatch is None
+    assert [(a.index, reason) for a, reason in dropped] == [
+        (1, "in-flight limit of 1 reached")
+    ]
+    assert dropped[0][0].held_for_slot and dropped[0][0].in_flight_at_dispatch is None
     assert not sent[1].held_for_slot
     assert sent[1].intended_at_ns - sent[0].intended_at_ns == 200_000_000
+
+
+def test_dispatcher_drops_arrivals_still_held_at_the_deadline() -> None:
+    sent: list[Arrival] = []
+    dropped: list[tuple[Arrival, str]] = []
+
+    async def scenario() -> None:
+        limiter = InFlightLimiter(1)
+
+        async def send(arrival: Arrival) -> None:
+            sent.append(arrival)
+            await asyncio.sleep(5.0)
+
+        started = time.perf_counter()
+        dispatch = await dispatch_schedule(
+            [0.0, 0.01, 0.02],
+            mode="fixed-rate",
+            limiter=limiter,
+            overflow="wait",
+            send=send,
+            drop=lambda arrival, reason: dropped.append((arrival, reason)),
+            deadline=0.1,
+        )
+        # Returned at the deadline, not after the 5 s request freed the slot.
+        assert time.perf_counter() - started < 2.0
+        assert len(dispatch.tasks) == 1 and limiter.active == 1
+        await cancel_all(dispatch.tasks)
+        assert limiter.active == 0
+
+    _run(scenario())
+    assert [a.index for a in sent] == [0]
+    assert [a.index for a, _reason in dropped] == [1, 2]
+    assert all(a.held_for_slot for a, _reason in dropped)
+    assert {reason for _arrival, reason in dropped} == {
+        "still waiting to be sent when the drain deadline passed"
+    }
 
 
 def test_limiter_rejects_a_limit_below_one() -> None:

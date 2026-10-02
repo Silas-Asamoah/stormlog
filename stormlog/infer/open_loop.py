@@ -63,18 +63,22 @@ async def dispatch_schedule(
     limiter: InFlightLimiter,
     overflow: Overflow,
     send: Callable[[Arrival], Awaitable[None]],
-    drop: Callable[[Arrival], None],
+    drop: Callable[[Arrival, str], None],
+    deadline: float | None = None,
 ) -> Dispatch:
     """Start each request at its offset from now, in seconds.
 
     With ``overflow="wait"`` an arrival that finds every slot busy is held
     until one frees up; while it waits, later arrivals fall behind schedule
     too, which their dispatch lag shows. With ``"drop"`` it is handed to
-    ``drop`` and never sent. Returns once every arrival has been sent or
-    dropped; the requests themselves may still be running.
+    ``drop`` and never sent, with the reason. ``deadline`` is when the
+    phase's drain ends, in seconds from now: an arrival still unsent then is
+    dropped rather than held any longer. Returns once every arrival has been
+    sent or dropped; the requests themselves may still be running.
     """
     started = time.perf_counter()
     started_ns = time.time_ns()
+    deadline_at = None if deadline is None else started + deadline
     tasks: list[asyncio.Task[None]] = []
     try:
         for index, offset in enumerate(offsets):
@@ -88,9 +92,12 @@ async def dispatch_schedule(
                 held_for_slot=limiter.full,
             )
             if overflow == "drop" and arrival.held_for_slot:
-                drop(arrival)
+                drop(arrival, f"in-flight limit of {limiter.limit} reached")
                 continue
-            in_flight = await limiter.acquire()
+            in_flight = await _acquire_by(limiter, deadline_at)
+            if in_flight is None:
+                drop(arrival, "still waiting to be sent when the drain deadline passed")
+                continue
             arrival = replace(arrival, in_flight_at_dispatch=in_flight)
             tasks.append(asyncio.create_task(_release_after(send(arrival), limiter)))
     except asyncio.CancelledError:
@@ -98,6 +105,19 @@ async def dispatch_schedule(
         await cancel_all(tasks)
         raise
     return Dispatch(started_at_ns=started_ns, tasks=tasks)
+
+
+async def _acquire_by(limiter: InFlightLimiter, deadline: float | None) -> int | None:
+    """Take a slot, or return None once ``deadline`` (a perf_counter time) passes."""
+    if deadline is None:
+        return await limiter.acquire()
+    timeout = deadline - time.perf_counter()
+    if timeout <= 0:
+        return None
+    try:
+        return await asyncio.wait_for(limiter.acquire(), timeout)
+    except asyncio.TimeoutError:
+        return None
 
 
 async def cancel_all(tasks: Sequence[asyncio.Task[None]]) -> None:

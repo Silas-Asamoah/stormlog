@@ -95,7 +95,8 @@ replayed: pick the case with `--arrival-trace-case` when there are several.
 
 `--max-in-flight` (default 128) limits how many requests can be outstanding
 at once. When every slot is busy, `--overflow wait` (default) holds the
-arrival until a slot frees up, and the arrivals behind it fall behind too.
+arrival until a slot frees up, and the arrivals behind it fall behind too; in
+a `--duration` run the hold ends at the drain deadline (see below).
 `--overflow drop` records the arrival as `dropped` and never sends it. A
 closed loop takes `--concurrency` instead; `--max-in-flight` and `--overflow`
 apply only to the open-loop modes.
@@ -120,12 +121,16 @@ open-loop case.
 Each phase has a window, when requests arrive, and a drain after it. The
 window ends when `--duration` runs out, or when the last scheduled or counted
 request is sent. During the drain, requests that are still running may finish
-for up to `--drain-timeout` seconds (default: `--timeout`). Any request still
-running at that deadline is recorded as `cancelled`. A closed loop counted
-with `--requests` has no drain deadline: every request in it is measured, so
-each one finishes or times out. Every phase writes an `infer.phase_window`
-record, and each case's `arrivals` block reports `window_seconds` and
-`drain_seconds`.
+for up to `--drain-timeout` seconds (default: `--timeout`), measured from the
+window end. Any request still running at that deadline is recorded as
+`cancelled`, and an open-loop arrival that `--overflow wait` was still holding
+for a slot is recorded as `dropped`: the window has closed, so it is never
+sent. An open loop counted with `--requests` sends every arrival, held ones
+included, before its window closes, so its drain starts after the last send.
+A closed loop counted with `--requests` has no drain deadline: every request
+in it is measured, so each one finishes or times out. Every phase writes an
+`infer.phase_window` record, and each case's `arrivals` block reports
+`window_seconds` and `drain_seconds`.
 
 `cancelled` means Stormlog stopped waiting, not that the request stopped. The
 HTTP call keeps running, on the server and on a client thread, until it
@@ -149,7 +154,7 @@ Request outcomes:
 | `timeout` | The client gave up after `--timeout` |
 | `rejected` | The server answered HTTP 429 or 503; `http_status` says which |
 | `error` | Any other failure, with `http_status` when there was one |
-| `dropped` | `--overflow drop` turned the arrival away; it was never sent |
+| `dropped` | Never sent: `--overflow drop` turned the arrival away, or the drain deadline passed while `--overflow wait` held it; `error_message` says which |
 | `cancelled` | Still running when the drain deadline passed; the call itself runs on until it finishes or times out |
 
 ### Prompts and prefix sharing
