@@ -401,3 +401,86 @@ def test_report_uuids_are_marked_as_coming_from_the_trace(
     assert capture.summary is not None
     devices = capture.summary["traces"][0]["devices"].values()
     assert {d["device_uuid_source"] for d in devices} == {"trace"}
+
+
+def test_graph_level_rows_are_counted_not_dropped_silently(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """nsys's default --cuda-graph-trace=graph: one row per graph launch.
+
+    The table and its columns are those of a real nsys 2024.3 capture.
+    """
+    path = _export(tmp_path / "run.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("delete from CUPTI_ACTIVITY_KIND_KERNEL where correlationId = 2")
+        db.execute(
+            "create table CUPTI_ACTIVITY_KIND_GRAPH_TRACE (start integer, end integer, "
+            "deviceId integer, contextId integer, greenContextId integer, "
+            "streamId integer, correlationId integer, globalPid integer, "
+            "graphId integer, graphExecId integer)"
+        )
+        db.execute(
+            "insert into CUPTI_ACTIVITY_KIND_GRAPH_TRACE values "
+            "(6000, 8000, 0, 1, 0, 7, 2, ?, 1, 1)",
+            (_gid(100, 0),),
+        )
+        db.commit()
+
+    code = main(["import-trace", str(_artifact(tmp_path / "infer.jsonl")), str(path)])
+
+    assert code == int(ExitCode.OK)
+    assert "1 CUDA graph launches were recorded per graph" in capsys.readouterr().out
+    capture = TraceFileCollector([path]).collect(run_id="r", session_id="s")
+    assert capture.summary is not None
+    assert capture.summary["traces"][0]["not_imported"] == {"graph_trace_rows": 1}
+
+
+def test_start_end_ranges_count_and_open_or_text_file_ranges_do_not(
+    tmp_path: Path,
+) -> None:
+    path = _export(tmp_path / "run.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("delete from NVTX_EVENTS")
+        db.executemany(
+            "insert into NVTX_EVENTS values (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    500,
+                    9_000,
+                    60,
+                    "stormlog.iteration/engine/step-1",
+                    None,
+                    _gid(100, 101),
+                ),
+                (500, None, 59, "stormlog.iteration/engine/open", None, _gid(200, 201)),
+                (
+                    500,
+                    9_000,
+                    70,
+                    "stormlog.iteration/engine/nvtxt",
+                    None,
+                    _gid(200, 201),
+                ),
+            ],
+        )
+        db.commit()
+
+    trace = load_nsys_sqlite(path)
+
+    assert {s.iteration_ref for spans in trace.spans.values() for s in spans} == {
+        EntityRef("engine", "step-1")
+    }
+
+
+def test_an_export_without_nvtx_ranges_imports_unlinked_work(tmp_path: Path) -> None:
+    path = _export(tmp_path / "run.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("drop table NVTX_EVENTS")
+        db.commit()
+
+    trace = load_nsys_sqlite(path)
+
+    assert trace.spans == {}
+    assert {link_gpu_event(trace, e).reason for e in trace.gpu_events} == {
+        "launch_outside_iteration_range"
+    }

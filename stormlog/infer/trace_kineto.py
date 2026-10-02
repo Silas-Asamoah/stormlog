@@ -120,6 +120,7 @@ class KinetoTrace:
     longest_span_us: dict[tuple[int, int], float] = field(default_factory=dict)
     # What the reader could not import or resolve, for the import summary.
     notes: list[str] = field(default_factory=list)
+    not_imported: dict[str, int] = field(default_factory=dict)
 
 
 def load_kineto_trace(path: str | Path) -> KinetoTrace:
@@ -599,6 +600,7 @@ def _summary(
         "devices": _device_summary(trace, builder),
         "event_loss": None,
         "event_loss_note": "the trace does not report dropped CUPTI records",
+        "not_imported": dict(trace.not_imported),
         "notes": list(trace.notes),
     }
 

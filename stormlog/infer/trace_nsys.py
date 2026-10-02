@@ -6,7 +6,7 @@ in-memory trace as the Kineto reader, so the import, iteration linking, and
 accounting rules are shared:
 
 - GPU work comes from ``CUPTI_ACTIVITY_KIND_KERNEL``, ``_MEMCPY`` and
-  ``_MEMSET``; launch calls from ``_RUNTIME`` (and ``_DRIVER`` when present).
+  ``_MEMSET``; launch calls from ``_RUNTIME``, which also holds driver calls.
   A report can hold several processes, so launches are keyed by process and
   correlation ID.
 - Iteration ranges are NVTX ranges named ``stormlog.iteration/...``; emit
@@ -19,8 +19,9 @@ accounting rules are shared:
   Otherwise the devices stay unnamed: re-export the report with a newer nsys.
 
 Record CUDA graphs with ``--cuda-graph-trace=node``. At the default graph-level
-tracing nsys writes one row per graph instead of its kernels, which this reader
-does not import.
+tracing nsys writes one ``CUPTI_ACTIVITY_KIND_GRAPH_TRACE`` row per graph
+launch instead of its kernels. This reader does not import those rows; it
+counts them in the summary and says how to re-record.
 """
 
 from __future__ import annotations
@@ -46,9 +47,10 @@ GPU_TABLES = {
     "CUPTI_ACTIVITY_KIND_MEMCPY": "gpu_memcpy",
     "CUPTI_ACTIVITY_KIND_MEMSET": "gpu_memset",
 }
-LAUNCH_TABLES = ("CUPTI_ACTIVITY_KIND_RUNTIME", "CUPTI_ACTIVITY_KIND_DRIVER")
-# NvtxPushPopRange, NvtxStartEndRange, and the domain-scoped push/pop range.
-NVTX_RANGE_TYPES = (59, 60, 70)
+GRAPH_TABLE = "CUPTI_ACTIVITY_KIND_GRAPH_TRACE"
+# NvtxPushPopRange and NvtxStartEndRange, in any domain. (70 and 71 are ranges
+# imported from NVTXT text files, not ones a program emits.)
+NVTX_RANGE_TYPES = (59, 60)
 
 
 def load_nsys_sqlite(path: str | Path) -> KinetoTrace:
@@ -88,9 +90,9 @@ def _load(db: sqlite3.Connection, path: Path) -> KinetoTrace:
             trace.gpu_events.extend(
                 _gpu_events(db, table, kind, strings, devices, trace)
             )
-    for table in LAUNCH_TABLES:
-        if table in tables:
-            trace.launches.update(_launches(db, table, strings))
+    if "CUPTI_ACTIVITY_KIND_RUNTIME" in tables:
+        trace.launches.update(_launches(db, strings))
+    _count_graph_rows(db, tables, trace)
     for thread, span in _nvtx_spans(db, tables, strings):
         trace.spans.setdefault(thread, []).append(span)
     index_spans(trace)
@@ -208,9 +210,12 @@ def _gpu_events(
 
 
 def _launches(
-    db: sqlite3.Connection, table: str, strings: dict[int, str]
+    db: sqlite3.Connection, strings: dict[int, str]
 ) -> Iterator[tuple[tuple[int | None, int], LaunchCall]]:
-    query = f"select start, globalTid, correlationId, nameId from {table}"
+    query = (
+        "select start, globalTid, correlationId, nameId "
+        "from CUPTI_ACTIVITY_KIND_RUNTIME"
+    )
     for start, global_tid, correlation, name_id in db.execute(query):
         if not correlation or global_tid is None:
             continue
@@ -219,6 +224,20 @@ def _launches(
             pid=pid, tid=tid, ts_us=int(start) / 1000, name=strings.get(name_id, "")
         )
         yield (pid, int(correlation)), call
+
+
+def _count_graph_rows(
+    db: sqlite3.Connection, tables: set[str], trace: KinetoTrace
+) -> None:
+    if GRAPH_TABLE not in tables:
+        return
+    rows = int(db.execute(f"select count(*) from {GRAPH_TABLE}").fetchone()[0])
+    if rows:
+        trace.not_imported["graph_trace_rows"] = rows
+        trace.notes.append(
+            f"{rows} CUDA graph launches were recorded per graph, not per kernel, "
+            "and are not imported; record with --cuda-graph-trace=node"
+        )
 
 
 def _nvtx_spans(
