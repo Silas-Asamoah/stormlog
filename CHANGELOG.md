@@ -25,6 +25,23 @@ the flaky benchmark memory gates
 
 ### Added
 
+- vLLM native telemetry for `stormlog infer profile`. `--vllm-metrics [URL]`
+  scrapes vLLM's Prometheus metrics just before each phase's first send,
+  after its drain and every `--vllm-metrics-interval` seconds between, as
+  one `infer.vllm_scrape` record per scrape that keeps every series under
+  its native name with native histogram boundaries. `--vllm-spans-listen
+  [HOST:PORT]` runs an OTLP/HTTP receiver for the run and keeps each request
+  span as an `infer.vllm_span` record; `infer analyze --vllm-spans FILE`
+  loads spans collected elsewhere. Every request now sends
+  `X-Request-Id: stormlog-<run_id>-<request_id>`, recorded as
+  `x_request_id`, so spans join to requests by the recorded value. The
+  report gains `telemetry.vllm`: per case and per engine label, counter and
+  histogram deltas, gauge summaries, token rates, prefix-cache hit ratio,
+  logical KV occupancy and the MFU estimates, with resets, restarts, missing
+  and retired series left unresolved with a reason instead of zero, plus a
+  capability record naming what vLLM 0.30.0 exposes and that
+  `--collect-detailed-traces` never fills the forward and execute fields.
+  ([#215](https://github.com/Silas-Asamoah/stormlog/issues/215))
 - Open-loop arrivals for `stormlog infer profile`. `--arrival fixed-rate`,
   `poisson`, `burst` or `replay` sends requests on a seeded schedule that is
   fixed before the run starts (`--rate`, `--burst-size`, `--burst-interval`,
