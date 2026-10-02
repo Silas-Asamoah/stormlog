@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from stormlog.infer.analysis import format_analysis_text
+from stormlog.infer.arrivals import load_arrival_trace
 from stormlog.infer.cache_state import redact_url
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.openai_client import (
@@ -101,6 +102,58 @@ def test_the_open_loop_limit_shapes_the_traffic(tmp_path: Path) -> None:
     first = _workload(tmp_path / "a", max_in_flight=1, **common)
     second = _workload(tmp_path / "b", max_in_flight=2, **common)
     assert first["workload_digest"] != second["workload_digest"]
+
+
+def _offset_trace(path: Path, offsets_ms: tuple[int, ...]) -> Path:
+    path.write_text("".join(f'{{"offset_ms": {ms}}}\n' for ms in offsets_ms))
+    return path
+
+
+def _artifact_trace(path: Path, case_id: str, offsets_ms: tuple[int, ...]) -> Path:
+    requests = [
+        {
+            "event_type": "infer.request",
+            "phase": "measured",
+            "case_id": case_id,
+            "status": "ok",
+            "intended_at_ns": 5_000_000_000 + ms * 1_000_000,
+        }
+        for ms in offsets_ms
+    ]
+    path.write_text("".join(json.dumps(request) + "\n" for request in requests))
+    return path
+
+
+def test_the_digest_ignores_where_a_replay_trace_came_from(tmp_path: Path) -> None:
+    from_trace = _workload(
+        tmp_path / "a",
+        arrival_mode="replay",
+        arrival_trace=load_arrival_trace(
+            _offset_trace(tmp_path / "t.jsonl", (0, 10, 25))
+        ),
+    )
+    from_artifact = _workload(
+        tmp_path / "b",
+        arrival_mode="replay",
+        arrival_trace=load_arrival_trace(
+            _artifact_trace(
+                tmp_path / "earlier.jsonl", "fixed100_in8_out4", (0, 10, 25)
+            )
+        ),
+    )
+    # The same arrivals are the same traffic, wherever they were read from.
+    assert from_trace["workload_digest"] == from_artifact["workload_digest"]
+    traces = [w["cases"][0]["arrival"]["trace"] for w in (from_trace, from_artifact)]
+    assert [t["source"] for t in traces] == ["offset_ms trace", "stormlog artifact"]
+    assert [t["case_id"] for t in traces] == [None, "fixed100_in8_out4"]
+    other_offsets = _workload(
+        tmp_path / "c",
+        arrival_mode="replay",
+        arrival_trace=load_arrival_trace(
+            _offset_trace(tmp_path / "o.jsonl", (0, 10, 30))
+        ),
+    )
+    assert other_offsets["workload_digest"] != from_trace["workload_digest"]
 
 
 def test_reset_urls_are_recorded_without_credentials_or_query(

@@ -2,8 +2,9 @@
 
 The digest covers what decides the requests a run sends: the cases,
 arrivals, prompts, warmup, decoding settings, seed, tokenizer and requested
-cache state. It leaves out the endpoint, model, timeouts and reset URL, so
-the same workload sent to two engine configurations has the same digest.
+cache state. It leaves out the endpoint, model, timeouts, reset URL and
+where a replay trace was read from, so the same workload sent to two engine
+configurations has the same digest.
 The API key is never recorded, and the reset URL is recorded without its
 credentials or query string.
 """
@@ -104,7 +105,7 @@ def _traffic(spec: dict[str, Any], *, open_loop: bool) -> dict[str, Any]:
     return {
         "seed": spec["seed"],
         "generator": spec["generator"],
-        "cases": spec["cases"],
+        "cases": [_case_traffic(case) for case in spec["cases"]],
         "measurement": {field: measurement[field] for field in shaping},
         "prompts": spec["prompts"],
         "warmup": spec["warmup"],
@@ -112,6 +113,15 @@ def _traffic(spec: dict[str, Any], *, open_loop: bool) -> dict[str, Any]:
         "tokenizer": spec["tokenizer"],
         "cache_requested": spec["cache"]["requested"],
     }
+
+
+def _case_traffic(case: dict[str, Any]) -> dict[str, Any]:
+    """A case without where its replay trace came from: its offsets are the traffic."""
+    trace = case["arrival"].get("trace")
+    if trace is None:
+        return case
+    shaping = {"arrivals": trace["arrivals"], "digest": trace["digest"]}
+    return {**case, "arrival": {**case["arrival"], "trace": shaping}}
 
 
 def _numbers_as_values(value: Any) -> Any:
