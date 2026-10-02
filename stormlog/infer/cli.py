@@ -258,7 +258,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Receive vLLM's OpenTelemetry request spans over OTLP/HTTP at "
             "HOST:PORT (default 127.0.0.1:4318) for the length of the run; "
-            "start vLLM with --otlp-traces-endpoint pointing at it"
+            "start vLLM with --otlp-traces-endpoint pointing at it and "
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf, since vLLM "
+            "exports over gRPC by default"
         ),
     )
     profile_parser.add_argument(

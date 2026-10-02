@@ -17,8 +17,10 @@ marks the derived stage windows as estimates.
 
 from __future__ import annotations
 
+import gzip
 import json
 import queue
+import socket
 import threading
 import time
 from collections.abc import Iterable
@@ -367,7 +369,13 @@ def _read_span_lines(lines: list[str]) -> tuple[str, list[RawSpan]]:
 
 # ------------------------------------------------------------------ records
 def span_clock_domain(resource: dict[str, Any], fallback_host: str) -> str:
-    """The exporter's wall clock, named by its host; never a shared clock."""
+    """The exporter's wall clock, named by its host; never a shared clock.
+
+    vLLM's resource carries no ``host.name``, so for spans the receiver
+    collects the domain is named by the peer address the export came from,
+    such as ``127.0.0.1/unix_epoch_ns``. Without a boot ID it never counts as
+    the client's clock, even on one machine.
+    """
     host = resource.get("host.name")
     name = host if isinstance(host, str) and host else fallback_host
     return wall_clock_domain(name.replace("/", "_") or "unknown-host", None)
@@ -412,7 +420,19 @@ class ReceiverStats:
     decode_failures: int = 0
     unsupported_media: int = 0
     protobuf_unavailable: int = 0
+    grpc_attempts: int = 0
+    oversized: int = 0
+    bad_requests: int = 0
+    handler_errors: int = 0
     by_media: dict[str, int] = field(default_factory=dict)
+
+
+MAX_BODY_BYTES = 32 * 1024 * 1024
+_GRPC_PREFACE = b"PRI * HTTP/2.0"
+GRPC_HINT = (
+    "an export arrived as gRPC (HTTP/2 preface); start vLLM with "
+    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf"
+)
 
 
 class OtlpSpanReceiver:
@@ -431,13 +451,31 @@ class OtlpSpanReceiver:
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
+            def parse_request(self) -> bool:
+                # vLLM's default exporter is gRPC: its HTTP/2 connection
+                # preface is not a request we can serve, but it is a fact
+                # worth recording.
+                line = getattr(self, "raw_requestline", b"")
+                if isinstance(line, bytes) and line.startswith(_GRPC_PREFACE):
+                    receiver._count("grpc_attempts")
+                    self.close_connection = True
+                    return False
+                return bool(super().parse_request())
+
             def do_POST(self) -> None:  # noqa: N802
-                receiver._handle(self)
+                try:
+                    receiver._handle(self)
+                except Exception:  # a bug must not take the receiver down
+                    receiver._count("handler_errors")
+                    _try_respond(self, 400)
 
             def log_message(self, _format: str, *_args: object) -> None:
                 return None
 
-        self._server = ThreadingHTTPServer((host, port), Handler)
+        class Server(ThreadingHTTPServer):
+            address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+        self._server = Server((host, port), Handler)
         self._thread = threading.Thread(
             target=self._server.serve_forever, name="stormlog-otlp", daemon=True
         )
@@ -446,6 +484,8 @@ class OtlpSpanReceiver:
     def listen(self) -> str:
         host, port = self._server.server_address[:2]
         name = host.decode() if isinstance(host, bytes) else str(host)
+        if ":" in name:
+            name = f"[{name}]"
         return f"{name}:{port}"
 
     @property
@@ -477,9 +517,11 @@ class OtlpSpanReceiver:
         if handler.path != OTLP_TRACES_PATH:
             _respond(handler, 404, b"", "text/plain")
             return
-        media = (handler.headers.get("Content-Type") or "").split(";")[0].strip()
-        body = handler.rfile.read(int(handler.headers.get("Content-Length") or 0))
         self._count("requests")
+        media = (handler.headers.get("Content-Type") or "").split(";")[0].strip()
+        body = self._read_body(handler)
+        if body is None:
+            return
         if media not in _RECEIVER_CAPABILITIES:
             self._count("unsupported_media")
             _respond(handler, 415, b"", "text/plain")
@@ -497,6 +539,37 @@ class OtlpSpanReceiver:
         self._enqueue(spans, media, handler.client_address[0])
         # An empty ExportTraceServiceResponse is valid in either encoding.
         _respond(handler, 200, b"" if media == PROTOBUF_MEDIA else b"{}", media)
+
+    def _read_body(self, handler: BaseHTTPRequestHandler) -> bytes | None:
+        """The decoded body, or None after answering a request we cannot take."""
+        try:
+            length = int(handler.headers.get("Content-Length") or 0)
+            if length < 0:
+                raise ValueError("negative length")
+        except ValueError:
+            self._count("bad_requests")
+            _respond(handler, 400, b"bad Content-Length", "text/plain")
+            return None
+        if length > MAX_BODY_BYTES:
+            self._count("oversized")
+            _respond(handler, 413, b"", "text/plain")
+            return None
+        body = handler.rfile.read(length)
+        encoding = (handler.headers.get("Content-Encoding") or "").strip().lower()
+        if encoding in {"", "identity"}:
+            return body
+        if encoding != "gzip":
+            self._count("unsupported_media")
+            _respond(
+                handler, 415, b"only gzip or identity Content-Encoding", "text/plain"
+            )
+            return None
+        try:
+            return gzip.decompress(body)
+        except (OSError, EOFError, ValueError):
+            self._count("decode_failures")
+            _respond(handler, 400, b"bad gzip body", "text/plain")
+            return None
 
     def _count(self, name: str) -> None:
         with self._lock:
@@ -535,10 +608,16 @@ class OtlpSpanReceiver:
                 "decode_failures": self.stats.decode_failures,
                 "unsupported_media": self.stats.unsupported_media,
                 "protobuf_unavailable": self.stats.protobuf_unavailable,
+                "grpc_attempts": self.stats.grpc_attempts,
+                "oversized": self.stats.oversized,
+                "bad_requests": self.stats.bad_requests,
+                "handler_errors": self.stats.handler_errors,
                 "spans_by_media": dict(self.stats.by_media),
             }
         if not self.protobuf_available:
             metadata["otlp_http_protobuf"] = OTLP_EXTRA_HINT
+        if metadata["grpc_attempts"]:
+            metadata["grpc"] = GRPC_HINT
         return metadata
 
 
@@ -556,6 +635,14 @@ def _respond(
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _try_respond(handler: BaseHTTPRequestHandler, status: int) -> None:
+    """Answer if the connection still allows it; a failed answer is not an error."""
+    try:
+        _respond(handler, status, b"", "text/plain")
+    except (OSError, ValueError):
+        handler.close_connection = True
 
 
 def span_capability_event(

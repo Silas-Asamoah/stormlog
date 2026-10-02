@@ -11,8 +11,10 @@ The differences are what the engine reports under each workload. The script
 does not claim that one caused the other, and nothing it prints attributes
 GPU time to a request.
 
-Start vLLM first, with spans pointed at the receiver this script runs::
+Start vLLM first, with spans pointed at the receiver this script runs. The
+protocol variable matters: vLLM exports over gRPC by default::
 
+    OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf \\
     vllm serve Qwen/Qwen2.5-0.5B-Instruct --port 8000 \\
         --otlp-traces-endpoint http://127.0.0.1:4318/v1/traces
 

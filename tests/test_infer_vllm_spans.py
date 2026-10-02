@@ -406,6 +406,138 @@ class TestReceiver:
         assert span_clock_domain({}, "1.2.3.4") == "1.2.3.4/unix_epoch_ns"
 
 
+@contextlib.contextmanager
+def _receiver(listen: str = "127.0.0.1:0") -> Iterator[OtlpSpanReceiver]:
+    receiver = OtlpSpanReceiver(listen=listen, session_id="s", run_id="run-1")
+    receiver.start()
+    try:
+        yield receiver
+    finally:
+        receiver.stop()
+
+
+def _raw_post(listen: str, raw: bytes) -> bytes:
+    host, port = parse_listen_address(listen.replace("[", "").replace("]", ""))
+    with socket.create_connection((host, port), timeout=5) as sock:
+        sock.sendall(raw)
+        sock.shutdown(socket.SHUT_WR)
+        chunks: list[bytes] = []
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+
+
+class TestReceiverRobustness:
+    def test_grpc_preface_is_counted_and_explained(self) -> None:
+        with _receiver() as receiver:
+            reply = _raw_post(receiver.listen, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+            metadata = receiver.capability_metadata()
+        assert reply == b""  # the connection is closed, no HTTP answer
+        assert metadata["grpc_attempts"] == 1
+        assert metadata["requests"] == 0
+        assert "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf" in metadata["grpc"]
+
+    def test_oversized_and_malformed_lengths_are_refused(self) -> None:
+        with _receiver() as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            huge = _raw_post(
+                receiver.listen,
+                b"POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                b"Content-Length: 40000000\r\n\r\n{}",
+            )
+            bad = _raw_post(
+                receiver.listen,
+                b"POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                b"Content-Length: abc\r\n\r\n{}",
+            )
+            assert _post(url, JSON_EXPORT, "application/json") == 200
+            metadata = receiver.capability_metadata()
+        assert huge.startswith(b"HTTP/1.1 413")
+        assert bad.startswith(b"HTTP/1.1 400")
+        assert metadata["oversized"] == 1
+        assert metadata["bad_requests"] == 1
+        assert metadata["spans"] == 1
+
+    def test_gzip_bodies_are_decoded_and_other_encodings_refused(self) -> None:
+        import gzip
+
+        with _receiver() as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            request = urllib.request.Request(
+                url,
+                data=gzip.compress(JSON_EXPORT),
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                assert response.status == 200
+            broken = urllib.request.Request(
+                url,
+                data=b"\x1f\x8bnot gzip",
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                },
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as exc_info:
+                urllib.request.urlopen(broken, timeout=5)
+            assert exc_info.value.code == 400
+            brotli = urllib.request.Request(
+                url,
+                data=JSON_EXPORT,
+                headers={"Content-Type": "application/json", "Content-Encoding": "br"},
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as exc_info:
+                urllib.request.urlopen(brotli, timeout=5)
+            assert exc_info.value.code == 415
+            assert [r.name for r in receiver.drain()] == ["Worker init"]
+            metadata = receiver.capability_metadata()
+        assert metadata["decode_failures"] == 1
+        assert metadata["unsupported_media"] == 1
+
+    def test_a_handler_bug_is_counted_not_fatal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def explode(body: bytes, media: str) -> list[RawSpan]:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(vllm_spans, "_decode_export", explode)
+        with _receiver() as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            assert _post(url, JSON_EXPORT, "application/json") == 400
+            monkeypatch.undo()
+            assert _post(url, JSON_EXPORT, "application/json") == 200
+            metadata = receiver.capability_metadata()
+        assert metadata["handler_errors"] == 1
+        assert metadata["spans"] == 1
+
+    def test_ipv6_listen_uses_an_ipv6_socket(self) -> None:
+        try:
+            probe = socket.socket(socket.AF_INET6)
+            probe.bind(("::1", 0))
+            probe.close()
+        except OSError:
+            pytest.skip("no IPv6 loopback")
+        with _receiver("[::1]:0") as receiver:
+            assert receiver.listen.startswith("[::1]:")
+            assert (
+                _post(
+                    f"http://{receiver.listen}/v1/traces",
+                    JSON_EXPORT,
+                    "application/json",
+                )
+                == 200
+            )
+            assert receiver.drain()[0].clock_domain == "::1/unix_epoch_ns"
+
+
 def _raw_request_span(attributes: dict[str, Any]) -> RawSpan:
     return RawSpan(
         name="llm_request",

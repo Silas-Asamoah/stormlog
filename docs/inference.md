@@ -635,7 +635,9 @@ latency change into queueing (waiting requests and queue time), cache
 pressure (KV block occupancy and prefix-cache hits) and token rates, per
 engine, with every delta that cannot be trusted marked unresolved and why.
 Spans join to requests by the recorded `X-Request-Id`; receiving vLLM's
-protobuf exports needs `pip install "stormlog[infer-otlp]"`. These are
+protobuf exports needs `pip install "stormlog[infer-otlp]"` and a server
+started with `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf`, because
+vLLM exports over gRPC by default. These are
 engine-aggregate numbers over every client's traffic; they attribute no GPU
 time to a request. See [vLLM native telemetry](vllm_telemetry.md) for the
 flags, the metric map and the capability matrix.

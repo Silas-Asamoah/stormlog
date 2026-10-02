@@ -30,9 +30,14 @@ pip install "stormlog[infer-otlp]"
 ```
 
 Start vLLM with its metrics on (the default) and, for spans, with
-`--otlp-traces-endpoint` pointing at the receiver that `infer profile` runs:
+`--otlp-traces-endpoint` pointing at the receiver that `infer profile` runs.
+vLLM 0.30.0 exports spans over gRPC unless
+`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf` is set
+(`vllm/tracing/otel.py`, `get_span_exporter`), so the variable is part of
+every server line below:
 
 ```bash
+OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf \
 vllm serve Qwen/Qwen2.5-7B-Instruct --port 8000 \
   --otlp-traces-endpoint http://127.0.0.1:4318/v1/traces
 
@@ -62,6 +67,9 @@ the run goes on without spans. Without the `infer-otlp` extra the receiver
 still listens and accepts OTLP JSON, but vLLM's exporter sends protobuf, so
 those exports are refused with a 415, counted, and the capability record
 lists `otlp_http_protobuf` as supported but not enabled; the run warns once.
+A server left on its gRPC default opens HTTP/2 connections instead; the
+receiver counts those as `grpc_attempts` in the capability record, with the
+variable to set, so an empty span count explains itself.
 
 The receiver exists only while the profile runs. Spans vLLM exports when no
 receiver is listening, such as its startup spans or the spans of traffic
@@ -85,8 +93,12 @@ joins to a request by the recorded value and never by a rebuilt string.
   block that says what the catalog recognised. A failed scrape records the
   error instead. About 10 KB per scrape for 0.30.0.
 - `infer.vllm_span`: one record per span, attributes under their native
-  names, timestamps on the exporter's wall clock (named by its host, never
-  taken as the client's clock), and the recovered `request_id`.
+  names, timestamps on the exporter's wall clock, and the recovered
+  `request_id`. The clock domain is named by the exporter's `host.name`
+  resource attribute when it has one; vLLM's resource has none, so spans the
+  receiver collects are named by the peer address the export came from,
+  such as `127.0.0.1/unix_epoch_ns`, which never counts as the client's
+  clock. Bodies may be gzip-encoded; a body over 32 MiB is refused with 413.
 - `infer.capabilities` for `vllm.metrics` and `vllm.spans`: what was
   supported, enabled and collected, with the engine's unknown, retired and
   removed series, scrape and span counts, and the receiver's decode failures.
