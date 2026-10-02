@@ -90,9 +90,13 @@ def _scrape(
 
 
 def _request(
-    index: int, *, case_id: str = CASE, x_request_id: str | None = "auto"
+    index: int,
+    *,
+    case_id: str = CASE,
+    x_request_id: str | None = "auto",
+    phase: str = "measured",
 ) -> dict[str, Any]:
-    request_id = f"{case_id}_measured_0_{index}"
+    request_id = f"{case_id}_{phase}_0_{index}"
     return {
         "schema_version": 1,
         "event_type": "infer.request",
@@ -103,7 +107,7 @@ def _request(
             f"stormlog-run-1-{request_id}" if x_request_id == "auto" else x_request_id
         ),
         "case_id": case_id,
-        "phase": "measured",
+        "phase": phase,
         "started_at_ns": T0 + index * SECOND,
         "ended_at_ns": T0 + index * SECOND + SECOND // 2,
         "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
@@ -418,7 +422,12 @@ class TestSpans:
     def test_spans_join_by_recorded_header_and_summarise_residency(
         self, tmp_path: Path
     ) -> None:
-        requests = [_request(0), _request(1), _request(2, x_request_id=None)]
+        requests = [
+            _request(0),
+            _request(1),
+            _request(2, x_request_id=None),
+            _request(0, phase="warmup"),
+        ]
         spans = [
             _span("stormlog-run-1-c8_in512_out128_measured_0_0"),
             _span(
@@ -427,15 +436,17 @@ class TestSpans:
             ),
             _span("stormlog-run-9-other"),
             _span(None),
+            _span("stormlog-run-1-c8_in512_out128_warmup_0_0"),
         ]
         path = _artifact(tmp_path, _standard_scrapes(), requests, spans)
         report = analyze_inference_events(path)
         block = report["telemetry"]["vllm"]
-        assert block["spans"]["total"] == 4
+        assert block["spans"]["total"] == 5
         assert block["spans"]["joined"] == 2
         assert block["spans"]["unjoined_by_reason"] == {
             "no_request_id": 1,
             "request_not_in_run": 1,
+            "warmup_request": 1,
         }
         case = block["cases"][CASE]["spans"]
         assert case["requests"] == 3 and case["requests_with_span"] == 2

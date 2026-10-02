@@ -107,7 +107,7 @@ def vllm_report(
             for window in _measured(records, "infer.phase_window")
         }
     )
-    join = _join_spans(spans, requests)
+    join = _join_spans(spans, requests, _warmup_request_ids(records))
     cases = {
         case_id: _case_block(case_id, scrapes, requests, join.by_request)
         for case_id in case_ids
@@ -651,8 +651,21 @@ class _SpanJoin:
         }
 
 
+def _warmup_request_ids(records: list[dict[str, Any]]) -> set[str]:
+    """The sent ids of requests outside the measured phase, such as warmup."""
+    return {
+        str(r["x_request_id"])
+        for r in records
+        if r.get("event_type") == "infer.request"
+        and r.get("phase") != "measured"
+        and isinstance(r.get("x_request_id"), str)
+    }
+
+
 def _join_spans(
-    spans: list[VllmSpanRecord], requests: list[dict[str, Any]]
+    spans: list[VllmSpanRecord],
+    requests: list[dict[str, Any]],
+    warmup_ids: set[str] | None = None,
 ) -> _SpanJoin:
     known = {
         str(r["x_request_id"])
@@ -664,7 +677,7 @@ def _join_spans(
     sources: dict[str, int] = {}
     for span in spans:
         sources[span.source] = sources.get(span.source, 0) + 1
-        reason = _unjoined_reason(span, known)
+        reason = _unjoined_reason(span, known, warmup_ids or set())
         if reason is None and span.request_id is not None:
             by_request.setdefault(span.request_id, []).append(span)
         else:
@@ -673,11 +686,15 @@ def _join_spans(
     return _SpanJoin(by_request, len(spans), joined, unjoined, sources)
 
 
-def _unjoined_reason(span: VllmSpanRecord, known: set[str]) -> str | None:
+def _unjoined_reason(
+    span: VllmSpanRecord, known: set[str], warmup_ids: set[str]
+) -> str | None:
     if span.name != "llm_request":
         return "not_a_request_span"
     if span.request_id is None:
         return "no_request_id"
+    if span.request_id in warmup_ids:
+        return "warmup_request"
     if span.request_id not in known:
         return "request_not_in_run"
     return None
