@@ -199,12 +199,20 @@ successor.
    `gen_ai.latency.time_in_model_inference` are one expression:
    last token processed minus first schedule. The Prometheus histogram and
    the span are the same number exported twice, not two sources.
-2. That stopwatch starts the first time a request is scheduled and stops
-   when the output of its last step has been processed. With async
-   scheduling (the default) the engine processes a step's output only after
-   it has scheduled and launched the next step, so every request is charged
-   one step it was not in. Under a steady load that is under 1%; when
-   requests finish in waves it can be a few percent.
+2. That stopwatch starts when the scheduler first admits the request
+   (`scheduled_ts`, stamped at the top of `Scheduler.schedule`) and stops
+   when the engine core has processed the output of the step that produced
+   its last token (`last_token_ts`, the `EngineCoreOutputs` timestamp). With
+   async scheduling, which vLLM turns on when the executor supports it, the
+   admitting `schedule()` runs while the previous step is still on the GPU,
+   so the interval starts up to one step before the request's first kernel.
+   The step's output is processed only after the next step has been
+   scheduled and launched, so when the CPU is the bottleneck the interval
+   also runs past the last kernel by that time. On an A30 with vLLM 0.30.0
+   the overhang was under 1% of a request's time at one request in flight
+   and 3–4% at 64 (up to 6% at 16 in flight on a 7B model). A request that
+   stops at `max_tokens` is not scheduled into the following step, so no
+   step after its last token is included.
 3. `--collect-detailed-traces all` is accepted and documented as costly, but
    in 0.30.0 nothing sets `gen_ai.latency.time_in_model_forward` or
    `gen_ai.latency.time_in_model_execute`. The capability matrix lists them

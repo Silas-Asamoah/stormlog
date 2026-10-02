@@ -617,10 +617,11 @@ CATALOG_0_30: tuple[CatalogEntry, ...] = (
         "inference_time",
         "request_latency",
         "seconds",
-        "first schedule to the processing of the last token; the same "
-        "expression as the OpenTelemetry attribute "
-        "gen_ai.latency.time_in_model_inference; with async scheduling it "
-        f"includes one step the request was not in; {RESIDENCY_NOTE}",
+        "from the scheduler admitting the request to the engine processing "
+        "its last token's output; the same expression as the OpenTelemetry "
+        "attribute gen_ai.latency.time_in_model_inference; with async "
+        "scheduling it can start while the previous step is still running; "
+        f"{RESIDENCY_NOTE}",
     ),
     _entry(
         "vllm:request_prefill_time_seconds",
