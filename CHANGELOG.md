@@ -55,10 +55,11 @@ the flaky benchmark memory gates
   `run_kind` of `cold_start`, `steady_state` or `unspecified`.
   ([#248](https://github.com/Silas-Asamoah/stormlog/pull/248))
 - Phase windows. Each phase has a window in which requests arrive and a
-  drain after it, bounded by `--drain-timeout` (default: `--timeout`); a
-  request still running at the deadline is recorded as `cancelled`. Every
-  phase writes an `infer.phase_window` record, and the report adds
-  `window_seconds` and `drain_seconds` per case.
+  drain after it, bounded by `--drain-timeout` (default: `--timeout`) from
+  the window's end. At the deadline, a request still running is recorded as
+  `cancelled`, and an open-loop arrival still waiting for a slot is recorded
+  as `dropped`. Every phase writes an `infer.phase_window` record, and the
+  report adds `window_seconds` and `drain_seconds` per case.
   ([#248](https://github.com/Silas-Asamoah/stormlog/pull/248))
 - Request failure statuses `timeout` (client timeout), `rejected` (HTTP 429
   or 503), `dropped` and `cancelled`, with `http_status` on every failure
@@ -68,8 +69,8 @@ the flaky benchmark memory gates
   prompt generator version, cases and arrival shapes, measurement and
   warmup settings, decoding settings, requested cache state and tokenizer
   identity, plus a `workload_digest` that leaves out the endpoint, model,
-  timeouts and reset URL, so the same workload sent to two engines shares a
-  digest. The API key is never recorded, and the reset URL is stored
+  timeouts, reset URL and where a replay trace came from, so the same
+  workload sent to two engines shares a digest. The API key is never recorded, and the reset URL is stored
   without credentials or query string.
   ([#248](https://github.com/Silas-Asamoah/stormlog/pull/248))
 - `--extra-body`, a JSON object merged into every request (for example
