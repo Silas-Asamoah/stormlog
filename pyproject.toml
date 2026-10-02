@@ -261,6 +261,10 @@ module = [
     "mlflow.*",
     "torchvision",
     "torchvision.*",
+    # The infer-otlp extra: generated protobuf classes without a py.typed
+    # marker, absent from the lint job's environment.
+    "opentelemetry",
+    "opentelemetry.*",
 ]
 ignore_missing_imports = true
 

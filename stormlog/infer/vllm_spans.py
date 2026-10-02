@@ -118,10 +118,12 @@ class OtlpProtobufUnavailable(RuntimeError):
 
 def _otlp_request_class() -> Any | None:
     """The generated ``ExportTraceServiceRequest``, or None without the extra."""
+    # The package is optional and ships no py.typed marker, so mypy is told
+    # to ignore it in pyproject rather than here: an inline ignore cannot
+    # name both the missing-package and the untyped-package codes without
+    # one of them being unused.
     try:
-        from opentelemetry.proto.collector.trace.v1 import (  # type: ignore[import-untyped, unused-ignore]
-            trace_service_pb2,
-        )
+        from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
     except ImportError:
         return None
     return trace_service_pb2.ExportTraceServiceRequest
