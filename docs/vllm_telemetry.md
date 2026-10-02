@@ -121,7 +121,7 @@ the text report. Per measured case and per `engine` label:
 | `derived.rates` | prompt and generated tokens per second, finished requests per second | counters over the window |
 | `derived.prefix_cache` | queries, hits and the hit ratio, in tokens | counters |
 | `derived.kv_cache` | peak and mean usage as a fraction, and in blocks when `cache_config_info` names `num_gpu_blocks` | gauge plus info labels |
-| `derived.mfu` | the estimated FLOPs and bytes per GPU, or `not_enabled` | counters |
+| `derived.mfu` | the estimated FLOPs and bytes per GPU, or `not_enabled`; zeros are `unresolved` while the generated token delta is | counters |
 | `spans` | requests with a span, and p50/p95/mean of each native latency attribute | joined spans |
 
 The window runs from the scrape before the first send to the scrape after
@@ -138,8 +138,8 @@ reasons when the two scrapes cannot be compared:
 | `scrape_missing:<marker>`, `scrape_failed:<marker>` | The phase has no successful start or end scrape |
 | `engine_restart` | The exporter's `process_start_time_seconds` changed between the two scrapes |
 | `engine_set_changed` | The set of `engine` labels changed |
-| `counter_reset` | The counter went backwards |
-| `counter_recreated` | The counter's `*_created` timestamp changed |
+| `counter_reset` | The counter, or a histogram's count, sum or bucket, went backwards |
+| `counter_recreated` | The counter's or histogram's `*_created` timestamp changed |
 | `series_missing` | One scrape lacks the series |
 | `bucket_boundaries_changed` | The histogram's `le` set differs between the scrapes |
 | `not_enabled` | The MFU counters stayed at zero while tokens were generated |

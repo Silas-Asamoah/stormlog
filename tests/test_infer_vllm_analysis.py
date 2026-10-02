@@ -15,8 +15,11 @@ from stormlog.exit_codes import ExitCode
 from stormlog.infer.analysis import analyze_inference_events, format_analysis_text
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.vllm_analysis import (
+    REASON_BOUNDARIES_CHANGED,
+    REASON_COUNTER_RECREATED,
     REASON_COUNTER_RESET,
     REASON_ENGINE_RESTART,
+    REASON_ENGINES_CHANGED,
     REASON_NOT_ENABLED,
     REASON_SCRAPE_MISSING,
     REASON_SERIES_MISSING,
@@ -314,6 +317,106 @@ class TestUnresolved:
         assert (
             case["engines"]["0"]["derived"]["rates"]["prompt_tokens_per_second"] is None
         )
+
+    def test_histogram_sum_or_bucket_going_backwards_is_a_reset(
+        self, tmp_path: Path
+    ) -> None:
+        # Count holds, but the sum shrinks: not a window to difference.
+        sum_line = re.compile(
+            r"^(vllm:request_queue_time_seconds_sum\{[^}]*\}) (\S+)$", re.MULTILINE
+        )
+        shrunk = sum_line.sub(r"\1 0.0", POST)
+        assert shrunk != POST
+        case = _vllm_case(_artifact(tmp_path, _standard_scrapes(end=shrunk)))
+        queue = case["engines"]["0"]["histograms"]["queue_time"]
+        assert queue["state"] == REASON_COUNTER_RESET
+        # One bucket lower than before while count and sum grew.
+        bucket_line = re.compile(
+            r'^(vllm:request_queue_time_seconds_bucket\{engine="0",le="\+Inf"[^}]*\}) (\S+)$',
+            re.MULTILINE,
+        )
+        lowered = bucket_line.sub(r"\1 1.0", POST)
+        assert lowered != POST
+        case = _vllm_case(_artifact(tmp_path, _standard_scrapes(end=lowered)))
+        queue = case["engines"]["0"]["histograms"]["queue_time"]
+        assert queue["state"] == REASON_COUNTER_RESET
+
+    def test_recreated_families_are_unresolved(self, tmp_path: Path) -> None:
+        created = re.compile(
+            r"^(vllm:(?:request_queue_time_seconds|prompt_tokens)_created\{[^}]*\}) (\S+)$",
+            re.MULTILINE,
+        )
+        recreated = created.sub(r"\1 1.791e+09", POST)
+        assert recreated != POST
+        case = _vllm_case(_artifact(tmp_path, _standard_scrapes(end=recreated)))
+        engine = case["engines"]["0"]
+        queue = engine["histograms"]["queue_time"]
+        assert queue["state"] == REASON_COUNTER_RECREATED
+        assert "count" not in queue
+        prompt = engine["counters"]["prompt_tokens"]
+        assert prompt["state"] == STATE_UNRESOLVED and prompt["delta"] is None
+        assert prompt["by_label"]["_"]["state"] == REASON_COUNTER_RECREATED
+        # The sibling families keep their own, untouched, stamps.
+        assert engine["counters"]["generation_tokens"]["state"] == STATE_RESOLVED
+        assert engine["histograms"]["prefill_time"]["state"] == STATE_RESOLVED
+
+    def test_changed_bucket_boundaries_are_unresolved(self, tmp_path: Path) -> None:
+        reshaped = POST.replace(
+            'vllm:request_queue_time_seconds_bucket{engine="0",le="0.3"',
+            'vllm:request_queue_time_seconds_bucket{engine="0",le="0.35"',
+        )
+        assert reshaped != POST
+        case = _vllm_case(_artifact(tmp_path, _standard_scrapes(end=reshaped)))
+        engine = case["engines"]["0"]
+        assert engine["histograms"]["queue_time"]["state"] == REASON_BOUNDARIES_CHANGED
+        assert engine["histograms"]["prefill_time"]["state"] == STATE_RESOLVED
+
+    def test_engine_set_change_leaves_the_window_unresolved(
+        self, tmp_path: Path
+    ) -> None:
+        grown = POST + '\nvllm:num_requests_running{engine="1",model_name="m"} 0.0\n'
+        path = _artifact(tmp_path, _standard_scrapes(end=grown))
+        report = analyze_inference_events(path)
+        block = report["telemetry"]["vllm"]
+        assert len(block["engine"]["epochs"]) == 1
+        case = block["cases"][CASE]
+        assert case["state"] == STATE_UNRESOLVED
+        assert case["reasons"] == [REASON_ENGINES_CHANGED]
+        assert "vllm: unresolved (engine_set_changed)" in format_analysis_text(report)
+
+    def test_zero_mfu_counters_need_a_resolved_token_delta(
+        self, tmp_path: Path
+    ) -> None:
+        # Without the generated token delta, zero counters are not a measurement.
+        without = "\n".join(
+            line
+            for line in POST.splitlines()
+            if not line.startswith("vllm:generation_tokens_total{")
+        )
+        case = _vllm_case(_artifact(tmp_path, _standard_scrapes(end=without)))
+        mfu = case["engines"]["0"]["derived"]["mfu"]
+        assert mfu["state"] == STATE_UNRESOLVED
+        assert (
+            "estimated_flops_per_gpu" in mfu and mfu["estimated_flops_per_gpu"] == 0.0
+        )
+        # One of the MFU counters itself unresolved: unresolved, with the states.
+        reset = re.sub(
+            r"^(vllm:estimated_flops_per_gpu_total\{[^}]*\}) (\S+)$",
+            r"\1 5.0",
+            PRE,
+            flags=re.MULTILINE,
+        )
+        assert reset != PRE
+        case = _vllm_case(_artifact(tmp_path, _standard_scrapes(start=reset)))
+        mfu = case["engines"]["0"]["derived"]["mfu"]
+        assert mfu["state"] == STATE_UNRESOLVED
+        assert mfu["counters"]["estimated_flops_per_gpu"] == STATE_UNRESOLVED
+        assert mfu["counters"]["estimated_read_bytes_per_gpu"] == STATE_RESOLVED
+        # Zero generated tokens and zero counters is a consistent, resolved zero.
+        case = _vllm_case(_artifact(tmp_path, _standard_scrapes(start=POST, end=POST)))
+        mfu = case["engines"]["0"]["derived"]["mfu"]
+        assert mfu["state"] == STATE_RESOLVED and mfu["estimated_flops_per_gpu"] == 0.0
+        assert "no tokens" in mfu["detail"]
 
     def test_engine_restart_leaves_the_window_unresolved(self, tmp_path: Path) -> None:
         restarted = re.sub(

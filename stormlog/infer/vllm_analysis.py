@@ -397,8 +397,7 @@ def _counter_field(
         "by_label": {},
     }
     first, last = _by_extra(name, before), _by_extra(name, after)
-    created_name = created_family_for(name) or ""
-    recreated = _by_extra(created_name, before) != _by_extra(created_name, after)
+    recreated = _recreated(name, before, after)
     for extra in sorted(set(first) | set(last)):
         a, b = first.get(extra), last.get(extra)
         result["by_label"][_label_key(extra)] = _delta(a, b, epoch_broken, recreated)
@@ -411,6 +410,18 @@ def _counter_field(
         else None
     )
     return result
+
+
+def _recreated(
+    name: str,
+    before: dict[SeriesKey, float | HistogramValue],
+    after: dict[SeriesKey, float | HistogramValue],
+) -> bool:
+    """The family's ``*_created`` timestamps differ between the two scrapes."""
+    created_name = created_family_for(name)
+    if created_name is None:
+        return False
+    return _by_extra(created_name, before) != _by_extra(created_name, after)
 
 
 def _delta(
@@ -447,21 +458,22 @@ def _histogram_field(
         "deprecated_alias_of": alias,
         "meaning": entry.meaning if entry else None,
     }
-    result.update(_histogram_delta(a, b, epoch_broken))
+    recreated = _recreated(name, before, after)
+    result.update(_histogram_delta(a, b, epoch_broken, recreated))
     return result
 
 
 def _histogram_delta(
-    a: HistogramValue | None, b: HistogramValue | None, epoch_broken: bool
+    a: HistogramValue | None,
+    b: HistogramValue | None,
+    epoch_broken: bool,
+    recreated: bool,
 ) -> dict[str, Any]:
     if a is None or b is None:
         return {"state": REASON_SERIES_MISSING}
-    if epoch_broken:
-        return {"state": REASON_ENGINE_RESTART}
-    if [le for le, _ in a.buckets] != [le for le, _ in b.buckets]:
-        return {"state": REASON_BOUNDARIES_CHANGED}
-    if b.count < a.count:
-        return {"state": REASON_COUNTER_RESET}
+    reason = _histogram_reason(a, b, epoch_broken, recreated)
+    if reason is not None:
+        return {"state": reason}
     count = b.count - a.count
     total = b.sum - a.sum
     return {
@@ -474,6 +486,27 @@ def _histogram_delta(
             for (le, before), (_le, after) in zip(a.buckets, b.buckets)
         ],
     }
+
+
+def _histogram_reason(
+    a: HistogramValue, b: HistogramValue, epoch_broken: bool, recreated: bool
+) -> str | None:
+    """Why a histogram window cannot be differenced, in the order checked for
+    counters: the epoch, the family's ``*_created`` stamp, then its shape and
+    monotonicity. Every cumulative part must be non-decreasing: the count,
+    the sum and each bucket."""
+    if epoch_broken:
+        return REASON_ENGINE_RESTART
+    if recreated:
+        return REASON_COUNTER_RECREATED
+    if [le for le, _ in a.buckets] != [le for le, _ in b.buckets]:
+        return REASON_BOUNDARIES_CHANGED
+    backwards = b.count < a.count or b.sum < a.sum
+    if backwards or any(
+        after < before for (_, before), (_, after) in zip(a.buckets, b.buckets)
+    ):
+        return REASON_COUNTER_RESET
+    return None
 
 
 def _gauge_field(
@@ -610,27 +643,69 @@ def _int_label(labels: dict[str, str], key: str) -> int | None:
         return None
 
 
+_MFU_FIELDS = (
+    "estimated_flops_per_gpu",
+    "estimated_read_bytes_per_gpu",
+    "estimated_write_bytes_per_gpu",
+)
+
+
 def _mfu(counters: dict[str, Any], generated: float | None) -> dict[str, Any]:
-    fields = (
-        "estimated_flops_per_gpu",
-        "estimated_read_bytes_per_gpu",
-        "estimated_write_bytes_per_gpu",
-    )
-    deltas = {name: _resolved_delta(counters, name) for name in fields}
-    if all(value is None for value in deltas.values()):
+    """The MFU counter deltas, resolved only when every counter is.
+
+    A zero delta is evidence of a disabled feature only against a resolved,
+    positive generation token delta; with that delta unresolved the zeros
+    are reported as unresolved, never as a measured zero."""
+    if all(name not in counters for name in _MFU_FIELDS):
         return {"state": REASON_SERIES_MISSING}
-    if generated and all(not value for value in deltas.values()):
+    deltas = {name: _resolved_delta(counters, name) for name in _MFU_FIELDS}
+    if any(value is None for value in deltas.values()):
+        return {
+            "state": STATE_UNRESOLVED,
+            "counters": {
+                name: counters.get(name, {}).get("state", REASON_SERIES_MISSING)
+                for name in _MFU_FIELDS
+            },
+        }
+    resolved = {
+        name: float(value) for name, value in deltas.items() if value is not None
+    }
+    if any(resolved.values()):
+        return _mfu_resolved(resolved)
+    return _mfu_idle(resolved, generated)
+
+
+def _mfu_idle(deltas: dict[str, float], generated: float | None) -> dict[str, Any]:
+    """Every MFU counter stayed put over the window."""
+    if generated is None:
+        return {
+            "state": STATE_UNRESOLVED,
+            "detail": "the counters did not advance and the generation token "
+            "delta is unresolved, so whether --enable-mfu-metrics is off or "
+            "nothing was generated cannot be told",
+            **deltas,
+        }
+    if generated > 0:
         return {
             "state": REASON_NOT_ENABLED,
             "detail": "the counters did not advance while tokens were generated; "
             "vLLM needs --enable-mfu-metrics",
         }
-    return {
+    return _mfu_resolved(deltas, detail="no tokens were generated in the window")
+
+
+def _mfu_resolved(
+    deltas: dict[str, float], detail: str | None = None
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "state": STATE_RESOLVED,
         "provenance": "estimated",
         "per_gpu": True,
         **deltas,
     }
+    if detail is not None:
+        result["detail"] = detail
+    return result
 
 
 # ----------------------------------------------------------------- spans
