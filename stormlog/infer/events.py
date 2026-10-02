@@ -57,6 +57,8 @@ class InferenceRequestEvent:
     prefix_group: int | None = None
     shared_prefix_tokens: int | None = None
     prompt_digest: str | None = None
+    # The X-Request-Id header sent, as recorded; None for a request never sent.
+    x_request_id: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)

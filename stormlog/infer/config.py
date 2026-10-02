@@ -121,6 +121,10 @@ class ProfileConfig:
     extra_body: dict[str, Any] | None = None
     # POSTed before each case, e.g. vLLM /reset_prefix_cache or SGLang /flush_cache.
     cache_reset_url: str | None = None
+    # vLLM's Prometheus endpoint, scraped at phase boundaries and on a cadence;
+    # None leaves native telemetry off.
+    vllm_metrics_url: str | None = None
+    vllm_metrics_interval_seconds: float = 1.0
 
     def prompt_spec(self) -> PromptSpec:
         return PromptSpec(

@@ -40,6 +40,8 @@ from .openai_client import (
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter
+from .vllm_scraper import VllmMetricsScraper
+from .vllm_telemetry import MARKER_PHASE_END, MARKER_PHASE_START
 from .workload import workload_record
 
 
@@ -88,6 +90,27 @@ class InferenceProfiler:
         # Pool threads remove finished calls while the event loop reads the set.
         self._unfinished_lock = threading.Lock()
         self._opened_artifact = False
+        self.vllm_scraper = self._build_vllm_scraper()
+
+    def _build_vllm_scraper(self) -> VllmMetricsScraper | None:
+        """The ``/metrics`` scraper when native vLLM telemetry is on."""
+        config = self.config
+        if config.vllm_metrics_url is None:
+            return None
+        return VllmMetricsScraper(
+            url=config.vllm_metrics_url,
+            interval_seconds=config.vllm_metrics_interval_seconds,
+            timeout_seconds=config.timeout_seconds,
+            session_id=self.session.session_id,
+            run_id=self.run_id,
+            clock_domain=wall_clock_domain(self.session.host, host_boot_id()),
+            api_key=config.api_key,
+            on_warning=self.on_warning,
+        )
+
+    def _x_request_id(self, request_id: str) -> str:
+        """The run-scoped ``X-Request-Id`` sent with a request and recorded on it."""
+        return f"stormlog-{self.run_id}-{request_id}"
 
     def _check_schedules(self) -> None:
         """Refuse an open-loop schedule above the arrival cap up front."""
@@ -162,6 +185,11 @@ class InferenceProfiler:
                         "prompts": self.prompt_spec.to_record(),
                         "cache_state": self.config.cache_state,
                         "cache_reset_url": redact_url(self.config.cache_reset_url),
+                        "vllm_metrics": (
+                            self.vllm_scraper.config_record()
+                            if self.vllm_scraper is not None
+                            else None
+                        ),
                     },
                 }
             )
@@ -188,6 +216,11 @@ class InferenceProfiler:
             finally:
                 stop_sampling.set()
                 await sample_task
+            if self.vllm_scraper is not None:
+                capability = self.vllm_scraper.capability_event(
+                    self._artifact_identity().context
+                )
+                writer.append(capability.to_record())
 
     def _artifact_identity(self) -> ArtifactIdentityEvent:
         session = self.session
@@ -349,14 +382,9 @@ class InferenceProfiler:
         prompts.warm()
         if abandoned is None:
             abandoned = await self._wait_for_abandoned()
-        if case.arrival.open_loop:
-            window = await self._run_open_phase(
-                request, total_requests, duration_seconds
-            )
-        else:
-            window = await self._run_closed_phase(
-                request, total_requests, duration_seconds
-            )
+        window = await self._run_scraped_phase(
+            request, total_requests, duration_seconds
+        )
         writer.append(
             window.to_record(
                 session_id=self.session.session_id,
@@ -365,6 +393,63 @@ class InferenceProfiler:
                 abandoned=abandoned,
             )
         )
+
+    async def _run_scraped_phase(
+        self,
+        request: "_PhaseRequest",
+        total_requests: int | None,
+        duration_seconds: float | None,
+    ) -> "_PhaseWindow":
+        """Run the phase's arrivals, scraping vLLM around and during them.
+
+        The first scrape lands just before the first send and the last one
+        after the drain, so counters and histograms between them cover the
+        requests this phase completed; the interval scrapes catch the gauges
+        while the phase runs.
+        """
+        scraper = self.vllm_scraper
+        if scraper is None:
+            return await self._run_arrivals(request, total_requests, duration_seconds)
+        case_id, phase, writer = request.case.case_id, request.phase, request.writer
+        await self._scrape(scraper, MARKER_PHASE_START, case_id, phase, writer)
+        stop_scraping = asyncio.Event()
+        scrape_task = asyncio.create_task(
+            scraper.interval_loop(
+                append=writer.append,
+                case_id=case_id,
+                phase=phase,
+                stop_event=stop_scraping,
+            )
+        )
+        try:
+            return await self._run_arrivals(request, total_requests, duration_seconds)
+        finally:
+            stop_scraping.set()
+            await scrape_task
+            await self._scrape(scraper, MARKER_PHASE_END, case_id, phase, writer)
+
+    async def _run_arrivals(
+        self,
+        request: "_PhaseRequest",
+        total_requests: int | None,
+        duration_seconds: float | None,
+    ) -> "_PhaseWindow":
+        if request.case.arrival.open_loop:
+            return await self._run_open_phase(request, total_requests, duration_seconds)
+        return await self._run_closed_phase(request, total_requests, duration_seconds)
+
+    async def _scrape(
+        self,
+        scraper: VllmMetricsScraper,
+        marker: str,
+        case_id: str,
+        phase: str,
+        writer: JsonlEventWriter,
+    ) -> None:
+        record = await asyncio.to_thread(
+            scraper.scrape, marker=marker, case_id=case_id, phase=phase
+        )
+        writer.append(record.to_record())
 
     def _track(self, call: Future[Any]) -> None:
         with self._unfinished_lock:
@@ -566,17 +651,20 @@ class InferenceProfiler:
         arrival: Arrival,
         prompt: Prompt,
         prompt_count: TokenCount,
+        sent: bool = True,
     ) -> dict[str, Any]:
         """Fields every request event carries, whatever its outcome.
 
         ``prompt_count`` is the server's count when it reported one, an exact
         count made on the request's thread, or the planned size for a
-        request that never completed.
+        request that never completed. ``sent`` is False for a request that
+        never went out, which therefore carried no ``X-Request-Id``.
         """
         case = request.case
         return {
             "session_id": self.session.session_id,
             "request_id": request_id,
+            "x_request_id": self._x_request_id(request_id) if sent else None,
             "case_id": case.case_id,
             "phase": request.phase,
             "endpoint": self.config.endpoint,
@@ -619,6 +707,7 @@ class InferenceProfiler:
                 output_tokens=case.output_tokens,
                 stream=self.config.stream,
                 stream_include_usage=self.config.stream_include_usage,
+                request_id=self._x_request_id(request_id),
             ),
         )
         self._track(call)
@@ -772,6 +861,7 @@ class InferenceProfiler:
                 arrival=arrival,
                 prompt=prompt,
                 prompt_count=prompt.planned_count,
+                sent=False,
             ),
             started_at_ns=now_ns,
             ended_at_ns=now_ns,

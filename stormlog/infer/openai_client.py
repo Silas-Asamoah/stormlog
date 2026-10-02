@@ -62,7 +62,13 @@ class OpenAIChatCompletionsClient:
         output_tokens: int,
         stream: bool,
         stream_include_usage: bool,
+        request_id: str | None = None,
     ) -> ChatCompletionResult:
+        """Send one chat completion.
+
+        ``request_id`` goes out as ``X-Request-Id``, which vLLM embeds in its
+        own request id and in the ``gen_ai.request.id`` of the request span.
+        """
         payload = {
             **self.extra_body,
             "model": self.model,
@@ -79,6 +85,8 @@ class OpenAIChatCompletionsClient:
         }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        if request_id:
+            headers["X-Request-Id"] = request_id
 
         _validate_http_endpoint(self.endpoint)
         request = urllib.request.Request(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import signal
 import sys
@@ -36,6 +37,7 @@ from .server_collector import (
     NvmlUnavailableError,
     collect_server_telemetry,
 )
+from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -226,6 +228,25 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Seed for prompts and Poisson arrivals (default: 0)",
+    )
+    profile_parser.add_argument(
+        "--vllm-metrics",
+        nargs="?",
+        const=AUTO_METRICS_URL,
+        default=None,
+        metavar="URL",
+        help=(
+            "Scrape vLLM's Prometheus metrics at the start and end of every "
+            "phase and every --vllm-metrics-interval seconds inside it; without "
+            "a URL, the endpoint's origin plus /metrics"
+        ),
+    )
+    profile_parser.add_argument(
+        "--vllm-metrics-interval",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Seconds between vLLM metrics scrapes inside a phase (default: 1)",
     )
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
@@ -553,6 +574,10 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         cache_state=args.cache_state,
         cache_reset_url=args.cache_reset_url,
         extra_body=_extra_body(args.extra_body),
+        vllm_metrics_url=resolve_metrics_url(endpoint, args.vllm_metrics),
+        vllm_metrics_interval_seconds=(
+            1.0 if args.vllm_metrics_interval is None else args.vllm_metrics_interval
+        ),
     )
 
 
@@ -709,6 +734,19 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--warmup-requests must be >= 0")
     if args.sample_interval <= 0:
         raise ValueError("--sample-interval must be > 0")
+    _validate_vllm_metrics_arguments(args)
+
+
+def _validate_vllm_metrics_arguments(args: argparse.Namespace) -> None:
+    if args.vllm_metrics not in (None, AUTO_METRICS_URL):
+        _validate_http_url(args.vllm_metrics, "--vllm-metrics")
+    interval = args.vllm_metrics_interval
+    if interval is None:
+        return
+    if args.vllm_metrics is None:
+        raise ValueError("--vllm-metrics-interval only applies with --vllm-metrics")
+    if not math.isfinite(interval) or interval < 0.1:
+        raise ValueError("--vllm-metrics-interval must be a number of seconds >= 0.1")
 
 
 def _validate_arrival_arguments(args: argparse.Namespace) -> None:
