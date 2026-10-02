@@ -834,20 +834,35 @@ def _flatten_metrics(
     return metrics
 
 
+_CONFIG_FIELDS: Mapping[str, Callable[[Any], Any]] = {
+    "profile": str,
+    "mode": str,
+    "iterations": int,
+    "allocation_kb": int,
+    "profile_equivalent_hours": float,
+}
+_RUNTIME_CONFIG_FIELDS: Mapping[str, Callable[[Any], Any]] = {
+    "default_interval": float,
+    "overhead_sample_count": int,
+    "soak_sample_count": int,
+}
+_RETENTION_CONFIG_FIELDS: Mapping[str, Callable[[Any], Any]] = {
+    "flush_every_events": int,
+    "flush_every_seconds": float,
+    "rollover_max_bytes": int,
+    "rollover_max_events": int,
+    "retention_max_files": int,
+    "retention_max_total_bytes": int,
+    "sample_limit": int,
+}
+
+
 def _normalize_comparison_config(
     raw_config: Mapping[str, Any],
     *,
     label: str,
 ) -> dict[str, Any]:
-    required = {
-        "profile",
-        "mode",
-        "iterations",
-        "allocation_kb",
-        "profile_equivalent_hours",
-        "runtimes",
-        "retention_validation",
-    }
+    required = set(_CONFIG_FIELDS) | {"runtimes", "retention_validation"}
     missing = sorted(required.difference(raw_config))
     if missing:
         raise AssetError(f"{label} missing config keys: {', '.join(missing)}")
@@ -855,37 +870,50 @@ def _normalize_comparison_config(
     raw_runtimes = raw_config["runtimes"]
     if not isinstance(raw_runtimes, Mapping):
         raise AssetError(f"{label} runtimes must be a mapping")
-    runtimes: dict[str, dict[str, int | float]] = {}
+    runtimes: dict[str, dict[str, Any]] = {}
     for runtime_name, raw_runtime in raw_runtimes.items():
         if not isinstance(runtime_name, str) or not isinstance(raw_runtime, Mapping):
             raise AssetError(f"{label} contains invalid runtime config")
-        runtimes[runtime_name] = {
-            "default_interval": float(raw_runtime["default_interval"]),
-            "overhead_sample_count": int(raw_runtime["overhead_sample_count"]),
-            "soak_sample_count": int(raw_runtime["soak_sample_count"]),
-        }
+        runtimes[runtime_name] = _convert_config_fields(
+            raw_runtime,
+            _RUNTIME_CONFIG_FIELDS,
+            label=f"{label} runtime {runtime_name!r}",
+        )
 
     raw_retention = raw_config["retention_validation"]
     if not isinstance(raw_retention, Mapping):
         raise AssetError(f"{label} retention_validation must be a mapping")
-    retention_validation = {
-        "flush_every_events": int(raw_retention["flush_every_events"]),
-        "flush_every_seconds": float(raw_retention["flush_every_seconds"]),
-        "rollover_max_bytes": int(raw_retention["rollover_max_bytes"]),
-        "rollover_max_events": int(raw_retention["rollover_max_events"]),
-        "retention_max_files": int(raw_retention["retention_max_files"]),
-        "retention_max_total_bytes": int(raw_retention["retention_max_total_bytes"]),
-        "sample_limit": int(raw_retention["sample_limit"]),
-    }
     return {
-        "profile": str(raw_config["profile"]),
-        "mode": str(raw_config["mode"]),
-        "iterations": int(raw_config["iterations"]),
-        "allocation_kb": int(raw_config["allocation_kb"]),
-        "profile_equivalent_hours": float(raw_config["profile_equivalent_hours"]),
+        **_convert_config_fields(raw_config, _CONFIG_FIELDS, label=label),
         "runtimes": dict(sorted(runtimes.items())),
-        "retention_validation": retention_validation,
+        "retention_validation": _convert_config_fields(
+            raw_retention,
+            _RETENTION_CONFIG_FIELDS,
+            label=f"{label} retention_validation",
+        ),
     }
+
+
+def _convert_config_fields(
+    section: Mapping[str, Any],
+    fields: Mapping[str, Callable[[Any], Any]],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """Convert each named field; a missing key or bad value is an AssetError."""
+    missing = sorted(set(fields).difference(section))
+    if missing:
+        raise AssetError(f"{label} missing config keys: {', '.join(missing)}")
+    converted: dict[str, Any] = {}
+    for key, convert in fields.items():
+        try:
+            converted[key] = convert(section[key])
+        except (TypeError, ValueError) as exc:
+            raise AssetError(
+                f"{label} config key {key!r} is not a valid {convert.__name__}: "
+                f"{section[key]!r}"
+            ) from exc
+    return converted
 
 
 class AssetError(ValueError):

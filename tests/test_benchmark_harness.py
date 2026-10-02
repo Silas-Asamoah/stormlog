@@ -470,6 +470,110 @@ def test_main_rejects_unusable_assets_before_running_any_scenario(
     assert not (tmp_path / "artifacts").exists()
 
 
+def _main_regression_argv(
+    tmp_path: Path, baseline_path: Path, tolerances_path: Path
+) -> list[str]:
+    return [
+        "--check",
+        "--profile",
+        "pr",
+        "--mode",
+        "all",
+        "--gate-mode",
+        "regression",
+        "--baseline",
+        str(baseline_path),
+        "--tolerances",
+        str(tolerances_path),
+        "--output",
+        str(tmp_path / "report.json"),
+        "--artifact-root",
+        str(tmp_path / "artifacts"),
+    ]
+
+
+def _pr_baseline_config() -> dict[str, Any]:
+    return {
+        "profile": "pr",
+        "mode": "all",
+        "iterations": 5000,
+        "allocation_kb": 512,
+        "profile_equivalent_hours": benchmark_harness.PROFILE_EQUIVALENT_HOURS["pr"],
+        "runtimes": benchmark_harness._runtime_config(
+            "pr", 5000, ["gpumemprof_cpu", "tfmemprof_cpu"]
+        ),
+        "retention_validation": dict(benchmark_harness.DEFAULT_RETENTION_VALIDATION),
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_message"),
+    [
+        (
+            lambda config: config["runtimes"]["gpumemprof_cpu"].pop("default_interval"),
+            "Baseline file runtime 'gpumemprof_cpu' missing config keys: "
+            "default_interval",
+        ),
+        (
+            lambda config: config["runtimes"]["gpumemprof_cpu"].update(
+                overhead_sample_count="many"
+            ),
+            "Baseline file runtime 'gpumemprof_cpu' config key "
+            "'overhead_sample_count' is not a valid int: 'many'",
+        ),
+        (
+            lambda config: config["retention_validation"].update(
+                flush_every_events=None
+            ),
+            "Baseline file retention_validation config key 'flush_every_events' "
+            "is not a valid int: None",
+        ),
+        (
+            lambda config: config["retention_validation"].pop("sample_limit"),
+            "Baseline file retention_validation missing config keys: sample_limit",
+        ),
+        (
+            lambda config: config.update(iterations="lots"),
+            "Baseline file config key 'iterations' is not a valid int: 'lots'",
+        ),
+        (
+            lambda config: config.update(profile="nightly"),
+            "Baseline config mismatch: current=",
+        ),
+    ],
+)
+def test_main_returns_invalid_input_for_unusable_baseline_configs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mutate: Callable[[dict[str, Any]], object],
+    expected_message: str,
+) -> None:
+    # A baseline whose nested config is incomplete or holds the wrong type
+    # is an unusable asset like any other: INVALID_INPUT, not a traceback.
+    _install_fake_runtimes(monkeypatch)
+    config = _pr_baseline_config()
+    mutate(config)
+    baseline_path = tmp_path / "baseline.json"
+    tolerances_path = tmp_path / "tolerances.json"
+    _write_baseline_file(
+        baseline_path,
+        config=config,
+        metrics={"gpumemprof_cpu.runtime_overhead_pct": 0.0},
+    )
+    _write_tolerance_file(
+        tolerances_path, tolerances={"gpumemprof_cpu.runtime_overhead_pct": 10.0}
+    )
+
+    exit_code = benchmark_harness.main(
+        _main_regression_argv(tmp_path, baseline_path, tolerances_path)
+    )
+
+    assert exit_code == ExitCode.INVALID_INPUT
+    assert expected_message in capsys.readouterr().err
+    assert not (tmp_path / "artifacts").exists()
+
+
 @pytest.mark.parametrize("broken", ["--artifact-root", "--output"])
 def test_main_returns_error_when_the_output_location_is_a_file(
     monkeypatch: pytest.MonkeyPatch,
