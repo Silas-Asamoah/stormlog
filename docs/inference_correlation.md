@@ -335,8 +335,9 @@ process reported for itself, and so did the same nsys 2024.3 report once
 re-exported with nsys 2025.6.
 
 The same workload under the PyTorch profiler gave the same structure. In both
-captures each of the 200 steps had 12 kernels, all from the graph replay, and
-6 memsets, and the two streams overlapped by 4% of the summed time. Median
+captures each of the 200 steps had 12 kernels and 6 memsets, of which the
+graph replay ran 8 kernels and 4 memsets, and the two streams overlapped by 4%
+of the summed time. Median
 kernel durations agreed within 3% (the matrix multiply took 246 µs under
 Kineto and 251 µs under Nsight), and median busy time per step within 0.6%
 (1.535 ms and 1.544 ms). The first 42 Nsight steps were about 1.5× slower in
