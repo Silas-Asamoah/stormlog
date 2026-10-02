@@ -86,7 +86,7 @@
             "type": "object",
             "additionalProperties": {
               "oneOf": [
-                { "type": "number" },
+                { "$ref": "#/$defs/sample_value" },
                 { "$ref": "#/$defs/histogram_value" }
               ]
             }
@@ -98,6 +98,13 @@
         }
       }
     },
+    "sample_value": {
+      "description": "A Prometheus sample value; NaN and the infinities are written as the strings NaN, +Inf and -Inf so every line stays strict JSON.",
+      "oneOf": [
+        { "type": "number" },
+        { "enum": ["NaN", "+Inf", "-Inf"] }
+      ]
+    },
     "histogram_value": {
       "type": "object",
       "additionalProperties": false,
@@ -107,13 +114,13 @@
           "type": "array",
           "items": {
             "type": "array",
-            "prefixItems": [{ "type": "string" }, { "type": "number" }],
+            "prefixItems": [{ "type": "string" }, { "$ref": "#/$defs/sample_value" }],
             "minItems": 2,
             "maxItems": 2
           }
         },
-        "sum": { "type": "number" },
-        "count": { "type": "number" }
+        "sum": { "$ref": "#/$defs/sample_value" },
+        "count": { "$ref": "#/$defs/sample_value" }
       }
     },
     "discovery": {
@@ -124,6 +131,7 @@
         "present",
         "absent",
         "optional_absent",
+        "optional_present",
         "deprecated_present",
         "removed_present",
         "unknown",
@@ -136,6 +144,7 @@
         "present": { "$ref": "#/$defs/names" },
         "absent": { "$ref": "#/$defs/names" },
         "optional_absent": { "$ref": "#/$defs/names" },
+        "optional_present": { "$ref": "#/$defs/names" },
         "deprecated_present": { "$ref": "#/$defs/names" },
         "removed_present": { "$ref": "#/$defs/names" },
         "unknown": { "$ref": "#/$defs/names" },

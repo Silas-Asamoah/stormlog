@@ -190,6 +190,7 @@ def _discovery_from_record(record: dict[str, Any]) -> Discovery:
         present=tuple(record["present"]),
         absent=tuple(record["absent"]),
         optional_absent=tuple(record["optional_absent"]),
+        optional_present=tuple(record.get("optional_present", ())),
         deprecated_present=tuple(record["deprecated_present"]),
         removed_present=tuple(record["removed_present"]),
         unknown=tuple(record["unknown"]),
@@ -316,9 +317,12 @@ class VllmSpanRecord:
 def request_id_from_span_id(native_id: object) -> str | None:
     """Recover the ``X-Request-Id`` vLLM embedded in ``gen_ai.request.id``.
 
-    vLLM names an OpenAI request ``cmpl-<X-Request-Id>`` or
-    ``chatcmpl-<X-Request-Id>`` and appends ``-<index>`` per sequence. Without
-    the client's header it uses a random id, which no Stormlog request owns.
+    vLLM names a chat completion ``chatcmpl-<X-Request-Id>`` and a text
+    completion ``cmpl-<X-Request-Id>-<index>``, with the per-prompt index only
+    on the completions path. A trailing ``-<digits>`` is stripped only when it
+    is one; the request ids Stormlog sends end in ``_<n>``, never ``-<n>``.
+    Without the client's header vLLM uses a random id, which no Stormlog
+    request owns.
     """
     if not isinstance(native_id, str):
         return None

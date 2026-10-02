@@ -212,6 +212,7 @@ def _discovery_union(discoveries: list[Discovery]) -> dict[str, Any]:
         "deprecated_series": union("deprecated_present"),
         "removed_series": union("removed_present"),
         "optional_absent": sorted(optional_absent),
+        "optional_present": union("optional_present"),
     }
 
 

@@ -157,21 +157,44 @@ class HistogramValue:
 
     def to_record(self) -> dict[str, Any]:
         return {
-            "buckets": [[le, count] for le, count in self.buckets],
-            "sum": self.sum,
-            "count": self.count,
+            "buckets": [[le, encode_number(count)] for le, count in self.buckets],
+            "sum": encode_number(self.sum),
+            "count": encode_number(self.count),
         }
 
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> HistogramValue:
         buckets = tuple(
-            (str(le), float(count)) for le, count in record.get("buckets", [])
+            (str(le), decode_number(count)) for le, count in record.get("buckets", [])
         )
-        return cls(buckets, float(record["sum"]), float(record["count"]))
+        return cls(
+            buckets, decode_number(record["sum"]), decode_number(record["count"])
+        )
 
     @property
     def boundaries(self) -> tuple[float, ...]:
         return tuple(bucket_boundary(le) for le, _count in self.buckets)
+
+
+_NON_FINITE = {"NaN": math.nan, "+Inf": math.inf, "-Inf": -math.inf}
+
+
+def encode_number(value: float) -> float | str:
+    """A sample value as strict JSON: NaN and infinities become strings."""
+    if math.isnan(value):
+        return "NaN"
+    if math.isinf(value):
+        return "+Inf" if value > 0 else "-Inf"
+    return value
+
+
+def decode_number(value: Any) -> float:
+    """The inverse of :func:`encode_number`; other strings are an error."""
+    if isinstance(value, str):
+        if value in _NON_FINITE:
+            return _NON_FINITE[value]
+        raise ValueError(f"not a sample value: {value!r}")
+    return float(value)
 
 
 def bucket_boundary(le: str) -> float:
@@ -199,7 +222,9 @@ class CompactScrape:
         for name, by_set in self.values.items():
             values[name] = {
                 set_id: (
-                    value.to_record() if isinstance(value, HistogramValue) else value
+                    value.to_record()
+                    if isinstance(value, HistogramValue)
+                    else encode_number(value)
                 )
                 for set_id, value in by_set.items()
             }
@@ -219,7 +244,7 @@ class CompactScrape:
                 str(set_id): (
                     HistogramValue.from_record(value)
                     if isinstance(value, dict)
-                    else float(value)
+                    else decode_number(value)
                 )
                 for set_id, value in by_set.items()
             }
@@ -830,6 +855,9 @@ class Discovery:
     engines: tuple[str, ...]
     model_names: tuple[str, ...]
     process_start_ns: int | None
+    # Series of an optional subsystem (see OPTIONAL_PREFIXES) the catalog does
+    # not name one by one: known to be vLLM's, kept raw, never "unknown".
+    optional_present: tuple[str, ...] = ()
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -837,6 +865,7 @@ class Discovery:
             "present": list(self.present),
             "absent": list(self.absent),
             "optional_absent": list(self.optional_absent),
+            "optional_present": list(self.optional_present),
             "deprecated_present": list(self.deprecated_present),
             "removed_present": list(self.removed_present),
             "unknown": list(self.unknown),
@@ -850,7 +879,7 @@ def discover(scrape: CompactScrape) -> Discovery:
     """Compare a scrape with the catalog without discarding anything."""
     names = set(scrape.families)
     present, absent, optional_absent = _catalog_presence(names)
-    deprecated, removed, unknown = _classify_vllm_names(names)
+    deprecated, removed, unknown, optional_present = _classify_vllm_names(names)
     return Discovery(
         present,
         absent,
@@ -861,6 +890,7 @@ def discover(scrape: CompactScrape) -> Discovery:
         scrape.label_values("engine"),
         scrape.label_values("model_name"),
         process_start_ns(scrape),
+        optional_present=optional_present,
     )
 
 
@@ -877,20 +907,26 @@ def _catalog_presence(
 
 def _classify_vllm_names(
     names: set[str],
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """Retired names with a successor, retired names without one, and unknown."""
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Retired names with a successor, retired names without one, unknown
+    names, and names of an optional subsystem the catalog knows by prefix."""
     deprecated: list[str] = []
     removed: list[str] = []
     unknown: list[str] = []
+    optional: list[str] = []
     for name in sorted(names):
         if name.endswith("_created") or not name.startswith(VLLM_PREFIX):
             continue
         if name in DEPRECATED_ALIASES:
             successor = DEPRECATED_ALIASES[name][0]
             (deprecated if successor else removed).append(name)
-        elif name not in CATALOG:
+        elif name in CATALOG:
+            continue
+        elif any(name.startswith(prefix) for prefix in OPTIONAL_PREFIXES):
+            optional.append(name)
+        else:
             unknown.append(name)
-    return tuple(deprecated), tuple(removed), tuple(unknown)
+    return tuple(deprecated), tuple(removed), tuple(unknown), tuple(optional)
 
 
 def process_start_ns(scrape: CompactScrape) -> int | None:

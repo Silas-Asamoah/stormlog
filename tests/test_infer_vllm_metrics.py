@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from stormlog.infer.vllm_metrics import (
     bucket_boundary,
     compact_scrape,
     created_family_for,
+    decode_number,
     discover,
     family_group,
     parse_prometheus_text,
@@ -158,6 +160,30 @@ class TestCompactScrape:
         assert bucket_boundary("0.3") == 0.3
         assert bucket_boundary("+Inf") == math.inf
 
+    def test_non_finite_values_round_trip_as_strict_json(self) -> None:
+        text = (
+            "# TYPE demo_summary summary\n"
+            'demo_summary{quantile="0.5"} NaN\n'
+            "demo_summary_sum +Inf\n"
+            "demo_summary_count 2\n"
+            "# TYPE demo gauge\n"
+            "demo -Inf\n"
+        )
+        compact = compact_scrape(parse_prometheus_text(text))
+        payload = json.dumps(compact.to_record(), allow_nan=False)
+        record = json.loads(payload)
+        (quantiles,) = record["values"]["demo_summary"].values()
+        assert quantiles == {"buckets": [["0.5", "NaN"]], "sum": "+Inf", "count": 2.0}
+        assert list(record["values"]["demo"].values()) == ["-Inf"]
+        restored = CompactScrape.from_record(record)
+        (value,) = restored.series("demo_summary").values()
+        assert isinstance(value, HistogramValue)
+        assert math.isnan(value.buckets[0][1]) and value.sum == math.inf
+        (gauge,) = restored.series("demo").values()
+        assert gauge == -math.inf
+        with pytest.raises(ValueError):
+            decode_number("Infinity")
+
 
 class TestCatalog:
     def test_catalog_names_are_unique_and_prefixed(self) -> None:
@@ -188,6 +214,8 @@ class TestCatalog:
         assert found.absent == ()
         assert "vllm:spec_decode_num_drafts_total" in found.optional_absent
         assert "vllm:kv_block_lifetime_seconds" in found.optional_absent
+        assert found.optional_present == ()
+        assert found.to_record()["optional_present"] == []
         assert "vllm:estimated_flops_per_gpu_total" in found.present
         assert found.engines == ("0",)
         assert found.model_names == (MODEL,)
@@ -205,11 +233,15 @@ class TestCatalog:
             'vllm:model_forward_time_milliseconds_count{engine="0"} 1\n'
             "# TYPE vllm:brand_new_thing gauge\n"
             'vllm:brand_new_thing{engine="0"} 1\n'
+            "# TYPE vllm:kv_offload_load_bytes_total counter\n"
+            'vllm:kv_offload_load_bytes_total{engine="0"} 5\n'
         )
         found = discover(compact_scrape(parse_prometheus_text(text)))
         assert found.deprecated_present == ("vllm:gpu_cache_usage_perc",)
         assert found.removed_present == ("vllm:model_forward_time_milliseconds",)
+        # A family of a known optional subsystem is not an unknown series.
         assert found.unknown == ("vllm:brand_new_thing",)
+        assert found.optional_present == ("vllm:kv_offload_load_bytes_total",)
         assert resolve_name("vllm:gpu_cache_usage_perc") == (
             "vllm:kv_cache_usage_perc",
             "vllm:gpu_cache_usage_perc",

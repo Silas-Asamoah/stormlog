@@ -91,7 +91,9 @@ joins to a request by the recorded value and never by a rebuilt string.
   compact form: label sets shared across series, native names, native
   histogram bucket boundaries, the `# TYPE` of each family, and a discovery
   block that says what the catalog recognised. A failed scrape records the
-  error instead. About 10 KB per scrape for 0.30.0.
+  error instead. About 30 KB per scrape for 0.30.0, most of it the sixteen
+  histograms' bucket lists. NaN and infinite sample values are written as
+  the strings `NaN`, `+Inf` and `-Inf`, so every line is strict JSON.
 - `infer.vllm_span`: one record per span, attributes under their native
   names, timestamps on the exporter's wall clock, and the recovered
   `request_id`. The clock domain is named by the exporter's `host.name`
@@ -143,8 +145,10 @@ reasons when the two scrapes cannot be compared:
 | `not_enabled` | The MFU counters stayed at zero while tokens were generated |
 
 A series the catalog does not name is kept under its native name and listed
-as unknown. A retired name is normalised under its successor, kept as
-`deprecated_alias_of`, and listed as retired.
+as unknown, unless it belongs to an optional subsystem the catalog knows by
+prefix (`vllm:kv_offload_*`, `vllm:spec_decode_*`, `vllm:diffusion_*`): those
+are listed as `optional_present` and kept raw. A retired name is normalised
+under its successor, kept as `deprecated_alias_of`, and listed as retired.
 
 ## Metric map
 

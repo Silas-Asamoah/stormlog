@@ -262,6 +262,7 @@ class VllmMetricsScraper:
                     "deprecated_series": list(found.deprecated_present),
                     "removed_series": list(found.removed_present),
                     "optional_absent": list(found.optional_absent),
+                    "optional_present": list(found.optional_present),
                     "engines": list(found.engines),
                 }
             )

@@ -129,7 +129,7 @@ def _request(
 def _span(request_id: str | None, **attributes: Any) -> dict[str, Any]:
     values: dict[str, Any] = {
         "gen_ai.request.id": (
-            f"chatcmpl-{request_id}-0" if request_id else "chatcmpl-random-0"
+            f"chatcmpl-{request_id}" if request_id else "chatcmpl-random"
         ),
         "gen_ai.latency.time_in_queue": 0.001,
         "gen_ai.latency.time_in_model_prefill": 0.03,
@@ -403,12 +403,15 @@ class TestNamesAndEngines:
         extra = (
             POST
             + '\n# TYPE vllm:brand_new_total counter\nvllm:brand_new_total{engine="0",model_name="m"} 7.0\n'
+            + '# TYPE vllm:kv_offload_load_bytes_total counter\nvllm:kv_offload_load_bytes_total{engine="0",model_name="m"} 3.0\n'
         )
         path = _artifact(tmp_path, _standard_scrapes(end=extra))
         report = analyze_inference_events(path)
-        assert report["telemetry"]["vllm"]["engine"]["unknown_series"] == [
-            "vllm:brand_new_total"
-        ]
+        engine = report["telemetry"]["vllm"]["engine"]
+        assert engine["unknown_series"] == ["vllm:brand_new_total"]
+        # An uncatalogued family of a known optional subsystem is listed on
+        # its own, not as unknown, and still kept raw under its native name.
+        assert engine["optional_present"] == ["vllm:kv_offload_load_bytes_total"]
         counters = report["telemetry"]["vllm"]["cases"][CASE]["engines"]["0"][
             "counters"
         ]

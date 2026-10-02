@@ -70,7 +70,7 @@ def _span(**changes: Any) -> VllmSpanRecord:
         "start_unix_ns": 1_790_000_000_000_000_000,
         "end_unix_ns": 1_790_000_000_500_000_000,
         "attributes": {
-            "gen_ai.request.id": "chatcmpl-stormlog-run-c8_measured_0_1-0",
+            "gen_ai.request.id": "chatcmpl-stormlog-run-c8_measured_0_1",
             "gen_ai.latency.time_in_model_inference": 0.48,
         },
         "resource": {"service.name": "vllm"},
@@ -181,8 +181,10 @@ class TestSpanRecord:
             _span(**changes)
 
     def test_request_id_recovery_from_vllm_ids(self) -> None:
-        assert request_id_from_span_id("chatcmpl-stormlog-run-c8_0_1-0") == (
-            "stormlog-run-c8_0_1"
+        # Chat completions carry the header as sent; text completions append
+        # the per-prompt index, which is stripped.
+        assert request_id_from_span_id("chatcmpl-stormlog-run-c8_measured_0_1") == (
+            "stormlog-run-c8_measured_0_1"
         )
         assert request_id_from_span_id("cmpl-q05-u-c01-rep0-on-r0000-0") == (
             "q05-u-c01-rep0-on-r0000"

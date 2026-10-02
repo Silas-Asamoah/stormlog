@@ -52,7 +52,7 @@ V2_VALIDATOR = Draft202012Validator(
 METRICS_TEXT = (FIXTURES / "q05_c08_metrics_post.txt").read_text(encoding="utf-8")
 
 REQUEST_ATTRIBUTES: dict[str, Any] = {
-    "gen_ai.request.id": "chatcmpl-stormlog-run-1-c1_in8_out4_measured_0_1-0",
+    "gen_ai.request.id": "chatcmpl-stormlog-run-1-c1_in8_out4_measured_0_1",
     "gen_ai.latency.time_in_queue": 0.001,
     "gen_ai.latency.time_in_model_prefill": 0.03,
     "gen_ai.latency.time_in_model_decode": 0.4,
@@ -650,7 +650,7 @@ class _ExportingVllmHandler(BaseHTTPRequestHandler):
     def _export(self, request_id: str) -> None:
         attributes = {
             **REQUEST_ATTRIBUTES,
-            "gen_ai.request.id": f"chatcmpl-{request_id}-0",
+            "gen_ai.request.id": f"chatcmpl-{request_id}",
         }
         payload = _export_request(
             [
