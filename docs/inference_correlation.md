@@ -306,9 +306,10 @@ stormlog infer import-trace infer.jsonl run.sqlite
   mapping. Any device the report does not name is listed in a summary note.
 - **`--device-uuid` only fills gaps.** It is used for a device the report does
   not name. A UUID that contradicts the report's is refused, and a UUID the
-  report names cannot be overridden. One ordinal given for several processes
-  in a report is refused too, since `TRACE_FILE:` cannot pick one process
-  inside a report.
+  report names cannot be overridden. An ordinal given for a device the report
+  leaves unnamed is refused when another process in the report uses the same
+  ordinal, even one the report names, since `TRACE_FILE:` cannot pick one
+  process inside a report.
 - **A `.nsys-rep` file is registered, not read.** Its format is not public, so
   the import notes that it must be exported to SQLite first.
 - **Event loss is unknown** (`null`), as for Kineto traces: the exported tables

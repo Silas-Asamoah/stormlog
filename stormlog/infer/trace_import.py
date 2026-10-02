@@ -8,7 +8,7 @@ trace is registered in the run envelope and its GPU activity is appended as
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -242,36 +242,53 @@ def _check_shared_devices(
     """Refuse a ``--device-uuid`` ordinal that several processes used.
 
     A process is its host name, rank, and pid (for formats that hold several,
-    such as Nsight Systems reports) or launching pids. Only UUIDs taken from
-    the option count; a UUID the trace names is the process's own. Containers
-    that share a host name and pid namespace layout can still look alike,
-    which is why the docs recommend the per-trace form for traces from
+    such as Nsight Systems reports) or launching pids. Every process that uses
+    a given ordinal counts, including one whose UUID the trace names: an entry
+    that matches that process would otherwise be applied to the others too.
+    The check fires only when the option's UUID was applied somewhere.
+    Containers that share a host name and pid namespace layout can still look
+    alike, which is why the docs recommend the per-trace form for traces from
     separate containers.
     """
     users: dict[tuple[str | None, int], set[tuple[Any, ...]]] = {}
+    applied: set[tuple[str | None, int]] = set()
     for path, capture in zip(paths, captures):
         summary = capture.summary or {}
         own = uuids.scoped(path)
         for key, device in summary.get("devices", {}).items():
-            if device.get("device_uuid_source") != "option":
-                continue
             pid, index = _split_device_key(str(key))
-            scope = str(path) if index in own else None
-            process = (
-                summary.get("host"),
-                summary.get("rank"),
-                pid if pid is not None else tuple(summary.get("processes", ())),
-            )
-            users.setdefault((scope, index), set()).add(process)
-    for (scope, index), processes in sorted(users.items(), key=str):
-        if len(processes) > 1:
-            raise InferUsageError(_shared_device_message(scope, index))
+            scope = _option_scope(str(path), index, own, uuids.shared)
+            if scope is None:
+                continue
+            users.setdefault(scope, set()).add(_process_identity(summary, pid))
+            if device.get("device_uuid_source") == "option":
+                applied.add(scope)
+    for scope in sorted(applied, key=str):
+        if len(users[scope]) > 1:
+            raise InferUsageError(_shared_device_message(*scope))
 
 
-def _split_device_key(key: str) -> tuple[int | None, int]:
-    """(pid, ordinal) from a summary device key: ``"0"`` or ``"<pid>/0"``."""
+def _option_scope(
+    name: str, index: int | None, own: Mapping[int, str], shared: Mapping[int, str]
+) -> tuple[str | None, int] | None:
+    """Which ``--device-uuid`` entry covers this ordinal: per-trace or shared."""
+    if index is None or (index not in own and index not in shared):
+        return None
+    return (name if index in own else None, index)
+
+
+def _process_identity(summary: dict[str, Any], pid: int | None) -> tuple[Any, ...]:
+    processes = pid if pid is not None else tuple(summary.get("processes", ()))
+    return (summary.get("host"), summary.get("rank"), processes)
+
+
+def _split_device_key(key: str) -> tuple[int | None, int | None]:
+    """(pid, ordinal) from a summary device key: ``"0"`` or ``"<pid>/0"``.
+
+    The ordinal is None for a trace whose GPU events name no device.
+    """
     pid, _, ordinal = key.rpartition("/")
-    return (int(pid) if pid else None), int(ordinal)
+    return (int(pid) if pid else None), (int(ordinal) if ordinal.isdigit() else None)
 
 
 def _shared_device_message(scope: str | None, index: int) -> str:

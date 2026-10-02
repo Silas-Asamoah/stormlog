@@ -559,3 +559,20 @@ def test_a_report_without_cuda_tracing_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="record with --trace=cuda"):
         load_nsys_sqlite(path)
+
+
+def test_a_uuid_matching_one_named_process_is_not_applied_to_another(
+    tmp_path: Path,
+) -> None:
+    """Process 100's device 0 is named by the report; process 200's is not."""
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    path = _export(tmp_path / "partial.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("delete from TARGET_INFO_CUDA_DEVICE where pid = 200")
+        db.commit()
+
+    code = main(
+        ["import-trace", str(artifact), str(path), "--device-uuid", "0=GPU-bbbb-1111"]
+    )
+
+    assert code == int(ExitCode.USAGE)
