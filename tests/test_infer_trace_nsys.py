@@ -515,3 +515,47 @@ def test_a_process_missing_from_the_device_table_is_named_in_a_note(
     trace = load_nsys_sqlite(path)
 
     assert trace.notes == ["the report does not name the GPU of process 200 device 0"]
+
+
+def test_a_copy_only_report_without_a_kernel_table_imports(tmp_path: Path) -> None:
+    """nsys creates tables lazily, so a report may have copies but no kernels."""
+    path = _export(tmp_path / "copies.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("drop table CUPTI_ACTIVITY_KIND_KERNEL")
+        db.commit()
+
+    trace = load_nsys_sqlite(path)
+
+    assert [event.kind for event in trace.gpu_events] == ["gpu_memcpy"]
+
+
+def test_a_report_with_cuda_calls_but_no_gpu_work_imports_empty(
+    tmp_path: Path,
+) -> None:
+    path = _export(tmp_path / "idle.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        for table in ("CUPTI_ACTIVITY_KIND_KERNEL", "CUPTI_ACTIVITY_KIND_MEMCPY"):
+            db.execute(f"drop table {table}")
+        db.commit()
+
+    trace = load_nsys_sqlite(path)
+
+    assert trace.gpu_events == []
+    assert trace.notes == [
+        "the report records CUDA calls but no GPU kernels, copies or memsets"
+    ]
+
+
+def test_a_report_without_cuda_tracing_is_refused(tmp_path: Path) -> None:
+    path = _export(tmp_path / "cpu.sqlite")
+    with closing(sqlite3.connect(path)) as db:
+        for table in (
+            "CUPTI_ACTIVITY_KIND_KERNEL",
+            "CUPTI_ACTIVITY_KIND_MEMCPY",
+            "CUPTI_ACTIVITY_KIND_RUNTIME",
+        ):
+            db.execute(f"drop table {table}")
+        db.commit()
+
+    with pytest.raises(ValueError, match="record with --trace=cuda"):
+        load_nsys_sqlite(path)

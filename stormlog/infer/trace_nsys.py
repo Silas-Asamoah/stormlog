@@ -48,6 +48,10 @@ GPU_TABLES = {
     "CUPTI_ACTIVITY_KIND_MEMSET": "gpu_memset",
 }
 GRAPH_TABLE = "CUPTI_ACTIVITY_KIND_GRAPH_TRACE"
+RUNTIME_TABLE = "CUPTI_ACTIVITY_KIND_RUNTIME"
+CUDA_TABLES = {*GPU_TABLES, GRAPH_TABLE, RUNTIME_TABLE}
+# The exporter always writes one of these next to StringIds.
+EXPORT_MARKERS = {"META_DATA_EXPORT", "TARGET_INFO_SESSION_START_TIME"}
 # NvtxPushPopRange and NvtxStartEndRange, in any domain. (70 and 71 are ranges
 # imported from NVTXT text files, not ones a program emits.)
 NVTX_RANGE_TYPES = (59, 60)
@@ -67,9 +71,7 @@ def load_nsys_sqlite(path: str | Path) -> KinetoTrace:
 
 
 def _load(db: sqlite3.Connection, path: Path) -> KinetoTrace:
-    tables = {row[0] for row in db.execute("select name from sqlite_master")}
-    if "CUPTI_ACTIVITY_KIND_KERNEL" not in tables or "StringIds" not in tables:
-        raise ValueError("not an Nsight Systems SQLite export: no CUDA activity")
+    tables = _export_tables(db)
     strings = dict(db.execute("select id, value from StringIds"))
     trace = KinetoTrace(
         base_ns=_session_start(db, tables),
@@ -82,6 +84,36 @@ def _load(db: sqlite3.Connection, path: Path) -> KinetoTrace:
         device_names={},
         source="nsys",
     )
+    _read_gpu_work(db, tables, strings, trace)
+    if RUNTIME_TABLE in tables:
+        trace.launches.update(_launches(db, strings))
+    _count_graph_rows(db, tables, trace)
+    if not trace.gpu_events and not trace.not_imported:
+        trace.notes.append(
+            "the report records CUDA calls but no GPU kernels, copies or memsets"
+        )
+    for thread, span in _nvtx_spans(db, tables, strings):
+        trace.spans.setdefault(thread, []).append(span)
+    index_spans(trace)
+    return trace
+
+
+def _export_tables(db: sqlite3.Connection) -> set[str]:
+    tables = {row[0] for row in db.execute("select name from sqlite_master")}
+    if "StringIds" not in tables or not tables & EXPORT_MARKERS:
+        raise ValueError("not an Nsight Systems SQLite export")
+    # nsys creates tables lazily: a copy-only report has no kernel table.
+    if not tables & CUDA_TABLES:
+        raise ValueError("no CUDA activity in this report; record with --trace=cuda")
+    return tables
+
+
+def _read_gpu_work(
+    db: sqlite3.Connection,
+    tables: set[str],
+    strings: dict[int, str],
+    trace: KinetoTrace,
+) -> None:
     devices = _devices(db, tables)
     if devices.note:
         trace.notes.append(devices.note)
@@ -92,13 +124,6 @@ def _load(db: sqlite3.Connection, path: Path) -> KinetoTrace:
             )
     if not devices.note:
         trace.notes.extend(_unnamed_devices_note(trace.gpu_events))
-    if "CUPTI_ACTIVITY_KIND_RUNTIME" in tables:
-        trace.launches.update(_launches(db, strings))
-    _count_graph_rows(db, tables, trace)
-    for thread, span in _nvtx_spans(db, tables, strings):
-        trace.spans.setdefault(thread, []).append(span)
-    index_spans(trace)
-    return trace
 
 
 def split_global_id(global_id: int) -> tuple[int, int]:
@@ -230,10 +255,7 @@ def _gpu_events(
 def _launches(
     db: sqlite3.Connection, strings: dict[int, str]
 ) -> Iterator[tuple[tuple[int | None, int], LaunchCall]]:
-    query = (
-        "select start, globalTid, correlationId, nameId "
-        "from CUPTI_ACTIVITY_KIND_RUNTIME"
-    )
+    query = "select start, globalTid, correlationId, nameId " f"from {RUNTIME_TABLE}"
     for start, global_tid, correlation, name_id in db.execute(query):
         if not correlation or global_tid is None:
             continue
