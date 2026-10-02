@@ -568,6 +568,11 @@ def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig
 def _validate_trace_arguments(args: argparse.Namespace) -> None:
     if args.trace is not None:
         _validate_http_url(args.trace_control_url, "--trace-control-url")
+        if args.trace_phase == "warmup" and args.warmup_requests < 1:
+            raise ValueError(
+                "--trace-phase warmup needs --warmup-requests >= 1; without "
+                "warmup requests there is no warmup phase to profile"
+            )
         if args.trace_dir is not None and not Path(args.trace_dir).is_dir():
             _print_warning(
                 f"--trace-dir {args.trace_dir} does not exist yet; traces are found "

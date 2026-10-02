@@ -698,3 +698,25 @@ def test_ctrl_c_during_the_start_still_stops_the_profiler(tmp_path: Path) -> Non
 
     assert control.calls == ["/start_profile", "/stop_profile"]
     assert [w.stop_reason for w in windows.windows] == ["cancelled"]
+
+
+def test_warmup_tracing_needs_warmup_requests(tmp_path: Path) -> None:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+        code = infer_main(
+            [
+                "profile",
+                "--endpoint",
+                "http://127.0.0.1:1/v1/chat/completions",
+                "--model",
+                "m",
+                "--output",
+                str(tmp_path / "out.jsonl"),
+                "--trace",
+                "vllm-torch",
+                "--trace-phase",
+                "warmup",
+            ]
+        )
+    assert code == int(ExitCode.USAGE)
+    assert "--trace-phase warmup needs --warmup-requests >= 1" in stderr.getvalue()
