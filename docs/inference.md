@@ -34,6 +34,12 @@ stormlog infer profile \
   --output artifacts/infer_steady_state.jsonl
 ```
 
+Every request goes out with an `X-Request-Id: stormlog-<run_id>-<request_id>`
+header, recorded on its event as `x_request_id`. OpenAI-compatible servers
+ignore headers they do not know; vLLM embeds it in its own request id and in
+the span it emits per request, which is how
+[vLLM native telemetry](vllm_telemetry.md) joins spans to requests.
+
 The profiler sends controlled traffic for each workload case in the matrix:
 
 - `concurrency`
@@ -628,11 +634,11 @@ emits per request, both into the same artifact. The report then separates a
 latency change into queueing (waiting requests and queue time), cache
 pressure (KV block occupancy and prefix-cache hits) and token rates, per
 engine, with every delta that cannot be trusted marked unresolved and why.
-Every request carries an `X-Request-Id` so spans join to requests by the
-recorded value. These are engine-aggregate numbers over every client's
-traffic; they attribute no GPU time to a request. See
-[vLLM native telemetry](vllm_telemetry.md) for the flags, the metric map
-and the capability matrix.
+Spans join to requests by the recorded `X-Request-Id`; receiving vLLM's
+protobuf exports needs `pip install "stormlog[infer-otlp]"`. These are
+engine-aggregate numbers over every client's traffic; they attribute no GPU
+time to a request. See [vLLM native telemetry](vllm_telemetry.md) for the
+flags, the metric map and the capability matrix.
 
 ## Execution correlation and future adapters
 

@@ -21,6 +21,14 @@ retire series, and the capability record of each run says what it found.
 
 ## Collect
 
+Scraping metrics needs nothing beyond Stormlog. Receiving vLLM's spans needs
+the `infer-otlp` extra, which brings the generated OpenTelemetry protobuf
+classes the receiver decodes with:
+
+```bash
+pip install "stormlog[infer-otlp]"
+```
+
 Start vLLM with its metrics on (the default) and, for spans, with
 `--otlp-traces-endpoint` pointing at the receiver that `infer profile` runs:
 
@@ -49,7 +57,10 @@ clock alignment is involved. A scrape that fails or returns something that
 is not Prometheus text is recorded with its reason and the run goes on; the
 first failure is printed once. The receiver binds before any request is
 sent; a port it cannot bind is recorded as unavailable, with the error, and
-the run goes on without spans.
+the run goes on without spans. Without the `infer-otlp` extra the receiver
+still listens and accepts OTLP JSON, but vLLM's exporter sends protobuf, so
+those exports are refused with a 415, counted, and the capability record
+lists `otlp_http_protobuf` as supported but not enabled; the run warns once.
 
 Every request is sent with `X-Request-Id: stormlog-<run_id>-<request_id>`,
 recorded on its `infer.request` event as `x_request_id`. vLLM embeds that
@@ -175,9 +186,9 @@ A span's attributes are kept as exported: `gen_ai.request.id`,
 `gen_ai.latency.time_in_queue`, `time_to_first_token`,
 `time_in_model_prefill`, `time_in_model_decode`, `time_in_model_inference`,
 `e2e`, `gen_ai.usage.prompt_tokens`, `gen_ai.usage.completion_tokens` and the
-request parameters. The receiver accepts OTLP/HTTP protobuf and JSON bodies
-and decodes the protobuf from the wire format alone. Spans of other names,
-such as vLLM's startup spans, are kept but not joined.
+request parameters. The receiver accepts OTLP/HTTP protobuf bodies (with the
+`infer-otlp` extra) and JSON bodies. Spans of other names, such as vLLM's
+startup spans, are kept but not joined.
 
 For the v2 correlation model, `spans_to_correlation_events` maps each request
 span onto an `infer.request` record with vLLM's own timestamps (provenance
@@ -192,7 +203,7 @@ for how GPU time is accounted separately.
 | Component | Verified | Supported | Not supported |
 | --- | --- | --- | --- |
 | `vllm.metrics` | vLLM 0.30.0, CUDA backend, single and data-parallel engines (`engine` label) | the fields in the metric map; unknown series kept raw | per-request attribution from scrapes |
-| `vllm.spans` | vLLM 0.30.0 over OTLP/HTTP protobuf and JSON; OTLP JSON and JSONL files | `llm_request` spans and their native attributes; join by `X-Request-Id` | `time_in_model_forward`, `time_in_model_execute` (never set in 0.30.0); gRPC export |
+| `vllm.spans` | vLLM 0.30.0 over OTLP/HTTP protobuf (`infer-otlp` extra, `opentelemetry-proto>=1.20`) and JSON; OTLP JSON and JSONL files | `llm_request` spans and their native attributes; join by `X-Request-Id` | `time_in_model_forward`, `time_in_model_execute` (never set in 0.30.0); gRPC export; protobuf without the extra |
 | vLLM profiler controls | see [Inference execution correlation](inference_correlation.md) | `/start_profile`, `/stop_profile` orchestration lives with the GPU trace capture work | starting a profile without `--profiler-config` at server start |
 
 Other engines, tensor-parallel scrapes from several API servers behind a load

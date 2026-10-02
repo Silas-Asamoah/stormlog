@@ -1,11 +1,16 @@
-"""vLLM span ingest: OTLP protobuf and JSON, the receiver, and the v2 mapping."""
+"""vLLM span ingest: OTLP protobuf and JSON, the receiver, and the v2 mapping.
+
+Protobuf payloads are built with the generated ``opentelemetry-proto``
+classes, so the decoder is tested against the real wire format; those tests
+skip when the ``infer-otlp`` extra is not installed. JSON bodies, the file
+readers, the receiver's gate and the v2 mapping need no extra.
+"""
 
 from __future__ import annotations
 
 import contextlib
 import json
 import socket
-import struct
 import threading
 import urllib.error
 import urllib.request
@@ -16,12 +21,16 @@ from typing import Any, Iterator
 import pytest
 from jsonschema import Draft202012Validator
 
+from stormlog.infer import vllm_spans
 from stormlog.infer.config import ProfileConfig
 from stormlog.infer.correlation_events import RequestEvent, StageEvent
 from stormlog.infer.profile import InferenceProfiler
 from stormlog.infer.vllm_spans import (
+    OTLP_EXTRA_HINT,
+    OtlpProtobufUnavailable,
     OtlpSpanReceiver,
     ProtobufDecodeError,
+    RawSpan,
     decode_otlp_json,
     decode_otlp_protobuf,
     parse_listen_address,
@@ -42,90 +51,6 @@ V2_VALIDATOR = Draft202012Validator(
 )
 METRICS_TEXT = (FIXTURES / "q05_c08_metrics_post.txt").read_text(encoding="utf-8")
 
-
-# ----------------------------------------------------------------- an encoder
-def _varint(value: int) -> bytes:
-    out = bytearray()
-    while True:
-        byte = value & 0x7F
-        value >>= 7
-        if value:
-            out.append(byte | 0x80)
-        else:
-            out.append(byte)
-            return bytes(out)
-
-
-def _ld(number: int, payload: bytes) -> bytes:
-    return _varint((number << 3) | 2) + _varint(len(payload)) + payload
-
-
-def _vi(number: int, value: int) -> bytes:
-    return _varint(number << 3) + _varint(value)
-
-
-def _f64(number: int, value: int) -> bytes:
-    return _varint((number << 3) | 1) + struct.pack("<Q", value)
-
-
-def _any(value: Any) -> bytes:
-    if isinstance(value, bool):
-        return _vi(2, int(value))
-    if isinstance(value, int):
-        return _vi(3, value & ((1 << 64) - 1))
-    if isinstance(value, float):
-        return _varint((4 << 3) | 1) + struct.pack("<d", value)
-    if isinstance(value, str):
-        return _ld(1, value.encode())
-    if isinstance(value, list):
-        return _ld(5, b"".join(_ld(1, _any(item)) for item in value))
-    if isinstance(value, dict):
-        return _ld(6, _kvs(value))
-    raise TypeError(type(value))
-
-
-def _kv(key: str, value: Any) -> bytes:
-    """One KeyValue message body."""
-    return _ld(1, key.encode()) + _ld(2, _any(value))
-
-
-def _kvs(values: dict[str, Any]) -> bytes:
-    """Repeated KeyValue under field 1: Resource.attributes, KeyValueList.values."""
-    return b"".join(_ld(1, _kv(key, value)) for key, value in values.items())
-
-
-def _span(
-    name: str,
-    *,
-    attributes: dict[str, Any],
-    start: int,
-    end: int,
-    trace_id: bytes = bytes(range(16)),
-    span_id: bytes = b"\x01\x02\x03\x04\x05\x06\x07\x08",
-    kind: int = 2,
-    status: int = 1,
-) -> bytes:
-    return (
-        _ld(1, trace_id)
-        + _ld(2, span_id)
-        + _ld(5, name.encode())
-        + _vi(6, kind)
-        + _f64(7, start)
-        + _f64(8, end)
-        # Span.attributes is repeated KeyValue under field 9, one entry each.
-        + b"".join(_ld(9, _kv(key, value)) for key, value in attributes.items())
-        + _vi(10, 0)
-        + _ld(15, _ld(2, b"") + _vi(3, status))
-    )
-
-
-def _export_request(spans: list[bytes]) -> bytes:
-    resource = _ld(1, _kvs({"service.name": "vllm", "host.name": "gpu-box"}))
-    scope = _ld(1, _ld(1, b"vllm.llm_engine") + _ld(2, b"0.30.0"))
-    scope_spans = scope + b"".join(_ld(2, span) for span in spans)
-    return _ld(1, resource + _ld(2, scope_spans))
-
-
 REQUEST_ATTRIBUTES: dict[str, Any] = {
     "gen_ai.request.id": "chatcmpl-stormlog-run-1-c1_in8_out4_measured_0_1-0",
     "gen_ai.latency.time_in_queue": 0.001,
@@ -143,6 +68,100 @@ REQUEST_ATTRIBUTES: dict[str, Any] = {
 }
 START_NS = 1_790_000_000_000_000_000
 END_NS = START_NS + 500_000_000
+TRACE_ID = bytes(range(16))
+SPAN_ID = b"\x01\x02\x03\x04\x05\x06\x07\x08"
+
+
+# ----------------------------------------------------------- generated classes
+def _otlp() -> tuple[Any, Any, Any]:
+    """The generated modules, or skip the test without the extra."""
+    trace_service = pytest.importorskip(
+        "opentelemetry.proto.collector.trace.v1.trace_service_pb2"
+    )
+    common = pytest.importorskip("opentelemetry.proto.common.v1.common_pb2")
+    trace = pytest.importorskip("opentelemetry.proto.trace.v1.trace_pb2")
+    return trace_service, common, trace
+
+
+def _any_value(common: Any, value: Any) -> Any:
+    any_value = common.AnyValue()
+    if isinstance(value, bool):
+        any_value.bool_value = value
+    elif isinstance(value, int):
+        any_value.int_value = value
+    elif isinstance(value, float):
+        any_value.double_value = value
+    elif isinstance(value, str):
+        any_value.string_value = value
+    elif isinstance(value, bytes):
+        any_value.bytes_value = value
+    elif isinstance(value, list):
+        any_value.array_value.values.extend(_any_value(common, item) for item in value)
+    elif isinstance(value, dict):
+        any_value.kvlist_value.values.extend(
+            _key_value(common, key, item) for key, item in value.items()
+        )
+    else:
+        raise TypeError(type(value))
+    return any_value
+
+
+def _key_value(common: Any, key: str, value: Any) -> Any:
+    return common.KeyValue(key=key, value=_any_value(common, value))
+
+
+def _span_message(
+    name: str,
+    *,
+    attributes: dict[str, Any],
+    start: int,
+    end: int,
+    kind: int = 2,
+    status: int | None = 1,
+) -> Any:
+    _trace_service, common, trace = _otlp()
+    span = trace.Span(
+        name=name,
+        trace_id=TRACE_ID,
+        span_id=SPAN_ID,
+        kind=kind,
+        start_time_unix_nano=start,
+        end_time_unix_nano=end,
+    )
+    span.attributes.extend(_key_value(common, k, v) for k, v in attributes.items())
+    if status is not None:
+        span.status.code = status
+    return span
+
+
+def _export_request(spans: list[Any]) -> bytes:
+    trace_service, common, _trace = _otlp()
+    request = trace_service.ExportTraceServiceRequest()
+    resource_spans = request.resource_spans.add()
+    resource_spans.resource.attributes.extend(
+        [
+            _key_value(common, "service.name", "vllm"),
+            _key_value(common, "host.name", "gpu-box"),
+        ]
+    )
+    scope_spans = resource_spans.scope_spans.add()
+    scope_spans.scope.name = "vllm.llm_engine"
+    scope_spans.scope.version = "0.30.0"
+    scope_spans.spans.extend(spans)
+    return bytes(request.SerializeToString())
+
+
+def _request_payload() -> bytes:
+    return _export_request(
+        [
+            _span_message(
+                "llm_request", attributes=REQUEST_ATTRIBUTES, start=START_NS, end=END_NS
+            ),
+            _span_message(
+                "Worker init", attributes={}, start=1, end=2, kind=1, status=None
+            ),
+        ]
+    )
 
 
 def _free_port() -> int:
@@ -153,52 +172,49 @@ def _free_port() -> int:
 
 class TestProtobufDecoder:
     def test_decodes_every_value_kind(self) -> None:
-        payload = _export_request(
-            [
-                _span(
-                    "llm_request",
-                    attributes=REQUEST_ATTRIBUTES,
-                    start=START_NS,
-                    end=END_NS,
-                ),
-                _span("Worker init", attributes={}, start=1, end=2, kind=1, status=0),
-            ]
-        )
-        spans = decode_otlp_protobuf(payload)
+        spans = decode_otlp_protobuf(_request_payload())
         assert [s.name for s in spans] == ["llm_request", "Worker init"]
         first = spans[0]
         assert first.attributes == REQUEST_ATTRIBUTES
         assert first.start_unix_ns == START_NS and first.end_unix_ns == END_NS
-        assert first.trace_id == bytes(range(16)).hex()
-        assert first.span_id == "0102030405060708"
+        assert first.trace_id == TRACE_ID.hex()
+        assert first.span_id == SPAN_ID.hex()
+        assert first.parent_span_id is None
         assert first.kind == "SERVER"
-        assert first.status == {"message": "", "code": "OK"}
+        assert first.status == {"code": "OK", "message": ""}
         assert first.resource == {"service.name": "vllm", "host.name": "gpu-box"}
         assert first.scope == {"name": "vllm.llm_engine", "version": "0.30.0"}
-        assert first.dropped == {"attributes": 0}
-        assert spans[1].kind == "INTERNAL" and spans[1].status == {
-            "message": "",
-            "code": "UNSET",
-        }
+        assert first.dropped == {"attributes": 0, "events": 0, "links": 0}
+        assert spans[1].kind == "INTERNAL"
+        assert spans[1].status is None
 
-    def test_negative_ints_and_unknown_fields_are_handled(self) -> None:
-        span = (
-            _span("x", attributes={"neg": -5}, start=1, end=2)
-            + _vi(99, 7)
-            + _ld(98, b"?")
+    def test_negative_ints_and_bytes_values(self) -> None:
+        payload = _export_request(
+            [
+                _span_message(
+                    "x", attributes={"neg": -5, "raw": b"\x00\xff"}, start=1, end=2
+                )
+            ]
         )
-        (decoded,) = decode_otlp_protobuf(_export_request([span]))
-        assert decoded.attributes == {"neg": -5}
+        (decoded,) = decode_otlp_protobuf(payload)
+        assert decoded.attributes == {"neg": -5, "raw": "00ff"}
 
-    @pytest.mark.parametrize(
-        "data", [b"\x0a\xff\xff", b"\x0b", b"\x0a\x03\x01\x02", bytes([0x08 | 3])]
-    )
-    def test_malformed_bytes_raise(self, data: bytes) -> None:
+    def test_malformed_bytes_raise(self) -> None:
+        _otlp()
         with pytest.raises(ProtobufDecodeError):
-            decode_otlp_protobuf(data)
+            decode_otlp_protobuf(b"\x0a\xff\xff")
 
     def test_empty_request_has_no_spans(self) -> None:
+        _otlp()
         assert decode_otlp_protobuf(b"") == []
+
+    def test_without_the_extra_the_decoder_says_so(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(vllm_spans, "_otlp_request_class", lambda: None)
+        with pytest.raises(OtlpProtobufUnavailable, match="infer-otlp"):
+            decode_otlp_protobuf(b"")
+        assert not vllm_spans.otlp_protobuf_available()
 
 
 class TestJsonReaders:
@@ -296,56 +312,48 @@ class TestJsonReaders:
             read_span_file(empty)
 
 
-class TestReceiver:
-    def _post(self, url: str, body: bytes, media: str) -> int:
-        request = urllib.request.Request(
-            url, data=body, headers={"Content-Type": media}, method="POST"
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                return int(response.status)
-        except urllib.error.HTTPError as exc:
-            return exc.code
+def _post(url: str, body: bytes, media: str) -> int:
+    request = urllib.request.Request(
+        url, data=body, headers={"Content-Type": media}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as exc:
+        return exc.code
 
+
+JSON_EXPORT = json.dumps(
+    {"resourceSpans": [{"scopeSpans": [{"spans": [{"name": "Worker init"}]}]}]}
+).encode()
+
+
+class TestReceiver:
     def test_receives_protobuf_and_json_and_rejects_others(self) -> None:
+        payload = _request_payload()
         receiver = OtlpSpanReceiver(
             listen="127.0.0.1:0", session_id="s", run_id="run-1"
         )
+        assert receiver.protobuf_available
         receiver.start()
         try:
             url = f"http://{receiver.listen}/v1/traces"
-            payload = _export_request(
-                [
-                    _span(
-                        "llm_request",
-                        attributes=REQUEST_ATTRIBUTES,
-                        start=START_NS,
-                        end=END_NS,
-                    )
-                ]
-            )
-            assert self._post(url, payload, "application/x-protobuf") == 200
-            json_doc = {
-                "resourceSpans": [
-                    {"scopeSpans": [{"spans": [{"name": "Worker init"}]}]}
-                ]
-            }
+            assert _post(url, payload, "application/x-protobuf") == 200
+            assert _post(url, JSON_EXPORT, "application/json") == 200
+            assert _post(url, b"x", "text/plain") == 415
+            assert _post(url, b"\xff\xff", "application/x-protobuf") == 400
             assert (
-                self._post(url, json.dumps(json_doc).encode(), "application/json")
-                == 200
-            )
-            assert self._post(url, b"x", "text/plain") == 415
-            assert self._post(url, b"\xff\xff", "application/x-protobuf") == 400
-            assert (
-                self._post(
-                    f"http://{receiver.listen}/other", b"", "application/x-protobuf"
-                )
+                _post(f"http://{receiver.listen}/other", b"", "application/x-protobuf")
                 == 404
             )
         finally:
             receiver.stop()
         records = receiver.drain()
-        assert [r.name for r in records] == ["llm_request", "Worker init"]
+        assert [r.name for r in records] == [
+            "llm_request",
+            "Worker init",
+            "Worker init",
+        ]
         first = records[0]
         assert first.request_id == "stormlog-run-1-c1_in8_out4_measured_0_1"
         assert first.clock_domain == "gpu-box/unix_epoch_ns"
@@ -355,10 +363,35 @@ class TestReceiver:
             SPAN_VALIDATOR.validate(record.to_record())
         metadata = receiver.capability_metadata()
         assert metadata["requests"] == 4
-        assert metadata["spans"] == 2
+        assert metadata["spans"] == 3
         assert metadata["decode_failures"] == 1
         assert metadata["unsupported_media"] == 1
+        assert metadata["protobuf_unavailable"] == 0
+        assert "otlp_http_protobuf" not in metadata
+        assert receiver.enabled == ["otlp_http_protobuf", "otlp_http_json"]
         assert receiver.drain() == []
+
+    def test_without_the_extra_protobuf_is_refused_and_recorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(vllm_spans, "_otlp_request_class", lambda: None)
+        receiver = OtlpSpanReceiver(
+            listen="127.0.0.1:0", session_id="s", run_id="run-1"
+        )
+        assert not receiver.protobuf_available
+        assert receiver.enabled == ["otlp_http_json"]
+        receiver.start()
+        try:
+            url = f"http://{receiver.listen}/v1/traces"
+            assert _post(url, b"anything", "application/x-protobuf") == 415
+            assert _post(url, JSON_EXPORT, "application/json") == 200
+        finally:
+            receiver.stop()
+        metadata = receiver.capability_metadata()
+        assert metadata["protobuf_unavailable"] == 1
+        assert metadata["otlp_http_protobuf"] == OTLP_EXTRA_HINT
+        assert [r.name for r in receiver.drain()] == ["Worker init"]
+        assert receiver.config_record()["protobuf"] is False
 
     def test_listen_address_parsing(self) -> None:
         assert parse_listen_address("127.0.0.1:4318") == ("127.0.0.1", 4318)
@@ -373,22 +406,20 @@ class TestReceiver:
         assert span_clock_domain({}, "1.2.3.4") == "1.2.3.4/unix_epoch_ns"
 
 
+def _raw_request_span(attributes: dict[str, Any]) -> RawSpan:
+    return RawSpan(
+        name="llm_request",
+        span_id=SPAN_ID.hex(),
+        start_unix_ns=START_NS,
+        end_unix_ns=END_NS,
+        attributes=attributes,
+    )
+
+
 class TestCorrelationMapping:
     def test_request_and_stage_events_validate(self) -> None:
-        raw = decode_otlp_protobuf(
-            _export_request(
-                [
-                    _span(
-                        "llm_request",
-                        attributes=REQUEST_ATTRIBUTES,
-                        start=START_NS,
-                        end=END_NS,
-                    )
-                ]
-            )
-        )[0]
         record = span_record(
-            raw,
+            _raw_request_span(REQUEST_ATTRIBUTES),
             session_id="s",
             run_id="run-1",
             source="otlp_json_file",
@@ -420,20 +451,14 @@ class TestCorrelationMapping:
 
     def test_non_request_spans_and_missing_ids_are_skipped(self) -> None:
         worker = span_record(
-            decode_otlp_protobuf(
-                _export_request([_span("Worker init", attributes={}, start=1, end=2)])
-            )[0],
+            RawSpan(name="Worker init", start_unix_ns=1, end_unix_ns=2),
             session_id="s",
             run_id="r",
             source="otlp_json_file",
             clock_domain="h/unix_epoch_ns",
         )
         anonymous = span_record(
-            decode_otlp_protobuf(
-                _export_request(
-                    [_span("llm_request", attributes={"x": 1}, start=1, end=2)]
-                )
-            )[0],
+            _raw_request_span({"x": 1}),
             session_id="s",
             run_id="r",
             source="otlp_json_file",
@@ -490,7 +515,11 @@ class _ExportingVllmHandler(BaseHTTPRequestHandler):
             "gen_ai.request.id": f"chatcmpl-{request_id}-0",
         }
         payload = _export_request(
-            [_span("llm_request", attributes=attributes, start=START_NS, end=END_NS)]
+            [
+                _span_message(
+                    "llm_request", attributes=attributes, start=START_NS, end=END_NS
+                )
+            ]
         )
         request = urllib.request.Request(
             type(self).otlp_url,
@@ -546,35 +575,61 @@ def _run(tmp_path: Path, origin: str, listen: str | None) -> list[dict[str, Any]
     return records
 
 
+def _of_type(records: list[dict[str, Any]], event_type: str) -> list[dict[str, Any]]:
+    return [r for r in records if r.get("event_type") == event_type]
+
+
+def _span_capability(records: list[dict[str, Any]]) -> dict[str, Any]:
+    return [
+        r
+        for r in _of_type(records, "infer.capabilities")
+        if r["component"] == "vllm.spans"
+    ][0]
+
+
 class TestProfileReceiver:
     def test_spans_land_in_the_artifact_and_join_by_header(
         self, tmp_path: Path
     ) -> None:
+        _otlp()
         port = _free_port()
         with _exporting_vllm(f"http://127.0.0.1:{port}/v1/traces") as origin:
             records = _run(tmp_path, origin, f"127.0.0.1:{port}")
-        spans = [r for r in records if r.get("event_type") == "infer.vllm_span"]
-        requests = [r for r in records if r.get("event_type") == "infer.request"]
+        spans = _of_type(records, "infer.vllm_span")
+        requests = _of_type(records, "infer.request")
         assert len(spans) == len(requests) == 2
         for span in spans:
             SPAN_VALIDATOR.validate(span)
         assert {s["request_id"] for s in spans} == {r["x_request_id"] for r in requests}
-        session = [r for r in records if r.get("event_type") == "infer.session"][0]
+        session = _of_type(records, "infer.session")[0]
         assert session["config"]["vllm_spans"] == {
             "listen": f"127.0.0.1:{port}",
             "path": "/v1/traces",
+            "protobuf": True,
         }
-        capability = [
-            r
-            for r in records
-            if r.get("event_type") == "infer.capabilities"
-            and r["component"] == "vllm.spans"
-        ][0]
+        capability = _span_capability(records)
         assert capability["available"] is True
         assert capability["collected"] == ["otlp_http_protobuf"]
-        assert "otlp_http_json" in capability["enabled"]
+        assert capability["enabled"] == ["otlp_http_protobuf", "otlp_http_json"]
         assert capability["metadata"]["spans"] == 2
         assert records[-1]["warnings"] == []
+
+    def test_without_the_extra_the_run_warns_once_and_records_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(vllm_spans, "_otlp_request_class", lambda: None)
+        port = _free_port()
+        with _exporting_vllm("") as origin:
+            records = _run(tmp_path, origin, f"127.0.0.1:{port}")
+        assert [r["status"] for r in _of_type(records, "infer.request")] == ["ok", "ok"]
+        capability = _span_capability(records)
+        assert capability["available"] is True
+        assert "otlp_http_protobuf" in capability["supported"]
+        assert capability["enabled"] == ["otlp_http_json"]
+        assert capability["collected"] == []
+        assert capability["metadata"]["otlp_http_protobuf"] == OTLP_EXTRA_HINT
+        warnings = records[-1]["warnings"]
+        assert len(warnings) == 1 and "infer-otlp" in warnings[0]
 
     def test_port_in_use_is_recorded_not_fatal(self, tmp_path: Path) -> None:
         holder = socket.socket()
@@ -586,17 +641,11 @@ class TestProfileReceiver:
                 records = _run(tmp_path, origin, f"127.0.0.1:{port}")
         finally:
             holder.close()
-        requests = [r for r in records if r.get("event_type") == "infer.request"]
-        assert [r["status"] for r in requests] == ["ok", "ok"]
-        assert [r for r in records if r.get("event_type") == "infer.vllm_span"] == []
-        session = [r for r in records if r.get("event_type") == "infer.session"][0]
+        assert [r["status"] for r in _of_type(records, "infer.request")] == ["ok", "ok"]
+        assert _of_type(records, "infer.vllm_span") == []
+        session = _of_type(records, "infer.session")[0]
         assert session["config"]["vllm_spans"] is None
-        capability = [
-            r
-            for r in records
-            if r.get("event_type") == "infer.capabilities"
-            and r["component"] == "vllm.spans"
-        ][0]
+        capability = _span_capability(records)
         assert capability["available"] is False
         assert capability["supported"] == []
         assert capability["metadata"]["listen"] == f"127.0.0.1:{port}"

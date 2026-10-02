@@ -6,18 +6,19 @@ collector's file exporter, or the one-span-per-line JSONL that a small sink
 writes. Every path produces the same ``infer.vllm_span`` record with the
 native attributes untouched.
 
-The receiver decodes OTLP protobuf with the wire format alone, so no
-OpenTelemetry package is needed on the client. The latency attributes a span
-carries are phase residency measured on the engine's clock; the mapping to
-the v2 correlation model keeps them as reported durations and marks the
-derived stage windows as estimates.
+OTLP protobuf bodies, which is what vLLM's exporter sends, are decoded with
+the generated classes from ``opentelemetry-proto`` (the ``infer-otlp``
+extra). Without that package the receiver still runs, accepts OTLP JSON,
+and records protobuf as supported but not enabled. The latency attributes a
+span carries are phase residency measured on the engine's clock; the
+mapping to the v2 correlation model keeps them as reported durations and
+marks the derived stage windows as estimates.
 """
 
 from __future__ import annotations
 
 import json
 import queue
-import struct
 import threading
 import time
 from collections.abc import Iterable
@@ -48,6 +49,9 @@ PROTOBUF_MEDIA = "application/x-protobuf"
 JSON_MEDIA = "application/json"
 DEFAULT_SPANS_LISTEN = "127.0.0.1:4318"
 CAPABILITY_COMPONENT = "vllm.spans"
+OTLP_EXTRA_HINT = (
+    "install stormlog[infer-otlp] (opentelemetry-proto) to decode OTLP protobuf"
+)
 SPAN_KINDS = {
     0: "UNSPECIFIED",
     1: "INTERNAL",
@@ -101,229 +105,102 @@ class RawSpan:
     dropped: dict[str, int] = field(default_factory=dict)
 
 
-# ------------------------------------------------------------------ protobuf wire
+# ------------------------------------------------------------------ OTLP protobuf
 class ProtobufDecodeError(ValueError):
     """The bytes are not an OTLP trace export request."""
 
 
-Payload = bytes | int
+class OtlpProtobufUnavailable(RuntimeError):
+    """The ``infer-otlp`` extra is not installed."""
 
 
-class _Reader:
-    def __init__(self, data: bytes) -> None:
-        self.data = data
-        self.position = 0
-
-    def done(self) -> bool:
-        return self.position >= len(self.data)
-
-    def varint(self) -> int:
-        result = 0
-        shift = 0
-        while True:
-            if self.position >= len(self.data):
-                raise ProtobufDecodeError("truncated varint")
-            byte = self.data[self.position]
-            self.position += 1
-            result |= (byte & 0x7F) << shift
-            if not byte & 0x80:
-                return result
-            shift += 7
-            if shift > 70:
-                raise ProtobufDecodeError("varint too long")
-
-    def read(self, length: int) -> bytes:
-        if length < 0 or self.position + length > len(self.data):
-            raise ProtobufDecodeError("truncated field")
-        chunk = self.data[self.position : self.position + length]
-        self.position += length
-        return chunk
-
-    def fields(self) -> Iterable[tuple[int, Payload]]:
-        """Yield (field number, payload); groups and unknown types are errors."""
-        while not self.done():
-            key = self.varint()
-            number, wire = key >> 3, key & 0x7
-            if wire == 0:
-                yield number, self.varint()
-            elif wire == 1:
-                yield number, self.read(8)
-            elif wire == 2:
-                yield number, self.read(self.varint())
-            elif wire == 5:
-                yield number, self.read(4)
-            else:
-                raise ProtobufDecodeError(f"unsupported wire type {wire}")
+def _otlp_request_class() -> Any | None:
+    """The generated ``ExportTraceServiceRequest``, or None without the extra."""
+    try:
+        from opentelemetry.proto.collector.trace.v1 import (  # type: ignore[import-untyped, unused-ignore]
+            trace_service_pb2,
+        )
+    except ImportError:
+        return None
+    return trace_service_pb2.ExportTraceServiceRequest
 
 
-def _as_bytes(payload: Payload) -> bytes:
-    if not isinstance(payload, bytes):
-        raise ProtobufDecodeError("expected a length-delimited field")
-    return payload
-
-
-def _as_int(payload: Payload) -> int:
-    if isinstance(payload, bytes):
-        if len(payload) == 8:
-            return int(struct.unpack("<Q", payload)[0])
-        raise ProtobufDecodeError("expected a varint field")
-    return payload
-
-
-def _text(payload: Payload) -> str:
-    return _as_bytes(payload).decode("utf-8", errors="replace")
-
-
-def _decode_any_value(data: bytes) -> Any:
-    """An ``AnyValue``: the one field set says which kind of value it holds."""
-    for number, payload in _Reader(data).fields():
-        if number == 5:
-            return [
-                _decode_any_value(_as_bytes(item))
-                for num, item in _Reader(_as_bytes(payload)).fields()
-                if num == 1
-            ]
-        if number == 6:
-            return _decode_key_value_list(_as_bytes(payload))
-        return _decode_scalar_value(number, payload)
-    return None
-
-
-def _decode_scalar_value(number: int, payload: Payload) -> Any:
-    if number == 1:
-        return _text(payload)
-    if number == 2:
-        return bool(_as_int(payload))
-    if number == 3:
-        value = _as_int(payload)
-        return value - (1 << 64) if value >= 1 << 63 else value
-    if number == 4:
-        return float(struct.unpack("<d", _as_bytes(payload))[0])
-    if number == 7:
-        return _as_bytes(payload).hex()
-    return None
-
-
-def _decode_key_value(data: bytes) -> tuple[str, Any]:
-    """One ``KeyValue`` message: a key and an ``AnyValue``."""
-    key, value = "", None
-    for number, payload in _Reader(data).fields():
-        if number == 1:
-            key = _text(payload)
-        elif number == 2:
-            value = _decode_any_value(_as_bytes(payload))
-    return key, value
-
-
-def _decode_key_value_list(data: bytes) -> dict[str, Any]:
-    """A ``KeyValueList`` message, whose field 1 repeats ``KeyValue``."""
-    values: dict[str, Any] = {}
-    for number, payload in _Reader(data).fields():
-        if number == 1:
-            key, value = _decode_key_value(_as_bytes(payload))
-            values[key] = value
-    return values
-
-
-def _decode_status(data: bytes) -> dict[str, Any]:
-    status: dict[str, Any] = {"code": "UNSET"}
-    for number, payload in _Reader(data).fields():
-        if number == 2:
-            status["message"] = _text(payload)
-        elif number == 3:
-            code = _as_int(payload)
-            status["code"] = STATUS_CODES.get(code, str(code))
-    return status
-
-
-_SPAN_ID_FIELDS = {1: "trace_id", 2: "span_id", 4: "parent_span_id"}
-_SPAN_DROPPED_FIELDS = {10: "attributes", 12: "events", 14: "links"}
-
-
-def _decode_span(
-    data: bytes, resource: dict[str, Any], scope: dict[str, Any]
-) -> RawSpan:
-    attributes: dict[str, Any] = {}
-    dropped: dict[str, int] = {}
-    values: dict[str, Any] = {}
-    for number, payload in _Reader(data).fields():
-        if number in _SPAN_ID_FIELDS:
-            values[_SPAN_ID_FIELDS[number]] = _as_bytes(payload).hex() or None
-        elif number in _SPAN_DROPPED_FIELDS:
-            dropped[_SPAN_DROPPED_FIELDS[number]] = _as_int(payload)
-        elif number == 9:
-            key, value = _decode_key_value(_as_bytes(payload))
-            attributes[key] = value
-        else:
-            _decode_span_scalar(number, payload, values)
-    if not values.get("name"):
-        raise ProtobufDecodeError("span without a name")
-    return RawSpan(
-        resource=resource, scope=scope, attributes=attributes, dropped=dropped, **values
-    )
-
-
-def _decode_span_scalar(number: int, payload: Payload, values: dict[str, Any]) -> None:
-    if number == 5:
-        values["name"] = _text(payload)
-    elif number == 6:
-        kind = _as_int(payload)
-        values["kind"] = SPAN_KINDS.get(kind, str(kind))
-    elif number == 7:
-        values["start_unix_ns"] = _as_int(payload)
-    elif number == 8:
-        values["end_unix_ns"] = _as_int(payload)
-    elif number == 15:
-        values["status"] = _decode_status(_as_bytes(payload))
-
-
-def _decode_scope(data: bytes) -> dict[str, Any]:
-    scope: dict[str, Any] = {}
-    for number, payload in _Reader(data).fields():
-        if number == 1:
-            scope["name"] = _text(payload)
-        elif number == 2:
-            scope["version"] = _text(payload)
-    return scope
-
-
-def _decode_resource(data: bytes) -> dict[str, Any]:
-    """A ``Resource`` message, whose field 1 repeats ``KeyValue``."""
-    return _decode_key_value_list(data)
-
-
-def _decode_scope_spans(data: bytes, resource: dict[str, Any]) -> list[RawSpan]:
-    scope: dict[str, Any] = {}
-    span_bytes: list[bytes] = []
-    for number, payload in _Reader(data).fields():
-        if number == 1:
-            scope = _decode_scope(_as_bytes(payload))
-        elif number == 2:
-            span_bytes.append(_as_bytes(payload))
-    return [_decode_span(item, resource, scope) for item in span_bytes]
-
-
-def _decode_resource_spans(data: bytes) -> list[RawSpan]:
-    resource: dict[str, Any] = {}
-    scope_bytes: list[bytes] = []
-    for number, payload in _Reader(data).fields():
-        if number == 1:
-            resource = _decode_resource(_as_bytes(payload))
-        elif number == 2:
-            scope_bytes.append(_as_bytes(payload))
-    spans: list[RawSpan] = []
-    for item in scope_bytes:
-        spans.extend(_decode_scope_spans(item, resource))
-    return spans
+def otlp_protobuf_available() -> bool:
+    return _otlp_request_class() is not None
 
 
 def decode_otlp_protobuf(data: bytes) -> list[RawSpan]:
-    """Decode an ``ExportTraceServiceRequest`` without generated classes."""
+    """Decode an ``ExportTraceServiceRequest`` with the generated classes."""
+    request_class = _otlp_request_class()
+    if request_class is None:
+        raise OtlpProtobufUnavailable(OTLP_EXTRA_HINT)
+    try:
+        message = request_class.FromString(data)
+    except Exception as exc:  # google.protobuf.message.DecodeError and friends
+        raise ProtobufDecodeError(f"not an OTLP trace export: {exc}") from exc
     spans: list[RawSpan] = []
-    for number, payload in _Reader(data).fields():
-        if number == 1:
-            spans.extend(_decode_resource_spans(_as_bytes(payload)))
+    for resource_spans in message.resource_spans:
+        resource = _message_attributes(resource_spans.resource.attributes)
+        for scope_spans in resource_spans.scope_spans:
+            scope = _message_scope(scope_spans.scope)
+            spans.extend(
+                _message_span(span, resource, scope) for span in scope_spans.spans
+            )
     return spans
+
+
+def _message_attributes(key_values: Any) -> dict[str, Any]:
+    return {item.key: _message_any_value(item.value) for item in key_values}
+
+
+def _message_any_value(value: Any) -> Any:
+    kind = value.WhichOneof("value")
+    if kind is None:
+        return None
+    if kind == "array_value":
+        return [_message_any_value(item) for item in value.array_value.values]
+    if kind == "kvlist_value":
+        return _message_attributes(value.kvlist_value.values)
+    if kind == "bytes_value":
+        return bytes(value.bytes_value).hex()
+    return getattr(value, kind)
+
+
+def _message_scope(scope: Any) -> dict[str, Any]:
+    return {
+        key: getattr(scope, key) for key in ("name", "version") if getattr(scope, key)
+    }
+
+
+def _message_span(
+    span: Any, resource: dict[str, Any], scope: dict[str, Any]
+) -> RawSpan:
+    if not span.name:
+        raise ProtobufDecodeError("span without a name")
+    status = None
+    if span.HasField("status"):
+        status = {
+            "code": STATUS_CODES.get(span.status.code, str(span.status.code)),
+            "message": span.status.message,
+        }
+    return RawSpan(
+        name=span.name,
+        trace_id=bytes(span.trace_id).hex() or None,
+        span_id=bytes(span.span_id).hex() or None,
+        parent_span_id=bytes(span.parent_span_id).hex() or None,
+        kind=SPAN_KINDS.get(span.kind, str(span.kind)),
+        start_unix_ns=int(span.start_time_unix_nano) or None,
+        end_unix_ns=int(span.end_time_unix_nano) or None,
+        attributes=_message_attributes(span.attributes),
+        resource=resource,
+        scope=scope,
+        status=status,
+        dropped={
+            "attributes": int(span.dropped_attributes_count),
+            "events": int(span.dropped_events_count),
+            "links": int(span.dropped_links_count),
+        },
+    )
 
 
 # ------------------------------------------------------------------ OTLP JSON
@@ -534,6 +411,7 @@ class ReceiverStats:
     spans: int = 0
     decode_failures: int = 0
     unsupported_media: int = 0
+    protobuf_unavailable: int = 0
     by_media: dict[str, int] = field(default_factory=dict)
 
 
@@ -544,6 +422,7 @@ class OtlpSpanReceiver:
         host, port = parse_listen_address(listen)
         self.session_id = session_id
         self.run_id = run_id
+        self.protobuf_available = otlp_protobuf_available()
         self.stats = ReceiverStats()
         self._queue: queue.SimpleQueue[VllmSpanRecord] = queue.SimpleQueue()
         self._lock = threading.Lock()
@@ -569,6 +448,15 @@ class OtlpSpanReceiver:
         name = host.decode() if isinstance(host, bytes) else str(host)
         return f"{name}:{port}"
 
+    @property
+    def enabled(self) -> list[str]:
+        """The receiver paths this process can serve."""
+        return [
+            name
+            for media, name in _RECEIVER_CAPABILITIES.items()
+            if media != PROTOBUF_MEDIA or self.protobuf_available
+        ]
+
     def start(self) -> None:
         self._thread.start()
 
@@ -591,11 +479,14 @@ class OtlpSpanReceiver:
             return
         media = (handler.headers.get("Content-Type") or "").split(";")[0].strip()
         body = handler.rfile.read(int(handler.headers.get("Content-Length") or 0))
-        with self._lock:
-            self.stats.requests += 1
+        self._count("requests")
         if media not in _RECEIVER_CAPABILITIES:
             self._count("unsupported_media")
             _respond(handler, 415, b"", "text/plain")
+            return
+        if media == PROTOBUF_MEDIA and not self.protobuf_available:
+            self._count("protobuf_unavailable")
+            _respond(handler, 415, OTLP_EXTRA_HINT.encode(), "text/plain")
             return
         try:
             spans = _decode_export(body, media)
@@ -629,18 +520,26 @@ class OtlpSpanReceiver:
             self.stats.by_media[media] = self.stats.by_media.get(media, 0) + len(spans)
 
     def config_record(self) -> dict[str, Any]:
-        return {"listen": self.listen, "path": OTLP_TRACES_PATH}
+        return {
+            "listen": self.listen,
+            "path": OTLP_TRACES_PATH,
+            "protobuf": self.protobuf_available,
+        }
 
     def capability_metadata(self) -> dict[str, Any]:
         with self._lock:
-            return {
+            metadata: dict[str, Any] = {
                 "listen": self.listen,
                 "requests": self.stats.requests,
                 "spans": self.stats.spans,
                 "decode_failures": self.stats.decode_failures,
                 "unsupported_media": self.stats.unsupported_media,
+                "protobuf_unavailable": self.stats.protobuf_unavailable,
                 "spans_by_media": dict(self.stats.by_media),
             }
+        if not self.protobuf_available:
+            metadata["otlp_http_protobuf"] = OTLP_EXTRA_HINT
+        return metadata
 
 
 def _decode_export(body: bytes, media: str) -> list[RawSpan]:
@@ -668,9 +567,10 @@ def span_capability_event(
 ) -> CapabilityEvent:
     """The span capability record for a run that asked for a receiver.
 
-    ``supported`` names every ingest path, ``enabled`` the two the receiver
-    serves, and ``collected`` the ones that delivered at least one span. A
-    receiver that could not listen is unavailable, with the error kept.
+    ``supported`` names every ingest path, ``enabled`` the ones the receiver
+    could serve (protobuf only with the ``infer-otlp`` extra), and
+    ``collected`` the ones that delivered at least one span. A receiver that
+    could not listen is unavailable, with the error kept.
     """
     if receiver is None:
         return CapabilityEvent(
@@ -691,7 +591,7 @@ def span_capability_event(
         component=CAPABILITY_COMPONENT,
         available=True,
         supported=list(SPAN_CAPABILITIES),
-        enabled=list(_RECEIVER_CAPABILITIES.values()),
+        enabled=receiver.enabled,
         collected=collected,
         metadata={**metadata, **_DETAILED_TRACE_NOTE},
     )
@@ -758,8 +658,10 @@ def _request_events(span: VllmSpanRecord, producer_id: str) -> list[CorrelationE
         backend_request_ref=EntityRef(producer_id, native) if native else None,
         start_ns=span.start_unix_ns,
         end_ns=span.end_unix_ns,
-        input_tokens=_count(span.attributes.get("gen_ai.usage.prompt_tokens")),
-        output_tokens=_count(span.attributes.get("gen_ai.usage.completion_tokens")),
+        input_tokens=_count_value(span.attributes.get("gen_ai.usage.prompt_tokens")),
+        output_tokens=_count_value(
+            span.attributes.get("gen_ai.usage.completion_tokens")
+        ),
         metadata={"name": span.name, "native_request_id": native},
     )
     stages = _stage_events(span, producer_id, base_id, request_ref)
@@ -835,7 +737,7 @@ def _duration_ns(value: Any) -> int | None:
     return max(0, round(seconds * 1e9))
 
 
-def _count(value: Any) -> int | None:
+def _count_value(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
     return int(value)

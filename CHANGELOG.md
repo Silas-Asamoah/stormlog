@@ -31,8 +31,9 @@ the flaky benchmark memory gates
   one `infer.vllm_scrape` record per scrape that keeps every series under
   its native name with native histogram boundaries. `--vllm-spans-listen
   [HOST:PORT]` runs an OTLP/HTTP receiver for the run and keeps each request
-  span as an `infer.vllm_span` record; `infer analyze --vllm-spans FILE`
-  loads spans collected elsewhere. Every request now sends
+  span as an `infer.vllm_span` record (protobuf exports need the new
+  `infer-otlp` extra, `opentelemetry-proto>=1.20`); `infer analyze
+  --vllm-spans FILE` loads spans collected elsewhere. Every request now sends
   `X-Request-Id: stormlog-<run_id>-<request_id>`, recorded as
   `x_request_id`, so spans join to requests by the recorded value. The
   report gains `telemetry.vllm`: per case and per engine label, counter and

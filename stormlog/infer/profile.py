@@ -41,7 +41,7 @@ from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter
 from .vllm_scraper import VllmMetricsScraper
-from .vllm_spans import OtlpSpanReceiver, span_capability_event
+from .vllm_spans import OTLP_EXTRA_HINT, OtlpSpanReceiver, span_capability_event
 from .vllm_telemetry import MARKER_PHASE_END, MARKER_PHASE_START
 from .workload import workload_record
 
@@ -253,6 +253,12 @@ class InferenceProfiler:
                 )
             return
         self.span_receiver = receiver
+        if not receiver.protobuf_available and self.on_warning is not None:
+            self.on_warning(
+                f"vLLM span receiver on {receiver.listen} cannot decode OTLP "
+                f"protobuf, which is what vLLM exports: {OTLP_EXTRA_HINT}; "
+                "protobuf exports are refused and recorded"
+            )
 
     def _stop_span_receiver(self, writer: JsonlEventWriter) -> None:
         receiver = self.span_receiver

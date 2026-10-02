@@ -15,6 +15,7 @@ pytest-xdist>=2.4.0
 pexpect>=4.9.0
 pytest-textual-snapshot>=1.1.0
 jsonschema>=4.0.0
+opentelemetry-proto>=1.20
 textual>=0.57.0
 coverage>=5.5.0
 memory-profiler>=0.60.0
