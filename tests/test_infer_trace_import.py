@@ -213,3 +213,37 @@ def test_cli_exits_invalid_input_for_a_truncated_gzip_trace(tmp_path: Path) -> N
     assert main(["import-trace", str(artifact), str(truncated)]) == int(
         ExitCode.INVALID_INPUT
     )
+
+
+def test_importing_the_same_trace_twice_skips_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    trace = _trace(tmp_path / "rank0.pt.trace.json", "T0")
+    assert main(["import-trace", str(artifact), str(trace)]) == int(ExitCode.OK)
+    lines = artifact.read_text(encoding="utf-8").count("\n")
+    capsys.readouterr()
+
+    assert main(["import-trace", str(artifact), str(trace)]) == int(ExitCode.OK)
+
+    assert artifact.read_text(encoding="utf-8").count("\n") == lines
+    assert f"Skipped {trace}: already imported into this run" in capsys.readouterr().out
+
+
+def test_combined_capture_unions_what_each_trace_collected(tmp_path: Path) -> None:
+    from stormlog.infer.trace_import import KinetoTraceCollector
+
+    with_ranges = _trace(tmp_path / "rank0.pt.trace.json", "T0")
+    document = json.loads(with_ranges.read_text(encoding="utf-8"))
+    document["traceEvents"] = document["traceEvents"][1:]
+    without = tmp_path / "rank1.pt.trace.json"
+    without.write_text(json.dumps(document), encoding="utf-8")
+
+    capture = KinetoTraceCollector([with_ranges, without]).collect(
+        run_id="run-9", session_id="session-9"
+    )
+
+    assert "iteration_ranges" in capture.capabilities.collected
+    assert len(capture.attachments) == 2
+    assert capture.summary is not None
+    assert [t["linked_gpu_events"] for t in capture.summary["traces"]] == [1, 0]

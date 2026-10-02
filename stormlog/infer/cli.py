@@ -840,6 +840,8 @@ def cmd_import_trace(args: argparse.Namespace) -> int:
     )
     for summary in (capture.summary or {}).get("traces", []):
         _print_trace_summary(summary)
+    for path in (capture.summary or {}).get("already_imported", []):
+        print(f"Skipped {path}: already imported into this run")
     return int(ExitCode.OK)
 
 

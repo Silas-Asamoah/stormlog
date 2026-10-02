@@ -7,10 +7,13 @@ trace is registered in the run envelope and its GPU activity is appended as
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from ..run_catalog import RUN_ENVELOPE_FILENAME
 from ..session import create_session_summary
 from .correlation_capture import (
     CaptureCapabilities,
@@ -131,9 +134,20 @@ def import_traces_into_artifact(
     detail: Detail = "launch",
     envelope_path: str | Path | None = None,
 ) -> TraceCapture:
-    """Append the traces' GPU activity to ``artifact`` and return what was added."""
+    """Append the traces' GPU activity to ``artifact`` and return what was added.
+
+    A trace already registered in the run envelope at the same path is skipped
+    and listed in the summary's ``already_imported``; importing it again would
+    only duplicate its records.
+    """
     run_id, session_id = artifact_run_identity(artifact)
-    collector = KinetoTraceCollector(traces, device_uuids=device_uuids, detail=detail)
+    envelope = Path(envelope_path or Path(artifact).parent / RUN_ENVELOPE_FILENAME)
+    registered = _registered_trace_paths(envelope)
+    skipped = [str(t) for t in traces if Path(t).resolve() in registered]
+    pending = [t for t in traces if str(t) not in skipped]
+    if not pending:
+        return _nothing_imported(skipped)
+    collector = KinetoTraceCollector(pending, device_uuids=device_uuids, detail=detail)
     captured: list[TraceCapture] = []
 
     class _Recording:
@@ -156,7 +170,32 @@ def import_traces_into_artifact(
     except ValueError as exc:
         # Every remaining rejection is about the artifact or its envelope.
         raise InferInputError(f"cannot import into {artifact}: {exc}") from exc
-    return captured[0]
+    summary = dict(captured[0].summary or {}, already_imported=skipped)
+    return replace(captured[0], summary=summary)
+
+
+def _registered_trace_paths(envelope: Path) -> set[Path]:
+    """Resolved paths of the Kineto traces the run envelope already lists."""
+    if not envelope.is_file():
+        return set()
+    try:
+        rows = json.loads(envelope.read_text(encoding="utf-8")).get("attachments", [])
+    except (ValueError, AttributeError) as exc:
+        raise InferInputError(f"{envelope}: unreadable run envelope ({exc})") from exc
+    return {
+        (envelope.parent / row["path"]).resolve()
+        for row in rows
+        if isinstance(row, dict)
+        and str(row.get("attachment_id", "")).startswith("kineto:")
+        and row.get("path")
+    }
+
+
+def _nothing_imported(skipped: list[str]) -> TraceCapture:
+    return TraceCapture(
+        capabilities=CaptureCapabilities(SUPPORTED, SUPPORTED, ()),
+        summary={"traces": [], "already_imported": skipped},
+    )
 
 
 __all__ = [
