@@ -8,6 +8,7 @@ import importlib
 import json
 import math
 import shutil
+import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
@@ -18,6 +19,7 @@ from typing import Any, Optional, TypedDict
 import psutil
 
 from stormlog.cpu_profiler import CPUMemoryTracker
+from stormlog.exit_codes import ExitCode
 from stormlog.telemetry_sink import TelemetrySinkConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -832,58 +834,94 @@ def _flatten_metrics(
     return metrics
 
 
+_CONFIG_FIELDS: Mapping[str, Callable[[Any], Any]] = {
+    "profile": str,
+    "mode": str,
+    "iterations": int,
+    "allocation_kb": int,
+    "profile_equivalent_hours": float,
+}
+_RUNTIME_CONFIG_FIELDS: Mapping[str, Callable[[Any], Any]] = {
+    "default_interval": float,
+    "overhead_sample_count": int,
+    "soak_sample_count": int,
+}
+_RETENTION_CONFIG_FIELDS: Mapping[str, Callable[[Any], Any]] = {
+    "flush_every_events": int,
+    "flush_every_seconds": float,
+    "rollover_max_bytes": int,
+    "rollover_max_events": int,
+    "retention_max_files": int,
+    "retention_max_total_bytes": int,
+    "sample_limit": int,
+}
+
+
 def _normalize_comparison_config(
     raw_config: Mapping[str, Any],
     *,
     label: str,
 ) -> dict[str, Any]:
-    required = {
-        "profile",
-        "mode",
-        "iterations",
-        "allocation_kb",
-        "profile_equivalent_hours",
-        "runtimes",
-        "retention_validation",
-    }
+    required = set(_CONFIG_FIELDS) | {"runtimes", "retention_validation"}
     missing = sorted(required.difference(raw_config))
     if missing:
-        raise ValueError(f"{label} missing config keys: {', '.join(missing)}")
+        raise AssetError(f"{label} missing config keys: {', '.join(missing)}")
 
     raw_runtimes = raw_config["runtimes"]
     if not isinstance(raw_runtimes, Mapping):
-        raise ValueError(f"{label} runtimes must be a mapping")
-    runtimes: dict[str, dict[str, int | float]] = {}
+        raise AssetError(f"{label} runtimes must be a mapping")
+    runtimes: dict[str, dict[str, Any]] = {}
     for runtime_name, raw_runtime in raw_runtimes.items():
         if not isinstance(runtime_name, str) or not isinstance(raw_runtime, Mapping):
-            raise ValueError(f"{label} contains invalid runtime config")
-        runtimes[runtime_name] = {
-            "default_interval": float(raw_runtime["default_interval"]),
-            "overhead_sample_count": int(raw_runtime["overhead_sample_count"]),
-            "soak_sample_count": int(raw_runtime["soak_sample_count"]),
-        }
+            raise AssetError(f"{label} contains invalid runtime config")
+        runtimes[runtime_name] = _convert_config_fields(
+            raw_runtime,
+            _RUNTIME_CONFIG_FIELDS,
+            label=f"{label} runtime {runtime_name!r}",
+        )
 
     raw_retention = raw_config["retention_validation"]
     if not isinstance(raw_retention, Mapping):
-        raise ValueError(f"{label} retention_validation must be a mapping")
-    retention_validation = {
-        "flush_every_events": int(raw_retention["flush_every_events"]),
-        "flush_every_seconds": float(raw_retention["flush_every_seconds"]),
-        "rollover_max_bytes": int(raw_retention["rollover_max_bytes"]),
-        "rollover_max_events": int(raw_retention["rollover_max_events"]),
-        "retention_max_files": int(raw_retention["retention_max_files"]),
-        "retention_max_total_bytes": int(raw_retention["retention_max_total_bytes"]),
-        "sample_limit": int(raw_retention["sample_limit"]),
-    }
+        raise AssetError(f"{label} retention_validation must be a mapping")
     return {
-        "profile": str(raw_config["profile"]),
-        "mode": str(raw_config["mode"]),
-        "iterations": int(raw_config["iterations"]),
-        "allocation_kb": int(raw_config["allocation_kb"]),
-        "profile_equivalent_hours": float(raw_config["profile_equivalent_hours"]),
+        **_convert_config_fields(raw_config, _CONFIG_FIELDS, label=label),
         "runtimes": dict(sorted(runtimes.items())),
-        "retention_validation": retention_validation,
+        "retention_validation": _convert_config_fields(
+            raw_retention,
+            _RETENTION_CONFIG_FIELDS,
+            label=f"{label} retention_validation",
+        ),
     }
+
+
+def _convert_config_fields(
+    section: Mapping[str, Any],
+    fields: Mapping[str, Callable[[Any], Any]],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """Convert each named field; a missing key or bad value is an AssetError."""
+    missing = sorted(set(fields).difference(section))
+    if missing:
+        raise AssetError(f"{label} missing config keys: {', '.join(missing)}")
+    converted: dict[str, Any] = {}
+    for key, convert in fields.items():
+        try:
+            converted[key] = convert(section[key])
+        except (TypeError, ValueError) as exc:
+            raise AssetError(
+                f"{label} config key {key!r} is not a valid {convert.__name__}: "
+                f"{section[key]!r}"
+            ) from exc
+    return converted
+
+
+class AssetError(ValueError):
+    """A budget, baseline or tolerance asset is missing, unreadable or invalid.
+
+    ``main()`` maps it to ``ExitCode.INVALID_INPUT``; any other failure is an
+    ``ERROR``.
+    """
 
 
 def _metric_values_from_mapping(
@@ -892,36 +930,53 @@ def _metric_values_from_mapping(
     label: str,
 ) -> dict[str, float]:
     if not raw_values:
-        raise ValueError(f"{label} must contain at least one metric")
-    return {str(key): float(value) for key, value in raw_values.items()}
+        raise AssetError(f"{label} must contain at least one metric")
+    values: dict[str, float] = {}
+    for key, value in raw_values.items():
+        try:
+            values[str(key)] = float(value)
+        except (TypeError, ValueError) as exc:
+            raise AssetError(f"{label} metric {key!r} is not a number") from exc
+    return values
+
+
+def _load_asset_payload(path: Path, *, label: str) -> Mapping[str, Any]:
+    """Read one JSON asset; every way it can be unusable is an AssetError."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise AssetError(f"{label} {path} cannot be read: {exc}") from exc
+    if not isinstance(payload, Mapping):
+        raise AssetError(f"{label} {path} must be a JSON object")
+    return payload
 
 
 def load_budget_thresholds(path: Path) -> dict[str, float]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = _load_asset_payload(path, label="Budget file")
     if payload.get("version") not in {None, REPORT_VERSION}:
-        raise ValueError(
+        raise AssetError(
             f"Budget file version must be {REPORT_VERSION}, "
             f"found {payload.get('version')!r}"
         )
     budgets_obj = payload.get("budgets", payload)
     if not isinstance(budgets_obj, Mapping):
-        raise ValueError("Budget file missing budgets mapping")
+        raise AssetError("Budget file missing budgets mapping")
     return _metric_values_from_mapping(budgets_obj, label="Budget file")
 
 
 def load_regression_baseline(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = _load_asset_payload(path, label="Baseline file")
     if payload.get("version") != REPORT_VERSION:
-        raise ValueError(
+        raise AssetError(
             f"Baseline file version must be {REPORT_VERSION}, "
             f"found {payload.get('version')!r}"
         )
     raw_config = payload.get("config")
     raw_metrics = payload.get("metrics")
     if not isinstance(raw_config, Mapping):
-        raise ValueError("Baseline file missing config mapping")
+        raise AssetError("Baseline file missing config mapping")
     if not isinstance(raw_metrics, Mapping):
-        raise ValueError("Baseline file missing metrics mapping")
+        raise AssetError("Baseline file missing metrics mapping")
     return {
         "version": REPORT_VERSION,
         "config": _normalize_comparison_config(raw_config, label="Baseline file"),
@@ -930,15 +985,15 @@ def load_regression_baseline(path: Path) -> dict[str, Any]:
 
 
 def load_regression_tolerances(path: Path) -> dict[str, float]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = _load_asset_payload(path, label="Tolerance file")
     if payload.get("version") != REPORT_VERSION:
-        raise ValueError(
+        raise AssetError(
             f"Tolerance file version must be {REPORT_VERSION}, "
             f"found {payload.get('version')!r}"
         )
     tolerances_obj = payload.get("tolerances", payload)
     if not isinstance(tolerances_obj, Mapping):
-        raise ValueError("Tolerance file missing tolerances mapping")
+        raise AssetError("Tolerance file missing tolerances mapping")
     return _metric_values_from_mapping(tolerances_obj, label="Tolerance file")
 
 
@@ -948,7 +1003,7 @@ def evaluate_budgets(
 ) -> dict[str, dict[str, Any]]:
     missing = sorted(set(metrics).difference(budgets))
     if missing:
-        raise ValueError(f"Budget file missing metric keys: {', '.join(missing)}")
+        raise AssetError(f"Budget file missing metric keys: {', '.join(missing)}")
     checks: dict[str, dict[str, Any]] = {}
     for metric_key, value in metrics.items():
         max_allowed = float(budgets[metric_key])
@@ -968,11 +1023,11 @@ def evaluate_regressions(
     missing_baseline = sorted(set(metrics).difference(baseline_metrics))
     missing_tolerances = sorted(set(metrics).difference(tolerances))
     if missing_baseline:
-        raise ValueError(
+        raise AssetError(
             "Baseline file missing metric keys: " + ", ".join(missing_baseline)
         )
     if missing_tolerances:
-        raise ValueError(
+        raise AssetError(
             "Tolerance file missing metric keys: " + ", ".join(missing_tolerances)
         )
     checks: dict[str, dict[str, Any]] = {}
@@ -1001,7 +1056,7 @@ def validate_regression_config(
         baseline_config, label="Baseline file"
     )
     if normalized_current != normalized_baseline:
-        raise ValueError(
+        raise AssetError(
             "Baseline config mismatch: "
             f"current={normalized_current!r}, baseline={normalized_baseline!r}"
         )
@@ -1317,6 +1372,64 @@ def _run_runtime_report(
     return runtime_report
 
 
+def _load_gate_assets(
+    gate_mode: str,
+    config: Mapping[str, Any],
+    *,
+    budgets_path: Optional[Path],
+    baseline_path: Optional[Path],
+    tolerances_path: Optional[Path],
+) -> dict[str, Any]:
+    """Load the assets a gate mode needs and check them against ``config``."""
+    if gate_mode == "budget":
+        if budgets_path is None:
+            raise ValueError("Budget gate mode requires a budgets path")
+        return {
+            "budgets_path": budgets_path,
+            "budgets": load_budget_thresholds(budgets_path),
+        }
+    if gate_mode == "regression":
+        if baseline_path is None or tolerances_path is None:
+            raise ValueError(
+                "Regression gate mode requires baseline and tolerance paths"
+            )
+        baseline = load_regression_baseline(baseline_path)
+        validate_regression_config(config, baseline["config"])
+        return {
+            "baseline_path": baseline_path,
+            "baseline": baseline,
+            "tolerances_path": tolerances_path,
+            "tolerances": load_regression_tolerances(tolerances_path),
+        }
+    raise ValueError(f"Unsupported gate mode: {gate_mode}")
+
+
+def _apply_gate_checks(
+    report: dict[str, Any],
+    gate_mode: str,
+    assets: Mapping[str, Any],
+    metrics: Mapping[str, float],
+) -> None:
+    """Evaluate the loaded gate assets against ``metrics`` into ``report``."""
+    if gate_mode == "budget":
+        checks = evaluate_budgets(metrics, assets["budgets"])
+        report["config"]["budgets_path"] = str(assets["budgets_path"])
+        report["budgets"] = assets["budgets"]
+        report["budget_checks"] = checks
+    else:
+        checks = evaluate_regressions(
+            metrics,
+            assets["baseline"]["metrics"],
+            assets["tolerances"],
+        )
+        report["config"]["baseline_path"] = str(assets["baseline_path"])
+        report["config"]["tolerances_path"] = str(assets["tolerances_path"])
+        report["baseline"] = assets["baseline"]
+        report["tolerances"] = assets["tolerances"]
+        report["regression_checks"] = checks
+    report["passed"] = all(bool(check["passed"]) for check in checks.values())
+
+
 def run_benchmark_harness(
     *,
     profile: str,
@@ -1344,6 +1457,28 @@ def run_benchmark_harness(
     if missing_runtimes:
         raise ValueError(f"Unknown runtimes: {', '.join(sorted(missing_runtimes))}")
 
+    config = {
+        "profile": profile,
+        "mode": mode,
+        "iterations": iterations,
+        "allocation_kb": allocation_kb,
+        "profile_equivalent_hours": PROFILE_EQUIVALENT_HOURS[profile],
+        "runtimes": _runtime_config(profile, iterations, selected_runtime_names),
+        "retention_validation": dict(DEFAULT_RETENTION_VALIDATION),
+        "overhead_scratch_root": (
+            str(overhead_scratch_root) if overhead_scratch_root is not None else None
+        ),
+    }
+    # Load and validate the gate assets first: a typo in --budgets must not
+    # cost a multi-minute scenario run before it is reported.
+    gate_assets = _load_gate_assets(
+        gate_mode,
+        config,
+        budgets_path=budgets_path,
+        baseline_path=baseline_path,
+        tolerances_path=tolerances_path,
+    )
+
     artifact_root.mkdir(parents=True, exist_ok=True)
     if overhead_scratch_root is not None:
         overhead_scratch_root.mkdir(parents=True, exist_ok=True)
@@ -1367,18 +1502,6 @@ def run_benchmark_harness(
                 "reason": str(exc),
             }
 
-    config = {
-        "profile": profile,
-        "mode": mode,
-        "iterations": iterations,
-        "allocation_kb": allocation_kb,
-        "profile_equivalent_hours": PROFILE_EQUIVALENT_HOURS[profile],
-        "runtimes": _runtime_config(profile, iterations, selected_runtime_names),
-        "retention_validation": dict(DEFAULT_RETENTION_VALIDATION),
-        "overhead_scratch_root": (
-            str(overhead_scratch_root) if overhead_scratch_root is not None else None
-        ),
-    }
     metrics = _flatten_metrics(runtime_reports)
     report: dict[str, Any] = {
         "version": REPORT_VERSION,
@@ -1390,41 +1513,7 @@ def run_benchmark_harness(
         "runtimes": runtime_reports,
         "metrics": metrics,
     }
-
-    if gate_mode == "budget":
-        if budgets_path is None:
-            raise ValueError("Budget gate mode requires a budgets path")
-        budgets = load_budget_thresholds(budgets_path)
-        budget_checks = evaluate_budgets(metrics, budgets)
-        report["config"]["budgets_path"] = str(budgets_path)
-        report["budgets"] = budgets
-        report["budget_checks"] = budget_checks
-        report["passed"] = all(
-            bool(check["passed"]) for check in budget_checks.values()
-        )
-    elif gate_mode == "regression":
-        if baseline_path is None or tolerances_path is None:
-            raise ValueError(
-                "Regression gate mode requires baseline and tolerance paths"
-            )
-        baseline = load_regression_baseline(baseline_path)
-        validate_regression_config(config, baseline["config"])
-        tolerances = load_regression_tolerances(tolerances_path)
-        regression_checks = evaluate_regressions(
-            metrics,
-            baseline["metrics"],
-            tolerances,
-        )
-        report["config"]["baseline_path"] = str(baseline_path)
-        report["config"]["tolerances_path"] = str(tolerances_path)
-        report["baseline"] = baseline
-        report["tolerances"] = tolerances
-        report["regression_checks"] = regression_checks
-        report["passed"] = all(
-            bool(check["passed"]) for check in regression_checks.values()
-        )
-    else:
-        raise ValueError(f"Unsupported gate mode: {gate_mode}")
+    _apply_gate_checks(report, gate_mode, gate_assets, metrics)
 
     failures = _failure_diagnostics(report)
     report["failure_diagnostics"] = failures
@@ -1474,7 +1563,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Return a non-zero exit code when any gate fails.",
+        help="Exit with GATE_FAILED (4) when any gate fails instead of 0.",
     )
     args = parser.parse_args(argv)
 
@@ -1483,26 +1572,39 @@ def main(argv: Optional[list[str]] = None) -> int:
         and args.profile != DEFAULT_PROFILE
         and (args.baseline is None or args.tolerances is None)
     ):
-        raise ValueError(
+        parser.error(
             "Regression defaults are only checked in for the pr profile; "
             "pass --baseline and --tolerances explicitly for other profiles."
         )
 
     baseline_path = args.baseline or _default_runtime_baseline_path()
     tolerances_path = args.tolerances or _default_runtime_tolerances_path()
-    report = run_benchmark_harness(
-        profile=args.profile,
-        mode=args.mode,
-        iterations=args.iterations,
-        allocation_kb=args.allocation_kb,
-        gate_mode=args.gate_mode,
-        budgets_path=args.budgets if args.gate_mode == "budget" else None,
-        baseline_path=baseline_path if args.gate_mode == "regression" else None,
-        tolerances_path=tolerances_path if args.gate_mode == "regression" else None,
-        artifact_root=args.artifact_root,
-        output_path=args.output,
-        overhead_scratch_root=args.overhead_scratch_root,
-    )
+    try:
+        report = run_benchmark_harness(
+            profile=args.profile,
+            mode=args.mode,
+            iterations=args.iterations,
+            allocation_kb=args.allocation_kb,
+            gate_mode=args.gate_mode,
+            budgets_path=args.budgets if args.gate_mode == "budget" else None,
+            baseline_path=baseline_path if args.gate_mode == "regression" else None,
+            tolerances_path=(
+                tolerances_path if args.gate_mode == "regression" else None
+            ),
+            artifact_root=args.artifact_root,
+            output_path=args.output,
+            overhead_scratch_root=args.overhead_scratch_root,
+        )
+    except AssetError as exc:
+        # A budget/baseline/tolerance asset is missing, malformed, the wrong
+        # version, does not match this run's config, or lacks a metric.
+        print(f"Error: {exc}", file=sys.stderr)
+        return ExitCode.INVALID_INPUT
+    except OSError as exc:
+        # The artifact root or output path cannot be written: the inputs were
+        # fine, so this is an ERROR rather than INVALID_INPUT.
+        print(f"Error: {exc}", file=sys.stderr)
+        return ExitCode.ERROR
 
     print(f"Operability report written to: {args.output}")
     for line in format_regression_summary(report):
@@ -1516,8 +1618,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"Overall status: {'PASS' if report['passed'] else 'FAIL'}")
 
     if args.check and not report["passed"]:
-        return 1
-    return 0
+        return ExitCode.GATE_FAILED
+    return ExitCode.OK
 
 
 if __name__ == "__main__":

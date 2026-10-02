@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Sequence
 
+from stormlog.diagnose_report import DiagnoseUsageError
+from stormlog.exit_codes import ExitCode
 from stormlog.telemetry import telemetry_event_from_record, telemetry_event_to_dict
 from stormlog.telemetry_sink import TelemetrySinkConfig
 
@@ -278,7 +280,7 @@ def cmd_monitor(args: argparse.Namespace) -> int:
     """Monitor device memory usage in real-time."""
     if not JAX_AVAILABLE:
         print("Error: JAX not available")
-        return 1
+        return ExitCode.USAGE
 
     print("Starting JAX memory monitoring...")
     print(f"Sampling interval: {args.interval} seconds")
@@ -338,13 +340,13 @@ def cmd_track(args: argparse.Namespace) -> int:
     """Start background memory tracking."""
     if not JAX_AVAILABLE:
         print("Error: JAX not available")
-        return 1
+        return ExitCode.USAGE
     wandb_config = _resolve_wandb_config(args)
     if wandb_config is None:
-        return 1
+        return ExitCode.USAGE
     mlflow_config = _resolve_mlflow_config(args)
     if mlflow_config is None:
-        return 1
+        return ExitCode.USAGE
 
     tracker = _build_tracking_runtime(args)
 
@@ -549,23 +551,29 @@ def _export_tracking_integrations(
 
 
 def cmd_diagnose(args: argparse.Namespace) -> int:
-    """Produce a portable diagnostic bundle. Returns 0 (OK), 1 (failure), or 2 (memory risk)."""
+    """Produce a portable diagnostic bundle.
+
+    Returns ``ExitCode.OK``, ``ExitCode.FINDINGS`` when memory risk was
+    detected, ``ExitCode.USAGE`` for invalid options, a missing runtime or
+    extra, or an output path that is not a directory, and ``ExitCode.ERROR``
+    when the bundle could not be written.
+    """
     if not JAX_AVAILABLE:
         print("Error: JAX not available")
-        return 1
+        return ExitCode.USAGE
     if args.duration < 0:
         print("Error: --duration must be >= 0", file=sys.stderr)
-        return 1
+        return ExitCode.USAGE
     if args.interval <= 0:
         print("Error: --interval must be > 0", file=sys.stderr)
-        return 1
+        return ExitCode.USAGE
 
     wandb_config = _resolve_wandb_config(args)
     if wandb_config is None:
-        return 1
+        return ExitCode.USAGE
     mlflow_config = _resolve_mlflow_config(args)
     if mlflow_config is None:
-        return 1
+        return ExitCode.USAGE
 
     command_line = " ".join(sys.argv)
     run_diagnose = _load_run_diagnose()
@@ -577,9 +585,12 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
             interval=args.interval,
             command_line=command_line,
         )
+    except DiagnoseUsageError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return ExitCode.USAGE
     except OSError as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        return 1
+        return ExitCode.ERROR
 
     _print_diagnose_summary(artifact_dir, exit_code)
     _export_diagnose_integrations(artifact_dir, wandb_config, mlflow_config)
@@ -590,9 +601,9 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
 def _print_diagnose_summary(artifact_dir: Path, exit_code: int) -> None:
     # Structured stdout summary
     print(f"Artifact: {artifact_dir}")
-    if exit_code == 0:
+    if exit_code == ExitCode.OK:
         status = "OK"
-    elif exit_code == 2:
+    elif exit_code == ExitCode.FINDINGS:
         status = "MEMORY_RISK"
     else:
         status = "FAILED"
@@ -656,14 +667,17 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     input_path = Path(args.input)
     if not input_path.exists():
         print(f"Error: Input file {args.input} not found", file=sys.stderr)
-        return 1
+        return ExitCode.INVALID_INPUT
 
     try:
         with input_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         print(f"Error: Failed to load results from {args.input}: {e}", file=sys.stderr)
-        return 1
+        return ExitCode.INVALID_INPUT
+    if not isinstance(data, dict):
+        print(f"Error: {args.input} does not contain a JSON object", file=sys.stderr)
+        return ExitCode.INVALID_INPUT
 
     print(f"Analyzing JAX tracking results: {args.input}")
     print("=" * 50)
@@ -951,7 +965,16 @@ Cookbook:
         parser.print_help()
         return 0
 
-    # Execute command
+    try:
+        return _dispatch(args)
+    except KeyboardInterrupt:
+        # monitor/track treat Ctrl+C as their stop key inside the capture
+        # loop; anywhere else it is an interrupted run.
+        print("\nOperation cancelled by user", file=sys.stderr)
+        return ExitCode.INTERRUPTED
+
+
+def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "info":
         return cmd_info(args)
     elif args.command == "monitor":
@@ -962,9 +985,8 @@ Cookbook:
         return cmd_diagnose(args)
     elif args.command == "analyze":
         return cmd_analyze(args)
-    else:
-        print(f"Unknown command: {args.command}")
-        return 1
+    print(f"Unknown command: {args.command}")
+    return ExitCode.USAGE
 
 
 def _report_monitor_results(results: Any, output: str | None) -> None:

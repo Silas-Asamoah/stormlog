@@ -31,6 +31,7 @@ Use the guides below based on the job you are doing, not based on package intern
 installation
 usage
 cli
+report_contract
 inference
 inference_correlation
 tui
@@ -86,8 +87,9 @@ examples/test_guides/README
 
 1. [Testing](testing.md)
 2. [CI and Release Qualification](cookbook/ci_release.md)
-3. [Examples](examples.md)
-4. [Benchmark Harness](benchmark_harness.md)
+3. [Report and Exit-Code Contract](report_contract.md)
+4. [Examples](examples.md)
+5. [Benchmark Harness](benchmark_harness.md)
 
 ### Framework-specific workflows
 

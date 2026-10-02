@@ -8,6 +8,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from stormlog.derived_fields import compute_event_fields
+from stormlog.diagnose_report import (
+    validate_output_directory,
+    write_incomplete_bundle,
+    write_verdict_report,
+)
+from stormlog.exit_codes import ExitCode, completed_with_findings
+from stormlog.report import REPORT_FILENAME
 from stormlog.session import (
     SESSION_STATUS_COMPLETED,
     SESSION_STATUS_INCOMPLETE,
@@ -22,6 +29,7 @@ from .utils import get_backend_info, get_gpu_info, get_system_info
 
 # Risk thresholds (same semantics as Stormlog)
 HIGH_UTILIZATION_RATIO = 0.85
+_RISK_THRESHOLDS = {"high_utilization": HIGH_UTILIZATION_RATIO}
 MANIFEST_VERSION = 2
 
 
@@ -276,8 +284,11 @@ def run_diagnose(
     """
     Build the full diagnostic bundle and write all artifact files.
     Returns (artifact_dir, exit_code).
-    exit_code: 0 = success no risk, 1 = failure, 2 = success with memory risk.
+    exit_code follows ``stormlog.exit_codes``: OK (0) when no risk was
+    detected, FINDINGS (3) when memory risk was detected, ERROR (1) when the
+    bundle could not be written completely.
     """
+    validate_output_directory(output)
     try:
         artifact_dir = _create_artifact_dir(output, "stormlog-tensorflow-diagnose")
     except OSError as e:
@@ -290,6 +301,7 @@ def run_diagnose(
         started_at_ns=now_ns(),
     )
     files_written: List[str] = []
+    summary: Dict[str, Any] = {}
     risk_detected = False
     exit_code = 0
 
@@ -315,9 +327,21 @@ def run_diagnose(
             json.dump(summary, f, indent=2, default=_default_str)
         files_written.append("diagnostic_summary.json")
 
-        exit_code = 2 if risk_detected else 0
+        exit_code = int(completed_with_findings(risk_detected))
 
-        # 4. Manifest
+        # 4. Verdict report (stormlog.report v1)
+        write_verdict_report(
+            artifact_dir,
+            tool_name="tfmemprof",
+            summary=summary,
+            exit_code=exit_code,
+            session_id=session_summary.session_id,
+            files=[*files_written, REPORT_FILENAME, "manifest.json"],
+            thresholds=_RISK_THRESHOLDS,
+        )
+        files_written.append(REPORT_FILENAME)
+
+        # 5. Manifest
         session_summary = update_session_summary(
             session_summary,
             status=SESSION_STATUS_COMPLETED,
@@ -332,30 +356,41 @@ def run_diagnose(
             risk_detected=risk_detected,
             session_summary=session_summary,
         )
-    except OSError as e:
+    except (OSError, ValueError) as e:
+        # OSError: a bundle file could not be written. ValueError: the report
+        # builder rejected its own output (a producer bug). Either way the
+        # bundle is incomplete and must say so in both report and manifest.
         print(f"Error: Failed to write diagnostic artifact: {e}", file=sys.stderr)
-        exit_code = 1
+        exit_code = int(ExitCode.ERROR)
         if not files_written:
             raise
+        error_text = str(e)
         session_summary = update_session_summary(
             session_summary,
             status=SESSION_STATUS_INCOMPLETE,
             ended_at_ns=now_ns(),
         )
-        try:
-            files_with_manifest = list(files_written)
-            if "manifest.json" not in files_with_manifest:
-                files_with_manifest.append("manifest.json")
+
+        def _write_fallback_manifest(files: list[str]) -> None:
             _write_manifest(
                 artifact_dir,
                 command_line=command_line,
-                files_written=files_with_manifest,
-                exit_code=1,
+                files_written=files,
+                exit_code=int(ExitCode.ERROR),
                 risk_detected=risk_detected,
                 session_summary=session_summary,
-                error=str(e),
+                error=error_text,
             )
-        except OSError:
-            pass
+
+        write_incomplete_bundle(
+            artifact_dir,
+            tool_name="tfmemprof",
+            summary=summary,
+            session_id=session_summary.session_id,
+            files_written=files_written,
+            error=error_text,
+            thresholds=_RISK_THRESHOLDS,
+            write_manifest=_write_fallback_manifest,
+        )
 
     return artifact_dir, exit_code

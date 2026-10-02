@@ -472,6 +472,12 @@ OOM flight-recorder bundles now write manifest schema `v2` and metadata that
 reference the owning tracking `session_id` directly. That makes it possible to
 tie a bundle back to the exact capture that emitted the OOM.
 
+Diagnose bundles also write `report.json`, a `stormlog.report` v1 verdict
+envelope (`docs/schemas/stormlog_report_v1.schema.json`) whose `exit_code`
+matches the manifest and whose findings point back into
+`diagnostic_summary.json`. See the
+[Report and Exit-Code Contract](report_contract.md).
+
 ## Reconstructing a capture
 
 ```python
