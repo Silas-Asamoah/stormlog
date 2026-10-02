@@ -128,6 +128,9 @@ class ProfileConfig:
     # HOST:PORT for an OTLP/HTTP receiver that collects vLLM's request spans
     # while the profile runs; None runs no receiver.
     vllm_spans_listen: str | None = None
+    # How long the receiver keeps listening after the last phase, so the
+    # exporter's final batch (flushed every 5 s by default) still arrives.
+    vllm_spans_drain_seconds: float = 6.0
 
     def prompt_spec(self) -> PromptSpec:
         return PromptSpec(

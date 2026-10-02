@@ -195,7 +195,10 @@ class InferenceProfiler:
                             else None
                         ),
                         "vllm_spans": (
-                            self.span_receiver.config_record()
+                            {
+                                **self.span_receiver.config_record(),
+                                "drain_seconds": self.config.vllm_spans_drain_seconds,
+                            }
                             if self.span_receiver is not None
                             else None
                         ),
@@ -223,16 +226,31 @@ class InferenceProfiler:
             span_task = asyncio.create_task(
                 self._drain_spans_loop(writer=writer, stop_event=stop_spans)
             )
+            completed = False
             try:
                 for case in self.config.cases():
                     await self._run_case(case=case, writer=writer)
+                completed = True
             finally:
                 stop_sampling.set()
                 await sample_task
+                if completed:
+                    await self._wait_for_late_spans()
                 stop_spans.set()
                 await span_task
                 self._stop_span_receiver(writer)
             self._write_capabilities(writer)
+
+    async def _wait_for_late_spans(self) -> None:
+        """Keep the receiver up after the last phase for the exporter's last batch.
+
+        vLLM's span exporter flushes on a schedule (5 s by default), so the
+        spans of the final requests usually leave the server after the last
+        request has been answered. The wait is skipped when no receiver runs.
+        """
+        if self.span_receiver is None or self.config.vllm_spans_drain_seconds <= 0:
+            return
+        await asyncio.sleep(self.config.vllm_spans_drain_seconds)
 
     def _start_span_receiver(self) -> None:
         """Bind the OTLP receiver before any request can produce a span."""

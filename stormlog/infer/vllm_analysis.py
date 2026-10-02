@@ -563,20 +563,42 @@ def _rate(delta: float | None, seconds: float) -> float | None:
 def _kv_cache(gauges: dict[str, Any]) -> dict[str, Any]:
     usage = gauges.get("kv_cache_usage", {})
     stats = (usage.get("stats") or {}).get("_")
-    config = (gauges.get("cache_config", {}).get("labels") or {}).get("_", {})
-    blocks = _int_label(config, "num_gpu_blocks")
+    config = _cache_config_labels(gauges)
+    block_size = _int_label(config, "block_size")
+    size_tokens = _int_label(config, "kv_cache_size_tokens")
+    blocks = _block_count(config, block_size, size_tokens)
     max_usage = stats["max"] if stats else None
     return {
         "state": usage.get("state", REASON_SERIES_MISSING),
         "max_usage_fraction": max_usage,
         "mean_usage_fraction": stats["mean"] if stats else None,
         "num_gpu_blocks": blocks,
-        "block_size": _int_label(config, "block_size"),
+        "block_size": block_size,
+        "kv_cache_size_tokens": size_tokens,
         "max_blocks_in_use": (
             round(max_usage * blocks) if max_usage is not None and blocks else None
         ),
         "meaning": "logical KV block occupancy; not device memory",
     }
+
+
+def _cache_config_labels(gauges: dict[str, Any]) -> dict[str, str]:
+    """``cache_config_info`` carries the configuration as labels of its one series."""
+    labelled = gauges.get("cache_config", {}).get("labels") or {}
+    if len(labelled) != 1:
+        return {}
+    labels: dict[str, str] = next(iter(labelled.values()))
+    return labels
+
+
+def _block_count(
+    config: dict[str, str], block_size: int | None, size_tokens: int | None
+) -> int | None:
+    """KV blocks from the labels; 0.30.0 gives the cache size in tokens."""
+    blocks = _int_label(config, "num_gpu_blocks")
+    if blocks is None and size_tokens and block_size:
+        blocks = size_tokens // block_size
+    return blocks
 
 
 def _int_label(labels: dict[str, str], key: str) -> int | None:

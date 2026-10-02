@@ -473,6 +473,8 @@ class _ExportingVllmHandler(BaseHTTPRequestHandler):
 
     protocol_version = "HTTP/1.1"
     otlp_url = ""
+    # Like vLLM's batch processor, the export may leave after the answer.
+    export_delay_seconds = 0.0
 
     def do_GET(self) -> None:  # noqa: N802
         body = METRICS_TEXT.encode("utf-8")
@@ -487,7 +489,11 @@ class _ExportingVllmHandler(BaseHTTPRequestHandler):
         self.rfile.read(length)
         request_id = self.headers.get("X-Request-Id") or "none"
         if type(self).otlp_url:
-            self._export(request_id)
+            delay = type(self).export_delay_seconds
+            if delay:
+                threading.Timer(delay, self._export, args=(request_id,)).start()
+            else:
+                self._export(request_id)
         body = json.dumps(
             {
                 "choices": [
@@ -527,7 +533,11 @@ class _ExportingVllmHandler(BaseHTTPRequestHandler):
             headers={"Content-Type": "application/x-protobuf"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=5):
+        try:
+            with urllib.request.urlopen(request, timeout=5):
+                pass
+        except OSError:
+            # Like vLLM's exporter: a receiver that is gone loses the batch.
             pass
 
     def log_message(self, _format: str, *_args: object) -> None:
@@ -548,7 +558,9 @@ def _exporting_vllm(otlp_url: str) -> Iterator[str]:
         server.server_close()
 
 
-def _run(tmp_path: Path, origin: str, listen: str | None) -> list[dict[str, Any]]:
+def _run(
+    tmp_path: Path, origin: str, listen: str | None, drain_seconds: float = 0.0
+) -> list[dict[str, Any]]:
     output = tmp_path / "infer.jsonl"
     warnings: list[str] = []
     InferenceProfiler(
@@ -565,6 +577,7 @@ def _run(tmp_path: Path, origin: str, listen: str | None) -> list[dict[str, Any]
             system_sampler="none",
             run_id="run-1",
             vllm_spans_listen=listen,
+            vllm_spans_drain_seconds=drain_seconds,
         ),
         on_warning=warnings.append,
     ).run()
@@ -606,6 +619,7 @@ class TestProfileReceiver:
             "listen": f"127.0.0.1:{port}",
             "path": "/v1/traces",
             "protobuf": True,
+            "drain_seconds": 0.0,
         }
         capability = _span_capability(records)
         assert capability["available"] is True
@@ -613,6 +627,25 @@ class TestProfileReceiver:
         assert capability["enabled"] == ["otlp_http_protobuf", "otlp_http_json"]
         assert capability["metadata"]["spans"] == 2
         assert records[-1]["warnings"] == []
+
+    def test_drain_window_catches_a_batch_exported_after_the_last_request(
+        self, tmp_path: Path
+    ) -> None:
+        """vLLM flushes spans on a schedule; the receiver waits for that batch."""
+        _otlp()
+        port = _free_port()
+        _ExportingVllmHandler.export_delay_seconds = 0.4
+        try:
+            with _exporting_vllm(f"http://127.0.0.1:{port}/v1/traces") as origin:
+                late = _run(tmp_path, origin, f"127.0.0.1:{port}", drain_seconds=0.0)
+            with _exporting_vllm(f"http://127.0.0.1:{port}/v1/traces") as origin:
+                caught = _run(tmp_path, origin, f"127.0.0.1:{port}", drain_seconds=1.5)
+        finally:
+            _ExportingVllmHandler.export_delay_seconds = 0.0
+        assert len(_of_type(late, "infer.vllm_span")) < 2
+        assert len(_of_type(caught, "infer.vllm_span")) == 2
+        session = _of_type(caught, "infer.session")[0]
+        assert session["config"]["vllm_spans"]["drain_seconds"] == 1.5
 
     def test_without_the_extra_the_run_warns_once_and_records_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

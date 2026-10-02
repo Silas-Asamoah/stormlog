@@ -50,6 +50,7 @@ stormlog infer profile \
 | --- | --- |
 | `--vllm-metrics [URL]` | Scrape `/metrics` just before each phase's first send, after its drain, and every `--vllm-metrics-interval` seconds (default 1) in between. Without a URL, the endpoint's origin plus `/metrics`. |
 | `--vllm-spans-listen [HOST:PORT]` | Run an OTLP/HTTP receiver (default `127.0.0.1:4318`) for the length of the run and keep every span vLLM exports to it. |
+| `--vllm-spans-drain SECONDS` | Keep the receiver listening this long after the last phase (default 6), because vLLM's exporter flushes spans in batches every 5 s (`OTEL_BSP_SCHEDULE_DELAY`), so the last requests' spans leave after the last answer. |
 | `infer analyze --vllm-spans FILE` | Load spans someone else collected: an OTLP JSON export, or one span per line. May be given more than once. |
 
 Scrapes are stamped on the client's clock, like the phase windows, so no
@@ -61,6 +62,15 @@ the run goes on without spans. Without the `infer-otlp` extra the receiver
 still listens and accepts OTLP JSON, but vLLM's exporter sends protobuf, so
 those exports are refused with a 415, counted, and the capability record
 lists `otlp_http_protobuf` as supported but not enabled; the run warns once.
+
+The receiver exists only while the profile runs. Spans vLLM exports when no
+receiver is listening, such as its startup spans or the spans of traffic
+between runs, fail on the server side and are dropped there; the exporter
+retries a failed batch with backoff for up to about a minute, which can hold
+back the next batch. For short runs, start vLLM with
+`OTEL_BSP_SCHEDULE_DELAY=1000` so batches leave every second, and keep
+`--vllm-spans-drain` at or above that delay. The report's `spans` block
+counts requests without a span, so a late batch is visible, never silent.
 
 Every request is sent with `X-Request-Id: stormlog-<run_id>-<request_id>`,
 recorded on its `infer.request` event as `x_request_id`. vLLM embeds that

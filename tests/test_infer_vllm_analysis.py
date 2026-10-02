@@ -289,7 +289,13 @@ class TestDeltas:
         assert usage["unit"] == "fraction"
         kv = case["engines"]["0"]["derived"]["kv_cache"]
         assert kv["state"] == STATE_RESOLVED
-        assert kv["num_gpu_blocks"] is None or kv["num_gpu_blocks"] > 0
+        # 0.30.0 labels the cache in tokens; blocks follow from the block size.
+        assert kv["block_size"] == 16
+        assert kv["kv_cache_size_tokens"] == 1715728
+        assert kv["num_gpu_blocks"] == 1715728 // 16
+        assert kv["max_blocks_in_use"] == round(
+            kv["max_usage_fraction"] * (1715728 // 16)
+        )
 
 
 class TestUnresolved:

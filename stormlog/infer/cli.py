@@ -261,6 +261,16 @@ def build_parser() -> argparse.ArgumentParser:
             "start vLLM with --otlp-traces-endpoint pointing at it"
         ),
     )
+    profile_parser.add_argument(
+        "--vllm-spans-drain",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Keep the span receiver listening this long after the last phase, "
+            "for the exporter's final batch (default: 6; vLLM flushes every 5 s)"
+        ),
+    )
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
     _add_cache_arguments(profile_parser)
@@ -602,6 +612,9 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
             1.0 if args.vllm_metrics_interval is None else args.vllm_metrics_interval
         ),
         vllm_spans_listen=args.vllm_spans_listen,
+        vllm_spans_drain_seconds=(
+            6.0 if args.vllm_spans_drain is None else args.vllm_spans_drain
+        ),
     )
 
 
@@ -760,6 +773,7 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
     if args.sample_interval <= 0:
         raise ValueError("--sample-interval must be > 0")
     _validate_vllm_metrics_arguments(args)
+    _validate_vllm_span_arguments(args)
 
 
 def _validate_vllm_metrics_arguments(args: argparse.Namespace) -> None:
@@ -772,8 +786,18 @@ def _validate_vllm_metrics_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--vllm-metrics-interval only applies with --vllm-metrics")
     if not math.isfinite(interval) or interval < 0.1:
         raise ValueError("--vllm-metrics-interval must be a number of seconds >= 0.1")
+
+
+def _validate_vllm_span_arguments(args: argparse.Namespace) -> None:
     if args.vllm_spans_listen is not None:
         parse_listen_address(args.vllm_spans_listen)
+    drain = args.vllm_spans_drain
+    if drain is None:
+        return
+    if args.vllm_spans_listen is None:
+        raise ValueError("--vllm-spans-drain only applies with --vllm-spans-listen")
+    if not math.isfinite(drain) or drain < 0:
+        raise ValueError("--vllm-spans-drain must be a number of seconds >= 0")
 
 
 def _validate_arrival_arguments(args: argparse.Namespace) -> None:
