@@ -5,8 +5,8 @@ GPU kernels, copies, and memsets with device timestamps, and the CPU runtime or
 driver calls that launched them. Each GPU event carries the CUDA correlation ID
 of its launch call. A CUDA graph launch is one call and many GPU events.
 
-This importer emits one ``infer.activity_ref`` per launch (``detail="launch"``,
-the default) or per GPU event (``detail="kernel"``). A launch record spans its
+This importer emits one ``infer.activity_ref`` per launch, device, and activity
+kind (``detail="launch"``, the default) or per GPU event (``detail="kernel"``). A launch record spans its
 first event's start to its last event's end. When it holds several events, its
 ``metadata.intervals`` lists the exact busy intervals inside that span, so
 GPU time accounting does not count the idle gaps inside a CUDA graph replay as

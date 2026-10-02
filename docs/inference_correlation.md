@@ -144,7 +144,8 @@ including the `rank*.pt.trace.json.gz` files vLLM writes after
 `/start_profile` and `/stop_profile`, and appends their GPU work to an existing
 inference artifact as `infer.activity_ref` records. The artifact must contain
 an `infer.artifact` record, which supplies the run and session. Each trace is
-registered by reference in the run envelope.
+registered by reference in the run envelope. A trace already registered at the
+same path is skipped, so running the command twice does not duplicate records.
 
 ```bash
 stormlog infer import-trace infer.jsonl rank0.pt.trace.json.gz \
@@ -204,14 +205,22 @@ That is the expected result for an engine that does not emit them yet.
 
 ### Record detail
 
-`--detail launch` (the default) writes one record per launch call. The record
-spans the launch's first GPU event to its last. When the launch has several
+`--detail launch` (the default) writes one record per launch call, device, and
+activity kind; a CUDA graph launch that ran kernels and a memset gives two
+records. The record spans the launch's first GPU event to its last. When the launch has several
 events, `metadata.intervals` lists the exact busy intervals inside that span as
 `[offset_ns, duration_ns]` pairs from `start_ns`, and `metadata.busy_ns` their
 total. `account_gpu_time` unions those intervals instead of the span, so idle
 gaps inside a CUDA graph replay are not counted as busy and the device total is
 the same as with one record per event. `--detail kernel` writes one record per
 GPU event. Both keep every event's link.
+
+The accounting's other two numbers follow the records. At launch detail,
+`summed_activity_ns` adds each record's busy intervals, so overlap between
+streams inside one launch is already merged, and `activity_count` counts
+records, not GPU events. The per-event sum is in each record's
+`metadata.summed_duration_ns` and in the import summary's `summed_ns`. Busy
+time is the same at both details.
 
 | Trace | GPU events | Launch records | Span time beyond busy time |
 | --- | ---: | ---: | ---: |
