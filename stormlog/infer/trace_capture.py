@@ -181,6 +181,7 @@ class TraceWindows:
         )
         self.on_warning = on_warning
         self.windows: list[TraceWindow] = []
+        self._unwritten: list[TraceWindow] = []
 
     @asynccontextmanager
     async def window(
@@ -195,12 +196,20 @@ class TraceWindows:
         )
         before = await asyncio.to_thread(self._snapshot)
         window.before = before
-        window.start = await asyncio.to_thread(self.control.post, "/start_profile")
-        window.started = window.start.ok
-        window.started_at_ns = time.time_ns() if window.started else None
-        if not window.started:
-            window.note = "the profiler did not start; see start_status and start_error"
-            self._warn(window, "could not start the profiler")
+        # A bare executor future, not a task: on Ctrl+C, asyncio.run cancels
+        # every remaining task (Python 3.10 included), and the start's answer
+        # is needed to know whether to stop the profiler.
+        start = asyncio.get_running_loop().run_in_executor(
+            None, self.control.post, "/start_profile"
+        )
+        try:
+            window.start = await asyncio.shield(start)
+        except asyncio.CancelledError:
+            # The server may still start profiling: wait for its answer, then
+            # stop and record the window before letting the cancellation through.
+            await self._abandon(window, start, before)
+            raise
+        self._mark_started(window)
         timer = self._bound(window)
         reason = "phase_end"
         try:
@@ -211,6 +220,33 @@ class TraceWindows:
         finally:
             await _finish_timer(timer, window)
             await self._close(window, reason, before)
+
+    def _mark_started(self, window: TraceWindow) -> None:
+        assert window.start is not None
+        window.started = window.start.ok
+        window.started_at_ns = time.time_ns() if window.started else None
+        if not window.started:
+            window.note = "the profiler did not start; see start_status and start_error"
+            self._warn(window, "could not start the profiler")
+
+    async def _abandon(
+        self,
+        window: TraceWindow,
+        start: asyncio.Future[ControlResult],
+        before: dict[str, int],
+    ) -> None:
+        # Bounded by the control timeout of the start request itself.
+        window.start = await start
+        self._mark_started(window)
+        await self._close(window, "cancelled", before)
+
+    def take_records(self, *, session_id: str) -> list[dict[str, Any]]:
+        """``infer.trace_window`` records for windows closed since the last call."""
+        records = [
+            window.to_record(session_id=session_id) for window in self._unwritten
+        ]
+        self._unwritten.clear()
+        return records
 
     def _bound(self, window: TraceWindow) -> asyncio.Task[None] | None:
         if not window.started or self.config.max_seconds is None:
@@ -241,6 +277,7 @@ class TraceWindows:
             window.files = await asyncio.to_thread(self._new_files, before)
             window.note = self._files_note(window)
         self.windows.append(window)
+        self._unwritten.append(window)
 
     def _snapshot(self) -> dict[str, int]:
         directory = self.config.trace_dir

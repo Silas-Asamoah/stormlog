@@ -635,3 +635,66 @@ def test_a_trace_registered_over_the_size_bound_can_be_imported_later(
     again = import_traces_into_artifact(artifact, [big])
     assert again.summary == {"traces": [], "already_imported": [str(big)]}
     assert activities() == 1
+
+
+def test_cancelling_while_the_start_is_in_flight_still_stops_and_records(
+    tmp_path: Path,
+) -> None:
+    import time
+
+    class _SlowStart(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            if route == "/start_profile":
+                time.sleep(0.3)
+            return super().post(route)
+
+    control = _SlowStart(tmp_path)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    async def scenario() -> None:
+        async def body() -> None:
+            async with windows.window("c1", "measured"):
+                await asyncio.sleep(5)
+
+        task = asyncio.create_task(body())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    records = windows.take_records(session_id="s1")
+    assert [(r["stop_reason"], r["started"]) for r in records] == [("cancelled", True)]
+    assert records[0]["trace_files"] == ["rank0.1.pt.trace.json"]
+    assert windows.take_records(session_id="s1") == []
+
+
+def test_ctrl_c_during_the_start_still_stops_the_profiler(tmp_path: Path) -> None:
+    """asyncio.run cancels every remaining task on the way out of a Ctrl+C."""
+    import time
+
+    class _SlowStart(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            if route == "/start_profile":
+                time.sleep(0.3)
+            return super().post(route)
+
+    control = _SlowStart(tmp_path)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    async def main() -> None:
+        async def body() -> None:
+            async with windows.window("c1", "measured"):
+                await asyncio.sleep(5)
+
+        asyncio.create_task(body())
+        await asyncio.sleep(0.05)
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(main())
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    assert [w.stop_reason for w in windows.windows] == ["cancelled"]
