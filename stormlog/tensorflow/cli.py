@@ -502,10 +502,13 @@ def cmd_diagnose(args: argparse.Namespace) -> int:
     """Produce a portable diagnostic bundle.
 
     Returns ``ExitCode.OK``, ``ExitCode.FINDINGS`` when memory risk was
-    detected, ``ExitCode.USAGE`` for invalid options, a missing extra, or an
-    output path that is not a directory, and ``ExitCode.ERROR`` when the
-    bundle could not be written.
+    detected, ``ExitCode.USAGE`` for invalid options, a missing runtime or
+    extra, or an output path that is not a directory, and ``ExitCode.ERROR``
+    when the bundle could not be written.
     """
+    if not TF_AVAILABLE:
+        print("Error: TensorFlow not available")
+        return ExitCode.USAGE
     if args.duration < 0:
         print("Error: --duration must be >= 0", file=sys.stderr)
         return ExitCode.USAGE

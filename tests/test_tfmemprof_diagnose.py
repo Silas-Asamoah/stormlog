@@ -194,6 +194,32 @@ def test_tfmemprof_diagnose_invalid_interval_returns_usage(
     assert "interval" in err.lower()
 
 
+def test_tfmemprof_diagnose_without_tensorflow_returns_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Without TensorFlow the command exits USAGE (2) and writes no bundle."""
+    monkeypatch.setattr(tfmemprof_cli, "TF_AVAILABLE", False)
+
+    def _must_not_run(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("run_diagnose must not run without TensorFlow")
+
+    monkeypatch.setattr(tfmemprof_cli, "run_diagnose", _must_not_run)
+    args = SimpleNamespace(
+        output=str(tmp_path),
+        device="/GPU:0",
+        duration=0,
+        interval=0.5,
+    )
+
+    exit_code = tfmemprof_cli.cmd_diagnose(args)  # type: ignore[arg-type, unused-ignore]
+
+    assert exit_code == ExitCode.USAGE
+    assert "TensorFlow not available" in capsys.readouterr().out
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_tfmemprof_diagnose_exit_code_zero_when_no_risk(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
