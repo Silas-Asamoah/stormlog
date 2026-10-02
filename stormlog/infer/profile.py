@@ -363,12 +363,18 @@ class InferenceProfiler:
         prompts.warm()
         if abandoned is None:
             abandoned = await self._wait_for_abandoned()
-        async with self._trace_window(case.case_id, phase) as trace_window:
-            window = await self._run_phase_requests(
-                request, total_requests, duration_seconds
-            )
-        if trace_window is not None:
-            writer.append(trace_window.to_record(session_id=self.session.session_id))
+        trace_window = None
+        try:
+            async with self._trace_window(case.case_id, phase) as trace_window:
+                window = await self._run_phase_requests(
+                    request, total_requests, duration_seconds
+                )
+        finally:
+            # Written on cancellation too, so the artifact names the trace files.
+            if trace_window is not None:
+                writer.append(
+                    trace_window.to_record(session_id=self.session.session_id)
+                )
         writer.append(
             window.to_record(
                 session_id=self.session.session_id,

@@ -655,14 +655,21 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
   was already active. Do not point two profilers at one server. If a worker
   trace appears before Stormlog's stop, for example from a profile configured
   with `max_iterations`, the window's `stop_reason` is `stopped_by_server`.
-- **Record.** Each window writes an `infer.trace_window` event: case, phase,
-  control URL (credentials and query removed), start and stop HTTP status or
-  error, why it stopped, and the trace files found.
+- **Record.** Each window writes an `infer.trace_window` event, also when the
+  run is cancelled: case, phase, control URL (credentials and query removed),
+  when the start was requested and when it was confirmed, start and stop HTTP
+  status or error, why it stopped, and the trace files found. A cancelled run
+  does not import its traces; import the listed files with
+  `stormlog infer import-trace`. If `--trace` was requested and no trace could
+  be imported, the trace collector's `infer.capabilities` record says so, with
+  each window's reason.
 - **Files.** Only worker traces (`rank*.pt.trace.json*`) that appear during the
   window are imported; the API server's `*.async_llm.*` trace is ignored. A file
   larger than `--trace-max-bytes` is registered in the run envelope but not
   parsed. Without `--trace-dir`, the traces stay on the server; import them
-  later with `stormlog infer import-trace`.
+  later with `stormlog infer import-trace`. vLLM writes the trace while handling
+  `/stop_profile`, so if no new file has appeared 5 seconds after the stop,
+  Stormlog stops waiting for that window.
 - **Clock and settings.** Imported timestamps are Kineto's host-calibrated
   device times, not a raw GPU clock. The CUDA-graph and compile settings the
   server ran with are not in the trace; they stay unknown unless recorded

@@ -372,3 +372,185 @@ def test_a_trace_written_before_the_stop_is_marked_as_stopped_by_the_server(
 
     assert window.stop_reason == "stopped_by_server"
     assert [path.name for path in window.files] == ["rank0.auto.pt.trace.json"]
+
+
+def _serve(handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _profile_config(port: int, output: Path, trace_dir: Path) -> ProfileConfig:
+    return ProfileConfig(
+        endpoint=f"http://127.0.0.1:{port}/v1/chat/completions",
+        model="m",
+        concurrency=(1,),
+        input_tokens=(8,),
+        output_tokens=(4,),
+        request_count=2,
+        output_path=str(output),
+        stream=False,
+        system_sampler="none",
+        tokenizer="none",
+        trace=_config(trace_dir, control_url=f"http://127.0.0.1:{port}"),
+    )
+
+
+def test_a_cancelled_phase_still_records_its_trace_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace_dir = tmp_path / "traces"
+    trace_dir.mkdir()
+    server = _serve(type("Handler", (_ChatAndProfile,), {"trace_dir": trace_dir}))
+    output = tmp_path / "infer.jsonl"
+
+    async def interrupted(*_args: object, **_kwargs: object) -> None:
+        await asyncio.sleep(0.05)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(InferenceProfiler, "_run_phase_requests", interrupted)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            InferenceProfiler(
+                _profile_config(server.server_port, output, trace_dir)
+            ).run()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    raw = [json.loads(line) for line in output.read_text().splitlines()]
+    types = [r["event_type"] for r in raw]
+    assert types[-2:] == ["infer.trace_window", "infer.session"]
+    window = raw[-2]
+    assert window["stop_reason"] == "cancelled"
+    assert window["trace_files"] == ["rank0.0.pt.trace.json"]
+    assert window["started_at_ns"] >= window["requested_at_ns"]
+
+
+class _FailingStart(_ChatAndProfile):
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/start_profile":
+            self.send_response(500)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        super().do_POST()
+
+
+def test_a_requested_trace_that_imported_nothing_is_still_recorded(
+    tmp_path: Path,
+) -> None:
+    trace_dir = tmp_path / "traces"
+    trace_dir.mkdir()
+    server = _serve(type("Handler", (_FailingStart,), {"trace_dir": trace_dir}))
+    output = tmp_path / "infer.jsonl"
+    try:
+        InferenceProfiler(_profile_config(server.server_port, output, trace_dir)).run()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    collector = next(
+        r
+        for r in load_inference_artifact(output)
+        if isinstance(r, CapabilityEvent) and r.component == "trace_collector"
+    )
+    assert collector.available and collector.collected == []
+    assert collector.metadata["summary"]["windows"] == [
+        {
+            "case_id": "c1_in8_out4",
+            "started": False,
+            "note": "the profiler did not start; see start_status and start_error",
+        }
+    ]
+
+
+def test_a_failed_import_warns_instead_of_failing_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import stormlog.infer.trace_capture as trace_capture
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(trace_capture, "append_inference_capture", broken)
+    warnings: list[str] = []
+    control = _FakeControl(tmp_path)
+    windows = TraceWindows(
+        _config(tmp_path), control=control, on_warning=warnings.append
+    )
+    _run_window(windows)
+
+    windows.import_into(tmp_path / "infer.jsonl", run_id="r", session=None)  # type: ignore[arg-type]
+
+    assert warnings and "not imported (disk full)" in warnings[0]
+
+
+def test_a_malformed_reply_is_a_failed_call_not_an_exception() -> None:
+    import socket
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def answer() -> None:
+        connection, _ = listener.accept()
+        connection.recv(4096)
+        connection.sendall(b"NOT-HTTP garbage\r\n\r\n")
+        connection.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    control = HttpProfilerControl(
+        f"http://127.0.0.1:{listener.getsockname()[1]}", api_key=None, timeout=5
+    )
+
+    result = control.post("/start_profile")
+    listener.close()
+
+    assert result.status is None
+    assert result.error is not None and result.error.startswith("BadStatusLine")
+
+
+def test_a_window_without_a_new_trace_stops_waiting_after_the_grace(
+    tmp_path: Path,
+) -> None:
+    import time
+
+    class _WritesNothing(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            self.calls.append(route)
+            return ControlResult(200)
+
+    windows = TraceWindows(
+        _config(tmp_path, flush_timeout_seconds=30.0, missing_grace_seconds=0.05),
+        control=_WritesNothing(tmp_path),
+    )
+    started = time.monotonic()
+
+    window = _run_window(windows)
+
+    assert time.monotonic() - started < 5
+    assert window.files == []
+    assert window.note == f"no new worker trace appeared in {tmp_path}"
+
+
+def test_an_oversized_trace_is_registered_but_not_parsed(tmp_path: Path) -> None:
+    from stormlog.infer.trace_import import KinetoTraceCollector
+
+    big = tmp_path / "rank0.big.pt.trace.json"
+    big.write_text(_kineto("BIG") + " " * 5000, encoding="utf-8")
+    small = tmp_path / "rank0.small.pt.trace.json"
+    small.write_text(_kineto("SMALL"), encoding="utf-8")
+
+    capture = KinetoTraceCollector([big, small], max_bytes=2000).collect(
+        run_id="r", session_id="s"
+    )
+
+    assert capture.summary is not None
+    skipped, parsed = capture.summary["traces"]
+    assert (skipped["file"], skipped["skipped"]) == (big.name, "max_bytes")
+    assert parsed["trace_id"] == "SMALL"
+    assert len(capture.attachments) == 2
+    assert (
+        len([e for e in capture.events if isinstance(e, ActivityReferenceEvent)]) == 1
+    )
