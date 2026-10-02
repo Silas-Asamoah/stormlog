@@ -8,6 +8,7 @@ evidence pointers back into the bundle.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
@@ -236,7 +237,7 @@ def _finding(
     metrics: dict[str, float | int | None] = {}
     observed = summary.get(metric_key)
     if isinstance(observed, (int, float)) and not isinstance(observed, bool):
-        metrics[metric_key] = observed
+        metrics[metric_key] = _finite_or_none(observed)
     if threshold is not None:
         metrics["threshold"] = threshold
     return Finding(
@@ -265,8 +266,15 @@ def _metrics(summary: Mapping[str, Any]) -> dict[str, float | int | None]:
         if value is None or (
             isinstance(value, (int, float)) and not isinstance(value, bool)
         ):
-            metrics[key] = value
+            metrics[key] = _finite_or_none(value)
     return metrics
+
+
+def _finite_or_none(value: float | int | None) -> float | int | None:
+    """The metric value, or null for NaN and infinities, which JSON cannot hold."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
 
 
 def _artifact(name: str) -> Artifact:

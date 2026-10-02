@@ -259,6 +259,7 @@
     },
     "metrics": {
       "type": "object",
+      "description": "Flat name -> finite number or null. JSON has no NaN or Infinity, so a file holding them is not a report; stormlog.report rejects them on write and on load.",
       "additionalProperties": {
         "type": ["number", "null"]
       }

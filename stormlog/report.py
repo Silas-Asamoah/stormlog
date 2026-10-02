@@ -13,6 +13,7 @@ The published schema is ``docs/schemas/stormlog_report_v1.schema.json``.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -221,7 +222,10 @@ def write_report(path: Path, report: Mapping[str, Any]) -> None:
     validate_report(report)
     tmp_path = path.with_name(path.name + ".tmp")
     try:
-        tmp_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        # allow_nan=False is the last guard: NaN and Infinity are not JSON.
+        tmp_path.write_text(
+            json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+        )
         os.replace(tmp_path, path)
     finally:
         with suppress(OSError):
@@ -394,10 +398,13 @@ def _validate_metrics(metrics: Any, label: str) -> None:
     for key, value in metrics.items():
         if not isinstance(key, str):
             raise ValueError(f"{label} keys must be strings")
-        if value is not None and (
-            not isinstance(value, (int, float)) or isinstance(value, bool)
-        ):
+        if value is None:
+            continue
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
             raise ValueError(f"{label}.{key} must be a number or null")
+        # JSON has no NaN or Infinity; json.dumps would write invalid tokens.
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"{label}.{key} must be finite")
 
 
 def _validate_recommendations(recommendations: Any) -> None:

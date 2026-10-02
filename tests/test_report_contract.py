@@ -255,6 +255,57 @@ def test_malformed_reports_are_rejected_by_schema_and_validator(
     _assert_rejected(report, message)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_metrics_are_rejected_before_they_reach_the_file(
+    tmp_path: Path, value: float
+) -> None:
+    # JSON has no NaN or Infinity, so the schema cannot name them: a file
+    # holding those tokens is not JSON at all. The runtime validator is the
+    # side that rejects them, in top-level and finding metrics alike.
+    report = _fixture("diagnose_findings.json")
+    report["metrics"]["utilization_ratio"] = value
+    with pytest.raises(ValueError, match="metrics.utilization_ratio must be finite"):
+        validate_report(report)
+
+    report = _fixture("diagnose_findings.json")
+    report["findings"][0]["metrics"]["num_ooms"] = value
+    with pytest.raises(ValueError, match=r"findings\[0\].metrics.num_ooms must be"):
+        validate_report(report)
+    path = tmp_path / "report.json"
+    with pytest.raises(ValueError):
+        write_report(path, report)
+    assert not path.exists()
+
+
+def test_write_report_never_emits_nan_even_if_validation_is_bypassed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("stormlog.report.validate_report", lambda report: None)
+    report = _fixture("diagnose_findings.json")
+    report["metrics"]["utilization_ratio"] = float("nan")
+    path = tmp_path / "report.json"
+
+    with pytest.raises(ValueError):
+        write_report(path, report)
+
+    assert not path.exists()
+    assert not path.with_name("report.json.tmp").exists()
+
+
+def test_load_report_rejects_nan_tokens(tmp_path: Path) -> None:
+    # Python's json module parses the NaN extension; the validator must
+    # still refuse the value so a non-JSON file is not read as a report.
+    text = json.dumps(_fixture("diagnose_findings.json")).replace(
+        '"utilization_ratio": 0.9', '"utilization_ratio": NaN'
+    )
+    assert "NaN" in text
+    path = tmp_path / "report.json"
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="utilization_ratio must be finite"):
+        load_report(path)
+
+
 def test_write_and_load_report_round_trip(tmp_path: Path) -> None:
     report = _fixture("diagnose_findings.json")
     path = tmp_path / "report.json"

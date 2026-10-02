@@ -166,6 +166,33 @@ def test_report_tolerates_partial_summaries() -> None:
     assert report["payload"]["backend"] is None
 
 
+def test_non_finite_summary_values_become_null_metrics() -> None:
+    # A NaN or infinite ratio in a summary cannot be written as JSON; the
+    # report records the metric as unknown rather than failing to write.
+    report = build_diagnose_report(
+        tool_name="gpumemprof",
+        summary=_summary(
+            utilization_ratio=float("nan"), fragmentation_ratio=float("inf")
+        ),
+        exit_code=ExitCode.FINDINGS,
+        session_id="session-4",
+        files=["diagnostic_summary.json", "manifest.json"],
+        thresholds={"high_utilization": 0.85},
+    )
+
+    _assert_valid(report)
+    assert report["metrics"]["utilization_ratio"] is None
+    assert report["metrics"]["fragmentation_ratio"] is None
+    by_id = {finding["id"]: finding for finding in report["findings"]}
+    assert by_id["diagnose.high_utilization"]["metrics"] == {
+        "utilization_ratio": None,
+        "threshold": 0.85,
+    }
+    assert by_id["diagnose.fragmentation_warning"]["metrics"] == {
+        "fragmentation_ratio": None
+    }
+
+
 def test_incomplete_report_claims_no_findings() -> None:
     report = build_diagnose_report(
         tool_name="gpumemprof",

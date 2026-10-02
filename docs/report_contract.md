@@ -120,7 +120,7 @@ strict (`additionalProperties: false` at the top level).
 | `tool` | yes | `name` (console script), `command` (subcommand), optional `version` and `argv`. |
 | `verdict` | yes | `status`, `exit_code`, and a one-line `summary`. `status` and `exit_code` must pair as in the table above; the schema enforces it. |
 | `findings` | yes | A list, possibly empty. Each finding has a stable `id`, a `kind`, a `severity` (`info`, `warning`, `critical`), a `title`, an optional `message`, optional `metrics`, and a list of `evidence` pointers. |
-| `metrics` | no | Flat `name -> number or null`. |
+| `metrics` | no | Flat `name -> number or null`. Numbers are finite: JSON has no NaN or Infinity, so the schema cannot name them; `stormlog.report` rejects them on write and on load, and a producer records a value it cannot represent as `null`. |
 | `artifacts` | no | Files the command wrote or relied on: `kind`, `path`, optional `format` and `schema_version`. |
 | `recommendations` | no | Short actions, one string each. |
 | `session_id`, `run_id` | no | Identity for joins with sessions and [run envelopes](run_envelopes.md). |
