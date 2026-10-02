@@ -271,3 +271,54 @@ iteration (3,600 of 3,601). The one copy made after the loop stayed
 through their launch calls, counted the two streams' overlap once (busy
 305.8 ms against 318.3 ms summed), and produced identical results with the
 profiler on and off.
+
+### Nsight Systems reports
+
+`import-trace` also reads Nsight Systems reports exported to SQLite. The same
+linking, record detail, and accounting apply:
+
+```bash
+nsys profile --trace=cuda,nvtx --cuda-graph-trace=node -o run python serve.py
+nsys export --type sqlite run.nsys-rep
+stormlog infer import-trace infer.jsonl run.sqlite
+```
+
+- **Iteration ranges are NVTX ranges** with the same
+  `stormlog.iteration/<producer_id>/<iteration_id>` name. Emit them with
+  `iteration_range(..., nvtx=True)`; a `record_function` range alone is not
+  visible to Nsight Systems.
+- **Record CUDA graphs per node** with `--cuda-graph-trace=node`. At the default
+  graph-level tracing Nsight Systems writes one row per graph instead of its
+  kernels, and those rows are not imported.
+- **Several processes in one report** are handled: launches are matched to GPU
+  work by process and correlation ID, and each device is reported per process.
+- **The report names the GPUs.** Each process's CUDA device is mapped to its
+  GPU UUID from the report's own tables (`TARGET_INFO_CUDA_DEVICE`, or
+  `TARGET_INFO_CUDA_CONTEXT_INFO` in older exports such as nsys 2024.4's), so
+  `CUDA_VISIBLE_DEVICES` renumbering needs no `--device-uuid`. A
+  `--device-uuid` entry is used only for a device the report does not name.
+- **A `.nsys-rep` file is registered, not read.** Its format is not public, so
+  the import notes that it must be exported to SQLite first.
+- **Event loss is unknown** (`null`), as for Kineto traces: the exported tables
+  this reader uses do not report dropped CUPTI records.
+- **Attachment.** The report is registered as `nsys:<file name>:<digest>`.
+
+Run the scenario with `--external` to get a workload with NVTX iteration ranges
+and no PyTorch profiler, since two CUPTI clients cannot run at once. On an
+NVIDIA A30, exported with nsys 2024.4 (200 steps after 20 warmup steps, each
+in its own iteration range), the import linked 3,960 of 3,979 GPU events to
+the 220 iterations, including all 2,640 graph-replay events, and wrote 1,779
+launch records. The other 19 events were setup and teardown work launched
+outside any iteration range, such as initializing the inputs and the copy
+after the loop. The report named the GPU's UUID, and `account_gpu_time` on the
+records gave 384.74 ms busy, the same to the nanosecond as the union of the
+GPU events, against 400.72 ms summed.
+
+The same workload under the PyTorch profiler gave the same structure. In both
+captures each of the 200 steps had 12 kernels, all from the graph replay, and
+6 memsets, and the two streams overlapped by 4% of the summed time. Median
+kernel durations agreed within 3% (the matrix multiply took 246 µs under
+Kineto and 251 µs under Nsight), and median busy time per step within 0.6%
+(1.535 ms and 1.544 ms). The first 42 Nsight steps were about 1.5× slower in
+every kernel on both streams. That fits a GPU still raising its clocks after
+20 warmup steps; the Kineto capture ran after five unprofiled repeats.

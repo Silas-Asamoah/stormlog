@@ -15,6 +15,15 @@ trace, and checks that:
 It also reports the profiler's throughput cost. Run on a CUDA host:
 
     python -m examples.scenarios.trace_import_scenario --steps 200
+
+With ``--external`` it only runs the workload, with NVTX iteration ranges and
+no PyTorch profiler, for capture by Nsight Systems (two CUPTI clients cannot
+run at once):
+
+    nsys profile --trace=cuda,nvtx --cuda-graph-trace=node -o run \\
+        python -m examples.scenarios.trace_import_scenario --external
+    nsys export --type sqlite run.nsys-rep
+    stormlog infer import-trace infer.jsonl run.sqlite
 """
 
 from __future__ import annotations
@@ -69,12 +78,14 @@ class Workload:
         return left + right + self.graph_out
 
 
-def run(workload: Workload, steps: int) -> tuple[float, torch.Tensor]:
+def run(
+    workload: Workload, steps: int, *, label: str = "step", nvtx: bool = False
+) -> tuple[float, torch.Tensor]:
     torch.cuda.synchronize()
     start = time.perf_counter()
     outputs = []
     for index in range(steps):
-        with iteration_range(PRODUCER, f"step-{index}"):
+        with iteration_range(PRODUCER, f"{label}-{index}", nvtx=nvtx):
             outputs.append(workload.step())
     torch.cuda.synchronize()
     return time.perf_counter() - start, outputs[-1].clone()
@@ -86,7 +97,19 @@ def main() -> None:
     parser.add_argument("--size", type=int, default=1024)
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument(
+        "--external",
+        action="store_true",
+        help="Run with NVTX ranges and no PyTorch profiler, for Nsight Systems",
+    )
     args = parser.parse_args()
+    if args.external:
+        workload = Workload(args.size)
+        # Nsight records the warmup too; its own IDs keep iterations unique.
+        run(workload, 20, label="warmup", nvtx=True)
+        seconds, _ = run(workload, args.steps, nvtx=True)
+        print(json.dumps({"steps": args.steps, "seconds": seconds}))
+        return
 
     workload = Workload(args.size)
     run(workload, 20)
