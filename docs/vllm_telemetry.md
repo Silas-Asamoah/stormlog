@@ -53,7 +53,7 @@ stormlog infer profile \
 
 | Flag | What it does |
 | --- | --- |
-| `--vllm-metrics [URL]` | Scrape `/metrics` just before each phase's first send, after its drain, and every `--vllm-metrics-interval` seconds (default 1) in between. Without a URL, the endpoint's origin plus `/metrics`. |
+| `--vllm-metrics [URL]` | Scrape `/metrics` just before each phase's first send, after its drain, and every `--vllm-metrics-interval` seconds (default 1) in between. Without a URL, the endpoint's origin plus `/metrics`. The endpoint's bearer token (`--api-key`, `OPENAI_API_KEY`) goes with the scrape only when the URL has the endpoint's scheme, host and port; any other origin is scraped without credentials, and the run says so once. |
 | `--vllm-spans-listen [HOST:PORT]` | Run an OTLP/HTTP receiver (default `127.0.0.1:4318`) for the length of the run and keep every span vLLM exports to it. |
 | `--vllm-spans-drain SECONDS` | Keep the receiver listening this long after the last phase (default 6), because vLLM's exporter flushes spans in batches every 5 s (`OTEL_BSP_SCHEDULE_DELAY`), so the last requests' spans leave after the last answer. |
 | `infer analyze --vllm-spans FILE` | Load spans someone else collected: an OTLP JSON export, or one span per line. May be given more than once. |
@@ -61,7 +61,10 @@ stormlog infer profile \
 Scrapes are stamped on the client's clock, like the phase windows, so no
 clock alignment is involved. A scrape that fails or returns something that
 is not Prometheus text is recorded with its reason and the run goes on; the
-first failure is printed once. The receiver binds before any request is
+first failure is printed once. A run stopped with Ctrl+C still takes the
+phase-end scrape, with a 2 s timeout so a server that stopped answering
+cannot hold the stop back, and still writes the capability records before
+the session's last word. The receiver binds before any request is
 sent; a port it cannot bind is recorded as unavailable, with the error, and
 the run goes on without spans. Without the `infer-otlp` extra the receiver
 still listens and accepts OTLP JSON, but vLLM's exporter sends protobuf, so

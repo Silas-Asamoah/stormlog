@@ -40,6 +40,9 @@ from .vllm_telemetry import (
 DEFAULT_METRICS_PATH = "/metrics"
 AUTO_METRICS_URL = "auto"
 CAPABILITY_COMPONENT = "vllm.metrics"
+# The phase-end scrape of a run being stopped waits at most this long, so a
+# server that stopped answering cannot hold Ctrl+C back.
+INTERRUPT_SCRAPE_TIMEOUT_SECONDS = 2.0
 
 
 def resolve_metrics_url(endpoint: str, requested: str | None) -> str | None:
@@ -52,6 +55,38 @@ def resolve_metrics_url(endpoint: str, requested: str | None) -> str | None:
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         raise ValueError("--vllm-metrics needs a URL when the endpoint is not http(s)")
     return f"{parts.scheme}://{parts.netloc}{DEFAULT_METRICS_PATH}"
+
+
+def metrics_api_key(
+    endpoint: str,
+    url: str,
+    api_key: str | None,
+    on_warning: Callable[[str], None] | None = None,
+) -> str | None:
+    """The bearer token for scrapes: the endpoint's, and only on its origin.
+
+    A metrics URL on another scheme, host or port is scraped without
+    credentials, so the token given for the inference endpoint never goes
+    anywhere else; the run says so once.
+    """
+    if api_key is None or _origin(endpoint) == _origin(url) is not None:
+        return api_key
+    if on_warning is not None:
+        on_warning(
+            f"the bearer token is not sent to {redact_url(url) or url}: it is not "
+            "the endpoint's origin, so scrapes go out without credentials"
+        )
+    return None
+
+
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    """Scheme, host and port as written; None for a URL without a usable port."""
+    parts = urllib.parse.urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    return (parts.scheme.lower(), (parts.hostname or "").lower(), port)
 
 
 @dataclass(frozen=True)
@@ -117,12 +152,25 @@ class VllmMetricsScraper:
         self.last_error: str | None = None
 
     def scrape(
-        self, *, marker: str, case_id: str | None = None, phase: str | None = None
+        self,
+        *,
+        marker: str,
+        case_id: str | None = None,
+        phase: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> VllmScrapeRecord:
-        """Fetch and parse once; the record says what happened either way."""
+        """Fetch and parse once; the record says what happened either way.
+
+        ``timeout_seconds`` overrides the scraper's own for one scrape, for
+        the one taken on the way out of an interrupted run.
+        """
         observed_at_ns = time.time_ns()
         result = fetch_metrics(
-            self.url, timeout_seconds=self.timeout_seconds, api_key=self.api_key
+            self.url,
+            timeout_seconds=(
+                self.timeout_seconds if timeout_seconds is None else timeout_seconds
+            ),
+            api_key=self.api_key,
         )
         if result.text is None:
             return self._failed(observed_at_ns, marker, case_id, phase, result)
@@ -215,6 +263,7 @@ class VllmMetricsScraper:
             "url": self.source_url,
             "interval_seconds": self.interval_seconds,
             "timeout_seconds": self.timeout_seconds,
+            "authorization": "bearer" if self.api_key else None,
         }
 
     def capability_event(self, context: CorrelationContext) -> CapabilityEvent:

@@ -40,7 +40,11 @@ from .openai_client import (
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter
-from .vllm_scraper import VllmMetricsScraper
+from .vllm_scraper import (
+    INTERRUPT_SCRAPE_TIMEOUT_SECONDS,
+    VllmMetricsScraper,
+    metrics_api_key,
+)
 from .vllm_spans import OTLP_EXTRA_HINT, OtlpSpanReceiver, span_capability_event
 from .vllm_telemetry import MARKER_PHASE_END, MARKER_PHASE_START
 from .workload import workload_record
@@ -107,7 +111,12 @@ class InferenceProfiler:
             session_id=self.session.session_id,
             run_id=self.run_id,
             clock_domain=wall_clock_domain(self.session.host, host_boot_id()),
-            api_key=config.api_key,
+            api_key=metrics_api_key(
+                config.endpoint,
+                config.vllm_metrics_url,
+                config.api_key,
+                on_warning=self.on_warning,
+            ),
             on_warning=self.on_warning,
         )
 
@@ -239,7 +248,10 @@ class InferenceProfiler:
                 stop_spans.set()
                 await span_task
                 self._stop_span_receiver(writer)
-            self._write_capabilities(writer)
+                # Written on the way out of an interrupted run too, so the
+                # artifact says what the engine exposed before it says why
+                # the run stopped.
+                self._write_capabilities(writer)
 
     async def _wait_for_late_spans(self) -> None:
         """Keep the receiver up after the last phase for the exporter's last batch.
@@ -516,12 +528,23 @@ class InferenceProfiler:
                 stop_event=stop_scraping,
             )
         )
+        completed = False
         try:
-            return await self._run_arrivals(request, total_requests, duration_seconds)
+            window = await self._run_arrivals(request, total_requests, duration_seconds)
+            completed = True
+            return window
         finally:
             stop_scraping.set()
             await scrape_task
-            await self._scrape(scraper, MARKER_PHASE_END, case_id, phase, writer)
+            # A cancelled phase still gets its end scrape, on a short clock.
+            await self._scrape(
+                scraper,
+                MARKER_PHASE_END,
+                case_id,
+                phase,
+                writer,
+                timeout_seconds=None if completed else INTERRUPT_SCRAPE_TIMEOUT_SECONDS,
+            )
 
     async def _run_arrivals(
         self,
@@ -540,9 +563,14 @@ class InferenceProfiler:
         case_id: str,
         phase: str,
         writer: JsonlEventWriter,
+        timeout_seconds: float | None = None,
     ) -> None:
         record = await asyncio.to_thread(
-            scraper.scrape, marker=marker, case_id=case_id, phase=phase
+            scraper.scrape,
+            marker=marker,
+            case_id=case_id,
+            phase=phase,
+            timeout_seconds=timeout_seconds,
         )
         writer.append(record.to_record())
 

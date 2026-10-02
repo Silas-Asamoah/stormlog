@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import socket
@@ -20,8 +21,10 @@ from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
 from stormlog.infer.profile import InferenceProfiler
 from stormlog.infer.vllm_scraper import (
+    INTERRUPT_SCRAPE_TIMEOUT_SECONDS,
     VllmMetricsScraper,
     fetch_metrics,
+    metrics_api_key,
     resolve_metrics_url,
 )
 from stormlog.infer.vllm_telemetry import (
@@ -43,6 +46,7 @@ class _FakeVllmHandler(BaseHTTPRequestHandler):
 
     protocol_version = "HTTP/1.1"
     seen_request_ids: list[str | None] = []
+    seen_metrics_auth: list[str | None] = []
     metrics_status = 200
     metrics_body = METRICS_TEXT
 
@@ -50,6 +54,7 @@ class _FakeVllmHandler(BaseHTTPRequestHandler):
         if self.path != "/metrics":
             self.send_error(404)
             return
+        type(self).seen_metrics_auth.append(self.headers.get("Authorization"))
         body = type(self).metrics_body.encode("utf-8")
         self.send_response(type(self).metrics_status)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
@@ -94,6 +99,7 @@ def _fake_vllm(
     *, metrics_status: int = 200, metrics_body: str = METRICS_TEXT
 ) -> Iterator[str]:
     _FakeVllmHandler.seen_request_ids = []
+    _FakeVllmHandler.seen_metrics_auth = []
     _FakeVllmHandler.metrics_status = metrics_status
     _FakeVllmHandler.metrics_body = metrics_body
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeVllmHandler)
@@ -113,7 +119,18 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _run(tmp_path: Path, origin: str, **changes: Any) -> list[dict[str, Any]]:
+def _run(
+    tmp_path: Path,
+    origin: str,
+    *,
+    raises: type[BaseException] | None = None,
+    **changes: Any,
+) -> list[dict[str, Any]]:
+    """Run a profile against the fake server and return its records plus warnings.
+
+    ``raises`` is the exception the run is expected to end with, for a run
+    that is interrupted.
+    """
     output = tmp_path / "infer.jsonl"
     values: dict[str, Any] = {
         "endpoint": f"{origin}/v1/chat/completions",
@@ -133,7 +150,12 @@ def _run(tmp_path: Path, origin: str, **changes: Any) -> list[dict[str, Any]]:
     }
     values.update(changes)
     warnings: list[str] = []
-    InferenceProfiler(ProfileConfig(**values), on_warning=warnings.append).run()
+    profiler = InferenceProfiler(ProfileConfig(**values), on_warning=warnings.append)
+    if raises is None:
+        profiler.run()
+    else:
+        with pytest.raises(raises):
+            profiler.run()
     records = [
         json.loads(line)
         for line in output.read_text(encoding="utf-8").splitlines()
@@ -185,6 +207,7 @@ class TestProfileScrapes:
             "url": f"{origin}/metrics",
             "interval_seconds": 0.1,
             "timeout_seconds": 60.0,
+            "authorization": None,
         }
         capability = _of_type(records, "infer.capabilities")[0]
         assert capability["component"] == "vllm.metrics"
@@ -237,6 +260,63 @@ class TestProfileScrapes:
         assert all(s["error"].startswith("unparseable response") for s in scrapes)
         assert all(s["http_status"] == 200 for s in scrapes)
 
+    def test_bearer_token_goes_only_to_the_endpoints_origin(
+        self, tmp_path: Path
+    ) -> None:
+        with _fake_vllm() as origin:
+            records = _run(tmp_path, origin, api_key="secret", warmup_requests=0)
+            assert set(_FakeVllmHandler.seen_metrics_auth) == {"Bearer secret"}
+        session = _of_type(records, "infer.session")[0]
+        assert session["config"]["vllm_metrics"]["authorization"] == "bearer"
+        assert records[-1]["warnings"] == []
+        # A metrics page on another port is another origin: no token.
+        with _fake_vllm() as origin, _fake_vllm() as other:
+            records = _run(
+                tmp_path,
+                origin,
+                api_key="secret",
+                warmup_requests=0,
+                vllm_metrics_url=f"{other}/metrics",
+            )
+            assert set(_FakeVllmHandler.seen_metrics_auth) == {None}
+        session = _of_type(records, "infer.session")[0]
+        assert session["config"]["vllm_metrics"]["authorization"] is None
+        assert all(s["status"] == "ok" for s in _of_type(records, "infer.vllm_scrape"))
+        warnings = records[-1]["warnings"]
+        assert len(warnings) == 1 and "not sent" in warnings[0]
+
+    def test_an_interrupted_run_still_scrapes_and_writes_capabilities(
+        self, tmp_path: Path
+    ) -> None:
+        timeouts: list[float] = []
+
+        def spy(url: str, **kwargs: Any) -> Any:
+            timeouts.append(kwargs["timeout_seconds"])
+            return fetch_metrics(url, **kwargs)
+
+        with (
+            _fake_vllm() as origin,
+            mock.patch("stormlog.infer.vllm_scraper.fetch_metrics", spy),
+            mock.patch.object(
+                InferenceProfiler, "_run_arrivals", side_effect=asyncio.CancelledError
+            ),
+        ):
+            records = _run(
+                tmp_path, origin, warmup_requests=0, raises=asyncio.CancelledError
+            )
+        scrapes = _of_type(records, "infer.vllm_scrape")
+        assert [s["marker"] for s in scrapes] == [MARKER_PHASE_START, MARKER_PHASE_END]
+        assert all(s["status"] == "ok" for s in scrapes)
+        # The end scrape of a cancelled phase runs on the short clock.
+        assert timeouts == [60.0, INTERRUPT_SCRAPE_TIMEOUT_SECONDS]
+        capabilities = _of_type(records, "infer.capabilities")
+        assert [c["component"] for c in capabilities] == ["vllm.metrics"]
+        assert capabilities[0]["available"] is True
+        # Capabilities land before the session's last word, which says why.
+        tail = [r["event_type"] for r in records[-3:-1]]
+        assert tail == ["infer.capabilities", "infer.session"]
+        assert records[-2]["status"] == "interrupted"
+
     def test_without_the_flag_nothing_is_scraped_or_sent_differently(
         self, tmp_path: Path
     ) -> None:
@@ -276,6 +356,24 @@ class TestScraperUnits:
         assert (scraper.ok_scrapes, scraper.failed_scrapes) == (0, 2)
         assert len(warnings) == 1
         VALIDATOR.validate(first.to_record())
+
+    def test_metrics_api_key_stays_on_the_endpoints_origin(self) -> None:
+        endpoint = "http://host:8000/v1/chat/completions"
+        warnings: list[str] = []
+        same = "http://host:8000/metrics"
+        assert metrics_api_key(endpoint, same, "k", warnings.append) == "k"
+        assert (
+            metrics_api_key(endpoint, "HTTP://HOST:8000/m", "k", warnings.append) == "k"
+        )
+        assert metrics_api_key(endpoint, "http://other:8000/m", None) is None
+        assert warnings == []
+        for other in (
+            "http://host:9000/metrics",
+            "https://host:8000/metrics",
+            "http://other:8000/metrics",
+        ):
+            assert metrics_api_key(endpoint, other, "k", warnings.append) is None
+        assert len(warnings) == 3 and all("not sent" in w for w in warnings)
 
     def test_resolve_metrics_url(self) -> None:
         endpoint = "http://host:8000/v1/chat/completions"
