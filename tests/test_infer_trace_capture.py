@@ -552,14 +552,14 @@ def test_a_window_without_a_new_trace_stops_waiting_after_the_grace(
 
 
 def test_an_oversized_trace_is_registered_but_not_parsed(tmp_path: Path) -> None:
-    from stormlog.infer.trace_import import KinetoTraceCollector
+    from stormlog.infer.trace_import import TraceFileCollector
 
     big = tmp_path / "rank0.big.pt.trace.json"
     big.write_text(_kineto("BIG") + " " * 5000, encoding="utf-8")
     small = tmp_path / "rank0.small.pt.trace.json"
     small.write_text(_kineto("SMALL"), encoding="utf-8")
 
-    capture = KinetoTraceCollector([big, small], max_bytes=2000).collect(
+    capture = TraceFileCollector([big, small], max_bytes=2000).collect(
         run_id="r", session_id="s"
     )
 
@@ -608,7 +608,7 @@ def test_a_trace_registered_over_the_size_bound_can_be_imported_later(
         CorrelationContext,
     )
     from stormlog.infer.trace_import import (
-        KinetoTraceCollector,
+        TraceFileCollector,
         import_traces_into_artifact,
     )
     from stormlog.session import create_session_summary
@@ -636,7 +636,7 @@ def test_a_trace_registered_over_the_size_bound_can_be_imported_later(
         artifact,
         run_id="r",
         session=create_session_summary(source="test", session_id="s"),
-        trace_collector=KinetoTraceCollector([big], max_bytes=2000),
+        trace_collector=TraceFileCollector([big], max_bytes=2000),
     )
 
     def activities() -> int:
