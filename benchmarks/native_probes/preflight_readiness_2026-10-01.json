@@ -64,8 +64,14 @@
   ],
   "cloud": {
     "instance_actions_this_preflight": "none",
-    "instance_state_this_preflight": "not_queried",
-    "cost_this_preflight": "unknown; no paid instance action performed",
+    "instance_state_this_preflight": "Paused",
+    "read_only_query": "jl get 522535 --json",
+    "instance_id": 522535,
+    "instance_gpu": "L4",
+    "instance_spot": false,
+    "reported_runtime": "23 hours 45 minutes",
+    "reported_cost_usd": 0.322,
+    "reported_values_interpretation": "Provider fields were returned while the instance was paused; cumulative billable runtime and incremental preflight cost are unknown.",
     "final_run_cost_estimate": null
   }
 }
