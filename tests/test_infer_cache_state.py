@@ -12,13 +12,9 @@ from typing import Any
 
 import pytest
 
+from stormlog.exit_codes import ExitCode
 from stormlog.infer.analysis import format_analysis_text
-from stormlog.infer.cache_state import (
-    CacheReset,
-    cache_summary,
-    reset_cache,
-    run_kind,
-)
+from stormlog.infer.cache_state import CacheReset, cache_summary, reset_cache, run_kind
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
 from stormlog.infer.profile import InferenceProfiler
@@ -193,7 +189,7 @@ def test_cli_warns_when_a_cold_cache_has_no_reset(tmp_path: Path) -> None:
 
 def test_cli_rejects_a_reset_url_that_is_not_http(tmp_path: Path) -> None:
     code, stderr = _cli(tmp_path, "--cache-reset-url", "file:///tmp/reset")
-    assert code == 1
+    assert code == ExitCode.USAGE
     assert "--cache-reset-url must use http:// or https://" in stderr
     assert not (tmp_path / "infer.jsonl").exists()
 

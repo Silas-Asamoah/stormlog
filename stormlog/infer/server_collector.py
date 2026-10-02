@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 import psutil
 
+from .errors import InferUsageError
 from .host_clock import host_boot_id
 from .telemetry import ServerIdentity, TelemetrySample, validate_group_membership
 
@@ -70,6 +71,10 @@ def _configure_nvml_library(lib: ctypes.CDLL) -> None:
     lib.nvmlDeviceGetMemoryInfo_v2.restype = ctypes.c_int
 
 
+# NVML_ERROR_INVALID_ARGUMENT and NVML_ERROR_NOT_FOUND: the host has no such device.
+_NVML_NO_SUCH_DEVICE = frozenset({2, 6})
+
+
 def _lookup_nvml_handle(
     lib: ctypes.CDLL, device_index: int, expected_uuid: str | None
 ) -> ctypes.c_void_p:
@@ -85,6 +90,13 @@ def _lookup_nvml_handle(
         code = lib.nvmlDeviceGetHandleByUUID(
             expected_uuid.encode(), ctypes.byref(handle)
         )
+    if code in _NVML_NO_SUCH_DEVICE:
+        named = (
+            f"--device-uuid {expected_uuid}"
+            if expected_uuid is not None
+            else f"--device-index {device_index}"
+        )
+        raise InferUsageError(f"{named}: no such GPU on this host (NVML code {code})")
     if code != 0:
         raise RuntimeError(f"NVML device lookup failed (code {code})")
     return handle
@@ -156,6 +168,10 @@ class CollectionResult:
     warnings: tuple[str, ...] = ()
 
 
+class NvmlUnavailableError(RuntimeError):
+    """The NVML library cannot be loaded on this host."""
+
+
 class NvmlMemorySource:
     """Read NVML v2 memory counters from a verified GPU or MIG handle."""
 
@@ -163,7 +179,7 @@ class NvmlMemorySource:
         try:
             self._lib = ctypes.CDLL("libnvidia-ml.so.1")
         except OSError as exc:
-            raise RuntimeError("NVML is unavailable on this host") from exc
+            raise NvmlUnavailableError("NVML is unavailable on this host") from exc
         lib = self._lib
         _configure_nvml_library(lib)
         self._closed = False
@@ -268,12 +284,14 @@ def collect_server_telemetry(
     ``world_size`` declare this process as one member of a server group, such as
     one tensor-parallel worker.
     """
-    _validate_collection_options(run_id, pid, no_gpu, device_uuid, gpu_source)
-    _validate_timing(interval_seconds, duration_seconds)
-    validate_group_membership(group_id, rank, world_size)
-    process = psutil.Process(pid)
-    if not process.is_running():
-        raise ValueError("server process is not running")
+    try:
+        _validate_collection_options(run_id, pid, no_gpu, device_uuid, gpu_source)
+        _validate_timing(interval_seconds, duration_seconds)
+        validate_group_membership(group_id, rank, world_size)
+        process = _server_process(pid)
+    except ValueError as exc:
+        # Each check is about the caller's options or the process it named.
+        raise InferUsageError(str(exc)) from exc
     source, own_source = _gpu_source(gpu_source, no_gpu, device_index, device_uuid)
     try:
         warnings = _gpu_process_warnings(process, source)
@@ -297,6 +315,16 @@ def collect_server_telemetry(
     finally:
         if own_source and source:
             source.close()
+
+
+def _server_process(pid: int) -> psutil.Process:
+    try:
+        process = psutil.Process(pid)
+    except psutil.NoSuchProcess as exc:
+        raise ValueError(f"no process with pid {pid}") from exc
+    if not process.is_running():
+        raise ValueError("server process is not running")
+    return process
 
 
 def _validate_collection_options(

@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from stormlog.exit_codes import ExitCode
 from stormlog.infer.analysis import format_analysis_text
 from stormlog.infer.arrivals import load_arrival_trace
 from stormlog.infer.cache_state import redact_url
@@ -282,7 +283,7 @@ def test_cli_rejects_bad_extra_bodies_before_writing(
                 str(tmp_path / "never.jsonl"),
             ]
         )
-    assert code == 1
+    assert code == ExitCode.USAGE
     assert message in stderr.getvalue()
     assert not (tmp_path / "never.jsonl").exists()
 

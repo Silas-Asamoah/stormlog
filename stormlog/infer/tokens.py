@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any, Protocol
 
+from .errors import TokenizerUnavailableError
+
 logger = logging.getLogger(__name__)
 
 
@@ -179,7 +181,11 @@ def build_token_counter(
         logger.debug("transformers unavailable in auto mode: %s", exc)
 
     if strict:
-        raise RuntimeError("No configured tokenizer is available")
+        # A setting the run cannot honour, so the CLI reports it as usage.
+        raise TokenizerUnavailableError(
+            "No configured tokenizer is available: install tiktoken or "
+            "transformers, or drop strict token counts"
+        )
     return EstimatedTokenCounter()
 
 
