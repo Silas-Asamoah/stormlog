@@ -289,7 +289,12 @@ def test_accounting_busy_time_is_exact_in_both_detail_modes(
     spans = 80_000 if detail == "launch" else 79_000
     assert capture.summary["devices"]["0"]["launch_span_ns"] == spans
     it1 = accounting.iterations[EntityRef(ENGINE, "it-1")]
-    assert it1.gpu[DeviceClock("GPU-abc", "kineto:worker-a:TRACE1", "device")].busy_ns
+    clock = DeviceClock("GPU-abc", "kineto:worker-a:TRACE1", "device")
+    assert it1.gpu[clock].busy_ns == 30_000
+    # At launch detail the "summed" time adds per-launch unions, so overlap
+    # inside a launch is already removed; the per-event sum stays in metadata.
+    summed, count = (89_000, 7) if detail == "kernel" else (79_000, 4)
+    assert (device.summed_activity_ns, device.activity_count) == (summed, count)
     assert len(accounting.unattributed_activity_refs) == 2
 
 
@@ -460,3 +465,28 @@ def _with_iterations(capture: TraceCapture) -> list[CorrelationEvent]:
         )
     events.extend(capture.events)
     return events
+
+
+def test_truncated_and_malformed_traces_are_value_errors(tmp_path: Path) -> None:
+    whole = _write(tmp_path, _trace_document(), compress=True).read_bytes()
+    truncated = tmp_path / "truncated.pt.trace.json.gz"
+    truncated.write_bytes(whole[: len(whole) // 2])
+    with pytest.raises(ValueError, match="truncated or corrupt"):
+        load_kineto_trace(truncated)
+
+    document = _trace_document()
+    del document["traceEvents"][4]["tid"]
+    with pytest.raises(ValueError, match=r"traceEvents\[4\] is malformed"):
+        load_kineto_trace(_write(tmp_path, document))
+
+
+def test_a_launch_at_a_range_boundary_belongs_to_the_range_it_starts(
+    tmp_path: Path,
+) -> None:
+    document = _trace_document()
+    document["traceEvents"].append(_launch("cudaLaunchKernel", 9, 100.0))
+    document["traceEvents"].append(_gpu("kernel", 9, 101.0, 1.0))
+    trace = load_kineto_trace(_write(tmp_path, document))
+    event = next(e for e in trace.gpu_events if e.correlation == 9)
+
+    assert link_gpu_event(trace, event).iteration_ref == EntityRef(ENGINE, "it-2")

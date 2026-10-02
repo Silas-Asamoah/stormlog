@@ -119,9 +119,9 @@ def load_kineto_trace(path: str | Path) -> KinetoTrace:
     ):
         raise ValueError("not a Kineto trace: missing traceEvents")
     trace = _trace_header(document)
-    for event in document["traceEvents"]:
+    for index, event in enumerate(document["traceEvents"]):
         if isinstance(event, dict) and event.get("ph") == "X":
-            _add_event(trace, event)
+            _add_checked_event(trace, event, index)
     _index_spans(trace)
     return trace
 
@@ -179,13 +179,24 @@ def import_kineto_trace(
 
 
 def _read_json(path: Path) -> Any:
+    """Load the trace; a truncated or corrupt file is a ``ValueError``."""
     with path.open("rb") as handle:
         magic = handle.read(2)
-    if magic == b"\x1f\x8b":
-        with gzip.open(path, "rt", encoding="utf-8") as compressed:
-            return json.load(compressed)
-    with path.open(encoding="utf-8") as plain:
-        return json.load(plain)
+    try:
+        if magic == b"\x1f\x8b":
+            with gzip.open(path, "rt", encoding="utf-8") as compressed:
+                return json.load(compressed)
+        with path.open(encoding="utf-8") as plain:
+            return json.load(plain)
+    except (EOFError, gzip.BadGzipFile, UnicodeDecodeError) as exc:
+        raise ValueError(f"truncated or corrupt trace file: {exc}") from exc
+
+
+def _add_checked_event(trace: KinetoTrace, event: dict[str, Any], index: int) -> None:
+    try:
+        _add_event(trace, event)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"traceEvents[{index}] is malformed: {exc!r}") from exc
 
 
 def _trace_header(document: dict[str, Any]) -> KinetoTrace:
@@ -278,7 +289,8 @@ def _enclosing_spans(trace: KinetoTrace, launch: LaunchCall) -> list[IterationSp
         span = spans[index]
         if span.start_us < earliest:
             break
-        if span.end_us >= launch.ts_us:
+        # Chrome trace "X" events cover [ts, ts + dur).
+        if launch.ts_us < span.end_us:
             found.append(span)
     return found
 

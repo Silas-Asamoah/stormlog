@@ -200,3 +200,16 @@ def test_cli_exits_invalid_input_for_an_artifact_without_run_identity(
     assert main(["import-trace", str(legacy), str(trace)]) == int(
         ExitCode.INVALID_INPUT
     )
+
+
+def test_cli_exits_invalid_input_for_a_truncated_gzip_trace(tmp_path: Path) -> None:
+    import gzip
+
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    whole = gzip.compress(_trace(tmp_path / "t.json", "T0").read_bytes())
+    truncated = tmp_path / "rank0.pt.trace.json.gz"
+    truncated.write_bytes(whole[: len(whole) // 2])
+
+    assert main(["import-trace", str(artifact), str(truncated)]) == int(
+        ExitCode.INVALID_INPUT
+    )
