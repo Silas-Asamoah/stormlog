@@ -23,6 +23,7 @@ from stormlog.infer.trace_import import (
     artifact_run_identity,
     import_traces_into_artifact,
     parse_device_uuids,
+    trace_attachment_id,
 )
 
 
@@ -125,8 +126,7 @@ def test_import_appends_activity_from_every_trace(tmp_path: Path) -> None:
     records = load_inference_artifact(artifact)
     activities = [r for r in records if isinstance(r, ActivityReferenceEvent)]
     assert {a.trace_attachment_id for a in activities} == {
-        "kineto:rank0.pt.trace.json",
-        "kineto:rank1.pt.trace.json",
+        trace_attachment_id(path) for path in traces
     }
     assert {a.iteration_ref for a in activities} == {EntityRef("engine", "step-1")}
     assert {a.context.run_id for a in activities} == {"run-9"}
@@ -138,8 +138,7 @@ def test_import_appends_activity_from_every_trace(tmp_path: Path) -> None:
     assert len(collector.metadata["summary"]["traces"]) == 2
     envelope = json.loads((tmp_path / "stormlog_run.json").read_text())
     assert {row["attachment_id"] for row in envelope["attachments"]} >= {
-        "kineto:rank0.pt.trace.json",
-        "kineto:rank1.pt.trace.json",
+        trace_attachment_id(path) for path in traces
     }
 
 
@@ -269,8 +268,36 @@ def test_imports_through_a_symlinked_directory_store_paths_that_open(
     row = next(
         r
         for r in json.loads(envelope.read_text())["attachments"]
-        if r["attachment_id"] == "kineto:rank0.pt.trace.json"
+        if r["attachment_id"] == trace_attachment_id(trace)
     )
     assert (envelope.parent / row["path"]).is_file()
     records = load_inference_artifact(artifact)
     assert len([r for r in records if isinstance(r, ActivityReferenceEvent)]) == 1
+
+
+def test_traces_with_the_same_name_in_different_directories_are_distinct(
+    tmp_path: Path,
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    first = _trace(_dir(tmp_path / "run-a") / "rank0.pt.trace.json", "A")
+    second = _trace(_dir(tmp_path / "run-b") / "rank0.pt.trace.json", "B")
+
+    assert main(["import-trace", str(artifact), str(first), str(second)]) == int(
+        ExitCode.OK
+    )
+
+    activities = [
+        r
+        for r in load_inference_artifact(artifact)
+        if isinstance(r, ActivityReferenceEvent)
+    ]
+    assert {a.trace_attachment_id for a in activities} == {
+        trace_attachment_id(first),
+        trace_attachment_id(second),
+    }
+    assert trace_attachment_id(first) != trace_attachment_id(second)
+
+
+def _dir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path

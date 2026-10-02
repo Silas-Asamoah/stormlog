@@ -7,6 +7,7 @@ trace is registered in the run envelope and its GPU activity is appended as
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -59,6 +60,16 @@ def parse_device_uuids(values: Sequence[str]) -> dict[int, str]:
     return mapping
 
 
+def trace_attachment_id(path: Path, prefix: str = "kineto") -> str:
+    """A stable ID per file: its name and a digest of its resolved path.
+
+    The name alone would make ``run-a/rank0.pt.trace.json.gz`` and
+    ``run-b/rank0.pt.trace.json.gz`` the same attachment.
+    """
+    digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}:{path.name}:{digest}"
+
+
 class KinetoTraceCollector:
     """A ``TraceCollector`` over one or more Kineto trace files."""
 
@@ -85,7 +96,7 @@ class KinetoTraceCollector:
 
     def _import(self, path: Path, run_id: str, session_id: str) -> TraceCapture:
         attachment = TraceAttachment(
-            attachment_id=f"kineto:{path.name}",
+            attachment_id=trace_attachment_id(path),
             title=f"Kineto trace {path.name}",
             path=path.resolve(),
             storage="reference",
@@ -213,4 +224,5 @@ __all__ = [
     "import_traces_into_artifact",
     "imported_trace_paths",
     "parse_device_uuids",
+    "trace_attachment_id",
 ]
