@@ -568,18 +568,22 @@ def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig
 def _validate_trace_arguments(args: argparse.Namespace) -> None:
     if args.trace is not None:
         _validate_http_url(args.trace_control_url, "--trace-control-url")
+        if args.trace_dir is not None and not Path(args.trace_dir).is_dir():
+            _print_warning(
+                f"--trace-dir {args.trace_dir} does not exist yet; traces are found "
+                "only if the server creates it and this host can read it"
+            )
         return
-    given = [
-        flag
-        for flag, value in (
-            ("--trace-dir", args.trace_dir),
-            ("--trace-control-url", args.trace_control_url),
-            ("--trace-max-seconds", args.trace_max_seconds),
-            ("--trace-max-bytes", args.trace_max_bytes),
-            ("--trace-device-uuid", args.trace_device_uuid),
-        )
-        if value
-    ]
+    options: tuple[tuple[str, object, object], ...] = (
+        ("--trace-dir", args.trace_dir, None),
+        ("--trace-control-url", args.trace_control_url, None),
+        ("--trace-phase", args.trace_phase, "measured"),
+        ("--trace-max-seconds", args.trace_max_seconds, None),
+        ("--trace-max-bytes", args.trace_max_bytes, None),
+        ("--trace-device-uuid", args.trace_device_uuid, []),
+        ("--trace-detail", args.trace_detail, "launch"),
+    )
+    given = [flag for flag, value, default in options if value != default]
     if given:
         raise ValueError(f"{', '.join(given)} needs --trace")
 

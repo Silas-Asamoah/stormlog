@@ -554,3 +554,29 @@ def test_an_oversized_trace_is_registered_but_not_parsed(tmp_path: Path) -> None
     assert (
         len([e for e in capture.events if isinstance(e, ActivityReferenceEvent)]) == 1
     )
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [("--trace-phase", "warmup"), ("--trace-detail", "kernel")],
+)
+def test_trace_options_with_defaults_also_need_trace(
+    tmp_path: Path, flag: str, value: str
+) -> None:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+        code = infer_main(
+            [
+                "profile",
+                "--endpoint",
+                "http://127.0.0.1:1/v1/chat/completions",
+                "--model",
+                "m",
+                "--output",
+                str(tmp_path / "out.jsonl"),
+                flag,
+                value,
+            ]
+        )
+    assert code == int(ExitCode.USAGE)
+    assert f"{flag} needs --trace" in stderr.getvalue()
