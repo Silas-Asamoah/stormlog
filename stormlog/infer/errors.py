@@ -13,3 +13,12 @@ class InferUsageError(ValueError):
 
 class InferInputError(ValueError):
     """An input file the command cannot read; the CLI exits ``INVALID_INPUT`` (5)."""
+
+
+class TokenizerUnavailableError(InferUsageError, RuntimeError):
+    """Strict token counts were requested but no tokenizer backend loads.
+
+    A usage error for the CLI (exit 2); it is still a ``RuntimeError``, which
+    is what ``build_token_counter`` raised before, so existing callers that
+    catch that keep working.
+    """

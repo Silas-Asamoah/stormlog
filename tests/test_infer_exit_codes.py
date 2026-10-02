@@ -12,6 +12,7 @@ import pytest
 
 from stormlog.exit_codes import ExitCode
 from stormlog.infer.cli import main as infer_main
+from stormlog.infer.tokens import build_token_counter
 
 
 def _infer(*argv: str) -> tuple[int, str]:
@@ -43,6 +44,21 @@ def test_a_requested_tokenizer_that_is_not_installed_is_a_usage_error(
     code, stderr = _profile(tmp_path, "--tokenizer", "tiktoken")
     assert code == ExitCode.USAGE
     assert "install it or choose another --tokenizer" in stderr
+    assert not (tmp_path / "infer.jsonl").exists()
+
+
+def test_strict_token_counts_with_no_tokenizer_backend_is_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # --tokenizer auto tries tiktoken, then transformers; with neither
+    # installed, --strict-token-counts cannot be honoured. That is a
+    # setting the run cannot use, not a crash.
+    monkeypatch.setitem(sys.modules, "tiktoken", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+    code, stderr = _profile(tmp_path, "--tokenizer", "auto", "--strict-token-counts")
+    assert code == ExitCode.USAGE
+    assert "No configured tokenizer is available" in stderr
+    assert "install tiktoken or transformers" in stderr
     assert not (tmp_path / "infer.jsonl").exists()
 
 
@@ -215,3 +231,14 @@ def test_collect_server_names_a_gpu_the_host_does_not_have(
     )
     assert code == expected
     assert message in stderr
+
+
+def test_strict_tokenizer_failure_is_still_a_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Library callers that caught RuntimeError before this was a usage error
+    # keep working.
+    monkeypatch.setitem(sys.modules, "tiktoken", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+    with pytest.raises(RuntimeError, match="No configured tokenizer is available"):
+        build_token_counter(tokenizer="auto", model="fake-model", strict=True)
