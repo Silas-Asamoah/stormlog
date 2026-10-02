@@ -294,6 +294,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Assert requests went to the single server identity in telemetry",
     )
     analyze_parser.add_argument(
+        "--vllm-spans",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help=(
+            "vLLM request spans collected elsewhere, as OTLP JSON or one span "
+            "per line; may be supplied more than once"
+        ),
+    )
+    analyze_parser.add_argument(
         "--clock-offset-ns",
         type=int,
         default=None,
@@ -643,6 +653,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         direct_server=args.direct_server,
         clock_offset_ns=args.clock_offset_ns,
         clock_uncertainty_ns=args.clock_uncertainty_ns,
+        vllm_span_paths=args.vllm_spans,
     )
     if args.format == "json":
         payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
