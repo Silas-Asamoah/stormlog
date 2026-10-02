@@ -272,7 +272,7 @@ the flaky benchmark memory gates
   commands, plus the `stormlog.mlflow_integration` API. Session metrics and
   tags, alert and timeline tables, dashboard HTML, timeline plots, the
   attribution preview and output artifacts are logged to the run. Requires
-  the new `stormlog[mlflow]` extra (`mlflow>=2.4.0`), included in
+  the new `stormlog[mlflow]` extra (`mlflow>=2.10.0`), included in
   `stormlog[all]`.
   ([#206](https://github.com/Silas-Asamoah/stormlog/pull/206),
   [#207](https://github.com/Silas-Asamoah/stormlog/pull/207))
