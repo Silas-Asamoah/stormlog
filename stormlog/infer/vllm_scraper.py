@@ -12,19 +12,22 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from functools import partial
+from typing import Any, TypeVar
 
 from .cache_state import redact_url
 from .correlation_events import CapabilityEvent, CorrelationContext
 from .vllm_metrics import (
     CATALOG,
     VERIFIED_VLLM_VERSION,
+    CompactScrape,
     Discovery,
     compact_scrape,
     discover,
@@ -128,6 +131,60 @@ def fetch_metrics(
         return FetchResult(None, None, f"{type(exc).__name__}: {exc}", elapsed)
 
 
+def _fetch_and_parse(
+    url: str, timeout_seconds: float, api_key: str | None
+) -> tuple[FetchResult, CompactScrape | None]:
+    """Fetch and parse, touching no scraper state, so the work can run on a
+    thread whose result may be dropped."""
+    result = fetch_metrics(url, timeout_seconds=timeout_seconds, api_key=api_key)
+    if result.text is None:
+        return result, None
+    try:
+        return result, compact_scrape(parse_prometheus_text(result.text))
+    except ValueError as exc:
+        failed = FetchResult(
+            None,
+            result.http_status,
+            f"unparseable response: {exc}",
+            result.duration_ms,
+        )
+        return failed, None
+
+
+T = TypeVar("T")
+
+
+async def _off_loop(func: Callable[[], T]) -> T:
+    """Run ``func`` on a daemon thread; cancelling the await abandons it.
+
+    ``asyncio.to_thread`` would make a cancelled caller, and then the
+    interpreter's exit, wait for a fetch blocked on a silent endpoint until
+    its socket timeout. A daemon thread is dropped instead, and its result
+    is discarded because nothing awaits it any more.
+    """
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[T] = loop.create_future()
+
+    def deliver(outcome: Callable[[], None]) -> None:
+        if not future.done():
+            outcome()
+
+    def run() -> None:
+        try:
+            value = func()
+        except BaseException as exc:
+            outcome = partial(future.set_exception, exc)
+        else:
+            outcome = partial(future.set_result, value)
+        try:
+            loop.call_soon_threadsafe(deliver, outcome)
+        except RuntimeError:
+            pass  # the loop is closed: nobody is waiting
+
+    threading.Thread(target=run, name="stormlog-vllm-scrape", daemon=True).start()
+    return await future
+
+
 class VllmMetricsScraper:
     """Turn metrics responses into records and remember what they exposed."""
 
@@ -166,36 +223,57 @@ class VllmMetricsScraper:
         phase: str | None = None,
         timeout_seconds: float | None = None,
     ) -> VllmScrapeRecord:
-        """Fetch and parse once; the record says what happened either way.
+        """Fetch and parse once, here; the record says what happened either way.
 
         ``timeout_seconds`` overrides the scraper's own for one scrape, for
         the one taken on the way out of an interrupted run.
         """
         observed_at_ns = time.time_ns()
-        result = fetch_metrics(
-            self.url,
-            timeout_seconds=(
-                self.timeout_seconds if timeout_seconds is None else timeout_seconds
-            ),
-            api_key=self.api_key,
+        result, compact = _fetch_and_parse(
+            self.url, self._timeout(timeout_seconds), self.api_key
         )
-        if result.text is None:
+        return self._record(observed_at_ns, marker, case_id, phase, result, compact)
+
+    async def scrape_async(
+        self,
+        *,
+        marker: str,
+        case_id: str | None = None,
+        phase: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> VllmScrapeRecord:
+        """``scrape`` with the fetch on a thread a cancelled caller abandons.
+
+        Counting and the record happen back on the loop, so a fetch dropped
+        by cancellation leaves no trace: no counter moves and no record is
+        written for it.
+        """
+        observed_at_ns = time.time_ns()
+        fetch = partial(
+            _fetch_and_parse, self.url, self._timeout(timeout_seconds), self.api_key
+        )
+        result, compact = await _off_loop(fetch)
+        return self._record(observed_at_ns, marker, case_id, phase, result, compact)
+
+    def _timeout(self, override: float | None) -> float:
+        return self.timeout_seconds if override is None else override
+
+    def _record(
+        self,
+        observed_at_ns: int,
+        marker: str,
+        case_id: str | None,
+        phase: str | None,
+        result: FetchResult,
+        compact: CompactScrape | None,
+    ) -> VllmScrapeRecord:
+        if compact is None:
             return self._failed(observed_at_ns, marker, case_id, phase, result)
-        try:
-            compact = compact_scrape(parse_prometheus_text(result.text))
-        except ValueError as exc:
-            failed = FetchResult(
-                None,
-                result.http_status,
-                f"unparseable response: {exc}",
-                result.duration_ms,
-            )
-            return self._failed(observed_at_ns, marker, case_id, phase, failed)
         found = discover(compact)
         if self.first_discovery is None:
             self.first_discovery = found
         self.ok_scrapes += 1
-        encoded = result.text.encode("utf-8")
+        encoded = (result.text or "").encode("utf-8")
         return VllmScrapeRecord(
             session_id=self.session_id,
             run_id=self.run_id,
@@ -252,7 +330,11 @@ class VllmMetricsScraper:
         phase: str,
         stop_event: asyncio.Event,
     ) -> None:
-        """Scrape every interval until the phase ends; the fetch runs off the loop."""
+        """Scrape every interval until the phase ends; the fetch runs off the loop.
+
+        Cancelling the loop while a fetch is in flight abandons that fetch
+        (see ``scrape_async``), so a stop never waits on a silent endpoint.
+        """
         while True:
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=self.interval_seconds)
@@ -260,8 +342,8 @@ class VllmMetricsScraper:
                 pass
             else:
                 return
-            record = await asyncio.to_thread(
-                self.scrape, marker=MARKER_INTERVAL, case_id=case_id, phase=phase
+            record = await self.scrape_async(
+                marker=MARKER_INTERVAL, case_id=case_id, phase=phase
             )
             append(record.to_record())
 

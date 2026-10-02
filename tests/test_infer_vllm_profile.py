@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import signal
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
@@ -49,13 +51,24 @@ class _FakeVllmHandler(BaseHTTPRequestHandler):
     seen_metrics_auth: list[str | None] = []
     metrics_status = 200
     metrics_body = METRICS_TEXT
+    # GETs of /metrics past this many hang until the fixture releases them.
+    metrics_hang_after: int | None = None
+    metrics_release = threading.Event()
+    metrics_gets = 0
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path != "/metrics":
             self.send_error(404)
             return
-        type(self).seen_metrics_auth.append(self.headers.get("Authorization"))
-        body = type(self).metrics_body.encode("utf-8")
+        cls = type(self)
+        cls.seen_metrics_auth.append(self.headers.get("Authorization"))
+        cls.metrics_gets += 1
+        if (
+            cls.metrics_hang_after is not None
+            and cls.metrics_gets > cls.metrics_hang_after
+        ):
+            cls.metrics_release.wait(timeout=30)
+        body = cls.metrics_body.encode("utf-8")
         self.send_response(type(self).metrics_status)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
         self.send_header("Content-Length", str(len(body)))
@@ -96,18 +109,25 @@ class _FakeVllmHandler(BaseHTTPRequestHandler):
 
 @contextlib.contextmanager
 def _fake_vllm(
-    *, metrics_status: int = 200, metrics_body: str = METRICS_TEXT
+    *,
+    metrics_status: int = 200,
+    metrics_body: str = METRICS_TEXT,
+    metrics_hang_after: int | None = None,
 ) -> Iterator[str]:
     _FakeVllmHandler.seen_request_ids = []
     _FakeVllmHandler.seen_metrics_auth = []
     _FakeVllmHandler.metrics_status = metrics_status
     _FakeVllmHandler.metrics_body = metrics_body
+    _FakeVllmHandler.metrics_hang_after = metrics_hang_after
+    _FakeVllmHandler.metrics_release = threading.Event()
+    _FakeVllmHandler.metrics_gets = 0
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeVllmHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_port}"
     finally:
+        _FakeVllmHandler.metrics_release.set()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
@@ -167,6 +187,51 @@ def _run(
 
 def _of_type(records: list[dict[str, Any]], event_type: str) -> list[dict[str, Any]]:
     return [record for record in records if record.get("event_type") == event_type]
+
+
+def _records(path: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _hung_scrape_config(origin: str, output: Path) -> ProfileConfig:
+    """A 5 s closed-loop phase scraped every 0.1 s with a 10 s request timeout."""
+    return ProfileConfig(
+        endpoint=f"{origin}/v1/chat/completions",
+        model="fake-model",
+        concurrency=(1,),
+        input_tokens=(8,),
+        output_tokens=(4,),
+        output_path=str(output),
+        stream=False,
+        request_count=None,
+        duration_seconds=5.0,
+        warmup_requests=0,
+        tokenizer="none",
+        system_sampler="none",
+        run_id="run-1",
+        timeout_seconds=10.0,
+        vllm_metrics_url=f"{origin}/metrics",
+        vllm_metrics_interval_seconds=0.1,
+    )
+
+
+def _assert_interrupted_artifact(records: list[dict[str, Any]]) -> None:
+    """The artifact of a run stopped while an interval scrape hung."""
+    scrapes = _of_type(records, "infer.vllm_scrape")
+    # The given-up interval scrape leaves no record at all; the end scrape
+    # timed out on its own short clock.
+    assert [s["marker"] for s in scrapes] == [MARKER_PHASE_START, MARKER_PHASE_END]
+    assert scrapes[0]["status"] == "ok"
+    assert scrapes[1]["status"] == "error" and "timed out" in scrapes[1]["error"]
+    assert [r["event_type"] for r in records[-2:]] == [
+        "infer.capabilities",
+        "infer.session",
+    ]
+    assert records[-1]["status"] == "interrupted"
 
 
 class TestProfileScrapes:
@@ -316,6 +381,59 @@ class TestProfileScrapes:
         tail = [r["event_type"] for r in records[-3:-1]]
         assert tail == ["infer.capabilities", "infer.session"]
         assert records[-2]["status"] == "interrupted"
+
+    def test_cancelling_during_a_hung_interval_scrape_unwinds_promptly(
+        self, tmp_path: Path
+    ) -> None:
+        # The first GET of /metrics is answered (the phase-start scrape) and
+        # every later one hangs, so the 0.1 s interval scrape is blocked when
+        # the run's task is cancelled 0.6 s in. The phase waits 2 s for that
+        # scrape, gives it up, and takes the end scrape on its own 2 s clock.
+        output = tmp_path / "infer.jsonl"
+        with _fake_vllm(metrics_hang_after=1) as origin:
+            profiler = InferenceProfiler(_hung_scrape_config(origin, output))
+
+            async def interrupt() -> float:
+                run = asyncio.create_task(profiler._run_async())
+                await asyncio.sleep(0.6)
+                started = time.perf_counter()
+                run.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await run
+                return time.perf_counter() - started
+
+            try:
+                unwound = asyncio.run(interrupt())
+            finally:
+                profiler.request_executor.shutdown(wait=True)
+        # Two bounded waits, well short of the 10 s request timeout the hung
+        # fetch would otherwise be waited for.
+        assert unwound < 6.0
+        _assert_interrupted_artifact(_records(output))
+
+    def test_a_real_sigint_during_a_hung_scrape_still_ends_the_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        # Python 3.10's asyncio.run answers Ctrl+C by cancelling every task,
+        # helpers included: a bare await of a helper inside a finally would
+        # raise there and skip the end scrape, the span drain and the
+        # capability records. The signal is a real one, from a timer thread.
+        output = tmp_path / "infer.jsonl"
+        with _fake_vllm(metrics_hang_after=1) as origin:
+            profiler = InferenceProfiler(_hung_scrape_config(origin, output))
+            timer = threading.Timer(0.6, signal.raise_signal, (signal.SIGINT,))
+            started = time.perf_counter()
+            timer.start()
+            try:
+                with pytest.raises(KeyboardInterrupt):
+                    profiler.run()
+            finally:
+                timer.cancel()
+            elapsed = time.perf_counter() - started
+        # The end scrape's 2 s, plus the 0.6 s before the signal; nothing
+        # waits for the hung fetch, not even interpreter shutdown.
+        assert elapsed < 6.0
+        _assert_interrupted_artifact(_records(output))
 
     def test_without_the_flag_nothing_is_scraped_or_sent_differently(
         self, tmp_path: Path

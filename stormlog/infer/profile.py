@@ -241,12 +241,15 @@ class InferenceProfiler:
                     await self._run_case(case=case, writer=writer)
                 completed = True
             finally:
+                # The helpers are waited for, never awaited: under a real
+                # Ctrl+C asyncio.run has cancelled them too, and a bare
+                # await would raise here and skip the rest of this block.
                 stop_sampling.set()
-                await sample_task
+                await _wait_for(sample_task)
                 if completed:
                     await self._wait_for_late_spans()
                 stop_spans.set()
-                await span_task
+                await _wait_for(span_task)
                 self._stop_span_receiver(writer)
                 # Written on the way out of an interrupted run too, so the
                 # artifact says what the engine exposed before it says why
@@ -535,7 +538,14 @@ class InferenceProfiler:
             return window
         finally:
             stop_scraping.set()
-            await scrape_task
+            # A finished phase keeps a straddling interval scrape, however
+            # long its fetch takes. A cancelled one waits briefly for a
+            # scrape in flight and then gives it up: its thread is dropped,
+            # and its late result with it, so nothing from it is recorded.
+            bound = None if completed else INTERRUPT_SCRAPE_TIMEOUT_SECONDS
+            if not await _wait_for(scrape_task, bound):
+                scrape_task.cancel()
+                await _wait_for(scrape_task)
             # A cancelled phase still gets its end scrape, on a short clock.
             await self._scrape(
                 scraper,
@@ -565,8 +575,7 @@ class InferenceProfiler:
         writer: JsonlEventWriter,
         timeout_seconds: float | None = None,
     ) -> None:
-        record = await asyncio.to_thread(
-            scraper.scrape,
+        record = await scraper.scrape_async(
             marker=marker,
             case_id=case_id,
             phase=phase,
@@ -1100,6 +1109,21 @@ class _PhaseWindow:
             "prompts_digest": request.prompts.digest(),
             "abandoned_requests": abandoned.to_record(),
         }
+
+
+async def _wait_for(task: asyncio.Task[Any], timeout: float | None = None) -> bool:
+    """Wait for a helper task; True once it has finished.
+
+    ``await task`` would re-raise the CancelledError of a task that
+    ``asyncio.run`` has already cancelled (a Ctrl+C on Python 3.10 cancels
+    every task of the run at once) and abort the ``finally`` doing the
+    waiting. A finished task's own failure is still raised, so a bug in a
+    helper is not hidden.
+    """
+    done, _pending = await asyncio.wait({task}, timeout=timeout)
+    if task in done and not task.cancelled():
+        task.result()
+    return task in done
 
 
 async def _drain(tasks: list[asyncio.Task[None]], *, timeout: float | None) -> None:
