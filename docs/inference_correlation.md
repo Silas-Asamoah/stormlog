@@ -288,15 +288,25 @@ stormlog infer import-trace infer.jsonl run.sqlite
   `iteration_range(..., nvtx=True)`; a `record_function` range alone is not
   visible to Nsight Systems.
 - **Record CUDA graphs per node** with `--cuda-graph-trace=node`. At the default
-  graph-level tracing Nsight Systems writes one row per graph instead of its
-  kernels, and those rows are not imported.
+  graph-level tracing Nsight Systems writes one row per graph launch instead of
+  its kernels. Those rows are not imported; the summary counts them under
+  `not_imported`, and the import says to re-record.
 - **Several processes in one report** are handled: launches are matched to GPU
-  work by process and correlation ID, and each device is reported per process.
-- **The report names the GPUs.** Each process's CUDA device is mapped to its
-  GPU UUID from the report's own tables (`TARGET_INFO_CUDA_DEVICE`, or
-  `TARGET_INFO_CUDA_CONTEXT_INFO` in older exports such as nsys 2024.4's), so
-  `CUDA_VISIBLE_DEVICES` renumbering needs no `--device-uuid`. A
-  `--device-uuid` entry is used only for a device the report does not name.
+  work by process and correlation ID, and each device is reported per process
+  (`"<pid>/<device>"`).
+- **GPUs are named from the report when it can name them.** A GPU event's
+  device is the CUDA device number inside its process, after
+  `CUDA_VISIBLE_DEVICES`, and nsys numbers GPUs in its own order, not
+  `nvidia-smi`'s. Exports from nsys 2025.1 and later map each process's device
+  numbers to GPUs, so renumbering needs no `--device-uuid`. Older exporters,
+  such as nsys 2024.4's, do not write that mapping. A report from one of them
+  that lists one GPU is still named, since nsys lists every GPU on the host.
+  With several GPUs, the devices stay unmeasured and the import says to
+  re-export the report with a newer nsys, which adds the mapping.
+- **`--device-uuid` only fills gaps.** It is used for a device the report does
+  not name. A UUID that contradicts the report's is refused. So is one ordinal
+  given for several processes in a report, since `TRACE_FILE:` cannot pick one
+  process inside a report.
 - **A `.nsys-rep` file is registered, not read.** Its format is not public, so
   the import notes that it must be exported to SQLite first.
 - **Event loss is unknown** (`null`), as for Kineto traces: the exported tables
@@ -310,9 +320,17 @@ in its own iteration range), the import linked 3,960 of 3,979 GPU events to
 the 220 iterations, including all 2,640 graph-replay events, and wrote 1,779
 launch records. The other 19 events were setup and teardown work launched
 outside any iteration range, such as initializing the inputs and the copy
-after the loop. The report named the GPU's UUID, and `account_gpu_time` on the
-records gave 384.74 ms busy, the same to the nanosecond as the union of the
-GPU events, against 400.72 ms summed.
+after the loop. The report listed one GPU, which named the work, and
+`account_gpu_time` on the records gave 384.74 ms busy, the same to the
+nanosecond as the union of the GPU events, against 400.72 ms summed.
+
+On a host with two A30s, three processes ran under one capture. One saw only
+the second GPU, one saw both in reverse order and used its device 1, and one
+saw both in the usual order. In each, the kernels' device was the
+process's own CUDA device number, and nsys's GPU ids did not follow
+`nvidia-smi`'s order. An nsys 2025.6 export mapped all three to the GPU each
+process reported for itself, and so did the same nsys 2024.3 report once
+re-exported with nsys 2025.6.
 
 The same workload under the PyTorch profiler gave the same structure. In both
 captures each of the 200 steps had 12 kernels, all from the graph replay, and
