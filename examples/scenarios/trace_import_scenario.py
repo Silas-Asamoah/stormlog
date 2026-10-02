@@ -120,7 +120,7 @@ def main() -> None:
         "unresolved_gpu_events": summary["unresolved_gpu_events"],
         "activity_records": summary["activity_records"],
         "busy_ms": device["busy_ns"] / 1e6,
-        "record_busy_ms": device["record_busy_ns"] / 1e6,
+        "launch_span_ms": device["launch_span_ns"] / 1e6,
         "summed_ms": device["summed_ns"] / 1e6,
         "steps_per_s_off": [args.steps / seconds for seconds, _ in off],
         "steps_per_s_on": [args.steps / seconds for seconds, _ in on],

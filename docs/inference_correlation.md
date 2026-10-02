@@ -76,6 +76,10 @@ from server evidence.
   `[2, 10)`, the sum is 16 units and the union is 10. This is a union of
   observed trace intervals, not a hardware utilization measurement.
 
+An activity whose `metadata.intervals` lists `[offset_ns, duration_ns]` busy
+intervals inside its span contributes those intervals, not the whole span; see
+[Record detail](#record-detail). Malformed intervals leave the activity
+unmeasured rather than falling back to the span.
 An activity without a device UUID, complete span, or usable clock domain stays
 unmeasured. Unlinked activities can still contribute to the device total when
 their intervals are valid, but not to an iteration total. Totals from different
@@ -201,22 +205,25 @@ That is the expected result for an engine that does not emit them yet.
 ### Record detail
 
 `--detail launch` (the default) writes one record per launch call. The record
-spans the launch's first GPU event to its last and keeps the exact busy time
-and the idle time inside that span in `metadata.busy_ns` and
-`metadata.idle_inside_ns`. `--detail kernel` writes one record per GPU event.
-Both keep every event's link; they differ in size and in how gaps inside a
-launch are counted.
+spans the launch's first GPU event to its last. When the launch has several
+events, `metadata.intervals` lists the exact busy intervals inside that span as
+`[offset_ns, duration_ns]` pairs from `start_ns`, and `metadata.busy_ns` their
+total. `account_gpu_time` unions those intervals instead of the span, so idle
+gaps inside a CUDA graph replay are not counted as busy and the device total is
+the same as with one record per event. `--detail kernel` writes one record per
+GPU event. Both keep every event's link.
 
-| Trace | GPU events | Launch records | Busy time added by launch records |
+| Trace | GPU events | Launch records | Span time beyond busy time |
 | --- | ---: | ---: | ---: |
 | vLLM 0.30.0, Qwen2.5-7B, 64 requests, 30 s | 218,012 | 35,380 | 0.015% |
 | vLLM 0.30.0, Qwen2.5-0.5B, 64 requests, 3.5 s | 189,918 | 31,843 | 0.19% |
 | Two overlapping streams + a CUDA graph, 200 steps | 3,601 | 1,601 | 1.1% |
 
-Each record is about 1.3 KB of JSONL, so a 30-second vLLM trace at kernel
-detail adds roughly 280 MB to the artifact, and about 45 MB at launch detail.
-Capture short windows. Compare `busy_ns` with `record_busy_ns` in the summary
-when the difference matters.
+The last column is what a consumer that ignored `metadata.intervals` and used
+the spans would overcount. The import summary reports `busy_ns` and
+`launch_span_ns` per device. Each record is about 1.3 KB of JSONL, most of it
+the repeated context, so a 30-second vLLM trace at kernel detail adds roughly
+280 MB to the artifact and about 45 MB at launch detail. Capture short windows.
 
 `examples/scenarios/trace_import_scenario.py` checks the import on a CUDA
 device. On an NVIDIA A30 it linked every GPU event launched inside an

@@ -857,5 +857,5 @@ def _print_trace_summary(summary: dict[str, Any]) -> None:
         uuid = values["device_uuid"] or "unknown UUID, not measured"
         print(
             f"  device {device} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
-            f"records cover {values['record_busy_ns'] / 1e6:.3f} ms"
+            f"summed {values['summed_ns'] / 1e6:.3f} ms"
         )

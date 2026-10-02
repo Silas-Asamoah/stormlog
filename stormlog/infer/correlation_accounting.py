@@ -253,9 +253,9 @@ def _missing_optional_ref(
 
 def account_gpu_time(graph: CorrelationGraph) -> RunAccounting:
     """Keep summed activity, interval union, and iteration elapsed separate."""
-    device_groups: dict[DeviceClock, list[ActivityReferenceEvent]] = {}
+    device_groups: dict[DeviceClock, list[list[tuple[int, int]]]] = {}
     iteration_groups: dict[
-        EntityRef, dict[DeviceClock, list[ActivityReferenceEvent]]
+        EntityRef, dict[DeviceClock, list[list[tuple[int, int]]]]
     ] = {}
     unmeasured: list[EntityRef] = []
     unattributed: list[EntityRef] = []
@@ -264,14 +264,15 @@ def account_gpu_time(graph: CorrelationGraph) -> RunAccounting:
             unattributed.append(activity.activity_ref)
         if activity.activity_domain != "gpu":
             continue
-        key = _device_clock(activity)
-        if key is None:
+        measured = _measured_busy(activity)
+        if measured is None:
             unmeasured.append(activity.activity_ref)
             continue
-        device_groups.setdefault(key, []).append(activity)
+        key, busy = measured
+        device_groups.setdefault(key, []).append(busy)
         if activity.iteration_ref in graph.iterations:
             by_device = iteration_groups.setdefault(activity.iteration_ref, {})
-            by_device.setdefault(key, []).append(activity)
+            by_device.setdefault(key, []).append(busy)
     iteration_timings = {
         ref: IterationTiming(
             elapsed_ns=iteration.elapsed_ns,
@@ -291,6 +292,17 @@ def account_gpu_time(graph: CorrelationGraph) -> RunAccounting:
     )
 
 
+def _measured_busy(
+    activity: ActivityReferenceEvent,
+) -> tuple[DeviceClock, list[tuple[int, int]]] | None:
+    """The device clock and busy intervals of a measurable GPU activity."""
+    key = _device_clock(activity)
+    busy = activity_busy_intervals(activity) if key is not None else None
+    if key is None or busy is None:
+        return None
+    return key, busy
+
+
 def _device_clock(activity: ActivityReferenceEvent) -> DeviceClock | None:
     context = activity.context
     if (
@@ -303,17 +315,61 @@ def _device_clock(activity: ActivityReferenceEvent) -> DeviceClock | None:
     return DeviceClock(context.device_uuid, context.clock_domain, context.clock_kind)
 
 
-def _gpu_time(activities: list[ActivityReferenceEvent]) -> GpuTime:
-    intervals = [(item.start_ns, item.end_ns) for item in activities]
-    complete = [
-        (start, end)
-        for start, end in intervals
-        if start is not None and end is not None
-    ]
+def activity_busy_intervals(
+    activity: ActivityReferenceEvent,
+) -> list[tuple[int, int]] | None:
+    """The intervals in which a GPU activity kept its device busy.
+
+    An activity covers ``[start_ns, end_ns)`` unless its metadata lists
+    ``intervals``: ``[offset_ns, duration_ns]`` pairs from ``start_ns``, sorted
+    and disjoint, inside the span. A launch record uses them so that idle gaps
+    inside one launch are not counted as busy. Malformed intervals return None
+    and the activity stays unmeasured rather than falling back to its span.
+    """
+    start, end = activity.start_ns, activity.end_ns
+    if start is None or end is None:
+        return None
+    raw = activity.metadata.get("intervals")
+    if raw is None:
+        return [(start, end)]
+    return _offset_intervals(raw, start, end)
+
+
+def _offset_intervals(
+    raw: object, start: int, end: int
+) -> list[tuple[int, int]] | None:
+    if not isinstance(raw, (list, tuple)):
+        return None
+    intervals: list[tuple[int, int]] = []
+    cursor = 0
+    for item in raw:
+        pair = _int_pair(item)
+        if pair is None or pair[0] < cursor or pair[1] < 0:
+            return None
+        offset, duration = pair
+        cursor = offset + duration
+        if start + cursor > end:
+            return None
+        intervals.append((start + offset, start + cursor))
+    return intervals
+
+
+def _int_pair(item: object) -> tuple[int, int] | None:
+    if not isinstance(item, (list, tuple)) or len(item) != 2:
+        return None
+    first, second = item
+    if any(isinstance(v, bool) or not isinstance(v, int) for v in (first, second)):
+        return None
+    return first, second
+
+
+def _gpu_time(activities: list[list[tuple[int, int]]]) -> GpuTime:
+    """Summed and merged busy time of activities given as their busy intervals."""
+    intervals = [interval for busy in activities for interval in busy]
     return GpuTime(
-        summed_activity_ns=sum(end - start for start, end in complete),
-        busy_ns=_merged_duration(complete),
-        activity_count=len(complete),
+        summed_activity_ns=sum(end - start for start, end in intervals),
+        busy_ns=_merged_duration(intervals),
+        activity_count=len(activities),
     )
 
 

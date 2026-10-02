@@ -258,21 +258,18 @@ def test_launch_detail_spans_each_launch_and_keeps_its_exact_busy_time(
     assert overlapped.metadata["event_count"] == 2
     assert overlapped.metadata["summed_duration_ns"] == 40_000
     assert overlapped.metadata["busy_ns"] == 30_000
+    assert overlapped.metadata["intervals"] == [[0, 30_000]]
     graph = next(a for a in activities if a.cuda_correlation_id == 2)
-    assert (graph.metadata["busy_ns"], graph.metadata["idle_inside_ns"]) == (
-        29_000,
-        1_000,
-    )
+    assert graph.metadata["busy_ns"] == 29_000
+    # [130, 140) and [141, 160) us, as offsets from the record's start.
+    assert graph.metadata["intervals"] == [[0, 10_000], [11_000, 19_000]]
+    single = next(a for a in activities if a.cuda_correlation_id == 3)
+    assert "intervals" not in single.metadata
 
 
-@pytest.mark.parametrize(
-    ("detail", "busy_us"),
-    # Exact union: [20,50) [130,140) [141,160) [260,270) [300,310) = 79 us.
-    # Launch records also count the 1 us gap inside the graph replay.
-    [("kernel", 79), ("launch", 80)],
-)
-def test_accounting_busy_time_by_detail_mode(
-    tmp_path: Path, detail: str, busy_us: int
+@pytest.mark.parametrize("detail", ["kernel", "launch"])
+def test_accounting_busy_time_is_exact_in_both_detail_modes(
+    tmp_path: Path, detail: str
 ) -> None:
     capture = import_kineto_trace(
         _write(tmp_path, _trace_document()),
@@ -284,10 +281,13 @@ def test_accounting_busy_time_by_detail_mode(
     accounting = account_gpu_time(resolve_inference_events(_with_iterations(capture)))
     device = next(iter(accounting.device_totals.values()))
 
-    assert device.busy_ns == busy_us * 1000
+    # Union of [20,50) [130,140) [141,160) [260,270) [300,310) us; the 1 us
+    # gap inside the graph replay is not busy, even with one record per launch.
+    assert device.busy_ns == 79_000
     assert capture.summary is not None
     assert capture.summary["devices"]["0"]["busy_ns"] == 79_000
-    assert capture.summary["devices"]["0"]["record_busy_ns"] == busy_us * 1000
+    spans = 80_000 if detail == "launch" else 79_000
+    assert capture.summary["devices"]["0"]["launch_span_ns"] == spans
     it1 = accounting.iterations[EntityRef(ENGINE, "it-1")]
     assert it1.gpu[DeviceClock("GPU-abc", "kineto:worker-a:TRACE1", "device")].busy_ns
     assert len(accounting.unattributed_activity_refs) == 2

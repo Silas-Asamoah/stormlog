@@ -7,11 +7,11 @@ of its launch call. A CUDA graph launch is one call and many GPU events.
 
 This importer emits one ``infer.activity_ref`` per launch (``detail="launch"``,
 the default) or per GPU event (``detail="kernel"``). A launch record spans its
-first event's start to its last event's end and keeps the exact busy time and
-the idle time inside that span in its metadata. On vLLM 0.30.0 traces a launch
-record set is 6-8x smaller than a per-event one and overstates device busy time
-by 0.02-0.2%, because idle gaps inside a CUDA graph replay count as busy. The
-import summary reports both the exact and the record-based busy time. A GPU
+first event's start to its last event's end. When it holds several events, its
+``metadata.intervals`` lists the exact busy intervals inside that span, so
+GPU time accounting does not count the idle gaps inside a CUDA graph replay as
+busy. On vLLM 0.30.0 traces a launch record set is about 6x smaller than a
+per-event one and gives the same device busy time. A GPU
 activity is linked to an iteration only when its launch call sits inside exactly
 one ``stormlog.iteration/...`` range on the launching thread. Otherwise it stays
 unresolved and says why. Launch calls are CPU work and are never emitted as GPU
@@ -439,12 +439,18 @@ def _group_metadata(members: list[GpuEvent], link: GpuLink) -> dict[str, Any]:
     if len(streams) > 1:
         metadata["streams"] = streams
     if len(members) > 1:
-        busy = merge_intervals((event.start_ns, event.end_ns) for event in members)
-        busy_ns = sum(end - start for start, end in busy)
-        span_ns = busy[-1][1] - busy[0][0]
-        metadata["busy_ns"] = busy_ns
-        metadata["idle_inside_ns"] = span_ns - busy_ns
+        metadata.update(_launch_intervals(members))
     return metadata
+
+
+def _launch_intervals(members: list[GpuEvent]) -> dict[str, Any]:
+    """Busy intervals inside a launch, as offsets from its first event."""
+    busy = merge_intervals((event.start_ns, event.end_ns) for event in members)
+    origin = busy[0][0]
+    return {
+        "intervals": [[start - origin, end - start] for start, end in busy],
+        "busy_ns": sum(end - start for start, end in busy),
+    }
 
 
 # ---------------------------------------------------------------- summary
@@ -500,9 +506,10 @@ def _summary(
 def _device_summary(
     trace: KinetoTrace, builder: _EventBuilder
 ) -> dict[str, dict[str, Any]]:
-    """Per device: exact busy time from events, and busy time of the records.
+    """Per device: exact busy time, and the time the record spans cover.
 
-    The two differ only by idle gaps inside multi-event launch records.
+    Spans also cover idle gaps inside multi-event launches; the records'
+    ``metadata.intervals`` exclude them, so accounting matches ``busy_ns``.
     """
     by_device: dict[int | None, list[GpuEvent]] = defaultdict(list)
     for event in trace.gpu_events:
@@ -517,7 +524,7 @@ def _device_summary(
                 builder.device_uuids.get(device) if device is not None else None
             ),
             "busy_ns": sum(end - start for start, end in busy),
-            "record_busy_ns": sum(end - start for start, end in records),
+            "launch_span_ns": sum(end - start for start, end in records),
             "summed_ns": sum(event.end_ns - event.start_ns for event in events),
         }
     return summary
