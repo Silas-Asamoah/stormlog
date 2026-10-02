@@ -77,7 +77,7 @@ def _profile_command(
     return [
         sys.executable,
         "-m",
-        "stormlog.cli",
+        "stormlog.entrypoint",
         "infer",
         "profile",
         "--base-url",
@@ -116,7 +116,7 @@ def _analyze(artifact: Path) -> dict[str, Any]:
         [
             sys.executable,
             "-m",
-            "stormlog.cli",
+            "stormlog.entrypoint",
             "infer",
             "analyze",
             str(artifact),
