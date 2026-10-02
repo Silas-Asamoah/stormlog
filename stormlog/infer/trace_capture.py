@@ -5,7 +5,11 @@ vLLM's torch profiler is configured when the server starts
 then start and stop it over HTTP (``/start_profile`` and ``/stop_profile``).
 This module opens one window per profiled phase, closes it at the phase's end,
 at a time bound, or on cancellation, and finds the worker traces vLLM wrote.
-It stops only a profile it started. The traces are imported after the run.
+It stops the profiler only after its own start succeeded. vLLM 0.30.0 answers
+200 to a second ``/start_profile`` and to ``/stop_profile`` with nothing
+running, so a client cannot tell from HTTP whether another profile was already
+active; do not run two profilers against one server. The traces are imported
+after the run.
 
 The profiler adds no synchronization per request; the server writes the trace
 while handling ``/stop_profile``, so that call can take tens of seconds.
@@ -124,6 +128,7 @@ class TraceWindow:
     stopped_at_ns: int | None = None
     files: list[Path] = field(default_factory=list)
     note: str | None = None
+    before: dict[str, int] = field(default_factory=dict, repr=False)
 
     def to_record(self, *, session_id: str) -> dict[str, Any]:
         return {
@@ -178,6 +183,7 @@ class TraceWindows:
             case_id, phase, self.config.control_url, requested_at_ns=time.time_ns()
         )
         before = self._snapshot()
+        window.before = before
         window.start = await asyncio.to_thread(self.control.post, "/start_profile")
         window.started = window.start.ok
         if not window.started:
@@ -206,6 +212,9 @@ class TraceWindows:
         if not window.started or window.stop_reason is not None:
             return
         window.stop_reason = reason
+        if await asyncio.to_thread(self._wrote_before_stop, window.before):
+            # A profile with max_iterations stops itself and writes its trace.
+            window.stop_reason = "stopped_by_server"
         window.stop = await asyncio.to_thread(self.control.post, "/stop_profile")
         window.stopped_at_ns = time.time_ns()
         if not window.stop.ok:
@@ -225,6 +234,12 @@ class TraceWindows:
         if directory is None or not directory.is_dir():
             return {}
         return {path.name: path.stat().st_size for path in _worker_traces(directory)}
+
+    def _wrote_before_stop(self, before: dict[str, int]) -> bool:
+        directory = self.config.trace_dir
+        if directory is None or not directory.is_dir():
+            return False
+        return any(path.name not in before for path in _worker_traces(directory))
 
     def _new_files(self, before: dict[str, int]) -> list[Path]:
         """Worker traces written since ``before``, once their sizes settle."""

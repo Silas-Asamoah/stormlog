@@ -344,3 +344,31 @@ def test_trace_options_need_trace(tmp_path: Path) -> None:
         )
     assert code == int(ExitCode.USAGE)
     assert "--trace-dir needs --trace" in stderr.getvalue()
+
+
+class _SelfStoppingControl(_FakeControl):
+    """A server profile that stopped by itself (max_iterations) before our stop."""
+
+    def post(self, route: str) -> ControlResult:
+        if route == "/start_profile" and self.trace_dir is not None:
+            self.calls.append(route)
+            (self.trace_dir / "rank0.auto.pt.trace.json").write_text(
+                _kineto("AUTO"), encoding="utf-8"
+            )
+            return ControlResult(200)
+        if route == "/stop_profile":
+            self.calls.append(route)
+            return ControlResult(200)
+        return super().post(route)
+
+
+def test_a_trace_written_before_the_stop_is_marked_as_stopped_by_the_server(
+    tmp_path: Path,
+) -> None:
+    control = _SelfStoppingControl(tmp_path)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    window = _run_window(windows)
+
+    assert window.stop_reason == "stopped_by_server"
+    assert [path.name for path in window.files] == ["rank0.auto.pt.trace.json"]
