@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -40,24 +40,49 @@ def artifact_run_identity(path: str | Path) -> tuple[str, str]:
     )
 
 
-def parse_device_uuids(values: Sequence[str]) -> dict[int, str]:
-    """Parse ``INDEX=UUID`` pairs; a bare ``UUID`` means device 0.
+@dataclass(frozen=True)
+class DeviceUuids:
+    """GPU UUIDs by CUDA ordinal: shared by every trace, or for one trace file.
+
+    An ordinal is local to the traced process (after ``CUDA_VISIBLE_DEVICES``),
+    so a shared mapping is only safe when each ordinal belongs to one process.
+    """
+
+    shared: dict[int, str] = field(default_factory=dict)
+    per_trace: dict[str, dict[int, str]] = field(default_factory=dict)
+
+    def for_trace(self, name: str) -> dict[int, str]:
+        return {**self.shared, **self.per_trace.get(name, {})}
+
+
+def parse_device_uuids(values: Sequence[str]) -> DeviceUuids:
+    """Parse ``[TRACE_FILE:]INDEX=UUID`` entries; a bare ``UUID`` means device 0.
 
     The index is the CUDA device ordinal inside the traced process, after
-    ``CUDA_VISIBLE_DEVICES``. It is not necessarily the host's NVML index.
+    ``CUDA_VISIBLE_DEVICES``. It is not necessarily the host's NVML index. A
+    ``TRACE_FILE`` prefix (the trace's file name) limits the entry to that trace.
     """
-    mapping: dict[int, str] = {}
+    shared: dict[int, str] = {}
+    per_trace: dict[str, dict[int, str]] = {}
     for value in values:
-        index_text, separator, uuid = value.partition("=")
-        if not separator:
-            index_text, uuid = "0", value
-        if not index_text.isdigit() or not uuid:
-            raise InferUsageError(f"--device-uuid {value!r}: expected INDEX=UUID")
-        index = int(index_text)
-        if index in mapping and mapping[index] != uuid:
+        target, index, uuid = _device_uuid_entry(value)
+        table = shared if target is None else per_trace.setdefault(target, {})
+        if table.get(index, uuid) != uuid:
             raise InferUsageError(f"--device-uuid: device {index} given twice")
-        mapping[index] = uuid
-    return mapping
+        table[index] = uuid
+    return DeviceUuids(shared, per_trace)
+
+
+def _device_uuid_entry(value: str) -> tuple[str | None, int, str]:
+    left, separator, uuid = value.partition("=")
+    if not separator:
+        left, uuid = "0", value
+    target, colon, index_text = left.rpartition(":")
+    if not index_text.isdigit() or not uuid or (colon and not target):
+        raise InferUsageError(
+            f"--device-uuid {value!r}: expected [TRACE_FILE:]INDEX=UUID"
+        )
+    return (target if colon else None), int(index_text), uuid
 
 
 def trace_attachment_id(path: Path, prefix: str = "kineto") -> str:
@@ -77,7 +102,7 @@ class KinetoTraceCollector:
         self,
         paths: Sequence[str | Path],
         *,
-        device_uuids: dict[int, str] | None = None,
+        device_uuids: DeviceUuids | dict[int, str] | None = None,
         detail: Detail = "launch",
     ) -> None:
         if not paths:
@@ -86,13 +111,17 @@ class KinetoTraceCollector:
         missing = [str(path) for path in self.paths if not path.is_file()]
         if missing:
             raise InferInputError(f"trace file not found: {', '.join(missing)}")
-        self.device_uuids = dict(device_uuids or {})
+        self.device_uuids = (
+            device_uuids
+            if isinstance(device_uuids, DeviceUuids)
+            else DeviceUuids(dict(device_uuids or {}))
+        )
         self.detail = detail
 
     def collect(self, *, run_id: str, session_id: str) -> TraceCapture:
-        return combine_captures(
-            [self._import(path, run_id, session_id) for path in self.paths]
-        )
+        captures = [self._import(path, run_id, session_id) for path in self.paths]
+        _check_shared_devices(self.paths, captures, self.device_uuids)
+        return combine_captures(captures)
 
     def _import(self, path: Path, run_id: str, session_id: str) -> TraceCapture:
         attachment = TraceAttachment(
@@ -108,11 +137,42 @@ class KinetoTraceCollector:
                 run_id=run_id,
                 session_id=session_id,
                 attachment=attachment,
-                device_uuids=self.device_uuids,
+                device_uuids=self.device_uuids.for_trace(path.name),
                 detail=self.detail,
             )
         except (ValueError, OSError) as exc:
             raise InferInputError(f"{path}: {exc}") from exc
+
+
+def _check_shared_devices(
+    paths: Sequence[Path], captures: Sequence[TraceCapture], uuids: DeviceUuids
+) -> None:
+    """Refuse a shared mapping for an ordinal that several processes used.
+
+    A process is its host name, rank, and launching pids. Containers that share
+    a host name and pid namespace layout can still look alike, which is why the
+    docs recommend the per-trace form for traces from separate containers.
+    """
+    users: dict[int, set[tuple[Any, ...]]] = {}
+    for path, capture in zip(paths, captures):
+        summary = capture.summary or {}
+        process = (
+            summary.get("host"),
+            summary.get("rank"),
+            tuple(summary.get("processes", ())),
+        )
+        own = uuids.per_trace.get(path.name, {})
+        for key in summary.get("devices", {}):
+            index = int(key) if str(key).isdigit() else None
+            if index in uuids.shared and index not in own:
+                users.setdefault(index, set()).add(process)
+    for index, processes in sorted(users.items()):
+        if len(processes) > 1:
+            raise InferUsageError(
+                f"--device-uuid {index}=...: traces from different processes use "
+                f"device {index}, which each process may map to a different GPU; "
+                f"give a UUID per trace as TRACE_FILE:{index}=UUID"
+            )
 
 
 def combine_captures(captures: Sequence[TraceCapture]) -> TraceCapture:
@@ -143,7 +203,7 @@ def import_traces_into_artifact(
     artifact: str | Path,
     traces: Sequence[str | Path],
     *,
-    device_uuids: dict[int, str] | None = None,
+    device_uuids: DeviceUuids | dict[int, str] | None = None,
     detail: Detail = "launch",
     envelope_path: str | Path | None = None,
 ) -> TraceCapture:
@@ -218,6 +278,7 @@ def _nothing_imported(skipped: list[str]) -> TraceCapture:
 
 
 __all__ = [
+    "DeviceUuids",
     "KinetoTraceCollector",
     "artifact_run_identity",
     "combine_captures",

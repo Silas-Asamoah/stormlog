@@ -352,11 +352,13 @@ def _add_import_trace_parser(subparsers: Any) -> None:
         "--device-uuid",
         action="append",
         default=[],
-        metavar="INDEX=UUID",
+        metavar="[TRACE_FILE:]INDEX=UUID",
         help=(
             "GPU UUID for a CUDA device ordinal in the traced process (after "
-            "CUDA_VISIBLE_DEVICES); repeat per device. Without it, GPU activity "
-            "is kept but not measured"
+            "CUDA_VISIBLE_DEVICES); repeat per device. Prefix a trace's file name "
+            "to scope it to that trace; an unscoped ordinal that traces from "
+            "different processes use is refused. Without it, GPU activity is "
+            "kept but not measured"
         ),
     )
     import_parser.add_argument(

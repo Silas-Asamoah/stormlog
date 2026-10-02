@@ -189,12 +189,24 @@ That is the expected result for an engine that does not emit them yet.
 - **GPU work only.** Kernels, copies, and memsets become GPU activities. Launch
   calls are CPU work and are never counted as GPU time.
 - **Identity.** CUDA correlation ID, stream, CUDA graph ID, rank and world size,
-  and the engine and CUPTI versions the trace reports.
+  and the CUPTI version. The engine version is recorded when the trace carries
+  it; vLLM 0.30.0 stamps it only for scheduled profiles, not for traces taken
+  with `/start_profile` and `/stop_profile`.
 - **Device.** Pass `--device-uuid INDEX=UUID` for each device. The index is the
   CUDA device ordinal inside the traced process, after `CUDA_VISIBLE_DEVICES`,
-  which is not necessarily the host's NVML index. Without a UUID, GPU
-  activities are kept but stay unmeasured: they never enter a GPU time total
-  under a guessed identity.
+  which is not necessarily the host's NVML index. Two processes can both call
+  their GPU device 0, so `--device-uuid TRACE_FILE:INDEX=UUID` scopes a UUID to
+  one trace, and an unscoped ordinal that traces from different processes (by
+  host name, rank, and launching pid) use is refused rather than applied to
+  both. That check cannot tell apart two containers that report the same host
+  name, rank, and pid, so give per-trace UUIDs whenever traces come from
+  separate containers or hosts, or from vLLM's Ray backend, which gives each
+  worker its own `CUDA_VISIBLE_DEVICES`. Without a UUID, GPU activities are
+  kept but stay unmeasured: they never enter a GPU time total under a guessed
+  identity.
+- **Attachment.** Each trace is registered as `kineto:<file name>:<digest>`,
+  where the digest comes from the resolved path, so traces with the same file
+  name from different directories stay distinct.
 - **Clock.** Timestamps are Kineto's host-calibrated device times, in a clock
   domain scoped to the host and the trace. No alignment to other clocks is
   implied.

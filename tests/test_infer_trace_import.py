@@ -47,13 +47,13 @@ def _artifact(path: Path) -> Path:
     return path
 
 
-def _trace(path: Path, trace_id: str) -> Path:
+def _trace(path: Path, trace_id: str, pid: int = 1) -> Path:
     events: list[dict[str, Any]] = [
         {
             "ph": "X",
             "cat": "user_annotation",
             "name": "stormlog.iteration/engine/step-1",
-            "pid": 1,
+            "pid": pid,
             "tid": 1,
             "ts": 0.0,
             "dur": 50.0,
@@ -62,7 +62,7 @@ def _trace(path: Path, trace_id: str) -> Path:
             "ph": "X",
             "cat": "cuda_runtime",
             "name": "cudaLaunchKernel",
-            "pid": 1,
+            "pid": pid,
             "tid": 1,
             "ts": 5.0,
             "dur": 1.0,
@@ -104,8 +104,11 @@ def test_run_identity_comes_from_the_artifact_record(tmp_path: Path) -> None:
 
 
 def test_device_uuid_pairs() -> None:
-    assert parse_device_uuids(["1=GPU-b", "GPU-a"]) == {0: "GPU-a", 1: "GPU-b"}
-    assert parse_device_uuids([]) == {}
+    parsed = parse_device_uuids(["1=GPU-b", "GPU-a", "rank1.pt.trace.json:0=GPU-c"])
+    assert parsed.shared == {0: "GPU-a", 1: "GPU-b"}
+    assert parsed.for_trace("rank1.pt.trace.json") == {0: "GPU-c", 1: "GPU-b"}
+    assert parsed.for_trace("rank0.pt.trace.json") == {0: "GPU-a", 1: "GPU-b"}
+    assert parse_device_uuids([]).shared == {}
     with pytest.raises(InferUsageError, match="INDEX=UUID"):
         parse_device_uuids(["x=GPU-a"])
     with pytest.raises(InferUsageError, match="given twice"):
@@ -298,6 +301,75 @@ def test_traces_with_the_same_name_in_different_directories_are_distinct(
     assert trace_attachment_id(first) != trace_attachment_id(second)
 
 
+def test_a_shared_ordinal_used_by_two_processes_needs_per_trace_uuids(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    one = _trace(tmp_path / "worker-a.pt.trace.json", "A", pid=101)
+    two = _trace(tmp_path / "worker-b.pt.trace.json", "B", pid=202)
+
+    shared = main(
+        ["import-trace", str(artifact), str(one), str(two), "--device-uuid", "0=GPU-a"]
+    )
+
+    assert shared == int(ExitCode.USAGE)
+    assert "give a UUID per trace as TRACE_FILE:0=UUID" in capsys.readouterr().err
+    scoped = main(
+        [
+            "import-trace",
+            str(artifact),
+            str(one),
+            str(two),
+            "--device-uuid",
+            "worker-a.pt.trace.json:0=GPU-a",
+            "--device-uuid",
+            "worker-b.pt.trace.json:0=GPU-b",
+        ]
+    )
+    assert scoped == int(ExitCode.OK)
+    uuids = {
+        a.trace_attachment_id: a.context.device_uuid
+        for a in load_inference_artifact(artifact)
+        if isinstance(a, ActivityReferenceEvent)
+    }
+    assert uuids == {
+        trace_attachment_id(one): "GPU-a",
+        trace_attachment_id(two): "GPU-b",
+    }
+
+
+def test_a_shared_ordinal_is_fine_for_several_traces_of_one_process(
+    tmp_path: Path,
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    windows = [
+        _trace(tmp_path / f"rank0.{n}.pt.trace.json", f"W{n}", pid=7) for n in (1, 2)
+    ]
+
+    code = main(
+        ["import-trace", str(artifact), *map(str, windows), "--device-uuid", "0=GPU-a"]
+    )
+
+    assert code == int(ExitCode.OK)
+
+
 def _dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def test_the_shared_ordinal_check_tells_ranks_apart(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    ranks = []
+    for rank in (0, 1):
+        path = _trace(tmp_path / f"node{rank}.pt.trace.json", f"R{rank}", pid=7)
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["distributedInfo"] = {"rank": rank, "world_size": 2}
+        path.write_text(json.dumps(document), encoding="utf-8")
+        ranks.append(path)
+
+    code = main(
+        ["import-trace", str(artifact), *map(str, ranks), "--device-uuid", "GPU-a"]
+    )
+
+    assert code == int(ExitCode.USAGE)
