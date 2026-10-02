@@ -65,6 +65,10 @@ class GpuEvent:
     stream: int | None
     correlation: int | None
     graph_id: int | None
+    # Set by formats that hold several processes (Nsight Systems); a Kineto
+    # trace is one process, so its GPU events leave these unset.
+    pid: int | None = None
+    device_uuid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,7 +99,7 @@ class GpuLink:
 
 @dataclass
 class KinetoTrace:
-    """The parts of a Kineto trace the importer uses."""
+    """The parts of a profiler trace the importer uses (Kineto or Nsight)."""
 
     base_ns: int
     host: str | None
@@ -105,8 +109,10 @@ class KinetoTrace:
     engine_version: str | None
     cupti_version: str | None
     device_names: dict[int, str]
+    source: str = "kineto"
     gpu_events: list[GpuEvent] = field(default_factory=list)
-    launches: dict[int, LaunchCall] = field(default_factory=dict)
+    # Keyed by (pid, correlation); pid is None for single-process formats.
+    launches: dict[tuple[int | None, int], LaunchCall] = field(default_factory=dict)
     spans: dict[tuple[int, int], list[IterationSpan]] = field(default_factory=dict)
     span_starts: dict[tuple[int, int], list[float]] = field(default_factory=dict)
     longest_span_us: dict[tuple[int, int], float] = field(default_factory=dict)
@@ -123,13 +129,17 @@ def load_kineto_trace(path: str | Path) -> KinetoTrace:
     for index, event in enumerate(document["traceEvents"]):
         if isinstance(event, dict) and event.get("ph") == "X":
             _add_checked_event(trace, event, index)
-    _index_spans(trace)
+    index_spans(trace)
     return trace
 
 
 def link_gpu_event(trace: KinetoTrace, event: GpuEvent) -> GpuLink:
     """Link a GPU event to the one iteration range around its launch call."""
-    launch = trace.launches.get(event.correlation) if event.correlation else None
+    launch = (
+        trace.launches.get((event.pid, event.correlation))
+        if event.correlation
+        else None
+    )
     if launch is None:
         return GpuLink(None, "no_launch_record", None)
     refs = {span.iteration_ref for span in _enclosing_spans(trace, launch)}
@@ -152,7 +162,28 @@ def import_kineto_trace(
     """Return activity references, capabilities, and a summary for one trace."""
     if detail not in ("kernel", "launch"):
         raise ValueError("detail must be 'kernel' or 'launch'")
-    trace = load_kineto_trace(path)
+    return capture_trace(
+        load_kineto_trace(path),
+        path,
+        run_id=run_id,
+        session_id=session_id,
+        attachment=attachment,
+        device_uuids=device_uuids,
+        detail=detail,
+    )
+
+
+def capture_trace(
+    trace: KinetoTrace,
+    path: str | Path,
+    *,
+    run_id: str,
+    session_id: str,
+    attachment: TraceAttachment | None = None,
+    device_uuids: Mapping[int, str] | None = None,
+    detail: Detail = "launch",
+) -> TraceCapture:
+    """Build the capture for a loaded trace of any supported format."""
     trace_key = attachment.attachment_id if attachment else _trace_key(trace, path)
     builder = _EventBuilder(
         trace=trace,
@@ -226,7 +257,7 @@ def _add_event(trace: KinetoTrace, event: dict[str, Any]) -> None:
     if category in GPU_CATEGORIES:
         trace.gpu_events.append(_gpu_event(trace, event, args))
     elif category in LAUNCH_CATEGORIES and args.get("correlation"):
-        trace.launches[int(args["correlation"])] = LaunchCall(
+        trace.launches[(None, int(args["correlation"]))] = LaunchCall(
             pid=int(event["pid"]),
             tid=int(event["tid"]),
             ts_us=_event_times(event)[0],
@@ -278,7 +309,8 @@ def _event_times(event: dict[str, Any]) -> tuple[float, float]:
     return start_us, duration_us
 
 
-def _index_spans(trace: KinetoTrace) -> None:
+def index_spans(trace: KinetoTrace) -> None:
+    """Sort each thread's iteration spans and index them for launch lookups."""
     for thread, spans in trace.spans.items():
         spans.sort(key=lambda span: (span.start_us, -span.end_us))
         trace.span_starts[thread] = [span.start_us for span in spans]
@@ -337,12 +369,13 @@ GroupKey = tuple[Any, ...]
 def _group_events(trace: KinetoTrace, detail: Detail) -> dict[GroupKey, list[GpuEvent]]:
     """Group GPU events into the records to emit, with each record's link."""
     groups: dict[GroupKey, list[GpuEvent]] = defaultdict(list)
-    links: dict[int | None, GpuLink] = {}
+    links: dict[tuple[int | None, int | None], GpuLink] = {}
     for index, event in enumerate(trace.gpu_events):
-        if event.correlation not in links:
-            links[event.correlation] = link_gpu_event(trace, event)
-        link = links[event.correlation]
-        launch_key: Any = event.correlation if detail == "launch" else index
+        launch = (event.pid, event.correlation)
+        if launch not in links:
+            links[launch] = link_gpu_event(trace, event)
+        link = links[launch]
+        launch_key: Any = launch if detail == "launch" else index
         if event.correlation is None:
             launch_key = ("uncorrelated", index)
         groups[(event.device, event.kind, launch_key, link)].append(event)
@@ -372,20 +405,22 @@ class _EventBuilder:
     attachment_id: str | None
     device_uuids: dict[int, str]
     count: int = 0
-    record_spans: dict[int | None, list[tuple[int, int]]] = field(default_factory=dict)
-    _contexts: dict[tuple[int | None, int | None], CorrelationContext] = field(
-        default_factory=dict
+    record_spans: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    _contexts: dict[tuple[int | None, int | None, str | None], CorrelationContext] = (
+        field(default_factory=dict)
     )
 
     def build(
         self, key: GroupKey, members: list[GpuEvent]
     ) -> list[ActivityReferenceEvent]:
         device, kind, _, link = key
-        context = self._context(device, link.launch.pid if link.launch else None)
+        uuid = members[0].device_uuid or self.device_uuids.get(device)
+        pid = link.launch.pid if link.launch else members[0].pid
+        context = self._context(device, pid, uuid)
         metadata = _group_metadata(members, link)
         start = min(event.start_ns for event in members)
         end = max(event.end_ns for event in members)
-        self.record_spans.setdefault(device, []).append((start, end))
+        self.record_spans.setdefault(_device_key(members[0]), []).append((start, end))
         return [self._event(context, kind, link, members, start, end, metadata)]
 
     def _event(
@@ -419,22 +454,29 @@ class _EventBuilder:
             metadata=metadata,
         )
 
-    def _context(self, device: int | None, pid: int | None) -> CorrelationContext:
-        key = (device, pid)
+    def _context(
+        self, device: int | None, pid: int | None, uuid: str | None
+    ) -> CorrelationContext:
+        key = (device, pid, uuid)
         if key not in self._contexts:
-            self._contexts[key] = _context(self, device, pid)
+            self._contexts[key] = _context(self, pid, uuid)
         return self._contexts[key]
 
 
+def _device_key(event: GpuEvent) -> str:
+    """How the summary names a device: per process when the format has several."""
+    return str(event.device) if event.pid is None else f"{event.pid}/{event.device}"
+
+
 def _context(
-    builder: _EventBuilder, device: int | None, pid: int | None
+    builder: _EventBuilder, pid: int | None, uuid: str | None
 ) -> CorrelationContext:
     trace = builder.trace
     return CorrelationContext(
         run_id=builder.run_id,
         session_id=builder.session_id,
         producer_id=PRODUCER_ID,
-        source="kineto",
+        source=trace.source,
         source_version=__version__,
         engine="vllm" if trace.engine_version else None,
         engine_version=trace.engine_version,
@@ -442,10 +484,12 @@ def _context(
         backend_version=trace.cupti_version,
         host=trace.host,
         pid=pid,
-        device_uuid=builder.device_uuids.get(device) if device is not None else None,
+        device_uuid=uuid,
         rank=trace.rank,
         world_size=trace.world_size,
-        clock_domain=f"kineto:{trace.host or 'unknown-host'}:{builder.trace_key}",
+        clock_domain=(
+            f"{trace.source}:{trace.host or 'unknown-host'}:{builder.trace_key}"
+        ),
         clock_kind="device",
         collection_mode="imported",
         provenance="observed",
@@ -516,7 +560,7 @@ def _summary(
         else:
             reasons[link.reason] += len(members)
     return {
-        "format": "kineto",
+        "format": trace.source,
         "detail": detail,
         "path": str(Path(path).resolve()),
         "trace_id": trace.trace_id,
@@ -529,11 +573,21 @@ def _summary(
         "activity_records": builder.count,
         "linked_gpu_events": linked,
         "unresolved_gpu_events": dict(sorted(reasons.items())),
-        "graph_gpu_events": sum(1 for event in trace.gpu_events if event.graph_id),
+        "graph_gpu_events": sum(
+            1 for event in trace.gpu_events if _from_graph(trace, event)
+        ),
         "devices": _device_summary(trace, builder),
         "event_loss": None,
-        "event_loss_note": "Kineto traces do not report dropped CUPTI records",
+        "event_loss_note": "the trace does not report dropped CUPTI records",
     }
+
+
+def _from_graph(trace: KinetoTrace, event: GpuEvent) -> bool:
+    """A CUDA graph's work: a graph ID, or launched by cudaGraphLaunch."""
+    if event.graph_id:
+        return True
+    launch = trace.launches.get((event.pid, event.correlation or 0))
+    return launch is not None and launch.name.startswith("cudaGraphLaunch")
 
 
 def _device_summary(
@@ -544,18 +598,18 @@ def _device_summary(
     Spans also cover idle gaps inside multi-event launches; the records'
     ``metadata.intervals`` exclude them, so accounting matches ``busy_ns``.
     """
-    by_device: dict[int | None, list[GpuEvent]] = defaultdict(list)
+    by_device: dict[str, list[GpuEvent]] = defaultdict(list)
     for event in trace.gpu_events:
-        by_device[event.device].append(event)
+        by_device[_device_key(event)].append(event)
     summary = {}
-    for device, events in sorted(by_device.items(), key=lambda item: str(item[0])):
+    for key, events in sorted(by_device.items()):
+        device = events[0].device
         busy = merge_intervals((event.start_ns, event.end_ns) for event in events)
-        records = merge_intervals(builder.record_spans.get(device, []))
-        summary[str(device)] = {
+        records = merge_intervals(builder.record_spans.get(key, []))
+        summary[key] = {
             "name": trace.device_names.get(device) if device is not None else None,
-            "device_uuid": (
-                builder.device_uuids.get(device) if device is not None else None
-            ),
+            "device_uuid": events[0].device_uuid
+            or (builder.device_uuids.get(device) if device is not None else None),
             "busy_ns": sum(end - start for start, end in busy),
             "launch_span_ns": sum(end - start for start, end in records),
             "summed_ns": sum(event.end_ns - event.start_ns for event in events),
@@ -564,7 +618,12 @@ def _device_summary(
 
 
 __all__ = [
+    "Detail",
     "GpuEvent",
+    "IterationSpan",
+    "LaunchCall",
+    "capture_trace",
+    "index_spans",
     "GpuLink",
     "KinetoTrace",
     "import_kineto_trace",

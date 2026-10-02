@@ -161,7 +161,7 @@ def test_load_reads_header_events_and_ranges(tmp_path: Path) -> None:
     assert trace.cupti_version == "130001"
     assert trace.device_names == {0: "NVIDIA A30"}
     assert len(trace.gpu_events) == 7
-    assert set(trace.launches) == {1, 2, 3}
+    assert set(trace.launches) == {(None, 1), (None, 2), (None, 3)}
     assert [span.iteration_ref.id for span in trace.spans[(PID, TID)]] == [
         "it-1",
         "it-2",
