@@ -197,11 +197,16 @@ class KinetoTraceCollector:
         )
         size = path.stat().st_size
         if self.max_bytes is not None and size > self.max_bytes:
-            # Registered, so it can be imported later, but not parsed now.
+            # Registered so `import-trace` can import it later; not parsed now.
             return TraceCapture(
                 capabilities=CaptureCapabilities(SUPPORTED, SUPPORTED, ()),
                 attachments=(attachment,),
-                summary={"file": path.name, "bytes": size, "skipped": "max_bytes"},
+                summary={
+                    "file": path.name,
+                    "path": str(path.resolve()),
+                    "bytes": size,
+                    "skipped": "max_bytes",
+                },
             )
         try:
             return import_kineto_trace(

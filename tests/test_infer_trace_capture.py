@@ -580,3 +580,58 @@ def test_trace_options_with_defaults_also_need_trace(
         )
     assert code == int(ExitCode.USAGE)
     assert f"{flag} needs --trace" in stderr.getvalue()
+
+
+def test_a_trace_registered_over_the_size_bound_can_be_imported_later(
+    tmp_path: Path,
+) -> None:
+    from stormlog.infer.correlation_capture import append_inference_capture
+    from stormlog.infer.correlation_events import (
+        ArtifactIdentityEvent,
+        CorrelationContext,
+    )
+    from stormlog.infer.trace_import import (
+        KinetoTraceCollector,
+        import_traces_into_artifact,
+    )
+    from stormlog.session import create_session_summary
+
+    artifact = tmp_path / "infer.jsonl"
+    identity = ArtifactIdentityEvent(
+        context=CorrelationContext(
+            run_id="r",
+            session_id="s",
+            producer_id="p",
+            source="p",
+            clock_domain="c",
+            clock_kind="wall",
+            collection_mode="active",
+            provenance="observed",
+        ),
+        event_id="artifact",
+        artifact_kind="inference_profile",
+        created_at_ns=1,
+    )
+    artifact.write_text(json.dumps(identity.to_record()) + "\n", encoding="utf-8")
+    big = tmp_path / "rank0.big.pt.trace.json"
+    big.write_text(_kineto("BIG") + " " * 5000, encoding="utf-8")
+    append_inference_capture(
+        artifact,
+        run_id="r",
+        session=create_session_summary(source="test", session_id="s"),
+        trace_collector=KinetoTraceCollector([big], max_bytes=2000),
+    )
+
+    def activities() -> int:
+        return sum(
+            isinstance(r, ActivityReferenceEvent)
+            for r in load_inference_artifact(artifact)
+        )
+
+    assert activities() == 0
+    imported = import_traces_into_artifact(artifact, [big])
+    assert activities() == 1 and imported.summary is not None
+    assert imported.summary["already_imported"] == []
+    again = import_traces_into_artifact(artifact, [big])
+    assert again.summary == {"traces": [], "already_imported": [str(big)]}
+    assert activities() == 1

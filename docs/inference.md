@@ -668,8 +668,8 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
   larger than `--trace-max-bytes` is registered in the run envelope but not
   parsed. Without `--trace-dir`, the traces stay on the server; import them
   later with `stormlog infer import-trace`. vLLM writes the trace while handling
-  `/stop_profile`, so if no new file has appeared 5 seconds after the stop,
-  Stormlog stops waiting for that window.
+  `/stop_profile`, so if no new file has appeared about 5 seconds after the
+  stop, Stormlog stops waiting for that window.
 - **Clock and settings.** Imported timestamps are Kineto's host-calibrated
   device times, not a raw GPU clock. The CUDA-graph and compile settings the
   server ran with are not in the trace; they stay unknown unless recorded
