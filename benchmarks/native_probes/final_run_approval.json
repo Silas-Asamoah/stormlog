@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_protocol_approval",
+  "issue": 118,
+  "status": "policy_and_workload_approved_pending_preflight",
+  "proposal_path": "benchmarks/native_probes/final_run_proposal.json",
+  "proposal_sha256": "2761ffde2dfff13c14d3d2f24ef4036c2a4e33c073b879e39a69b14e82933815",
+  "approved_scope": [
+    "numeric_acceptance_policy",
+    "pinned_vllm_workload"
+  ],
+  "approval_source": {
+    "kind": "direct_user_reply_in_codex_conversation",
+    "reply": "approve",
+    "reply_date_local": "2026-10-01",
+    "preceding_question": "Please confirm whether you approve the exact policy and workload in the linked JSON. That approval would lock the protocol; it would not authorize paid hardware."
+  },
+  "paid_hardware": {
+    "status": "not_authorized",
+    "separate_authorization_required": true
+  },
+  "pilot_boundary": "W1 pilot remains configuration evidence only and did not set thresholds",
+  "freeze_rule": "Any later policy or workload change requires a new proposal, explicit approval, and a new run configuration before final observations."
+}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -177,22 +178,34 @@ def test_result_metrics_are_normalizable() -> None:
     assert _validated_trial_metrics(result) == result["metrics"]
 
 
-def test_proposal_stays_unapproved_and_matches_adapter() -> None:
+def test_approved_protocol_matches_frozen_proposal_and_adapter() -> None:
     root = Path(__file__).resolve().parents[1]
-    proposal = json.loads(
-        (root / "benchmarks/native_probes/final_run_proposal.json").read_text()
+    proposal_bytes = (
+        root / "benchmarks/native_probes/final_run_proposal.json"
+    ).read_bytes()
+    proposal = json.loads(proposal_bytes)
+    approval = json.loads(
+        (root / "benchmarks/native_probes/final_run_approval.json").read_text()
     )
-    approved = json.loads(
+    experiment = json.loads(
         (root / "benchmarks/native_probes/experiment.json").read_text()
     )
 
     assert proposal["status"] == "proposed_not_approved"
-    assert all(
-        proposal["approval"][key] is None
-        for key in ("numeric_policy", "workload", "paid_hardware")
-    )
-    assert approved["acceptance_thresholds"]["latency_perturbation_max"] is None
+    assert approval["status"] == "policy_and_workload_approved_pending_preflight"
+    assert approval["paid_hardware"]["status"] == "not_authorized"
+    assert approval["proposal_sha256"] == hashlib.sha256(proposal_bytes).hexdigest()
+    thresholds = experiment["acceptance_thresholds"]
+    assert thresholds["proposal_sha256"] == approval["proposal_sha256"]
+    assert thresholds["latency_perturbation_max"] == 0.05
+    assert thresholds["memory_reduction_min"] == 0.25
+    assert thresholds["correlation_coverage_min"] == 0.99
+    assert thresholds["event_loss_max"] == 0
+    assert thresholds["sample_sufficiency_min"] == 5
+    assert thresholds["paid_hardware_authorization_required"] is True
     assert proposal["vllm"]["model_revision"] == REVISION
+    assert experiment["workloads"]["vllm"]["model_revision"] == REVISION
+    assert experiment["workloads"]["vllm"]["tokenizer_revision"] == REVISION
     assert (
         proposal["vllm"]["request"]["user_message"]
         == request_body()["messages"][0]["content"]
