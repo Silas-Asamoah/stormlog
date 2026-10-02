@@ -87,6 +87,10 @@ pip install "stormlog[infer-tokenizers]"
 ```
 
 See [Inference Profiling](inference.md) for the full endpoint profiling guide.
+For controlled experiments, `--arrival` sends requests on a fixed-rate,
+Poisson, burst or replayed schedule instead of a closed loop. `--prompt-mode`
+chooses whether requests share prefixes, and `--cache-state cold` with
+`--cache-reset-url` asks for an empty prefix cache before each case.
 For server memory, run `stormlog infer collect-server` on the serving host,
 pass the same `--run-id` to `infer profile`, and import the collector JSONL with
 `infer analyze --server-telemetry`. The guide explains the direct-route and

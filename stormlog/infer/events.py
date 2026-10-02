@@ -22,7 +22,8 @@ class InferenceRequestEvent:
     ended_at_ns: int
     endpoint: str
     model: str
-    concurrency: int
+    # Closed-loop workers; None for open-loop arrivals, which use max_in_flight.
+    concurrency: int | None
     target_input_tokens: int
     target_output_tokens: int
     stream: bool
@@ -41,6 +42,21 @@ class InferenceRequestEvent:
     finish_reason: str | None = None
     error_type: str | None = None
     error_message: str | None = None
+    http_status: int | None = None
+    # How the request was scheduled and when it actually went out.
+    arrival_mode: str = "closed"
+    request_index: int | None = None
+    intended_at_ns: int | None = None
+    dispatch_lag_ms: float | None = None
+    held_for_slot: bool | None = None
+    in_flight_at_dispatch: int | None = None
+    max_in_flight: int | None = None
+    # Which prompt was sent and what it shares with other requests.
+    prompt_mode: str = "repeat"
+    prompt_id: str | None = None
+    prefix_group: int | None = None
+    shared_prefix_tokens: int | None = None
+    prompt_digest: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
