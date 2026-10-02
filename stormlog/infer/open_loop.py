@@ -50,7 +50,12 @@ class InFlightLimiter:
 
 @dataclass(frozen=True)
 class Dispatch:
-    """The requests a schedule sent, and when the schedule started."""
+    """The requests a schedule sent, and when the schedule started.
+
+    ``tasks`` holds the requests still running and any that failed, whose
+    errors are raised by whoever drains them; finished requests are dropped
+    so a long schedule holds no more than its in-flight limit.
+    """
 
     started_at_ns: int
     tasks: list[asyncio.Task[None]]
@@ -79,7 +84,13 @@ async def dispatch_schedule(
     started = time.perf_counter()
     started_ns = time.time_ns()
     deadline_at = None if deadline is None else started + deadline
-    tasks: list[asyncio.Task[None]] = []
+    # In creation order, so the first failure is the one raised.
+    tasks: dict[asyncio.Task[None], None] = {}
+
+    def forget(task: asyncio.Task[None]) -> None:
+        if not _still_matters(task):
+            tasks.pop(task, None)
+
     try:
         for index, offset in enumerate(offsets):
             delay = started + offset - time.perf_counter()
@@ -99,12 +110,24 @@ async def dispatch_schedule(
                 drop(arrival, "still waiting to be sent when the drain deadline passed")
                 continue
             arrival = replace(arrival, in_flight_at_dispatch=in_flight)
-            tasks.append(asyncio.create_task(_release_after(send(arrival), limiter)))
+            task = asyncio.create_task(_release_after(send(arrival), limiter))
+            tasks[task] = None
+            task.add_done_callback(forget)
     except asyncio.CancelledError:
         # Stopped part-way: the requests already sent finish cancelling first.
-        await cancel_all(tasks)
+        await cancel_all(list(tasks))
         raise
-    return Dispatch(started_at_ns=started_ns, tasks=tasks)
+    # Callbacks for the last requests to finish may not have run yet.
+    return Dispatch(
+        started_at_ns=started_ns, tasks=[task for task in tasks if _still_matters(task)]
+    )
+
+
+def _still_matters(task: asyncio.Task[None]) -> bool:
+    """Still running, or failed with an error the drain has to raise."""
+    if not task.done():
+        return True
+    return not task.cancelled() and task.exception() is not None
 
 
 async def _acquire_by(limiter: InFlightLimiter, deadline: float | None) -> int | None:

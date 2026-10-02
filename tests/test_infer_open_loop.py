@@ -463,6 +463,60 @@ def test_dispatcher_drops_arrivals_still_held_at_the_deadline() -> None:
     }
 
 
+def test_dispatcher_keeps_only_running_and_failed_requests() -> None:
+    async def scenario() -> None:
+        limiter = InFlightLimiter(4)
+
+        async def send(arrival: Arrival) -> None:
+            if arrival.index == 7:
+                raise RuntimeError("request 7 broke")
+            await asyncio.sleep(0)
+
+        dispatch = await dispatch_schedule(
+            [0.0] * 40,
+            mode="burst",
+            limiter=limiter,
+            overflow="wait",
+            send=send,
+            drop=lambda arrival, reason: None,
+        )
+        # Memory follows the in-flight limit, not the schedule length: a
+        # finished request is forgotten, a failed one is kept to be raised.
+        assert len(dispatch.tasks) <= limiter.limit + 1
+        results = await asyncio.gather(*dispatch.tasks, return_exceptions=True)
+        errors = [str(result) for result in results if isinstance(result, Exception)]
+        assert errors == ["request 7 broke"]
+        assert limiter.active == 0
+
+    _run(scenario())
+
+
+def test_a_request_bug_during_dispatch_still_fails_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profiler = InferenceProfiler(
+        dataclasses.replace(
+            _profiler(tmp_path).config,
+            arrival_mode="fixed-rate",
+            rates=(20.0,),
+            request_count=3,
+        )
+    )
+    profiler.client = SleepingClient(0.0)  # type: ignore[assignment]
+    run_one_request = profiler._run_one_request
+
+    async def broken(**kwargs: Any) -> Any:
+        # The first request fails while the dispatcher still has two to send.
+        if kwargs["arrival"].index == 0:
+            raise RuntimeError("bug in a request")
+        return await run_one_request(**kwargs)
+
+    monkeypatch.setattr(profiler, "_run_one_request", broken)
+    with pytest.raises(RuntimeError, match="bug in a request"):
+        profiler.run()
+    assert _last_session(tmp_path / "infer.jsonl")["status"] == "incomplete"
+
+
 def test_limiter_rejects_a_limit_below_one() -> None:
     with pytest.raises(ValueError, match=">= 1"):
         InFlightLimiter(0)
