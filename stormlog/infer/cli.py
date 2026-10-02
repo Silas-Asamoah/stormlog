@@ -36,6 +36,7 @@ from .server_collector import (
     NvmlUnavailableError,
     collect_server_telemetry,
 )
+from .trace_import import import_traces_into_artifact, parse_device_uuids
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -64,6 +65,8 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         return cmd_analyze(args)
     if args.infer_command == "collect-server":
         return cmd_collect_server(args)
+    if args.infer_command == "import-trace":
+        return cmd_import_trace(args)
     parser.error(f"Unsupported infer command: {args.infer_command}")
 
 
@@ -332,7 +335,42 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Number of group members; each rank 0..N-1 needs a collector",
     )
+    _add_import_trace_parser(subparsers)
     return parser
+
+
+def _add_import_trace_parser(subparsers: Any) -> None:
+    import_parser = subparsers.add_parser(
+        "import-trace",
+        help="Add a PyTorch/Kineto profiler trace's GPU activity to an artifact",
+    )
+    import_parser.add_argument("artifact", help="Inference JSONL with a run identity")
+    import_parser.add_argument(
+        "traces", nargs="+", help="Kineto Chrome trace files (.json or .json.gz)"
+    )
+    import_parser.add_argument(
+        "--device-uuid",
+        action="append",
+        default=[],
+        metavar="INDEX=UUID",
+        help=(
+            "GPU UUID for a CUDA device ordinal in the traced process (after "
+            "CUDA_VISIBLE_DEVICES); repeat per device. Without it, GPU activity "
+            "is kept but not measured"
+        ),
+    )
+    import_parser.add_argument(
+        "--detail",
+        choices=("launch", "kernel"),
+        default="launch",
+        help=(
+            "launch: one record per launch call (default, compact); kernel: one "
+            "record per GPU event (exact, large)"
+        ),
+    )
+    import_parser.add_argument(
+        "--envelope", default=None, help="Run envelope (default: beside the artifact)"
+    )
 
 
 def _add_arrival_arguments(parser: argparse.ArgumentParser) -> None:
@@ -789,3 +827,35 @@ def _warn_about_repeated_prompts(args: argparse.Namespace) -> None:
         "that already served this workload starts with them cached. Pass "
         "--cache-reset-url or change --seed to start cold"
     )
+
+
+def cmd_import_trace(args: argparse.Namespace) -> int:
+    """Append profiler-trace GPU activity to an existing inference artifact."""
+    capture = import_traces_into_artifact(
+        args.artifact,
+        args.traces,
+        device_uuids=parse_device_uuids(args.device_uuid),
+        detail=args.detail,
+        envelope_path=args.envelope,
+    )
+    for summary in (capture.summary or {}).get("traces", []):
+        _print_trace_summary(summary)
+    return int(ExitCode.OK)
+
+
+def _print_trace_summary(summary: dict[str, Any]) -> None:
+    unresolved = sum(summary["unresolved_gpu_events"].values())
+    print(
+        f"Imported trace {summary['trace_id'] or '(no trace id)'}: "
+        f"{summary['gpu_events']} GPU events as {summary['activity_records']} "
+        f"records; {summary['linked_gpu_events']} linked to iterations, "
+        f"{unresolved} unresolved"
+    )
+    for reason, count in summary["unresolved_gpu_events"].items():
+        print(f"  unresolved ({reason}): {count}")
+    for device, values in summary["devices"].items():
+        uuid = values["device_uuid"] or "unknown UUID, not measured"
+        print(
+            f"  device {device} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
+            f"records cover {values['record_busy_ns'] / 1e6:.3f} ms"
+        )
