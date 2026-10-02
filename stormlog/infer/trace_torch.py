@@ -1,7 +1,8 @@
 """Bounded in-process PyTorch profiler capture for import with ``import-trace``.
 
 ``capture_torch_trace`` profiles the code inside its block and writes a Kineto
-Chrome trace when the block ends, including when it raises. Stack, shape, and
+Chrome trace when the block ends, including when it raises. The block is the
+bound: there is no step or time limit inside it. Stack, shape, and
 memory recording are off unless asked for, since each adds CPU work per
 operator. The profiler adds no synchronization per step; stopping it flushes
 the CUDA activity buffers once, at the end of the block.
@@ -10,7 +11,7 @@ the CUDA activity buffers once, at the end of the block.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -58,9 +59,14 @@ def capture_torch_trace(
     profiler.start()
     try:
         yield path
-    finally:
-        profiler.stop()
-        profiler.export_chrome_trace(str(path))
+    except BaseException:
+        # Keep the block's exception; a failed export must not replace it.
+        with suppress(Exception):
+            profiler.stop()
+            profiler.export_chrome_trace(str(path))
+        raise
+    profiler.stop()
+    profiler.export_chrome_trace(str(path))
 
 
 def _profiler_running(torch: Any) -> bool:

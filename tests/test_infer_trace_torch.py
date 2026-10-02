@@ -44,3 +44,17 @@ def test_capture_refuses_to_take_over_a_running_profiler(tmp_path: Path) -> None
         with pytest.raises(ProfilerBusyError):
             with capture_torch_trace(tmp_path / "x.json", cuda=False):
                 pass
+
+
+def test_a_failed_export_does_not_hide_the_blocks_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from torch.profiler import profile
+
+    def broken_export(_self: object, _path: str) -> None:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(profile, "export_chrome_trace", broken_export)
+    with pytest.raises(RuntimeError, match="boom"):
+        with capture_torch_trace(tmp_path / "x.json", cuda=False):
+            raise RuntimeError("boom")
