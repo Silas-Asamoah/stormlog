@@ -44,7 +44,7 @@ the flaky benchmark memory gates
   and retired series left unresolved with a reason instead of zero, plus a
   capability record naming what vLLM 0.30.0 exposes and that
   `--collect-detailed-traces` never fills the forward and execute fields.
-  ([#215](https://github.com/Silas-Asamoah/stormlog/issues/215))
+  ([#263](https://github.com/Silas-Asamoah/stormlog/pull/263))
 - Open-loop arrivals for `stormlog infer profile`. `--arrival fixed-rate`,
   `poisson`, `burst` or `replay` sends requests on a seeded schedule that is
   fixed before the run starts (`--rate`, `--burst-size`, `--burst-interval`,
