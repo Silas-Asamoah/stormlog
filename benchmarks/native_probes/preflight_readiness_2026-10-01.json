@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_preflight_readiness",
+  "issue": 118,
+  "status": "local_checks_passed_tooling_and_hardware_gates_pending",
+  "checked_on_local_date": "2026-10-01",
+  "repository": {
+    "branch": "research/investigate-optional-low-overhead-native-probe-surfaces",
+    "local_revision_before_this_manifest": "6d4f11f48b413c9b56dfcf800d06640386b38ab9",
+    "remote_head": "b70c626bd1e1d2d60806ecd089e058da3d4964b0",
+    "remote_head_command": "git ls-remote origin refs/heads/research/investigate-optional-low-overhead-native-probe-surfaces",
+    "worktree_clean_before_this_manifest": true,
+    "prototype_revision": "d4ea783b7ef98aa2f0e3bfbcffc169e4612fd3a9",
+    "prototype_object_available": true
+  },
+  "issue_review": {
+    "issue_118_comments": 3,
+    "issue_118_last_update_utc": "2026-09-26T00:53:00Z",
+    "issue_221_comments": 0,
+    "issue_235_comments": 2,
+    "method": "read-only gh issue view on 2026-10-01",
+    "decision_boundary": "Screen all eight candidates across 24 fields; only Stormlog run evidence may promote validated cells."
+  },
+  "approved_protocol": {
+    "approval_record": "benchmarks/native_probes/final_run_approval.json",
+    "proposal_sha256": "2761ffde2dfff13c14d3d2f24ef4036c2a4e33c073b879e39a69b14e82933815",
+    "approval_hashes_match_configuration": true,
+    "paid_hardware_authorized": false,
+    "thresholds_frozen_before_final_observations": true
+  },
+  "retained_pilot": {
+    "use": "configuration evidence only",
+    "bundle": "artifacts/native-probes/pilot-118-l4-522535-01/pilot-bundle.tar.gz",
+    "bundle_sha256": "4968ac4c5b1f28d7e3a1eff2a2076d4f55f6ddb546ed2318903f1ed5b384e27a",
+    "tracked_json": "benchmarks/native_probes/evidence/pilot-118-l4-522535-01.json",
+    "tracked_json_sha256": "ec38cb1c65322685920a0df38168ea7b50f2a625000594a0ff002c6d7fcc8f69",
+    "raw_file_hash_list": "artifacts/native-probes/pilot-118-l4-522535-01/raw/file-hashes.sha256",
+    "raw_file_hash_list_check": "all listed files verified"
+  },
+  "local_validation": {
+    "environment_artifact": "artifacts/native-probes/preflight-control-2026-10-01-01/environment.json",
+    "environment_sha256": "e2845f3d2b7c60eee5e9ef3c6b5829ed07d4e3871fdafcc45b37de361aea7b86",
+    "environment_command": ".venv/bin/python -m scripts.native_probes.cli preflight --host-id control-macos-2026-10-01 --repository . --output artifacts/native-probes/preflight-control-2026-10-01-01/environment.json",
+    "environment_exit_code": 0,
+    "test_command": ".venv/bin/python -m pytest tests/test_native_probe_research.py tests/test_native_probe_cli.py tests/test_native_probe_gpu.py tests/test_vllm_open_loop.py -q",
+    "test_exit_code": 0,
+    "tests_passed": 64,
+    "tests_skipped": 1,
+    "gpu_smoke_skip_reason": "opt-in NVIDIA runtime unavailable on macOS control host",
+    "matrix_candidates": 8,
+    "matrix_fields_per_candidate": 24,
+    "validated_matrix_cell_statuses": ["UNKNOWN"]
+  },
+  "pending_before_final_observations": [
+    "separate paid-hardware authorization",
+    "pin and verify compatible L4 driver, CUDA, CUPTI, compiler, PyTorch, vLLM, Triton, model, and tokenizer environment",
+    "verify per-process CUPTI output isolation and coverage for vLLM worker processes",
+    "verify GPU, pinned host, and collector buffer memory accounting or mark corresponding claims inconclusive",
+    "define SLO goodput reporting without changing approved numeric acceptance limits",
+    "complete correlation and external kernel-coverage analysis with trusted Nsight timelines",
+    "implement and verify W4 pressure controls currently recorded but not induced",
+    "run W1-W4, profiler-off and public-profiler baselines, vLLM modes, separate Nsight correctness trials, and independent AMD qualification where claimed",
+    "verify packaging, privilege, container, coexistence, failure recovery, and every candidate matrix field"
+  ],
+  "cloud": {
+    "instance_actions_this_preflight": "none",
+    "instance_state_this_preflight": "not_queried",
+    "cost_this_preflight": "unknown; no paid instance action performed",
+    "final_run_cost_estimate": null
+  }
+}
