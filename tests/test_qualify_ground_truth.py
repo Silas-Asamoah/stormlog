@@ -1,0 +1,258 @@
+"""The qualification's ground-truth format, its validity layers and status."""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from stormlog.infer.qualify import vocabulary
+from stormlog.infer.qualify.ground_truth import (
+    IMPACT,
+    IMPACT_PARTIAL,
+    INCOMPARABLE,
+    INVALID_ALIGNMENT,
+    NO_IMPACT,
+    NOT_ACTUATED,
+    NOT_REALIZED,
+    PROTOCOL_FAILURE,
+    RECOVERY_INCOMPLETE,
+    VALID,
+    GroundTruthError,
+    OutcomeCounts,
+    PhaseWindow,
+    Times,
+    assess_impact,
+    decide_status,
+    is_aligned,
+    load_injections,
+    parse_injection,
+    write_injections,
+)
+
+S = 1_000_000_000
+
+
+def f2_record() -> dict[str, Any]:
+    """#221 A.5's KV-pressure episode, with v3.2's additions."""
+    return {
+        "format": "stormlog.qualify.injection/1",
+        "episode_id": "q221-0f3a9c1b2d4e5f60",
+        "episode_type": "F2",
+        "cause_class": "fault",
+        "injected": {
+            "method": "neighbor_traffic",
+            "target": {"role": None, "pid": None, "start_ns": None},
+            "dose": {"concurrency": 8, "input_tokens": 2048, "output_tokens": 1024},
+        },
+        "expects": [
+            {
+                "kind": "kv_preemption_pressure",
+                "component": "kv_cache",
+                "rank": None,
+                "engine": None,
+                "role": "primary",
+                "cause": "fault",
+                "min_severity": "warning",
+            }
+        ],
+        "secondary": [
+            {
+                "kind": "queue_saturation",
+                "component": "scheduler",
+                "rank": None,
+                "engine": None,
+                "edge": "kv_preemption_pressure->queue_saturation",
+            },
+            {
+                "kind": "mixed_prefill_interference",
+                "component": "scheduler",
+                "rank": None,
+                "engine": None,
+                "edge": "kv_preemption_pressure->mixed_prefill_interference",
+            },
+        ],
+        "allows": [
+            {"kind": kind, "component": "workload", "rank": None, "engine": None}
+            for kind in ("load_increase", "longer_inputs", "longer_outputs")
+        ],
+        "times": {
+            "action_onset_ns": 100 * S,
+            "action_end_ns": 145 * S,
+            "effect_onset_ns": 103 * S,
+            "effect_end_ns": 150 * S,
+            "effect_basis": "reference_hook_preempted_victim",
+            "first_observation_ns": 104 * S,
+            "recovery_held_at_ns": 172 * S,
+            "predicate_duration_ns": None,
+            "priming_check": {"cached_fraction_median": 0.94, "passed": True},
+        },
+        "clock_domain": "node-a/boot-1/unix_epoch_ns",
+        "actions": [
+            {
+                "kind": "neighbor_phase",
+                "at_wall_ns": 100 * S,
+                "at_mono_ns": 7,
+                "result": "ok",
+            }
+        ],
+        "validity": {
+            "actuation": "ok",
+            "realization": "realized",
+            "observation": "complete",
+            "impact": {
+                "status": "impact",
+                "reason": None,
+                "p_value": 0.001,
+                "effect": {"violations": 9, "met": 31, "unknown": 0},
+                "baseline": {"violations": 4, "met": 131, "unknown": 0},
+            },
+            "realized_mechanisms": ["kv_preemption_pressure", "queue_saturation"],
+            "checks": [
+                {"layer": "realization", "name": "victim_preempted", "passed": True}
+            ],
+        },
+        "status": "valid",
+    }
+
+
+def test_a_record_round_trips() -> None:
+    record = f2_record()
+    injection = parse_injection(record)
+    assert injection.to_record() == record
+    assert injection.expects[0].kind == "kv_preemption_pressure"
+    assert injection.validity.impact is not None
+    assert injection.validity.impact.status == IMPACT
+
+
+def test_records_round_trip_through_a_file(tmp_path: Path) -> None:
+    first = parse_injection(f2_record())
+    record = f2_record()
+    record["episode_id"] = "q221-1111111111111111"
+    record["status"] = "not_realized"
+    second = parse_injection(record)
+    path = tmp_path / "injections.jsonl"
+    write_injections(path, [first, second])
+    assert load_injections(path) == [first, second]
+
+
+def _broken(change: Any) -> list[str]:
+    record = copy.deepcopy(f2_record())
+    change(record)
+    with pytest.raises(GroundTruthError) as error:
+        parse_injection(record)
+    return error.value.problems
+
+
+def test_labels_use_218s_vocabulary_and_edges() -> None:
+    def unknown_kind(record: dict[str, Any]) -> None:
+        record["expects"][0]["kind"] = "kv_pressure"
+
+    def wrong_place(record: dict[str, Any]) -> None:
+        record["expects"][0]["component"] = "scheduler"
+
+    def no_edge(record: dict[str, Any]) -> None:
+        del record["secondary"][0]["edge"]
+
+    def unknown_edge(record: dict[str, Any]) -> None:
+        record["secondary"][0]["edge"] = "queue_saturation->kv_preemption_pressure"
+
+    def edge_elsewhere(record: dict[str, Any]) -> None:
+        record["secondary"][0][
+            "edge"
+        ] = "kv_preemption_pressure->mixed_prefill_interference"
+
+    def secondary_expectation(record: dict[str, Any]) -> None:
+        record["expects"][0]["role"] = "secondary"
+
+    assert _broken(unknown_kind) == ["expects[0]: unknown kind 'kv_pressure'"]
+    assert _broken(wrong_place) == [
+        "expects[0]: kv_preemption_pressure is never at 'scheduler'"
+    ]
+    assert _broken(no_edge) == ["secondary[0]: a secondary names its edge"]
+    assert _broken(unknown_edge) == [
+        "secondary[0]: unknown edge 'queue_saturation->kv_preemption_pressure'"
+    ]
+    assert _broken(edge_elsewhere) == [
+        "secondary[0]: edge kv_preemption_pressure->mixed_prefill_interference"
+        " does not lead to queue_saturation"
+    ]
+    assert _broken(secondary_expectation) == [
+        "expects[0]: an expectation is always primary"
+    ]
+
+
+def test_a_malformed_record_is_refused_with_its_line(tmp_path: Path) -> None:
+    def extra_time(record: dict[str, Any]) -> None:
+        record["times"]["when"] = 1
+
+    def bad_status(record: dict[str, Any]) -> None:
+        record["status"] = "maybe"
+
+    assert _broken(extra_time)[0].startswith("malformed record")
+    assert _broken(bad_status) == ["unknown status 'maybe'"]
+    path = tmp_path / "injections.jsonl"
+    path.write_text('{"format": "other"}\n', encoding="utf-8")
+    with pytest.raises(GroundTruthError, match="line 1: format is not"):
+        load_injections(path)
+
+
+def test_the_status_is_the_first_failure_in_order() -> None:
+    assert decide_status() == VALID
+    assert decide_status(recovered=False) == RECOVERY_INCOMPLETE
+    assert decide_status(realized=False, recovered=False) == NOT_REALIZED
+    assert decide_status(aligned=False, realized=False) == INVALID_ALIGNMENT
+    assert decide_status(actuated=False, aligned=False) == NOT_ACTUATED
+    assert decide_status(same_clock=False, actuated=False) == INCOMPARABLE
+    assert decide_status(protocol_failure=True, same_clock=False) == PROTOCOL_FAILURE
+
+
+def test_an_episode_needs_its_whole_effect_and_a_clean_baseline_in_the_window() -> None:
+    window = PhaseWindow(start_ns=0, end_ns=400 * S)
+    inside = Times(
+        action_onset_ns=100 * S, action_end_ns=145 * S, effect_end_ns=150 * S
+    )
+    assert is_aligned(inside, window)
+    # The effect runs past the measured window.
+    late = Times(action_onset_ns=100 * S, effect_end_ns=401 * S)
+    assert not is_aligned(late, window)
+    # Starts before the window.
+    early = Times(action_onset_ns=-1, effect_end_ns=10 * S)
+    assert not is_aligned(early, window)
+    # Only 20 s after the previous episode recovered.
+    assert not is_aligned(inside, window, clean_since_ns=80 * S)
+    assert is_aligned(inside, window, clean_since_ns=70 * S)
+    # No action time recorded.
+    assert not is_aligned(Times(effect_end_ns=150 * S), window)
+
+
+def test_impact_needs_more_violations_than_the_baseline_and_at_least_three() -> None:
+    baseline = OutcomeCounts(violations=6, met=129, unknown=0)
+    hurt = assess_impact(OutcomeCounts(violations=9, met=31), baseline)
+    assert (hurt.status, hurt.reason) == (IMPACT, None)
+    assert hurt.p_value is not None and hurt.p_value < 0.05
+    # Two violations out of two is a striking rate, but fewer than three.
+    few = assess_impact(OutcomeCounts(violations=2, met=0), OutcomeCounts(0, 135))
+    assert few.status == NO_IMPACT
+    same = assess_impact(OutcomeCounts(violations=2, met=43), baseline)
+    assert same.status == NO_IMPACT
+
+
+def test_impact_is_partial_when_slo_evidence_is_thin() -> None:
+    # Unknown outcomes are not violations, but they leave the window's
+    # evidence covering less than 0.9 of its requests.
+    thin = assess_impact(
+        OutcomeCounts(violations=9, met=31, unknown=5), OutcomeCounts(4, 131)
+    )
+    assert (thin.status, thin.reason) == (IMPACT_PARTIAL, "slo_evidence_coverage")
+    empty = assess_impact(OutcomeCounts(), OutcomeCounts(4, 131))
+    assert empty.status == IMPACT_PARTIAL
+
+
+def test_the_vocabulary_matches_218s_when_present() -> None:
+    theirs = pytest.importorskip("stormlog.infer.diagnosis_vocabulary")
+    assert dict(vocabulary.KIND_COMPONENTS) == dict(theirs.KIND_COMPONENTS)
+    assert vocabulary.CAUSES == theirs.CAUSES
+    assert vocabulary.WORKLOAD_KINDS == theirs.WORKLOAD_KINDS
