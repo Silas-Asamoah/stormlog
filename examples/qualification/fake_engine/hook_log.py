@@ -32,12 +32,16 @@ class HookLog(EngineObserver):
         self.engine_writer = EpochWriter(root, "engine", limits=limits)
         self.producer = producer_name(self.engine_writer)
         self.engine_writer.emit(
-            "hello", self._hello(self.engine_writer, self.producer, runner=None)
+            "hello",
+            self._hello(
+                self.engine_writer, self.producer, scheduler=SCHEDULER, runner=None
+            ),
         )
         self.worker_writer = EpochWriter(
             root, "worker", limits=limits, status_fields=_worker_status
         )
-        hello = self._hello(self.worker_writer, None, runner=RUNNER)
+        # Each side's gate sees only its own class, so the other stays null.
+        hello = self._hello(self.worker_writer, None, scheduler=None, runner=RUNNER)
         hello.update(
             {
                 "rank": {"global": 0, "tp": 0, "pp": 0, "dp": 0},
@@ -106,7 +110,12 @@ class HookLog(EngineObserver):
     # ------------------------------------------------------------ helpers
 
     def _hello(
-        self, writer: EpochWriter, producer: str | None, *, runner: str | None
+        self,
+        writer: EpochWriter,
+        producer: str | None,
+        *,
+        scheduler: str | None,
+        runner: str | None,
     ) -> dict[str, Any]:
         wall = time.time_ns()
         mono = time.monotonic_ns()
@@ -132,7 +141,7 @@ class HookLog(EngineObserver):
                 "speculative": None,
                 "v2_model_runner": True,
                 "request_id_randomization": self.config.request_id_randomization,
-                "scheduler": SCHEDULER,
+                "scheduler": scheduler,
                 "runner": runner,
             },
             "clock": {"wall_ns": wall, "mono_ns": mono, "gap_ns": wall_after - wall},

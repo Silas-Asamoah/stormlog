@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
+from examples.qualification.fake_engine.hook_log import RUNNER, SCHEDULER
 from tests.qualification_fake_engine_helpers import (
     chat,
     of_type,
@@ -111,3 +113,25 @@ def test_segments_seal_promptly_and_the_epochs_end_with_goodbye(
     assert parts == []
     assert epochs == ["engine", "worker"]
     assert all('"kind":"goodbye"' in line for line in last_lines.values())
+
+
+def test_each_epochs_hello_names_only_its_own_class(tmp_path: Path) -> None:
+    # The hook's gate summarises the engine's config with the scheduler alone
+    # and the worker's with the model runner alone (vllm_hook/__init__.py,
+    # gate.check), so each hello leaves the other class null.
+    hook = tmp_path / "hook"
+    with _engine(hook):
+        pass
+    hellos = {}
+    for path in sorted(hook.rglob("*.jsonl")):
+        first = json.loads(path.read_text().splitlines()[0])
+        if first["kind"] == "hello":
+            hellos[path.parent.name.split("-")[0]] = first["config"]
+    assert (hellos["engine"]["scheduler"], hellos["engine"]["runner"]) == (
+        SCHEDULER,
+        None,
+    )
+    assert (hellos["worker"]["scheduler"], hellos["worker"]["runner"]) == (
+        None,
+        RUNNER,
+    )
