@@ -395,8 +395,7 @@ class Engine:
 
     def _admit(self, request: FakeRequest) -> None:
         request.status = "RUNNING"
-        self.stats.prefix_queries += request.num_tokens
-        self.stats.prefix_hits += request.computed
+        self._record_lookup(request)
         if request.first_scheduled_ns is None:
             request.first_scheduled_ns = time.time_ns()
             request.cached_at_admission = request.computed
@@ -404,6 +403,19 @@ class Engine:
                 "vllm:request_queue_time_seconds",
                 (request.first_scheduled_ns - request.arrival_ns) / 1e9,
             )
+
+    def _record_lookup(self, request: FakeRequest) -> None:
+        """vLLM records each admission's prefix lookup, none with caching off,
+        and a resumed request's apart from the counters /metrics exports."""
+        stats = self.stats
+        if not self.config.enable_prefix_caching:
+            return
+        if request.preemptions:
+            stats.preempted_prefix_queries += request.num_tokens
+            stats.preempted_prefix_hits += request.computed
+        else:
+            stats.prefix_queries += request.num_tokens
+            stats.prefix_hits += request.computed
 
     def _member(self, request: FakeRequest, tokens: int) -> ScheduledMember:
         first = request.internal_id not in self._sighted

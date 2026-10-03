@@ -134,6 +134,9 @@ class EngineStats:
     created_s: float
     prefix_queries: int = 0
     prefix_hits: int = 0
+    # A resumed request's lookups, which vLLM keeps apart and never exports.
+    preempted_prefix_queries: int = 0
+    preempted_prefix_hits: int = 0
     preemptions: int = 0
     prompt_tokens: int = 0
     prompt_tokens_cached: int = 0

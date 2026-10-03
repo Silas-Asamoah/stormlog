@@ -95,7 +95,11 @@ def test_kv_pressure_shows_in_the_preemption_counter() -> None:
         engine.resume_engine()
         join_all(threads)
         scrape = _scrape(engine)
+        prompts = sum(request.prompt_len for request in engine.engine.finished)
     assert _value(scrape, "vllm:num_preemptions_total") > 0
+    # A resumed request's lookups are not exported, so each request is queried
+    # once, at its first admission.
+    assert _value(scrape, "vllm:prefix_cache_queries_total") == prompts
 
 
 def test_a_shared_prefix_shows_in_the_hit_counter() -> None:

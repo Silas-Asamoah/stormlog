@@ -252,10 +252,15 @@ def test_a_resets_victims_are_listed_in_the_next_steps_preempted() -> None:
     assert sorted(listed[0].preempted) == victims
 
 
-def _stepped_engine(*, max_num_batched_tokens: int = 256) -> Engine:
+def _stepped_engine(
+    *, max_num_batched_tokens: int = 256, enable_prefix_caching: bool = True
+) -> Engine:
     """An engine whose steps a test drives by hand: its loop never starts."""
     config = FakeEngineConfig(
-        block_size=4, num_gpu_blocks=64, max_num_batched_tokens=max_num_batched_tokens
+        block_size=4,
+        num_gpu_blocks=64,
+        max_num_batched_tokens=max_num_batched_tokens,
+        enable_prefix_caching=enable_prefix_caching,
     )
     return Engine(config)
 
@@ -477,3 +482,32 @@ def test_a_reset_by_hand_lists_its_victims_in_the_next_scheduled_record(
         for internal in record["preempted"]
     ]
     assert preempted == [request.internal_id]
+
+
+def test_a_resumed_requests_lookup_stays_out_of_the_exported_prefix_counters() -> None:
+    # vLLM records a lookup at admission, a preempted request's under
+    # preempted_queries/preempted_hits, which /metrics does not export
+    # (kv_cache_manager.record_prefix_cache_stats, PrefixCacheStats.record).
+    engine = _stepped_engine()
+    request = _request(engine, "r", words(6, "p"), max_tokens=20)
+    while request.output_tokens < 9:
+        _step(engine)
+    exported = (engine.stats.prefix_queries, engine.stats.prefix_hits)
+    _preempt(engine, request)
+    _step(engine)
+    assert (engine.stats.prefix_queries, engine.stats.prefix_hits) == exported
+    assert (
+        engine.stats.preempted_prefix_queries,
+        engine.stats.preempted_prefix_hits,
+    ) == (
+        request.prompt_len + 9,
+        16,
+    )
+
+
+def test_no_prefix_lookup_is_counted_with_caching_off() -> None:
+    # vLLM skips the lookup, and its record, when prefix caching is disabled.
+    engine = _stepped_engine(enable_prefix_caching=False)
+    _request(engine, "r", words(6, "p"), max_tokens=1)
+    _step(engine)
+    assert (engine.stats.prefix_queries, engine.stats.prefix_hits) == (0, 0)

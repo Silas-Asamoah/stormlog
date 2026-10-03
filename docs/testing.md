@@ -152,7 +152,9 @@ series vLLM exports:
   and recomputed, as vLLM's scheduler does.
 - **Prefix cache.** Every full block is hashed and cached, generated tokens
   included, so a request resumed after preemption reuses blocks past its
-  prompt. Freed blocks keep their hashes in an LRU queue, so a shared prefix is
+  prompt. As in vLLM, the exported prefix-cache counters count each request's
+  first admission only, and nothing with caching off; a resumed request's
+  lookups are kept apart. Freed blocks keep their hashes in an LRU queue, so a shared prefix is
   reused until other traffic evicts it.
 - **Aborts.** A client that disconnects aborts its request. An abort that
   arrives while a step runs takes effect before that step's update, as in
