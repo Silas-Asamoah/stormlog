@@ -275,8 +275,10 @@ running the command twice adds nothing twice.
 (`<host>/<boot id>/monotonic_ns`, `clock_kind` `monotonic`), whose
 `elapsed_ns` is the scheduler residence from `schedule()` to the processed
 output; one `infer.membership` per (request, attempt, iteration, role),
-with the step's token counts, outcome and, for the step a request was freed
-in, its finish; one `infer.request` per backend execution, holding admission
+whose role follows vLLM's `phase` (`context` is `prefill`, `generation` is
+`decode`, a step with drafts is `spec_decode`, no phase is `unknown`), with
+the step's token counts, outcome and, for the step a request was freed in,
+its finish; one `infer.request` per backend execution, holding admission
 facts only; and one `infer.clock_alignment` per epoch from the hello's
 wall/monotonic pair, with half the sampling gap as its uncertainty. The raw
 log is never registered as an attachment.

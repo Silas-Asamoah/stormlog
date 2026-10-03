@@ -590,7 +590,7 @@ def test_spec_decode_roles_and_outcomes_are_carried(tmp_path: Path) -> None:
                     scheduled=4,
                     computed_before=8,
                     prefill=0,
-                    decode=4,
+                    past_prompt=4,
                     drafts=3,
                     sighting="repeat",
                 )
@@ -640,3 +640,43 @@ def test_spec_decode_roles_and_outcomes_are_carried(tmp_path: Path) -> None:
     }
     assert iterations["2"].metadata["preempted"] == 1
     assert OWN1 not in str(iterations["2"].to_record())
+
+
+def test_the_role_follows_vllm_phase_not_the_token_counts(tmp_path: Path) -> None:
+    resumed = member(  # preempted, resumed: recomputes past its prompt as context
+        OWN0,
+        scheduled=12,
+        computed_before=0,
+        sighting="repeat",
+        phase="context",
+        prefill=8,
+        past_prompt=4,
+        recompute=True,
+        output_before=4,
+    )
+    records = [
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 10),
+        alias(OWN1, f"chatcmpl-{X1}", T0 - 9),
+        scheduled(0, T0, [resumed, member(OWN1, scheduled=8, phase=None)]),
+        completed(0, T0 + SECOND, [done(OWN0), done(OWN1)]),
+        scheduled(
+            1,
+            T0 + 2 * SECOND,
+            [
+                member(
+                    OWN0, scheduled=3, sighting="repeat", phase="generation", prefill=3
+                )
+            ],
+        ),
+        completed(1, T0 + 3 * SECOND, [done(OWN0)]),
+    ]
+    engine_log(tmp_path, records)
+    result = _reduce(tmp_path)
+    memberships = {(_attempt(m), m.iteration_ref.id): m for m in _memberships(result)}
+    assert memberships[(OWN0, "0")].role == "prefill"
+    assert memberships[(OWN0, "0")].metadata["recompute"] is True
+    assert memberships[(OWN0, "0")].metadata["past_prompt_scheduled"] == 4
+    assert memberships[(OWN0, "0")].metadata["phase"] == "context"
+    assert memberships[(OWN1, "0")].role == "unknown"  # no phase: not guessed
+    assert memberships[(OWN0, "1")].role == "decode"  # phase wins over counts
+    assert result.summary["epochs"][EPOCH]["config"]["v2_model_runner"] is True

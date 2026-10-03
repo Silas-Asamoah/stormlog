@@ -54,6 +54,8 @@ REASON_COMPLETED_MISSING = "completed_missing"
 ROLE_PREFILL = "prefill"
 ROLE_DECODE = "decode"
 ROLE_SPEC_DECODE = "spec_decode"
+ROLE_UNKNOWN = "unknown"
+_ROLE_BY_PHASE = {"context": ROLE_PREFILL, "generation": ROLE_DECODE}
 
 # vLLM's request IDs: an optional n>1 child index, the API's prefix, the
 # external ID, and the 8 random characters vLLM adds unless told not to.
@@ -618,6 +620,7 @@ class _EpochReducer:
         summary.update(
             producer=self.producer,
             reduced=True,
+            config=dict(self.hello.get("config") or {}),
             iterations_kept=len(kept),
             iterations_complete=self.counts.get(STATE_COMPLETE, 0),
             iterations_incomplete=self.counts.get(STATE_INCOMPLETE, 0),
@@ -724,11 +727,12 @@ def _members(record: RawRecord | None) -> list[dict[str, Any]]:
 
 
 def _role(member: dict[str, Any]) -> str:
+    """vLLM's own phase decides the role, never the token counts: a request
+    resumed after preemption recomputes past its prompt and is still context."""
     if (_integer(member.get("drafts_scheduled")) or 0) > 0:
         return ROLE_SPEC_DECODE
-    if (_integer(member.get("prefill_scheduled")) or 0) > 0:
-        return ROLE_PREFILL
-    return ROLE_DECODE
+    phase = _text(member.get("phase"))
+    return _ROLE_BY_PHASE.get(phase, ROLE_UNKNOWN) if phase else ROLE_UNKNOWN
 
 
 def _finish(terminal: dict[str, Any], *, in_step: bool) -> dict[str, Any]:
@@ -778,10 +782,11 @@ def _membership_metadata(member: Member) -> dict[str, Any]:
         "ownership": member.execution.binding.ownership,
         "state": member.iteration.state,
         "sighting": data.get("sighting"),
+        "phase": data.get("phase"),
         "computed_before": data.get("computed_before"),
         "prompt_tokens": data.get("prompt_tokens"),
         "prefill_scheduled": data.get("prefill_scheduled"),
-        "decode_scheduled": data.get("decode_scheduled"),
+        "past_prompt_scheduled": data.get("past_prompt_scheduled"),
         "drafts_scheduled": data.get("drafts_scheduled"),
         "cached_at_admission": data.get("cached_at_admission"),
         "recompute": data.get("recompute"),

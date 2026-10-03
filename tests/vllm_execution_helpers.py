@@ -64,6 +64,7 @@ def hello(
             "async_scheduling": True,
             "speculative": None,
             "max_num_batched_tokens": 2048,
+            "v2_model_runner": True,
             "request_id_randomization": True,
         },
         "clock": clock(mono_ns),
@@ -89,24 +90,30 @@ def member(
     computed_before: int = 0,
     prompt_tokens: int = 8,
     sighting: str = "first",
+    phase: str | None = "",
     prefill: int | None = None,
-    decode: int | None = None,
+    past_prompt: int | None = None,
     drafts: int = 0,
     cached: int = 0,
     recompute: bool = False,
     output_before: int = 0,
 ) -> dict[str, Any]:
-    if prefill is None and decode is None:
+    """A scheduled member; ``phase`` defaults to vLLM's usual classification
+    (context on the first sighting, generation after), None leaves it unset."""
+    if prefill is None and past_prompt is None:
         prefill = max(0, min(scheduled, prompt_tokens - computed_before))
-        decode = scheduled - prefill
+        past_prompt = scheduled - prefill
+    if phase == "":
+        phase = "context" if sighting == "first" else "generation"
     return {
         "internal": internal,
         "sighting": sighting,
+        "phase": phase,
         "scheduled": scheduled,
         "computed_before": computed_before,
         "prompt_tokens": prompt_tokens,
         "prefill_scheduled": prefill or 0,
-        "decode_scheduled": decode or 0,
+        "past_prompt_scheduled": past_prompt or 0,
         "drafts_scheduled": drafts,
         "cached_at_admission": cached,
         "recompute": recompute,
