@@ -196,8 +196,10 @@ What it serves, as vLLM 0.30.0 does:
   writer, in the `stormlog.vllm_hook/1` format of
   [vLLM execution hook](vllm_execution.md). `infer profile --vllm-execution-dir`
   imports it, and `hook_seal_seconds` makes segments visible quickly.
-- `spans_endpoint` exports each request's `llm_request` span as OTLP/HTTP JSON.
-  A `traceparent` header makes the span its child.
+- `spans_endpoint` exports each request's `llm_request` span over OTLP/HTTP as
+  protobuf, the only encoding vLLM's OpenTelemetry exporter sends, so it needs
+  the `infer-otlp` extra. `span_encoding="json"` sends OTLP/JSON instead. A
+  `traceparent` header makes the span its child.
 
 **Fault controls,** over `/_fault/` routes that answer even while the front end
 is held:

@@ -44,6 +44,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--trace-dir", type=Path, default=None)
     parser.add_argument("--spans-endpoint", default=None)
     parser.add_argument("--span-export-seconds", type=float, default=0.25)
+    parser.add_argument(
+        "--span-encoding", choices=("protobuf", "json"), default="protobuf"
+    )
     return parser
 
 
@@ -67,6 +70,7 @@ def config_from_args(argv: Sequence[str] | None = None) -> FakeEngineConfig:
         trace_dir=args.trace_dir,
         spans_endpoint=args.spans_endpoint,
         span_export_seconds=args.span_export_seconds,
+        span_encoding=args.span_encoding,
         allow_kill=True,
     )
 

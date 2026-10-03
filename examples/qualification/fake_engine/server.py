@@ -61,6 +61,7 @@ class FakeEngine:
                 self.config.spans_endpoint,
                 self.controls,
                 interval=self.config.span_export_seconds,
+                encoding=self.config.span_encoding,
             )
             self.engine.observers.append(self.spans)
             self.spans.start()

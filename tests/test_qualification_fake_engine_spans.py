@@ -7,8 +7,10 @@ import socket
 from pathlib import Path
 from typing import Iterator
 
+import pytest
+
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
-from stormlog.infer.vllm_spans import OtlpSpanReceiver
+from stormlog.infer.vllm_spans import JSON_MEDIA, PROTOBUF_MEDIA, OtlpSpanReceiver
 from stormlog.infer.vllm_telemetry import VllmSpanRecord
 from tests.qualification_fake_engine_helpers import (
     chat,
@@ -39,12 +41,15 @@ def _receiver() -> Iterator[OtlpSpanReceiver]:
         receiver.stop()
 
 
-def _engine(receiver: OtlpSpanReceiver) -> FakeEngine:
+def _engine(
+    receiver: OtlpSpanReceiver, *, span_encoding: str = "protobuf"
+) -> FakeEngine:
     return FakeEngine(
         FakeEngineConfig(
             step_seconds=0.001,
             spans_endpoint=f"http://{receiver.listen}/v1/traces",
             span_export_seconds=0.05,
+            span_encoding=span_encoding,
         )
     )
 
@@ -70,6 +75,26 @@ def test_spans_reach_stormlogs_receiver_and_name_their_request() -> None:
     assert attributes["gen_ai.usage.completion_tokens"] == 3
     for name in ("time_in_queue", "time_to_first_token", "time_in_model_inference"):
         assert attributes[f"gen_ai.latency.{name}"] >= 0
+
+
+@pytest.mark.parametrize(
+    ("encoding", "media"),
+    [("protobuf", PROTOBUF_MEDIA), ("json", JSON_MEDIA)],
+)
+def test_spans_leave_as_protobuf_like_vllms_exporter_unless_json_is_asked(
+    encoding: str, media: str
+) -> None:
+    # vLLM 0.30 exports through the OpenTelemetry SDK's OTLP/HTTP exporter,
+    # which sends protobuf only.
+    spans: list[VllmSpanRecord] = []
+    with _receiver() as receiver:
+        with _engine(receiver, span_encoding=encoding) as engine:
+            chat(engine, words(4, "a"), max_tokens=2, request_id="stormlog-run-1-a")
+        assert wait_until(lambda: _received(receiver, spans) >= 1)
+        by_media = dict(receiver.stats.by_media)
+    assert by_media == {media: 1}
+    assert spans[0].request_id == "stormlog-run-1-a"
+    assert spans[0].attributes["gen_ai.usage.completion_tokens"] == 2
 
 
 def test_a_traceparent_makes_the_span_its_child() -> None:

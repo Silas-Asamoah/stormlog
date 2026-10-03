@@ -1,9 +1,10 @@
-"""vLLM's per-request ``llm_request`` span, exported as OTLP/HTTP JSON.
+"""vLLM's per-request ``llm_request`` span, exported over OTLP/HTTP.
 
 Spans leave in batches on a timer, like the OpenTelemetry batch processor
-vLLM uses. An incoming W3C ``traceparent`` makes the request's span its
-child. A failed export is counted and dropped, as vLLM's exporter drops it
-once its retries run out.
+vLLM uses, as protobuf, the only encoding the SDK's HTTP exporter sends
+(OTLP/JSON on request). An incoming W3C ``traceparent`` makes the request's
+span its child. A failed export is counted and dropped, as vLLM's exporter
+drops it once its retries run out.
 """
 
 from __future__ import annotations
@@ -19,6 +20,13 @@ import urllib.request
 from typing import Any
 from urllib.parse import urlparse
 
+from stormlog.infer.vllm_spans import (
+    JSON_MEDIA,
+    OTLP_EXTRA_HINT,
+    PROTOBUF_MEDIA,
+    otlp_protobuf_available,
+)
+
 from .config import Controls
 from .engine import EngineObserver, FakeRequest
 
@@ -27,10 +35,23 @@ ABUSIVE_BYTES = 33 * 1024 * 1024
 
 
 class SpanExporter(EngineObserver):
-    def __init__(self, endpoint: str, controls: Controls, *, interval: float) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        controls: Controls,
+        *,
+        interval: float,
+        encoding: str = "protobuf",
+    ) -> None:
+        if encoding not in ("protobuf", "json"):
+            raise ValueError(f"unknown span encoding {encoding!r}")
+        if encoding == "protobuf" and not otlp_protobuf_available():
+            raise RuntimeError(OTLP_EXTRA_HINT)
         self.endpoint = endpoint
         self.controls = controls
         self.interval = interval
+        self.encoding = encoding
+        self.media = PROTOBUF_MEDIA if encoding == "protobuf" else JSON_MEDIA
         self.statuses: list[int] = []
         self.failed = 0
         self._pending: list[tuple[int, dict[str, Any]]] = []
@@ -71,7 +92,7 @@ class SpanExporter(EngineObserver):
         )
         try:
             connection.putrequest("POST", target.path or "/")
-            connection.putheader("Content-Type", "application/json")
+            connection.putheader("Content-Type", self.media)
             connection.putheader("Content-Length", str(ABUSIVE_BYTES))
             connection.endheaders()
             status = int(connection.getresponse().status)
@@ -87,20 +108,28 @@ class SpanExporter(EngineObserver):
             self._flush(everything=False)
 
     def _flush(self, *, everything: bool) -> None:
+        ready = self._take_ready(everything)
+        if not ready:
+            return
+        if self.encoding == "protobuf":
+            body = _protobuf(ready)
+        else:
+            body = json.dumps(_document(ready)).encode()
+        for _ in range(2 if self.controls.span_duplicates else 1):
+            self._post(body, encoding=None)
+
+    def _take_ready(self, everything: bool) -> list[dict[str, Any]]:
+        """The spans due now, or every queued one, taken off the queue."""
         now = time.time_ns()
         with self._lock:
             ready = [span for at, span in self._pending if everything or at <= now]
             self._pending = [
                 item for item in self._pending if not (everything or item[0] <= now)
             ]
-        if not ready:
-            return
-        body = json.dumps(_document(ready)).encode()
-        for _ in range(2 if self.controls.span_duplicates else 1):
-            self._post(body, encoding=None)
+        return ready
 
     def _post(self, body: bytes, *, encoding: str | None) -> int:
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": self.media}
         if encoding is not None:
             headers["Content-Encoding"] = encoding
         request = urllib.request.Request(
@@ -191,6 +220,54 @@ def _document(spans: list[dict[str, Any]]) -> dict[str, Any]:
             }
         ]
     }
+
+
+def _protobuf(spans: list[dict[str, Any]]) -> bytes:
+    """The same document as the SDK's exporter sends it: an
+    ``ExportTraceServiceRequest`` in protobuf."""
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+        ExportTraceServiceRequest,
+    )
+    from opentelemetry.proto.trace.v1.trace_pb2 import Span, Status
+
+    message = ExportTraceServiceRequest()
+    resource_spans = message.resource_spans.add()
+    resource_spans.resource.attributes.append(
+        _key_value(_attribute("service.name", "vllm"))
+    )
+    scope_spans = resource_spans.scope_spans.add()
+    scope_spans.scope.name = "vllm.llm_engine"
+    for span in spans:
+        scope_spans.spans.append(
+            Span(
+                trace_id=bytes.fromhex(span["traceId"]),
+                span_id=bytes.fromhex(span["spanId"]),
+                parent_span_id=bytes.fromhex(span["parentSpanId"]),
+                name=span["name"],
+                kind=span["kind"],
+                start_time_unix_nano=int(span["startTimeUnixNano"]),
+                end_time_unix_nano=int(span["endTimeUnixNano"]),
+                attributes=[_key_value(item) for item in span["attributes"]],
+                status=Status(code=span["status"]["code"]),
+            )
+        )
+    return bytes(message.SerializeToString())
+
+
+def _key_value(item: dict[str, Any]) -> Any:
+    """An OTLP/JSON attribute as the protobuf ``KeyValue``."""
+    from opentelemetry.proto.common.v1.common_pb2 import AnyValue, KeyValue
+
+    ((kind, value),) = item["value"].items()
+    if kind == "intValue":
+        wrapped = AnyValue(int_value=int(value))
+    elif kind == "stringValue":
+        wrapped = AnyValue(string_value=value)
+    elif kind == "boolValue":
+        wrapped = AnyValue(bool_value=value)
+    else:
+        wrapped = AnyValue(double_value=value)
+    return KeyValue(key=item["key"], value=wrapped)
 
 
 __all__ = ["ABUSIVE_BYTES", "SpanExporter", "request_span"]

@@ -42,6 +42,9 @@ class FakeEngineConfig:
     # exports no spans.
     spans_endpoint: str | None = None
     span_export_seconds: float = 0.25
+    # "protobuf", as vLLM's OpenTelemetry exporter sends spans (it needs the
+    # infer-otlp extra), or "json" for OTLP/JSON.
+    span_encoding: str = "protobuf"
     # Only a subprocess may honour the kill switch.
     allow_kill: bool = False
     device_uuid: str = "GPU-00000000-0000-4000-8000-00000000fa4e"
