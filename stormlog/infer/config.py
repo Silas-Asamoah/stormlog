@@ -124,6 +124,16 @@ class ProfileConfig:
     extra_body: dict[str, Any] | None = None
     # POSTed before each case, e.g. vLLM /reset_prefix_cache or SGLang /flush_cache.
     cache_reset_url: str | None = None
+    # vLLM's Prometheus endpoint, scraped at phase boundaries and on a cadence;
+    # None leaves native telemetry off.
+    vllm_metrics_url: str | None = None
+    vllm_metrics_interval_seconds: float = 1.0
+    # HOST:PORT for an OTLP/HTTP receiver that collects vLLM's request spans
+    # while the profile runs; None runs no receiver.
+    vllm_spans_listen: str | None = None
+    # How long the receiver keeps listening after the last phase, so the
+    # exporter's final batch (flushed every 5 s by default) still arrives.
+    vllm_spans_drain_seconds: float = 6.0
     # Optional bounded profiler windows; None records no trace.
     trace: TraceCaptureConfig | None = None
 

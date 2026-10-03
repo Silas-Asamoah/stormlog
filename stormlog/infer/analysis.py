@@ -31,6 +31,12 @@ from .server_clock import (
 from .server_group import members as group_members
 from .server_group import membership_issue
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
+from .vllm_analysis import (
+    load_external_spans,
+    vllm_case_lines,
+    vllm_lines,
+    vllm_report,
+)
 from .workload_report import (
     length_summary,
     prompt_lines,
@@ -47,11 +53,13 @@ def analyze_inference_events(
     direct_server: bool = False,
     clock_offset_ns: int | None = None,
     clock_uncertainty_ns: int | None = None,
+    vllm_span_paths: Iterable[str | Path] = (),
 ) -> dict[str, Any]:
     """Analyze an inference profiling JSONL artifact."""
     records = _load_jsonl(path)
     requests, samples = _partition_inference_records(records)
     server_samples = _load_server_samples(server_telemetry_paths)
+    vllm = _vllm_telemetry(records, vllm_span_paths)
     join, members = _server_join(
         records,
         server_samples,
@@ -80,8 +88,19 @@ def analyze_inference_events(
             "client_observation_scope": "client_local",
             "server_join": join,
             "server_targets": _server_targets(server_samples),
+            "vllm": vllm,
         },
     }
+
+
+def _vllm_telemetry(
+    records: list[dict[str, Any]], span_paths: Iterable[str | Path]
+) -> dict[str, Any]:
+    """The vLLM block; a span file or record that cannot be read is an input error."""
+    try:
+        return vllm_report(records, load_external_spans(records, span_paths))
+    except (OSError, ValueError) as exc:
+        raise InferInputError(f"vLLM telemetry: {_reason(exc)}") from exc
 
 
 def _case_reports(
@@ -159,15 +178,20 @@ def format_analysis_text(report: dict[str, Any]) -> str:
         f"Failure rate: {float(summary.get('failure_rate', 0.0)):.2%}",
     ]
     cases = report.get("cases", {})
-    join = report.get("telemetry", {}).get("server_join", {})
+    telemetry = report.get("telemetry", {})
+    join = telemetry.get("server_join", {})
+    vllm = telemetry.get("vllm")
+    vllm_cases = vllm.get("cases", {}) if isinstance(vllm, dict) else {}
     lines.extend(workload_lines(report.get("workload")))
     lines.append("Memory observations: client-local")
     lines.extend(_server_status_lines(join))
+    lines.extend(vllm_lines(vllm))
     if isinstance(cases, dict) and cases:
         lines.append("")
         lines.append("Cases:")
         for case_id, case in cases.items():
             lines.extend(_case_lines(case_id, case))
+            lines.extend(vllm_case_lines(vllm_cases.get(case_id)))
     return "\n".join(lines)
 
 

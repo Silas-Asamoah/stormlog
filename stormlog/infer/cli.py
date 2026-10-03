@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import signal
 import sys
@@ -38,6 +39,8 @@ from .server_collector import (
 )
 from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
 from .trace_import import import_traces_into_artifact, parse_device_uuids
+from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
+from .vllm_spans import DEFAULT_SPANS_LISTEN, parse_listen_address
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -231,6 +234,49 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Seed for prompts and Poisson arrivals (default: 0)",
     )
+    profile_parser.add_argument(
+        "--vllm-metrics",
+        nargs="?",
+        const=AUTO_METRICS_URL,
+        default=None,
+        metavar="URL",
+        help=(
+            "Scrape vLLM's Prometheus metrics at the start and end of every "
+            "phase and every --vllm-metrics-interval seconds inside it; without "
+            "a URL, the endpoint's origin plus /metrics"
+        ),
+    )
+    profile_parser.add_argument(
+        "--vllm-metrics-interval",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Seconds between vLLM metrics scrapes inside a phase (default: 1)",
+    )
+    profile_parser.add_argument(
+        "--vllm-spans-listen",
+        nargs="?",
+        const=DEFAULT_SPANS_LISTEN,
+        default=None,
+        metavar="HOST:PORT",
+        help=(
+            "Receive vLLM's OpenTelemetry request spans over OTLP/HTTP at "
+            "HOST:PORT (default 127.0.0.1:4318) for the length of the run; "
+            "start vLLM with --otlp-traces-endpoint pointing at it and "
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf, since vLLM "
+            "exports over gRPC by default"
+        ),
+    )
+    profile_parser.add_argument(
+        "--vllm-spans-drain",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Keep the span receiver listening this long after the last phase, "
+            "for the exporter's final batch (default: 6; vLLM flushes every 5 s)"
+        ),
+    )
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
     _add_cache_arguments(profile_parser)
@@ -263,6 +309,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--direct-server",
         action="store_true",
         help="Assert requests went to the single server identity in telemetry",
+    )
+    analyze_parser.add_argument(
+        "--vllm-spans",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help=(
+            "vLLM request spans collected elsewhere, as OTLP JSON or one span "
+            "per line; may be supplied more than once"
+        ),
     )
     analyze_parser.add_argument(
         "--clock-offset-ns",
@@ -700,6 +756,14 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         cache_state=args.cache_state,
         cache_reset_url=args.cache_reset_url,
         extra_body=_extra_body(args.extra_body),
+        vllm_metrics_url=resolve_metrics_url(endpoint, args.vllm_metrics),
+        vllm_metrics_interval_seconds=(
+            1.0 if args.vllm_metrics_interval is None else args.vllm_metrics_interval
+        ),
+        vllm_spans_listen=args.vllm_spans_listen,
+        vllm_spans_drain_seconds=(
+            6.0 if args.vllm_spans_drain is None else args.vllm_spans_drain
+        ),
         trace=_trace_config(args, endpoint),
     )
 
@@ -752,6 +816,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         direct_server=args.direct_server,
         clock_offset_ns=args.clock_offset_ns,
         clock_uncertainty_ns=args.clock_uncertainty_ns,
+        vllm_span_paths=args.vllm_spans,
     )
     if args.format == "json":
         payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
@@ -858,6 +923,32 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--warmup-requests must be >= 0")
     if args.sample_interval <= 0:
         raise ValueError("--sample-interval must be > 0")
+    _validate_vllm_metrics_arguments(args)
+    _validate_vllm_span_arguments(args)
+
+
+def _validate_vllm_metrics_arguments(args: argparse.Namespace) -> None:
+    if args.vllm_metrics not in (None, AUTO_METRICS_URL):
+        _validate_http_url(args.vllm_metrics, "--vllm-metrics")
+    interval = args.vllm_metrics_interval
+    if interval is None:
+        return
+    if args.vllm_metrics is None:
+        raise ValueError("--vllm-metrics-interval only applies with --vllm-metrics")
+    if not math.isfinite(interval) or interval < 0.1:
+        raise ValueError("--vllm-metrics-interval must be a number of seconds >= 0.1")
+
+
+def _validate_vllm_span_arguments(args: argparse.Namespace) -> None:
+    if args.vllm_spans_listen is not None:
+        parse_listen_address(args.vllm_spans_listen)
+    drain = args.vllm_spans_drain
+    if drain is None:
+        return
+    if args.vllm_spans_listen is None:
+        raise ValueError("--vllm-spans-drain only applies with --vllm-spans-listen")
+    if not math.isfinite(drain) or drain < 0:
+        raise ValueError("--vllm-spans-drain must be a number of seconds >= 0")
 
 
 def _validate_arrival_arguments(args: argparse.Namespace) -> None:

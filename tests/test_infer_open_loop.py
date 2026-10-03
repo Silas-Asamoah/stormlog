@@ -574,6 +574,7 @@ class _SlowThenRejectingClient:
         output_tokens: int,
         stream: bool,
         stream_include_usage: bool,
+        request_id: str | None = None,
     ) -> ChatCompletionResult:
         self.calls += 1
         if self.calls > 1:

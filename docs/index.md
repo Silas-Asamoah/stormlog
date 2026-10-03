@@ -34,6 +34,7 @@ cli
 report_contract
 inference
 inference_correlation
+vllm_telemetry
 tui
 cookbook/index
 cookbook/always_on
@@ -79,9 +80,10 @@ examples/test_guides/README
 1. [CLI](cli.md)
 2. [Inference Profiling](inference.md)
 3. [Inference execution correlation](inference_correlation.md)
-4. [TUI](tui.md)
-5. [Production Cookbook](cookbook/index.md)
-6. [Troubleshooting](troubleshooting.md)
+4. [vLLM native telemetry](vllm_telemetry.md)
+5. [TUI](tui.md)
+6. [Production Cookbook](cookbook/index.md)
+7. [Troubleshooting](troubleshooting.md)
 
 ### Release or CI validation
 

@@ -26,3 +26,5 @@ line-profiler>=3.3.0
 #   pip install -e ".[torch]"
 #   pip install -e ".[tf]"
 #   pip install -e ".[all]"
+# Optional: the vLLM span receiver's protobuf tests need the infer-otlp extra:
+#   pip install -e ".[infer-otlp]"

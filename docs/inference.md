@@ -34,6 +34,12 @@ stormlog infer profile \
   --output artifacts/infer_steady_state.jsonl
 ```
 
+Every request goes out with an `X-Request-Id: stormlog-<run_id>-<request_id>`
+header, recorded on its event as `x_request_id`. OpenAI-compatible servers
+ignore headers they do not know; vLLM embeds it in its own request id and in
+the span it emits per request, which is how
+[vLLM native telemetry](vllm_telemetry.md) joins spans to requests.
+
 The profiler sends controlled traffic for each workload case in the matrix:
 
 - `concurrency`
@@ -298,9 +304,9 @@ The report includes:
 - highest recorded client-local device memory when system telemetry is available
 - scoped server memory observations when a matching on-host collector artifact is supplied
 
-`infer analyze` exits `5` when the artifact or a `--server-telemetry` file is
-missing, unparsable, or invalid, which includes an artifact with no
-`infer.session` or `infer.request` records. Otherwise it exits `0`, even when
+`infer analyze` exits `5` when the artifact, a `--server-telemetry` file or a
+`--vllm-spans` file is missing, unparsable, or invalid, which includes an
+artifact with no `infer.session` or `infer.request` records. Otherwise it exits `0`, even when
 every request in the artifact failed: analysis reports findings without
 failing.
 
@@ -620,6 +626,21 @@ fields separately in its [NVML memory structure](https://docs.nvidia.com/deploy/
 Exporters such as DCGM may report interval averages or cached values; this
 collector currently reads NVML directly and does not ingest DCGM metrics.
 
+## vLLM native telemetry
+
+When the endpoint is vLLM, `--vllm-metrics` scrapes its Prometheus metrics
+around and during every phase and `--vllm-spans-listen` receives the span it
+emits per request, both into the same artifact. The report then separates a
+latency change into queueing (waiting requests and queue time), cache
+pressure (KV block occupancy and prefix-cache hits) and token rates, per
+engine, with every delta that cannot be trusted marked unresolved and why.
+Spans join to requests by the recorded `X-Request-Id`; receiving vLLM's
+protobuf exports needs `pip install "stormlog[infer-otlp]"` and a server
+started with `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf`, because
+vLLM exports over gRPC by default. These are
+engine-aggregate numbers over every client's traffic; they attribute no GPU
+time to a request. See [vLLM native telemetry](vllm_telemetry.md) for the
+flags, the metric map and the capability matrix.
 ## Profiler traces
 
 `stormlog infer profile --trace vllm-torch` opens a vLLM torch-profiler window
@@ -706,10 +727,11 @@ It refuses to start while another PyTorch profiler is running.
 
 ## Execution correlation and future adapters
 
-The v1 request path is engine-agnostic. Future adapters can enrich the same run
-with engine-native telemetry such as vLLM scheduler metrics, SGLang cache
-metrics, TensorRT-LLM inflight batching metrics, or MLX Metal runtime stats
-without changing the core `stormlog infer profile` artifact shape.
+The v1 request path is engine-agnostic. Adapters enrich the same run with
+engine-native telemetry, as the vLLM adapter does with scheduler and cache
+metrics; SGLang cache metrics, TensorRT-LLM inflight batching metrics, or MLX
+Metal runtime stats could follow without changing the core
+`stormlog infer profile` artifact shape.
 
 The versioned request, iteration, stage, membership, and GPU activity contract
 is described in [Inference execution correlation](inference_correlation.md).
