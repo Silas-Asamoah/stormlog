@@ -78,8 +78,9 @@ from server evidence.
 
 An activity whose `metadata.intervals` lists `[offset_ns, duration_ns]` busy
 intervals inside its span contributes those intervals, not the whole span; see
-[Record detail](#record-detail). Malformed intervals leave the activity
-unmeasured rather than falling back to the span.
+[Record detail](#record-detail). Such a record is `schema_version: 3` (see
+[Compatibility](#compatibility)), and malformed intervals are rejected when
+the record is built or read rather than measured as the span or as nothing.
 An activity without a device UUID, complete span, or usable clock domain stays
 unmeasured. Unlinked activities can still contribute to the device total when
 their intervals are valid, but not to an iteration total. Totals from different
@@ -114,6 +115,16 @@ fields; it does not invent a server iteration, host clock, or GPU attribution.
 The existing `analyze_inference_events` path still analyzes v1 request records.
 Unsupported schema versions fail explicitly instead of being interpreted as
 v1. New fields that change record meaning require a new schema version.
+
+`infer.activity_ref` records that carry `metadata.intervals` are written with
+`schema_version: 3`, because the intervals change what the span means: the
+device is busy inside them, not from `start_ns` to `end_ns`. A reader that
+knows only v2 rejects such a record with `unsupported inference
+schema_version: 3` instead of counting the idle gaps inside a launch as busy
+time. Every other record stays v2, and a v3 record of any other type is
+rejected. A v3 activity record must carry valid intervals (a non-empty,
+sorted, disjoint list of `[offset_ns, duration_ns]` pairs inside its span) and
+a v2 activity record must carry none; the loader rejects both mismatches.
 
 Raw profiler traces are linked by `trace_attachment_id` through the existing
 run envelope attachment catalog. The activity record is a pointer and
@@ -227,7 +238,9 @@ activity kind; a CUDA graph launch that ran kernels and a memset gives two
 records. The record spans the launch's first GPU event to its last. When the launch has several
 events, `metadata.intervals` lists the exact busy intervals inside that span as
 `[offset_ns, duration_ns]` pairs from `start_ns`, and `metadata.busy_ns` their
-total. `account_gpu_time` unions those intervals instead of the span, so idle
+total; such a record is written as `schema_version: 3`, while a single-event
+launch record and every `--detail kernel` record stay v2 (see
+[Compatibility](#compatibility)). `account_gpu_time` unions those intervals instead of the span, so idle
 gaps inside a CUDA graph replay are not counted as busy and the device total is
 the same as with one record per event. `--detail kernel` writes one record per
 GPU event. Both keep every event's link.

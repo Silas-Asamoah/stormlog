@@ -16,6 +16,7 @@ from .correlation_events import (
     MembershipEvent,
     RequestEvent,
     StageEvent,
+    activity_busy_intervals,
 )
 
 
@@ -295,7 +296,12 @@ def account_gpu_time(graph: CorrelationGraph) -> RunAccounting:
 def _measured_busy(
     activity: ActivityReferenceEvent,
 ) -> tuple[DeviceClock, list[tuple[int, int]]] | None:
-    """The device clock and busy intervals of a measurable GPU activity."""
+    """The device clock and busy intervals of a measurable GPU activity.
+
+    A launch record's ``metadata.intervals`` (schema version 3) replace its
+    span, so the idle gaps inside one launch are not counted as busy; the
+    record itself guarantees they are well formed.
+    """
     key = _device_clock(activity)
     busy = activity_busy_intervals(activity) if key is not None else None
     if key is None or busy is None:
@@ -313,54 +319,6 @@ def _device_clock(activity: ActivityReferenceEvent) -> DeviceClock | None:
     ):
         return None
     return DeviceClock(context.device_uuid, context.clock_domain, context.clock_kind)
-
-
-def activity_busy_intervals(
-    activity: ActivityReferenceEvent,
-) -> list[tuple[int, int]] | None:
-    """The intervals in which a GPU activity kept its device busy.
-
-    An activity covers ``[start_ns, end_ns)`` unless its metadata lists
-    ``intervals``: ``[offset_ns, duration_ns]`` pairs from ``start_ns``, sorted
-    and disjoint, inside the span. A launch record uses them so that idle gaps
-    inside one launch are not counted as busy. Malformed intervals return None
-    and the activity stays unmeasured rather than falling back to its span.
-    """
-    start, end = activity.start_ns, activity.end_ns
-    if start is None or end is None:
-        return None
-    raw = activity.metadata.get("intervals")
-    if raw is None:
-        return [(start, end)]
-    return _offset_intervals(raw, start, end)
-
-
-def _offset_intervals(
-    raw: object, start: int, end: int
-) -> list[tuple[int, int]] | None:
-    if not isinstance(raw, (list, tuple)) or not raw:
-        return None
-    intervals: list[tuple[int, int]] = []
-    cursor = 0
-    for item in raw:
-        pair = _int_pair(item)
-        if pair is None or pair[0] < cursor or pair[1] < 0:
-            return None
-        offset, duration = pair
-        cursor = offset + duration
-        if start + cursor > end:
-            return None
-        intervals.append((start + offset, start + cursor))
-    return intervals
-
-
-def _int_pair(item: object) -> tuple[int, int] | None:
-    if not isinstance(item, (list, tuple)) or len(item) != 2:
-        return None
-    first, second = item
-    if any(isinstance(v, bool) or not isinstance(v, int) for v in (first, second)):
-        return None
-    return first, second
 
 
 def _gpu_time(activities: list[list[tuple[int, int]]]) -> GpuTime:

@@ -515,3 +515,21 @@ def test_a_gpu_event_with_a_bad_time_is_rejected_at_both_details(
             session_id="session-1",
             detail=detail,  # type: ignore[arg-type]
         )
+
+
+def test_launch_records_with_several_events_are_schema_version_3(
+    tmp_path: Path,
+) -> None:
+    path = _write(tmp_path, _trace_document())
+    launch = import_kineto_trace(path, run_id="run-1", session_id="session-1")
+    kernel = import_kineto_trace(
+        path, run_id="run-1", session_id="session-1", detail="kernel"
+    )
+
+    versions = {
+        a.cuda_correlation_id: a.to_record()["schema_version"]
+        for a in _activities(launch)
+    }
+    # Two-kernel launch 1 and the graph launch 2 carry intervals; 3 and 4 do not.
+    assert versions == {1: 3, 2: 3, 3: 2, 4: 2}
+    assert {a.to_record()["schema_version"] for a in _activities(kernel)} == {2}

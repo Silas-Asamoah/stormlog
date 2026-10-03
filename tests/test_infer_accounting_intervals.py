@@ -75,10 +75,6 @@ def test_launch_intervals_replace_the_span_in_gpu_time() -> None:
         [[0]],
     ],
 )
-def test_malformed_launch_intervals_leave_the_activity_unmeasured(
-    intervals: object,
-) -> None:
-    accounting = account_gpu_time(resolve_inference_events(_launch(intervals)))
-
-    assert accounting.device_totals == {}
-    assert accounting.unmeasured_gpu_activity_refs == (EntityRef("trace", "launch-1"),)
+def test_malformed_launch_intervals_are_rejected(intervals: object) -> None:
+    with pytest.raises(ValueError, match="metadata.intervals"):
+        _launch(intervals)
