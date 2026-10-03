@@ -9,7 +9,9 @@ import pytest
 from stormlog import scrub
 from stormlog.infer import cache_state
 from stormlog.scrub import (
+    SECRET_KEY_WORDS,
     KnownSecrets,
+    is_forbidden_key_name,
     redact_url,
     scrub_text,
     truncate_utf8,
@@ -198,3 +200,49 @@ def test_scrub_text_cuts_after_redacting_so_no_fragment_is_left() -> None:
 def test_scrub_text_bounds_its_input_before_matching() -> None:
     text = "a" * 10_000_000
     assert scrub_text(text, max_bytes=16) == "a" * 16
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "db.password",
+        "api.key",
+        "API_KEY",
+        "x-apikey",
+        "service.Api-Token",
+        "client_secret",
+        "Authorization",
+        "aws.credentials",
+        "session.cookie",
+        "user_passwd",
+        "pwd",
+        "private_key",
+        "request.signature",
+        "bearer",
+        "sessionid",
+    ],
+)
+def test_is_forbidden_key_name_catches_credential_like_names(name: str) -> None:
+    assert is_forbidden_key_name(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "service.name",
+        "service.instance.id",
+        "deployment.environment.name",
+        "host.name",
+        "k8s.pod.uid",
+        "cloud.availability_zone",
+        "container.id",
+        "os.type",
+    ],
+)
+def test_is_forbidden_key_name_admits_ordinary_resource_names(name: str) -> None:
+    assert not is_forbidden_key_name(name)
+
+
+def test_free_text_patterns_use_the_same_words_as_the_key_check() -> None:
+    for word in SECRET_KEY_WORDS:
+        assert scrub_text(f"x_{word}_y=opaque-value") == f"x_{word}_y=<redacted>"

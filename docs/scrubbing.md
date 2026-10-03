@@ -99,7 +99,7 @@ What it removes:
 | an `Authorization` or `Proxy-Authorization` header, to the end of its line | `Authorization: Bearer abc…` | `Authorization: <redacted>` |
 | a Bearer or Basic token | `bearer abc.def-123` | `bearer <redacted>` |
 | URL user information and query strings | `https://u:p@host/x?k=v` | `https://<redacted>@host/x?<redacted>` |
-| a JSON member whose key contains `pass`, `secret`, `token`, `key`, `auth`, `cred`, `cookie` or `signature` | `"api_key": "abc"` | `"api_key": "<redacted>"` |
+| a JSON member whose key contains a word from `SECRET_KEY_WORDS` (below) | `"api_key": "abc"` | `"api_key": "<redacted>"` |
 | `key=value` or `key: value` with such a key | `client_secret=abc` | `client_secret=<redacted>` |
 | known key formats | `sk-…`, `hf_…`, `AKIA…`/`ASIA…`, `ghp_…` and the other GitHub token prefixes, `github_pat_…`, `xox?-…`, three-part JWTs | `<redacted>` |
 | private key blocks, including one cut before its `END` line | `-----BEGIN PRIVATE KEY-----…` | `<redacted>` |
@@ -121,3 +121,18 @@ first word, which is one reason consent is needed.
 `truncate_utf8(text, max_bytes)` returns the longest prefix whose UTF-8
 encoding fits `max_bytes`, and never splits a character. A lone surrogate,
 which UTF-8 cannot encode, becomes `?`.
+
+## Key names
+
+`is_forbidden_key_name(name)` says whether a key's name suggests its value may
+be a credential. An exporter refuses such a key from any outside source, such
+as an environment variable or a flag, even when an operator names it
+explicitly, because the value cannot be checked. The test is a substring
+match, ignoring case, against the words in `SECRET_KEY_WORDS`:
+
+`pass`, `pwd`, `secret`, `token`, `key`, `auth`, `bearer`, `cred`, `cookie`,
+`session`, `signature`, `private`
+
+So `api-key`, `API_KEY` and `apikey` are all caught. A few innocent names are
+caught too, which is the safe mistake. `scrub_text` uses the same words for
+the keys in JSON members and `key=value` pairs.

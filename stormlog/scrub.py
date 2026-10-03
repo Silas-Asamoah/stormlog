@@ -25,7 +25,24 @@ MIN_SECRET_LENGTH = 8
 # than the margin, so the final cut never leaves a fragment of one.
 INPUT_MARGIN_CHARS = 4096
 
-_SECRET_WORDS = "pass|secret|token|key|auth|cred|cookie|signature"
+# Words that make a key name look like it holds a credential. Matched as
+# substrings, case-insensitively, so "api-key", "API_KEY" and "apikey" all
+# count; a few innocent names are caught too, which is the safe mistake.
+SECRET_KEY_WORDS: tuple[str, ...] = (
+    "pass",
+    "pwd",
+    "secret",
+    "token",
+    "key",
+    "auth",
+    "bearer",
+    "cred",
+    "cookie",
+    "session",
+    "signature",
+    "private",
+)
+_SECRET_WORDS = "|".join(SECRET_KEY_WORDS)
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # A private key block, including one cut before its END line.
     (
@@ -229,3 +246,14 @@ def scrub_text(
     for pattern, replacement in _PATTERNS:
         text = pattern.sub(replacement, text)
     return text if max_bytes is None else truncate_utf8(text, max_bytes)
+
+
+def is_forbidden_key_name(name: str) -> bool:
+    """Whether a key's name says its value may be a credential.
+
+    An exporter refuses to admit such a key from any outside source (an
+    environment variable or a flag), even one an operator names
+    explicitly, because the value cannot be checked.
+    """
+    lowered = name.lower()
+    return any(word in lowered for word in SECRET_KEY_WORDS)
