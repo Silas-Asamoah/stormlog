@@ -36,7 +36,7 @@ class WriterLimits:
 
     max_bytes: int = 256 * 1024 * 1024
     segment_bytes: int = 8 * 1024 * 1024
-    seal_seconds: float = 2.0
+    seal_seconds: float = 60.0
     heartbeat_seconds: float = 1.0
     queue_records: int = 20_000
     queue_bytes: int = 32 * 1024 * 1024

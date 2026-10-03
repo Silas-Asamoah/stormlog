@@ -72,7 +72,7 @@ $STORMLOG_VLLM_HOOK_DIR/
 roles and writes one epoch per role.
 
 A segment is sealed by renaming `.part` to `.jsonl`. Sealing happens at 8 MiB,
-after 2 s, when the process exits, and when a file named `flush` appears in the
+after 60 s, when the process exits, and when a file named `flush` appears in the
 epoch directory; the writer deletes it once sealed. Files are created with mode
 `0600`. A reader takes sealed segments whole and only complete lines of an open
 segment.
@@ -180,9 +180,12 @@ rollback applying only when the output is not stale.
 ```json
 {"kind": "heartbeat", "wall_ns": …, "mono_ns": …, "last_seq": 1234,
  "dropped": {"scheduled": 0, "completed": 0, "alias": 0, "terminal": 0},
- "errors": 0, "bytes": 1048576, "capped": false, "pending_iterations": 1,
- "range_misses": 0}
+ "errors": 0, "bytes": 1048576, "capped": false}
 ```
+
+A worker's heartbeat adds `range_misses` (serving calls that ran without an
+iteration range), `startup_unranged` (warm-up and CUDA-graph capture calls
+before the first serving step, which never have one), and `pending_samples`.
 
 `status.json` holds the latest heartbeat's fields and is still updated after
 the disk cap stops record writing, so loss stays visible.

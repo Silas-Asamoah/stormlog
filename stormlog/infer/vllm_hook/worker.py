@@ -29,9 +29,17 @@ class RunnerRecorder:
     range_factory: Callable[[str, str, bool], Any] | None = None
     pending: deque[tuple[str, str]] = field(default_factory=deque)
     range_misses: int = 0
+    # Warm-up and CUDA-graph capture run steps before the first serving step;
+    # they carry no iteration and are counted apart from serving misses.
+    startup_unranged: int = 0
+    serving: bool = False
 
     def status_fields(self) -> dict[str, Any]:
-        return {"range_misses": self.range_misses, "pending_samples": len(self.pending)}
+        return {
+            "range_misses": self.range_misses,
+            "startup_unranged": self.startup_unranged,
+            "pending_samples": len(self.pending),
+        }
 
     def wrap(self, runner: Any) -> None:
         execute = runner.execute_model
@@ -50,7 +58,7 @@ class RunnerRecorder:
         def sample_tokens(*args: Any, **kwargs: Any) -> Any:
             identity = self.pending.popleft() if self.pending else None
             if identity is None:
-                self.range_misses += 1
+                self._miss()
             with self._range(identity):
                 return sample(*args, **kwargs)
 
@@ -63,9 +71,16 @@ class RunnerRecorder:
         except Exception:
             identity = None
         if identity is None:
-            self.range_misses += 1
+            self._miss()
             return None
+        self.serving = True
         return (str(identity[0]), str(identity[1]))
+
+    def _miss(self) -> None:
+        if self.serving:
+            self.range_misses += 1
+        else:
+            self.startup_unranged += 1
 
     @contextlib.contextmanager
     def _range(self, identity: tuple[str, str] | None) -> Iterator[None]:
