@@ -155,8 +155,13 @@ def test_profile_imports_the_execution_log_before_its_report(
     with _fake_server() as endpoint:
         config = _config(endpoint, output, hook)
         request_id = _hook_log_for(config, hook)
-        InferenceProfiler(config, on_warning=warnings.append).run()
+        report = InferenceProfiler(config, on_warning=warnings.append).run()
 
+    # The report, written after the import, already covers it.
+    execution = report["telemetry"]["execution"]
+    assert execution["available"] is True
+    assert execution["iterations"]["total"] == 1
+    assert execution["requests"]["run_requests_bound"] == 1
     records = _records(output)
     types = [record["event_type"] for record in records]
     # The imported records precede the report, and the session ends the file.

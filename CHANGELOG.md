@@ -25,6 +25,18 @@ the flaky benchmark memory gates
 
 ### Added
 
+- `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
+  hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,
+  `infer.membership`, `infer.request` and `infer.clock_alignment` records:
+  only final steps, each written once, with requests bound to the run by the
+  recorded `X-Request-Id` and other clients' requests kept under keyed
+  pseudonyms. `stormlog infer profile --vllm-execution-dir DIR` imports the
+  log when the run ends, before the report, and now imports traces before
+  the report too; `import-trace --vllm-execution-dir DIR` takes each
+  trace's GPU UUID from the hook's worker hellos. `infer analyze` gains
+  `telemetry.execution`, a coverage block of per-device unions: linkage,
+  membership, ownership, measurement and capture loss, with non-additive
+  case figures labelled. (#217)
 - vLLM native telemetry for `stormlog infer profile`. `--vllm-metrics [URL]`
   scrapes vLLM's Prometheus metrics just before each phase's first send,
   after its drain and every `--vllm-metrics-interval` seconds between, as

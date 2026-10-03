@@ -165,6 +165,11 @@ stormlog infer import-trace infer.jsonl rank0.pt.trace.json.gz \
   --device-uuid 0=GPU-6d1f0c5e-... --detail launch
 ```
 
+The same artifact takes vLLM's scheduler steps and their requests from the
+[vLLM execution hook](vllm_execution.md#import) with
+`stormlog infer import-execution infer.jsonl DIR`, and the hook's worker
+hellos can name each trace's GPU (`--vllm-execution-dir`, below).
+
 ### Linking GPU work to iterations
 
 A CUDA kernel, copy, or memset carries the correlation ID of the CPU runtime or
