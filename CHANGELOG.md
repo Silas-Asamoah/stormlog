@@ -25,6 +25,14 @@ the flaky benchmark memory gates
 
 ### Added
 
+- `stormlog.scrub`, shared scrubbing primitives for what Stormlog records or
+  sends elsewhere: `redact_url` (moved from `stormlog.infer.cache_state`,
+  which still exports it) with a new `origin_only` mode; `KnownSecrets`,
+  which redacts the exact credentials Stormlog was given in their raw,
+  percent-encoded, JSON-escaped and base64 forms; `scrub_text` for free text
+  an exporter has consent to send; `truncate_utf8`; and
+  `is_forbidden_key_name`. Documented in `docs/scrubbing.md`; the wider
+  artifact policy stays with #111. (#220)
 - `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
   hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,
   `infer.membership`, `infer.request` and `infer.clock_alignment` records:
