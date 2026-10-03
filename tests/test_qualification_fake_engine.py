@@ -154,6 +154,21 @@ def test_a_cached_prompt_still_computes_its_last_token() -> None:
     assert pool.lookup(hashes, 9) == taken
 
 
+def test_a_hash_cached_twice_keeps_its_hit_while_either_copy_stays() -> None:
+    # vLLM's BlockHashToBlockMap keeps every block cached under a hash, and an
+    # eviction removes only the block it reuses (core/block_pool.py:33-120).
+    pool = BlockPool(2, 4, caching=True)
+    taken = pool.allocate(2)
+    assert taken is not None
+    first, second = taken
+    (block_hash,) = pool.block_hashes(["x"] * 4)
+    pool.cache(first, block_hash)
+    pool.cache(second, block_hash)
+    pool.free([first])
+    assert pool.allocate(1) == [first]
+    assert pool.lookup([block_hash], 5) == [second]
+
+
 def test_descriptive_routes_answer_like_vllm() -> None:
     with FakeEngine(FAST) as engine:
         version = json.loads(get(f"{engine.base_url}/version")[1])

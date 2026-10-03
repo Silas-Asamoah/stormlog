@@ -3,7 +3,8 @@
 Free blocks wait in an LRU queue; a freed block keeps its hash, so a later
 request with the same prefix can reuse it until an allocation evicts it from
 the queue's head. A request's last full blocks are freed first, as in vLLM, so
-they are evicted first.
+they are evicted first. Like vLLM's ``BlockHashToBlockMap``, a hash keeps every
+block cached under it, so evicting one copy leaves the others' hits.
 """
 
 from __future__ import annotations
@@ -32,7 +33,8 @@ class BlockPool:
         self._free: OrderedDict[int, None] = OrderedDict(
             (block.block_id, None) for block in self.blocks
         )
-        self._cached: dict[int, int] = {}
+        # Each hash's cached blocks, in the order they were cached.
+        self._cached: dict[int, dict[int, None]] = {}
         self.evictions = 0
 
     @property
@@ -67,10 +69,10 @@ class BlockPool:
         limit = (prompt_len - 1) // self.block_size
         found: list[int] = []
         for block_hash in hashes[:limit]:
-            block_id = self._cached.get(block_hash)
-            if block_id is None:
+            copies = self._cached.get(block_hash)
+            if not copies:
                 break
-            found.append(block_id)
+            found.append(next(iter(copies)))
         return found
 
     def touch(self, block_ids: Sequence[int]) -> None:
@@ -90,19 +92,28 @@ class BlockPool:
             block_id, _none = self._free.popitem(last=False)
             block = self.blocks[block_id]
             if block.block_hash is not None:
-                self._cached.pop(block.block_hash, None)
-                block.block_hash = None
-                self.evictions += 1
+                self._evict(block)
             block.ref_count = 1
             taken.append(block_id)
         return taken
 
     def cache(self, block_id: int, block_hash: int) -> None:
-        """Mark a full block reusable under ``block_hash``; the first wins."""
-        if not self.caching or block_hash in self._cached:
+        """Mark a full block reusable under ``block_hash``, beside any other
+        block already cached under it."""
+        if not self.caching:
             return
         self.blocks[block_id].block_hash = block_hash
-        self._cached[block_hash] = block_id
+        self._cached.setdefault(block_hash, {})[block_id] = None
+
+    def _evict(self, block: Block) -> None:
+        """Forget one block's hash; other blocks under it keep theirs."""
+        assert block.block_hash is not None
+        copies = self._cached.get(block.block_hash, {})
+        copies.pop(block.block_id, None)
+        if not copies:
+            self._cached.pop(block.block_hash, None)
+        block.block_hash = None
+        self.evictions += 1
 
     def free(self, block_ids: Sequence[int]) -> None:
         """Drop references, last block first; idle blocks join the queue's tail."""
