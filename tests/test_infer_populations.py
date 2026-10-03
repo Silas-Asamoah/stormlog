@@ -200,14 +200,27 @@ def test_an_old_open_loop_artifact_recomputes_its_endpoint_from_the_workload() -
     assert intervals.rate.seconds == pytest.approx(1.0)
 
 
-def test_a_replay_without_an_endpoint_falls_back_to_the_measured_span() -> None:
-    records = [_request(i) for i in range(10)]
+def test_a_replay_without_an_endpoint_has_no_rate_interval(tmp_path: Path) -> None:
+    # The span to the drain's end would make an open loop's rate depend on
+    # when its requests finished, so no rate is given at all.
+    records = [_request(i, e2e_latency_ms=500.0) for i in range(10)]
     window = _window(arrival_mode="replay", scheduled_endpoint_offset_ns=None)
     replay = _workload({"mode": "replay", "trace": {"arrivals": 10}})
     intervals = _case([*records, window, replay]).intervals
-    assert intervals.rate is not None and intervals.rate.kind == "measured_span"
-    assert intervals.rate_reason == "scheduled_endpoint_unknown"
+    assert intervals.rate is None
+    assert intervals.rate_reason == "endpoint_undeclared"
     assert intervals.scheduled_window is None
+    assert intervals.measured_span is not None
+
+    report = _analyze(tmp_path, [*records, window, replay])
+    throughput = report["cases"]["c1"]["throughput"]
+    assert throughput["interval_kind"] is None
+    assert throughput["requests_per_second"] is None
+    assert "no rate interval (endpoint_undeclared)" in format_analysis_text(report)
+
+    evaluation = goodput(records, parse_slo_flags(["e2e:1000"]), intervals.rate)
+    assert evaluation.status == "evaluated" and evaluation.met == 10
+    assert evaluation.goodput_lower_rps is None
 
 
 def test_a_closed_loop_rate_divides_by_the_phase_start_to_drain_end() -> None:

@@ -363,7 +363,10 @@ Throughput divides by the case's **rate interval**, named in
 - for an artifact without a phase window, the span of every measured request
   that has both times, failed ones included (`request_span`).
 
-A rate is `null` when its interval has no length.
+A rate is `null` when its interval has no length, and for an open loop with
+no known endpoint, such as a replay without `--duration`: the span to the
+drain's end would make its rate depend on when its requests finished, so
+there is no rate interval (`intervals.rate_reason: endpoint_undeclared`).
 
 Before `analysis_version` 2, throughput divided by
 `throughput.duration_seconds`: the span of the case's **successful**

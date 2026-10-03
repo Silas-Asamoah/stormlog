@@ -179,7 +179,9 @@ the flaky benchmark memory gates
     which shrank when the last requests failed.
   - `throughput.duration_seconds` is replaced by `interval_seconds`,
     `interval_kind` and `numerator_cohort`.
-  - A rate over an empty interval is `null`, not `0.0`.
+  - A rate over an empty interval is `null`, not `0.0`, and so is every rate
+    of an open loop with no known endpoint, such as a replay without
+    `--duration` (`rate_reason: endpoint_undeclared`).
   - Each case gains a `population` block (offered, sent, accepted,
     successful, failed, timed out, cancelled and the rest, with cohort checks)
     and an `intervals` block. (#213)

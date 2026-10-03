@@ -247,8 +247,11 @@ The **rate** interval, which every rate divides by, depends on the run:
 | No phase window | `request_span` | Every measured request |
 
 An old open-loop artifact without a recorded endpoint has it recomputed from
-its seeded workload record. A replay without a duration has none, so its rate
-falls back to `measured_span` with `rate_reason: scheduled_endpoint_unknown`.
+its seeded workload record. A replay without a duration has none, so it has
+no rate interval: its rates and goodput are `null`, with `rate_reason:
+endpoint_undeclared`. Its attainment is still judged. Dividing by
+`measured_span` instead would make an open loop's rate depend on when its
+requests finished.
 
 The intervals also give the configured rate and the realized offered rate
 (scheduled arrivals per second of the scheduled window).

@@ -365,7 +365,9 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
         f"requests={_fmt(throughput.get('requests_per_second'))} req/s"
     ]
     if isinstance(case, dict):
-        lines.extend(_interval_lines(throughput, case.get("population")))
+        lines.extend(
+            _interval_lines(throughput, case.get("population"), case.get("intervals"))
+        )
         lines.extend(_slo_lines(case.get("slo")))
         lines.extend(arrival_lines(case.get("arrivals"), case.get("latency_ms")))
         lines.extend(prompt_lines(case.get("prompts")))
@@ -375,7 +377,7 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
     return lines
 
 
-def _interval_lines(throughput: Any, population: Any) -> list[str]:
+def _interval_lines(throughput: Any, population: Any, intervals: Any) -> list[str]:
     """What the rates divide by, and whether the request cohort is whole."""
     lines = []
     if isinstance(throughput, dict) and throughput.get("interval_kind"):
@@ -384,6 +386,8 @@ def _interval_lines(throughput: Any, population: Any) -> list[str]:
             f"  rates per {throughput['interval_kind'].replace('_', ' ')} of "
             f"{_fmt(throughput.get('interval_seconds'))} s ({cohort})"
         )
+    elif isinstance(intervals, dict) and intervals.get("rate_reason"):
+        lines.append(f"  no rate interval ({intervals['rate_reason']})")
     if isinstance(population, dict) and not population.get("cohort_valid", True):
         issues = ", ".join(str(issue) for issue in population.get("issues", []))
         lines.append(f"  cohort invalid: {issues}")

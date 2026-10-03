@@ -165,8 +165,9 @@ class CaseIntervals:
 
     ``rate`` is the scheduled window for an open loop, the measured span for
     a closed loop, and the span of the recorded requests for an artifact
-    with no phase window. ``rate_reason`` says why it is not the first
-    choice when it is not.
+    with no phase window. It is None for an open loop whose schedule has no
+    known end. ``rate_reason`` says why it is not the first choice when it
+    is not.
     """
 
     rate: MeasuredInterval | None
@@ -445,10 +446,13 @@ def _intervals(
     endpoint = _endpoint_ns(case_id, window, workload)
     configured = _configured_rate(case_id, workload)
     if endpoint is None:
+        # Dividing by the span to the drain's end would make an open loop's
+        # rate depend on when its requests finished.
         return replace(
             base,
+            rate=None,
             configured_rate_per_second=configured,
-            rate_reason="scheduled_endpoint_unknown",
+            rate_reason="endpoint_undeclared",
         )
     started = int_value(window.get("started_at_ns"))
     scheduled = MeasuredInterval(
