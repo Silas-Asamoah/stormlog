@@ -381,6 +381,10 @@ class _EpochReducer:
             return True
         if any(e.binding.ownership == OWN for e in executions):
             return True
+        if not executions:
+            # An idle scheduler step: nothing to attribute, nothing lost.
+            self._count("empty_counted")
+            return False
         if self._placed_in_a_window(item):
             self._count("foreign_only_placed")
             return True
@@ -628,6 +632,7 @@ class _EpochReducer:
             iterations_already_imported=self.counts.get("already_imported", 0),
             foreign_only_placed=self.counts.get("foreign_only_placed", 0),
             foreign_only_counted=self.counts.get("foreign_only_counted", 0),
+            empty_counted=self.counts.get("empty_counted", 0),
             completed_without_scheduled=self.counts.get(
                 "completed_without_scheduled", 0
             ),

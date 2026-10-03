@@ -682,6 +682,29 @@ def test_the_role_follows_vllm_phase_not_the_token_counts(tmp_path: Path) -> Non
     assert result.summary["epochs"][EPOCH]["config"]["v2_model_runner"] is True
 
 
+def test_an_idle_step_is_counted_as_empty_not_foreign(tmp_path: Path) -> None:
+    records = [
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 10),
+        scheduled(0, T0, [member(OWN0, scheduled=8)]),
+        completed(0, T0 + SECOND, [done(OWN0)]),
+        scheduled(1, T0 + 2 * SECOND, []),  # vLLM's scheduler ran with nothing to do
+        completed(1, T0 + 2 * SECOND + 10, []),
+        scheduled(2, T0 + 3 * SECOND, []),
+        completed(2, T0 + 3 * SECOND + 10, []),
+    ]
+    engine_log(tmp_path, records)
+    result = _reduce(tmp_path)
+    assert _iteration_ids(result) == ["0"]
+    epoch = result.summary["epochs"][EPOCH]
+    assert (epoch["empty_counted"], epoch["foreign_only_counted"]) == (2, 0)
+    # Unless a trace's activity points at it, which keeps it as evidence.
+    referenced = _reduce(
+        tmp_path, _facts(referenced_iterations=frozenset({EntityRef(PRODUCER, "2")}))
+    )
+    assert _iteration_ids(referenced) == ["0", "2"]
+    assert referenced.summary["epochs"][EPOCH]["empty_counted"] == 1
+
+
 def test_drafts_make_spec_decode_only_in_generation(tmp_path: Path) -> None:
     records = [
         alias(OWN0, f"chatcmpl-{X0}", T0 - 10),

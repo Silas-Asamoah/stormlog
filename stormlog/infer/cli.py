@@ -1149,7 +1149,8 @@ def _epoch_line(epoch: dict[str, Any]) -> str:
         f"{epoch.get('state')}; kept {epoch.get('iterations_kept', 0)} steps "
         f"({epoch.get('iterations_incomplete', 0)} incomplete), {waiting} pending, "
         f"{epoch.get('iterations_already_imported', 0)} already imported, "
-        f"{epoch.get('foreign_only_counted', 0)} foreign-only counted; "
+        f"{epoch.get('foreign_only_counted', 0)} foreign-only counted, "
+        f"{epoch.get('empty_counted', 0)} empty; "
         f"high-water seq {epoch.get('high_water_seq')}"
     )
     dropped = sum(int(value) for value in (epoch.get("dropped") or {}).values())

@@ -298,7 +298,8 @@ across imports.
 steps with a run member are always kept. A step with only other clients'
 requests is kept when the engine's wall clock is the client's (same host
 and boot) and the step lies inside a run phase or trace window; otherwise
-it is counted in the summary, not written.
+it is counted in the summary, not written. A step that scheduled no request
+(an idle scheduler call) is counted as empty, not written.
 
 **Device binding for traces.** A worker hello names the worker's host, pid,
 CUDA ordinal and GPU UUID. `import-trace --vllm-execution-dir DIR` and the
