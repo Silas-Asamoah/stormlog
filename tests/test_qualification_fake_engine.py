@@ -511,3 +511,16 @@ def test_no_prefix_lookup_is_counted_with_caching_off() -> None:
     _request(engine, "r", words(6, "p"), max_tokens=1)
     _step(engine)
     assert (engine.stats.prefix_queries, engine.stats.prefix_hits) == (0, 0)
+
+
+def test_the_queue_time_is_observed_when_the_request_finishes() -> None:
+    # vLLM observes every per-request histogram, queue time included, from its
+    # finished requests (metrics/loggers.py, PrometheusStatLogger.record).
+    engine = _stepped_engine()
+    request = _request(engine, "r", words(6, "p"), max_tokens=3)
+    queue = engine.stats.histograms["vllm:request_queue_time_seconds"]
+    _step(engine)
+    assert (request.output_tokens, queue.count) == (1, 0)
+    while not request.finished:
+        _step(engine)
+    assert queue.count == 1

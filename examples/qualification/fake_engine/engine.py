@@ -399,10 +399,6 @@ class Engine:
         if request.first_scheduled_ns is None:
             request.first_scheduled_ns = time.time_ns()
             request.cached_at_admission = request.computed
-            self.stats.observe(
-                "vllm:request_queue_time_seconds",
-                (request.first_scheduled_ns - request.arrival_ns) / 1e9,
-            )
 
     def _record_lookup(self, request: FakeRequest) -> None:
         """vLLM records each admission's prefix lookup, none with caching off,
@@ -596,6 +592,10 @@ class Engine:
         if request.first_scheduled_ns is None or request.first_token_ns is None:
             return
         scheduled = request.first_scheduled_ns
+        # Observed at the finish, like every per-request histogram in vLLM.
+        stats.observe(
+            "vllm:request_queue_time_seconds", (scheduled - request.arrival_ns) / 1e9
+        )
         stats.observe("vllm:request_inference_time_seconds", (now - scheduled) / 1e9)
         stats.observe(
             "vllm:request_prefill_time_seconds",
