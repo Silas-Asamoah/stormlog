@@ -18,6 +18,7 @@ from .engine import Engine, FakeRequest, prompt_tokens
 from .hook_log import HookLog
 from .metrics import render_metrics
 from .profiler import FakeProfiler
+from .spans import SpanExporter
 
 TOKEN_TEXT = " tok"
 
@@ -39,6 +40,7 @@ class FakeEngine:
         self._thread: threading.Thread | None = None
         self.hook: HookLog | None = None
         self.profiler: FakeProfiler | None = None
+        self.spans: SpanExporter | None = None
 
     # ------------------------------------------------------------ lifecycle
 
@@ -53,6 +55,14 @@ class FakeEngine:
         )
         self.profiler = FakeProfiler(self.engine, self.config, self.controls, producer)
         self.engine.observers.append(self.profiler)
+        if self.config.spans_endpoint is not None:
+            self.spans = SpanExporter(
+                self.config.spans_endpoint,
+                self.controls,
+                interval=self.config.span_export_seconds,
+            )
+            self.engine.observers.append(self.spans)
+            self.spans.start()
         self._server = _Server((self.config.host, self.config.port), _Handler)
         self._server.fake = self
         self.engine.start()
@@ -70,6 +80,8 @@ class FakeEngine:
             self._server.server_close()
         if self._thread is not None:
             self._thread.join(timeout=10)
+        if self.spans is not None:
+            self.spans.close()
         if self.hook is not None:
             self.hook.close()
 
