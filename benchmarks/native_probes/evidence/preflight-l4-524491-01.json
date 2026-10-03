@@ -4,6 +4,11 @@
   "issue": 118,
   "local_date": "2026-10-02",
   "status": "failed_direct_cupti_vllm_capture_preflight",
+  "authorization": {
+    "source": "user reply 'okay let's run that' to the proposed paid hardware preflight stage",
+    "scope": "one-instance hardware preflight only",
+    "final_trials_authorized": false
+  },
   "repository": {
     "branch": "research/investigate-optional-low-overhead-native-probe-surfaces",
     "head_before_preflight": "677cf156da196041b234e010753aa37f45822775",

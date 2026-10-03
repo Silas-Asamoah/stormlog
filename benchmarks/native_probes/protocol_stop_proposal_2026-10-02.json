@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_protocol_stop_proposal",
+  "issue": 118,
+  "status": "proposed_not_approved",
+  "finding_source": "benchmarks/native_probes/evidence/preflight-l4-524491-01.json",
+  "finding": "With vLLM 0.30.0, the pinned helper produced large partial traces but no final status when the API server shut down its GPU worker, including with the adapter's API-server-only SIGTERM. The worker was force killed during vLLM shutdown.",
+  "frozen_inputs": {
+    "numeric_policy_sha256": "2761ffde2dfff13c14d3d2f24ef4036c2a4e33c073b879e39a69b14e82933815",
+    "approved_slo_and_w4_setpoints_sha256": "b78b42abd89851997bdd058991d1ca074a68bc0c720dd0c69404d617ffa26f56",
+    "vllm_request_body_arrivals_server_settings_and_measured_window": "unchanged"
+  },
+  "proposed_direct_cupti_stop_rule": {
+    "order": [
+      "finish and persist every scheduled measured request and record the measurement end marker",
+      "while the server and GPU workers are still alive, send a stop request to each initialized per-process CUPTI helper",
+      "wait at most 30 seconds per process for an explicit stop acknowledgment and finalized trace and status files",
+      "verify status, process identity, trace integrity, and loss counters before sending the server its normal SIGTERM",
+      "retain the subsequent server exit, worker exits, and all raw files without replacing or repairing failed attempts"
+    ],
+    "control_channel": "one owner-only Unix-domain socket inside each helper's unique 0700 per-process output directory; socket mode 0600; no network listener",
+    "measurement_boundary": "the stop request occurs after the measured request window; helper process and idle control thread remain in the profiled mode's measured resource and latency overhead",
+    "missing_or_failed_ack": "mark capture partial or failed, retain every partial trace, status, command, exit, and timestamp; never infer zero loss or a completed trace",
+    "unexpected_target_exit": "retain partial artifacts and nonzero exit; best-effort atexit finalization is not counted as guaranteed coverage",
+    "process_population": "record all discovered vLLM server and worker PIDs, identify which initialized CUDA helpers emitted control endpoints, and require a finalized report for each such helper; any unresolved CUDA process is inconclusive",
+    "one_intervention_per_w4_variant": "unchanged from the approved setpoints"
+  },
+  "required_validation_before_final_observations": [
+    "pin the revised helper source and binary hashes",
+    "CPU tests for concurrent per-process output isolation, stop acknowledgment, missing acknowledgment, nonzero exit, timeout, and partial-trace retention",
+    "one bounded L4 hardware smoke confirming complete status for every initialized vLLM CUDA helper under normal API-server shutdown",
+    "repeat the exact nominal and approved W4 control checks without treating failed preflight smokes as final repetitions",
+    "explicit approval of this stop rule and revised helper configuration",
+    "separate explicit authorization for final trials"
+  ],
+  "authorization": {
+    "stop_rule_approved": false,
+    "final_trials_authorized": false,
+    "current_instance_state": "Paused"
+  }
+}
