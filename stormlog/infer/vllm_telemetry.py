@@ -10,6 +10,7 @@ which GPU time.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -114,7 +115,7 @@ class VllmScrapeRecord:
             return
         if not isinstance(duration, (int, float)) or isinstance(duration, bool):
             raise ValueError("duration_ms must be a non-negative number or null")
-        if duration < 0:
+        if not math.isfinite(duration) or duration < 0:
             raise ValueError("duration_ms must be a non-negative number or null")
 
     def _validate_outcome(self) -> None:
