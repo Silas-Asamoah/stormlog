@@ -94,8 +94,25 @@ from .vllm_telemetry import MARKER_PHASE_END, MARKER_PHASE_START
 from .workload import workload_record
 
 
+@dataclass(frozen=True)
+class PhaseEvent:
+    """A phase's arrivals are about to start (``started``), or the phase has
+    drained (``ended``, with its window's times as the artifact records them).
+    ``at_ns`` is the wall clock when the caller was told."""
+
+    case_id: str
+    phase: str
+    event: str
+    at_ns: int
+    window: dict[str, int] | None = None
+
+
 class InferenceProfiler:
-    """Profile an OpenAI-compatible chat completions endpoint."""
+    """Profile an OpenAI-compatible chat completions endpoint.
+
+    ``on_phase`` is told when each phase starts and ends, on the profiler's
+    event loop; an exception it raises stops the profile.
+    """
 
     def __init__(
         self,
@@ -105,6 +122,7 @@ class InferenceProfiler:
         on_warning: Callable[[str], None] | None = None,
         on_notice: Callable[[str], None] | None = None,
         prober: Callable[[str], ServerProbe] | None = None,
+        on_phase: Callable[[PhaseEvent], None] | None = None,
     ) -> None:
         self.config = config
         self.on_warning = on_warning
@@ -112,6 +130,7 @@ class InferenceProfiler:
         self.on_notice = on_notice
         self.prober = prober or self._probe_server
         self._before_probe: ServerProbe | None = None
+        self.on_phase = on_phase
         self.session = create_session_summary(source="stormlog.infer.profile")
         self.run_id = run_id or config.run_id or new_session_id()
         self._check_before_description()
@@ -926,6 +945,9 @@ class InferenceProfiler:
                 abandoned=abandoned,
             )
         )
+        # Told once the window is on record, so a caller that fails here
+        # loses no record, and its marker never precedes the record.
+        self._tell(case.case_id, phase, "ended", window.times())
 
     async def _run_scraped_phase(
         self,
@@ -1024,9 +1046,16 @@ class InferenceProfiler:
         total_requests: int | None,
         duration_seconds: float | None,
     ) -> "_PhaseWindow":
+        self._tell(request.case.case_id, request.phase, "started")
         if request.case.arrival.open_loop:
             return await self._run_open_phase(request, total_requests, duration_seconds)
         return await self._run_closed_phase(request, total_requests, duration_seconds)
+
+    def _tell(
+        self, case_id: str, phase: str, event: str, window: dict[str, int] | None = None
+    ) -> None:
+        if self.on_phase is not None:
+            self.on_phase(PhaseEvent(case_id, phase, event, time.time_ns(), window))
 
     async def _scrape(
         self,
@@ -1653,6 +1682,13 @@ class _PhaseWindow:
     # Where the schedule's observation window ends, from the phase start: the
     # duration, or one whole slot after the last counted arrival.
     scheduled_endpoint_offset_ns: int | None = None
+
+    def times(self) -> dict[str, int]:
+        return {
+            "started_at_ns": self.started_at_ns,
+            "window_ended_at_ns": self.window_ended_at_ns,
+            "drained_at_ns": self.drained_at_ns,
+        }
 
     def to_record(
         self,
