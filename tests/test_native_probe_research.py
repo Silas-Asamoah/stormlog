@@ -42,6 +42,7 @@ from scripts.native_probes.runner import (
     _artifact,
     _artifact_digest,
     _usable_cupti_microbench,
+    _vllm_shutdown_failures,
     run_trial,
 )
 from scripts.native_probes.validation import (
@@ -52,6 +53,31 @@ from scripts.native_probes.workloads.cuda_microbench import w2_contract
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 SCHEMAS = REPOSITORY / "benchmarks/native_probes/schemas"
+
+
+def test_vllm_shutdown_failure_is_retained_despite_zero_exit(tmp_path: Path) -> None:
+    (tmp_path / "server-exit.json").write_text(
+        '{"return_code": 0, "profile_stop_completed": true}'
+    )
+    (tmp_path / "server-stdout.log").write_text(
+        "force killing remaining process EngineCore\n"
+        "AsyncLLM output_handler: EngineDeadError\n"
+    )
+    (tmp_path / "server-stderr.log").write_text(
+        "resource_tracker: There appear to be 1 leaked semaphore objects\n"
+    )
+
+    assert _vllm_shutdown_failures(tmp_path) == [
+        "vLLM force killed a process at shutdown",
+        "vLLM engine died at shutdown",
+        "vLLM leaked a semaphore at shutdown",
+    ]
+
+    (tmp_path / "server-stdout.log").write_text("clean shutdown\n")
+    (tmp_path / "server-stderr.log").write_text("")
+    assert _vllm_shutdown_failures(tmp_path) == []
+
+
 MATRICES = REPOSITORY / "benchmarks/native_probes/matrices"
 
 

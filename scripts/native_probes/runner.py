@@ -102,6 +102,13 @@ def run_trial(
     )
     if status is ResultStatus.PASS and missing_required:
         status = ResultStatus.PARTIAL
+    shutdown_failures = (
+        _vllm_shutdown_failures(trial_directory / "vllm")
+        if spec.workload_id is WorkloadId.VLLM
+        else []
+    )
+    if status is ResultStatus.PASS and shutdown_failures:
+        status = ResultStatus.PARTIAL
     pressure_unsupported = (
         spec.workload_id.value == "w4-stress"
         and spec.mode.value == "direct-cupti"
@@ -114,6 +121,7 @@ def run_trial(
         limitations.append(
             "direct CUPTI trace lacked a valid timed device kernel capture"
         )
+    limitations.extend(shutdown_failures)
     if pressure_unsupported:
         limitations.append(
             str(spec.pressure_controls.get("variant_reason", "W4 pressure unsupported"))
@@ -590,6 +598,42 @@ def _collect_artifacts(spec: TrialSpec, trial_directory: Path) -> list[dict[str,
                 }
             )
     return rows
+
+
+def _vllm_shutdown_failures(directory: Path) -> list[str]:
+    """Retain known vLLM teardown failures even when the wrapper exits zero."""
+    failures: list[str] = []
+    exit_path = directory / "server-exit.json"
+    try:
+        exit_status = json.loads(exit_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        failures.append("vLLM server exit status is missing or malformed")
+    else:
+        if not isinstance(exit_status, Mapping):
+            failures.append("vLLM server exit status is not an object")
+        else:
+            if exit_status.get("return_code") != 0:
+                failures.append("vLLM server did not exit successfully")
+            if exit_status.get("profile_stop_completed") is not True:
+                failures.append("vLLM profiler stop did not complete")
+    markers = {
+        "force killing remaining process": "vLLM force killed a process at shutdown",
+        "EngineDeadError": "vLLM engine died at shutdown",
+        "leaked semaphore objects": "vLLM leaked a semaphore at shutdown",
+        "External init callback must run in same thread as registerClient": (
+            "vLLM profiler reported a CUPTI initialization error"
+        ),
+    }
+    for name in ("server-stdout.log", "server-stderr.log"):
+        try:
+            with (directory / name).open(encoding="utf-8", errors="replace") as source:
+                for line in source:
+                    for marker, message in markers.items():
+                        if marker in line and message not in failures:
+                            failures.append(message)
+        except OSError:
+            failures.append(f"vLLM {name} is missing or unreadable")
+    return failures
 
 
 def _usable_chrome_trace(path: Path) -> bool:
