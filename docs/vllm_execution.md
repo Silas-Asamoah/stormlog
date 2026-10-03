@@ -33,6 +33,15 @@ like any other plugin.
 | `STORMLOG_VLLM_HOOK_RETAIN_HOURS` | Epoch directories older than this are deleted at start (default 24). |
 | `STORMLOG_VLLM_HOOK_MAX_BYTES` | Disk cap per epoch (default 256 MiB). |
 
+By default vLLM 0.30.0 stops its engine process with SIGKILL as soon as the
+server shuts down (`--shutdown-timeout` defaults to 0). The hook then cannot
+finish its log: each epoch ends without a `goodbye` record, with its last
+segment still a `.part` file, and records not yet written are lost. Records
+already written are kept, and a reader takes the complete lines of a `.part`
+segment. For a clean end, serve with `--shutdown-timeout 5` or more, or create
+the `flush` file in each epoch directory (see below) and wait for it to
+disappear before stopping the server.
+
 ## What is supported
 
 The hook checks vLLM's configured objects when they are built and enables
@@ -224,8 +233,8 @@ calls before the first serving step, which never have one), and
 `status.json` holds the latest heartbeat's fields and is still updated after
 the disk cap stops record writing, so loss stays visible.
 
-**`goodbye`** has `wall_ns`, `mono_ns` and `last_seq`. A process killed by a
-signal it does not handle writes no `goodbye`.
+**`goodbye`** has `wall_ns`, `mono_ns` and `last_seq`. A process that is killed,
+including by vLLM's default shutdown, writes no `goodbye`.
 
 ## Iteration ranges
 
