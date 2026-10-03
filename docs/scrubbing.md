@@ -54,14 +54,25 @@ redacts them wherever they appear. An exporter's allowlist already keeps these
 fields out of what it sends. `KnownSecrets` is the backstop for a value that
 turns up somewhere unexpected, for example echoed inside an error message.
 
-Each value is matched in the forms it most often travels in:
+Each value is matched in the spellings it most often travels in:
 
-| Form | Example of where it appears |
+| Spelling | Example of where it appears |
 | --- | --- |
 | as given | a header value, a log line |
-| percent-encoded (`quote` and `quote_plus`) | a URL |
-| JSON-escaped (ASCII and UTF-8) | a string inside a JSON body |
-| base64 (standard and URL-safe, with and without padding) | an encoded token |
+| percent-encoded, with hex digits in either case, any characters left plain (as `quote` leaves `/`), and `+` for a space | a URL |
+| JSON-escaped: `\uXXXX` in either case, surrogate pairs for characters outside the BMP, an escaped `/`, and the short escapes such as `\"` | a string inside a JSON body |
+| base64 of the value on its own, standard and URL-safe, with and without padding | an encoded token, a Basic header |
+
+Each character can be spelled differently from the next, so a value that is
+partly encoded is still found. These are not covered:
+- double encoding, such as `%252F`;
+- base64 of a longer string that contains the value, where it starts at
+  another offset;
+- HTML entities and other character encodings, such as UTF-16.
+
+Finding every spelling costs more than a plain search: about 30 ms per
+megabyte for each value. Exporters redact bounded strings, and `scrub_text`
+bounds its input first.
 
 A Basic authorization header encodes `user:password` as one string, so
 `url_secrets(url)` returns that pair alongside the password itself. It also

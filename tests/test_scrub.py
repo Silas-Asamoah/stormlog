@@ -4,7 +4,6 @@ import base64
 import json
 import subprocess
 import sys
-import urllib.parse
 from collections.abc import Iterator
 
 import pytest
@@ -58,26 +57,65 @@ def test_redact_url_origin_only_keeps_none_as_none() -> None:
     assert redact_url(None, origin_only=True) is None
 
 
+# Each spelling below is written out by hand, not produced by the encoders
+# the implementation might use, so a test cannot agree with a bug.
+# A backslash, built here so no escape in this file can be mistaken for one.
+BACKSLASH = chr(92)
+U = BACKSLASH + "u"  # a JSON unicode escape
+Q = BACKSLASH + '"'  # a JSON-escaped quote
+S = BACKSLASH + "/"  # a JSON-escaped slash
 SECRET = 'sk-Abc/123+"quoted" päss'
-
-
-@pytest.mark.parametrize(
-    "form",
-    [
-        SECRET,
-        urllib.parse.quote(SECRET, safe=""),
-        urllib.parse.quote_plus(SECRET, safe=""),
-        json.dumps(SECRET)[1:-1],
-        json.dumps(SECRET, ensure_ascii=False)[1:-1],
-        base64.b64encode(SECRET.encode()).decode(),
-        base64.urlsafe_b64encode(SECRET.encode()).decode().rstrip("="),
-    ],
+SPELLINGS = (
+    'sk-Abc/123+"quoted" päss',
+    # Percent-encoded: everything, with + for space, keeping "/", lowercase.
+    "sk-Abc%2F123%2B%22quoted%22%20p%C3%A4ss",
+    "sk-Abc%2F123%2B%22quoted%22+p%C3%A4ss",
+    "sk-Abc/123%2B%22quoted%22%20p%C3%A4ss",
+    "sk-Abc%2f123%2b%22quoted%22%20p%c3%a4ss",
+    # A mix of encoded and plain characters.
+    'sk-Abc%2f123+%22quoted" p%C3%A4ss',
+    # JSON: ASCII-only, UTF-8, upper-case hex, an escaped slash, quotes as
+    # unicode escapes, an escaped first letter.
+    f"sk-Abc/123+{Q}quoted{Q} p{U}00e4ss",
+    f"sk-Abc/123+{Q}quoted{Q} päss",
+    f"sk-Abc/123+{Q}quoted{Q} p{U}00E4ss",
+    f"sk-Abc{S}123+{Q}quoted{Q} p{U}00e4ss",
+    f"sk-Abc/123+{U}0022quoted{U}0022 p{U}00e4ss",
+    f"{U}0073k-Abc/123+{Q}quoted{Q} p{U}00e4ss",
+    # Base64 of the UTF-8 bytes, padded and not.
+    "c2stQWJjLzEyMysicXVvdGVkIiBww6Rzcw==",
+    "c2stQWJjLzEyMysicXVvdGVkIiBww6Rzcw",
 )
-def test_known_secrets_redact_every_travelling_form(form: str) -> None:
+
+
+@pytest.mark.parametrize("form", SPELLINGS)
+def test_known_secrets_redact_every_spelling_of_a_value(form: str) -> None:
     secrets = KnownSecrets([SECRET])
     text = f"before {form} after"
     assert secrets.found_in(text)
     assert secrets.redact(text) == "before <redacted> after"
+
+
+@pytest.mark.parametrize(
+    ("value", "form"),
+    [
+        ("abc/def+ghi", "abc%2fdef%2Bghi"),
+        ("abc/def+ghi", f"abc{S}def+ghi"),
+        ("abc/def+ghi", f"{U}0061bc/def+ghi"),
+        # A character outside the BMP: JSON writes a surrogate pair.
+        ("password\U0001f600", f"password{U}D83D{U}DE00"),
+        ("password\U0001f600", f"password{U}d83d{U}de00"),
+        ("password\U0001f600", "password%F0%9F%98%80"),
+        ("password\U0001f600", "password%f0%9f%98%80"),
+        # Base64's two alphabets differ for this value: + and / against - and _.
+        ("z?>~?>~token-1", "ej8+fj8+fnRva2VuLTE="),
+        ("z?>~?>~token-1", "ej8-fj8-fnRva2VuLTE="),
+        ("z?>~?>~token-1", "ej8-fj8-fnRva2VuLTE"),
+    ],
+)
+def test_known_secrets_redact_equivalent_escapes(value: str, form: str) -> None:
+    secrets = KnownSecrets([value])
+    assert secrets.redact(f"[{form}]") == "[<redacted>]"
 
 
 def test_known_secrets_replace_a_longer_value_whole() -> None:

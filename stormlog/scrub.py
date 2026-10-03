@@ -8,13 +8,13 @@ Each exporter documents its own allowlists. See ``docs/scrubbing.md``.
 from __future__ import annotations
 
 import base64
-import json
 import re
 import urllib.parse
 from collections.abc import Callable, Iterable, Iterator
 from typing import overload
 
 REDACTED = "<redacted>"
+BACKSLASH = chr(92)
 # Shorter values are not used for exact-value redaction: they would erase
 # ordinary text such as case names and numbers, and a credential that short
 # is not protected by redaction anyway.
@@ -174,14 +174,19 @@ class KnownSecrets:
     """The exact credentials Stormlog was given, redacted wherever they appear.
 
     Allowlists decide which fields leave; this is the backstop behind them.
-    Each value is matched in the forms it most often travels in: as given,
-    percent-encoded (inside a URL), JSON-escaped (inside a JSON string), and
-    base64 (an encoded token, or a Basic authorization header when the
-    ``user:password`` pair is registered).
+    Each value is matched in every spelling it most often travels in: as
+    given; percent-encoded (inside a URL) in either case of hex digit, with
+    any characters left plain, and with ``+`` for a space; JSON-escaped
+    (inside a JSON string), with or without unicode escapes in either case,
+    surrogate pairs, an escaped ``/`` and the short escapes; and each
+    character may be spelled differently from the next. Also base64,
+    standard and URL-safe, padded or not, of the value on its own: an
+    encoded token, or a Basic authorization header when the
+    ``user:password`` pair is registered.
     """
 
     def __init__(self, values: Iterable[str | None] = ()) -> None:
-        self._forms: tuple[str, ...] = ()
+        self._patterns: dict[str, re.Pattern[str]] = {}
         self.skipped_short = 0
         for value in values:
             self.add(value)
@@ -193,8 +198,8 @@ class KnownSecrets:
         if len(value) < MIN_SECRET_LENGTH:
             self.skipped_short += 1
             return
-        forms = set(self._forms) | _encoded_forms(value)
-        self._forms = tuple(sorted(forms))
+        if value not in self._patterns:
+            self._patterns[value] = _spellings(value)
 
     def redact(self, text: str) -> str:
         """``text`` with every form of every registered value replaced.
@@ -207,17 +212,17 @@ class KnownSecrets:
 
     def spans(self, text: str) -> list[tuple[int, int]]:
         """Where each form of each value occurs in ``text``, as (start, end)."""
-        found: list[tuple[int, int]] = []
-        for form in self._forms:
-            start = text.find(form)
-            while start >= 0:
-                found.append((start, start + len(form)))
-                start = text.find(form, start + 1)
-        return found
+        # Each pattern is a lookahead, so occurrences that overlap are all
+        # found; the spans are merged when they are replaced.
+        return [
+            (match.start(), match.end(1))
+            for pattern in self._patterns.values()
+            for match in pattern.finditer(text)
+        ]
 
     def found_in(self, text: str) -> bool:
-        """Whether any form of any registered value occurs in ``text``."""
-        return any(form in text for form in self._forms)
+        """Whether any spelling of any registered value occurs in ``text``."""
+        return any(pattern.search(text) for pattern in self._patterns.values())
 
 
 def replace_spans(text: str, spans: Iterable[tuple[int, int]]) -> str:
@@ -268,19 +273,59 @@ def url_secrets(url: str | None) -> list[str]:
     return found
 
 
-def _encoded_forms(value: str) -> set[str]:
-    raw = value.encode("utf-8")
-    forms = {
-        value,
-        urllib.parse.quote(value, safe=""),
-        urllib.parse.quote_plus(value, safe=""),
-        json.dumps(value)[1:-1],
-        json.dumps(value, ensure_ascii=False)[1:-1],
-    }
+# JSON's short escapes, as the two characters that spell each.
+_JSON_SHORT = {
+    '"': BACKSLASH + '"',
+    BACKSLASH: BACKSLASH + BACKSLASH,
+    "/": BACKSLASH + "/",
+    "\b": BACKSLASH + "b",
+    "\f": BACKSLASH + "f",
+    "\n": BACKSLASH + "n",
+    "\r": BACKSLASH + "r",
+    "\t": BACKSLASH + "t",
+}
+
+
+def _spellings(value: str) -> re.Pattern[str]:
+    """A lookahead matching every spelling of ``value`` that KnownSecrets covers."""
+    options = ["".join(_char_spellings(char) for char in value)]
+    raw = value.encode("utf-8", "surrogatepass")
     for encoded in (base64.b64encode(raw), base64.urlsafe_b64encode(raw)):
         text = encoded.decode("ascii")
-        forms.update({text, text.rstrip("=")})
-    return {form for form in forms if form}
+        # Padded first, so the longer spelling is the one matched.
+        options.extend(
+            re.escape(form) for form in dict.fromkeys((text, text.rstrip("=")))
+        )
+    return re.compile("(?=(" + "|".join(options) + "))")
+
+
+def _char_spellings(char: str) -> str:
+    """One character as given, percent-encoded or JSON-escaped."""
+    options = [re.escape(char)]
+    options.append(
+        "".join("%" + _hex(byte, 2) for byte in char.encode("utf-8", "surrogatepass"))
+    )
+    if char == " ":
+        options.append(re.escape("+"))
+    if char in _JSON_SHORT:
+        options.append(re.escape(_JSON_SHORT[char]))
+    code = ord(char)
+    if code > 0xFFFF:
+        code -= 0x10000
+        units = [0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF)]
+    else:
+        units = [code]
+    escape = re.escape(BACKSLASH) + "u"
+    options.append("".join(escape + _hex(unit, 4) for unit in units))
+    return "(?:" + "|".join(options) + ")"
+
+
+def _hex(number: int, width: int) -> str:
+    """``number`` in hex, each letter matching either case."""
+    return "".join(
+        f"[{digit.lower()}{digit.upper()}]" if digit.isalpha() else digit
+        for digit in f"{number:0{width}X}"
+    )
 
 
 def truncate_utf8(text: str, max_bytes: int) -> str:
