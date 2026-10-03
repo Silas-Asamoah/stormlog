@@ -569,7 +569,10 @@ class Engine:
         request.block_ids = []
         self.live.pop(request.internal_id, None)
         self.finished.append(request)
-        self._observe_finish(request, now)
+        if reason != "abort":
+            # vLLM's front end drops a client-aborted request's state without
+            # recording it; only a request the engine finishes is counted.
+            self._observe_finish(request, now)
         request.events.put(("finish", reason))
 
     def _observe_finish(self, request: FakeRequest, now: int) -> None:

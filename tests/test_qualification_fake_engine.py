@@ -524,3 +524,20 @@ def test_the_queue_time_is_observed_when_the_request_finishes() -> None:
     while not request.finished:
         _step(engine)
     assert queue.count == 1
+
+
+def test_a_client_abort_records_no_request_statistics() -> None:
+    # A client that goes away aborts its request in vLLM's output processor,
+    # which drops the request's state without updating finished-request stats
+    # (OutputProcessor.abort_requests); the engine core then frees it with no
+    # output to report.
+    engine = _stepped_engine()
+    request = _request(engine, "r", words(6, "p"), max_tokens=20)
+    _step(engine)
+    engine.abort(request)
+    _step(engine)
+    histograms = engine.stats.histograms
+    assert request.finish_reason == "abort"
+    assert sum(engine.stats.success.values()) == 0
+    assert histograms["vllm:e2e_request_latency_seconds"].count == 0
+    assert histograms["vllm:request_generation_tokens"].count == 0

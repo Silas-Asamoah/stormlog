@@ -159,7 +159,8 @@ series vLLM exports:
 - **Aborts.** A client that disconnects aborts its request. An abort that
   arrives while a step runs takes effect before that step's update, as in
   vLLM, so the hook records the member as `discarded_finished` and still
-  counts the token the sampler produced.
+  counts the token the sampler produced. As in vLLM, a client's abort adds
+  nothing to `request_success_total` or the per-request histograms.
 
 Nothing is computed: each step sleeps for a simulated cost. Prompts are counted
 as whitespace words plus a fixed four-token chat template.
