@@ -9,7 +9,13 @@ from typing import Any
 import pytest
 from jsonschema import Draft202012Validator
 
-from stormlog.infer.vllm_metrics import compact_scrape, discover, parse_prometheus_text
+from stormlog.infer.vllm_metrics import (
+    CompactScrape,
+    HistogramValue,
+    compact_scrape,
+    discover,
+    parse_prometheus_text,
+)
 from stormlog.infer.vllm_telemetry import (
     MARKER_INTERVAL,
     MARKER_PHASE_START,
@@ -29,6 +35,17 @@ VALIDATOR = Draft202012Validator(
     json.loads((ROOT / "docs/schemas/inference_vllm_v1.schema.json").read_text())
 )
 CLOCK = "client-host/boot-1/unix_epoch_ns"
+
+
+def _by_labels(
+    scrape: CompactScrape,
+) -> dict[tuple[str, tuple[tuple[str, str], ...]], float | HistogramValue]:
+    """Every series keyed by family and labels, free of the label-set ids."""
+    return {
+        (name, tuple(sorted(scrape.labels(set_id).items()))): value
+        for name, by_set in scrape.values.items()
+        for set_id, value in by_set.items()
+    }
 
 
 def _scrape(**changes: Any) -> VllmScrapeRecord:
@@ -145,7 +162,41 @@ class TestScrapeRecord:
         assert record.discovery is not None
         assert record.discovery.optional_present == ()
         assert record.to_record()["discovery"]["optional_present"] == []
-        assert record.scrape == _scrape().scrape
+        fresh = _scrape().scrape
+        assert record.scrape is not None and fresh is not None
+        # The old fold dropped a summary that had only a _sum and a _count;
+        # the current one keeps it, bucket-less. So the old record is a
+        # strict subset of a fresh fold of the same text, and every series
+        # it does have is unchanged.
+        old_series = _by_labels(record.scrape)
+        fresh_series = _by_labels(fresh)
+        assert set(old_series) < set(fresh_series)
+        assert all(fresh_series[key] == value for key, value in old_series.items())
+        extra = {key: fresh_series[key] for key in set(fresh_series) - set(old_series)}
+        assert {name for name, _labels in extra} == {
+            "http_request_size_bytes",
+            "http_response_size_bytes",
+        }
+        assert all(
+            isinstance(value, HistogramValue) and value.buckets == ()
+            for value in extra.values()
+        )
+
+    def test_a_histogram_without_its_sum_validates_and_round_trips(self) -> None:
+        text = (
+            "# TYPE vllm:request_queue_time_seconds histogram\n"
+            'vllm:request_queue_time_seconds_bucket{engine="0",le="+Inf"} 10\n'
+            'vllm:request_queue_time_seconds_count{engine="0"} 10\n'
+        )
+        compact = compact_scrape(parse_prometheus_text(text))
+        record = _scrape(scrape=compact, discovery=discover(compact))
+        payload = record.to_record()
+        VALIDATOR.validate(payload)
+        (value,) = payload["scrape"]["values"][
+            "vllm:request_queue_time_seconds"
+        ].values()
+        assert value["sum"] is None and value["count"] == 10.0
+        assert VllmScrapeRecord.from_record(json.loads(json.dumps(payload))) == record
 
     def test_wrong_envelope_is_rejected(self) -> None:
         payload = _scrape().to_record()

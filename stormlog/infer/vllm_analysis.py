@@ -472,11 +472,16 @@ def _histogram_delta(
 ) -> dict[str, Any]:
     if a is None or b is None:
         return {"state": REASON_SERIES_MISSING}
+    parts = _complete(a, b)
+    if parts is None:
+        # A _sum or _count the exposition lacked is not a zero to subtract.
+        return {"state": REASON_SERIES_MISSING, "missing": _missing_components(a, b)}
     reason = _histogram_reason(a, b, epoch_broken, recreated)
     if reason is not None:
         return {"state": reason}
-    count = b.count - a.count
-    total = b.sum - a.sum
+    a_count, a_sum, b_count, b_sum = parts
+    count = b_count - a_count
+    total = b_sum - a_sum
     return {
         "state": STATE_RESOLVED,
         "count": count,
@@ -502,12 +507,35 @@ def _histogram_reason(
         return REASON_COUNTER_RECREATED
     if [le for le, _ in a.buckets] != [le for le, _ in b.buckets]:
         return REASON_BOUNDARIES_CHANGED
-    backwards = b.count < a.count or b.sum < a.sum
+    backwards = _less(b.count, a.count) or _less(b.sum, a.sum)
     if backwards or any(
         after < before for (_, before), (_, after) in zip(a.buckets, b.buckets)
     ):
         return REASON_COUNTER_RESET
     return None
+
+
+def _less(after: float | None, before: float | None) -> bool:
+    return after is not None and before is not None and after < before
+
+
+def _complete(
+    a: HistogramValue, b: HistogramValue
+) -> tuple[float, float, float, float] | None:
+    """Both histograms' count and sum, or None when any is missing."""
+    if a.count is None or a.sum is None or b.count is None or b.sum is None:
+        return None
+    return a.count, a.sum, b.count, b.sum
+
+
+def _missing_components(a: HistogramValue, b: HistogramValue) -> list[str]:
+    parts = (
+        ("start_sum", a.sum),
+        ("start_count", a.count),
+        ("end_sum", b.sum),
+        ("end_count", b.count),
+    )
+    return [name for name, value in parts if value is None]
 
 
 def _gauge_field(

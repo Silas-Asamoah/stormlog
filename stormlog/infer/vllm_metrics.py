@@ -149,17 +149,21 @@ def _family_of(sample_name: str, kinds: dict[str, str]) -> str:
 # --------------------------------------------------------------------------- compact
 @dataclass(frozen=True)
 class HistogramValue:
-    """Cumulative bucket counts under their native ``le`` boundaries."""
+    """Cumulative bucket counts under their native ``le`` boundaries.
+
+    ``sum`` or ``count`` is None when the exposition lacked that sample: it
+    is kept missing, never invented as zero, so nothing differences it.
+    """
 
     buckets: tuple[tuple[str, float], ...]
-    sum: float
-    count: float
+    sum: float | None
+    count: float | None
 
     def to_record(self) -> dict[str, Any]:
         return {
             "buckets": [[le, encode_number(count)] for le, count in self.buckets],
-            "sum": encode_number(self.sum),
-            "count": encode_number(self.count),
+            "sum": None if self.sum is None else encode_number(self.sum),
+            "count": None if self.count is None else encode_number(self.count),
         }
 
     @classmethod
@@ -167,8 +171,11 @@ class HistogramValue:
         buckets = tuple(
             (str(le), decode_number(count)) for le, count in record.get("buckets", [])
         )
+        total, count = record["sum"], record["count"]
         return cls(
-            buckets, decode_number(record["sum"]), decode_number(record["count"])
+            buckets,
+            None if total is None else decode_number(total),
+            None if count is None else decode_number(count),
         )
 
     @property
@@ -322,13 +329,21 @@ def _fold_distribution(family: MetricFamily) -> dict[Labels, HistogramValue]:
                 continue
             rest = tuple(item for item in sample.labels if item[0] != key)
             buckets.setdefault(rest, []).append((bound, sample.value))
+    # Every label set any component named, in first-seen order: a set with
+    # only a sum and a count (a quantile-free summary) keeps no buckets, and
+    # a missing component stays None rather than becoming a zero.
+    seen = {**dict.fromkeys(buckets), **dict.fromkeys(sums), **dict.fromkeys(counts)}
     return {
         labels: HistogramValue(
-            tuple(sorted(items, key=lambda item: bucket_boundary(item[0]))),
-            sums.get(labels, 0.0),
-            counts.get(labels, 0.0),
+            tuple(
+                sorted(
+                    buckets.get(labels, []), key=lambda item: bucket_boundary(item[0])
+                )
+            ),
+            sums.get(labels),
+            counts.get(labels),
         )
-        for labels, items in buckets.items()
+        for labels in seen
     }
 
 

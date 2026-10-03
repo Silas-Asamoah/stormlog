@@ -119,8 +119,14 @@
             "maxItems": 2
           }
         },
-        "sum": { "$ref": "#/$defs/sample_value" },
-        "count": { "$ref": "#/$defs/sample_value" }
+        "sum": {
+          "description": "null when the exposition had no _sum sample; it is never invented as zero.",
+          "oneOf": [{ "$ref": "#/$defs/sample_value" }, { "type": "null" }]
+        },
+        "count": {
+          "description": "null when the exposition had no _count sample.",
+          "oneOf": [{ "$ref": "#/$defs/sample_value" }, { "type": "null" }]
+        }
       }
     },
     "discovery": {

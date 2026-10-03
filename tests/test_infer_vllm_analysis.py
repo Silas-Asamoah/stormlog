@@ -460,6 +460,25 @@ class TestUnresolved:
         assert "restarted 1 time" in text
         assert "vllm: unresolved (engine_restart)" in text
 
+    def test_a_histogram_missing_its_sum_is_not_differenced(
+        self, tmp_path: Path
+    ) -> None:
+        # The start scrape has the queue-time buckets and count but no _sum;
+        # treating the missing sum as 0.0 would resolve a delta against a
+        # number that was never observed.
+        without_sum = "\n".join(
+            line
+            for line in PRE.splitlines()
+            if not line.startswith("vllm:request_queue_time_seconds_sum{")
+        )
+        case = _vllm_case(_artifact(tmp_path, _standard_scrapes(start=without_sum)))
+        engine = case["engines"]["0"]
+        queue = engine["histograms"]["queue_time"]
+        assert queue["state"] == REASON_SERIES_MISSING
+        assert queue["missing"] == ["start_sum"]
+        assert "sum" not in queue and "count" not in queue
+        assert engine["histograms"]["prefill_time"]["state"] == STATE_RESOLVED
+
     def test_missing_series_is_reported_not_zero(self, tmp_path: Path) -> None:
         without = "\n".join(
             line

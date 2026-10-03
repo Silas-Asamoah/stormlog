@@ -160,6 +160,29 @@ class TestCompactScrape:
         assert bucket_boundary("0.3") == 0.3
         assert bucket_boundary("+Inf") == math.inf
 
+    def test_a_missing_sum_or_count_stays_missing(self) -> None:
+        # A partial exposition is kept as what it is: no component is
+        # invented as 0.0, so nothing downstream can difference it.
+        text = (
+            "# TYPE vllm:request_queue_time_seconds histogram\n"
+            'vllm:request_queue_time_seconds_bucket{engine="0",le="+Inf"} 10\n'
+            'vllm:request_queue_time_seconds_count{engine="0"} 10\n'
+            "# TYPE demo summary\n"
+            'demo_sum{engine="0"} 3\n'
+            'demo_count{engine="0"} 2\n'
+        )
+        compact = compact_scrape(parse_prometheus_text(text))
+        (queue,) = compact.series("vllm:request_queue_time_seconds").values()
+        assert isinstance(queue, HistogramValue)
+        assert queue.sum is None and queue.count == 10.0
+        # A quantile-free summary is kept too, with no buckets.
+        (summary,) = compact.series("demo").values()
+        assert isinstance(summary, HistogramValue)
+        assert summary.buckets == () and (summary.sum, summary.count) == (3.0, 2.0)
+        record = json.loads(json.dumps(compact.to_record(), allow_nan=False))
+        restored = CompactScrape.from_record(record)
+        assert restored == compact
+
     def test_non_finite_values_round_trip_as_strict_json(self) -> None:
         text = (
             "# TYPE demo_summary summary\n"
