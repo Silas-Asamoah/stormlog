@@ -279,9 +279,35 @@ def test_scrub_text_finds_every_span_before_replacing_any(
 def test_scrub_text_cuts_after_redacting_so_no_fragment_is_left() -> None:
     key = "sk-" + "k" * 30
     text = "x" * 95 + key + " tail"
-    scrubbed = scrub_text(text, max_bytes=100)
-    assert len(scrubbed.encode()) <= 100
-    assert "sk-" not in scrubbed and "kkkk" not in scrubbed
+    # The marker does not fit whole, so it is dropped, not left as "<reda".
+    assert scrub_text(text, max_bytes=100) == "x" * 95
+    assert scrub_text(text, max_bytes=105) == "x" * 95 + "<redacted>"
+
+
+@pytest.mark.parametrize(
+    ("tail", "secret"),
+    [
+        ("opaque-credential-value", "opaque-credential-value"),
+        ("opaque-value-without-shape-1234567890 tail", "opaque-value-without-shape"),
+        ("hf_" + "Q" * 40, None),
+    ],
+)
+def test_text_past_the_kept_length_never_reaches_the_output(
+    tail: str, secret: str | None
+) -> None:
+    # A long header line shrinks to a few characters when redacted. The
+    # text after it was beyond the kept length in the input, and must stay
+    # out of the output instead of moving up into the room the redaction
+    # made: there, the input bound may have cut it before it could match.
+    line = "Authorization: " + "a" * (100 + scrub.INPUT_MARGIN_CHARS - 50)
+    text = line + "\n" + tail
+    secrets = KnownSecrets([secret] if secret else [])
+    assert (
+        scrub_text(text, max_bytes=100, secrets=secrets) == "Authorization: <redacted>"
+    )
+    assert (
+        scrub_text(text, max_bytes=64, secrets=secrets) == "Authorization: <redacted>"
+    )
 
 
 def test_scrub_text_bounds_its_input_before_matching(

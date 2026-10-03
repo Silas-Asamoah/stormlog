@@ -131,8 +131,12 @@ The steps run in a fixed order:
    secret in a URL's path hiding the URL's query.
 4. The cut to `max_bytes` comes last.
 
-Because the cut comes last, it never leaves part of a secret that a whole
-match would have removed, as long as the secret is shorter than the margin.
+Only the first `max_bytes` characters of the input can reach the output. The
+margin is lookahead: it lets a match that starts within the kept length be
+seen whole, and text from it is never copied, even when redactions before it
+leave room in the output. So the cut never leaves part of a secret that a
+whole match would have removed, as long as the secret is shorter than the
+margin, however much earlier redactions shrink the text.
 The patterns err on the side of removing too much. For example, a
 `max_tokens="128"` field loses its value, and a key run together with the
 word before it is still removed. A value containing spaces loses only its

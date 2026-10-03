@@ -20,9 +20,10 @@ BACKSLASH = chr(92)
 # is not protected by redaction anyway.
 MIN_SECRET_LENGTH = 8
 # scrub_text cuts a long text this many characters past the requested length
-# before matching, so a large body cannot make scrubbing slow. A secret that
-# starts inside the kept length ends inside the margin unless it is longer
-# than the margin, so the final cut never leaves a fragment of one.
+# before matching, so a large body cannot make scrubbing slow. Only the
+# first max_bytes characters can reach the output; the margin is lookahead,
+# so a secret that starts inside the kept length is seen whole unless it is
+# longer than the margin.
 INPUT_MARGIN_CHARS = 4096
 
 # Words that make a key name look like it holds a credential. Matched as
@@ -225,15 +226,25 @@ class KnownSecrets:
         return any(pattern.search(text) for pattern in self._patterns.values())
 
 
-def replace_spans(text: str, spans: Iterable[tuple[int, int]]) -> str:
-    """``text`` with each span, overlapping or touching spans merged, redacted."""
+def replace_spans(
+    text: str, spans: Iterable[tuple[int, int]], *, limit: int | None = None
+) -> str:
+    """``text`` with each span, overlapping or touching spans merged, redacted.
+
+    With ``limit``, only ``text[:limit]`` is kept: a span that starts
+    before it is redacted whole, and nothing after it is copied.
+    """
+    stop = len(text) if limit is None else min(limit, len(text))
     pieces: list[str] = []
     cursor = 0
     for start, end in _merged(spans):
+        if start >= stop:
+            break
         pieces.append(text[cursor:start])
         pieces.append(REDACTED)
         cursor = end
-    pieces.append(text[cursor:])
+    if cursor < stop:
+        pieces.append(text[cursor:stop])
     return "".join(pieces)
 
 
@@ -362,8 +373,19 @@ def scrub_text(
     spans = secrets.spans(text) if secrets is not None else []
     for finder in _FINDERS:
         spans.extend(finder(text))
-    text = replace_spans(text, spans)
-    return text if max_bytes is None else truncate_utf8(text, max_bytes)
+    # The margin is lookahead only: it lets a match that starts within the
+    # kept length be seen whole. Text from it never reaches the output,
+    # even when redactions before it leave room, because the input bound
+    # may have cut a secret there before it could match.
+    text = replace_spans(text, spans, limit=max_bytes)
+    if max_bytes is None:
+        return text
+    cut = truncate_utf8(text, max_bytes)
+    # A marker cut short is dropped rather than left as "<reda".
+    start = cut.rfind("<", max(0, len(cut) - len(REDACTED) + 1))
+    if start >= 0 and text.startswith(REDACTED, start):
+        cut = cut[:start]
+    return cut
 
 
 def is_forbidden_key_name(name: str) -> bool:
