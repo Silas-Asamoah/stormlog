@@ -8,7 +8,13 @@ import pytest
 
 from stormlog import scrub
 from stormlog.infer import cache_state
-from stormlog.scrub import KnownSecrets, redact_url, url_secrets
+from stormlog.scrub import (
+    KnownSecrets,
+    redact_url,
+    scrub_text,
+    truncate_utf8,
+    url_secrets,
+)
 
 
 @pytest.mark.parametrize(
@@ -108,3 +114,87 @@ def test_url_secrets_lists_the_values_that_may_be_credentials(
 def test_short_url_values_are_not_used_for_redaction() -> None:
     secrets = KnownSecrets(url_secrets("https://h/x?api-key=abc12345&stream=true"))
     assert secrets.redact("stream=true key=abc12345") == "stream=true key=<redacted>"
+
+
+@pytest.mark.parametrize(
+    ("text", "max_bytes", "kept"),
+    [
+        ("hello", 10, "hello"),
+        ("hello", 5, "hello"),
+        ("hello", 3, "hel"),
+        ("héllo", 2, "h"),  # é is two bytes; half of it is never kept
+        ("héllo", 3, "hé"),
+        ("日本", 4, "日"),
+        ("x", 0, ""),
+        ("a\ud800b", 10, "a?b"),
+    ],
+)
+def test_truncate_utf8_never_splits_a_character(
+    text: str, max_bytes: int, kept: str
+) -> None:
+    assert truncate_utf8(text, max_bytes) == kept
+
+
+def test_truncate_utf8_refuses_a_negative_length() -> None:
+    with pytest.raises(ValueError):
+        truncate_utf8("x", -1)
+
+
+@pytest.mark.parametrize(
+    ("text", "leaked"),
+    [
+        ("Authorization: Bearer abcdefgh12345678", "abcdefgh12345678"),
+        ("proxy-authorization=Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA"),
+        ("sent with bearer opaque.token-value_123", "opaque.token-value_123"),
+        ("see https://alice:hunter22@host/x for details", "hunter22"),
+        ("GET https://host/v1?api_key=QQQ-opaque&x=1 failed", "QQQ-opaque"),
+        ('{"api_key": "opaque\\"quoted-value"}', "opaque"),
+        ('{"X-Auth-Token":"zzz-opaque"}', "zzz-opaque"),
+        ("client_secret=hidden-value-1 next", "hidden-value-1"),
+        ("password: correct horse", "correct"),
+        ("key sk-proj-abcdefghijklmnop1234 used", "abcdefghijklmnop1234"),
+        ("hf_abcdefghijklmnopqrstuvwx in env", "hf_abcdefghijklmnopqrstuvwx"),
+        ("aws AKIAABCDEFGHIJKLMNOP id", "AKIAABCDEFGHIJKLMNOP"),
+        ("ghp_" + "a" * 36, "a" * 36),
+        ("github_pat_" + "b" * 30, "b" * 30),
+        ("slack xoxb-1234567890-abcdef", "1234567890-abcdef"),
+        (
+            "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl here",
+            "eyJzdWIiOiIxMjM0In0",
+        ),
+        (
+            "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----",
+            "MIIEvQIBADANBg",
+        ),
+        ("-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQ cut here", "MIIEpAIBAAKCAQ"),
+    ],
+)
+def test_scrub_text_removes_common_credential_shapes(text: str, leaked: str) -> None:
+    scrubbed = scrub_text(text)
+    assert leaked not in scrubbed
+    assert "<redacted>" in scrubbed
+
+
+def test_scrub_text_leaves_ordinary_text_alone() -> None:
+    text = "This model's maximum context length is 32768 tokens; max_tokens 128."
+    assert scrub_text(text) == text
+
+
+def test_scrub_text_applies_known_secrets_before_patterns() -> None:
+    # An opaque value no pattern recognises is still removed when known.
+    secrets = KnownSecrets(["opaque-value-without-shape"])
+    scrubbed = scrub_text("echo: opaque-value-without-shape", secrets=secrets)
+    assert scrubbed == "echo: <redacted>"
+
+
+def test_scrub_text_cuts_after_redacting_so_no_fragment_is_left() -> None:
+    key = "sk-" + "k" * 30
+    text = "x" * 95 + key + " tail"
+    scrubbed = scrub_text(text, max_bytes=100)
+    assert len(scrubbed.encode()) <= 100
+    assert "sk-" not in scrubbed and "kkkk" not in scrubbed
+
+
+def test_scrub_text_bounds_its_input_before_matching() -> None:
+    text = "a" * 10_000_000
+    assert scrub_text(text, max_bytes=16) == "a" * 16

@@ -81,3 +81,43 @@ counted in `skipped_short`. Replacing a short value everywhere would erase
 ordinary text such as case names and numbers, and a credential that short is
 not protected by redaction anyway. When one value contains another, the
 longer is replaced first, so no tail of it is left behind.
+
+## Free text
+
+`scrub_text(text, max_bytes=None, secrets=None)` removes the common shapes of
+a credential from free text, then cuts the result to at most `max_bytes` bytes
+of UTF-8. Use it only on text an exporter has consent to send, such as an
+error message. It is a third layer under the allowlist and `KnownSecrets`, not
+a guarantee: a pattern catches what a credential usually looks like, and an
+opaque secret with no recognisable shape gets through. That is why the
+exporters send no free text unless you opt in.
+
+What it removes:
+
+| Shape | Example | Result |
+| --- | --- | --- |
+| an `Authorization` or `Proxy-Authorization` header, to the end of its line | `Authorization: Bearer abc…` | `Authorization: <redacted>` |
+| a Bearer or Basic token | `bearer abc.def-123` | `bearer <redacted>` |
+| URL user information and query strings | `https://u:p@host/x?k=v` | `https://<redacted>@host/x?<redacted>` |
+| a JSON member whose key contains `pass`, `secret`, `token`, `key`, `auth`, `cred`, `cookie` or `signature` | `"api_key": "abc"` | `"api_key": "<redacted>"` |
+| `key=value` or `key: value` with such a key | `client_secret=abc` | `client_secret=<redacted>` |
+| known key formats | `sk-…`, `hf_…`, `AKIA…`/`ASIA…`, `ghp_…` and the other GitHub token prefixes, `github_pat_…`, `xox?-…`, three-part JWTs | `<redacted>` |
+| private key blocks, including one cut before its `END` line | `-----BEGIN PRIVATE KEY-----…` | `<redacted>` |
+
+The steps run in a fixed order:
+1. The text is first cut to `max_bytes` + 4,096 characters
+   (`INPUT_MARGIN_CHARS`), so a large body cannot make the patterns slow.
+2. The exact values in `secrets` are redacted.
+3. The patterns run.
+4. The cut to `max_bytes` comes last.
+
+Because the cut comes last, it never leaves part of a secret that a whole
+match would have removed, as long as the secret is shorter than the margin.
+The patterns err on the side of removing too much. For example, a
+`max_tokens="128"` field loses its value, and a key run together with the
+word before it is still removed. A value containing spaces loses only its
+first word, which is one reason consent is needed.
+
+`truncate_utf8(text, max_bytes)` returns the longest prefix whose UTF-8
+encoding fits `max_bytes`, and never splits a character. A lone surrogate,
+which UTF-8 cannot encode, becomes `?`.
