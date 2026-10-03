@@ -31,8 +31,17 @@ redact_url("https://user:hunter2@host:8443/flush_cache?token=abc")
 ```
 
 The path is kept, so a URL whose path holds a secret is not safe to share
-after `redact_url` alone. The host is lower-cased, and an IPv6 host keeps
-its brackets. `redact_url(None)` is `None`.
+after `redact_url` alone. `redact_url(url, origin_only=True)` drops the path
+too and keeps only the scheme, host and port. Use it wherever the path is not
+known to be safe, as an exporter does for every URL it reports:
+
+```python
+redact_url("https://host:8443/v1/sk-secret/chat?k=v", origin_only=True)
+# 'https://host:8443'
+```
+
+The host is lower-cased, and an IPv6 host keeps its brackets.
+`redact_url(None)` is `None`.
 
 `stormlog.infer.cache_state.redact_url` is the same function, kept for
 callers that imported it from there.
