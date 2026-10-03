@@ -39,6 +39,7 @@ def hello(
     mono_ns: int = 1_000 * SECOND,
     enabled: bool = True,
     refused: str | None = None,
+    config: dict[str, Any] | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
@@ -66,6 +67,7 @@ def hello(
             "max_num_batched_tokens": 2048,
             "v2_model_runner": True,
             "request_id_randomization": True,
+            **(config or {}),
         },
         "clock": clock(mono_ns),
     }
@@ -97,6 +99,7 @@ def member(
     cached: int = 0,
     recompute: bool = False,
     output_before: int = 0,
+    resumable: bool = False,
 ) -> dict[str, Any]:
     """A scheduled member; ``phase`` defaults to vLLM's usual classification
     (context on the first sighting, generation after), None leaves it unset."""
@@ -118,6 +121,7 @@ def member(
         "cached_at_admission": cached,
         "recompute": recompute,
         "output_before": output_before,
+        "resumable": resumable,
     }
 
 
@@ -153,6 +157,7 @@ def done(
     accepted: int = 0,
     retained: int = 1,
     computed_after: int = 0,
+    finish_reason: str | None = None,
 ) -> dict[str, Any]:
     return {
         "internal": internal,
@@ -161,20 +166,42 @@ def done(
         "sampled": sampled,
         "accepted_drafts": accepted,
         "retained": retained,
+        "finish_reason": finish_reason,
         "computed_after": computed_after,
     }
 
 
-def completed(
-    iteration: int, mono_ns: int, members: list[dict[str, Any]]
-) -> dict[str, Any]:
+def failed(internal: str) -> dict[str, Any]:
+    """A member of a step whose update_from_output raised."""
     return {
+        "internal": internal,
+        "outcome": "unknown",
+        "stale": None,
+        "sampled": None,
+        "accepted_drafts": None,
+        "retained": None,
+        "finish_reason": None,
+        "computed_after": None,
+    }
+
+
+def completed(
+    iteration: int,
+    mono_ns: int,
+    members: list[dict[str, Any]],
+    *,
+    update_failed: bool = False,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
         "kind": "completed",
         "iteration": str(iteration),
         "wall_ns": mono_ns + WALL_OFFSET,
         "mono_ns": mono_ns,
         "members": members,
     }
+    if update_failed:
+        record["update_failed"] = True
+    return record
 
 
 def terminal(
@@ -206,6 +233,7 @@ def heartbeat(mono_ns: int, last_seq: int, **counters: Any) -> dict[str, Any]:
         "errors": 0,
         "bytes": 1024,
         "capped": False,
+        "queued": 0,
         "pending_iterations": 0,
         "range_misses": 0,
     }
@@ -267,14 +295,9 @@ def engine_log(
     pid: int = 2600,
     start_ns: int = 1_790_000_000_000_000_000,
     hello_mono_ns: int = 1_000 * SECOND,
+    config: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> Path:
     """An engine epoch whose first record is a hello."""
-    return write_epoch(
-        root,
-        "engine",
-        pid,
-        start_ns,
-        [hello("engine", pid, start_ns, mono_ns=hello_mono_ns), *records],
-        **kwargs,
-    )
+    first = hello("engine", pid, start_ns, mono_ns=hello_mono_ns, config=config)
+    return write_epoch(root, "engine", pid, start_ns, [first, *records], **kwargs)

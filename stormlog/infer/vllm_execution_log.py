@@ -98,6 +98,7 @@ class EpochRead:
             "gaps": self.gaps,
             "dropped": dict(status.get("dropped") or {}),
             "capped": bool(status.get("capped", False)),
+            "queued": status.get("queued"),
             "pending_iterations": status.get("pending_iterations"),
             # Worker counters: serving calls without a range, and the warm-up
             # and graph-capture calls before the first serving step.

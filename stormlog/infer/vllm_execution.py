@@ -126,8 +126,9 @@ class Execution:
     alias: dict[str, Any] | None = None
     alias_seq: int | None = None
     admitted_mono_ns: int | None = None  # None: admitted before these records
-    prompt_tokens: int | None = None
+    prompt_tokens: int | None = None  # at the first sighting; may grow if resumable
     cached_at_admission: int | None = None
+    resumable: bool | None = None
     terminal: dict[str, Any] | None = None
     terminal_seq: int | None = None
     reused: bool = False
@@ -208,7 +209,7 @@ class _EpochReducer:
         self.boot = epoch.boot_id or "unknown-boot"
         self.mono_domain = f"{self.host}/{self.boot}/monotonic_ns"
         self.wall_domain = f"{self.host}/{self.boot}/unix_epoch_ns"
-        self.binder = _Binder(facts)
+        self.binder = _Binder(facts, _randomization(self.hello))
         self.executions: dict[str, Execution] = {}
         self.iterations: dict[str, Iteration] = {}
         self.counts: dict[str, int] = {}
@@ -417,6 +418,7 @@ class _EpochReducer:
             execution = self._member_execution(data, item)
             if execution.prompt_tokens is None and data.get("sighting") == "first":
                 execution.prompt_tokens = _integer(data.get("prompt_tokens"))
+                execution.resumable = bool(data.get("resumable", False))
                 execution.cached_at_admission = _integer(
                     data.get("cached_at_admission")
                 )
@@ -515,6 +517,8 @@ class _EpochReducer:
         ]
         events.extend(self._membership_event(ref, member) for member in item.members)
         self._count(item.state)
+        if _update_failed(item):
+            self._count("update_failed")
         return events
 
     def _membership_event(self, ref: EntityRef, member: Member) -> MembershipEvent:
@@ -555,6 +559,7 @@ class _EpochReducer:
             "admission_seen": execution.alias is not None,
             "admitted_wall_ns": _integer(alias.get("wall_ns")),
             "cached_at_admission": execution.cached_at_admission,
+            "resumable": execution.resumable,
         }
         if own and binding.request is not None:
             metadata.update(
@@ -633,6 +638,7 @@ class _EpochReducer:
             foreign_only_placed=self.counts.get("foreign_only_placed", 0),
             foreign_only_counted=self.counts.get("foreign_only_counted", 0),
             empty_counted=self.counts.get("empty_counted", 0),
+            iterations_update_failed=self.counts.get("update_failed", 0),
             completed_without_scheduled=self.counts.get(
                 "completed_without_scheduled", 0
             ),
@@ -647,8 +653,10 @@ class _EpochReducer:
 class _Binder:
     """Exact binding of vLLM request IDs to the run's requests."""
 
-    def __init__(self, facts: RunFacts) -> None:
+    def __init__(self, facts: RunFacts, randomization: bool | None = None) -> None:
         self.requests = facts.requests
+        # Whether vLLM added its random suffix to internal IDs; None: unknown.
+        self.randomization = randomization
 
     def bind(self, internal: str, external: str | None) -> Binding:
         match = _INTERNAL_ID.match(internal)
@@ -658,17 +666,24 @@ class _Binder:
             return bound or Binding(FOREIGN, child_index=child, via="alias")
         if match is None:
             return Binding(UNRESOLVED, child_index=child)
-        # Without the alias, the ID's shape proposes candidates: with vLLM's
-        # random suffix stripped, and as it is, for a server that adds none.
-        prefix, body, suffix = match.group(2), match.group(3), match.group(4)
-        candidates = [prefix + body]
-        if suffix:
-            candidates.append(f"{prefix}{body}-{suffix}")
-        for candidate in candidates:
+        for candidate in self._candidates(match):
             bound = self._bind_external(candidate, child, "internal")
             if bound is not None:
                 return bound
         return Binding(FOREIGN, child_index=child, via="internal")
+
+    def _candidates(self, match: re.Match[str]) -> list[str]:
+        """Without the alias, the ID's shape proposes the external ID: with
+        vLLM's random suffix stripped when the hello says one was added, as it
+        is when none was, and both ways when that is unknown."""
+        prefix, body, suffix = match.group(2), match.group(3), match.group(4)
+        stripped = prefix + body
+        whole = f"{stripped}-{suffix}" if suffix else stripped
+        if self.randomization is True:
+            return [stripped]
+        if self.randomization is False:
+            return [whole]
+        return [stripped, whole]
 
     def _bind_external(
         self, external: str, child: int | None, via: str
@@ -722,6 +737,18 @@ def _superseded(item: Iteration, latest_completed: int | None) -> bool:
     )
 
 
+def _randomization(hello: dict[str, Any]) -> bool | None:
+    config = hello.get("config")
+    value = config.get("request_id_randomization") if isinstance(config, dict) else None
+    return value if isinstance(value, bool) else None
+
+
+def _update_failed(item: Iteration) -> bool:
+    """Whether vLLM's update_from_output raised for this step: the outcome of
+    every member is unknown, and nothing is read from its computed_after."""
+    return item.completed is not None and bool(item.completed.data.get("update_failed"))
+
+
 def _members(record: RawRecord | None) -> list[dict[str, Any]]:
     if record is None:
         return []
@@ -768,6 +795,7 @@ def _iteration_metadata(
         "schedule_end_wall_ns": data.get("end_wall_ns"),
         "schedule_end_mono_ns": data.get("end_mono_ns"),
         "completed_wall_ns": done.get("wall_ns"),
+        "update_failed": _update_failed(item),
         "scheduler_residence_ns": (
             end - start if start is not None and end is not None else None
         ),
@@ -797,12 +825,15 @@ def _membership_metadata(member: Member) -> dict[str, Any]:
         "cached_at_admission": data.get("cached_at_admission"),
         "recompute": data.get("recompute"),
         "output_before": data.get("output_before"),
+        "resumable": data.get("resumable"),
         "processed_prefill": data.get("prefill_scheduled") if kept else 0,
         "outcome": outcome.get("outcome", "unknown"),
         "stale": outcome.get("stale"),
         "sampled": outcome.get("sampled"),
         "accepted_drafts": outcome.get("accepted_drafts"),
+        "finish_reason": outcome.get("finish_reason"),
         "computed_after": outcome.get("computed_after"),
+        "update_failed": _update_failed(member.iteration),
         "cache_actions": "unknown",
     }
     if member.finish is not None:

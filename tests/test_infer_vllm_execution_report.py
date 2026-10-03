@@ -253,6 +253,7 @@ def test_coverage_is_a_union_per_device_and_clock(tmp_path: Path) -> None:
         "missing_sequences": 0,
         "pending_iterations": 0,
         "incomplete_iterations": 1,
+        "update_failed_iterations": 0,
         "range_misses": 0,
         "finish_unattached": 0,
         "startup_unranged": 0,
@@ -277,8 +278,8 @@ def test_text_lines_name_every_dimension(tmp_path: Path) -> None:
     assert "  unmeasured: 2 GPU activity records" in lines[3]
     assert lines[4] == (
         "  capture loss: 0 records dropped by the hook, 0 missing, 0 steps pending, "
-        "1 incomplete, 0 range misses, 0 finishes unattached; 0 start-up calls "
-        "unranged (not loss)"
+        "1 incomplete, 0 update failures, 0 range misses, 0 finishes unattached; "
+        "0 start-up calls unranged (not loss)"
     )
     assert lines[5].startswith("  c1_in8_out4: 2 steps, 1 shared (non-additive); ")
 
@@ -294,9 +295,10 @@ def test_capture_loss_keeps_worker_counters_and_unattached_finishes_apart() -> N
         "engine-1-1": {
             "role": "engine",
             "reduced": True,
-            "dropped": {"scheduled": 1, "completed": 0, "alias": 0, "terminal": 2},
+            "dropped": {"scheduled": 1, "alias_oversized": 1, "terminal": 2},
             "gaps": 3,
             "iterations_pending": 1,
+            "iterations_update_failed": 1,
             "finish_unattached": 2,
         },
         "worker-2-1": {
@@ -319,12 +321,9 @@ def test_capture_loss_keeps_worker_counters_and_unattached_finishes_apart() -> N
         collected=[],
     )
     loss = execution_report([capability.to_record()])["capture_loss"]
-    assert loss["dropped"] == {
-        "scheduled": 1,
-        "completed": 0,
-        "alias": 0,
-        "terminal": 2,
-    }
+    # An oversized record is a drop like any other.
+    assert loss["dropped"] == {"scheduled": 1, "alias_oversized": 1, "terminal": 2}
+    assert loss["update_failed_iterations"] == 1
     assert (loss["missing_sequences"], loss["pending_iterations"]) == (3, 1)
     assert (loss["range_misses"], loss["startup_unranged"]) == (1, 9)
     assert loss["finish_unattached"] == 2

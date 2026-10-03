@@ -281,12 +281,18 @@ the step's token counts, outcome and, for the step a request was freed in,
 its finish; one `infer.request` per backend execution, holding admission
 facts only; and one `infer.clock_alignment` per epoch from the hello's
 wall/monotonic pair, with half the sampling gap as its uncertainty. The raw
-log is never registered as an attachment.
+log is never registered as an attachment. A step whose `update_from_output`
+raised (`update_failed`) keeps its memberships with outcome `unknown`, no
+output tokens and nothing read from its counters; the coverage block counts
+such steps. A request's `input_tokens` is its prompt at the first sighting;
+a `resumable` request's later prompts are on its memberships.
 
 **Binding.** A request is the run's when its alias `external` is
 `chatcmpl-<x_request_id>` or `cmpl-<x_request_id>-<i>` for an
 `x_request_id` the artifact recorded; without an alias, the internal ID's
-shape only proposes the same exact match. Every other ID is foreign, or
+shape only proposes the same exact match, with vLLM's random suffix
+stripped only when the hello says `request_id_randomization` is on (both
+forms are tried when it is unknown). Every other ID is foreign, or
 unresolved when it has no alias and does not parse. Foreign and unresolved
 executions appear only as `HMAC-SHA256(HMAC(epoch key, run_id), id)[:16]`,
 stable within a run and different in every other artifact;

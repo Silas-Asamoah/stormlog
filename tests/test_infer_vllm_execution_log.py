@@ -182,6 +182,8 @@ def test_worker_and_engine_epochs_are_told_apart(tmp_path: Path) -> None:
             "range_misses": 1,
             "startup_unranged": 9,
             "pending_samples": 2,
+            "queued": 3,
+            "dropped": {"alias_oversized": 1},
         },
     )
     read = read_execution_log(tmp_path, now_ns=NOW)
@@ -193,7 +195,8 @@ def test_worker_and_engine_epochs_are_told_apart(tmp_path: Path) -> None:
     assert (read.workers()[0].host, read.workers()[0].boot_id) == (HOST, BOOT)
     summary = read.workers()[0].summary()
     assert (summary["range_misses"], summary["startup_unranged"]) == (1, 9)
-    assert summary["pending_samples"] == 2
+    assert (summary["pending_samples"], summary["queued"]) == (2, 3)
+    assert summary["dropped"] == {"alias_oversized": 1}
 
 
 def test_a_missing_directory_is_an_error(tmp_path: Path) -> None:

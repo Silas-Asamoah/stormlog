@@ -37,6 +37,7 @@ from tests.vllm_execution_helpers import (
     completed,
     done,
     engine_log,
+    failed,
     goodbye,
     heartbeat,
     member,
@@ -703,6 +704,102 @@ def test_an_idle_step_is_counted_as_empty_not_foreign(tmp_path: Path) -> None:
     )
     assert _iteration_ids(referenced) == ["0", "2"]
     assert referenced.summary["epochs"][EPOCH]["empty_counted"] == 1
+
+
+def test_a_failed_update_leaves_every_outcome_unknown(tmp_path: Path) -> None:
+    records = [
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 10),
+        alias(OWN1, f"chatcmpl-{X1}", T0 - 9),
+        scheduled(0, T0, [member(OWN0, scheduled=8), member(OWN1, scheduled=8)]),
+        completed(0, T0 + SECOND, [failed(OWN0), failed(OWN1)], update_failed=True),
+        scheduled(
+            1,
+            T0 + 2 * SECOND,
+            [member(OWN0, scheduled=1, sighting="repeat", computed_before=8)],
+        ),
+        completed(1, T0 + 3 * SECOND, [done(OWN0, finish_reason="stop")]),
+    ]
+    engine_log(tmp_path, records)
+    result = _reduce(tmp_path)
+    iterations = {
+        i.iteration_ref.id: i for i in _by_type(result.events)["infer.iteration"]
+    }
+    assert iterations["0"].metadata["update_failed"] is True
+    assert iterations["0"].metadata["state"] == "complete"
+    assert iterations["1"].metadata["update_failed"] is False
+    memberships = {(_attempt(m), m.iteration_ref.id): m for m in _memberships(result)}
+    for key in ((OWN0, "0"), (OWN1, "0")):
+        failed_member = memberships[key]
+        assert failed_member.metadata["outcome"] == "unknown"
+        assert failed_member.metadata["update_failed"] is True
+        assert failed_member.output_tokens is None
+        assert failed_member.metadata["processed_prefill"] == 0
+        assert failed_member.metadata["computed_after"] is None
+    # The next step's output is read as usual, with vLLM's own finish reason.
+    assert memberships[(OWN0, "1")].metadata["finish_reason"] == "stop"
+    assert memberships[(OWN0, "1")].metadata["update_failed"] is False
+    assert result.summary["epochs"][EPOCH]["iterations_update_failed"] == 1
+
+
+def test_a_resumable_request_keeps_each_turns_prompt(tmp_path: Path) -> None:
+    records = [
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 10),
+        scheduled(0, T0, [member(OWN0, scheduled=8, prompt_tokens=8, resumable=True)]),
+        completed(0, T0 + SECOND, [done(OWN0)]),
+        # A second turn of input: the live prompt grew to 12.
+        scheduled(
+            1,
+            T0 + 2 * SECOND,
+            [
+                member(
+                    OWN0,
+                    scheduled=4,
+                    computed_before=8,
+                    prompt_tokens=12,
+                    sighting="repeat",
+                    phase="context",
+                    resumable=True,
+                )
+            ],
+        ),
+        completed(1, T0 + 3 * SECOND, [done(OWN0)]),
+    ]
+    engine_log(tmp_path, records)
+    result = _reduce(tmp_path)
+    request = _requests(result)[OWN0]
+    assert request.input_tokens == 8  # the prompt at the first sighting
+    assert request.metadata["resumable"] is True
+    memberships = {m.iteration_ref.id: m for m in _memberships(result)}
+    assert [memberships[i].metadata["prompt_tokens"] for i in ("0", "1")] == [8, 12]
+    assert memberships["1"].role == "prefill" and memberships["1"].metadata["resumable"]
+
+
+def test_binding_follows_the_hello_s_request_id_randomization(tmp_path: Path) -> None:
+    plain = f"chatcmpl-{X0}"  # randomization off: internal == external
+    suffixed = f"chatcmpl-{X1}-0f3a9c1d"
+    records = [
+        scheduled(0, T0, [member(plain, scheduled=8), member(suffixed, scheduled=8)]),
+        completed(0, T0 + SECOND, [done(plain), done(suffixed)]),
+    ]
+    engine_log(tmp_path, records, config={"request_id_randomization": False})
+    off = _requests(_reduce(tmp_path))
+    assert off[plain].metadata["ownership"] == OWN
+    # With the suffix known to be absent, nothing is stripped: a suffixed ID
+    # that is not a recorded X-Request-Id stays foreign.
+    assert [
+        r.metadata["ownership"]
+        for r in off.values()
+        if r.attempt_ref and r.attempt_ref.id != plain
+    ] == [FOREIGN]
+    engine_log(tmp_path / "on", records, config={"request_id_randomization": True})
+    on = _requests(_reduce(tmp_path / "on"))
+    assert (
+        on[plain].metadata["ownership"] == OWN
+        and on[suffixed].metadata["ownership"] == OWN
+    )
+    engine_log(tmp_path / "unknown", records, config={"request_id_randomization": None})
+    unknown = _requests(_reduce(tmp_path / "unknown"))
+    assert {r.metadata["ownership"] for r in unknown.values()} == {OWN}
 
 
 def test_drafts_make_spec_decode_only_in_generation(tmp_path: Path) -> None:

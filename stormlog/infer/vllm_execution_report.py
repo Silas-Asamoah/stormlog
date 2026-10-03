@@ -47,6 +47,7 @@ _LOSS_COUNTERS = (
     "gaps",
     "iterations_pending",
     "iterations_incomplete",
+    "iterations_update_failed",
     "range_misses",
     "finish_unattached",
     "startup_unranged",
@@ -318,6 +319,8 @@ def _capture_loss(imports: list[dict[str, Any]]) -> dict[str, Any]:
         "missing_sequences": totals["gaps"],
         "pending_iterations": totals["iterations_pending"],
         "incomplete_iterations": totals["iterations_incomplete"],
+        # Steps whose update_from_output raised: every member's outcome unknown.
+        "update_failed_iterations": totals["iterations_update_failed"],
         "range_misses": totals["range_misses"],
         "finish_unattached": totals["finish_unattached"],
         # Not loss: the calls before the first serving step never have a range.
@@ -433,6 +436,7 @@ def _loss_text(loss: dict[str, Any]) -> str:
         f"{loss.get('missing_sequences', 0)} missing, "
         f"{loss.get('pending_iterations', 0)} steps pending, "
         f"{loss.get('incomplete_iterations', 0)} incomplete, "
+        f"{loss.get('update_failed_iterations', 0)} update failures, "
         f"{loss.get('range_misses', 0)} range misses, "
         f"{loss.get('finish_unattached', 0)} finishes unattached; "
         f"{loss.get('startup_unranged', 0)} start-up calls unranged (not loss)"
