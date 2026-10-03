@@ -260,6 +260,25 @@ def test_scrub_text_removes_common_credential_shapes(text: str, leaked: str) -> 
     assert "<redacted>" in scrubbed
 
 
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        ('password="opaque-credential-value"', 'password="<redacted>"'),
+        ("password='opaque value with spaces' next", "password='<redacted>' next"),
+        (
+            'client_secret = "a' + chr(92) + '"b-c" end',
+            'client_secret = "<redacted>" end',
+        ),
+        ('max_tokens="128"', 'max_tokens="<redacted>"'),
+        ('model="Qwen/Qwen2.5-7B"', 'model="Qwen/Qwen2.5-7B"'),
+    ],
+)
+def test_scrub_text_redacts_quoted_values_of_secret_keys(
+    text: str, scrubbed: str
+) -> None:
+    assert scrub_text(text) == scrubbed
+
+
 def test_scrub_text_leaves_ordinary_text_alone() -> None:
     text = "This model's maximum context length is 32768 tokens; max_tokens 128."
     assert scrub_text(text) == text

@@ -115,7 +115,7 @@ What it removes:
 | a Bearer or Basic token | `bearer abc.def-123` | `bearer <redacted>` |
 | URL user information and query strings | `https://u:p@host/x?k=v` | `https://<redacted>@host/x?<redacted>` |
 | a JSON member whose key contains a word from `SECRET_KEY_WORDS` (below) | `"api_key": "abc"` | `"api_key": "<redacted>"` |
-| `key=value` or `key: value` with such a key | `client_secret=abc` | `client_secret=<redacted>` |
+| `key=value` or `key: value` with such a key, the value bare or in single or double quotes | `client_secret=abc`, `password="a b"` | `client_secret=<redacted>`, `password="<redacted>"` |
 | known key formats | `sk-…`, `hf_…`, `AKIA…`/`ASIA…`, `ghp_…` and the other GitHub token prefixes, `github_pat_…`, `xox?-…`, three-part JWTs | `<redacted>` |
 | private key blocks, including one cut before its `END` line | `-----BEGIN PRIVATE KEY-----…` | `<redacted>` |
 

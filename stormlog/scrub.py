@@ -63,8 +63,11 @@ _AUTHORIZATION = re.compile(r"(?i)\b(?:proxy-)?authorization\s*[:=]\s*([^\r\n]+)
 _BEARER = re.compile(r"(?i)\b(?:bearer|basic)\s+([A-Za-z0-9._~+/=-]{8,})")
 _URL = re.compile(r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*://([^\s\"'<>]*)")
 _JSON_MEMBER = re.compile(_JSON_STRING + r"\s*:\s*" + _JSON_STRING)
+# The value is a double- or single-quoted string, escapes included, or a
+# bare word; for a quoted one, what is inside the quotes is redacted.
 _KEY_VALUE = re.compile(
-    rf"(?<![{_KEY_CHARS}])([{_KEY_CHARS}]+)\s*[=:]\s*([^\s&,;\"']+)"
+    rf"(?<![{_KEY_CHARS}])([{_KEY_CHARS}]+)\s*[=:]\s*"
+    r"(?:" + _JSON_STRING + r"|'((?:[^'\\]|\\.)*)'|([^\s&,;\"']+))"
 )
 # Well-known credential shapes. No word boundary in front of most: a key
 # glued to the text before it is still a key, and removing a little too
@@ -122,7 +125,9 @@ def _json_member_spans(text: str) -> Iterator[Span]:
 def _key_value_spans(text: str) -> Iterator[Span]:
     for match in _KEY_VALUE.finditer(text):
         if is_forbidden_key_name(match.group(1)):
-            yield match.span(2)
+            group = next(g for g in (2, 3, 4) if match.group(g) is not None)
+            if match.end(group) > match.start(group):
+                yield match.span(group)
 
 
 _FINDERS: tuple[Finder, ...] = (
