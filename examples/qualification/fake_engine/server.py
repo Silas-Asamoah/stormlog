@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import socket
 import threading
@@ -16,6 +17,7 @@ from .config import VLLM_VERSION, Controls, FakeEngineConfig
 from .engine import Engine, FakeRequest, prompt_tokens
 from .hook_log import HookLog
 from .metrics import render_metrics
+from .profiler import FakeProfiler
 
 TOKEN_TEXT = " tok"
 
@@ -36,6 +38,7 @@ class FakeEngine:
         self._server: _Server | None = None
         self._thread: threading.Thread | None = None
         self.hook: HookLog | None = None
+        self.profiler: FakeProfiler | None = None
 
     # ------------------------------------------------------------ lifecycle
 
@@ -43,6 +46,13 @@ class FakeEngine:
         if self.config.hook_dir is not None:
             self.hook = HookLog(self.config.hook_dir, self.config)
             self.engine.observers.append(self.hook)
+        producer = (
+            self.hook.producer
+            if self.hook is not None
+            else f"vllm:fake:{os.getpid()}:{self.engine.start_ns}"
+        )
+        self.profiler = FakeProfiler(self.engine, self.config, self.controls, producer)
+        self.engine.observers.append(self.profiler)
         self._server = _Server((self.config.host, self.config.port), _Handler)
         self._server.fake = self
         self.engine.start()
@@ -276,6 +286,27 @@ def _metrics(handler: _Handler) -> None:
     handler.send_bytes(200, text.encode(), "text/plain; version=0.0.4")
 
 
+def _start_profile(handler: _Handler) -> None:
+    handler.read_body()
+    profiler = handler.fake.profiler
+    assert profiler is not None
+    status = profiler.start()
+    if status == 200 and handler.fake.controls.drop_start_response:
+        # (a) The profiler is running, but the caller never hears so.
+        handler.close_connection = True
+        handler.connection.shutdown(socket.SHUT_RDWR)
+        return
+    handler.send_json(status, {} if status == 200 else {"error": "not configured"})
+
+
+def _stop_profile(handler: _Handler) -> None:
+    handler.read_body()
+    profiler = handler.fake.profiler
+    assert profiler is not None
+    status = profiler.stop()
+    handler.send_json(status, {} if status == 200 else {"error": "not configured"})
+
+
 def _reset_prefix_cache(handler: _Handler) -> None:
     """vLLM 0.30's dev route: 200 with ``success: false`` while blocks are
     held, unless ``reset_running_requests`` preempts every running request."""
@@ -411,6 +442,8 @@ GET_ROUTES: dict[str, Route] = {
 POST_ROUTES: dict[str, Route] = {
     "/v1/chat/completions": _chat,
     "/reset_prefix_cache": _reset_prefix_cache,
+    "/start_profile": _start_profile,
+    "/stop_profile": _stop_profile,
 }
 
 __all__ = ["GET_ROUTES", "POST_ROUTES", "FakeEngine"]
