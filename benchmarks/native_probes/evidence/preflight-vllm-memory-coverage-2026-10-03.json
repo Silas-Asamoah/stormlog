@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_hardware_preflight_evidence",
+  "issue": 118,
+  "local_date": "2026-10-03",
+  "status": "gpu_pinned_and_collector_memory_claims_inconclusive",
+  "source_evidence": "benchmarks/native_probes/evidence/preflight-vllm-capacity-4g-stop300-l4-524654-08.json",
+  "source_archive_sha256": "f5b7220597f9d3839bc0d15333b3e831ad735cf9ee9f7d74714b602c30b3f612",
+  "per_process_capture": {
+    "sampled_target_pids": [246, 313, 314],
+    "required_gpu_worker_pids": [314],
+    "finalized_cupti_status_pids": [314],
+    "gpu_worker_coverage_for_this_preflight": true,
+    "one_process_output_directory": "cupti/pid-314-5O5j13",
+    "no_second_gpu_worker_claim": true
+  },
+  "measured_host_rss": {
+    "samples": 2152,
+    "valid_samples": 2152,
+    "sample_errors": 0,
+    "helper_agent_pid": 242,
+    "target_pids": [246, 313, 314],
+    "peak_rss_bytes_by_pid": {
+      "242": 29380608,
+      "246": 1401847808,
+      "313": 8404992,
+      "314": 3667922944
+    },
+    "combined_median_bytes": 4405010432.0,
+    "combined_peak_bytes": 5107556352
+  },
+  "inconclusive_domains": {
+    "gpu_memory_bytes": null,
+    "pinned_host_memory_bytes": null,
+    "collector_buffer_memory_bytes": null,
+    "configured_activity_buffer_bytes": 8388608,
+    "reason": "No direct measurement of GPU allocation, pinned host allocation, or actual collector buffer residency was recorded. The configured activity buffer size is not an observed peak.",
+    "memory_reduction_acceptance_result": "inconclusive"
+  },
+  "readiness": {
+    "memory_accounting_either_measured_or_inconclusive": true,
+    "hardware_preflight_passed": false,
+    "final_trials_started": false,
+    "adoption_result": "unknown"
+  }
+}
