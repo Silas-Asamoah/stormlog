@@ -12,6 +12,8 @@ from stormlog.infer.vllm_execution_log import (
     STATE_ALIVE,
     STATE_ENDED,
     STATE_GONE,
+    STATE_UNKNOWN,
+    Importer,
     read_execution_log,
 )
 from tests.vllm_execution_helpers import (
@@ -25,12 +27,14 @@ from tests.vllm_execution_helpers import (
     goodbye,
     heartbeat,
     hello,
+    importer,
     scheduled,
     write_epoch,
 )
 
 T0 = 1_000 * SECOND
 NOW = T0 + WALL_OFFSET + 5 * SECOND
+HERE = importer(NOW - WALL_OFFSET)  # on the server's host and boot
 
 
 def _line(epoch: str, seq: int, **fields: object) -> str:
@@ -44,7 +48,7 @@ def test_reads_sealed_segments_and_complete_lines_of_the_open_one(
     # The open segment ends in the middle of a record the writer is still on.
     tail = _line(epoch_name("engine", 2600, 1), 99, kind="heartbeat")[:-10]
     directory = engine_log(tmp_path, records, sealed=2, open_tail=tail.encode())
-    read = read_execution_log(tmp_path, now_ns=NOW)
+    read = read_execution_log(tmp_path, importer=HERE)
     (epoch,) = read.epochs
     assert epoch.directory == directory
     assert (epoch.host, epoch.boot_id, epoch.role, epoch.pid) == (
@@ -71,13 +75,13 @@ def test_records_are_told_apart_by_sequence_not_by_file(tmp_path: Path) -> None:
     with (directory / "000001.jsonl.part").open("a", encoding="utf-8") as handle:
         handle.write(_line(name, 1, kind="scheduled", iteration="other"))
         handle.write(_line(name, 3, kind="heartbeat", wall_ns=NOW - SECOND, last_seq=3))
-    read = read_execution_log(tmp_path, now_ns=NOW)
+    read = read_execution_log(tmp_path, importer=HERE)
     (epoch,) = read.epochs
     assert [r.seq for r in epoch.records] == [0, 1, 2, 3]
     assert [r.data["iteration"] for r in epoch.of_kind("scheduled")] == ["0", "1"]
     # A re-import with the previous high-water mark gets only the new records,
     # while the epoch's sequence facts still cover everything read.
-    again = read_execution_log(tmp_path, high_water={name: 1}, now_ns=NOW)
+    again = read_execution_log(tmp_path, high_water={name: 1}, importer=HERE)
     (epoch,) = again.epochs
     assert [r.seq for r in epoch.records] == [2, 3]
     assert epoch.high_water_before == 1 and epoch.last_seq == 3
@@ -100,7 +104,7 @@ def test_gaps_and_the_status_file_extend_the_sequence_facts(tmp_path: Path) -> N
         + _line(directory.name, 6, kind="scheduled", iteration="6"),
         encoding="utf-8",
     )
-    (epoch,) = read_execution_log(tmp_path, now_ns=NOW).epochs
+    (epoch,) = read_execution_log(tmp_path, importer=HERE).epochs
     assert [r.seq for r in epoch.records] == [0, 1, 5, 6]
     assert epoch.gaps == 3
     # The sequences read, the contiguous ones an import may consume, and the
@@ -136,7 +140,7 @@ def test_an_epoch_has_ended_gone_quiet_or_is_alive(
     tmp_path: Path, hello_mono_ns: int, records: list[dict[str, object]], state: str
 ) -> None:
     engine_log(tmp_path, records, hello_mono_ns=hello_mono_ns)
-    (epoch,) = read_execution_log(tmp_path, now_ns=NOW).epochs
+    (epoch,) = read_execution_log(tmp_path, importer=HERE).epochs
     assert epoch.state == state
     assert (epoch.goodbye is not None) == (state == STATE_ENDED)
 
@@ -156,7 +160,7 @@ def test_bad_lines_and_stray_entries_are_reported_not_fatal(tmp_path: Path) -> N
     )
     (tmp_path / f"{HOST}-{BOOT}" / "notes").mkdir()
     (tmp_path / f"{HOST}-{BOOT}" / "README").write_text("x", encoding="utf-8")
-    read = read_execution_log(tmp_path, now_ns=NOW)
+    read = read_execution_log(tmp_path, importer=HERE)
     (epoch,) = read.epochs
     assert [r.seq for r in epoch.records] == [0, 1]
     assert epoch.key is None
@@ -190,7 +194,7 @@ def test_worker_and_engine_epochs_are_told_apart(tmp_path: Path) -> None:
             "dropped": {"alias_oversized": 1},
         },
     )
-    read = read_execution_log(tmp_path, now_ns=NOW)
+    read = read_execution_log(tmp_path, importer=HERE)
     assert [e.role for e in read.epochs] == ["engine", "worker"]
     assert [e.pid for e in read.workers()] == [2601]
     worker_hello = read.workers()[0].hello
@@ -201,6 +205,47 @@ def test_worker_and_engine_epochs_are_told_apart(tmp_path: Path) -> None:
     assert (summary["range_misses"], summary["startup_unranged"]) == (1, 9)
     assert (summary["pending_samples"], summary["queued"]) == (2, 3)
     assert summary["dropped"] == {"alias_oversized": 1}
+
+
+def test_silence_is_judged_on_the_servers_own_clock(tmp_path: Path) -> None:
+    """Liveness compares the epoch's monotonic stamps with the importer's
+    monotonic clock, never a wall clock, and only on the same host and boot
+    (Codex #1)."""
+    # The last heartbeat was 5 s ago on the server's monotonic clock, though
+    # its wall stamp is an hour behind the importer's wall clock.
+    engine_log(tmp_path, [heartbeat(MONO_NOW - 5 * SECOND, 1)])
+    (epoch,) = read_execution_log(tmp_path, importer=HERE).epochs
+    assert (epoch.state, epoch.state_reason) == (STATE_ALIVE, "heartbeat")
+    assert epoch.last_seen_mono_ns == MONO_NOW - 5 * SECOND
+    # 31 s of monotonic silence is gone, whatever the wall clocks say.
+    quiet = importer(MONO_NOW + 26 * SECOND)
+    (epoch,) = read_execution_log(tmp_path, importer=quiet).epochs
+    assert (epoch.state, epoch.state_reason) == (STATE_GONE, "silence")
+
+
+@pytest.mark.parametrize(
+    ("who", "reason"),
+    [
+        (importer(MONO_NOW + 60 * SECOND, host="laptop"), "other_host"),
+        (importer(MONO_NOW + 60 * SECOND, boot_id="boot-zzzz"), "other_host"),
+        (importer(MONO_NOW + 60 * SECOND, boot_id=None), "importer_boot_unknown"),
+    ],
+)
+def test_liveness_is_not_judged_from_another_host_or_boot(
+    tmp_path: Path, who: Importer, reason: str
+) -> None:
+    """From elsewhere the clocks are unrelated: an epoch without goodbye is
+    neither alive nor gone, so nothing of it is finalized."""
+    engine_log(tmp_path, [heartbeat(MONO_NOW - 40 * SECOND, 1)])
+    (epoch,) = read_execution_log(tmp_path, importer=who).epochs
+    assert (epoch.state, epoch.state_reason) == (STATE_UNKNOWN, reason)
+    assert epoch.summary()["state_reason"] == reason
+    # A goodbye ends it from anywhere; --server-stopped makes it gone.
+    (stopped,) = read_execution_log(tmp_path, importer=who, server_stopped=True).epochs
+    assert (stopped.state, stopped.state_reason) == (STATE_GONE, "server_stopped")
+    engine_log(tmp_path / "ended", [goodbye(MONO_NOW - 40 * SECOND, 1)])
+    (ended,) = read_execution_log(tmp_path / "ended", importer=who).epochs
+    assert (ended.state, ended.state_reason) == (STATE_ENDED, "goodbye")
 
 
 def _append(directory: Path, seq: int, record: dict[str, object]) -> None:
@@ -235,13 +280,13 @@ def test_the_consumed_mark_never_passes_records_read(
         return real(path, errors)
 
     monkeypatch.setattr(reader, "_read_json_file", status_after_a_late_write)
-    (epoch,) = read_execution_log(tmp_path, now_ns=NOW).epochs
+    (epoch,) = read_execution_log(tmp_path, importer=HERE).epochs
     assert [r.seq for r in epoch.records] == [0]
     assert epoch.writer_last_seq == 1
     assert epoch.consumed_seq == 0 and epoch.summary()["high_water_seq"] == 0
     # The next read, from that mark, delivers the step.
     (again,) = read_execution_log(
-        tmp_path, high_water={directory.name: 0}, now_ns=NOW
+        tmp_path, high_water={directory.name: 0}, importer=HERE
     ).epochs
     assert [r.seq for r in again.records] == [1]
 
@@ -264,7 +309,7 @@ def test_a_segment_sealed_between_listing_and_reading_is_read_again(
         return real(epoch, path)
 
     monkeypatch.setattr(reader, "_read_segment", seal_before_open)
-    (epoch,) = read_execution_log(tmp_path, now_ns=NOW).epochs
+    (epoch,) = read_execution_log(tmp_path, importer=HERE).epochs
     assert [r.seq for r in epoch.records] == [0, 1]
     assert epoch.errors == [] and epoch.consumed_seq == 1
 
@@ -272,12 +317,12 @@ def test_a_segment_sealed_between_listing_and_reading_is_read_again(
 def test_a_hole_in_the_sequences_holds_the_mark_back(tmp_path: Path) -> None:
     directory = engine_log(tmp_path, [scheduled(0, T0, [])], sealed=2)
     _append(directory, 4, scheduled(2, T0, []))  # seqs 2 and 3 not visible yet
-    (epoch,) = read_execution_log(tmp_path, now_ns=NOW).epochs
+    (epoch,) = read_execution_log(tmp_path, importer=HERE).epochs
     assert [r.seq for r in epoch.records] == [0, 1, 4]
     assert (epoch.last_seq, epoch.contiguous_seq, epoch.consumed_seq) == (4, 1, 1)
     # An earlier mark is never lowered by a later, shorter read.
     (again,) = read_execution_log(
-        tmp_path, high_water={directory.name: 3}, now_ns=NOW
+        tmp_path, high_water={directory.name: 3}, importer=HERE
     ).epochs
     assert again.consumed_seq == 3
 

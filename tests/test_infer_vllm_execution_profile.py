@@ -28,6 +28,7 @@ from tests.vllm_execution_helpers import (
     goodbye,
     heartbeat,
     hello,
+    importer,
     member,
     scheduled,
     write_epoch,
@@ -37,6 +38,7 @@ PID, START = 2600, 1_790_000_000_000_000_000
 EPOCH = epoch_name("engine", PID, START)
 T0 = 1_000 * SECOND
 NOW = T0 + WALL_OFFSET + 5 * SECOND
+HERE = importer(NOW - WALL_OFFSET)  # on the server's host and boot
 
 
 def _engine_dir(root: Path) -> Path:
@@ -66,7 +68,7 @@ def test_flush_asks_live_epochs_and_waits_for_a_heartbeat(tmp_path: Path) -> Non
         _append(engine, 2, heartbeat(T0 + 2 * SECOND, 2))
 
     result = flush_execution_log(
-        tmp_path, timeout_seconds=10, now_ns=NOW, sleep=writer_heartbeats
+        tmp_path, timeout_seconds=10, importer=HERE, sleep=writer_heartbeats
     )
 
     assert (engine / "flush").is_file()
@@ -87,7 +89,7 @@ def test_flush_takes_a_removed_flush_file_as_sealed(tmp_path: Path) -> None:
     def writer_seals(_seconds: float) -> None:
         (engine / "flush").unlink()
 
-    result = flush_execution_log(tmp_path, now_ns=NOW, sleep=writer_seals)
+    result = flush_execution_log(tmp_path, importer=HERE, sleep=writer_seals)
     assert result["flushed"] == [EPOCH] and result["timed_out"] == []
 
 
@@ -99,7 +101,7 @@ def test_flush_times_out_without_a_writer(tmp_path: Path) -> None:
     result = flush_execution_log(
         tmp_path,
         timeout_seconds=3.0,
-        now_ns=NOW,
+        importer=HERE,
         sleep=polls.append,
         clock=lambda: next(ticks),
     )

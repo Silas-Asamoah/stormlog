@@ -33,6 +33,7 @@ from tests.vllm_execution_helpers import (
     engine_log,
     failed,
     goodbye,
+    importer,
     member,
     producer,
     scheduled,
@@ -44,6 +45,7 @@ EPOCH = f"engine-{PID}-{START}"
 PRODUCER = producer(PID, START)
 T0 = 1_000 * SECOND
 NOW = T0 + WALL_OFFSET + 5 * SECOND
+HERE = importer(NOW - WALL_OFFSET)  # on the server's host and boot
 RUN, SESSION = "run-1", "session-1"
 REQUEST_A = "c1_in8_out4_measured_0_0"
 REQUEST_B = "c2_in8_out4_measured_0_0"
@@ -108,7 +110,7 @@ def _execution_records(root: Path) -> list[dict[str, Any]]:
             goodbye(T0 + 3 * SECOND, 8),
         ],
     )
-    read = read_execution_log(root, now_ns=NOW)
+    read = read_execution_log(root, importer=HERE)
     capture = reduce_to_capture(read, _facts(), ReduceOptions())
     records = [event.to_record() for event in capture.events]
     capability = CapabilityEvent(
@@ -370,7 +372,7 @@ def test_unresolved_members_are_not_reported_as_mixed(tmp_path: Path) -> None:
     facts = replace(
         _facts(), referenced_iterations=frozenset({EntityRef(PRODUCER, "0")})
     )
-    capture = reduce_to_capture(read_execution_log(tmp_path, now_ns=NOW), facts)
+    capture = reduce_to_capture(read_execution_log(tmp_path, importer=HERE), facts)
     records = [
         _legacy_request(REQUEST_A, XA, "c1_in8_out4"),
         *[event.to_record() for event in capture.events],
@@ -417,7 +419,7 @@ def test_a_re_import_never_improves_the_capture_loss(tmp_path: Path) -> None:
     seen = []
     for _ in range(2):
         capture = import_execution_into_artifact(
-            artifact, tmp_path / "hook", now_ns=NOW
+            artifact, tmp_path / "hook", importer=HERE
         )
         records = [
             json.loads(line)

@@ -17,7 +17,13 @@ from typing import Any
 
 from .errors import InferInputError
 from .trace_kineto import KinetoTrace
-from .vllm_execution_log import SILENCE_NS, EpochRead, LogRead, read_execution_log
+from .vllm_execution_log import (
+    SILENCE_NS,
+    EpochRead,
+    Importer,
+    LogRead,
+    read_execution_log,
+)
 
 STATUS_BOUND = "bound"
 STATUS_PARTIAL = "partial"
@@ -98,10 +104,10 @@ class WorkerIndex:
 
     @classmethod
     def from_directory(
-        cls, directory: str | Path, *, now_ns: int | None = None
+        cls, directory: str | Path, *, importer: Importer | None = None
     ) -> WorkerIndex:
         try:
-            read = read_execution_log(directory, now_ns=now_ns)
+            read = read_execution_log(directory, importer=importer)
         except (OSError, ValueError) as exc:
             raise InferInputError(f"--vllm-execution-dir {directory}: {exc}") from exc
         return cls.from_log(read)

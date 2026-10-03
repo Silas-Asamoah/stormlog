@@ -249,6 +249,7 @@ before the first serving step.
 
 ```bash
 stormlog infer import-execution infer.jsonl /var/tmp/stormlog-vllm
+stormlog infer import-execution infer.jsonl copied-log/ --server-stopped
 stormlog infer profile ... --vllm-execution-dir /var/tmp/stormlog-vllm
 ```
 
@@ -264,12 +265,25 @@ run itself does not fail. Exit codes are in the
 [report contract](report_contract.md).
 
 **Final steps only.** A step is reduced once it is final: its `completed`
-record arrived, or it never will because the epoch ended (a `goodbye`, or
-30 s without a heartbeat) or a later step completed, which makes it
-`incomplete`. A pending step waits for a later import. Nothing is corrected
-after it is written: each epoch's high-water sequence is kept in the engine
-adapter's capability summary, and a later import starts from there, so
-running the command twice adds nothing twice.
+record arrived, or it never will because the epoch ended or is gone, or a
+later step completed, which makes it `incomplete`. A pending step waits for
+a later import. Nothing is corrected after it is written: each epoch's
+high-water sequence is kept in the engine adapter's capability summary, and
+a later import starts from there, so running the command twice adds nothing
+twice.
+
+**Liveness.** An epoch has ended when it wrote `goodbye`. Without one, the
+import may call it gone only on evidence from the clock that wrote its
+stamps: when the import runs on the epoch's own host and boot (the hello's
+`host` and `boot_id` equal the importer's own), it compares the epoch's last
+heartbeat `mono_ns` with its own monotonic clock, and 30 s of silence means
+gone; that clock is immune to wall-clock steps. From any other host, or
+when the importer's boot ID is unknown, the two clocks are unrelated, so
+liveness is not judged: the epoch is `unknown`, its pending steps wait, its
+mark is held back, and the summary says why. For a log copied from a
+server that has since stopped, `--server-stopped` says so, and every epoch
+without `goodbye` is then gone and its pending steps final. `infer profile`
+imports while its server may still be up and needs no such flag.
 
 **Records.** One `infer.iteration` per step on the engine's monotonic clock
 (`<host>/<boot id>/monotonic_ns`, `clock_kind` `monotonic`), whose

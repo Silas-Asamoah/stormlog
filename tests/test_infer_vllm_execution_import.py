@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 
@@ -44,6 +45,7 @@ from tests.vllm_execution_helpers import (
     done,
     engine_log,
     heartbeat,
+    importer,
     member,
     producer,
     scheduled,
@@ -55,6 +57,7 @@ EPOCH = f"engine-{PID}-{START}"
 PRODUCER = producer(PID, START)
 T0 = 1_000 * SECOND
 NOW = T0 + WALL_OFFSET + 5 * SECOND
+HERE = importer(NOW - WALL_OFFSET)  # on the server's host and boot
 RUN, SESSION = "run-1", "session-1"
 REQUEST0 = "c1_in8_out4_measured_0_0"
 X0 = f"stormlog-{RUN}-{REQUEST0}"
@@ -137,7 +140,7 @@ def test_import_appends_the_reduced_records_and_the_high_water(tmp_path: Path) -
     artifact = _artifact(tmp_path / "infer.jsonl")
     engine_log(tmp_path / "hook", _records())
 
-    capture = import_execution_into_artifact(artifact, tmp_path / "hook", now_ns=NOW)
+    capture = import_execution_into_artifact(artifact, tmp_path / "hook", importer=HERE)
 
     assert capture.capabilities.collected == (
         "iterations",
@@ -185,10 +188,10 @@ def test_a_second_import_adds_only_what_became_final(tmp_path: Path) -> None:
     artifact = _artifact(tmp_path / "infer.jsonl")
     hook = tmp_path / "hook"
     engine_log(hook, _records())
-    import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    import_execution_into_artifact(artifact, hook, importer=HERE)
     lines = artifact.read_text(encoding="utf-8").count("\n")
 
-    again = import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    again = import_execution_into_artifact(artifact, hook, importer=HERE)
 
     assert again.events == ()
     assert again.capabilities.collected == ()
@@ -200,7 +203,7 @@ def test_a_second_import_adds_only_what_became_final(tmp_path: Path) -> None:
         completed(4, T0 + 51 * SECOND, [done(OWN0)]),
     ]
     engine_log(hook, late)
-    third = import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    third = import_execution_into_artifact(artifact, hook, importer=HERE)
     assert [e.EVENT_TYPE for e in third.events] == [
         "infer.iteration",
         "infer.membership",
@@ -224,7 +227,7 @@ def test_an_alias_read_again_keeps_its_attempt(tmp_path: Path) -> None:
         completed(0, T0 + SECOND, [done(OWN0)]),
     ]
     engine_log(hook, first)
-    one = import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    one = import_execution_into_artifact(artifact, hook, importer=HERE)
     assert one.summary is not None
     assert one.summary["execution"]["high_water"] == {EPOCH: 0}
     engine_log(
@@ -237,7 +240,7 @@ def test_an_alias_read_again_keeps_its_attempt(tmp_path: Path) -> None:
             completed(1, T0 + 3 * SECOND, [done(OWN0)]),
         ],
     )
-    two = import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    two = import_execution_into_artifact(artifact, hook, importer=HERE)
     assert [e.EVENT_TYPE for e in two.events] == ["infer.iteration", "infer.membership"]
     records = load_inference_artifact(artifact)
     requests = [r for r in records if isinstance(r, RequestEvent)]
@@ -253,7 +256,7 @@ def test_an_alias_read_again_keeps_its_attempt(tmp_path: Path) -> None:
     ]
     assert resolve_inference_events(records).unresolved == ()
     # A third import, with nothing new, adds nothing.
-    assert import_execution_into_artifact(artifact, hook, now_ns=NOW).events == ()
+    assert import_execution_into_artifact(artifact, hook, importer=HERE).events == ()
 
 
 def _mixed_scheme_log(hook: Path, *, key: bytes | None = KEY) -> list[dict[str, Any]]:
@@ -301,7 +304,7 @@ def test_an_epochs_foreign_id_scheme_is_fixed_by_its_first_import(
     hook = tmp_path / "hook"
     first = _mixed_scheme_log(hook)
     capture = import_execution_into_artifact(
-        artifact, hook, raw_foreign_ids=first_raw, now_ns=NOW
+        artifact, hook, raw_foreign_ids=first_raw, importer=HERE
     )
     assert capture.summary is not None
     assert capture.summary["execution"]["epochs"][EPOCH]["foreign_ids"] == (
@@ -311,12 +314,12 @@ def test_an_epochs_foreign_id_scheme_is_fixed_by_its_first_import(
     before = artifact.read_text(encoding="utf-8")
     with pytest.raises(InferInputError, match="would duplicate their requests"):
         import_execution_into_artifact(
-            artifact, hook, raw_foreign_ids=not first_raw, now_ns=NOW
+            artifact, hook, raw_foreign_ids=not first_raw, importer=HERE
         )
     assert artifact.read_text(encoding="utf-8") == before
     # The same scheme as before continues the execution, with one request.
     again = import_execution_into_artifact(
-        artifact, hook, raw_foreign_ids=first_raw, now_ns=NOW
+        artifact, hook, raw_foreign_ids=first_raw, importer=HERE
     )
     assert [e.EVENT_TYPE for e in again.events] == [
         "infer.iteration",
@@ -341,11 +344,11 @@ def test_a_withheld_epoch_may_be_imported_under_any_later_scheme(
     artifact = _artifact(tmp_path / "infer.jsonl")
     hook = tmp_path / "hook"
     first = _mixed_scheme_log(hook, key=None)
-    capture = import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    capture = import_execution_into_artifact(artifact, hook, importer=HERE)
     assert capture.summary is not None
     assert capture.summary["execution"]["epochs"][EPOCH]["foreign_ids"] == "withheld"
     _continue_log(hook, first, key=KEY)  # the key file is there now
-    later = import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    later = import_execution_into_artifact(artifact, hook, importer=HERE)
     assert later.summary is not None
     assert later.summary["execution"]["epochs"][EPOCH]["foreign_ids"] == "pseudonym"
     assert "infer.request" in [e.EVENT_TYPE for e in later.events]
@@ -361,6 +364,78 @@ def test_cli_exits_invalid_input_for_a_changed_foreign_id_scheme(
     _continue_log(hook, first)
     code = main(["import-execution", str(artifact), str(hook), "--raw-foreign-ids"])
     assert code == int(ExitCode.INVALID_INPUT)
+
+
+def test_a_remote_import_leaves_pending_steps_for_later(tmp_path: Path) -> None:
+    """With the server's clock 31 s behind the importer's, a live epoch's
+    pending step must not be finalized as incomplete (Codex #1): from
+    another host the import does not judge liveness, so the step waits
+    and the completion that arrives later completes it."""
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    hook = tmp_path / "hook"
+    head = [
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 10),
+        scheduled(0, T0, [member(OWN0, scheduled=8)]),
+        heartbeat(T0 + SECOND, 2),
+    ]
+    engine_log(hook, head)
+    # The importer runs elsewhere; its own clock reads 31 s past the server's
+    # last heartbeat, which under the old wall-clock rule meant "gone".
+    elsewhere = importer(T0 + 32 * SECOND, host="laptop", boot_id="boot-zzzz")
+    first = import_execution_into_artifact(artifact, hook, importer=elsewhere)
+    # Only the hello's clock alignment: the pending step is not finalized.
+    assert [e.EVENT_TYPE for e in first.events] == ["infer.clock_alignment"]
+    assert first.summary is not None
+    epoch = first.summary["execution"]["epochs"][EPOCH]
+    assert (epoch["state"], epoch["state_reason"]) == ("unknown", "other_host")
+    # The pending step (seq 2) and the admission no final step has shown
+    # (seq 1) both wait, so the mark stays at the hello.
+    assert (epoch["iterations_pending"], epoch["high_water_seq"]) == (1, 0)
+    engine_log(
+        hook,
+        head
+        + [completed(0, T0 + 2 * SECOND, [done(OWN0)]), heartbeat(T0 + 3 * SECOND, 4)],
+    )
+    second = import_execution_into_artifact(artifact, hook, importer=elsewhere)
+    iterations = [e for e in second.events if isinstance(e, IterationEvent)]
+    assert [(i.iteration_ref.id, i.metadata["state"]) for i in iterations] == [
+        ("0", "complete")
+    ]
+    assert (
+        sum(isinstance(r, IterationEvent) for r in load_inference_artifact(artifact))
+        == 1
+    )
+
+
+def test_server_stopped_finalizes_an_epoch_without_goodbye(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    hook = engine_log(
+        tmp_path / "hook",
+        [
+            alias(OWN0, f"chatcmpl-{X0}", T0 - 10),
+            scheduled(0, T0, [member(OWN0, scheduled=8)]),
+            heartbeat(T0 + SECOND, 2),
+        ],
+    ).parent.parent
+    # From another host, without the option, the step waits and the line says so.
+    with mock.patch("stormlog.infer.vllm_execution_log.Importer.here") as here:
+        here.return_value = importer(
+            T0 + 32 * SECOND, host="laptop", boot_id="boot-zzzz"
+        )
+        assert main(["import-execution", str(artifact), str(hook)]) == int(ExitCode.OK)
+        out = capsys.readouterr().out
+        assert "unknown (other_host: pending steps wait; pass --server-stopped" in out
+        assert "1 pending" in out
+        code = main(["import-execution", str(artifact), str(hook), "--server-stopped"])
+    assert code == int(ExitCode.OK)
+    out = capsys.readouterr().out
+    assert "gone; kept 1 steps (1 incomplete), 0 pending" in out
+    iterations = [
+        r for r in load_inference_artifact(artifact) if isinstance(r, IterationEvent)
+    ]
+    assert [i.metadata["incomplete_reason"] for i in iterations] == ["epoch_ended"]
 
 
 def test_run_facts_come_from_the_artifact(tmp_path: Path) -> None:

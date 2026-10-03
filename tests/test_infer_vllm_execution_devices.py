@@ -36,6 +36,7 @@ from tests.vllm_execution_helpers import (
     goodbye,
     heartbeat,
     hello,
+    importer,
     write_epoch,
 )
 
@@ -43,6 +44,7 @@ ENGINE_PID = 2600
 T0 = 1_000 * SECOND  # the workers' monotonic clock at their hello
 W0 = T0 + WALL_OFFSET  # the same instant on the wall clock
 NOW = W0 + 100 * SECOND
+HERE = importer(NOW - WALL_OFFSET)  # on the server's host and boot
 
 
 def _worker(
@@ -129,7 +131,7 @@ def test_the_index_lists_every_worker_hello(tmp_path: Path) -> None:
         tmp_path, 2602, ordinal=1, uuid="GPU-b", records=[goodbye(T0 + 5 * SECOND, 1)]
     )
 
-    index = WorkerIndex.from_directory(tmp_path, now_ns=NOW)
+    index = WorkerIndex.from_directory(tmp_path, importer=HERE)
 
     assert [(w.pid, w.cuda_ordinal, w.device_uuid) for w in index.workers] == [
         (2601, 0, "GPU-a"),
@@ -147,7 +149,7 @@ def test_the_index_lists_every_worker_hello(tmp_path: Path) -> None:
 
 def test_a_trace_binds_to_the_worker_alive_on_its_host_and_pid(tmp_path: Path) -> None:
     _worker(tmp_path, 2601, records=[heartbeat(T0 + 10 * SECOND, 1)])
-    index = WorkerIndex.from_directory(tmp_path, now_ns=NOW)
+    index = WorkerIndex.from_directory(tmp_path, importer=HERE)
 
     inside = index.bind(
         host=HOST, pids=[2601], start_wall_ns=W0 + SECOND, end_wall_ns=W0 + 2 * SECOND
@@ -198,7 +200,7 @@ def test_a_reused_pid_is_told_apart_by_lifetime(tmp_path: Path) -> None:
         uuid="GPU-b",
         records=[heartbeat(T0 + 40 * SECOND, 1)],
     )
-    index = WorkerIndex.from_directory(tmp_path, now_ns=NOW)
+    index = WorkerIndex.from_directory(tmp_path, importer=HERE)
 
     first = index.bind(
         host=HOST, pids=[2601], start_wall_ns=W0 + SECOND, end_wall_ns=W0 + 4 * SECOND
@@ -240,7 +242,7 @@ def test_two_live_epochs_for_one_pid_are_ambiguous(tmp_path: Path) -> None:
         uuid="GPU-c",
         records=[heartbeat(T0 + 10 * SECOND, 1)],
     )
-    index = WorkerIndex.from_directory(tmp_path, now_ns=NOW)
+    index = WorkerIndex.from_directory(tmp_path, importer=HERE)
 
     binding = index.bind(
         host=HOST,
@@ -264,7 +266,7 @@ def test_a_loaded_trace_binds_by_its_window_and_launching_pid(tmp_path: Path) ->
     )
     assert trace_wall_window(trace) == (W0 + SECOND + 5_000, W0 + SECOND + 30_000)
 
-    binding = WorkerIndex.from_directory(tmp_path / "hook", now_ns=NOW).bind_trace(
+    binding = WorkerIndex.from_directory(tmp_path / "hook", importer=HERE).bind_trace(
         trace
     )
 

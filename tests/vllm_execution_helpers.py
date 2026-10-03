@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from stormlog.infer.vllm_execution_log import Importer
+
 FORMAT = "stormlog.vllm_hook/1"
 HOST = "node-7"
 BOOT = "boot-aaaa"
@@ -21,6 +23,14 @@ KEY = bytes(range(32))
 
 def epoch_name(role: str, pid: int, start_ns: int) -> str:
     return f"{role}-{pid}-{start_ns}"
+
+
+def importer(
+    monotonic_ns: int, host: str = HOST, boot_id: str | None = BOOT
+) -> Importer:
+    """An importer on the synthetic server's host and boot (by default),
+    reading at ``monotonic_ns`` on the clock the hook's stamps use."""
+    return Importer(host, boot_id, monotonic_ns)
 
 
 def producer(pid: int, start_ns: int) -> str:

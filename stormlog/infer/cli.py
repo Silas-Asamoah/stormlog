@@ -485,6 +485,16 @@ def _add_import_execution_parser(subparsers: Any) -> None:
         ),
     )
     parser.add_argument(
+        "--server-stopped",
+        action="store_true",
+        help=(
+            "The server that wrote this log is no longer running: an epoch "
+            "without a goodbye record is gone and its pending steps are final. "
+            "Without it, silence is judged only on the server's own host and "
+            "boot; from anywhere else such an epoch's pending steps wait"
+        ),
+    )
+    parser.add_argument(
         "--envelope", default=None, help="Run envelope (default: beside the artifact)"
     )
 
@@ -1119,6 +1129,7 @@ def cmd_import_execution(args: argparse.Namespace) -> int:
         args.directory,
         raw_foreign_ids=args.raw_foreign_ids,
         envelope_path=args.envelope,
+        server_stopped=args.server_stopped,
     )
     _print_execution_summary((capture.summary or {}).get("execution", {}))
     return int(ExitCode.OK)
@@ -1142,11 +1153,12 @@ def _print_execution_summary(summary: dict[str, Any]) -> None:
 
 
 def _epoch_line(epoch: dict[str, Any]) -> str:
+    state = _state_text(epoch)
     if not epoch.get("reduced"):
-        return f"{epoch.get('role')} epoch, {epoch.get('state')}; not reduced"
+        return f"{epoch.get('role')} epoch, {state}; not reduced"
     waiting = epoch.get("iterations_pending", 0)
     line = (
-        f"{epoch.get('state')}; kept {epoch.get('iterations_kept', 0)} steps "
+        f"{state}; kept {epoch.get('iterations_kept', 0)} steps "
         f"({epoch.get('iterations_incomplete', 0)} incomplete), {waiting} pending, "
         f"{epoch.get('iterations_already_imported', 0)} already imported, "
         f"{epoch.get('foreign_only_counted', 0)} foreign-only counted, "
@@ -1166,6 +1178,18 @@ def _epoch_line(epoch: dict[str, Any]) -> str:
             f"{withheld.get('foreign_only_steps', 0)} steps of other clients withheld"
         )
     return line
+
+
+def _state_text(epoch: dict[str, Any]) -> str:
+    """The epoch's liveness; an unjudged one says why and what to do."""
+    state = str(epoch.get("state"))
+    if state != "unknown":
+        return state
+    reason = epoch.get("state_reason") or "liveness not judged"
+    return (
+        f"unknown ({reason}: pending steps wait; pass --server-stopped if the "
+        "server that wrote this log has stopped)"
+    )
 
 
 def _print_trace_summary(summary: dict[str, Any]) -> None:

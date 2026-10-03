@@ -41,7 +41,13 @@ from .correlation_events import (
     MembershipEvent,
     RequestEvent,
 )
-from .vllm_execution_log import STATE_ALIVE, EpochRead, LogRead, RawRecord
+from .vllm_execution_log import (
+    STATE_ENDED,
+    STATE_GONE,
+    EpochRead,
+    LogRead,
+    RawRecord,
+)
 
 SOURCE = "stormlog.infer.import_execution"
 OWN = "run"
@@ -398,7 +404,9 @@ class _EpochReducer:
     # ------------------------------------------------------------ selection
     def _split_iterations(self) -> tuple[list[Iteration], list[Iteration]]:
         """Final iterations in sequence order, and the pending ones."""
-        ended = self.epoch.state != STATE_ALIVE
+        # Only a known end finalizes pending steps: an epoch whose liveness
+        # could not be judged keeps them for a later import.
+        ended = self.epoch.state in (STATE_ENDED, STATE_GONE)
         latest_completed = self._latest_completed_number()
         final: list[Iteration] = []
         pending: list[Iteration] = []
@@ -687,7 +695,7 @@ class _EpochReducer:
         sequence not read yet (the mark never passes what was read)."""
         consumed = self.epoch.consumed_seq
         before = self.epoch.high_water_before
-        if consumed is None or self.epoch.state != STATE_ALIVE:
+        if consumed is None or self.epoch.state in (STATE_ENDED, STATE_GONE):
             return consumed
         waiting = [item.scheduled.seq for item in pending]
         waiting.extend(

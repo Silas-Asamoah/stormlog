@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from .host_clock import host_boot_id
 
 FORMAT = "stormlog.vllm_hook/1"
 RECORD_KINDS = frozenset(
@@ -25,10 +28,38 @@ RECORD_KINDS = frozenset(
 )
 # A process with no heartbeat for this long is taken as gone: its epoch has
 # ended without a goodbye, and its pending iterations will never complete.
+# Silence is judged on the server's own monotonic clock, which the reader
+# shares only when it runs on the same host and boot.
 SILENCE_NS = 30 * 1_000_000_000
 STATE_ENDED = "ended"
 STATE_GONE = "gone"
 STATE_ALIVE = "alive"
+# Not judged: the reader runs elsewhere, so an epoch without goodbye may be
+# alive or gone, and its pending steps are left for a later import.
+STATE_UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class Importer:
+    """Where a read runs: its host, boot and monotonic clock, for judging an
+    epoch's liveness on the clock that wrote it."""
+
+    host: str
+    boot_id: str | None
+    monotonic_ns: int
+
+    @classmethod
+    def here(cls) -> Importer:
+        return cls(socket.gethostname(), host_boot_id(), time.monotonic_ns())
+
+    def shares_clock_with(self, epoch: EpochRead) -> bool:
+        """Same host and boot means the same CLOCK_MONOTONIC."""
+        return (
+            self.boot_id is not None
+            and epoch.boot_id == self.boot_id
+            and epoch.host == self.host
+        )
+
 
 _EPOCH_NAME = re.compile(r"^(engine|worker)-(\d+)-(\d+)$")
 _SEGMENT_NAME = re.compile(r"^(\d{6})\.jsonl(\.part)?$")
@@ -70,7 +101,9 @@ class EpochRead:
     gaps: int = 0
     errors: list[str] = field(default_factory=list)
     last_seen_wall_ns: int | None = None
+    last_seen_mono_ns: int | None = None
     state: str = STATE_ALIVE
+    state_reason: str | None = None
 
     @property
     def host(self) -> str:
@@ -104,6 +137,7 @@ class EpochRead:
             "pid": self.pid,
             "start_ns": self.start_ns,
             "state": self.state,
+            "state_reason": self.state_reason,
             "records": len(self.records),
             "last_seq": self.last_seq,
             "contiguous_seq": self.contiguous_seq,
@@ -143,27 +177,31 @@ def read_execution_log(
     directory: str | Path,
     *,
     high_water: dict[str, int] | None = None,
-    now_ns: int | None = None,
+    importer: Importer | None = None,
+    server_stopped: bool = False,
 ) -> LogRead:
     """Read every epoch under ``directory``.
 
     ``high_water`` maps an epoch name to the highest ``seq`` a previous import
     took; records at or below it are not returned again, though they still
-    count towards the epoch's gaps and last sequence. ``now_ns`` is the wall
-    time the silence rule is judged against (the current time by default).
+    count towards the epoch's gaps and last sequence. ``importer`` is where
+    this read runs (here, by default): an epoch's silence is judged only when
+    the importer shares the epoch's host and boot, on the monotonic clock.
+    ``server_stopped`` says the server that wrote the log is no longer
+    running, so an epoch without ``goodbye`` is gone.
     """
     root = Path(directory)
     if not root.is_dir():
         raise ValueError(f"not a directory: {root}")
     marks = high_water or {}
-    now = time.time_ns() if now_ns is None else now_ns
+    who = importer or Importer.here()
     read = LogRead(root, [])
     for host_boot, epoch_dir in _epoch_directories(root):
         epoch = _epoch_from_directory(host_boot, epoch_dir, marks)
         if epoch is None:
             read.notes.append(f"{epoch_dir}: not an epoch directory")
             continue
-        _read_epoch(epoch, now)
+        _read_epoch(epoch, who, server_stopped)
         read.epochs.append(epoch)
     return read
 
@@ -205,7 +243,7 @@ class _Vanished(Exception):
     """A listed ``.part`` segment was sealed (renamed) before it was opened."""
 
 
-def _read_epoch(epoch: EpochRead, now_ns: int) -> None:
+def _read_epoch(epoch: EpochRead, importer: Importer, server_stopped: bool) -> None:
     seen: dict[int, RawRecord] = {}
     for attempt in range(_RELIST_ATTEMPTS):
         # The writer may seal a segment between the listing and the open; the
@@ -215,7 +253,7 @@ def _read_epoch(epoch: EpochRead, now_ns: int) -> None:
             break
     epoch.status = _read_json_file(epoch.directory / "status.json", epoch.errors)
     epoch.key = _read_key(epoch.directory / "key", epoch.errors)
-    _settle(epoch, seen, now_ns)
+    _settle(epoch, seen, importer, server_stopped)
 
 
 def _read_segments(
@@ -332,7 +370,12 @@ def _read_key(path: Path, errors: list[str]) -> bytes | None:
     return key
 
 
-def _settle(epoch: EpochRead, seen: dict[int, RawRecord], now_ns: int) -> None:
+def _settle(
+    epoch: EpochRead,
+    seen: dict[int, RawRecord],
+    importer: Importer,
+    server_stopped: bool,
+) -> None:
     """Fill the epoch's records, sequence facts and liveness from what was read."""
     _sequence_facts(epoch, seen)
     mark = epoch.high_water_before
@@ -344,8 +387,9 @@ def _settle(epoch: EpochRead, seen: dict[int, RawRecord], now_ns: int) -> None:
             epoch.hello = record.data
         elif record.kind == "goodbye":
             epoch.goodbye = record.data
-    epoch.last_seen_wall_ns = _last_seen(epoch, seen)
-    epoch.state = _state(epoch, now_ns)
+    epoch.last_seen_wall_ns = _last_seen(epoch, seen, "wall_ns")
+    epoch.last_seen_mono_ns = _last_seen(epoch, seen, "mono_ns")
+    epoch.state, epoch.state_reason = _state(epoch, importer, server_stopped)
 
 
 def _sequence_facts(epoch: EpochRead, seen: dict[int, RawRecord]) -> None:
@@ -366,20 +410,21 @@ def _sequence_facts(epoch: EpochRead, seen: dict[int, RawRecord]) -> None:
     epoch.writer_last_seq = _integer((epoch.status or {}).get("last_seq"))
 
 
-def _last_seen(epoch: EpochRead, seen: dict[int, RawRecord]) -> int | None:
-    """The latest wall time the process is known to have been alive."""
-    stamps = [_wall_stamp(record) for record in seen.values()]
-    stamps.append(_integer((epoch.status or {}).get("wall_ns")))
+def _last_seen(epoch: EpochRead, seen: dict[int, RawRecord], clock: str) -> int | None:
+    """The latest time, on the server's wall or monotonic clock, the process
+    is known to have been alive."""
+    stamps = [_stamp(record, clock) for record in seen.values()]
+    stamps.append(_integer((epoch.status or {}).get(clock)))
     known = [stamp for stamp in stamps if stamp is not None]
     return max(known) if known else None
 
 
-def _wall_stamp(record: RawRecord) -> int | None:
+def _stamp(record: RawRecord, clock: str) -> int | None:
     """When a liveness record was written; other kinds say nothing about it."""
     if record.kind == "hello":
-        return _integer((record.data.get("clock") or {}).get("wall_ns"))
+        return _integer((record.data.get("clock") or {}).get(clock))
     if record.kind in {"heartbeat", "goodbye"}:
-        return _integer(record.data.get("wall_ns"))
+        return _integer(record.data.get(clock))
     return None
 
 
@@ -392,13 +437,26 @@ def _hello_text(hello: dict[str, Any] | None, key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _state(epoch: EpochRead, now_ns: int) -> str:
+def _state(
+    epoch: EpochRead, importer: Importer, server_stopped: bool
+) -> tuple[str, str]:
+    """The epoch's liveness and why: a goodbye ends it; a stopped server
+    leaves it gone; otherwise silence counts only on the clock that wrote
+    the stamps, which the importer shares on the same host and boot."""
     if epoch.goodbye is not None:
-        return STATE_ENDED
-    seen = epoch.last_seen_wall_ns
-    if seen is None or now_ns - seen >= SILENCE_NS:
-        return STATE_GONE
-    return STATE_ALIVE
+        return STATE_ENDED, "goodbye"
+    if server_stopped:
+        return STATE_GONE, "server_stopped"
+    if not importer.shares_clock_with(epoch):
+        return STATE_UNKNOWN, (
+            "other_host" if importer.boot_id is not None else "importer_boot_unknown"
+        )
+    seen = epoch.last_seen_mono_ns
+    if seen is None:
+        return STATE_GONE, "no_heartbeat"
+    if importer.monotonic_ns - seen >= SILENCE_NS:
+        return STATE_GONE, "silence"
+    return STATE_ALIVE, "heartbeat"
 
 
 __all__ = [
@@ -408,7 +466,9 @@ __all__ = [
     "STATE_ALIVE",
     "STATE_ENDED",
     "STATE_GONE",
+    "STATE_UNKNOWN",
     "EpochRead",
+    "Importer",
     "LogRead",
     "RawRecord",
     "read_execution_log",

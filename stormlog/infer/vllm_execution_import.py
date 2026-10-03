@@ -51,7 +51,9 @@ from .vllm_execution import (
 from .vllm_execution_log import (
     FORMAT,
     STATE_ALIVE,
+    STATE_UNKNOWN,
     EpochRead,
+    Importer,
     LogRead,
     read_execution_log,
 )
@@ -72,17 +74,22 @@ def import_execution_into_artifact(
     *,
     raw_foreign_ids: bool = False,
     envelope_path: str | Path | None = None,
-    now_ns: int | None = None,
+    importer: Importer | None = None,
+    server_stopped: bool = False,
 ) -> EngineCapture:
     """Append the log's new, final iterations to ``artifact``; return the capture.
 
     The capture's summary, recorded on the engine adapter's capability event,
     carries each epoch's high-water mark, which the next import starts from.
+    ``server_stopped`` says the server that wrote the log is no longer
+    running, so an epoch without ``goodbye`` is gone and its pending steps
+    are final; without it, an epoch whose liveness cannot be judged from
+    here (another host or boot) keeps them for a later import.
     """
     run_id, session_id = artifact_run_identity(artifact)
     records = _load_records(artifact)
     facts = run_facts_from_records(records, run_id, session_id)
-    read = _read_log(directory, execution_high_water(records), now_ns)
+    read = _read_log(directory, execution_high_water(records), importer, server_stopped)
     _check_foreign_schemes(read, execution_foreign_schemes(records), raw_foreign_ids)
     capture = reduce_to_capture(read, facts, ReduceOptions(raw_foreign_ids))
     _append_capture(artifact, run_id, session_id, capture, envelope_path)
@@ -166,21 +173,22 @@ def flush_execution_log(
     *,
     timeout_seconds: float = 10.0,
     poll_seconds: float = 0.25,
-    now_ns: int | None = None,
+    importer: Importer | None = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Ask every live epoch's writer to seal its open segment, and wait for
     proof that it did: the ``flush`` file gone, or a record written after the
-    request (a heartbeat comes every second). Ended epochs need no flush.
+    request (a heartbeat comes every second). Ended epochs need no flush; an
+    epoch whose liveness cannot be judged from here is asked like a live one.
     """
-    read = read_execution_log(directory, now_ns=now_ns)
+    read = read_execution_log(directory, importer=importer)
     waiting, errors = _request_flushes(read)
     requested = sorted(waiting)
     deadline = clock() + timeout_seconds
     while waiting and clock() < deadline:
         sleep(poll_seconds)
-        for epoch in read_execution_log(directory, now_ns=now_ns).epochs:
+        for epoch in read_execution_log(directory, importer=importer).epochs:
             if epoch.epoch in waiting and _sealed(epoch, waiting[epoch.epoch]):
                 del waiting[epoch.epoch]
     return {
@@ -196,7 +204,7 @@ def _request_flushes(read: LogRead) -> tuple[dict[str, int], list[str]]:
     waiting: dict[str, int] = {}
     errors: list[str] = []
     for epoch in read.epochs:
-        if epoch.state != STATE_ALIVE:
+        if epoch.state not in (STATE_ALIVE, STATE_UNKNOWN):
             continue
         try:
             (epoch.directory / "flush").touch()
@@ -392,10 +400,18 @@ def _load_records(artifact: str | Path) -> list[InferenceRecord]:
 
 
 def _read_log(
-    directory: str | Path, high_water: dict[str, int], now_ns: int | None
+    directory: str | Path,
+    high_water: dict[str, int],
+    importer: Importer | None,
+    server_stopped: bool,
 ) -> LogRead:
     try:
-        read = read_execution_log(directory, high_water=high_water, now_ns=now_ns)
+        read = read_execution_log(
+            directory,
+            high_water=high_water,
+            importer=importer,
+            server_stopped=server_stopped,
+        )
     except (OSError, ValueError) as exc:
         raise InferInputError(f"{directory}: {exc}") from exc
     if not read.epochs:

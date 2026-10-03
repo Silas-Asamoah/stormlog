@@ -42,6 +42,7 @@ from tests.vllm_execution_helpers import (
     failed,
     goodbye,
     heartbeat,
+    importer,
     member,
     producer,
     scheduled,
@@ -53,6 +54,7 @@ EPOCH = f"engine-{PID}-{START}"
 PRODUCER = producer(PID, START)
 T0 = 1_000 * SECOND
 NOW = T0 + WALL_OFFSET + 5 * SECOND
+HERE = importer(NOW - WALL_OFFSET)  # on the server's host and boot
 RUN = "run-1"
 REQUEST0 = "c1_in8_out4_measured_0_0"
 REQUEST1 = "c1_in8_out4_measured_0_1"
@@ -126,7 +128,7 @@ def _two_shared_steps() -> list[dict[str, Any]]:
 
 
 def _reduce(root: Path, facts: RunFacts | None = None, **kwargs: Any) -> ReduceResult:
-    read = read_execution_log(root, now_ns=NOW, **kwargs)
+    read = read_execution_log(root, importer=HERE, **kwargs)
     return reduce_execution_log(read, facts or _facts())
 
 
@@ -428,7 +430,7 @@ def test_raw_foreign_ids_are_an_opt_in(tmp_path: Path) -> None:
         completed(0, T0 + SECOND, [done(OWN0), done(OTHER)]),
     ]
     engine_log(tmp_path, records)
-    read = read_execution_log(tmp_path, now_ns=NOW)
+    read = read_execution_log(tmp_path, importer=HERE)
     hidden = reduce_execution_log(read, _facts())
     shown = reduce_execution_log(read, _facts(), ReduceOptions(raw_foreign_ids=True))
     assert OTHER not in str([e.to_record() for e in hidden.events])
@@ -512,7 +514,7 @@ def test_without_the_epoch_key_other_clients_identities_are_withheld(
     assert weak not in text and OTHER not in text and unparsable not in text
     # Raw IDs are the explicit way out, and the summary says so.
     raw = reduce_execution_log(
-        read_execution_log(tmp_path, now_ns=NOW),
+        read_execution_log(tmp_path, importer=HERE),
         _facts(windows=(window,)),
         ReduceOptions(raw_foreign_ids=True),
     )
