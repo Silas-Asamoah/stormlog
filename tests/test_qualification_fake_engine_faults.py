@@ -14,7 +14,11 @@ from pathlib import Path
 import pytest
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
-from examples.qualification.fake_engine.process import FakeEngineProcess
+from examples.qualification.fake_engine.process import (
+    ROOT,
+    FakeEngineProcess,
+    _environment,
+)
 from tests.qualification_fake_engine_helpers import (
     chats_in_background,
     get,
@@ -131,3 +135,16 @@ def test_the_kill_switch_ends_the_process_without_goodbye(tmp_path: Path) -> Non
     logs = [path.read_text() for path in hook.rglob("*.jsonl*")]
     assert logs
     assert not any('"kind":"goodbye"' in text for text in logs)
+
+
+def test_the_subprocess_keeps_the_callers_python_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(["/opt/a", "/opt/b"]))
+    assert _environment()["PYTHONPATH"].split(os.pathsep) == [
+        str(ROOT),
+        "/opt/a",
+        "/opt/b",
+    ]
+    monkeypatch.delenv("PYTHONPATH")
+    assert _environment()["PYTHONPATH"] == str(ROOT)

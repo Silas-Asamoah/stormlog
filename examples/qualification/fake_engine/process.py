@@ -30,11 +30,10 @@ class FakeEngineProcess:
         self.pid = 0
 
     def start(self) -> FakeEngineProcess:
-        environment = {**os.environ, "PYTHONPATH": str(ROOT)}
         self.process = subprocess.Popen(
             [sys.executable, "-m", "examples.qualification.fake_engine", *self.args],
             cwd=ROOT,
-            env=environment,
+            env=_environment(),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -71,6 +70,14 @@ class FakeEngineProcess:
 
     def __exit__(self, *_exc: object) -> None:
         self.stop()
+
+
+def _environment() -> dict[str, str]:
+    """The caller's environment, with the checkout first on PYTHONPATH and
+    whatever the caller had there kept after it."""
+    inherited = os.environ.get("PYTHONPATH")
+    path = str(ROOT) if not inherited else os.pathsep.join([str(ROOT), inherited])
+    return {**os.environ, "PYTHONPATH": path}
 
 
 def _first_marker(stream: IO[str], timeout: float) -> str | None:
