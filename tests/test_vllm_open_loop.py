@@ -22,6 +22,7 @@ from scripts.native_probes.workloads.vllm_open_loop import (
     _request,
     _result,
     _server_argv,
+    _slo_goodput,
     offer_requests,
     request_body,
     run,
@@ -115,6 +116,50 @@ def test_unknown_resource_domain_is_not_reported_as_zero() -> None:
     assert metrics["gpu_memory_bytes"] is None
 
 
+def test_incomplete_resource_sampling_cannot_produce_memory_claim() -> None:
+    metrics = _memory_metrics(
+        [
+            {
+                "processes": [
+                    {"pid": 1, "role": "helper_agent", "rss_bytes": 10},
+                    {"pid": 2, "role": "target", "rss_bytes": 20},
+                ]
+            },
+            {
+                "processes": [
+                    {"pid": 1, "role": "helper_agent", "rss_bytes": 11},
+                    {"pid": 2, "role": "target", "rss_bytes": None},
+                ]
+            },
+        ]
+    )
+    assert metrics["host_rss_valid_samples"] == 1
+    assert metrics["host_rss_measured_peak_bytes"] is None
+    assert metrics["host_rss_measured_median_bytes"] is None
+
+
+def test_resource_process_population_change_is_inconclusive() -> None:
+    metrics = _memory_metrics(
+        [
+            {
+                "processes": [
+                    {"pid": 1, "role": "helper_agent", "rss_bytes": 10},
+                    {"pid": 2, "role": "target", "rss_bytes": 20},
+                ]
+            },
+            {
+                "processes": [
+                    {"pid": 1, "role": "helper_agent", "rss_bytes": 11},
+                    {"pid": 2, "role": "target", "rss_bytes": 21},
+                    {"pid": 3, "role": "target", "rss_bytes": 22},
+                ]
+            },
+        ]
+    )
+    assert metrics["host_rss_valid_samples"] == 2
+    assert metrics["host_rss_measured_peak_bytes"] is None
+
+
 def test_incomplete_stream_is_a_failed_offered_request() -> None:
     class Response:
         def __enter__(self) -> "Response":
@@ -167,6 +212,70 @@ def test_cupti_capture_requires_every_target_and_clean_flush(tmp_path: Path) -> 
     capture, loss = _cupti_capture_status(tmp_path, samples)
     assert capture["complete"] is False
     assert loss["vendor_activity"]["lost_records"] == 2
+
+
+def test_cupti_capture_rejects_invalid_or_unobserved_process_status(
+    tmp_path: Path,
+) -> None:
+    cupti = tmp_path / "cupti"
+    cupti.mkdir()
+    (cupti / "activity.ndjson").write_text('{"kind":"kernel"}\n')
+    status = {
+        "pid": {"bad": "identity"},
+        "finalized": True,
+        "initialization_error": None,
+        "delivered_records": 1,
+        "cupti_dropped_records": 0,
+        "local_dropped_records": 0,
+        "bytes_dropped": 0,
+    }
+    (cupti / "cupti_status.json").write_text(json.dumps(status))
+    samples = [{"processes": [{"pid": 12, "role": "target"}]}]
+    capture, _ = _cupti_capture_status(tmp_path, samples)
+    assert capture["complete"] is False
+    assert any("invalid pid" in error for error in capture["errors"])
+    status["pid"] = 13
+    (cupti / "cupti_status.json").write_text(json.dumps(status))
+    capture, _ = _cupti_capture_status(tmp_path, samples)
+    assert capture["complete"] is False
+    assert any("unobserved" in error for error in capture["errors"])
+
+
+def test_cupti_capture_rejects_partial_or_malformed_trace(tmp_path: Path) -> None:
+    cupti = tmp_path / "cupti"
+    cupti.mkdir()
+    trace = cupti / "activity.ndjson"
+    trace.write_text('{"kind":"kernel"}\n')
+    status = {
+        "pid": 12,
+        "finalized": True,
+        "initialization_error": None,
+        "delivered_records": 2,
+        "cupti_dropped_records": 0,
+        "local_dropped_records": 0,
+        "bytes_dropped": 0,
+    }
+    (cupti / "cupti_status.json").write_text(json.dumps(status))
+    samples = [{"processes": [{"pid": 12, "role": "target"}]}]
+    capture, _ = _cupti_capture_status(tmp_path, samples)
+    assert capture["complete"] is False
+    assert any("record count" in error for error in capture["errors"])
+    trace.write_text('{"kind":"kernel"}\ninvalid\n')
+    capture, _ = _cupti_capture_status(tmp_path, samples)
+    assert capture["complete"] is False
+    assert any("malformed activity trace" in error for error in capture["errors"])
+
+
+def test_goodput_requires_declared_slo_and_keeps_failures_in_population() -> None:
+    rows = [
+        {"status": "ok", "e2e_latency_ms": 40},
+        {"status": "ok", "e2e_latency_ms": 120},
+        {"status": "timeout", "e2e_latency_ms": 20},
+    ]
+    assert _slo_goodput(rows, 2.0, None) is None
+    assert _slo_goodput(rows, 2.0, 100) == 0.5
+    with pytest.raises(ValueError, match="positive"):
+        _slo_goodput(rows, 2.0, 0)
 
 
 def test_result_metrics_are_normalizable() -> None:

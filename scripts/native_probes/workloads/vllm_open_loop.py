@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import importlib.metadata
 import json
+import math
 import os
 import signal
 import statistics
@@ -319,17 +320,39 @@ def _sample_resources(
 
 def _memory_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     combined: list[int] = []
+    target_sets: list[set[int]] = []
     for sample in samples:
-        processes = sample["processes"]
-        if sample.get("error") or any(row["rss_bytes"] is None for row in processes):
+        processes = sample.get("processes", [])
+        if sample.get("error") or any(
+            row.get("rss_bytes") is None for row in processes
+        ):
             continue
-        if not any(row["role"] == "target" for row in processes):
+        if not {"target", "helper_agent"}.issubset(
+            {row.get("role") for row in processes}
+        ):
             continue
+        targets = {
+            row["pid"]
+            for row in processes
+            if row.get("role") == "target"
+            and isinstance(row.get("pid"), int)
+            and not isinstance(row.get("pid"), bool)
+        }
+        if not targets or len(targets) != sum(
+            row.get("role") == "target" for row in processes
+        ):
+            continue
+        target_sets.append(targets)
         combined.append(sum(row["rss_bytes"] for row in processes))
+    complete = (
+        bool(samples)
+        and len(combined) == len(samples)
+        and all(targets == target_sets[0] for targets in target_sets)
+    )
     return {
-        "host_rss_measured_peak_bytes": max(combined) if combined else None,
+        "host_rss_measured_peak_bytes": max(combined) if complete else None,
         "host_rss_measured_median_bytes": (
-            statistics.median(combined) if combined else None
+            statistics.median(combined) if complete else None
         ),
         "host_rss_samples": len(samples),
         "host_rss_valid_samples": len(combined),
@@ -363,17 +386,28 @@ def _cupti_capture_status(
         except (OSError, ValueError) as exc:
             errors.append(f"{path.relative_to(output)}: {type(exc).__name__}: {exc}")
     reported = [row.get("pid") for row in reports]
+    valid_reported = [
+        pid
+        for pid in reported
+        if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+    ]
     if not reports:
         errors.append("no CUPTI status report")
-    if len(reported) != len(set(reported)):
+    if len(valid_reported) != len(set(valid_reported)):
         errors.append("duplicate CUPTI process status")
-    missing = sorted(set(observed) - set(reported))
+    if len(valid_reported) != len(reported):
+        errors.append("CUPTI process status has an invalid pid")
+    missing = sorted(set(observed) - set(valid_reported))
     if missing:
         errors.append(f"observed target processes without CUPTI status: {missing}")
     if not observed:
         errors.append("no target process observed during measurement")
+    unexpected = sorted(set(valid_reported) - set(observed))
+    if unexpected:
+        errors.append(f"CUPTI status for unobserved target processes: {unexpected}")
     dropped = 0
     delivered = 0
+    trace_paths: set[Path] = set()
     for report in reports:
         if report.get("finalized") is not True or report.get("initialization_error"):
             errors.append(f"CUPTI process {report.get('pid')} did not finalize cleanly")
@@ -397,8 +431,29 @@ def _cupti_capture_status(
             delivered += report["delivered_records"]
             dropped += report["cupti_dropped_records"] + report["local_dropped_records"]
         trace = Path(report["status_path"]).parent / "activity.ndjson"
+        if trace in trace_paths:
+            errors.append(f"CUPTI processes share an activity trace: {trace}")
+        trace_paths.add(trace)
         if not (output / trace).is_file() or (output / trace).stat().st_size == 0:
             errors.append(f"CUPTI process {report.get('pid')} has no activity trace")
+        else:
+            try:
+                with (output / trace).open(encoding="utf-8") as source:
+                    records = 0
+                    for line in source:
+                        if not isinstance(json.loads(line), dict):
+                            raise ValueError("activity record is not an object")
+                        records += 1
+                if records != report.get("delivered_records"):
+                    errors.append(
+                        f"CUPTI process {report.get('pid')} trace record count "
+                        f"{records} differs from delivered_records"
+                    )
+            except (OSError, UnicodeError, ValueError) as exc:
+                errors.append(
+                    f"CUPTI process {report.get('pid')} has malformed activity trace: "
+                    f"{type(exc).__name__}: {exc}"
+                )
         if report.get("bytes_dropped"):
             errors.append(f"CUPTI process {report.get('pid')} dropped output bytes")
     complete = not errors and dropped == 0 and delivered > 0
@@ -425,8 +480,35 @@ def _cupti_capture_status(
     return capture, loss
 
 
+def _slo_goodput(
+    rows: list[dict[str, Any]], seconds: float, deadline_ms: float | None
+) -> float | None:
+    """Count successful requests within a declared SLO, or retain unknown."""
+    if deadline_ms is None or seconds <= 0:
+        return None
+    if not math.isfinite(deadline_ms) or deadline_ms <= 0:
+        raise ValueError("SLO deadline must be finite and positive")
+    return (
+        float(
+            sum(
+                row.get("status") == "ok"
+                and isinstance(row.get("e2e_latency_ms"), (int, float))
+                and not isinstance(row.get("e2e_latency_ms"), bool)
+                and math.isfinite(row["e2e_latency_ms"])
+                and row["e2e_latency_ms"] <= deadline_ms
+                for row in rows
+            )
+        )
+        / seconds
+    )
+
+
 def _result(
-    rows: list[dict[str, Any]], started_ns: int, ended_ns: int
+    rows: list[dict[str, Any]],
+    started_ns: int,
+    ended_ns: int,
+    *,
+    slo_deadline_ms: float | None = None,
 ) -> dict[str, Any]:
     successful = [row for row in rows if row["status"] == "ok"]
     latencies = [float(row["e2e_latency_ms"]) for row in successful]
@@ -447,6 +529,10 @@ def _result(
             "e2e_p99_ms": _percentile(latencies, 0.99),
             "ttft_p95_ms": _percentile(ttft, 0.95),
             "successful_requests_per_second": len(successful) / seconds,
+            "slo_goodput_requests_per_second": _slo_goodput(
+                rows, seconds, slo_deadline_ms
+            ),
+            "slo_deadline_ms": slo_deadline_ms,
         },
         "measurement_window": {
             "range_id": RANGE_ID,
