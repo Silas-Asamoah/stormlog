@@ -825,11 +825,19 @@ DEPRECATED_ALIASES: dict[str, tuple[str | None, str]] = {
 }
 
 
-def created_family_for(name: str) -> str | None:
-    """The ``*_created`` gauge that marks when a counter or histogram was made."""
+def created_family_for(name: str, kind: str = "counter") -> str | None:
+    """The ``*_created`` gauge that marks when a counter or histogram was made.
+
+    prometheus_client names a counter's stamp without the ``_total`` suffix
+    (``vllm:prompt_tokens_created``) but a histogram's with its full name,
+    so ``vllm:iteration_tokens_total``, a histogram despite the suffix, is
+    stamped as ``vllm:iteration_tokens_total_created``.
+    """
     if name.endswith("_created"):
         return None
-    base = name[: -len("_total")] if name.endswith("_total") else name
+    base = name
+    if kind == "counter" and name.endswith("_total"):
+        base = name[: -len("_total")]
     return f"{base}_created"
 
 

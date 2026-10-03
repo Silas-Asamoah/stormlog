@@ -253,13 +253,17 @@ class TestCatalog:
         assert resolve_name("vllm:brand_new_thing") == ("vllm:brand_new_thing", None)
 
     def test_created_family_and_groups(self) -> None:
-        assert created_family_for("vllm:prompt_tokens_total") == (
+        assert created_family_for("vllm:prompt_tokens_total", "counter") == (
             "vllm:prompt_tokens_created"
         )
-        assert created_family_for("vllm:request_queue_time_seconds") == (
+        assert created_family_for("vllm:request_queue_time_seconds", "histogram") == (
             "vllm:request_queue_time_seconds_created"
         )
-        assert created_family_for("vllm:prompt_tokens_created") is None
+        # Only a counter drops _total: a histogram named like one keeps it.
+        assert created_family_for("vllm:iteration_tokens_total", "histogram") == (
+            "vllm:iteration_tokens_total_created"
+        )
+        assert created_family_for("vllm:prompt_tokens_created", "counter") is None
         assert family_group("vllm:kv_cache_usage_perc") == "kv_cache"
         assert family_group("vllm:gpu_cache_usage_perc") == "kv_cache"
         assert family_group("vllm:kv_offload_load_bytes") == "kv_transfer"

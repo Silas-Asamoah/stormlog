@@ -154,7 +154,7 @@ reasons when the two scrapes cannot be compared:
 | `engine_restart` | The exporter's `process_start_time_seconds` changed between the two scrapes |
 | `engine_set_changed` | The set of `engine` labels changed |
 | `counter_reset` | The counter, or a histogram's count, sum or bucket, went backwards |
-| `counter_recreated` | The counter's or histogram's `*_created` timestamp changed |
+| `counter_recreated` | The counter's or histogram's `*_created` timestamp changed (a counter's stamp drops `_total`, a histogram's keeps its full name) |
 | `series_missing` | One scrape lacks the series |
 | `bucket_boundaries_changed` | The histogram's `le` set differs between the scrapes |
 | `not_enabled` | The MFU counters stayed at zero while tokens were generated |

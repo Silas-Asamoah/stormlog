@@ -397,7 +397,7 @@ def _counter_field(
         "by_label": {},
     }
     first, last = _by_extra(name, before), _by_extra(name, after)
-    recreated = _recreated(name, before, after)
+    recreated = _recreated(name, "counter", before, after)
     for extra in sorted(set(first) | set(last)):
         a, b = first.get(extra), last.get(extra)
         result["by_label"][_label_key(extra)] = _delta(a, b, epoch_broken, recreated)
@@ -414,11 +414,12 @@ def _counter_field(
 
 def _recreated(
     name: str,
+    kind: str,
     before: dict[SeriesKey, float | HistogramValue],
     after: dict[SeriesKey, float | HistogramValue],
 ) -> bool:
     """The family's ``*_created`` timestamps differ between the two scrapes."""
-    created_name = created_family_for(name)
+    created_name = created_family_for(name, kind)
     if created_name is None:
         return False
     return _by_extra(created_name, before) != _by_extra(created_name, after)
@@ -458,7 +459,7 @@ def _histogram_field(
         "deprecated_alias_of": alias,
         "meaning": entry.meaning if entry else None,
     }
-    recreated = _recreated(name, before, after)
+    recreated = _recreated(name, "histogram", before, after)
     result.update(_histogram_delta(a, b, epoch_broken, recreated))
     return result
 

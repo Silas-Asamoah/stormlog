@@ -360,6 +360,27 @@ class TestUnresolved:
         assert engine["counters"]["generation_tokens"]["state"] == STATE_RESOLVED
         assert engine["histograms"]["prefill_time"]["state"] == STATE_RESOLVED
 
+    def test_a_recreated_native_total_histogram_is_unresolved(
+        self, tmp_path: Path
+    ) -> None:
+        # vllm:iteration_tokens_total is a histogram despite its suffix, so
+        # its stamp is vllm:iteration_tokens_total_created; the counter rule
+        # of dropping _total would look for a gauge that does not exist and
+        # never notice the recreation.
+        recreated = re.sub(
+            r"^(vllm:iteration_tokens_total_created\{[^}]*\}) (\S+)$",
+            r"\1 1.791e+09",
+            POST,
+            flags=re.MULTILINE,
+        )
+        assert recreated != POST
+        case = _vllm_case(_artifact(tmp_path, _standard_scrapes(end=recreated)))
+        engine = case["engines"]["0"]
+        iteration = engine["histograms"]["iteration_tokens"]
+        assert iteration["native"] == "vllm:iteration_tokens_total"
+        assert iteration["state"] == REASON_COUNTER_RECREATED
+        assert engine["histograms"]["queue_time"]["state"] == STATE_RESOLVED
+
     def test_changed_bucket_boundaries_are_unresolved(self, tmp_path: Path) -> None:
         reshaped = POST.replace(
             'vllm:request_queue_time_seconds_bucket{engine="0",le="0.3"',
