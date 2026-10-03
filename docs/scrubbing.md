@@ -127,9 +127,10 @@ What it removes:
 The steps run in a fixed order:
 1. The text is first cut to `max_bytes` + 4,096 characters
    (`INPUT_MARGIN_CHARS`), so the work is bounded by `max_bytes` whatever
-   the body's size. Every pattern also runs in time linear in its input:
-   each can start only where a run of its characters starts, and a key's
-   words are checked on the whole key, never by backtracking.
+   the body's size. Every pattern also runs in time linear in its input: a
+   key's words are checked on the whole key, never by backtracking, and a
+   search that several matches would repeat, such as the end of a run of
+   value characters, is done once.
 2. Every match is found in that text: each form of each value in
    `secrets`, and each pattern's span.
 3. Overlapping spans are merged, and each is replaced once with
@@ -144,6 +145,10 @@ seen whole, and text from it is never copied, even when redactions before it
 leave room in the output. So the cut never leaves part of a secret that a
 whole match would have removed, as long as the secret is shorter than the
 margin, however much earlier redactions shrink the text.
+
+Only a secret-like key's value is read, so a pair inside another key's value
+is still found: `error: password=x` becomes `error: password=<redacted>`.
+
 The patterns err on the side of removing too much. A key matches when any
 word from `SECRET_KEY_WORDS` appears anywhere in it, so `max_tokens="128"`,
 `session_id: s-123`, `keyboard: present`, `bypass=true` and
