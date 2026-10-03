@@ -167,7 +167,21 @@ class VictimView:
     cached_fraction: list[Point] = field(default_factory=list)
     preemptions: list[int] = field(default_factory=list)
     step_starts: list[int] = field(default_factory=list)
+    # Every request's admission, the victim's or not: (wall ns, external ID).
+    admissions: list[tuple[int, str]] = field(default_factory=list)
     _admitted: dict[str, int] = field(default_factory=dict)
+
+    def first_admission(self, external_prefix: str) -> int | None:
+        """When the first request whose external ID has this prefix was
+        admitted: a neighbor's onset, for T2."""
+        return min(
+            (
+                at
+                for at, external in self.admissions
+                if external.startswith(external_prefix)
+            ),
+            default=None,
+        )
 
     def add(self, record: dict[str, Any]) -> None:
         if not str(record.get("epoch", "")).startswith("engine-"):
@@ -180,6 +194,7 @@ class VictimView:
 
     def _alias(self, record: dict[str, Any]) -> None:
         external = str(record.get("external") or "")
+        self.admissions.append((int(record["wall_ns"]), external))
         if external.startswith(self.victim_prefix):
             self._admitted[str(record["internal"])] = int(record["wall_ns"])
 
@@ -242,7 +257,7 @@ class Scrape:
         }
 
 
-def scrape(url: str, *, timeout_seconds: float = 5.0) -> Scrape:
+def scrape_metrics(url: str, *, timeout_seconds: float = 5.0) -> Scrape:
     """One ``/metrics`` scrape: the waiting count summed over engines and the
     highest KV usage, at the time the answer arrived."""
     try:
@@ -297,13 +312,14 @@ class ReferenceChannel:
         self.victim_artifact = victim_artifact
         self.victim_prefix = victim_prefix
 
-    def poll(self) -> None:
-        """Read new hook records and take one scrape."""
+    def poll(self, *, scrape: bool = True) -> None:
+        """Read new hook records, and take one scrape unless told not to."""
         for record in self.tailer.poll():
             self.view.add(record)
-        taken = scrape(self.metrics_url)
-        self.scrapes.append(taken)
-        _append_lines(self.scrape_log, [taken.to_record()])
+        if scrape:
+            taken = scrape_metrics(self.metrics_url)
+            self.scrapes.append(taken)
+            _append_lines(self.scrape_log, [taken.to_record()])
 
     def signals(self) -> Signals:
         ok = [taken for taken in self.scrapes if taken.error is None]
@@ -333,5 +349,5 @@ __all__ = [
     "Scrape",
     "VictimView",
     "chunk_gaps",
-    "scrape",
+    "scrape_metrics",
 ]

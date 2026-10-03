@@ -11,7 +11,7 @@ from examples.qualification.reference import (
     ReferenceChannel,
     VictimView,
     chunk_gaps,
-    scrape,
+    scrape_metrics,
 )
 from tests.qualification_fake_engine_helpers import (
     chat,
@@ -123,10 +123,10 @@ def test_victim_preemptions_come_from_the_steps_preempted_lists(tmp_path: Path) 
 def test_scrapes_read_the_waiting_count_and_kv_usage(tmp_path: Path) -> None:
     with FakeEngine(FakeEngineConfig(step_seconds=0.001)) as engine:
         chat(engine, words(6, "a"), max_tokens=2)
-        taken = scrape(engine.metrics_url)
+        taken = scrape_metrics(engine.metrics_url)
     assert taken.error is None
     assert (taken.waiting, taken.kv_usage) == (0.0, 0.0)
-    gone = scrape("http://127.0.0.1:9/metrics", timeout_seconds=1)
+    gone = scrape_metrics("http://127.0.0.1:9/metrics", timeout_seconds=1)
     assert gone.error is not None and gone.waiting is None
 
 

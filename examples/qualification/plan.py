@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from stormlog.infer.qualify.recovery import SECOND, Thresholds
+
 from .catalog import CAPTURE, NEIGHBOR, PULSE, EpisodeType, episode_type
 from .neighbor import NeighborShape
 from .pulser import PulseRefused, check_schedule
@@ -40,6 +42,8 @@ class Timeline:
     min_recovery: float = 60.0
     recovery_timeout: float = 150.0
     final_recovery: float = 60.0
+    # The clean time an episode needs before its action (alignment).
+    min_clean: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,24 @@ class Plan:
     timeline: Timeline
     episodes: tuple[EpisodePlan, ...]
     binding: str = "vllm-0.30"
+    # Overrides of recovery's frozen thresholds, in seconds or fractions:
+    # window, hold, cadence_hold, priming_window, cached_loss_below,
+    # cached_recovered_at, kv_margin, priming_cached_at_least.
+    thresholds: Mapping[str, float] = field(default_factory=dict)
+
+    def recovery_thresholds(self) -> Thresholds:
+        """Recovery's thresholds: the design's, the plan's overrides, and the
+        timeline's recovery minimum and timeout."""
+        values: dict[str, Any] = {
+            "min_recovery_ns": int(self.timeline.min_recovery * SECOND),
+            "recovery_timeout_ns": int(self.timeline.recovery_timeout * SECOND),
+        }
+        for name, value in self.thresholds.items():
+            if name in _SECONDS:
+                values[f"{name}_ns"] = int(value * SECOND)
+            else:
+                values[name] = float(value)
+        return Thresholds(**values)
 
     def victim_duration_seconds(self) -> float:
         """Long enough for every episode to time out its recovery."""
@@ -104,6 +126,7 @@ class Plan:
             "binding": self.binding,
             "victim": self.victim.__dict__,
             "timeline": self.timeline.__dict__,
+            "thresholds": dict(self.thresholds),
             "episodes": [
                 {"type": episode.type, "dose": dict(episode.dose)}
                 for episode in self.episodes
@@ -127,7 +150,9 @@ def parse_plan(record: Mapping[str, Any]) -> Plan:
             victim=Victim(**record.get("victim", {})),
             timeline=Timeline(**record.get("timeline", {})),
             episodes=tuple(_episode(entry) for entry in record["episodes"]),
+            thresholds=dict(record.get("thresholds") or {}),
         )
+        plan.recovery_thresholds()
     except (KeyError, TypeError, ValueError) as error:
         raise PlanError([f"malformed plan: {error}"]) from error
     problems = [
@@ -140,6 +165,9 @@ def parse_plan(record: Mapping[str, Any]) -> Plan:
     if problems:
         raise PlanError(problems)
     return plan
+
+
+_SECONDS = frozenset({"window", "hold", "cadence_hold", "priming_window"})
 
 
 def load_plan(path: Path) -> Plan:
