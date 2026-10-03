@@ -724,6 +724,27 @@ def test_the_queue_counts_bytes_by_content(
     assert status["dropped"]["alias"] == 60 - sum(written.values())
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["chatcmpl-abc-123", 'a"b\\c', "\u00e9" * 50, "\x01" * 50, "\U0001f600" * 50],
+)
+def test_a_record_is_never_sized_below_its_json(text: str) -> None:
+    fields = {"internal": text, "members": [{"external": text}]}
+    encoded = json.dumps(fields, separators=(",", ":")).encode()
+
+    assert writer_module._estimate(fields, 1 << 30) >= len(encoded)
+
+
+def test_an_escaped_record_over_the_limit_is_dropped(tmp_path: Path) -> None:
+    # 400 emoji are 400 characters but 4,800 bytes of JSON escapes.
+    writer = EpochWriter(tmp_path, "engine", limits=WriterLimits(record_bytes=4096))
+    writer.emit("alias", {"internal": "\U0001f600" * 400})
+    writer.close()
+
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert status["dropped"] == {"alias_oversized": 1}
+
+
 def test_a_backlog_does_not_hold_up_the_status_or_sealing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

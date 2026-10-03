@@ -342,7 +342,7 @@ def _estimate(value: Any, limit: int) -> int:
     while stack and total <= limit:
         item = stack.pop()
         if isinstance(item, str):
-            total += len(item) + 4
+            total += _string_bytes(item)
         elif isinstance(item, dict):
             total += 2 + 2 * len(item)
             stack.extend(item.keys())
@@ -353,6 +353,17 @@ def _estimate(value: Any, limit: int) -> int:
         else:
             total += 24
     return total
+
+
+def _string_bytes(text: str) -> int:
+    """Bytes ``json.dumps`` writes for a string, or a bound that is never less.
+
+    Printable ASCII is counted exactly. Anything else may be escaped: up to six
+    bytes a character, and twelve for one beyond the Basic Multilingual Plane.
+    """
+    if text.isascii() and text.isprintable():
+        return len(text) + 2 + text.count('"') + text.count("\\")
+    return 12 * len(text) + 2
 
 
 def _write_all(fd: int, data: bytes) -> bool:
