@@ -184,8 +184,11 @@ def _fake_vllm() -> dict[str, types.ModuleType]:
     ):
         cls.__module__ = module
         cls.__qualname__ = cls.__name__
+    envs = types.ModuleType("vllm.envs")
+    setattr(envs, "VLLM_DISABLE_REQUEST_ID_RANDOMIZATION", False)
     modules = {
         "vllm": types.ModuleType("vllm"),
+        "vllm.envs": envs,
         "vllm.v1.core.sched.scheduler": types.ModuleType(
             "vllm.v1.core.sched.scheduler"
         ),
@@ -222,6 +225,7 @@ def vllm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, 
         ),
         "EngineCore": getattr(modules["vllm.v1.engine.core"], "EngineCore"),
         "Worker": getattr(modules["vllm.v1.worker.gpu_worker"], "Worker"),
+        "envs": modules["vllm.envs"],
     }
     for writer in list(hook._WRITERS.values()):
         writer.close()
@@ -402,6 +406,18 @@ def test_another_vllm_version_is_refused(
     assert hello["refused"] == "vLLM 0.31.0 is not supported"
 
 
+@pytest.mark.parametrize("disabled", [False, True])
+def test_hello_says_whether_request_ids_are_randomized(
+    vllm: dict[str, Any], disabled: bool
+) -> None:
+    setattr(vllm["envs"], "VLLM_DISABLE_REQUEST_ID_RANDOMIZATION", disabled)
+
+    vllm["Scheduler"](vllm_config())
+
+    hello = _of(_records(vllm["root"], "engine"), "hello")[0]
+    assert hello["config"]["request_id_randomization"] is (not disabled)
+
+
 def test_vllm_errors_pass_through_and_telemetry_errors_do_not(
     vllm: dict[str, Any]
 ) -> None:
@@ -493,6 +509,7 @@ def test_a_worker_hello_names_its_rank_and_is_gated(vllm: dict[str, Any]) -> Non
     assert (hello["role"], hello["enabled"]) == ("worker", True)
     assert hello["rank"]["global"] == 0 and hello["cuda_ordinal"] == 0
     assert hello["config"]["runner"] == "vllm.v1.worker.gpu.model_runner.GPUModelRunner"
+    assert hello["config"]["request_id_randomization"] is True
 
 
 class _Range:

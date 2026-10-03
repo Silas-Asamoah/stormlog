@@ -88,9 +88,20 @@ def config_summary(
         "max_num_batched_tokens": getattr(scheduling, "max_num_batched_tokens", None),
         "speculative": getattr(speculative, "method", None) if speculative else None,
         "v2_model_runner": getattr(vllm_config, "use_v2_model_runner", None),
+        "request_id_randomization": _request_id_randomization(),
         "scheduler": _qualname(scheduler),
         "runner": _qualname(runner),
     }
+
+
+def _request_id_randomization() -> bool | None:
+    """Whether vLLM suffixes request IDs; ``None`` when vLLM cannot say."""
+    try:
+        from vllm import envs
+
+        return not bool(envs.VLLM_DISABLE_REQUEST_ID_RANDOMIZATION)
+    except Exception:
+        return None
 
 
 def _version_reason(summary: dict[str, Any]) -> str | None:

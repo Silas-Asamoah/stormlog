@@ -115,7 +115,10 @@ Times are pairs: `*_wall_ns` from `time.time_ns()` and `*_mono_ns` from
  "clock": {"wall_ns": 1790000000000123456, "mono_ns": 123456789000, "gap_ns": 1200}}
 ```
 
-`refused` is null when enabled, else a short reason. `producer` names the
+`refused` is null when enabled, else a short reason.
+`config.request_id_randomization` is false when vLLM was told not to add a random
+suffix to request IDs, so each internal ID equals its external ID, and null when
+vLLM's setting could not be read. `producer` names the
 engine's iterations and is the producer ID in every range. A worker's `hello`
 adds `rank` (`tp`, `pp`, `dp`), `local_rank`, `cuda_ordinal`, `device_uuid`
 (`GPU-…`), and `trace_rank_suffix`, the suffix vLLM puts in that worker's
