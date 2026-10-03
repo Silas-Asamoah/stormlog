@@ -75,6 +75,30 @@ def test_two_scrapes_at_one_instant_give_no_window() -> None:
     assert evaluate_signal("kv_preemption_pressure", window).exceeds is None
 
 
+def test_a_quick_scrape_inside_a_slow_one_s_interval_is_out_of_order() -> None:
+    # The first sampled somewhere in [0 s, 20 s], the second in [1 s, 1.004 s]:
+    # the midpoints run backwards, which sampled first is unknown, and the
+    # window would last -9 s.
+    window = [
+        scrape(exposition(counters={PREEMPTIONS: 5.0}), 0.0, duration_ms=20_000),
+        scrape(exposition(counters={PREEMPTIONS: 9.0}), 1.0),
+    ]
+    check = check_window(window)
+    assert check.reasons == (REASON_OUT_OF_ORDER,) and not check.sufficient
+    assert counter_window(window, PREEMPTIONS).reasons == (REASON_OUT_OF_ORDER,)
+    assert evaluate_signal("kv_preemption_pressure", window).exceeds is None
+
+
+def test_overlapping_scrapes_whose_midpoints_advance_are_in_order() -> None:
+    window = [
+        scrape(exposition(counters={PREEMPTIONS: 5.0}), 0.0, duration_ms=1_500),
+        scrape(exposition(counters={PREEMPTIONS: 9.0}), 1.0),
+    ]
+    check = check_window(window)
+    assert check.sufficient and check.seconds is not None and check.seconds > 0
+    assert counter_window(window, PREEMPTIONS).delta == 4.0
+
+
 def test_an_interior_failed_scrape_does_not_blank_the_window() -> None:
     texts: list[str | None] = [exposition(gauges={WAITING: 9})] * 2
     window = series([*texts, None, *texts])

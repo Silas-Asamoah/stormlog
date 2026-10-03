@@ -197,7 +197,9 @@ never differenced across the change (`series_labels_changed`).
 
 Scrapes must be given in strictly increasing stamp order
 (`scrapes_out_of_order`, `duplicate_scrape_time`), and nothing is differenced
-when they are not. A failed scrape inside a window leaves fewer samples, and
+when they are not. Their sample midpoints must increase too: a quick scrape
+inside a slow one's interval may have sampled first, so it is
+`scrapes_out_of_order` as well. A failed scrape inside a window leaves fewer samples, and
 counters are differenced across it; a failed first or last scrape shortens the
 window the caller chose, so the window is `scrape_failed`. Each change of a
 histogram between consecutive scrapes must itself be a histogram: cumulative
