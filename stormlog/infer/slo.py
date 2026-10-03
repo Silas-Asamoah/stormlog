@@ -21,9 +21,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeGuard
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeGuard
 
 from .errors import InferInputError, InferUsageError
+
+if TYPE_CHECKING:
+    from .vllm_analysis import JoinedSpans
 
 SLO_FORMAT = "stormlog.infer.slo"
 SLO_VERSION = 1
@@ -446,16 +449,20 @@ def evaluate_request(
     spec: SloSpec,
     *,
     span: Mapping[str, Any] | None = None,
+    missing_span_reason: str = "no_joined_span",
 ) -> RequestSloOutcome:
     """Judge one ``infer.request`` record; ``span`` is its joined vLLM span.
 
     Client criteria read the record and server criteria read only ``span``'s
-    attributes, so a missing span leaves the server criteria unknown and is
-    never filled from client values. A request that did not succeed is
-    ``missed`` whatever its criteria say; they are still judged on what was
-    recorded, for diagnosis.
+    attributes, so a missing span leaves the server criteria unknown, with
+    ``missing_span_reason``, and is never filled from client values. A request
+    that did not succeed is ``missed`` whatever its criteria say; they are
+    still judged on what was recorded, for diagnosis.
     """
-    values = {**client_values(record), **server_values(span)}
+    values = {
+        **client_values(record),
+        **server_values(span, missing_span_reason=missing_span_reason),
+    }
     criteria = evaluate_criteria(values, spec)
     status = str(record.get("status"))
     outcome = _REQUEST_OUTCOMES[criteria.outcome] if status == "ok" else "missed"
@@ -470,6 +477,37 @@ def evaluate_span(span_attributes: Mapping[str, Any], spec: SloSpec) -> SpanSloO
     """
     criteria = evaluate_criteria(server_values(span_attributes), spec, boundary=SERVER)
     return SpanSloOutcome(outcome=criteria.outcome, criteria=criteria.criteria)
+
+
+def span_attributes_by_request(
+    records: Sequence[Mapping[str, Any]], span_paths: Sequence[str | Path] = ()
+) -> JoinedSpans:
+    """Each measured request's trusted vLLM span attributes, by ``x_request_id``.
+
+    Spans come from the artifact and from ``span_paths``. A request whose span
+    arrived again with different content, or that has several spans, is left
+    out and listed in ``quarantined`` with the reason; pass that reason to
+    ``evaluate_request`` as ``missing_span_reason``.
+
+    Raises:
+        InferInputError: for a span file or span record that cannot be read.
+    """
+    from .vllm_analysis import joined_span_attributes, load_external_spans
+
+    rows = [dict(record) for record in records]
+    try:
+        return joined_span_attributes(rows, load_external_spans(rows, span_paths))
+    except (OSError, ValueError) as exc:
+        raise InferInputError(f"vLLM spans: {exc}") from exc
+
+
+def request_span(
+    record: Mapping[str, Any], spans: JoinedSpans
+) -> tuple[Mapping[str, Any] | None, str]:
+    """A request's trusted span, or None and the reason it has none."""
+    request_id = str(record.get("x_request_id"))
+    span = spans.by_request.get(request_id)
+    return span, spans.quarantined.get(request_id, "no_joined_span")
 
 
 def slo_attained(
@@ -493,12 +531,14 @@ def client_values(record: Mapping[str, Any]) -> dict[str, CriterionValue]:
 
 
 def server_values(
-    span_attributes: Mapping[str, Any] | None
+    span_attributes: Mapping[str, Any] | None,
+    *,
+    missing_span_reason: str = "no_joined_span",
 ) -> dict[str, CriterionValue]:
     """The per-request server criteria's values from a span's attributes."""
     if span_attributes is None:
         return {
-            key: CriterionValue(None, reason="no_joined_span")
+            key: CriterionValue(None, reason=missing_span_reason)
             for key in SPAN_ATTRIBUTES
         }
     values = {}
@@ -741,6 +781,8 @@ __all__ = [
     "SloSpec",
     "load_slo",
     "parse_slo_flags",
+    "request_span",
+    "span_attributes_by_request",
     "slo_from_artifact",
     "slo_from_document",
     "slo_record",

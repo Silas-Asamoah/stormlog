@@ -21,12 +21,15 @@ from stormlog.infer.slo import (
     evaluate_span,
     load_slo,
     parse_slo_flags,
+    request_span,
     server_values,
     slo_attained,
     slo_from_artifact,
     slo_from_document,
     slo_record,
+    span_attributes_by_request,
 )
+from stormlog.infer.vllm_spans import VllmSpanRecord
 
 
 def _document(**overrides: Any) -> dict[str, Any]:
@@ -436,3 +439,74 @@ def test_evaluate_criteria_accepts_plain_numbers() -> None:
     assert outcome.criteria["server.e2e"].reason == "no_value"
     infinite = evaluate_criteria({"client.ttft": float("inf")}, spec)
     assert infinite.criteria["client.ttft"].reason == "non_finite_value"
+
+
+# --- spans joined to requests ------------------------------------------------
+
+
+def _span_record(
+    x_request_id: str, span_id: str, ttft_seconds: float
+) -> dict[str, Any]:
+    return VllmSpanRecord(
+        session_id="s1",
+        run_id="run-1",
+        source="otlp_http_receiver",
+        name="llm_request",
+        clock_domain="gpu-box/unix_epoch_ns",
+        trace_id="a" * 32,
+        span_id=span_id,
+        start_unix_ns=0,
+        end_unix_ns=1,
+        attributes={
+            "gen_ai.request.id": f"chatcmpl-{x_request_id}",
+            "gen_ai.latency.time_to_first_token": ttft_seconds,
+            "gen_ai.latency.e2e": 1.0,
+            "gen_ai.latency.time_in_queue": 0.01,
+        },
+        request_id=x_request_id,
+    ).to_record()
+
+
+def _measured(index: int) -> dict[str, Any]:
+    return _request(
+        phase="measured",
+        case_id="c1",
+        session_id="s1",
+        x_request_id=f"stormlog-run-{index}",
+    )
+
+
+def test_joined_spans_judge_server_criteria_and_quarantine_conflicts() -> None:
+    first, second = _measured(0), _measured(1)
+    conflicting = _span_record("stormlog-run-1", "2" * 16, 0.2)
+    conflicting["attributes"]["gen_ai.latency.time_to_first_token"] = 0.9
+    records = [
+        {"event_type": "infer.session", "session_id": "s1"},
+        first,
+        second,
+        _span_record("stormlog-run-0", "1" * 16, 0.2),
+        _span_record("stormlog-run-1", "2" * 16, 0.2),
+        conflicting,
+    ]
+    spans = span_attributes_by_request(records)
+    spec = parse_slo_flags(["server.ttft:400"])
+
+    assert spans.quarantined == {"stormlog-run-1": "conflicting_spans"}
+    span, reason = request_span(first, spans)
+    assert evaluate_request(first, spec, span=span, missing_span_reason=reason).met
+    span, reason = request_span(second, spans)
+    outcome = evaluate_request(second, spec, span=span, missing_span_reason=reason)
+    assert outcome.outcome == "unknown"
+    assert outcome.criteria["server.ttft"].reason == "conflicting_spans"
+
+
+def test_a_request_without_a_span_says_so() -> None:
+    records = [{"event_type": "infer.session", "session_id": "s1"}, _measured(0)]
+    span, reason = request_span(_measured(0), span_attributes_by_request(records))
+    assert (span, reason) == (None, "no_joined_span")
+
+
+def test_an_unreadable_span_file_is_invalid_input(tmp_path: Path) -> None:
+    records = [{"event_type": "infer.session", "session_id": "s1"}, _measured(0)]
+    with pytest.raises(InferInputError, match="vLLM spans"):
+        span_attributes_by_request(records, [tmp_path / "absent.json"])

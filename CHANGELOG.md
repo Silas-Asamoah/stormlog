@@ -242,6 +242,10 @@ the flaky benchmark memory gates
 
 ### Fixed
 
+- `stormlog infer analyze` no longer keeps the first of two different
+  deliveries of a request's vLLM span. That request, and any request with more
+  than one span, is quarantined: its spans are left out of the case's span
+  statistics and counted under `quarantined_requests`. (#213)
 - `stormlog infer profile --cache-reset-url` no longer counts an HTTP 200 as a
   reset. vLLM's `/reset_prefix_cache` answers 200 with `{"success": false}`
   while blocks are still held. The answer is now read and recorded as

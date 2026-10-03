@@ -145,6 +145,15 @@ never whether the request succeeded.
 `evaluate_criteria(values, spec, boundary=...)` is the shared judge underneath
 both. It takes values keyed by criterion, in milliseconds.
 
+`span_attributes_by_request(records, span_paths=())` joins each measured
+request to its vLLM span, from the artifact and from span files, by
+`X-Request-Id`. It never guesses between deliveries. A request whose span
+arrived again with different content, or that has several spans, is left out
+and listed in `quarantined` with the reason. `request_span(record, spans)`
+returns a request's span and, when it has none, the reason. Pass that reason
+to `evaluate_request(..., missing_span_reason=...)` so the unknown server
+criteria say why.
+
 ## Populations and intervals
 
 `stormlog.infer.populations.case_populations(records)` describes each
