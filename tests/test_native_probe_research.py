@@ -302,7 +302,15 @@ def test_w4_pressure_unsupported_cannot_pass_and_preserves_process_failure(
                     "-c",
                     f"import sys; print({payload!r}); sys.exit({exit_code})",
                 ),
-                {},
+                {
+                    "STORMLOG_CUPTI_OUTPUT_DIR": str(
+                        tmp_path
+                        / "control"
+                        / "trials"
+                        / f"w4-pressure-{exit_code}"
+                        / "cupti"
+                    )
+                },
                 5.0,
             ),
             pressure_controls=pressure,

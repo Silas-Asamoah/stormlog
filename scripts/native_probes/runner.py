@@ -15,7 +15,14 @@ from typing import Any, Mapping
 
 import psutil
 
-from .models import ProcessRole, ProcessRoleSpec, ResultStatus, TrialSpec
+from .models import (
+    ExperimentMode,
+    ProcessRole,
+    ProcessRoleSpec,
+    ResultStatus,
+    TrialSpec,
+    WorkloadId,
+)
 from .normalization import validate_measurement_window, validate_unique_artifacts
 from .preflight import write_manifest
 
@@ -43,6 +50,17 @@ def run_trial(
     _validate_environment(spec.command.environment)
     trial_directory = output_root / spec.configuration_id / "trials" / spec.trial_id
     trial_directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+    if (
+        spec.mode is ExperimentMode.DIRECT_CUPTI
+        and spec.workload_id is not WorkloadId.VLLM
+    ):
+        configured_output = spec.command.environment.get("STORMLOG_CUPTI_OUTPUT_DIR")
+        if not configured_output:
+            raise ValueError("direct-CUPTI trial requires an output directory")
+        output_directory = Path(configured_output)
+        if not output_directory.is_relative_to(trial_directory.resolve()):
+            raise ValueError("CUPTI output directory must be inside the trial")
+        output_directory.mkdir(mode=0o700)
     logs_directory = trial_directory / "logs"
     logs_directory.mkdir(mode=0o700)
     stdout_path = logs_directory / "stdout.log"

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_protocol_stop_approval",
+  "issue": 118,
+  "approved_on_local_date": "2026-10-02",
+  "approval_source": "direct user reply 'yes' to the exact stop rule in the linked JSON proposal",
+  "proposal_path": "benchmarks/native_probes/protocol_stop_proposal_2026-10-02.json",
+  "proposal_sha256": "9b9fc0f37f456277116a535e26407df2f66bace02ba787b3b96f176c8b9857a7",
+  "approved_scope": "direct_cupti_stop_rule",
+  "paid_hardware_preflight_authorized": true,
+  "final_trials_authorized": false,
+  "status": "stop_rule_approved_helper_revision_pending"
+}

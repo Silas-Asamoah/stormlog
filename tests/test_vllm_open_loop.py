@@ -5,6 +5,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import socket
+import tempfile
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +17,7 @@ import pytest
 
 from scripts.native_probes.mode_commands import (
     Workload,
+    microbenchmark_command,
     vllm_command,
     vllm_expected_artifacts,
 )
@@ -29,6 +34,7 @@ from scripts.native_probes.workloads.vllm_open_loop import (
     _result,
     _server_argv,
     _slo_goodput,
+    _stop_cupti_helpers,
     offer_requests,
     request_body,
     run,
@@ -189,6 +195,69 @@ def test_incomplete_stream_is_a_failed_offered_request() -> None:
     assert row["error"] == "stream ended before [DONE]"
 
 
+def test_cupti_stop_requires_private_socket_ack_and_actual_controls() -> None:
+    with tempfile.TemporaryDirectory(prefix="cupti-stop-", dir="/tmp") as temporary:
+        root = Path(temporary)
+        process = root / "pid-123-test"
+        process.mkdir(mode=0o700)
+        path = process / "stop.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(path))
+            os.chmod(path, 0o600)
+            listener.listen(1)
+
+            def serve() -> None:
+                connection, _ = listener.accept()
+                with connection:
+                    assert connection.recv(4) == b"STOP"
+                    (process / "cupti_status.json").write_text(
+                        json.dumps(
+                            {
+                                "pid": 123,
+                                "finalized": True,
+                                "activity_buffer_bytes": 8388608,
+                            }
+                        )
+                    )
+                    connection.sendall(b"OK\n")
+
+            worker = threading.Thread(target=serve, daemon=True)
+            worker.start()
+            result = _stop_cupti_helpers(
+                root, timeout=2, expected_controls={"activity_buffer_bytes": 8388608}
+            )
+            worker.join(timeout=2)
+            assert result["complete"] is True
+            assert result["reports"][0]["status"]["pid"] == 123
+        path.unlink()
+        assert _stop_cupti_helpers(root)["complete"] is False
+
+
+def test_cupti_stop_retains_missing_ack() -> None:
+    with tempfile.TemporaryDirectory(prefix="cupti-stop-", dir="/tmp") as temporary:
+        root = Path(temporary)
+        process = root / "pid-123-test"
+        process.mkdir(mode=0o700)
+        path = process / "stop.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(path))
+            os.chmod(path, 0o600)
+            listener.listen(1)
+
+            def serve() -> None:
+                connection, _ = listener.accept()
+                with connection:
+                    assert connection.recv(4) == b"STOP"
+
+            worker = threading.Thread(target=serve, daemon=True)
+            worker.start()
+            result = _stop_cupti_helpers(root, timeout=2)
+            worker.join(timeout=2)
+            assert result["complete"] is False
+            assert result["reports"][0]["ack"] == ""
+            assert result["errors"]
+
+
 def test_cupti_capture_requires_every_target_and_clean_flush(tmp_path: Path) -> None:
     cupti = tmp_path / "cupti"
     cupti.mkdir()
@@ -213,6 +282,11 @@ def test_cupti_capture_requires_every_target_and_clean_flush(tmp_path: Path) -> 
     capture, _ = _cupti_capture_status(tmp_path, samples)
     assert capture["complete"] is False
     assert "13" in capture["errors"][0]
+    capture, _ = _cupti_capture_status(tmp_path, samples, required_gpu_pids={12})
+    assert capture["complete"] is True
+    assert capture["required_gpu_pids"] == [12]
+    capture, _ = _cupti_capture_status(tmp_path, samples, required_gpu_pids=set())
+    assert capture["complete"] is False
 
     samples[0]["processes"].pop()
     status["local_dropped_records"] = 2
@@ -419,6 +493,39 @@ def test_slo_and_w4_values_match_approved_amendment() -> None:
     assert (
         variants["target_timeout"]["target_timeout_after_measurement_start_ms"] == 500
     )
+
+
+def test_approved_stop_rule_and_cupti_pressure_environment(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1] / "benchmarks/native_probes"
+    proposal_bytes = (root / "protocol_stop_proposal_2026-10-02.json").read_bytes()
+    approval = json.loads((root / "protocol_stop_approval_2026-10-02.json").read_text())
+    assert approval["proposal_sha256"] == hashlib.sha256(proposal_bytes).hexdigest()
+    assert approval["approved_scope"] == "direct_cupti_stop_rule"
+    assert approval["final_trials_authorized"] is False
+
+    library = tmp_path / "libstormlog_cupti_injection.so"
+    library.write_bytes(b"placeholder")
+    command = microbenchmark_command(
+        ExperimentMode.DIRECT_CUPTI,
+        Workload(
+            WorkloadId.W4_STRESS,
+            producer_buffer_bytes=65536,
+            output_byte_bound=65536,
+            consumer_delay_ms=25,
+        ),
+        tmp_path,
+        cupti_library=library,
+    )
+    assert command.environment["STORMLOG_CUPTI_BUFFER_BYTES"] == "65536"
+    assert command.environment["STORMLOG_CUPTI_CONSUMER_DELAY_MS"] == "25"
+    assert command.environment["STORMLOG_CUPTI_MAX_BYTES"] == "65536"
+    with pytest.raises(ValueError, match="pressure control"):
+        microbenchmark_command(
+            ExperimentMode.DIRECT_CUPTI,
+            Workload(WorkloadId.W4_STRESS, consumer_delay_ms=0.5),
+            tmp_path,
+            cupti_library=library,
+        )
 
 
 def test_vllm_plan_separates_modes_and_rejects_unimplemented_modes(

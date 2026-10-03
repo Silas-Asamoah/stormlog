@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,7 +60,12 @@ def microbenchmark_command(
         if cupti_library is None:
             raise ValueError("direct-cupti requires a pinned injection library")
         return _direct_cupti(
-            base, artifact_directory, cupti_library, workload.output_byte_bound
+            base,
+            artifact_directory,
+            cupti_library,
+            workload.output_byte_bound,
+            workload.producer_buffer_bytes,
+            workload.consumer_delay_ms,
         )
     if mode is ExperimentMode.AMD_ROCPROFILER:
         return _rocprofiler_command(base, artifact_directory)
@@ -100,7 +106,14 @@ def vllm_command(
     if mode is ExperimentMode.DIRECT_CUPTI:
         if cupti_library is None:
             raise ValueError("direct-cupti requires a pinned injection library")
-        return _direct_cupti(base, directory / "vllm", cupti_library, 256 * 1024 * 1024)
+        return _direct_cupti(
+            base,
+            directory / "vllm",
+            cupti_library,
+            256 * 1024 * 1024,
+            8 * 1024 * 1024,
+            0,
+        )
     return CommandSpec(base, {}, 1800.0)
 
 
@@ -166,7 +179,7 @@ def vllm_expected_artifacts(mode: ExperimentMode) -> tuple[ArtifactExpectation, 
     if mode not in profiler:
         return common
     path, producer, format_name = profiler[mode]
-    return (
+    artifacts = (
         *common,
         ArtifactExpectation(
             "vllm-profiler",
@@ -179,6 +192,18 @@ def vllm_expected_artifacts(mode: ExperimentMode) -> tuple[ArtifactExpectation, 
             mode is ExperimentMode.DIRECT_CUPTI,
         ),
     )
+    if mode is ExperimentMode.DIRECT_CUPTI:
+        return (
+            *artifacts,
+            ArtifactExpectation(
+                "vllm-cupti-stop",
+                "status",
+                "vllm/cupti-stop.json",
+                "helper_agent",
+                "json",
+            ),
+        )
+    return artifacts
 
 
 def vllm_process_roles(mode: ExperimentMode) -> tuple[ProcessRoleSpec, ...]:
@@ -355,7 +380,19 @@ def _direct_cupti(
     artifact_directory: Path,
     library: Path,
     output_byte_bound: int,
+    activity_buffer_bytes: int,
+    consumer_delay_ms: float,
 ) -> CommandSpec:
+    if (
+        activity_buffer_bytes < 65536
+        or activity_buffer_bytes > 64 * 1024 * 1024
+        or output_byte_bound <= 0
+        or not math.isfinite(consumer_delay_ms)
+        or consumer_delay_ms < 0
+        or consumer_delay_ms > 1000
+        or not float(consumer_delay_ms).is_integer()
+    ):
+        raise ValueError("invalid direct-CUPTI pressure control")
     resolved_library = library.resolve(strict=True)
     return CommandSpec(
         base,
@@ -363,6 +400,8 @@ def _direct_cupti(
             "CUDA_INJECTION64_PATH": str(resolved_library),
             "STORMLOG_CUPTI_OUTPUT_DIR": str(artifact_directory / "cupti"),
             "STORMLOG_CUPTI_MAX_BYTES": str(output_byte_bound),
+            "STORMLOG_CUPTI_BUFFER_BYTES": str(activity_buffer_bytes),
+            "STORMLOG_CUPTI_CONSUMER_DELAY_MS": str(int(consumer_delay_ms)),
             "STORMLOG_CUPTI_ACTIVITIES": (
                 "driver,runtime,kernel,memcpy,memset,synchronization"
             ),

@@ -9,6 +9,8 @@ import json
 import math
 import os
 import signal
+import socket
+import stat
 import statistics
 import subprocess
 import sys
@@ -375,8 +377,104 @@ def _memory_metrics(samples: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _gpu_process_pids() -> tuple[set[int] | None, str | None]:
+    """Query live CUDA context owners before the target shutdown begins."""
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"GPU process query failed: {type(exc).__name__}: {exc}"
+    if result.returncode != 0:
+        return None, f"GPU process query exited {result.returncode}: {result.stderr}"
+    try:
+        return {
+            int(line.strip()) for line in result.stdout.splitlines() if line.strip()
+        }, None
+    except ValueError as exc:
+        return None, f"GPU process query contained an invalid pid: {exc}"
+
+
+def _stop_cupti_helpers(
+    directory: Path,
+    *,
+    timeout: float = 30,
+    expected_controls: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """Finalize every live injected process before stopping the vLLM server."""
+    sockets = sorted(directory.rglob("stop.sock"))
+    reports: list[dict[str, Any]] = []
+    errors: list[str] = []
+    if not sockets:
+        errors.append("no live CUPTI stop socket")
+    for path in sockets:
+        row: dict[str, Any] = {
+            "socket": str(path.relative_to(directory)),
+            "request_at_ns": time.time_ns(),
+            "ack_at_ns": None,
+        }
+        descriptor = -1
+        try:
+            socket_status = path.lstat()
+            directory_status = path.parent.stat()
+            if (
+                not stat.S_ISSOCK(socket_status.st_mode)
+                or socket_status.st_uid != os.geteuid()
+                or stat.S_IMODE(socket_status.st_mode) != 0o600
+                or directory_status.st_uid != os.geteuid()
+                or stat.S_IMODE(directory_status.st_mode) != 0o700
+            ):
+                raise ValueError("stop socket or process directory is not private")
+            address = str(path)
+            if len(os.fsencode(address)) >= 100 and Path("/proc/self/fd").is_dir():
+                descriptor = os.open(
+                    path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                )
+                address = f"/proc/self/fd/{descriptor}/stop.sock"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as control:
+                control.settimeout(timeout)
+                control.connect(address)
+                control.sendall(b"STOP")
+                row["ack"] = control.recv(4).decode("ascii", errors="replace")
+                row["ack_at_ns"] = time.time_ns()
+            status_path = path.parent / "cupti_status.json"
+            if status_path.is_file():
+                row["status"] = json.loads(status_path.read_text(encoding="utf-8"))
+            if row.get("ack") != "OK\n" or not isinstance(row.get("status"), dict):
+                errors.append(f"{row['socket']}: stop acknowledgment or status missing")
+            elif row["status"].get("finalized") is not True:
+                errors.append(f"{row['socket']}: CUPTI helper did not finalize")
+            elif len(path.parent.name.split("-")) < 3 or path.parent.name.split("-")[
+                1
+            ] != str(row["status"].get("pid")):
+                errors.append(f"{row['socket']}: process identity mismatch")
+            if isinstance(row.get("status"), dict) and expected_controls is not None:
+                for key, expected in expected_controls.items():
+                    if row["status"].get(key) != expected:
+                        errors.append(
+                            f"{row['socket']}: observed {key} differs from configured value"
+                        )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            errors.append(f"{row['socket']}: {type(exc).__name__}: {exc}")
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            reports.append(row)
+    return {"reports": reports, "errors": errors, "complete": not errors}
+
+
 def _cupti_capture_status(
-    output: Path, samples: list[dict[str, Any]]
+    output: Path,
+    samples: list[dict[str, Any]],
+    required_gpu_pids: set[int] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Require a finalized capture for every observed target process."""
     observed = sorted(
@@ -410,11 +508,16 @@ def _cupti_capture_status(
         errors.append("duplicate CUPTI process status")
     if len(valid_reported) != len(reported):
         errors.append("CUPTI process status has an invalid pid")
-    missing = sorted(set(observed) - set(valid_reported))
+    required = set(observed) if required_gpu_pids is None else required_gpu_pids
+    missing = sorted(required - set(valid_reported))
     if missing:
         errors.append(f"observed target processes without CUPTI status: {missing}")
     if not observed:
         errors.append("no target process observed during measurement")
+    if required_gpu_pids is not None and not required_gpu_pids:
+        errors.append("no GPU process identified before capture stop")
+    if required_gpu_pids is not None and not required_gpu_pids.issubset(observed):
+        errors.append("GPU process was not observed in target process samples")
     unexpected = sorted(set(valid_reported) - set(observed))
     if unexpected:
         errors.append(f"CUPTI status for unobserved target processes: {unexpected}")
@@ -476,6 +579,7 @@ def _cupti_capture_status(
         errors.append("CUPTI delivered no activity records")
     capture = {
         "observed_target_pids": observed,
+        "required_gpu_pids": sorted(required),
         "reported_pids": reported,
         "status_reports": reports,
         "errors": errors,
@@ -673,6 +777,9 @@ def run(mode: str, output: Path, port: int) -> int:
     )
     profiled_modes = {"public-engine", "proton", "trusted"}
     stop_completed = mode not in profiled_modes
+    cupti_stop: dict[str, Any] | None = None
+    gpu_pids: set[int] | None = None
+    gpu_pid_error: str | None = None
     with (
         (output / "server-stdout.log").open("xb") as stdout,
         (output / "server-stderr.log").open("xb") as stderr,
@@ -713,6 +820,44 @@ def run(mode: str, output: Path, port: int) -> int:
             if mode in profiled_modes:
                 _control(endpoint, "stop_profile")
                 stop_completed = True
+            if mode == "direct-cupti":
+                gpu_pids, gpu_pid_error = _gpu_process_pids()
+                controls = {
+                    "activity_buffer_bytes": environment.get(
+                        "STORMLOG_CUPTI_BUFFER_BYTES"
+                    ),
+                    "consumer_delay_ms": environment.get(
+                        "STORMLOG_CUPTI_CONSUMER_DELAY_MS"
+                    ),
+                    "maximum_output_bytes": environment.get("STORMLOG_CUPTI_MAX_BYTES"),
+                }
+                expected_controls = (
+                    {
+                        key: int(value)
+                        for key, value in controls.items()
+                        if value is not None
+                    }
+                    if all(
+                        value is not None and value.isdecimal()
+                        for value in controls.values()
+                    )
+                    else None
+                )
+                cupti_stop = _stop_cupti_helpers(
+                    output / "cupti", expected_controls=expected_controls
+                )
+                if expected_controls is None:
+                    cupti_stop["errors"].append(
+                        "CUPTI control environment is incomplete"
+                    )
+                    cupti_stop["complete"] = False
+                cupti_stop["gpu_process_pids"] = (
+                    sorted(gpu_pids) if gpu_pids is not None else None
+                )
+                cupti_stop["gpu_process_error"] = gpu_pid_error
+                (output / "cupti-stop.json").write_text(
+                    json.dumps(cupti_stop, sort_keys=True) + "\n", encoding="utf-8"
+                )
             server_exited_early = server.poll() is not None
         finally:
             if server.poll() is None:
@@ -751,7 +896,14 @@ def run(mode: str, output: Path, port: int) -> int:
     result["metrics"].update(_memory_metrics(samples))
     result["metrics"]["server_exited_early_count"] = int(server_exited_early)
     if mode == "direct-cupti":
-        capture, loss = _cupti_capture_status(output, samples)
+        capture, loss = _cupti_capture_status(
+            output, samples, required_gpu_pids=gpu_pids
+        )
+        if cupti_stop is None or not cupti_stop["complete"] or gpu_pid_error:
+            capture["errors"].append("CUPTI stop control or GPU process query failed")
+            capture["complete"] = False
+            loss["vendor_activity"]["status"] = "unknown"
+            loss["vendor_activity"]["reason"] = "; ".join(capture["errors"])
         (output / "cupti-capture-status.json").write_text(
             json.dumps(capture, sort_keys=True) + "\n", encoding="utf-8"
         )
