@@ -243,10 +243,14 @@ class TraceWindows:
             # stop and record the window before letting the cancellation through.
             await self._abandon(window, start, before)
             raise
-        self._mark_started(window)
-        timer = self._bound(window)
+        _mark_started(window)
+        timer: asyncio.Task[None] | None = None
         reason = "phase_end"
         try:
+            # Inside the cleanup: a warning that fails (a closed stderr, a
+            # Ctrl+C while it prints) must not skip the stop or the record.
+            self._warn_start(window)
+            timer = self._bound(window)
             if window.start_outcome == START_UNKNOWN:
                 # The server may be profiling with nobody to stop it: stop it
                 # now, and let the phase run unprofiled.
@@ -268,19 +272,10 @@ class TraceWindows:
         finally:
             window.start_returned_at_ns = time.time_ns()
 
-    def _mark_started(self, window: TraceWindow) -> None:
-        assert window.start is not None
-        window.start_outcome = start_outcome(window.start)
-        window.started = window.start_outcome == START_ACKNOWLEDGED
-        window.started_at_ns = window.start_returned_at_ns if window.started else None
+    def _warn_start(self, window: TraceWindow) -> None:
         if window.start_outcome == START_REJECTED:
-            window.note = "the profiler did not start; see start_status and start_error"
             self._warn(window, "could not start the profiler")
         elif window.start_outcome == START_UNKNOWN:
-            window.note = (
-                "the start's answer does not say whether the profiler started; "
-                "it was stopped, and the phase ran unprofiled"
-            )
             self._warn(window, "the profiler may have started; stopping it")
 
     async def _abandon(
@@ -291,8 +286,11 @@ class TraceWindows:
     ) -> None:
         # Bounded by the control timeout of the start request itself.
         window.start = await start
-        self._mark_started(window)
-        await self._close(window, "cancelled", before)
+        _mark_started(window)
+        try:
+            self._warn_start(window)
+        finally:
+            await self._close(window, "cancelled", before)
 
     def take_records(self, *, session_id: str) -> list[dict[str, Any]]:
         """``infer.trace_window`` records for windows closed since the last call."""
@@ -485,6 +483,21 @@ class _NothingCollected:
                     for window in self.windows
                 ],
             },
+        )
+
+
+def _mark_started(window: TraceWindow) -> None:
+    """Classify the start's answer; no callback runs here."""
+    assert window.start is not None
+    window.start_outcome = start_outcome(window.start)
+    window.started = window.start_outcome == START_ACKNOWLEDGED
+    window.started_at_ns = window.start_returned_at_ns if window.started else None
+    if window.start_outcome == START_REJECTED:
+        window.note = "the profiler did not start; see start_status and start_error"
+    elif window.start_outcome == START_UNKNOWN:
+        window.note = (
+            "the start's answer does not say whether the profiler started; "
+            "it was stopped, and the phase ran unprofiled"
         )
 
 
