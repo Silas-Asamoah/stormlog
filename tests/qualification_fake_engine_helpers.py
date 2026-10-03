@@ -6,9 +6,12 @@ import json
 import threading
 import time
 import urllib.request
+from pathlib import Path
 from typing import Any, Callable
 
 from examples.qualification.fake_engine import FakeEngine
+from stormlog.infer.config import ProfileConfig
+from stormlog.infer.profile import InferenceProfiler
 
 
 def chat(
@@ -116,3 +119,34 @@ def wait_until(predicate: Callable[[], bool], *, timeout: float = 10.0) -> bool:
 def words(count: int, tag: str) -> str:
     """``count`` distinct whitespace tokens, unique to ``tag``."""
     return " ".join(f"{tag}{index}" for index in range(count))
+
+
+def run_profile(engine: FakeEngine, output: Path, **changes: Any) -> dict[str, Any]:
+    """An ``infer profile`` run against the fake engine; returns its report."""
+    values: dict[str, Any] = {
+        "endpoint": engine.endpoint,
+        "model": engine.config.model,
+        "concurrency": (2,),
+        "input_tokens": (32,),
+        "output_tokens": (4,),
+        "output_path": str(output),
+        "request_count": 4,
+        "tokenizer": "none",
+        "system_sampler": "none",
+        "run_id": "run-1",
+        "prompt_mode": "unique",
+    }
+    values.update(changes)
+    return InferenceProfiler(ProfileConfig(**values)).run()
+
+
+def records(path: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def of_type(items: list[dict[str, Any]], event_type: str) -> list[dict[str, Any]]:
+    return [item for item in items if item.get("event_type") == event_type]

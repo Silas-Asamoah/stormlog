@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .config import VLLM_VERSION, Controls, FakeEngineConfig
 from .engine import Engine, FakeRequest, prompt_tokens
+from .hook_log import HookLog
 from .metrics import render_metrics
 
 TOKEN_TEXT = " tok"
@@ -34,10 +35,14 @@ class FakeEngine:
         self._frontend.set()
         self._server: _Server | None = None
         self._thread: threading.Thread | None = None
+        self.hook: HookLog | None = None
 
     # ------------------------------------------------------------ lifecycle
 
     def start(self) -> FakeEngine:
+        if self.config.hook_dir is not None:
+            self.hook = HookLog(self.config.hook_dir, self.config)
+            self.engine.observers.append(self.hook)
         self._server = _Server((self.config.host, self.config.port), _Handler)
         self._server.fake = self
         self.engine.start()
@@ -55,6 +60,8 @@ class FakeEngine:
             self._server.server_close()
         if self._thread is not None:
             self._thread.join(timeout=10)
+        if self.hook is not None:
+            self.hook.close()
 
     def __enter__(self) -> FakeEngine:
         return self.start()
