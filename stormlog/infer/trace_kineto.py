@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
@@ -228,7 +229,7 @@ def _add_event(trace: KinetoTrace, event: dict[str, Any]) -> None:
         trace.launches[int(args["correlation"])] = LaunchCall(
             pid=int(event["pid"]),
             tid=int(event["tid"]),
-            ts_us=float(event["ts"]),
+            ts_us=_event_times(event)[0],
             name=str(event.get("name", "")),
         )
     elif category in RANGE_CATEGORIES:
@@ -238,8 +239,8 @@ def _add_event(trace: KinetoTrace, event: dict[str, Any]) -> None:
 def _gpu_event(
     trace: KinetoTrace, event: dict[str, Any], args: dict[str, Any]
 ) -> GpuEvent:
-    start_us = float(event["ts"])
-    end_us = start_us + float(event.get("dur") or 0.0)
+    start_us, duration_us = _event_times(event)
+    end_us = start_us + duration_us
     graph_id = _optional_int(args.get("graph id"))
     return GpuEvent(
         start_ns=_to_ns(trace, start_us),
@@ -257,9 +258,24 @@ def _add_span(trace: KinetoTrace, event: dict[str, Any]) -> None:
     ref = parse_iteration_range(str(event.get("name", "")))
     if ref is None:
         return
-    start_us = float(event["ts"])
-    span = IterationSpan(start_us, start_us + float(event.get("dur") or 0.0), ref)
+    start_us, duration_us = _event_times(event)
+    span = IterationSpan(start_us, start_us + duration_us, ref)
     trace.spans.setdefault((int(event["pid"]), int(event["tid"])), []).append(span)
+
+
+def _event_times(event: dict[str, Any]) -> tuple[float, float]:
+    """An event's start and duration in microseconds, checked before any use.
+
+    A negative or non-finite value would otherwise hide inside the merged span
+    of a multi-event launch, where the record's own span check cannot see it.
+    """
+    start_us = float(event["ts"])
+    duration_us = float(event.get("dur") or 0.0)
+    if not math.isfinite(start_us) or not math.isfinite(duration_us):
+        raise ValueError("ts and dur must be finite")
+    if duration_us < 0:
+        raise ValueError(f"negative duration {duration_us}")
+    return start_us, duration_us
 
 
 def _index_spans(trace: KinetoTrace) -> None:

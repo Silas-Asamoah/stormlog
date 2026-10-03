@@ -373,3 +373,41 @@ def test_the_shared_ordinal_check_tells_ranks_apart(tmp_path: Path) -> None:
     )
 
     assert code == int(ExitCode.USAGE)
+
+
+@pytest.mark.parametrize("detail", ["launch", "kernel"])
+def test_cli_rejects_a_negative_gpu_duration_at_both_details(
+    tmp_path: Path, detail: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    trace = _trace(tmp_path / "rank0.pt.trace.json", "T0")
+    document = json.loads(trace.read_text(encoding="utf-8"))
+    document["traceEvents"].append(
+        {
+            "ph": "X",
+            "cat": "kernel",
+            "name": "gemm",
+            "pid": 0,
+            "tid": 7,
+            "ts": 20.0,
+            "dur": -100.0,
+            "args": {"device": 0, "stream": 7, "correlation": 1},
+        }
+    )
+    trace.write_text(json.dumps(document), encoding="utf-8")
+
+    code = main(
+        [
+            "import-trace",
+            str(artifact),
+            str(trace),
+            "--detail",
+            detail,
+            "--device-uuid",
+            "0=GPU-a",
+        ]
+    )
+
+    assert code == int(ExitCode.INVALID_INPUT)
+    assert "negative duration" in capsys.readouterr().err
+    assert artifact.read_text(encoding="utf-8").count("\n") == 1

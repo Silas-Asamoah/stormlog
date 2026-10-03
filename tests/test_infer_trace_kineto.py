@@ -490,3 +490,28 @@ def test_a_launch_at_a_range_boundary_belongs_to_the_range_it_starts(
     event = next(e for e in trace.gpu_events if e.correlation == 9)
 
     assert link_gpu_event(trace, event).iteration_ref == EntityRef(ENGINE, "it-2")
+
+
+@pytest.mark.parametrize("detail", ["launch", "kernel"])
+@pytest.mark.parametrize(
+    ("ts", "dur", "reason"),
+    [
+        (20.0, -100.0, "negative duration"),
+        (float("inf"), 1.0, "finite"),
+        (10.0, float("nan"), "finite"),
+    ],
+)
+def test_a_gpu_event_with_a_bad_time_is_rejected_at_both_details(
+    tmp_path: Path, detail: str, ts: float, dur: float, reason: str
+) -> None:
+    """A bad event must not hide inside the merged span of its launch."""
+    document = _trace_document()
+    document["traceEvents"].append(_gpu("kernel", 1, ts, dur))
+
+    with pytest.raises(ValueError, match=rf"traceEvents\[\d+\] is malformed.*{reason}"):
+        import_kineto_trace(
+            _write(tmp_path, document),
+            run_id="run-1",
+            session_id="session-1",
+            detail=detail,  # type: ignore[arg-type]
+        )
