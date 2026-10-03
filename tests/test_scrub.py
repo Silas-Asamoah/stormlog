@@ -472,6 +472,26 @@ def test_arrays_and_objects_are_redacted_whole(text: str, scrubbed: str) -> None
     assert scrub_text(text) == scrubbed
 
 
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        # A command-line flag and its value.
+        ("--api-key opaque-value", "--api-key <redacted>"),
+        ("run --token abc123 --model m", "run --token <redacted> --model m"),
+        ('serve -password "a b c" now', 'serve -password "<redacted>" now'),
+        # An upper-case name, as an environment variable or a header is written.
+        ("API-KEY opaque", "API-KEY <redacted>"),
+        ("set CLIENT_SECRET hunter2-x", "set CLIENT_SECRET <redacted>"),
+        # Prose and other flags are left alone.
+        ("the token expired", "the token expired"),
+        ("run --model m --verbose", "run --model m --verbose"),
+        ("--api-key --verbose", "--api-key --verbose"),
+    ],
+)
+def test_a_key_and_value_separated_by_a_space(text: str, scrubbed: str) -> None:
+    assert scrub_text(text) == scrubbed
+
+
 def test_scrub_text_leaves_ordinary_text_alone() -> None:
     text = "This model's maximum context length is 32768 tokens; max_tokens 128."
     assert scrub_text(text) == text
@@ -650,6 +670,9 @@ ADVERSARIAL = (
     ("'{\"api_key\": ' * 10000", None),
     ('"[" * 50000', None),
     ('"password=[" * 5000', None),
+    ('"--token " * 7000', None),
+    ('"TOKEN " * 8000', None),
+    ('"-" * 52000', None),
     ('"a=\'" * 17000', None),
     ("'a=\"' * 17000", None),
     ("'password=\"' * 5000", None),

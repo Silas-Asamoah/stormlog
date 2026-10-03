@@ -85,6 +85,14 @@ _KEY_SEPARATOR = re.compile(rf"(?<![{_KEY_CHARS}])([{_KEY_CHARS}]+)\s*[=:]\s*")
 # A quoted value ends at its closing quote, or at the end of the text when
 # it has none, as in a truncated body: what follows its opening quote is
 # still its value.
+# A key separated from its value by spaces: a command-line flag (--api-key
+# value) or an upper-case name, as an environment variable or a header is
+# written (API-KEY value). Prose ("the token expired") is neither. The
+# value must not start with "-", so a flag followed by another flag is not
+# taken for one with a value.
+_SPACED_KEY = re.compile(
+    r"(?<!\S)(--?[A-Za-z0-9][A-Za-z0-9_.-]*|[A-Z][A-Z0-9_-]*[A-Z0-9])[ \t]+(?=[^\s-])"
+)
 _DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)(?:"|\\?\Z)')
 _SINGLE_QUOTED = re.compile(r"'((?:[^'\\]|\\.)*)(?:'|\\?\Z)")
 # A value in escaped quotes, as JSON inside a JSON string spells it: it ends
@@ -203,6 +211,15 @@ def _json_unescaped(key: str) -> str:
     except ValueError:
         return key
     return decoded if isinstance(decoded, str) else key
+
+
+def _spaced_key_spans(text: str) -> Iterator[Span]:
+    values = _Values(text)
+    for match in _SPACED_KEY.finditer(text):
+        if is_forbidden_key_name(match.group(1).lstrip("-")):
+            span = values.span(match.start(), match.end())
+            if span is not None:
+                yield span
 
 
 def _key_value_spans(text: str) -> Iterator[Span]:
@@ -326,6 +343,7 @@ _FINDERS: tuple[Finder, ...] = (
     _url_spans,
     _member_spans,
     _key_value_spans,
+    _spaced_key_spans,
     *(_whole(shape) for shape in _SHAPES),
     _jwt_spans,
 )
