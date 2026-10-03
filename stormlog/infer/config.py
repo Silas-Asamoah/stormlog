@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from .arrivals import BURST, CLOSED, RATE_MODES, REPLAY, ArrivalSpec, ArrivalTrace
@@ -136,6 +137,9 @@ class ProfileConfig:
     vllm_spans_drain_seconds: float = 6.0
     # Optional bounded profiler windows; None records no trace.
     trace: TraceCaptureConfig | None = None
+    # The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR as this host sees it;
+    # its final steps are imported when the run ends. None imports nothing.
+    vllm_execution_dir: Path | None = None
 
     def prompt_spec(self) -> PromptSpec:
         return PromptSpec(

@@ -35,6 +35,7 @@ report_contract
 inference
 inference_correlation
 vllm_telemetry
+vllm_execution
 tui
 cookbook/index
 cookbook/always_on

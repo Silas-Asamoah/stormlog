@@ -155,6 +155,11 @@ tfmemprof = "stormlog.tensorflow.cli:main"
 jaxmemprof = "stormlog.jax.cli:main"
 stormlog = "stormlog.entrypoint:main"
 
+# vLLM loads this in its engine-core and worker processes; it does nothing
+# unless STORMLOG_VLLM_HOOK_DIR is set (docs/vllm_execution.md).
+[project.entry-points."vllm.general_plugins"]
+stormlog = "stormlog.vllm_hook:register"
+
 [tool.setuptools_scm]
 fallback_version = "0.0.0"
 local_scheme = "no-local-version"
@@ -265,6 +270,10 @@ module = [
     # marker, absent from the lint job's environment.
     "opentelemetry",
     "opentelemetry.*",
+    # The vLLM execution hook runs inside a vLLM server; vLLM is never a
+    # Stormlog dependency.
+    "vllm",
+    "vllm.*",
 ]
 ignore_missing_imports = true
 

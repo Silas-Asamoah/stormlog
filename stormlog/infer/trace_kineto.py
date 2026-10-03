@@ -191,8 +191,16 @@ def capture_trace(
     attachment: TraceAttachment | None = None,
     device_uuids: Mapping[int, str] | None = None,
     detail: Detail = "launch",
+    device_uuids_by_pid: Mapping[int, Mapping[int, str]] | None = None,
 ) -> TraceCapture:
-    """Build the capture for a loaded trace of any supported format."""
+    """Build the capture for a loaded trace of any supported format.
+
+    ``device_uuids`` (``--device-uuid``) names a CUDA ordinal's GPU for every
+    process in the trace and is checked against UUIDs the trace names itself.
+    ``device_uuids_by_pid`` is what the vLLM execution log's worker hellos
+    bound: a process's own ordinals only, so a process no hello matched stays
+    unmeasured. The option wins where both name an ordinal.
+    """
     _check_given_uuids(trace, device_uuids or {})
     trace_key = attachment.attachment_id if attachment else _trace_key(trace, path)
     builder = _EventBuilder(
@@ -202,6 +210,8 @@ def capture_trace(
         trace_key=trace_key,
         attachment_id=attachment.attachment_id if attachment else None,
         device_uuids=dict(device_uuids or {}),
+        device_uuids_by_pid=_by_pid(device_uuids_by_pid),
+        processes={launch.pid for launch in trace.launches.values()},
     )
     groups = _group_events(trace, detail)
     events = tuple(
@@ -215,6 +225,12 @@ def capture_trace(
         attachments=(attachment,) if attachment else (),
         summary=_summary(trace, groups, builder, detail, path),
     )
+
+
+def _by_pid(
+    given: Mapping[int, Mapping[int, str]] | None,
+) -> dict[int, dict[int, str]]:
+    return {pid: dict(uuids) for pid, uuids in (given or {}).items()}
 
 
 def _check_given_uuids(trace: KinetoTrace, given: Mapping[int, str]) -> None:
@@ -429,6 +445,8 @@ class _EventBuilder:
     trace_key: str
     attachment_id: str | None
     device_uuids: dict[int, str]
+    device_uuids_by_pid: dict[int, dict[int, str]] = field(default_factory=dict)
+    processes: set[int] = field(default_factory=set)
     count: int = 0
     record_spans: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     _contexts: dict[tuple[int | None, int | None, str | None], CorrelationContext] = (
@@ -439,8 +457,8 @@ class _EventBuilder:
         self, key: GroupKey, members: list[GpuEvent]
     ) -> list[ActivityReferenceEvent]:
         device, kind, _, link = key
-        uuid = members[0].device_uuid or self.device_uuids.get(device)
         pid = link.launch.pid if link.launch else members[0].pid
+        uuid = members[0].device_uuid or self.uuid_for(pid, device)[0]
         context = self._context(device, pid, uuid)
         metadata = _group_metadata(members, link)
         start = min(event.start_ns for event in members)
@@ -486,6 +504,22 @@ class _EventBuilder:
         if key not in self._contexts:
             self._contexts[key] = _context(self, pid, uuid)
         return self._contexts[key]
+
+    def uuid_for(
+        self, pid: int | None, device: int | None
+    ) -> tuple[str | None, str | None]:
+        """A device's UUID and where it came from: ``--device-uuid`` names an
+        ordinal for every process; the execution log names a process's own
+        ordinals, and a single-process format whose GPU events carry no pid
+        belongs to its one launching process."""
+        if device is None:
+            return None, None
+        if device in self.device_uuids:
+            return self.device_uuids[device], "option"
+        if pid is None and len(self.processes) == 1:
+            pid = next(iter(self.processes))
+        uuid = self.device_uuids_by_pid.get(pid, {}).get(device) if pid else None
+        return (uuid, "execution_log") if uuid is not None else (None, None)
 
 
 def _device_key(event: GpuEvent) -> str:
@@ -649,7 +683,7 @@ def _device_entry(
         "name": events[0].device_name
         or (trace.device_names.get(device) if device is not None else None),
         "device_uuid": events[0].device_uuid
-        or (builder.device_uuids.get(device) if device is not None else None),
+        or builder.uuid_for(events[0].pid, device)[0],
         "device_uuid_source": _uuid_source(builder, events[0]),
         "busy_ns": sum(end - start for start, end in busy),
         "launch_span_ns": sum(end - start for start, end in records),
@@ -658,12 +692,11 @@ def _device_entry(
 
 
 def _uuid_source(builder: _EventBuilder, event: GpuEvent) -> str | None:
-    """Where a device's UUID came from: the trace itself or ``--device-uuid``."""
+    """Where a device's UUID came from: the trace itself, ``--device-uuid``
+    (``option``), or the vLLM execution log's worker hellos."""
     if event.device_uuid is not None:
         return "trace"
-    if event.device is not None and event.device in builder.device_uuids:
-        return "option"
-    return None
+    return builder.uuid_for(event.pid, event.device)[1]
 
 
 __all__ = [
