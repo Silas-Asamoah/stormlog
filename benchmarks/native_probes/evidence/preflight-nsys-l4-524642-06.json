@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_hardware_preflight_evidence",
+  "issue": 118,
+  "local_date": "2026-10-03",
+  "status": "bounded_new_nsight_cuda_reference_available_coverage_analysis_pending",
+  "cloud": {
+    "provider": "JarvisLabs",
+    "machine_id": 524642,
+    "gpu": "L4",
+    "state_after_verified_download": "Paused",
+    "running_instances_after_pause": 0,
+    "cost_and_balance_record": "benchmarks/native_probes/evidence/preflight-vllm-capacity-4g-l4-524642-07.json"
+  },
+  "old_profiler_failure": {
+    "version": "2024.3.2.0",
+    "run_id": "r_f3e3726c",
+    "workload": "bounded W1 eager, 10 warmup and 50 measured iterations",
+    "workload_exit_code": 0,
+    "report_generated": true,
+    "sqlite_export_exit_code": 0,
+    "exported_runtime_api_rows": 1251,
+    "exported_kernel_rows": 182,
+    "diagnostic": "Installed CUDA driver version 13.0 is not supported by this build of Nsight Systems; unknown runtime API function index 486; not all CUDA events might have been collected.",
+    "trusted_reference_usable": false,
+    "archive": "artifacts/native-probes/preflight-nsys-524642-06/nsys-failure-524642.tar.gz",
+    "archive_sha256": "6bbccb307b2a4f5939ec61633e7cd62111a04295c6704342f0f4fb0e8272a274",
+    "internal_file_hashes_verified": 9
+  },
+  "new_profiler_bounded_smoke": {
+    "source": "https://developer.nvidia.com/nsight-systems/get-started",
+    "package": "NVIDIA Nsight Systems 2026.5.1 Linux x86_64 CLI-only .deb",
+    "package_sha256": "61829db6392e5c293ada1319df86a97c3356bc810335a1975cb551fcfe3eca08",
+    "installation": "unpacked in an isolated directory; no system package installation",
+    "reported_version": "NVIDIA Nsight Systems version 2026.5.1.161-265138896106v0",
+    "package_preparation_run_id": "r_352ab244",
+    "workload_run_id": "r_15501233",
+    "workload": "bounded W1 eager, 10 warmup and 50 measured iterations",
+    "workload_exit_code": 0,
+    "report_generated": true,
+    "sqlite_export_exit_code": 0,
+    "exported_runtime_api_rows": 1255,
+    "exported_kernel_rows": 182,
+    "exported_nvtx_rows": 1,
+    "remaining_diagnostics": [
+      "CPU IP/backtrace, context switch, or event sampling could not be configured.",
+      "Not all NVTX events might have been collected."
+    ],
+    "cuda_driver_version_rejection_present": false,
+    "unknown_runtime_api_index_error_present": false,
+    "trusted_cuda_reference_qualified": false,
+    "qualification_reason": "A bounded CUDA report exists, but NVTX range completeness and external kernel coverage have not been analyzed against a matched direct-CUPTI trial.",
+    "archive": "artifacts/native-probes/preflight-nsys-524642-06/nsys-2026-5-1-524642.tar.gz",
+    "archive_sha256": "92eeb6247bf61f13586dd4c8f9615ca02e1c357186c33f25708d88db7e3b5656",
+    "internal_file_hashes_verified": 14
+  },
+  "readiness": {
+    "hardware_preflight_passed": false,
+    "final_trials_started": false,
+    "next_step": "Pin the compatible Nsight executable and exported schema, then validate range attribution and kernel coverage against matched direct-CUPTI W1-W3 evidence; retain unsupported outcomes."
+  }
+}
