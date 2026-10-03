@@ -14,6 +14,7 @@ from .cache_state import cache_lines, cache_summary
 from .correlation_accounting import AlignedTimestamp
 from .errors import InferInputError
 from .host_clock import is_boot_qualified
+from .populations import CasePopulation, MeasuredInterval, case_populations, rate
 from .report_stats import int_value as _int_value
 from .report_stats import is_number as _is_number
 from .report_stats import number_values as _number_values
@@ -75,6 +76,10 @@ def analyze_inference_events(
         join["case_coverage"] = _coverage_counts(cases)
     failed = [record for record in requests if record.get("status") != "ok"]
     return {
+        # 2: per-case populations and intervals; throughput divides by the
+        # case's declared interval (throughput.interval_seconds) instead of
+        # the span of its successful requests (the old duration_seconds).
+        "analysis_version": ANALYSIS_VERSION,
         "summary": {
             "total_requests": len(requests),
             "successful_requests": len(ok_requests),
@@ -93,6 +98,9 @@ def analyze_inference_events(
             "execution": execution_report(records),
         },
     }
+
+
+ANALYSIS_VERSION = 2
 
 
 def _vllm_telemetry(
@@ -117,10 +125,16 @@ def _case_reports(
         by_case.setdefault(str(record.get("case_id", "unknown")), []).append(record)
     windows = _measured_windows(records)
     cache_states = _case_records(records, "infer.cache_state")
+    populations = case_populations(records)
     cases = {}
     for case_id, case_requests in sorted(by_case.items()):
         cases[case_id] = _case_report(
-            case_requests, samples, timelines, grouped, windows.get(case_id)
+            case_requests,
+            samples,
+            timelines,
+            grouped,
+            windows.get(case_id),
+            populations[case_id],
         )
         cases[case_id]["cache"] = cache_summary(cache_states.get(case_id))
     return cases
@@ -132,10 +146,21 @@ def _case_report(
     timelines: list[tuple[_Member, _ServerTimeline]],
     grouped: bool,
     window: dict[str, Any] | None,
+    population: CasePopulation,
 ) -> dict[str, Any]:
-    """Summarize one case: latency from its completed requests, arrivals from all."""
+    """Summarize one case: latency from its completed requests, arrivals from all.
+
+    Rates divide by the case's rate interval; its populations count every
+    measured request.
+    """
     ok = [record for record in case_requests if record.get("status") == "ok"]
-    report = _summarize_requests(ok, samples=_samples_for_request_window(samples, ok))
+    report = _summarize_requests(
+        ok,
+        samples=_samples_for_request_window(samples, ok),
+        interval=population.intervals.rate,
+    )
+    report["population"] = population.population.to_record()
+    report["intervals"] = population.intervals.to_record()
     report["arrivals"] = arrival_summary(case_requests, window)
     report["prompts"] = prompt_summary(case_requests, window)
     report["lengths"] = length_summary(ok)
@@ -262,11 +287,27 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
         f"requests={_fmt(throughput.get('requests_per_second'))} req/s"
     ]
     if isinstance(case, dict):
+        lines.extend(_interval_lines(throughput, case.get("population")))
         lines.extend(arrival_lines(case.get("arrivals"), case.get("latency_ms")))
         lines.extend(prompt_lines(case.get("prompts")))
         lines.extend(cache_lines(case.get("cache")))
     memory = case.get("memory", {}) if isinstance(case, dict) else {}
     lines.extend(_server_case_lines(memory))
+    return lines
+
+
+def _interval_lines(throughput: Any, population: Any) -> list[str]:
+    """What the rates divide by, and whether the request cohort is whole."""
+    lines = []
+    if isinstance(throughput, dict) and throughput.get("interval_kind"):
+        cohort = str(throughput.get("numerator_cohort", "")).replace("_", " ")
+        lines.append(
+            f"  rates per {throughput['interval_kind'].replace('_', ' ')} of "
+            f"{_fmt(throughput.get('interval_seconds'))} s ({cohort})"
+        )
+    if isinstance(population, dict) and not population.get("cohort_valid", True):
+        issues = ", ".join(str(issue) for issue in population.get("issues", []))
+        lines.append(f"  cohort invalid: {issues}")
     return lines
 
 
@@ -360,6 +401,7 @@ def _summarize_requests(
     requests: list[dict[str, Any]],
     *,
     samples: list[dict[str, Any]],
+    interval: MeasuredInterval | None,
 ) -> dict[str, Any]:
     e2e = _number_values(requests, "e2e_latency_ms")
     from_intended = latency_from_intended_ms(requests)
@@ -367,16 +409,7 @@ def _summarize_requests(
     first_chunk = _number_values(requests, "first_chunk_latency_ms")
     output_tokens = sum(_int_value(record.get("output_tokens")) for record in requests)
     total_tokens = sum(_int_value(record.get("total_tokens")) for record in requests)
-    request_window = _request_time_window(requests)
-    duration_seconds = (
-        max(request_window[1] - request_window[0], 0) / 1_000_000_000
-        if request_window is not None
-        else 0.0
-    )
     request_count = len(requests)
-    output_tps = output_tokens / duration_seconds if duration_seconds > 0 else 0.0
-    total_tps = total_tokens / duration_seconds if duration_seconds > 0 else 0.0
-    request_rate = request_count / duration_seconds if duration_seconds > 0 else 0.0
     peak_device_used = _peak_sample_value(samples, "device_used_bytes")
     peak_process_rss = _peak_sample_value(samples, "process_rss_bytes")
     return {
@@ -394,12 +427,7 @@ def _summarize_requests(
             "first_chunk_p50": _percentile(first_chunk, 50),
             "first_chunk_p95": _percentile(first_chunk, 95),
         },
-        "throughput": {
-            "duration_seconds": duration_seconds,
-            "requests_per_second": request_rate,
-            "output_tokens_per_second": output_tps,
-            "total_tokens_per_second": total_tps,
-        },
+        "throughput": _throughput(request_count, output_tokens, total_tokens, interval),
         "tokens": {
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,
@@ -415,6 +443,28 @@ def _summarize_requests(
             "peak_device_used_bytes": peak_device_used,
             "peak_process_rss_bytes": peak_process_rss,
         },
+    }
+
+
+def _throughput(
+    requests: int,
+    output_tokens: int,
+    total_tokens: int,
+    interval: MeasuredInterval | None,
+) -> dict[str, Any]:
+    """Successful requests and their tokens per second of the rate interval.
+
+    The rates are null when the interval has no length, instead of zero.
+    """
+    return {
+        "interval_seconds": interval.seconds if interval is not None else None,
+        "interval_kind": interval.kind if interval is not None else None,
+        "numerator_cohort": (
+            interval.numerator_cohort if interval is not None else None
+        ),
+        "requests_per_second": rate(requests, interval),
+        "output_tokens_per_second": rate(output_tokens, interval),
+        "total_tokens_per_second": rate(total_tokens, interval),
     }
 
 

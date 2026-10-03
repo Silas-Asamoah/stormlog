@@ -155,6 +155,17 @@ the flaky benchmark memory gates
 
 ### Changed
 
+- **Breaking:** `stormlog infer analyze` JSON is `analysis_version: 2`.
+  - Each case's throughput divides by its rate interval. For an open loop
+    that is the schedule's own window; for a closed loop, the phase start to
+    the drain end. It used to be the span of the case's successful requests,
+    which shrank when the last requests failed.
+  - `throughput.duration_seconds` is replaced by `interval_seconds`,
+    `interval_kind` and `numerator_cohort`.
+  - A rate over an empty interval is `null`, not `0.0`.
+  - Each case gains a `population` block (offered, sent, accepted,
+    successful, failed, timed out, cancelled and the rest, with cohort checks)
+    and an `intervals` block. (#213)
 - `stormlog infer profile` tells apart where a failed request stopped. Two
   new request statuses:
   - `unreachable`: the connection failed before any byte was sent. A connect

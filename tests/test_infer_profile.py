@@ -509,7 +509,9 @@ class InferenceProfileTests(unittest.TestCase):
             report = analyze_inference_events(path)
 
             case = report["cases"]["c1_in8_out4"]
-            self.assertEqual(case["throughput"]["duration_seconds"], 1.0)
+            # No phase window: the span of the requests with both bounds.
+            self.assertEqual(case["throughput"]["interval_seconds"], 1.0)
+            self.assertEqual(case["throughput"]["interval_kind"], "request_span")
             self.assertIsNone(case["memory"]["peak_device_used_bytes"])
             self.assertEqual(case["memory"]["peak_process_rss_bytes"], 500)
 

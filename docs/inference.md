@@ -325,14 +325,35 @@ stormlog infer analyze artifacts/infer_qwen.jsonl --format json --output report.
 
 The report includes:
 
+- `analysis_version` (2), which says how the figures below are computed
+- per case, a `population` block that counts every measured request by
+  outcome, and an `intervals` block naming the interval rates divide by (see
+  [Inference SLOs and goodput](inference_slo.md))
 - end-to-end latency percentiles
 - TTFT percentiles for streaming responses
 - first streamed chunk latency
-- requests/sec
-- output tokens/sec and total tokens/sec
+- requests/sec, output tokens/sec and total tokens/sec of the successful
+  requests, per second of the case's rate interval
 - failure rate
 - highest recorded client-local device memory when system telemetry is available
 - scoped server memory observations when a matching on-host collector artifact is supplied
+
+Throughput divides by the case's **rate interval**, named in
+`throughput.interval_kind` and `throughput.interval_seconds`:
+- for an open loop, the schedule's own window (`scheduled_window`), counting
+  the requests scheduled in it however late they finished;
+- for a closed loop, the phase start to the end of its drain
+  (`measured_span`);
+- for an artifact without a phase window, the span of every measured request
+  that has both times, failed ones included (`request_span`).
+
+A rate is `null` when its interval has no length.
+
+Before `analysis_version` 2, throughput divided by
+`throughput.duration_seconds`: the span of the case's **successful**
+requests. That span shrank when the last requests failed or timed out, which
+flattered a failing run. The old key is gone, so a consumer that reads it
+fails rather than misreading the new figures.
 
 `infer analyze` exits `5` when the artifact, a `--server-telemetry` file or a
 `--vllm-spans` file is missing, unparsable, or invalid, which includes an

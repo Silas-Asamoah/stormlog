@@ -557,18 +557,21 @@ def _dispatch_window(requests: list[Mapping[str, Any]]) -> MeasuredInterval | No
 
 
 def _request_span(requests: list[Mapping[str, Any]]) -> MeasuredInterval | None:
-    """First start to last end over every measured request, successful or not."""
-    starts = [
-        int_value(r["started_at_ns"])
+    """First start to last end over every measured request, successful or not.
+
+    A request missing either bound is left out rather than paired with
+    another request's.
+    """
+    bounds = [
+        (int_value(r["started_at_ns"]), int_value(r["ended_at_ns"]))
         for r in requests
-        if is_number(r.get("started_at_ns"))
+        if is_number(r.get("started_at_ns")) and is_number(r.get("ended_at_ns"))
     ]
-    ends = [
-        int_value(r["ended_at_ns"]) for r in requests if is_number(r.get("ended_at_ns"))
-    ]
-    if not starts or not ends:
+    if not bounds:
         return None
-    return MeasuredInterval("request_span", min(starts), max(ends), "all_measured")
+    start = min(began for began, _ended in bounds)
+    end = max(ended for _began, ended in bounds)
+    return MeasuredInterval("request_span", start, end, "all_measured")
 
 
 # ----------------------------------------------------------------- segments

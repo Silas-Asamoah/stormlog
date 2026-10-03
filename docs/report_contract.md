@@ -108,6 +108,14 @@ These are breaking changes for callers that matched the old numbers:
   - `infer collect-server` exits `3` when the GPU identity changes, and `2`
     for options it cannot use, a `--pid` with no running process, a GPU the
     host does not have, or a host without NVML.
+- `stormlog infer analyze --format json` reports `analysis_version: 2`.
+  - Throughput divides by each case's rate interval
+    (`throughput.interval_seconds`, with `interval_kind` and
+    `numerator_cohort`), not by the span of its successful requests.
+  - `throughput.duration_seconds` is removed rather than redefined, so a
+    consumer that reads it fails instead of mixing old and new figures.
+  - A rate whose interval has no length is `null`; it used to be `0.0`.
+  - Each case gains `population` and `intervals` blocks.
 
 ## The report envelope
 

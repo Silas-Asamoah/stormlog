@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from stormlog.infer.analysis import analyze_inference_events, format_analysis_text
 from stormlog.infer.populations import (
     MeasuredInterval,
     Segment,
@@ -404,3 +407,69 @@ def test_goodput_without_an_interval_has_no_rate() -> None:
     assert evaluation.status == "evaluated"
     assert evaluation.goodput_lower_rps is None
     assert evaluation.attainment_lower == 1.0
+
+
+# --- in the analysis report -----------------------------------------------------
+
+
+def _analyze(tmp_path: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
+    path = tmp_path / "infer.jsonl"
+    session = {"event_type": "infer.session", "session_id": "s1"}
+    path.write_text(
+        "\n".join(json.dumps(record) for record in [session, *records]) + "\n",
+        encoding="utf-8",
+    )
+    return analyze_inference_events(path)
+
+
+def test_the_report_is_version_2_with_populations_and_intervals(
+    tmp_path: Path,
+) -> None:
+    records = [_request(i, total_tokens=12, output_tokens=4) for i in range(10)]
+    report = _analyze(tmp_path, [*records, _window(), _workload()])
+    case = report["cases"]["c1"]
+
+    assert report["analysis_version"] == 2
+    assert case["population"]["offered"] == 10
+    assert case["population"]["cohort_valid"] is True
+    assert case["intervals"]["rate"]["kind"] == "scheduled_window"
+    throughput = case["throughput"]
+    assert "duration_seconds" not in throughput
+    assert throughput["interval_kind"] == "scheduled_window"
+    assert throughput["numerator_cohort"] == "arrival_cohort"
+    assert throughput["interval_seconds"] == pytest.approx(1.0)
+    # 10 successful requests per second of the scheduled window, not per
+    # second of the span their sends and responses happened to cover.
+    assert throughput["requests_per_second"] == pytest.approx(10.0)
+    assert throughput["output_tokens_per_second"] == pytest.approx(40.0)
+    text = format_analysis_text(report)
+    assert "rates per scheduled window of 1.00 s (arrival cohort)" in text
+
+
+def test_late_timeouts_no_longer_shorten_a_closed_loops_interval(
+    tmp_path: Path,
+) -> None:
+    # The successful requests span 0.9 s, but the case ran until its last
+    # request timed out at 9 s. The old denominator was the 0.9 s.
+    records = [_request(i) for i in range(9)] + [
+        _request(9, "timeout", ended_at_ns=START + 9 * SECOND)
+    ]
+    window = _window(
+        arrival_mode="closed",
+        scheduled_arrivals=None,
+        drained_at_ns=START + 9 * SECOND,
+        window_ended_at_ns=START + SECOND,
+    )
+    case = _analyze(tmp_path, [*records, window])["cases"]["c1"]
+    assert case["throughput"]["interval_kind"] == "measured_span"
+    assert case["throughput"]["interval_seconds"] == pytest.approx(9.0)
+    assert case["throughput"]["requests_per_second"] == pytest.approx(1.0)
+
+
+def test_an_invalid_cohort_is_shown_in_the_text_report(tmp_path: Path) -> None:
+    records = [_request(i) for i in range(9)] + [_request(3, request_id="again")]
+    report = _analyze(tmp_path, [*records, _window()])
+    text = format_analysis_text(report)
+    assert "cohort invalid:" in text
+    assert "request_index_repeated" in text
+    assert "records_missing: 1 of 10" in text
