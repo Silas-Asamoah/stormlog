@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from collections import defaultdict
 from pathlib import Path
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
@@ -9,6 +11,7 @@ from stormlog.infer.config import ProfileConfig
 from stormlog.infer.profile import InferenceProfiler
 from stormlog.infer.vllm_metrics import (
     CompactScrape,
+    HistogramValue,
     compact_scrape,
     discover,
     parse_prometheus_text,
@@ -24,6 +27,8 @@ from tests.qualification_fake_engine_helpers import (
 )
 
 FAST = FakeEngineConfig(step_seconds=0.001, decode_token_seconds=0.0001)
+# A real vLLM 0.30.0 page (Qwen2.5-0.5B on one A30) after a run.
+REAL_PAGE = Path(__file__).parent / "fixtures" / "vllm" / "q05_c08_metrics_post.txt"
 
 
 def _scrape(engine: FakeEngine) -> CompactScrape:
@@ -155,3 +160,79 @@ def test_a_profile_scrapes_and_resolves_the_fake_metrics(tmp_path: Path) -> None
     assert vllm["status"] == "collected"
     assert case["state"] == "resolved"
     assert counters["generation_tokens"]["delta"] == 24.0
+
+
+def _shape(text: str) -> tuple[dict[str, str], dict[str, set[tuple[str, ...]]]]:
+    """vLLM's families on a page: each one's type, and each sample name's
+    label-name sets with every ``le`` bucket spelled out."""
+    types: dict[str, str] = {}
+    labels: dict[str, set[tuple[str, ...]]] = defaultdict(set)
+    for line in text.splitlines():
+        if line.startswith("# TYPE vllm:"):
+            _hash, _type, name, kind = line.split()
+            types[name] = kind
+        elif line.startswith("vllm:"):
+            name, _brace, rest = line.partition("{")
+            pairs = re.findall(r'(\w+)="((?:[^"\\]|\\.)*)"', rest.rpartition("}")[0])
+            names = sorted(key for key, _value in pairs)
+            buckets = [f"le={value}" for key, value in pairs if key == "le"]
+            labels[name].add(tuple(names + buckets))
+    return types, dict(labels)
+
+
+def test_the_page_has_the_real_pages_families_labels_and_buckets() -> None:
+    with FakeEngine(FAST) as engine:
+        chat(engine, words(10, "a"), max_tokens=3)
+        status, body = get(engine.metrics_url)
+    assert status == 200
+    fake_types, fake_labels = _shape(body.decode())
+    real_types, real_labels = _shape(REAL_PAGE.read_text())
+    assert fake_types == real_types
+    assert fake_labels == real_labels
+
+
+def _by(scrape: CompactScrape, name: str, label: str) -> dict[str, float]:
+    return {
+        scrape.labels(set_id)[label]: value
+        for set_id, value in scrape.series(name).items()
+        if isinstance(value, float)
+    }
+
+
+def _histogram(scrape: CompactScrape, name: str) -> tuple[float, float]:
+    (value,) = scrape.series(name).values()
+    assert isinstance(value, HistogramValue)
+    assert value.count is not None and value.sum is not None
+    return value.count, value.sum
+
+
+def test_prompt_sources_and_request_parameters_count_as_in_vllm() -> None:
+    # vLLM 0.30's loggers.py: prompt tokens split by source at each first
+    # token; per finished request, its prompt less its cached tokens, its n,
+    # its max_tokens and the tokens it generated.
+    shared = words(40, "shared")
+    with FakeEngine(FAST) as engine:
+        chat(engine, shared + " one", max_tokens=2)
+        chat(engine, shared + " two", max_tokens=3)
+        scrape = _scrape(engine)
+        finished = list(engine.engine.finished)
+    prompt = sum(request.prompt_len for request in finished)
+    cached = sum(request.cached_at_admission or 0 for request in finished)
+    assert cached >= 32
+    assert _by(scrape, "vllm:prompt_tokens_by_source_total", "source") == {
+        "local_compute": prompt - cached,
+        "local_cache_hit": cached,
+        "external_kv_transfer": 0.0,
+    }
+    assert _histogram(scrape, "vllm:request_prefill_kv_computed_tokens") == (
+        2,
+        prompt - cached,
+    )
+    assert _histogram(scrape, "vllm:request_params_n") == (2, 2)
+    assert _histogram(scrape, "vllm:request_params_max_tokens") == (2, 5)
+    assert _histogram(scrape, "vllm:request_max_num_generation_tokens") == (2, 5)
+    assert _by(scrape, "vllm:engine_sleep_state", "sleep_state") == {
+        "awake": 1.0,
+        "weights_offloaded": 0.0,
+        "discard_all": 0.0,
+    }

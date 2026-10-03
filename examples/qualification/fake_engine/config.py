@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 VLLM_VERSION = "0.30.0"
+MAX_MODEL_LEN = 4096
 
 
 @dataclass(frozen=True)
@@ -86,4 +87,4 @@ class Controls:
     span_duplicates: bool = False
 
 
-__all__ = ["VLLM_VERSION", "Controls", "FakeEngineConfig"]
+__all__ = ["MAX_MODEL_LEN", "VLLM_VERSION", "Controls", "FakeEngineConfig"]

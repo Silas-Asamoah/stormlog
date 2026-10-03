@@ -79,6 +79,7 @@ _STEP_TOKENS: tuple[float, ...] = (
 )
 _STEP_TOKENS += (2048.0, 4096.0, 8192.0, 16384.0)
 _PREEMPTIONS: tuple[float, ...] = (1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0)
+_N: tuple[float, ...] = (1.0, 2.0, 5.0, 10.0, 20.0)
 
 HISTOGRAM_BUCKETS: dict[str, tuple[float, ...]] = {
     "vllm:time_to_first_token_seconds": _LATENCY,
@@ -93,6 +94,10 @@ HISTOGRAM_BUCKETS: dict[str, tuple[float, ...]] = {
     "vllm:request_prompt_tokens": _TOKENS,
     "vllm:request_generation_tokens": _TOKENS,
     "vllm:request_num_preemptions": _PREEMPTIONS,
+    "vllm:request_prefill_kv_computed_tokens": _TOKENS,
+    "vllm:request_max_num_generation_tokens": _TOKENS,
+    "vllm:request_params_n": _N,
+    "vllm:request_params_max_tokens": _TOKENS,
 }
 FINISH_REASONS = ("stop", "length", "abort", "error", "repetition")
 

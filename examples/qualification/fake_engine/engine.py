@@ -549,6 +549,14 @@ class Engine:
         stats.observe("vllm:request_prompt_tokens", request.prompt_len)
         stats.observe("vllm:request_generation_tokens", request.output_tokens)
         stats.observe("vllm:request_num_preemptions", request.preemptions)
+        stats.observe(
+            "vllm:request_prefill_kv_computed_tokens",
+            request.prompt_len - (request.cached_at_admission or 0),
+        )
+        # One completion per request, so n is 1 and its longest is its own.
+        stats.observe("vllm:request_max_num_generation_tokens", request.output_tokens)
+        stats.observe("vllm:request_params_n", 1)
+        stats.observe("vllm:request_params_max_tokens", request.max_tokens)
         if request.first_scheduled_ns is None or request.first_token_ns is None:
             return
         scheduled = request.first_scheduled_ns

@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
-from .config import VLLM_VERSION, Controls, FakeEngineConfig
+from .config import MAX_MODEL_LEN, VLLM_VERSION, Controls, FakeEngineConfig
 from .engine import Engine, FakeRequest, prompt_tokens
 from .hook_log import HookLog
 from .metrics import render_metrics
@@ -164,7 +164,7 @@ class FakeEngine:
         config = self.config
         return {
             "vllm_config": {
-                "model_config": {"model": config.model, "max_model_len": 4096},
+                "model_config": {"model": config.model, "max_model_len": MAX_MODEL_LEN},
                 "cache_config": {
                     "block_size": config.block_size,
                     "num_gpu_blocks": config.num_gpu_blocks,
@@ -363,7 +363,7 @@ def _models(handler: _Handler) -> None:
         200,
         {
             "object": "list",
-            "data": [{"id": model, "object": "model", "max_model_len": 4096}],
+            "data": [{"id": model, "object": "model", "max_model_len": MAX_MODEL_LEN}],
         },
     )
 
