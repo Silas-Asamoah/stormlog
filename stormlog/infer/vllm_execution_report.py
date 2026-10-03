@@ -159,7 +159,15 @@ def execution_report(records: list[dict[str, Any]]) -> dict[str, Any]:
         "available": True,
         "imports": imports,
         "iterations": _iteration_counts(steps),
-        "memberships": dict(Counter(_ownership(m) for m in graph.memberships)),
+        # Only the memberships of the steps counted above: another engine
+        # adapter's memberships are not this import's.
+        "memberships": dict(
+            Counter(
+                _ownership(m)
+                for m in graph.memberships
+                if m.iteration_ref in iterations
+            )
+        ),
         "requests": _request_counts(graph.requests.values(), records),
         "gpu": {key: scope.summary() for key, scope in sorted(scopes.items())},
         "unmeasured": unmeasured,

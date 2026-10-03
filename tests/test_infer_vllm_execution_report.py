@@ -13,6 +13,7 @@ from stormlog.infer.correlation_events import (
     CapabilityEvent,
     CorrelationContext,
     EntityRef,
+    MembershipEvent,
 )
 from stormlog.infer.vllm_execution import ReduceOptions, RunFacts, RunRequest
 from stormlog.infer.vllm_execution_import import (
@@ -290,6 +291,25 @@ def test_text_lines_name_every_dimension(tmp_path: Path) -> None:
         "0 start-up calls unranged (not loss)"
     )
     assert lines[5].startswith("  c1_in8_out4: 2 steps, 1 shared (non-additive); ")
+
+
+def test_another_adapters_memberships_are_not_counted(tmp_path: Path) -> None:
+    """The membership totals cover the execution import's steps only, like
+    the step totals they sit beside (Codex #3)."""
+    records = _records(tmp_path)
+    other = MembershipEvent(
+        context=_context("another.engine", "monotonic"),
+        event_id="other-membership",
+        metadata={"ownership": "run"},
+        request_ref=EntityRef("stormlog", REQUEST_A),
+        iteration_ref=EntityRef("another.engine", "step-9"),
+        role="decode",
+    )
+    report = execution_report(records + [other.to_record()])
+    assert report["memberships"] == {"run": 3, "foreign": 2}
+    assert execution_lines(report)[0].endswith(
+        "memberships foreign 2, run 3, 2 of 2 run requests bound"
+    )
 
 
 def test_nothing_imported_is_not_available() -> None:
