@@ -81,9 +81,12 @@ A server left on its gRPC default opens HTTP/2 connections instead; the
 receiver counts those as `grpc_attempts` in the capability record, with the
 variable to set, so an empty span count explains itself.
 
-The receiver exists only while the profile runs. Spans vLLM exports when no
-receiver is listening, such as its startup spans or the spans of traffic
-between runs, fail on the server side and are dropped there; the exporter
+The receiver exists only while the profile runs. When it stops it closes
+every connection it accepted, waits briefly for an export already being
+read, and answers anything that still arrives with a 503, counted as
+`after_stop` and never kept. Spans vLLM exports when no receiver is
+listening, such as its startup spans or the spans of traffic between
+runs, fail on the server side and are dropped there; the exporter
 retries a failed batch with backoff for up to its export timeout
 (`OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`, 10 s by default in opentelemetry-sdk
 1.44.0), which can hold back the next batch. For short runs, start vLLM with

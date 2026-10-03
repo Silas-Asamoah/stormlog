@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import http.client
 import json
 import signal
 import socket
@@ -507,6 +508,41 @@ class TestReceiverRobustness:
             metadata = receiver.capability_metadata()
         assert metadata["decode_failures"] == 1
         assert metadata["unsupported_media"] == 1
+
+    def test_a_kept_alive_connection_cannot_export_after_stop(self) -> None:
+        # stop() closed the listener but left accepted HTTP/1.1 connections
+        # and their handlers alive, so an exporter on a persistent connection
+        # kept getting 200 and its spans landed in the queue after the final
+        # drain, where the next run's artifact could not see them.
+        receiver = OtlpSpanReceiver(listen="127.0.0.1:0", session_id="s", run_id="r")
+        receiver.start()
+        host, port = receiver.listen.rsplit(":", 1)
+        connection = http.client.HTTPConnection(host, int(port), timeout=5)
+
+        def post() -> int:
+            connection.request(
+                "POST",
+                "/v1/traces",
+                body=JSON_EXPORT,
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            response.read()
+            return response.status
+
+        try:
+            assert post() == 200
+            assert [r.name for r in receiver.drain()] == ["Worker init"]
+            receiver.stop()
+            assert receiver.drain() == []
+            # The connection was shut down by the server: the next request
+            # fails on the way out or gets no answer, and nothing is queued.
+            with pytest.raises((http.client.HTTPException, OSError)):
+                post()
+            assert receiver.drain() == []
+            assert receiver.stopped
+        finally:
+            connection.close()
 
     def test_a_gzip_bomb_is_refused_at_the_cap_not_after_inflating(self) -> None:
         import gzip

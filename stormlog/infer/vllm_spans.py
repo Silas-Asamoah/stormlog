@@ -426,10 +426,13 @@ class ReceiverStats:
     oversized: int = 0
     bad_requests: int = 0
     handler_errors: int = 0
+    after_stop: int = 0
     by_media: dict[str, int] = field(default_factory=dict)
 
 
 MAX_BODY_BYTES = 32 * 1024 * 1024
+# How long stop() waits for an export already being read to finish.
+STOP_GRACE_SECONDS = 2.0
 
 
 def gunzip_capped(body: bytes, cap: int) -> bytes | None:
@@ -486,6 +489,14 @@ class OtlpSpanReceiver:
                 return bool(super().parse_request())
 
             def do_POST(self) -> None:  # noqa: N802
+                if receiver.stopped:
+                    # A request on a connection accepted before the stop:
+                    # refused and counted, never queued behind the final
+                    # drain where no run would see it.
+                    receiver._count("after_stop")
+                    self.close_connection = True
+                    _try_respond(self, 503)
+                    return
                 try:
                     receiver._handle(self)
                 except Exception:  # a bug must not take the receiver down
@@ -496,7 +507,50 @@ class OtlpSpanReceiver:
                 return None
 
         class Server(ThreadingHTTPServer):
+            """Knows its accepted connections, so stop() can close them.
+
+            Closing the listener alone leaves every kept-alive HTTP/1.1
+            connection and its handler thread alive; this server shuts
+            those sockets down on request and can wait for the handlers
+            still inside a request to finish.
+            """
+
             address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                self._connections: set[Any] = set()
+                self._idle = threading.Condition()
+
+            def process_request(self, request: Any, client_address: Any) -> None:
+                with self._idle:
+                    self._connections.add(request)
+                super().process_request(request, client_address)
+
+            def shutdown_request(self, request: Any) -> None:
+                try:
+                    super().shutdown_request(request)
+                finally:
+                    with self._idle:
+                        self._connections.discard(request)
+                        self._idle.notify_all()
+
+            def close_connections(self) -> None:
+                """Shut down every accepted socket; idle handlers see EOF."""
+                with self._idle:
+                    sockets = list(self._connections)
+                for sock in sockets:
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+
+            def wait_idle(self, timeout: float) -> bool:
+                """True once every handler has finished, or False at the timeout."""
+                with self._idle:
+                    return bool(
+                        self._idle.wait_for(lambda: not self._connections, timeout)
+                    )
 
         self._server = Server((host, port), Handler)
         self._thread = threading.Thread(
@@ -524,8 +578,17 @@ class OtlpSpanReceiver:
         self._thread.start()
 
     def stop(self) -> None:
+        """Stop for good: nothing is queued after this returns.
+
+        New requests are refused first, then the listener closes, every
+        accepted connection is shut down, and handlers still inside a
+        request get a short grace to finish, so what they decoded is in
+        the queue for the final drain and nothing can arrive after it.
+        """
         self._stopped = True
         self._server.shutdown()
+        self._server.close_connections()
+        self._server.wait_idle(STOP_GRACE_SECONDS)
         self._thread.join(timeout=5)
         self._server.server_close()
 
@@ -650,6 +713,7 @@ class OtlpSpanReceiver:
                 "oversized": self.stats.oversized,
                 "bad_requests": self.stats.bad_requests,
                 "handler_errors": self.stats.handler_errors,
+                "after_stop": self.stats.after_stop,
                 "spans_by_media": dict(self.stats.by_media),
             }
         if not self.protobuf_available:
