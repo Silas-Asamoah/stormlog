@@ -220,6 +220,57 @@ intended arrival (or, without one, its send) falls in. `membership="overlap"`
 counts every request whose span meets the segment, for example the requests
 in flight during a profiler's stop.
 
+## Latency quantiles and how much data they need
+
+`stormlog.infer.quantiles` estimates latency quantiles and says whether a
+case has enough requests to trust them.
+
+### Sufficiency
+
+A quantile from n observations has a distribution-free confidence interval
+made of two order statistics: `[X(j), X(k)]` covers the p-quantile with
+probability `B(k−1) − B(j−1)`, where B is the Binomial(n, p) distribution
+function (Le Boudec, *Performance Evaluation of Computer and Communication
+Systems*, Theorem 2.1). The ranks come from n and p alone, never from the
+data.
+
+A quantile is **`sufficient`** when the equal-tailed 95% interval exists
+(each tail at most 2.5%) with at least 5 order statistics above its upper
+rank. That needs at least:
+
+| Quantile | p50 | p75 | p90 | p95 | p99 | p99.9 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `sufficient` (symmetric, margin 5) | 20 | 44 | 114 | 230 | 1,164 | 11,665 |
+| symmetric, margin 0 | 6 | 13 | 36 | 72 | 368 | 3,688 |
+| `n_min_exists` (narrowest, margin 0) | 6 | | | 59 | 299 | 2,995 |
+
+`n_min_exists` is the smallest n for which any interval exists; it matches
+Le Boudec's own tables. `sufficient` certifies that statement and nothing
+else. It is not a precision in milliseconds, and it assumes independent
+requests, which queueing does not give. Every estimate reports:
+- the ranks;
+- the coverage the ranks achieve;
+- the interval's width in milliseconds.
+
+`quantile_minimum_n(p, confidence, margin=..., tails=...)` computes any of
+these minimums.
+
+### Two estimands
+
+- **`successful`**: the latency of the requests that succeeded.
+- **`failure_penalized`**: every offered request, with each one that did not
+  succeed ranked worst. That is a policy penalty, not an observed latency.
+  - The p-quantile is the successful values' quantile at level `p / (1 − f)`,
+    where `f` is the share of offered requests that did not succeed.
+  - With 95 successes and 5 failures, p95 is the largest success.
+  - Above level 1 the quantile falls in the failure mass (`penalized: true`)
+    and has no value.
+  - It gets an observed lower bound only when every failure was a real
+    timeout. A request cancelled after 1 ms is not evidence of a long latency.
+
+Both use the same linear interpolation between order statistics as the rest
+of the inference report.
+
 ## Related pages
 
 - [Inference Profiling](inference.md)
