@@ -233,20 +233,35 @@ stormlog infer profile \
   --output artifacts/infer_cold.jsonl
 ```
 
-Asking for a cold cache is not proof that the cache was empty. No engine
-adapter can read the cache yet, so each case's `infer.cache_state` record and
-the report's `cache` block say `unverified`, with the reason. The reason is
-one of:
+Asking for a cold cache is not proof that the cache was empty, and neither is
+an HTTP 200 from the reset route. vLLM answers 200 with `{"success": false}`
+while blocks are still held, for example by requests still running. Stormlog
+reads the answer, and records it as one of:
 
-- the reset succeeded but cannot be confirmed;
-- the reset failed, with its HTTP status or error;
+| Answer | Meaning |
+| --- | --- |
+| `acknowledged` | The server answered `success: true`. |
+| `refused` | The server kept answering `success: false`. A refused reset is retried every half second for up to 10 seconds; the record keeps the number of attempts. It counts as a failed reset. |
+| `accepted_unverified` | A 2xx answer without a `success` field, such as SGLang's text reply. |
+
+The `infer.cache_state` record and the report's `cache` block record:
+- whether a reset was `attempted`;
+- whether it was `acknowledged`;
+- the reset's status, `success` field, answer and attempts.
+
+No engine adapter can read the cache yet, so the state is still `unverified`,
+with the reason. The reason is one of:
+
+- the server acknowledged the reset, but it cannot be confirmed;
+- the reset returned a 2xx without saying whether it succeeded;
+- the reset failed or was refused, with its HTTP status, error or attempts;
 - nothing reset the cache.
 
-A failed reset is recorded and the run continues. Each case also has a
+A failed or refused reset is recorded and the run continues. Each case also has a
 `run_kind`, which names how the run was designed:
 
 - `cold_start`: a cold cache was requested, no warmup ran, and no reset
-  failed;
+  failed or was refused;
 - `steady_state`: warmup ran;
 - `unspecified`: anything else, including a cold start whose reset failed.
 

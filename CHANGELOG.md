@@ -222,6 +222,14 @@ the flaky benchmark memory gates
 
 ### Fixed
 
+- `stormlog infer profile --cache-reset-url` no longer counts an HTTP 200 as a
+  reset. vLLM's `/reset_prefix_cache` answers 200 with `{"success": false}`
+  while blocks are still held. The answer is now read and recorded as
+  `acknowledged`, `refused` or `accepted_unverified`. A refused reset is
+  retried for up to 10 seconds, then counts as a failed reset, so the case
+  is not labelled a cold start. `infer.cache_state` records and the report's
+  `cache` block gain `attempted` and `acknowledged`, and the reset's
+  `success`, `answer` and `attempts`. (#213)
 - The benchmark harness's memory gates no longer fail on runner noise:
   - The soak's RSS checks (`max_rss_delta_bytes`, `rss_growth_per_24h_equiv`)
     now read memory inside the sample loop, after a warmup. Before, they

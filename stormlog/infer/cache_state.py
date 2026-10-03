@@ -5,10 +5,17 @@ each case, such as vLLM's ``/reset_prefix_cache`` (available when the server
 runs in development mode) or SGLang's ``/flush_cache``. Asking is not
 proof: until an engine adapter can read the cache's contents, every case
 records its cache state as unverified and says why.
+
+A 2xx answer is not proof of a reset either. vLLM answers HTTP 200 with
+``{"success": false}`` while blocks are still held, so the body is read: a
+reset is acknowledged only when the server says ``success: true``, refused
+when it keeps saying ``false``, and accepted but unconfirmed when a 2xx body
+does not say.
 """
 
 from __future__ import annotations
 
+import json
 import time
 import urllib.error
 import urllib.request
@@ -23,19 +30,47 @@ COLD = "cold"
 CACHE_STATES = (UNSPECIFIED, COLD)
 UNVERIFIED = "unverified"
 
+ACKNOWLEDGED = "acknowledged"
+REFUSED = "refused"
+ACCEPTED_UNVERIFIED = "accepted_unverified"
+# vLLM refuses a reset while blocks are held and says callers may retry.
+RESET_RETRY_SECONDS = 10.0
+RESET_RETRY_INTERVAL_SECONDS = 0.5
+_RESET_BODY_LIMIT = 64 * 1024
+
 
 @dataclass(frozen=True)
 class CacheReset:
-    """The outcome of one call to a cache reset endpoint."""
+    """The outcome of a cache reset, over every attempt it took.
+
+    ``success`` is the body's ``success`` field when the server sent one.
+    """
 
     url: str
     at_ns: int
     status: int | None = None
     error: str | None = None
+    success: bool | None = None
+    attempts: int = 1
+
+    @property
+    def answer(self) -> str | None:
+        """``acknowledged``, ``refused`` or ``accepted_unverified``; None if no 2xx."""
+        if self.status is None or not 200 <= self.status < 300:
+            return None
+        if self.success is None:
+            return ACCEPTED_UNVERIFIED
+        return ACKNOWLEDGED if self.success else REFUSED
 
     @property
     def succeeded(self) -> bool:
-        return self.status is not None and 200 <= self.status < 300
+        """The server accepted the reset, whether or not it confirmed it."""
+        return self.answer in (ACKNOWLEDGED, ACCEPTED_UNVERIFIED)
+
+    @property
+    def acknowledged(self) -> bool:
+        """The server said the reset happened."""
+        return self.answer == ACKNOWLEDGED
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -43,28 +78,79 @@ class CacheReset:
             "at_ns": self.at_ns,
             "status": self.status,
             "error": self.error,
+            "success": self.success,
+            "answer": self.answer,
+            "attempts": self.attempts,
         }
 
 
 def reset_cache(
-    url: str, *, timeout_seconds: float, api_key: str | None = None
+    url: str,
+    *,
+    timeout_seconds: float,
+    api_key: str | None = None,
+    retry_seconds: float = RESET_RETRY_SECONDS,
 ) -> CacheReset:
     """POST to a reset endpoint and record what happened; never raises.
 
-    The API key, when there is one, goes along as it does with every
-    request, since the reset route usually sits behind the same server.
+    A reset the server refuses (``success: false``) is tried again every
+    half second for up to ``retry_seconds``. The API key, when there is one,
+    goes along as it does with every request, since the reset route usually
+    sits behind the same server.
     """
     at_ns = time.time_ns()
+    deadline = time.monotonic() + retry_seconds
+    attempts = 1
+    reset = _post_reset(url, at_ns, timeout_seconds=timeout_seconds, api_key=api_key)
+    while reset.answer == REFUSED and time.monotonic() < deadline:
+        time.sleep(RESET_RETRY_INTERVAL_SECONDS)
+        attempts += 1
+        reset = _post_reset(
+            url, at_ns, timeout_seconds=timeout_seconds, api_key=api_key
+        )
+    if reset.answer == REFUSED:
+        error = f"refused: success false on {attempts} attempts"
+        return _with(reset, error=error, attempts=attempts)
+    return _with(reset, error=reset.error, attempts=attempts)
+
+
+def _post_reset(
+    url: str, at_ns: int, *, timeout_seconds: float, api_key: str | None
+) -> CacheReset:
     recorded = redact_url(url)
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     request = urllib.request.Request(url, data=b"", headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            return CacheReset(recorded, at_ns, status=int(response.status))
+            success = _success_field(response.read(_RESET_BODY_LIMIT))
+            return CacheReset(
+                recorded, at_ns, status=int(response.status), success=success
+            )
     except urllib.error.HTTPError as exc:
         return CacheReset(recorded, at_ns, status=exc.code, error=f"HTTP {exc.code}")
     except OSError as exc:
         return CacheReset(recorded, at_ns, error=f"{type(exc).__name__}: {exc}")
+
+
+def _success_field(body: bytes) -> bool | None:
+    """vLLM's ``{"success": bool}``; None for any other answer."""
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    success = payload.get("success") if isinstance(payload, dict) else None
+    return success if isinstance(success, bool) else None
+
+
+def _with(reset: CacheReset, *, error: str | None, attempts: int) -> CacheReset:
+    return CacheReset(
+        reset.url,
+        reset.at_ns,
+        status=reset.status,
+        error=error,
+        success=reset.success,
+        attempts=attempts,
+    )
 
 
 def run_kind(
@@ -99,6 +185,8 @@ def cache_state_record(
         "case_id": case_id,
         "requested": requested,
         "reset": reset.to_record() if reset is not None else None,
+        "attempted": reset is not None,
+        "acknowledged": reset is not None and reset.acknowledged,
         "verified": UNVERIFIED,
         "reason": _reason(requested, reset),
         "run_kind": run_kind(requested, warmup_requests, reset),
@@ -108,8 +196,16 @@ def cache_state_record(
 def _reason(requested: str, reset: CacheReset | None) -> str:
     if reset is not None and not reset.succeeded:
         return f"the cache reset failed ({reset.error or reset.status})"
+    if reset is not None and reset.acknowledged:
+        return (
+            "the server acknowledged the cache reset, but no engine adapter "
+            "can confirm it"
+        )
     if reset is not None:
-        return "the cache reset succeeded, but no engine adapter can confirm it"
+        return (
+            f"the cache reset returned HTTP {reset.status} without saying "
+            "whether it succeeded, and no engine adapter can confirm it"
+        )
     if requested == COLD:
         return "nothing reset the cache, and no engine adapter can read it"
     return (
@@ -124,6 +220,7 @@ def cache_summary(record: dict[str, Any] | None) -> dict[str, Any]:
         return {
             "requested": UNSPECIFIED,
             "reset": None,
+            "acknowledged": None,
             "verified": UNVERIFIED,
             "reason": "the artifact does not record a cache state",
             "run_kind": None,
@@ -131,6 +228,8 @@ def cache_summary(record: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "requested": record.get("requested"),
         "reset": record.get("reset"),
+        # Artifacts written before resets were parsed do not say.
+        "acknowledged": record.get("acknowledged"),
         "verified": record.get("verified"),
         "reason": record.get("reason"),
         "run_kind": record.get("run_kind"),
