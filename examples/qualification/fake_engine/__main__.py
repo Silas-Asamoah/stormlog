@@ -47,6 +47,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--span-encoding", choices=("protobuf", "json"), default="protobuf"
     )
+    parser.add_argument("--span-export-timeout-seconds", type=float, default=10.0)
     return parser
 
 
@@ -71,6 +72,7 @@ def config_from_args(argv: Sequence[str] | None = None) -> FakeEngineConfig:
         spans_endpoint=args.spans_endpoint,
         span_export_seconds=args.span_export_seconds,
         span_encoding=args.span_encoding,
+        span_export_timeout_seconds=args.span_export_timeout_seconds,
         allow_kill=True,
     )
 

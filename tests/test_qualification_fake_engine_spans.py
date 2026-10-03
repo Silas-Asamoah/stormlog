@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import contextlib
 import socket
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import pairwise
 from pathlib import Path
 from typing import Iterator
 
 import pytest
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
+from examples.qualification.fake_engine.config import Controls
+from examples.qualification.fake_engine.engine import FakeRequest, prompt_tokens
+from examples.qualification.fake_engine.spans import SpanExporter
 from stormlog.infer.vllm_spans import JSON_MEDIA, PROTOBUF_MEDIA, OtlpSpanReceiver
 from stormlog.infer.vllm_telemetry import VllmSpanRecord
 from tests.qualification_fake_engine_helpers import (
@@ -153,3 +160,84 @@ def test_infer_profile_joins_the_fake_spans(tmp_path: Path) -> None:
         )
     (case,) = report["telemetry"]["vllm"]["cases"].values()
     assert case["spans"]["requests_with_span"] == 4
+
+
+class _ScriptedCollector(ThreadingHTTPServer):
+    """Answers each export with the next scripted status, then 200."""
+
+    daemon_threads = True
+
+    def __init__(self, statuses: list[int]) -> None:
+        super().__init__(("127.0.0.1", 0), _ScriptedHandler)
+        self.script = list(statuses)
+        self.arrivals: list[float] = []
+
+
+class _ScriptedHandler(BaseHTTPRequestHandler):
+    server: _ScriptedCollector
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        self.server.arrivals.append(time.monotonic())
+        status = self.server.script.pop(0) if self.server.script else 200
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:
+        return None
+
+
+@contextlib.contextmanager
+def _exporter(
+    statuses: list[int], *, timeout: float = 10.0
+) -> Iterator[tuple[SpanExporter, _ScriptedCollector]]:
+    collector = _ScriptedCollector(statuses)
+    thread = threading.Thread(target=collector.serve_forever, daemon=True)
+    thread.start()
+    host, port = collector.server_address[:2]
+    exporter = SpanExporter(
+        f"http://{host!s}:{port}/v1/traces", Controls(), interval=0.02, timeout=timeout
+    )
+    exporter.start()
+    exporter.on_free(
+        FakeRequest("r-0a1b2c3d", "r", prompt_tokens("x"), 1, time.time_ns())
+    )
+    try:
+        yield exporter, collector
+    finally:
+        exporter.close()
+        collector.shutdown()
+        collector.server_close()
+
+
+def test_a_failed_export_is_retried_with_the_sdks_backoff() -> None:
+    # opentelemetry-exporter-otlp-proto-http 1.44.0 retries 408, 5xx and
+    # connection errors, 2**n s apart with 20% jitter (trace_exporter:197-252).
+    with _exporter([503, 408]) as (exporter, collector):
+        assert wait_until(lambda: len(exporter.statuses) == 3, timeout=10)
+        statuses, failed = list(exporter.statuses), exporter.failed
+        arrivals = list(collector.arrivals)
+    assert statuses == [503, 408, 200]
+    assert failed == 0
+    first, second = (later - earlier for earlier, later in pairwise(arrivals))
+    assert 0.75 <= first <= 1.6
+    assert 1.55 <= second <= 2.9
+
+
+def test_a_429_or_other_client_error_is_final() -> None:
+    # The SDK's _is_retryable admits 408 and 5xx only (_common:15-20).
+    with _exporter([429]) as (exporter, _collector):
+        assert wait_until(lambda: exporter.failed == 1)
+        time.sleep(1.5)
+        statuses = list(exporter.statuses)
+    assert statuses == [429]
+
+
+def test_retries_stop_at_the_export_timeout() -> None:
+    # A retry is skipped when its backoff would pass the export's deadline,
+    # OTEL_EXPORTER_OTLP_TRACES_TIMEOUT (10 s by default).
+    with _exporter([503] * 10, timeout=1.5) as (exporter, _collector):
+        assert wait_until(lambda: exporter.failed == 1, timeout=10)
+        statuses = list(exporter.statuses)
+    assert statuses == [503, 503]

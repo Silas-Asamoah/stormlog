@@ -3,8 +3,8 @@
 Spans leave in batches on a timer, like the OpenTelemetry batch processor
 vLLM uses, as protobuf, the only encoding the SDK's HTTP exporter sends
 (OTLP/JSON on request). An incoming W3C ``traceparent`` makes the request's
-span its child. A failed export is counted and dropped, as vLLM's exporter
-drops it once its retries run out.
+span its child. A failed export is retried as the SDK's exporter retries it,
+then counted and dropped.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import gzip
 import http.client
 import json
+import random
 import secrets
 import threading
 import time
@@ -32,6 +33,9 @@ from .engine import EngineObserver, FakeRequest
 
 # Bigger than the 32 MiB Stormlog's receiver accepts, raw or inflated.
 ABUSIVE_BYTES = 33 * 1024 * 1024
+# opentelemetry-exporter-otlp-proto-http 1.44.0: at most six attempts, 2**n s
+# apart with 20% jitter, all inside one export timeout.
+MAX_ATTEMPTS = 6
 
 
 class SpanExporter(EngineObserver):
@@ -42,6 +46,7 @@ class SpanExporter(EngineObserver):
         *,
         interval: float,
         encoding: str = "protobuf",
+        timeout: float = 10.0,
     ) -> None:
         if encoding not in ("protobuf", "json"):
             raise ValueError(f"unknown span encoding {encoding!r}")
@@ -51,6 +56,8 @@ class SpanExporter(EngineObserver):
         self.controls = controls
         self.interval = interval
         self.encoding = encoding
+        # OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: one export's whole retry window.
+        self.timeout = timeout
         self.media = PROTOBUF_MEDIA if encoding == "protobuf" else JSON_MEDIA
         self.statuses: list[int] = []
         self.failed = 0
@@ -116,7 +123,7 @@ class SpanExporter(EngineObserver):
         else:
             body = json.dumps(_document(ready)).encode()
         for _ in range(2 if self.controls.span_duplicates else 1):
-            self._post(body, encoding=None)
+            self._export(body)
 
     def _take_ready(self, everything: bool) -> list[dict[str, Any]]:
         """The spans due now, or every queued one, taken off the queue."""
@@ -128,7 +135,31 @@ class SpanExporter(EngineObserver):
             ]
         return ready
 
-    def _post(self, body: bytes, *, encoding: str | None) -> int:
+    def _export(self, body: bytes) -> None:
+        """One batch, as the SDK's exporter sends it: 408, 5xx and connection
+        errors are retried with backoff inside the timeout; any other answer,
+        429 included, is final. A close abandons the retries."""
+        deadline = time.monotonic() + self.timeout
+        for attempt in range(MAX_ATTEMPTS):
+            backoff = 2**attempt * random.uniform(0.8, 1.2)
+            status = self._attempt(body, deadline - time.monotonic())
+            if 200 <= status < 400:
+                return
+            if not _retryable(status) or attempt + 1 == MAX_ATTEMPTS:
+                break
+            if backoff > deadline - time.monotonic() or self._stop.wait(backoff):
+                break
+        self.failed += 1
+
+    def _attempt(self, body: bytes, timeout: float) -> int:
+        status = self._post(body, encoding=None, timeout=timeout)
+        if status == 0:
+            # The SDK posts once more at once when a kept-alive connection
+            # breaks, before counting the attempt as failed.
+            status = self._post(body, encoding=None, timeout=timeout)
+        return status
+
+    def _post(self, body: bytes, *, encoding: str | None, timeout: float = 10.0) -> int:
         headers = {"Content-Type": self.media}
         if encoding is not None:
             headers["Content-Encoding"] = encoding
@@ -136,16 +167,19 @@ class SpanExporter(EngineObserver):
             self.endpoint, data=body, headers=headers, method="POST"
         )
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                status = int(response.status)
+            with urllib.request.urlopen(request, timeout=max(timeout, 0.01)) as answer:
+                status = int(answer.status)
         except urllib.error.HTTPError as error:
             status = int(error.code)
         except (urllib.error.URLError, OSError):
             status = 0
         self.statuses.append(status)
-        if status != 200:
-            self.failed += 1
         return status
+
+
+def _retryable(status: int) -> bool:
+    """The SDK's rule: a connection error (0 here), 408 or any 5xx."""
+    return status in (0, 408) or 500 <= status <= 599
 
 
 def request_span(request: FakeRequest) -> dict[str, Any]:
