@@ -451,8 +451,6 @@ def _histogram_field(
 ) -> dict[str, Any]:
     entry = CATALOG.get(resolve_name(name)[0])
     first, last = _by_extra(name, before), _by_extra(name, after)
-    a = next((v for v in first.values() if isinstance(v, HistogramValue)), None)
-    b = next((v for v in last.values() if isinstance(v, HistogramValue)), None)
     result: dict[str, Any] = {
         "native": name,
         "unit": entry.unit if entry else None,
@@ -460,8 +458,60 @@ def _histogram_field(
         "meaning": entry.meaning if entry else None,
     }
     recreated = _recreated(name, "histogram", before, after)
-    result.update(_histogram_delta(a, b, epoch_broken, recreated))
+    # Every label set is differenced against itself, whatever order the
+    # two scrapes list them in; a set one scrape lacks stays unresolved.
+    by_label: dict[str, dict[str, Any]] = {}
+    for extra in sorted(set(first) | set(last)):
+        a, b = first.get(extra), last.get(extra)
+        by_label[_label_key(extra)] = _histogram_delta(
+            a if isinstance(a, HistogramValue) else None,
+            b if isinstance(b, HistogramValue) else None,
+            epoch_broken,
+            recreated,
+        )
+    result["by_label"] = by_label
+    result.update(_histogram_total(by_label))
     return result
+
+
+def _histogram_total(by_label: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """The histogram over its label sets: one set's own delta, the sum of
+    several when every one resolved, or unresolved with their reasons."""
+    items = list(by_label.values())
+    if not items:
+        return {"state": REASON_SERIES_MISSING}
+    if len(items) == 1:
+        return dict(items[0])
+    reasons = sorted({i["state"] for i in items if i["state"] != STATE_RESOLVED})
+    if reasons:
+        return {"state": STATE_UNRESOLVED, "reasons": reasons}
+    return _summed_histograms(items)
+
+
+def _summed_histograms(items: list[dict[str, Any]]) -> dict[str, Any]:
+    count = sum(float(item["count"]) for item in items)
+    total = sum(float(item["sum"]) for item in items)
+    result: dict[str, Any] = {
+        "state": STATE_RESOLVED,
+        "count": count,
+        "sum": total,
+        "mean": total / count if count else None,
+    }
+    buckets = _summed_buckets(items)
+    if buckets is not None:
+        result["buckets"] = buckets
+    return result
+
+
+def _summed_buckets(items: list[dict[str, Any]]) -> list[list[Any]] | None:
+    """Per-bucket sums when every set has the same boundaries, else None."""
+    shapes = {tuple(le for le, _ in item["buckets"]) for item in items}
+    if len(shapes) != 1:
+        return None
+    return [
+        [le, sum(float(item["buckets"][i][1]) for item in items)]
+        for i, (le, _) in enumerate(items[0]["buckets"])
+    ]
 
 
 def _histogram_delta(

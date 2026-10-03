@@ -131,7 +131,7 @@ the text report. Per measured case and per `engine` label:
 | Block | Content | Source |
 | --- | --- | --- |
 | `counters` | delta over the case window, per extra label (`finished_reason`, `source`, ...) | phase-start and phase-end scrapes |
-| `histograms` | count and sum deltas, the mean, and per-bucket deltas under the native `le` boundaries | the same two scrapes |
+| `histograms` | count and sum deltas, the mean, and per-bucket deltas under the native `le` boundaries, per extra label set (`by_label`, each set differenced against itself) with the total over the sets when every one resolves | the same two scrapes |
 | `gauges` | min, mean, max, last and sample count over every scrape in the window | all scrapes of the case |
 | `derived.rates` | prompt and generated tokens per second, finished requests per second | counters over the window |
 | `derived.prefix_cache` | queries, hits and the hit ratio, in tokens | counters |

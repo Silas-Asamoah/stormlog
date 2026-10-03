@@ -509,6 +509,62 @@ class TestUnresolved:
         assert case["window"] is None and case["engines"] == {}
 
 
+def _ranked_queue_histogram(ranks: list[tuple[int, float, float]]) -> str:
+    """One queue-time histogram with a rank label, in the order given."""
+    lines = [
+        "# TYPE process_start_time_seconds gauge",
+        "process_start_time_seconds 100",
+        "# TYPE vllm:request_queue_time_seconds histogram",
+    ]
+    for rank, count, total in ranks:
+        labels = f'engine="0",model_name="m",rank="{rank}"'
+        lines += [
+            f'vllm:request_queue_time_seconds_bucket{{{labels},le="+Inf"}} {count}',
+            f"vllm:request_queue_time_seconds_sum{{{labels}}} {total}",
+            f"vllm:request_queue_time_seconds_count{{{labels}}} {count}",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+class TestHistogramLabelSets:
+    def test_histograms_are_differenced_per_label_set(self, tmp_path: Path) -> None:
+        # The end scrape lists the two ranks in the other order. Each rank is
+        # differenced against itself and the total is their sum, never one
+        # rank's end minus the other's start.
+        start = _ranked_queue_histogram([(0, 10, 1.0), (1, 100, 20.0)])
+        end = _ranked_queue_histogram([(1, 102, 22.0), (0, 11, 1.1)])
+        scrapes = [
+            _scrape(start, MARKER_PHASE_START, T0 - SECOND),
+            _scrape(end, MARKER_PHASE_END, T0 + 12 * SECOND),
+        ]
+        case = _vllm_case(_artifact(tmp_path, scrapes))
+        queue = case["engines"]["0"]["histograms"]["queue_time"]
+        assert queue["state"] == STATE_RESOLVED
+        assert (queue["count"], queue["sum"]) == (3.0, pytest.approx(2.1))
+        assert queue["buckets"] == [["+Inf", 3.0]]
+        assert queue["by_label"]["rank=0"]["count"] == 1.0
+        assert queue["by_label"]["rank=0"]["sum"] == pytest.approx(0.1)
+        assert queue["by_label"]["rank=1"]["count"] == 2.0
+        assert queue["by_label"]["rank=1"]["sum"] == 2.0
+
+    def test_a_label_set_missing_from_one_scrape_is_unresolved(
+        self, tmp_path: Path
+    ) -> None:
+        start = _ranked_queue_histogram([(0, 10, 1.0), (1, 100, 20.0)])
+        end = _ranked_queue_histogram([(0, 11, 1.1)])
+        scrapes = [
+            _scrape(start, MARKER_PHASE_START, T0 - SECOND),
+            _scrape(end, MARKER_PHASE_END, T0 + 12 * SECOND),
+        ]
+        case = _vllm_case(_artifact(tmp_path, scrapes))
+        queue = case["engines"]["0"]["histograms"]["queue_time"]
+        assert queue["state"] == STATE_UNRESOLVED
+        assert queue["reasons"] == [REASON_SERIES_MISSING]
+        assert "count" not in queue and "sum" not in queue
+        assert queue["by_label"]["rank=0"]["state"] == STATE_RESOLVED
+        assert queue["by_label"]["rank=1"]["state"] == REASON_SERIES_MISSING
+
+
 class TestNamesAndEngines:
     def test_retired_name_is_normalised_and_flagged(self, tmp_path: Path) -> None:
         old = PRE.replace("vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc")
