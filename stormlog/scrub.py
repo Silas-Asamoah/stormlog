@@ -85,10 +85,11 @@ _KEY_SEPARATOR = re.compile(rf"(?<![{_KEY_CHARS}])([{_KEY_CHARS}]+)\s*[=:]\s*")
 _DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _SINGLE_QUOTED = re.compile(r"'((?:[^'\\]|\\.)*)'")
 _BARE_VALUE = re.compile(r"[^\s&,;\"'(){}\[\]<>]+")
-# Well-known credential shapes. No word boundary in front of most: a key
-# glued to the text before it is still a key, and removing a little too
-# much is the safe mistake. Each class covers the prefix that follows it,
-# so a run of repeated prefixes is one match.
+# Well-known credential shapes. No word boundary in front: a key glued to
+# the text before it is still a key, and removing a little too much is the
+# safe mistake. Each is linear: where a prefix's class covers the prefix
+# itself (sk-, github_pat_, xox), a run of repeated prefixes is one match,
+# and where it does not (hf_, gh*_), a failed attempt stops at the next _.
 _SHAPES = (
     re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
     re.compile(r"hf_[A-Za-z0-9]{20,}"),
@@ -96,11 +97,8 @@ _SHAPES = (
     re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
     re.compile(r"xox[abposr]-[A-Za-z0-9-]{10,}"),
-    re.compile(
-        r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
-        r"\.[A-Za-z0-9_-]{8,}"
-    ),
 )
+_JWT_SEGMENT = re.compile(r"[A-Za-z0-9_-]*")
 
 
 def _whole(pattern: re.Pattern[str]) -> Finder:
@@ -234,6 +232,45 @@ def _value_span(text: str, position: int, bare: _BareRuns) -> Span | None:
     return (position, end) if end > position else None
 
 
+def _jwt_spans(text: str) -> Iterator[Span]:
+    """A three-part JWT, glued to the word before it or not.
+
+    An "eyJ" inside the first segment of one that failed would fail the
+    same way, so the search resumes after that segment: linear even on a
+    run of "eyJ".
+    """
+    resume = 0
+    for match in re.finditer("eyJ", text):
+        start = match.start()
+        if start < resume:
+            continue
+        end = _jwt_end(text, start + 3)
+        if end is None:
+            resume = _segment_end(text, start + 3)
+            continue
+        resume = end
+        yield start, end
+
+
+def _jwt_end(text: str, position: int) -> int | None:
+    """Where a JWT whose first segment starts at ``position`` ends, if it is one."""
+    for part in range(3):
+        if part:
+            if text[position : position + 1] != ".":
+                return None
+            position += 1
+        end = _segment_end(text, position)
+        if end - position < 8:
+            return None
+        position = end
+    return position
+
+
+def _segment_end(text: str, position: int) -> int:
+    segment = _JWT_SEGMENT.match(text, position)
+    return segment.end() if segment else position
+
+
 _FINDERS: tuple[Finder, ...] = (
     _whole(_PRIVATE_KEY),
     _value(_AUTHORIZATION),
@@ -242,6 +279,7 @@ _FINDERS: tuple[Finder, ...] = (
     _json_member_spans,
     _key_value_spans,
     *(_whole(shape) for shape in _SHAPES),
+    _jwt_spans,
 )
 
 

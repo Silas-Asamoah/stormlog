@@ -378,6 +378,21 @@ def test_only_a_secret_key_consumes_a_value(text: str, scrubbed: str) -> None:
     assert scrub_text(text) == scrubbed
 
 
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        (
+            "token_eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.abcdefghijk",
+            "token_<redacted>",
+        ),
+        ("xeyJhbGciOiJI.eyJzdWIiOiJ4.abcdefghijk end", "x<redacted> end"),
+        ("eyJshort.eyJzdWIiOiJ4.abcdefghijk", "eyJshort.eyJzdWIiOiJ4.abcdefghijk"),
+    ],
+)
+def test_a_jwt_glued_to_a_word_is_still_found(text: str, scrubbed: str) -> None:
+    assert scrub_text(text) == scrubbed
+
+
 def test_scrub_text_leaves_ordinary_text_alone() -> None:
     text = "This model's maximum context length is 32768 tokens; max_tokens 128."
     assert scrub_text(text) == text
