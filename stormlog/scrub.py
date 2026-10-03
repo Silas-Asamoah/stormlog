@@ -381,6 +381,10 @@ def scrub_text(
     """
     if max_bytes is not None:
         text = text[: max_bytes + INPUT_MARGIN_CHARS]
+    # What UTF-8 cannot encode becomes "?" now, one character for one, so
+    # the text matched is the text sent: replacing it later could complete
+    # a registered value after matching.
+    text = text.encode("utf-8", "replace").decode("utf-8")
     spans = secrets.spans(text) if secrets is not None else []
     for finder in _FINDERS:
         spans.extend(finder(text))

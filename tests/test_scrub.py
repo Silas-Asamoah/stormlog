@@ -353,6 +353,15 @@ def test_text_past_the_kept_length_never_reaches_the_output(
     )
 
 
+@pytest.mark.parametrize("max_bytes", [None, 64])
+def test_a_lone_surrogate_cannot_complete_a_known_secret(max_bytes: int | None) -> None:
+    # UTF-8 cannot encode a lone surrogate, so it becomes "?"; it must do so
+    # before matching, or the replacement could complete a registered value.
+    text = "abc" + chr(0xD800) + "defgh"
+    secrets = KnownSecrets(["abc?defgh"])
+    assert scrub_text(text, max_bytes=max_bytes, secrets=secrets) == "<redacted>"
+
+
 def test_scrub_text_bounds_its_input_before_matching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
