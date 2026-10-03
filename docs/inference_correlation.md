@@ -196,7 +196,10 @@ That is the expected result for an engine that does not emit them yet.
   CUDA device ordinal inside the traced process, after `CUDA_VISIBLE_DEVICES`,
   which is not necessarily the host's NVML index. Two processes can both call
   their GPU device 0, so `--device-uuid TRACE_FILE:INDEX=UUID` scopes a UUID to
-  one trace, and an unscoped ordinal that traces from different processes (by
+  one trace. `TRACE_FILE` is the trace's path as passed to the command, or its
+  file name when only one imported trace has that name; a prefix that names no
+  trace, or a file name that several traces share, is refused before anything
+  is imported. An unscoped ordinal that traces from different processes (by
   host name, rank, and launching pid) use is refused rather than applied to
   both. That check cannot tell apart two containers that report the same host
   name, rank, and pid, so give per-trace UUIDs whenever traces come from

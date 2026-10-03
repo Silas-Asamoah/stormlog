@@ -42,17 +42,43 @@ def artifact_run_identity(path: str | Path) -> tuple[str, str]:
 
 @dataclass(frozen=True)
 class DeviceUuids:
-    """GPU UUIDs by CUDA ordinal: shared by every trace, or for one trace file.
+    """GPU UUIDs by CUDA ordinal: shared by every trace, or for one trace.
 
     An ordinal is local to the traced process (after ``CUDA_VISIBLE_DEVICES``),
     so a shared mapping is only safe when each ordinal belongs to one process.
+    ``per_trace`` is keyed by the selector as given until ``bind`` matches each
+    selector to one trace; from then on it is keyed by the trace's resolved path.
     """
 
     shared: dict[int, str] = field(default_factory=dict)
     per_trace: dict[str, dict[int, str]] = field(default_factory=dict)
+    bound: bool = False
 
-    def for_trace(self, name: str) -> dict[int, str]:
-        return {**self.shared, **self.per_trace.get(name, {})}
+    def bind(self, paths: Sequence[str | Path]) -> DeviceUuids:
+        """Match every selector to exactly one of ``paths``, or refuse.
+
+        A selector is a trace's path, as given or resolved, or its file name
+        when only one of ``paths`` has that name. A selector that names no
+        trace, or a name that several traces share, is a usage error.
+        """
+        if self.bound:
+            return self
+        candidates = [Path(path) for path in paths]
+        per_trace: dict[str, dict[int, str]] = {}
+        for selector, mapping in self.per_trace.items():
+            key = str(_select_trace(selector, candidates).resolve())
+            _add_entries(per_trace.setdefault(key, {}), mapping, selector)
+        return DeviceUuids(dict(self.shared), per_trace, bound=True)
+
+    def scoped(self, path: str | Path) -> dict[int, str]:
+        """The entries given for this trace alone."""
+        if not self.bound:
+            raise ValueError("bind the device UUIDs to the trace paths first")
+        return self.per_trace.get(str(Path(path).resolve()), {})
+
+    def for_trace(self, path: str | Path) -> dict[int, str]:
+        """Shared entries, overridden by the ones given for this trace."""
+        return {**self.shared, **self.scoped(path)}
 
 
 def parse_device_uuids(values: Sequence[str]) -> DeviceUuids:
@@ -60,17 +86,56 @@ def parse_device_uuids(values: Sequence[str]) -> DeviceUuids:
 
     The index is the CUDA device ordinal inside the traced process, after
     ``CUDA_VISIBLE_DEVICES``. It is not necessarily the host's NVML index. A
-    ``TRACE_FILE`` prefix (the trace's file name) limits the entry to that trace.
+    ``TRACE_FILE`` prefix limits the entry to one trace: the trace's path as
+    passed to the command, or its file name when only one trace has it.
+    ``DeviceUuids.bind`` checks the prefixes against the traces.
     """
     shared: dict[int, str] = {}
     per_trace: dict[str, dict[int, str]] = {}
     for value in values:
         target, index, uuid = _device_uuid_entry(value)
         table = shared if target is None else per_trace.setdefault(target, {})
-        if table.get(index, uuid) != uuid:
-            raise InferUsageError(f"--device-uuid: device {index} given twice")
-        table[index] = uuid
+        _add_entries(table, {index: uuid}, target)
     return DeviceUuids(shared, per_trace)
+
+
+def _add_entries(
+    table: dict[int, str], entries: dict[int, str], selector: str | None
+) -> None:
+    for index, uuid in entries.items():
+        if table.get(index, uuid) != uuid:
+            scope = f" of {selector}" if selector else ""
+            raise InferUsageError(f"--device-uuid: device {index}{scope} given twice")
+        table[index] = uuid
+
+
+def _select_trace(selector: str, paths: Sequence[Path]) -> Path:
+    """The one trace among ``paths`` that a ``--device-uuid`` prefix names."""
+    wanted = Path(selector)
+    by_path = {
+        str(path.resolve()): path
+        for path in paths
+        if path == wanted or path.resolve() == wanted.resolve()
+    }
+    if len(by_path) == 1:
+        return next(iter(by_path.values()))
+    by_name = {str(path.resolve()): path for path in paths if path.name == selector}
+    if len(by_name) == 1:
+        return next(iter(by_name.values()))
+    if by_name:
+        raise InferUsageError(
+            f"--device-uuid {selector}:...: {len(by_name)} traces in this import "
+            f"are named {selector}; give the trace's path instead"
+        )
+    raise InferUsageError(
+        f"--device-uuid {selector}:...: no trace in this import is {selector}"
+    )
+
+
+def _as_device_uuids(value: DeviceUuids | dict[int, str] | None) -> DeviceUuids:
+    if isinstance(value, DeviceUuids):
+        return value
+    return DeviceUuids(dict(value or {}))
 
 
 def _device_uuid_entry(value: str) -> tuple[str | None, int, str]:
@@ -111,11 +176,8 @@ class KinetoTraceCollector:
         missing = [str(path) for path in self.paths if not path.is_file()]
         if missing:
             raise InferInputError(f"trace file not found: {', '.join(missing)}")
-        self.device_uuids = (
-            device_uuids
-            if isinstance(device_uuids, DeviceUuids)
-            else DeviceUuids(dict(device_uuids or {}))
-        )
+        # Refuses a per-trace selector that fits none or several of the paths.
+        self.device_uuids = _as_device_uuids(device_uuids).bind(self.paths)
         self.detail = detail
 
     def collect(self, *, run_id: str, session_id: str) -> TraceCapture:
@@ -137,7 +199,7 @@ class KinetoTraceCollector:
                 run_id=run_id,
                 session_id=session_id,
                 attachment=attachment,
-                device_uuids=self.device_uuids.for_trace(path.name),
+                device_uuids=self.device_uuids.for_trace(path),
                 detail=self.detail,
             )
         except (ValueError, OSError) as exc:
@@ -161,7 +223,7 @@ def _check_shared_devices(
             summary.get("rank"),
             tuple(summary.get("processes", ())),
         )
-        own = uuids.per_trace.get(path.name, {})
+        own = uuids.scoped(path)
         for key in summary.get("devices", {}):
             index = int(key) if str(key).isdigit() else None
             if index in uuids.shared and index not in own:
@@ -215,12 +277,15 @@ def import_traces_into_artifact(
     size bound, can still be imported.
     """
     run_id, session_id = artifact_run_identity(artifact)
+    # Bound to every requested trace, so a selector for one that is skipped
+    # below as already imported still names a trace.
+    uuids = _as_device_uuids(device_uuids).bind(list(traces))
     imported = imported_trace_paths(artifact)
     skipped = [str(t) for t in traces if Path(t).resolve() in imported]
     pending = [t for t in traces if str(t) not in skipped]
     if not pending:
         return _nothing_imported(skipped)
-    collector = KinetoTraceCollector(pending, device_uuids=device_uuids, detail=detail)
+    collector = KinetoTraceCollector(pending, device_uuids=uuids, detail=detail)
     captured: list[TraceCapture] = []
 
     class _Recording:

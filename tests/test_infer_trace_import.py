@@ -106,8 +106,13 @@ def test_run_identity_comes_from_the_artifact_record(tmp_path: Path) -> None:
 def test_device_uuid_pairs() -> None:
     parsed = parse_device_uuids(["1=GPU-b", "GPU-a", "rank1.pt.trace.json:0=GPU-c"])
     assert parsed.shared == {0: "GPU-a", 1: "GPU-b"}
-    assert parsed.for_trace("rank1.pt.trace.json") == {0: "GPU-c", 1: "GPU-b"}
-    assert parsed.for_trace("rank0.pt.trace.json") == {0: "GPU-a", 1: "GPU-b"}
+    traces = [Path("run/rank0.pt.trace.json"), Path("run/rank1.pt.trace.json")]
+    bound = parsed.bind(traces)
+    assert bound.for_trace(traces[1]) == {0: "GPU-c", 1: "GPU-b"}
+    assert bound.for_trace(traces[0]) == {0: "GPU-a", 1: "GPU-b"}
+    assert bound.scoped(traces[0]) == {}
+    with pytest.raises(ValueError, match="bind"):
+        parsed.for_trace(traces[1])
     assert parse_device_uuids([]).shared == {}
     with pytest.raises(InferUsageError, match="INDEX=UUID"):
         parse_device_uuids(["x=GPU-a"])
@@ -411,3 +416,118 @@ def test_cli_rejects_a_negative_gpu_duration_at_both_details(
     assert code == int(ExitCode.INVALID_INPUT)
     assert "negative duration" in capsys.readouterr().err
     assert artifact.read_text(encoding="utf-8").count("\n") == 1
+
+
+def test_a_file_name_shared_by_two_traces_cannot_select_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Two workers' rank0 traces from different GPUs need different UUIDs."""
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    first = _trace(_dir(tmp_path / "worker-a") / "rank0.pt.trace.json", "A", pid=101)
+    second = _trace(_dir(tmp_path / "worker-b") / "rank0.pt.trace.json", "B", pid=202)
+
+    code = main(
+        [
+            "import-trace",
+            str(artifact),
+            str(first),
+            str(second),
+            "--device-uuid",
+            "rank0.pt.trace.json:0=GPU-a",
+        ]
+    )
+
+    assert code == int(ExitCode.USAGE)
+    assert "2 traces in this import are named rank0.pt.trace.json" in (
+        capsys.readouterr().err
+    )
+    assert artifact.read_text(encoding="utf-8").count("\n") == 1
+
+
+def test_a_trace_path_selects_one_trace_and_a_unique_file_name_another(
+    tmp_path: Path,
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    first = _trace(_dir(tmp_path / "worker-a") / "rank0.pt.trace.json", "A", pid=101)
+    second = _trace(_dir(tmp_path / "worker-b") / "rank1.pt.trace.json", "B", pid=202)
+
+    code = main(
+        [
+            "import-trace",
+            str(artifact),
+            str(first),
+            str(second),
+            "--device-uuid",
+            f"{first}:0=GPU-a",
+            "--device-uuid",
+            "rank1.pt.trace.json:0=GPU-b",
+        ]
+    )
+
+    assert code == int(ExitCode.OK)
+    uuids = {
+        a.trace_attachment_id: a.context.device_uuid
+        for a in load_inference_artifact(artifact)
+        if isinstance(a, ActivityReferenceEvent)
+    }
+    assert uuids == {
+        trace_attachment_id(first): "GPU-a",
+        trace_attachment_id(second): "GPU-b",
+    }
+
+
+def test_a_selector_that_names_no_trace_is_refused_before_importing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    trace = _trace(tmp_path / "rank0.pt.trace.json", "T0")
+
+    code = main(
+        [
+            "import-trace",
+            str(artifact),
+            str(trace),
+            "--device-uuid",
+            "rank9.pt.trace.json:0=GPU-a",
+        ]
+    )
+
+    assert code == int(ExitCode.USAGE)
+    assert "no trace in this import is rank9.pt.trace.json" in capsys.readouterr().err
+    assert artifact.read_text(encoding="utf-8").count("\n") == 1
+
+
+def test_a_selector_for_an_already_imported_trace_is_still_accepted(
+    tmp_path: Path,
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    first = _trace(tmp_path / "rank0.pt.trace.json", "T0", pid=101)
+    second = _trace(tmp_path / "rank1.pt.trace.json", "T1", pid=202)
+    first_only = ["--device-uuid", "rank0.pt.trace.json:0=GPU-a"]
+    assert main(["import-trace", str(artifact), str(first), *first_only]) == int(
+        ExitCode.OK
+    )
+
+    # rank0 is skipped as already imported; its selector must still match it.
+    code = main(
+        [
+            "import-trace",
+            str(artifact),
+            str(first),
+            str(second),
+            *first_only,
+            "--device-uuid",
+            "rank1.pt.trace.json:0=GPU-b",
+        ]
+    )
+
+    assert code == int(ExitCode.OK)
+    uuids = {
+        a.trace_attachment_id: a.context.device_uuid
+        for a in load_inference_artifact(artifact)
+        if isinstance(a, ActivityReferenceEvent)
+    }
+    assert uuids == {
+        trace_attachment_id(first): "GPU-a",
+        trace_attachment_id(second): "GPU-b",
+    }
