@@ -317,6 +317,33 @@ def test_json_members_are_read_as_json(text: str, scrubbed: str) -> None:
 @pytest.mark.parametrize(
     ("text", "scrubbed"),
     [
+        # User information ends at the last @ before the first / or space,
+        # whatever it holds: quotes, <, >, # and ? included.
+        (
+            "see https://admin:hunter2'xyz@db.example/x now",
+            "see https://<redacted>@db.example/x now",
+        ),
+        ("https://admin:pa?ss-1234@db.example/x", "https://<redacted>@db.example/x"),
+        ("https://admin:pa#ss-1234@db.example/x", "https://<redacted>@db.example/x"),
+        ('https://u:"p<q>@host/x', "https://<redacted>@host/x"),
+        ("https://u:p?q@host/x?k=v", "https://<redacted>@host/x?<redacted>"),
+        # A scheme glued to the character before it.
+        (
+            "endpoint -https://admin:hunter2-1234@db.example/x",
+            "endpoint -https://<redacted>@db.example/x",
+        ),
+        ("(.https://u:pw-1234@h/x)", "(.https://<redacted>@h/x)"),
+    ],
+)
+def test_url_user_information_is_found_whatever_it_holds(
+    text: str, scrubbed: str
+) -> None:
+    assert scrub_text(text) == scrubbed
+
+
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
         # A key that is not secret-like must not swallow the pair after it.
         ("error: password=hunter2-secret", "error: password=<redacted>"),
         (
@@ -500,6 +527,9 @@ ADVERSARIAL = (
     ('"a-" * 26000', None),
     ('"x://" * 13000', None),
     ('"http://" * 7400', None),
+    ('"a://h?q#" * 7000', None),
+    ('"-a://u@h " * 5000', None),
+    ('"a://" + "@" * 50000', None),
     ("'\"' + 'key' * 17000", None),
     ("'\"' + ('key' + 'a' * 10) * 4000", None),
     ('"eyJ" * 17000', None),

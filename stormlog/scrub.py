@@ -65,7 +65,13 @@ _PRIVATE_KEY = re.compile(
 )
 _AUTHORIZATION = re.compile(r"(?i)\b(?:proxy-)?authorization\s*[:=]\s*([^\r\n]+)")
 _BEARER = re.compile(r"(?i)\b(?:bearer|basic)\s+([A-Za-z0-9._~+/=-]{8,})")
-_URL = re.compile(r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*://([^\s\"'<>]*)")
+_SCHEME_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"
+)
+_URL_END = re.compile(r"[\s\"'<>]")
+_AUTHORITY_END = re.compile(r"[/\s]")
+_QUESTION = re.compile(r"\?")
+_HASH = re.compile("#")
 # A member's value is a string, whose inside is redacted, or a bare value
 # such as a number or true.
 _JSON_MEMBER = re.compile(
@@ -113,24 +119,57 @@ def _bearer_spans(text: str) -> Iterator[Span]:
 
 
 def _url_spans(text: str) -> Iterator[Span]:
-    """A URL's user information and query; its fragment is never sent."""
-    for match in _URL.finditer(text):
-        rest = match.group(1)
-        base = match.start(1)
-        authority_end = len(rest)
-        for mark in "/?#":
-            found = rest.find(mark)
-            if found >= 0:
-                authority_end = min(authority_end, found)
-        at = rest.rfind("@", 0, authority_end)
-        if at > 0:
-            yield base, base + at
-        query = rest.find("?")
-        if query >= 0:
-            fragment = rest.find("#", query)
-            end = fragment if fragment >= 0 else len(rest)
-            if end > query + 1:
-                yield base + query + 1, base + end
+    """A URL's user information and query; its fragment is never sent.
+
+    Each URL is found from its "://", so a scheme glued to the text before
+    it is still found, and each run of scheme characters is read once. The
+    user information runs to the last @ before the first / or whitespace,
+    whatever it holds: a quote, <, >, # and ? can all appear in a password.
+    """
+    url_end = _NextMatch(text, _URL_END)
+    question = _NextMatch(text, _QUESTION)
+    hash_mark = _NextMatch(text, _HASH)
+    for match in re.finditer("://", text):
+        start = match.start()
+        scheme = start
+        while scheme > 0 and text[scheme - 1] in _SCHEME_CHARS:
+            scheme -= 1
+        while scheme < start and not text[scheme].isalpha():
+            scheme += 1
+        if scheme == start:
+            continue
+        after = match.end()
+        stop = _AUTHORITY_END.search(text, after)
+        at = text.rfind("@", after, stop.start() if stop else len(text))
+        if at > after:
+            yield after, at
+        host = max(at + 1, after)
+        end = url_end.at_or_after(host)
+        query = question.at_or_after(host)
+        if query < end:
+            fragment = min(hash_mark.at_or_after(query), end)
+            if fragment > query + 1:
+                yield query + 1, fragment
+
+
+class _NextMatch:
+    """The next match of a pattern at or after a position, for rising positions.
+
+    Several URLs in one long token would each search to the token's end;
+    remembering the last match found keeps the total linear.
+    """
+
+    def __init__(self, text: str, pattern: re.Pattern[str]) -> None:
+        self.text = text
+        self.pattern = pattern
+        self.found = -1
+
+    def at_or_after(self, position: int) -> int:
+        """The match's start, or the text's length when there is none."""
+        if position > self.found:
+            match = self.pattern.search(self.text, position)
+            self.found = match.start() if match else len(self.text)
+        return self.found
 
 
 def _json_member_spans(text: str) -> Iterator[Span]:
