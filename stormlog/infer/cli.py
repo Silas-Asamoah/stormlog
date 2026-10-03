@@ -344,11 +344,16 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_import_trace_parser(subparsers: Any) -> None:
     import_parser = subparsers.add_parser(
         "import-trace",
-        help="Add a PyTorch/Kineto profiler trace's GPU activity to an artifact",
+        help="Add a profiler trace's GPU activity to an artifact",
     )
     import_parser.add_argument("artifact", help="Inference JSONL with a run identity")
     import_parser.add_argument(
-        "traces", nargs="+", help="Kineto Chrome trace files (.json or .json.gz)"
+        "traces",
+        nargs="+",
+        help=(
+            "Kineto Chrome traces (.json, .json.gz) or Nsight Systems SQLite "
+            "exports (.sqlite); an .nsys-rep report is registered only"
+        ),
     )
     import_parser.add_argument(
         "--device-uuid",
@@ -952,6 +957,12 @@ def cmd_import_trace(args: argparse.Namespace) -> int:
 
 
 def _print_trace_summary(summary: dict[str, Any]) -> None:
+    if summary.get("skipped") == "not_exported":
+        print(
+            f"Registered {summary['file']} without importing it; export it with "
+            "`nsys export --type sqlite` and import the .sqlite file"
+        )
+        return
     if summary.get("skipped"):
         print(
             f"Registered trace {summary['file']} ({summary['bytes']} bytes) "
@@ -969,7 +980,11 @@ def _print_trace_summary(summary: dict[str, Any]) -> None:
         print(f"  unresolved ({reason}): {count}")
     for device, values in summary["devices"].items():
         uuid = values["device_uuid"] or "unknown UUID, not measured"
+        pid, _, ordinal = str(device).rpartition("/")
+        label = f"process {pid} device {ordinal}" if pid else f"device {device}"
         print(
-            f"  device {device} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
+            f"  {label} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
             f"summed {values['summed_ns'] / 1e6:.3f} ms"
         )
+    for note in summary.get("notes", []):
+        print(f"  note: {note}")

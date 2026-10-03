@@ -238,7 +238,7 @@ def test_importing_the_same_trace_twice_skips_it(
 
 
 def test_combined_capture_unions_what_each_trace_collected(tmp_path: Path) -> None:
-    from stormlog.infer.trace_import import KinetoTraceCollector
+    from stormlog.infer.trace_import import TraceFileCollector
 
     with_ranges = _trace(tmp_path / "rank0.pt.trace.json", "T0")
     document = json.loads(with_ranges.read_text(encoding="utf-8"))
@@ -246,7 +246,7 @@ def test_combined_capture_unions_what_each_trace_collected(tmp_path: Path) -> No
     without = tmp_path / "rank1.pt.trace.json"
     without.write_text(json.dumps(document), encoding="utf-8")
 
-    capture = KinetoTraceCollector([with_ranges, without]).collect(
+    capture = TraceFileCollector([with_ranges, without]).collect(
         run_id="run-9", session_id="session-9"
     )
 

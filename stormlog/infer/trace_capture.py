@@ -36,7 +36,7 @@ from .correlation_capture import (
     TraceCapture,
     append_inference_capture,
 )
-from .trace_import import DeviceUuids, KinetoTraceCollector
+from .trace_import import DeviceUuids, TraceFileCollector
 from .trace_kineto import SUPPORTED, Detail
 
 VLLM_TORCH = "vllm-torch"
@@ -379,7 +379,7 @@ class TraceWindows:
             # Inside the guard: the collector checks the files exist, and one
             # removed since its window closed must not fail the finished run.
             collector: Any = (
-                KinetoTraceCollector(
+                TraceFileCollector(
                     files,
                     device_uuids=self.config.device_uuids,
                     detail=self.config.detail,

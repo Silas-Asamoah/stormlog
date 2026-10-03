@@ -161,7 +161,7 @@ def test_load_reads_header_events_and_ranges(tmp_path: Path) -> None:
     assert trace.cupti_version == "130001"
     assert trace.device_names == {0: "NVIDIA A30"}
     assert len(trace.gpu_events) == 7
-    assert set(trace.launches) == {1, 2, 3}
+    assert set(trace.launches) == {(None, 1), (None, 2), (None, 3)}
     assert [span.iteration_ref.id for span in trace.spans[(PID, TID)]] == [
         "it-1",
         "it-2",
@@ -533,3 +533,22 @@ def test_launch_records_with_several_events_are_schema_version_3(
     # Two-kernel launch 1 and the graph launch 2 carry intervals; 3 and 4 do not.
     assert versions == {1: 3, 2: 3, 3: 2, 4: 2}
     assert {a.to_record()["schema_version"] for a in _activities(kernel)} == {2}
+
+
+def test_a_driver_api_graph_launch_marks_graph_work_without_graph_ids(
+    tmp_path: Path,
+) -> None:
+    document = _trace_document()
+    for event in document["traceEvents"]:
+        if event.get("name") == "cudaGraphLaunch":
+            event.update(name="cuGraphLaunch", cat="cuda_driver")
+        if event.get("args", {}).get("correlation") == 2 and event["cat"] == "kernel":
+            event["args"]["graph id"] = 0
+
+    capture = import_kineto_trace(
+        _write(tmp_path, document), run_id="run-1", session_id="session-1"
+    )
+
+    assert capture.summary is not None
+    assert capture.summary["graph_gpu_events"] == 3
+    assert "cuda_graph_ids" not in capture.capabilities.collected

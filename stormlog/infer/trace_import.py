@@ -1,4 +1,4 @@
-"""Import profiler traces into an existing inference artifact.
+"""Import profiler traces (Kineto, Nsight Systems) into an inference artifact.
 
 The artifact's ``infer.artifact`` record supplies the run and session. Each
 trace is registered in the run envelope and its GPU activity is appended as
@@ -8,7 +8,7 @@ trace is registered in the run envelope and its GPU activity is appended as
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -26,7 +26,14 @@ from .correlation_events import (
     load_inference_artifact,
 )
 from .errors import InferInputError, InferUsageError
-from .trace_kineto import SUPPORTED, Detail, import_kineto_trace
+from .trace_kineto import (
+    SUPPORTED,
+    Detail,
+    KinetoTrace,
+    capture_trace,
+    load_kineto_trace,
+)
+from .trace_nsys import load_nsys_sqlite
 
 
 def artifact_run_identity(path: str | Path) -> tuple[str, str]:
@@ -160,8 +167,20 @@ def trace_attachment_id(path: Path, prefix: str = "kineto") -> str:
     return f"{prefix}:{path.name}:{digest}"
 
 
-class KinetoTraceCollector:
-    """A ``TraceCollector`` over one or more Kineto trace files."""
+FORMATS = {
+    ".sqlite": ("nsys", "Nsight Systems SQLite export", "nsys-sqlite"),
+    ".nsys-rep": ("nsys", "Nsight Systems report", "nsys-rep"),
+}
+KINETO = ("kineto", "Kineto trace", "kineto-chrome-trace")
+
+
+class TraceFileCollector:
+    """A ``TraceCollector`` over profiler trace files, chosen by file type.
+
+    ``.sqlite`` files are read as Nsight Systems exports; ``.nsys-rep`` reports
+    are registered but not read (export them to SQLite first); anything else
+    is read as a Kineto Chrome trace.
+    """
 
     def __init__(
         self,
@@ -188,28 +207,22 @@ class KinetoTraceCollector:
         return combine_captures(captures)
 
     def _import(self, path: Path, run_id: str, session_id: str) -> TraceCapture:
+        prefix, title, file_format = FORMATS.get(path.suffix, KINETO)
         attachment = TraceAttachment(
-            attachment_id=trace_attachment_id(path),
-            title=f"Kineto trace {path.name}",
+            attachment_id=trace_attachment_id(path, prefix),
+            title=f"{title} {path.name}",
             path=path.resolve(),
             storage="reference",
-            metadata={"format": "kineto-chrome-trace"},
+            metadata={"format": file_format},
         )
-        size = path.stat().st_size
-        if self.max_bytes is not None and size > self.max_bytes:
+        if file_format == "nsys-rep":
+            return _registered_only(attachment, path, "not_exported")
+        if self.max_bytes is not None and path.stat().st_size > self.max_bytes:
             # Registered so `import-trace` can import it later; not parsed now.
-            return TraceCapture(
-                capabilities=CaptureCapabilities(SUPPORTED, SUPPORTED, ()),
-                attachments=(attachment,),
-                summary={
-                    "file": path.name,
-                    "path": str(path.resolve()),
-                    "bytes": size,
-                    "skipped": "max_bytes",
-                },
-            )
+            return _registered_only(attachment, path, "max_bytes")
         try:
-            return import_kineto_trace(
+            return capture_trace(
+                _load(path, file_format),
                 path,
                 run_id=run_id,
                 session_id=session_id,
@@ -217,6 +230,8 @@ class KinetoTraceCollector:
                 device_uuids=self.device_uuids.for_trace(path),
                 detail=self.detail,
             )
+        except InferUsageError:
+            raise
         except (ValueError, OSError) as exc:
             raise InferInputError(f"{path}: {exc}") from exc
 
@@ -224,32 +239,87 @@ class KinetoTraceCollector:
 def _check_shared_devices(
     paths: Sequence[Path], captures: Sequence[TraceCapture], uuids: DeviceUuids
 ) -> None:
-    """Refuse a shared mapping for an ordinal that several processes used.
+    """Refuse a ``--device-uuid`` ordinal that several processes used.
 
-    A process is its host name, rank, and launching pids. Containers that share
-    a host name and pid namespace layout can still look alike, which is why the
-    docs recommend the per-trace form for traces from separate containers.
+    A process is its host name, rank, and pid (for formats that hold several,
+    such as Nsight Systems reports) or launching pids. Every process that uses
+    a given ordinal counts, including one whose UUID the trace names: an entry
+    that matches that process would otherwise be applied to the others too.
+    The check fires only when the option's UUID was applied somewhere.
+    Containers that share a host name and pid namespace layout can still look
+    alike, which is why the docs recommend the per-trace form for traces from
+    separate containers.
     """
-    users: dict[int, set[tuple[Any, ...]]] = {}
+    users: dict[tuple[str | None, int], set[tuple[Any, ...]]] = {}
+    applied: set[tuple[str | None, int]] = set()
     for path, capture in zip(paths, captures):
         summary = capture.summary or {}
-        process = (
-            summary.get("host"),
-            summary.get("rank"),
-            tuple(summary.get("processes", ())),
-        )
         own = uuids.scoped(path)
-        for key in summary.get("devices", {}):
-            index = int(key) if str(key).isdigit() else None
-            if index in uuids.shared and index not in own:
-                users.setdefault(index, set()).add(process)
-    for index, processes in sorted(users.items()):
-        if len(processes) > 1:
-            raise InferUsageError(
-                f"--device-uuid {index}=...: traces from different processes use "
-                f"device {index}, which each process may map to a different GPU; "
-                f"give a UUID per trace as TRACE_FILE:{index}=UUID"
-            )
+        for key, device in summary.get("devices", {}).items():
+            pid, index = _split_device_key(str(key))
+            scope = _option_scope(str(path), index, own, uuids.shared)
+            if scope is None:
+                continue
+            users.setdefault(scope, set()).add(_process_identity(summary, pid))
+            if device.get("device_uuid_source") == "option":
+                applied.add(scope)
+    for scope in sorted(applied, key=str):
+        if len(users[scope]) > 1:
+            raise InferUsageError(_shared_device_message(*scope))
+
+
+def _option_scope(
+    name: str, index: int | None, own: Mapping[int, str], shared: Mapping[int, str]
+) -> tuple[str | None, int] | None:
+    """Which ``--device-uuid`` entry covers this ordinal: per-trace or shared."""
+    if index is None or (index not in own and index not in shared):
+        return None
+    return (name if index in own else None, index)
+
+
+def _process_identity(summary: dict[str, Any], pid: int | None) -> tuple[Any, ...]:
+    processes = pid if pid is not None else tuple(summary.get("processes", ()))
+    return (summary.get("host"), summary.get("rank"), processes)
+
+
+def _split_device_key(key: str) -> tuple[int | None, int | None]:
+    """(pid, ordinal) from a summary device key: ``"0"`` or ``"<pid>/0"``.
+
+    The ordinal is None for a trace whose GPU events name no device.
+    """
+    pid, _, ordinal = key.rpartition("/")
+    return (int(pid) if pid else None), (int(ordinal) if ordinal.isdigit() else None)
+
+
+def _shared_device_message(scope: str | None, index: int) -> str:
+    given = f"{scope}:{index}" if scope else str(index)
+    return (
+        f"--device-uuid {given}=...: several processes use device {index}, which "
+        "each may map to a different GPU; give a UUID per trace as "
+        f"TRACE_FILE:{index}=UUID, or for an Nsight Systems report re-export it "
+        "with nsys 2025.1 or later so it names each process's GPUs"
+    )
+
+
+def _load(path: Path, file_format: str) -> KinetoTrace:
+    if file_format == "nsys-sqlite":
+        return load_nsys_sqlite(path)
+    return load_kineto_trace(path)
+
+
+def _registered_only(
+    attachment: TraceAttachment, path: Path, reason: str
+) -> TraceCapture:
+    return TraceCapture(
+        capabilities=CaptureCapabilities(SUPPORTED, SUPPORTED, ()),
+        attachments=(attachment,),
+        summary={
+            "file": path.name,
+            "path": str(path.resolve()),
+            "bytes": path.stat().st_size,
+            "skipped": reason,
+        },
+    )
 
 
 def combine_captures(captures: Sequence[TraceCapture]) -> TraceCapture:
@@ -300,7 +370,7 @@ def import_traces_into_artifact(
     pending = [t for t in traces if str(t) not in skipped]
     if not pending:
         return _nothing_imported(skipped)
-    collector = KinetoTraceCollector(pending, device_uuids=uuids, detail=detail)
+    collector = TraceFileCollector(pending, device_uuids=uuids, detail=detail)
     captured: list[TraceCapture] = []
 
     class _Recording:
@@ -359,7 +429,7 @@ def _nothing_imported(skipped: list[str]) -> TraceCapture:
 
 __all__ = [
     "DeviceUuids",
-    "KinetoTraceCollector",
+    "TraceFileCollector",
     "artifact_run_identity",
     "combine_captures",
     "import_traces_into_artifact",
