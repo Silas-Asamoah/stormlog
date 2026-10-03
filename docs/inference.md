@@ -154,6 +154,15 @@ With a count, two requests at 10/s span 0.2 s, not the 0.1 s between their
 arrivals, and a Poisson count gives the usual N/T_N rate. A replay without
 `--duration`, and a closed loop, have no scheduled endpoint (`null`).
 
+A Python caller can follow the phases as they run:
+`InferenceProfiler(config, on_phase=callback)` calls `callback` with a
+`PhaseEvent`. The event is `started` just before a phase's first arrival is
+dispatched, and `ended` once the phase has drained and its
+`infer.phase_window` record is written, carrying the times that record holds. The callback runs on the profiler's event
+loop, so it should be quick, and an exception it raises stops the profile.
+#221's qualification harness uses it to time its episodes against the victim's
+measured window.
+
 `cancelled` means Stormlog stopped waiting, not that the request stopped. The
 HTTP call keeps running, on the server and on a client thread, until it
 finishes or reaches `--timeout`. So the next phase waits for those calls
