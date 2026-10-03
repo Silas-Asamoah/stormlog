@@ -9,6 +9,7 @@ import signal
 import socket
 import threading
 import time
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
@@ -22,6 +23,7 @@ from stormlog.infer.cli import build_parser
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
 from stormlog.infer.profile import InferenceProfiler
+from stormlog.infer.trace_capture import TraceCaptureConfig
 from stormlog.infer.vllm_scraper import (
     INTERRUPT_SCRAPE_TIMEOUT_SECONDS,
     VllmMetricsScraper,
@@ -57,6 +59,8 @@ class _FakeVllmHandler(BaseHTTPRequestHandler):
     metrics_drip_after: int | None = None
     metrics_release = threading.Event()
     metrics_gets = 0
+    # vLLM's profiler controls, answered 200 and remembered in order.
+    profile_calls: list[str] = []
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path != "/metrics":
@@ -87,6 +91,15 @@ class _FakeVllmHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path in ("/start_profile", "/stop_profile"):
+            type(self).profile_calls.append(self.path)
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+            return
         if self.path != "/v1/chat/completions":
             self.send_error(404)
             return
@@ -134,6 +147,7 @@ def _fake_vllm(
     _FakeVllmHandler.metrics_drip_after = metrics_drip_after
     _FakeVllmHandler.metrics_release = threading.Event()
     _FakeVllmHandler.metrics_gets = 0
+    _FakeVllmHandler.profile_calls = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeVllmHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -442,7 +456,9 @@ class TestProfileScrapes:
             _fake_vllm() as origin,
             mock.patch("stormlog.infer.vllm_scraper.fetch_metrics", spy),
             mock.patch.object(
-                InferenceProfiler, "_run_arrivals", side_effect=asyncio.CancelledError
+                InferenceProfiler,
+                "_run_phase_requests",
+                side_effect=asyncio.CancelledError,
             ),
         ):
             records = _run(
@@ -550,6 +566,61 @@ class TestProfileScrapes:
         # waits for the hung fetch, not even interpreter shutdown.
         assert elapsed < 6.0
         _assert_interrupted_artifact(_records(output))
+
+    def test_a_real_sigint_with_trace_metrics_and_spans_ends_the_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        # The three shutdown paths together: #258's trace window must still
+        # send /stop_profile and write its record, the hung interval scrape
+        # must be given up and the end scrape taken on its deadline, the
+        # span drain must be skipped but the receiver stopped, and the
+        # capability records and the session's last word must follow.
+        output = tmp_path / "infer.jsonl"
+        port = _free_port()
+        with _fake_vllm(metrics_hang_after=1) as origin:
+            config = _hung_scrape_config(origin, output)
+            config = replace(
+                config,
+                vllm_spans_listen=f"127.0.0.1:{port}",
+                vllm_spans_drain_seconds=6.0,
+                trace=TraceCaptureConfig(
+                    control_url=origin,
+                    control_timeout_seconds=5.0,
+                    flush_timeout_seconds=1.0,
+                    missing_grace_seconds=0.2,
+                    settle_seconds=0.1,
+                ),
+            )
+            profiler = InferenceProfiler(config)
+            timer = threading.Timer(0.8, signal.raise_signal, (signal.SIGINT,))
+            started = time.perf_counter()
+            timer.start()
+            try:
+                with pytest.raises(KeyboardInterrupt):
+                    profiler.run()
+            finally:
+                timer.cancel()
+            elapsed = time.perf_counter() - started
+            assert _FakeVllmHandler.profile_calls == ["/start_profile", "/stop_profile"]
+            assert profiler.span_receiver is not None and profiler.span_receiver.stopped
+        assert elapsed < 8.0
+        records = _records(output)
+        kinds = [r["event_type"] for r in records]
+        scrapes = _of_type(records, "infer.vllm_scrape")
+        assert [s["marker"] for s in scrapes] == [MARKER_PHASE_START, MARKER_PHASE_END]
+        assert scrapes[1]["status"] == "error"
+        window = _of_type(records, "infer.trace_window")
+        assert len(window) == 1
+        assert (window[0]["start_status"], window[0]["stop_status"]) == (200, 200)
+        assert window[0]["stop_reason"] is not None
+        components = [c["component"] for c in _of_type(records, "infer.capabilities")]
+        assert {"vllm.metrics", "vllm.spans"} <= set(components)
+        # The end scrape lands inside the window, then the window's record,
+        # then what the engine exposed, then why the run stopped.
+        last_scrape = max(i for i, k in enumerate(kinds) if k == "infer.vllm_scrape")
+        assert last_scrape < kinds.index("infer.trace_window")
+        assert kinds.index("infer.trace_window") < kinds.index("infer.capabilities")
+        assert kinds[-1] == "infer.session" and records[-1]["status"] == "interrupted"
 
     def test_without_the_flag_nothing_is_scraped_or_sent_differently(
         self, tmp_path: Path

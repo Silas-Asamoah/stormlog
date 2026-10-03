@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any, ClassVar, Mapping, cast
 
 CORRELATION_SCHEMA_VERSION = 2
+# An activity reference whose metadata lists busy intervals: the device is busy
+# inside them, not from start_ns to end_ns, so a v2-only reader must refuse it.
+ACTIVITY_INTERVALS_SCHEMA_VERSION = 3
 
 
 def _nonempty(value: object, name: str) -> None:
@@ -128,9 +131,13 @@ class CorrelationEvent:
         if not isinstance(self.metadata, dict):
             raise ValueError("metadata must be an object")
 
+    @property
+    def schema_version(self) -> int:
+        return CORRELATION_SCHEMA_VERSION
+
     def to_record(self) -> dict[str, Any]:
         return {
-            "schema_version": CORRELATION_SCHEMA_VERSION,
+            "schema_version": self.schema_version,
             "event_type": self.EVENT_TYPE,
             **asdict(self),
         }
@@ -295,6 +302,72 @@ class ActivityReferenceEvent(CorrelationEvent):
         ):
             _optional_nonnegative(getattr(self, name), name)
         _span(self.start_ns, self.end_ns)
+        if "intervals" in self.metadata:
+            activity_busy_intervals(self)
+
+    @property
+    def schema_version(self) -> int:
+        """Busy intervals change what the span means, so they take version 3."""
+        if "intervals" in self.metadata:
+            return ACTIVITY_INTERVALS_SCHEMA_VERSION
+        return CORRELATION_SCHEMA_VERSION
+
+
+def activity_busy_intervals(
+    activity: ActivityReferenceEvent,
+) -> list[tuple[int, int]] | None:
+    """The intervals in which a GPU activity kept its device busy, or None.
+
+    Without ``metadata.intervals`` the activity is busy for ``[start_ns,
+    end_ns)``, and None means it has no complete span. With them (schema
+    version 3) it is busy only inside those ``[offset_ns, duration_ns]`` pairs
+    from ``start_ns``, which must be sorted, disjoint, and inside the span;
+    anything else is a ``ValueError``.
+    """
+    start, end = activity.start_ns, activity.end_ns
+    raw = activity.metadata.get("intervals")
+    if raw is not None:
+        return _busy_intervals(raw, start, end)
+    if start is None or end is None:
+        return None
+    return [(start, end)]
+
+
+def _busy_intervals(
+    raw: object, start: int | None, end: int | None
+) -> list[tuple[int, int]]:
+    if start is None or end is None:
+        raise ValueError("metadata.intervals needs start_ns and end_ns")
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raise ValueError(
+            "metadata.intervals must be a non-empty list of "
+            "[offset_ns, duration_ns] pairs"
+        )
+    intervals: list[tuple[int, int]] = []
+    cursor = 0
+    for item in raw:
+        offset, duration = _interval_pair(item)
+        if offset < cursor:
+            raise ValueError("metadata.intervals must be sorted and disjoint")
+        cursor = offset + duration
+        if start + cursor > end:
+            raise ValueError("metadata.intervals must lie inside start_ns..end_ns")
+        intervals.append((start + offset, start + cursor))
+    return intervals
+
+
+def _interval_pair(item: object) -> tuple[int, int]:
+    if (
+        isinstance(item, (list, tuple))
+        and len(item) == 2
+        and all(isinstance(v, int) and not isinstance(v, bool) for v in item)
+        and all(v >= 0 for v in item)
+    ):
+        return item[0], item[1]
+    raise ValueError(
+        "metadata.intervals entries must be [offset_ns, duration_ns] pairs of "
+        "non-negative integers"
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -365,6 +438,13 @@ _EVENT_TYPES: dict[str, type[CorrelationEvent]] = {
     CapabilityEvent.EVENT_TYPE: CapabilityEvent,
     ClockAlignmentEvent.EVENT_TYPE: ClockAlignmentEvent,
 }
+# Schema versions a reader accepts per event type; every other type is v2 only.
+_SCHEMA_VERSIONS: dict[str, tuple[int, ...]] = {
+    ActivityReferenceEvent.EVENT_TYPE: (
+        CORRELATION_SCHEMA_VERSION,
+        ACTIVITY_INTERVALS_SCHEMA_VERSION,
+    ),
+}
 _REF_FIELDS = (
     "request_ref",
     "attempt_ref",
@@ -397,9 +477,25 @@ def parse_inference_record(record: Mapping[str, Any]) -> InferenceRecord:
         raise ValueError("event_type must name an inference event")
     if version == 1:
         return LegacyInferenceRecord(dict(record))
-    if version != CORRELATION_SCHEMA_VERSION:
+    if version not in _SCHEMA_VERSIONS.get(event_type, (CORRELATION_SCHEMA_VERSION,)):
         raise ValueError(f"unsupported inference schema_version: {version}")
-    return _parse_correlation_record(event_type, record)
+    event = _parse_correlation_record(event_type, record)
+    _check_declared_version(event, version)
+    return event
+
+
+def _check_declared_version(event: CorrelationEvent, version: int) -> None:
+    """A record's version must say what its content means."""
+    if event.schema_version == version:
+        return
+    if version == ACTIVITY_INTERVALS_SCHEMA_VERSION:
+        raise ValueError(
+            f"{event.EVENT_TYPE} schema_version {version} requires metadata.intervals"
+        )
+    raise ValueError(
+        f"{event.EVENT_TYPE} with metadata.intervals requires schema_version "
+        f"{event.schema_version}"
+    )
 
 
 def _parse_correlation_record(
@@ -450,6 +546,7 @@ def load_inference_artifact(path: str | Path) -> list[InferenceRecord]:
 
 
 __all__ = [
+    "ACTIVITY_INTERVALS_SCHEMA_VERSION",
     "CORRELATION_SCHEMA_VERSION",
     "ActivityReferenceEvent",
     "ArtifactIdentityEvent",
@@ -464,6 +561,7 @@ __all__ = [
     "MembershipEvent",
     "RequestEvent",
     "StageEvent",
+    "activity_busy_intervals",
     "load_inference_artifact",
     "parse_inference_record",
 ]

@@ -7,8 +7,9 @@ import json
 import threading
 import time
 import urllib.error
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -40,6 +41,7 @@ from .openai_client import (
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter
+from .trace_capture import TraceWindows
 from .vllm_scraper import (
     INTERRUPT_SCRAPE_TIMEOUT_SECONDS,
     VllmMetricsScraper,
@@ -98,6 +100,11 @@ class InferenceProfiler:
         self.vllm_scraper = self._build_vllm_scraper()
         self.span_receiver: OtlpSpanReceiver | None = None
         self._span_receiver_error: str | None = None
+        self.traces = (
+            TraceWindows(config.trace, api_key=config.api_key, on_warning=on_warning)
+            if config.trace is not None
+            else None
+        )
 
     def _build_vllm_scraper(self) -> VllmMetricsScraper | None:
         """The ``/metrics`` scraper when native vLLM telemetry is on."""
@@ -165,6 +172,13 @@ class InferenceProfiler:
             self._write_terminal_session(output_path=output_path, report=None)
             raise
         self._write_terminal_session(output_path=output_path, report=report)
+        if self.traces is not None:
+            await asyncio.to_thread(
+                self.traces.import_into,
+                output_path,
+                run_id=self.run_id,
+                session=self.session,
+            )
         return report
 
     async def _capture(self, output_path: Path) -> None:
@@ -496,9 +510,16 @@ class InferenceProfiler:
         prompts.warm()
         if abandoned is None:
             abandoned = await self._wait_for_abandoned()
-        window = await self._run_scraped_phase(
-            request, total_requests, duration_seconds
-        )
+        try:
+            async with self._trace_window(case.case_id, phase):
+                window = await self._run_scraped_phase(
+                    request, total_requests, duration_seconds
+                )
+        finally:
+            # Written on cancellation too, even one that lands while the
+            # profiler start is in flight, so the artifact names the trace files.
+            for record in self._trace_records():
+                writer.append(record)
         writer.append(
             window.to_record(
                 session_id=self.session.session_id,
@@ -523,7 +544,9 @@ class InferenceProfiler:
         """
         scraper = self.vllm_scraper
         if scraper is None:
-            return await self._run_arrivals(request, total_requests, duration_seconds)
+            return await self._run_phase_requests(
+                request, total_requests, duration_seconds
+            )
         case_id, phase, writer = request.case.case_id, request.phase, request.writer
         await self._scrape(scraper, MARKER_PHASE_START, case_id, phase, writer)
         stop_scraping = asyncio.Event()
@@ -537,7 +560,9 @@ class InferenceProfiler:
         )
         completed = False
         try:
-            window = await self._run_arrivals(request, total_requests, duration_seconds)
+            window = await self._run_phase_requests(
+                request, total_requests, duration_seconds
+            )
             completed = True
             return window
         finally:
@@ -595,7 +620,7 @@ class InferenceProfiler:
             )
         writer.append(record.to_record())
 
-    async def _run_arrivals(
+    async def _run_phase_requests(
         self,
         request: "_PhaseRequest",
         total_requests: int | None,
@@ -621,6 +646,16 @@ class InferenceProfiler:
             timeout_seconds=timeout_seconds,
         )
         writer.append(record.to_record())
+
+    def _trace_records(self) -> list[dict[str, Any]]:
+        if self.traces is None:
+            return []
+        return self.traces.take_records(session_id=self.session.session_id)
+
+    def _trace_window(self, case_id: str, phase: str) -> Any:
+        if self.traces is None:
+            return _no_trace_window()
+        return self.traces.window(case_id, phase)
 
     def _track(self, call: Future[Any]) -> None:
         with self._unfinished_lock:
@@ -1163,6 +1198,11 @@ async def _wait_for(task: asyncio.Task[Any], timeout: float | None = None) -> bo
     if task in done and not task.cancelled():
         task.result()
     return task in done
+
+
+@asynccontextmanager
+async def _no_trace_window() -> AsyncIterator[None]:
+    yield None
 
 
 async def _drain(tasks: list[asyncio.Task[None]], *, timeout: float | None) -> None:

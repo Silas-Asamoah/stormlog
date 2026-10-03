@@ -37,6 +37,8 @@ from .server_collector import (
     NvmlUnavailableError,
     collect_server_telemetry,
 )
+from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
+from .trace_import import import_traces_into_artifact, parse_device_uuids
 from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
 from .vllm_spans import DEFAULT_SPANS_LISTEN, parse_listen_address
 
@@ -67,6 +69,8 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         return cmd_analyze(args)
     if args.infer_command == "collect-server":
         return cmd_collect_server(args)
+    if args.infer_command == "import-trace":
+        return cmd_import_trace(args)
     parser.error(f"Unsupported infer command: {args.infer_command}")
 
 
@@ -276,6 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
     _add_cache_arguments(profile_parser)
+    _add_trace_arguments(profile_parser)
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -388,7 +393,45 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Number of group members; each rank 0..N-1 needs a collector",
     )
+    _add_import_trace_parser(subparsers)
     return parser
+
+
+def _add_import_trace_parser(subparsers: Any) -> None:
+    import_parser = subparsers.add_parser(
+        "import-trace",
+        help="Add a PyTorch/Kineto profiler trace's GPU activity to an artifact",
+    )
+    import_parser.add_argument("artifact", help="Inference JSONL with a run identity")
+    import_parser.add_argument(
+        "traces", nargs="+", help="Kineto Chrome trace files (.json or .json.gz)"
+    )
+    import_parser.add_argument(
+        "--device-uuid",
+        action="append",
+        default=[],
+        metavar="[TRACE_FILE:]INDEX=UUID",
+        help=(
+            "GPU UUID for a CUDA device ordinal in the traced process (after "
+            "CUDA_VISIBLE_DEVICES); repeat per device. Prefix a trace's path as "
+            "given here, or its file name when only one trace has it, to scope "
+            "the entry to that trace; a prefix that names no trace or several is "
+            "refused, as is an unscoped ordinal that traces from different "
+            "processes use. Without it, GPU activity is kept but not measured"
+        ),
+    )
+    import_parser.add_argument(
+        "--detail",
+        choices=("launch", "kernel"),
+        default="launch",
+        help=(
+            "launch: one record per launch call (default, compact); kernel: one "
+            "record per GPU event (exact, large)"
+        ),
+    )
+    import_parser.add_argument(
+        "--envelope", default=None, help="Run envelope (default: beside the artifact)"
+    )
 
 
 def _add_arrival_arguments(parser: argparse.ArgumentParser) -> None:
@@ -507,6 +550,105 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group(
+        "profiler trace",
+        "Bounded vLLM torch-profiler windows. The server must be started with "
+        "--profiler-config.profiler=torch and torch_profiler_dir; Stormlog only "
+        "starts and stops the profiler and imports the worker traces.",
+    )
+    group.add_argument(
+        "--trace", choices=TRACE_MODES, default=None, help="Capture a profiler trace"
+    )
+    group.add_argument(
+        "--trace-dir",
+        default=None,
+        help=(
+            "The server's torch_profiler_dir as this host sees it; without it the "
+            "traces stay on the server for `stormlog infer import-trace`"
+        ),
+    )
+    group.add_argument(
+        "--trace-control-url",
+        default=None,
+        help="Server root for /start_profile and /stop_profile (default: endpoint host)",
+    )
+    group.add_argument(
+        "--trace-phase",
+        choices=TRACE_PHASES,
+        default="measured",
+        help="Phase of each case to profile (default: measured)",
+    )
+    group.add_argument(
+        "--trace-max-seconds",
+        type=float,
+        default=None,
+        help="Stop the profiler after this many seconds even if the phase continues",
+    )
+    group.add_argument(
+        "--trace-max-bytes",
+        type=int,
+        default=None,
+        help="Register but do not import a trace file larger than this",
+    )
+    group.add_argument(
+        "--trace-device-uuid",
+        action="append",
+        default=[],
+        metavar="INDEX=UUID",
+        help="GPU UUID for a CUDA device ordinal in the server process; repeatable",
+    )
+    group.add_argument(
+        "--trace-detail",
+        choices=("launch", "kernel"),
+        default="launch",
+        help="Import one record per launch (default) or per GPU event",
+    )
+
+
+def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig | None:
+    if args.trace is None:
+        return None
+    return TraceCaptureConfig(
+        mode=args.trace,
+        control_url=args.trace_control_url or server_root(endpoint),
+        trace_dir=Path(args.trace_dir) if args.trace_dir else None,
+        phase=args.trace_phase,
+        max_seconds=args.trace_max_seconds,
+        max_bytes=args.trace_max_bytes,
+        device_uuids=parse_device_uuids(args.trace_device_uuid),
+        detail=args.trace_detail,
+    )
+
+
+def _validate_trace_arguments(args: argparse.Namespace) -> None:
+    if args.trace is not None:
+        _validate_http_url(args.trace_control_url, "--trace-control-url")
+        if args.trace_phase == "warmup" and args.warmup_requests < 1:
+            raise ValueError(
+                "--trace-phase warmup needs --warmup-requests >= 1; without "
+                "warmup requests there is no warmup phase to profile"
+            )
+        if args.trace_dir is not None and not Path(args.trace_dir).is_dir():
+            _print_warning(
+                f"--trace-dir {args.trace_dir} does not exist yet; traces are found "
+                "only if the server creates it and this host can read it"
+            )
+        return
+    options: tuple[tuple[str, object, object], ...] = (
+        ("--trace-dir", args.trace_dir, None),
+        ("--trace-control-url", args.trace_control_url, None),
+        ("--trace-phase", args.trace_phase, "measured"),
+        ("--trace-max-seconds", args.trace_max_seconds, None),
+        ("--trace-max-bytes", args.trace_max_bytes, None),
+        ("--trace-device-uuid", args.trace_device_uuid, []),
+        ("--trace-detail", args.trace_detail, "launch"),
+    )
+    given = [flag for flag, value, default in options if value != default]
+    if given:
+        raise ValueError(f"{', '.join(given)} needs --trace")
+
+
 def cmd_profile(args: argparse.Namespace) -> int:
     """Run active inference profiling."""
     with _usage_errors():
@@ -617,6 +759,7 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         vllm_spans_drain_seconds=(
             6.0 if args.vllm_spans_drain is None else args.vllm_spans_drain
         ),
+        trace=_trace_config(args, endpoint),
     )
 
 
@@ -768,6 +911,7 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
     _validate_arrival_arguments(args)
     _validate_prompt_arguments(args)
     _validate_http_url(args.cache_reset_url, "--cache-reset-url")
+    _validate_trace_arguments(args)
     if args.timeout <= 0:
         raise ValueError("--timeout must be > 0")
     if args.warmup_requests < 0:
@@ -880,3 +1024,43 @@ def _warn_about_repeated_prompts(args: argparse.Namespace) -> None:
         "that already served this workload starts with them cached. Pass "
         "--cache-reset-url or change --seed to start cold"
     )
+
+
+def cmd_import_trace(args: argparse.Namespace) -> int:
+    """Append profiler-trace GPU activity to an existing inference artifact."""
+    capture = import_traces_into_artifact(
+        args.artifact,
+        args.traces,
+        device_uuids=parse_device_uuids(args.device_uuid),
+        detail=args.detail,
+        envelope_path=args.envelope,
+    )
+    for summary in (capture.summary or {}).get("traces", []):
+        _print_trace_summary(summary)
+    for path in (capture.summary or {}).get("already_imported", []):
+        print(f"Skipped {path}: already imported into this run")
+    return int(ExitCode.OK)
+
+
+def _print_trace_summary(summary: dict[str, Any]) -> None:
+    if summary.get("skipped"):
+        print(
+            f"Registered trace {summary['file']} ({summary['bytes']} bytes) "
+            f"without importing it: over the {summary['skipped']} bound"
+        )
+        return
+    unresolved = sum(summary["unresolved_gpu_events"].values())
+    print(
+        f"Imported trace {summary['trace_id'] or '(no trace id)'}: "
+        f"{summary['gpu_events']} GPU events as {summary['activity_records']} "
+        f"records; {summary['linked_gpu_events']} linked to iterations, "
+        f"{unresolved} unresolved"
+    )
+    for reason, count in summary["unresolved_gpu_events"].items():
+        print(f"  unresolved ({reason}): {count}")
+    for device, values in summary["devices"].items():
+        uuid = values["device_uuid"] or "unknown UUID, not measured"
+        print(
+            f"  device {device} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
+            f"summed {values['summed_ns'] / 1e6:.3f} ms"
+        )

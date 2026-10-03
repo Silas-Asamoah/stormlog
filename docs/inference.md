@@ -641,6 +641,89 @@ vLLM exports over gRPC by default. These are
 engine-aggregate numbers over every client's traffic; they attribute no GPU
 time to a request. See [vLLM native telemetry](vllm_telemetry.md) for the
 flags, the metric map and the capability matrix.
+## Profiler traces
+
+`stormlog infer profile --trace vllm-torch` opens a vLLM torch-profiler window
+around one phase of each case, then imports the GPU work in the traces it wrote
+(see [Importing profiler traces](inference_correlation.md#importing-profiler-traces)).
+
+What must be set when the server starts, and what Stormlog does while it runs:
+
+| When | Setting | Who sets it |
+| --- | --- | --- |
+| Server start | `--profiler-config.profiler=torch` and `--profiler-config.torch_profiler_dir=DIR` | you |
+| Server start | `--profiler-config.torch_profiler_with_stack=false` (Python stacks per operator are the largest overhead) and `--profiler-config.ignore_frontend=true` (no second profiler in the API server) | you; recommended |
+| During the run | `POST /start_profile` and `/stop_profile` around the window | Stormlog |
+| After the run | read the new worker trace files in `DIR` and import them | Stormlog, when `--trace-dir` is readable from the client |
+
+```bash
+stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
+  --concurrency 1,8 --requests 64 \
+  --trace vllm-torch --trace-dir /shared/vllm-traces \
+  --trace-max-seconds 30 --trace-device-uuid 0=GPU-6d1f0c5e-...
+```
+
+- **Window.** By default each case's measured phase is profiled
+  (`--trace-phase warmup` profiles warmup instead). The window closes when the
+  phase ends, when `--trace-max-seconds` elapses (the phase keeps running
+  unprofiled), or when the run is cancelled; the profiler is stopped in every
+  case.
+- **Ownership.** Stormlog calls `/stop_profile` only after its own
+  `/start_profile` succeeded; a failed start (for example, a server started
+  without a profiler) is recorded as not started and nothing is stopped. vLLM
+  0.30.0 answers 200 to a second `/start_profile` and to `/stop_profile` with
+  nothing running, so Stormlog cannot tell from HTTP whether another profile
+  was already active. Do not point two profilers at one server. If a worker
+  trace appears before Stormlog's stop, for example from a profile configured
+  with `max_iterations`, the window's `stop_reason` is `stopped_by_server`.
+- **Record.** Each window writes an `infer.trace_window` event, also when the
+  run is cancelled: case, phase, control URL (credentials and query removed),
+  when the start was requested and when it was confirmed, start and stop HTTP
+  status or error, why it stopped, and the trace files found. A cancelled run
+  does not import its traces; import the listed files with
+  `stormlog infer import-trace`. If `--trace` was requested and no trace could
+  be imported, the trace collector's `infer.capabilities` record says so, with
+  each window's reason.
+- **Files.** Only worker traces (`rank<N>.*.pt.trace.json*`, or
+  `dp<D>_pp<P>_tp<T>_dcp<C>_ep<E>_rank<N>.*` for models where vLLM creates every
+  parallel group, such as MoE models) that appear during the
+  window are imported; the API server's `*.async_llm.*` trace is ignored. A file
+  larger than `--trace-max-bytes` is registered in the run envelope but not
+  parsed. Without `--trace-dir`, the traces stay on the server; import them
+  later with `stormlog infer import-trace`. vLLM writes the trace while handling
+  `/stop_profile`, so if no new file has appeared about 5 seconds after the
+  stop, Stormlog stops waiting for that window.
+- **Clock and settings.** Imported timestamps are Kineto's host-calibrated
+  device times, not a raw GPU clock. The CUDA-graph and compile settings the
+  server ran with are not in the trace; they stay unknown unless recorded
+  elsewhere.
+- **Coverage.** With an engine that emits iteration ranges, GPU work launched
+  outside them stays unresolved by design. On vLLM 0.30.0 with Qwen2.5-0.5B on
+  an NVIDIA A30, two profiled cases produced 367,192 GPU events in 29,578
+  launch records: all unresolved without ranges, and all linked with a test
+  plugin that wrapped each step in `stormlog.iteration/...` ranges.
+- **Cost.** The profiler adds no synchronization per request, but it does CPU
+  work per operator, and `/stop_profile` blocks while the server writes the
+  trace (tens of seconds for a 30-second window). On vLLM 0.30.0 on an NVIDIA
+  A30, with stacks off and `ignore_frontend=true`, output tokens per second fell
+  0.4–1.3% for Qwen2.5-7B and 4.4–6.5% for Qwen2.5-0.5B, and requests per step
+  were unchanged within 0.5%. A trace import never treats CPU launch time as GPU
+  time.
+
+For a PyTorch program that is not behind a server, `capture_torch_trace`
+profiles a block in-process and writes a trace for `import-trace`:
+
+```python
+from stormlog.infer.trace_ranges import iteration_range
+from stormlog.infer.trace_torch import capture_torch_trace
+
+with capture_torch_trace("traces/run.pt.trace.json"):
+    for step in range(100):
+        with iteration_range("my-loop", str(step)):
+            train_or_serve_one_step()
+```
+
+It refuses to start while another PyTorch profiler is running.
 
 ## Execution correlation and future adapters
 
