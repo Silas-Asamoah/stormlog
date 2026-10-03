@@ -134,6 +134,83 @@ gpumemprof track --duration 10 --interval 0.5 --output track.json --format json 
   --mlflow --mlflow-experiment stormlog-smoke --mlflow-tracking-uri sqlite:///mlflow.db
 ```
 
+## Fake vLLM engine
+
+> **Source checkout only.** `examples.qualification.fake_engine` is not
+> shipped in the PyPI package.
+
+The inference tests run against a CPU-only stand-in for vLLM 0.30.0 instead of
+a GPU server. It simulates continuous batching, so each mechanism moves the
+series vLLM exports:
+
+- **Scheduling.** Running requests are scheduled first, then waiting ones in
+  arrival order, up to `max_num_seqs` and the token budget, with chunked
+  prefill.
+- **KV blocks.** When they run out, the newest running request is preempted
+  and recomputed, as vLLM's scheduler does.
+- **Prefix cache.** Freed blocks keep their hashes in an LRU queue, so a shared
+  prefix is reused until other traffic evicts it.
+
+Nothing is computed: each step sleeps for a simulated cost. Prompts are counted
+as whitespace words plus a fixed four-token chat template.
+
+```python
+from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
+
+config = FakeEngineConfig(max_num_seqs=4, num_gpu_blocks=64, hook_dir=hook, trace_dir=traces)
+with FakeEngine(config) as engine:
+    ...  # engine.endpoint, engine.metrics_url, engine.base_url
+```
+
+To run it as its own process, so that signals reach it:
+
+```bash
+python -m examples.qualification.fake_engine --port 0 --step-seconds 0.001
+```
+
+It prints `FAKE_ENGINE_URL=<url> PID=<pid>` once it serves.
+`FakeEngineProcess` starts it from a test and always continues it before
+stopping it.
+
+What it serves, as vLLM 0.30.0 does:
+
+| Route | Behaviour |
+| --- | --- |
+| `POST /v1/chat/completions` | Streamed or whole, with usage. A request is named `chatcmpl-<X-Request-Id>`, plus vLLM's random suffix unless `request_id_randomization=False` |
+| `GET /metrics` | vLLM's series names, labels and histogram buckets. The page is taken after each step, so it holds the last step's values while the loop is paused |
+| `POST /reset_prefix_cache` | `{"success": false}` while blocks are held. With `reset_running_requests=true`, it preempts every running request first |
+| `POST /start_profile`, `/stop_profile` | Run between steps, with a configurable stop pause. Repeated calls answer 200. The stop writes a gzipped `rank0.*.pt.trace.json.gz` whose iteration ranges name the hook's steps. Without `trace_dir` both answer 404 |
+| `GET /server_info`, `/version`, `/v1/models`, `/health` | Descriptive answers |
+
+**Optional outputs:**
+
+- `hook_dir` writes the execution hook's raw log through Stormlog's own
+  writer, in the `stormlog.vllm_hook/1` format of
+  [vLLM execution hook](vllm_execution.md). `infer profile --vllm-execution-dir`
+  imports it, and `hook_seal_seconds` makes segments visible quickly.
+- `spans_endpoint` exports each request's `llm_request` span as OTLP/HTTP JSON.
+  A `traceparent` header makes the span its child.
+
+**Fault controls,** over `/_fault/` routes that answer even while the front end
+is held:
+
+| Control | Effect |
+| --- | --- |
+| `pause?target=engine` / `frontend` (`&seconds=S`), `resume` | Hold the step loop, or every API answer while the engine keeps stepping |
+| `controls` (JSON body) | Set any switch in `Controls`: profiler status, start and stop pauses, a lost start answer, a stop without a trace, a `max_iterations` self-stop, a delayed trace write, a failing or slow `/metrics`, late or duplicated spans |
+| `foreign_trace`, `span_body?kind=oversized` / `gzip_bomb` | Drop a trace outside any window; send a span body the receiver must refuse |
+| `state` | Steps, queue, preemptions |
+| `kill` | Exit at once, like SIGKILL (subprocess mode only) |
+
+**Not modeled:**
+
+- async scheduling;
+- tensor parallelism above 1;
+- speculative decoding;
+- real GPU timing.
+
+New hook fields reach the fake engine in the change that adds them to the hook.
+
 ## CI behavior in this repo
 
 The current CI workflow at `.github/workflows/ci.yml` runs:
