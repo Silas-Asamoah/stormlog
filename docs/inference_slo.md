@@ -102,6 +102,49 @@ spec.digest()                       # SHA-256 of the canonical document
 an artifact carries: the policy document, its digest, and whether it came from
 a file or from flags.
 
+## Judging requests and spans
+
+`evaluate_request(record, spec, span=None)` judges one `infer.request` record.
+Client criteria read the record. Server criteria read only `span`, the
+attributes of the request's joined vLLM span. A missing span leaves the server
+criteria unknown; they are never filled from client values.
+
+Each criterion is `pass`, `fail`, `not_applicable` or `unknown`:
+- `not_applicable` is TPOT on a response with at most one output token. It
+  counts as passing, as in vLLM's benchmark.
+- `unknown` comes with a reason, for example:
+  - `no_client_ttft` for a non-streaming response;
+  - `no_joined_span`;
+  - `output_tokens_not_server_reported`: a local tokenizer's count is
+    deterministic but is not the count the server generated;
+  - `aggregate_only`, for `server.itl` and `server.tpot`.
+
+The request's outcome is decided by the first rule that applies:
+
+| Rule | Outcome |
+| --- | --- |
+| The status is anything but `ok`: `dropped`, `unreachable`, `delivery_unknown`, `rejected`, `error`, `timeout`, `cancelled` | `missed` |
+| Any criterion fails | `missed` |
+| Any criterion is unknown | `unknown` |
+| Otherwise | `met` |
+
+For a request that did not succeed, its criteria are still judged on what was
+recorded, for diagnosis.
+
+`slo_attained(record, spec, span=None)` returns `True`, `False` or `None` for
+`met`, `missed` and `unknown`.
+
+`evaluate_span(span_attributes, spec)` judges an engine-finished vLLM span
+against the policy's server criteria; client criteria are `unknown`
+(`client_boundary`) on a span. Its outcome is `criteria_met`,
+`criteria_missed` or `unknown`, and `service_success` is always `unverified`.
+vLLM 0.30.0 spans carry no finish reason, and vLLM emits a span for aborted,
+failed and ignored requests too, so a span shows whether the criteria held,
+never whether the request succeeded.
+
+`evaluate_criteria(values, spec, boundary=...)` is the shared judge underneath
+both. It takes values keyed by criterion, in milliseconds.
+
 ## Related pages
 
 - [Inference Profiling](inference.md)

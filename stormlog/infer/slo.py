@@ -17,7 +17,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -344,6 +344,257 @@ def slo_from_artifact(records: Sequence[Mapping[str, Any]]) -> SloSpec | None:
         raise InferInputError(f"the artifact's infer.slo record: {exc}") from exc
 
 
+Outcome = Literal["pass", "fail", "not_applicable", "unknown"]
+CriteriaVerdict = Literal["criteria_met", "criteria_missed", "unknown"]
+
+# vLLM span attributes for the server criteria judged per request, in seconds.
+SPAN_ATTRIBUTES: Mapping[str, str] = MappingProxyType(
+    {
+        "server.ttft": "gen_ai.latency.time_to_first_token",
+        "server.e2e": "gen_ai.latency.e2e",
+        "server.queue": "gen_ai.latency.time_in_queue",
+    }
+)
+
+
+@dataclass(frozen=True)
+class CriterionValue:
+    """A value to judge in milliseconds, or the reason there is none."""
+
+    value_ms: float | None
+    reason: str | None = None
+    not_applicable: bool = False
+
+
+@dataclass(frozen=True)
+class CriterionOutcome:
+    """How one criterion judged one request or span."""
+
+    outcome: Outcome
+    value_ms: float | None
+    max_ms: float
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class CriteriaOutcome:
+    """The criteria alone, with no claim about whether the service succeeded."""
+
+    outcome: CriteriaVerdict
+    criteria: Mapping[str, CriterionOutcome]
+
+
+RequestVerdict = Literal["met", "missed", "unknown"]
+_REQUEST_OUTCOMES: Mapping[CriteriaVerdict, RequestVerdict] = MappingProxyType(
+    {"criteria_met": "met", "criteria_missed": "missed", "unknown": "unknown"}
+)
+
+
+@dataclass(frozen=True)
+class RequestSloOutcome:
+    """A client request judged against a policy.
+
+    ``met`` needs a successful request and every criterion passing; any other
+    status is ``missed``; a successful request with a criterion that cannot be
+    judged, and none failing, is ``unknown``.
+    """
+
+    outcome: RequestVerdict
+    status: str
+    criteria: Mapping[str, CriterionOutcome]
+
+    @property
+    def met(self) -> bool | None:
+        return {"met": True, "missed": False}.get(self.outcome)
+
+
+@dataclass(frozen=True)
+class SpanSloOutcome:
+    """An engine-finished span judged against a policy's server criteria.
+
+    A vLLM span carries no finish reason, and vLLM emits one for aborted and
+    failed requests too, so a span shows whether the criteria were met, never
+    whether the request succeeded.
+    """
+
+    outcome: CriteriaVerdict
+    criteria: Mapping[str, CriterionOutcome]
+    service_success: Literal["unverified"] = "unverified"
+
+
+def evaluate_criteria(
+    values: Mapping[str, float | CriterionValue | None],
+    spec: SloSpec,
+    *,
+    boundary: Literal["client", "server", "both"] = "both",
+) -> CriteriaOutcome:
+    """Judge each criterion of ``spec`` against ``values`` keyed by criterion.
+
+    A criterion outside ``boundary`` is unknown, as is one with no value or a
+    value that is not finite. A failing criterion makes the whole verdict
+    ``criteria_missed``; otherwise an unknown one makes it ``unknown``.
+    """
+    outcomes = {
+        criterion.key: _judge(criterion, values.get(criterion.key), boundary)
+        for criterion in spec.criteria
+    }
+    return CriteriaOutcome(outcome=_combine(outcomes.values()), criteria=outcomes)
+
+
+def evaluate_request(
+    record: Mapping[str, Any],
+    spec: SloSpec,
+    *,
+    span: Mapping[str, Any] | None = None,
+) -> RequestSloOutcome:
+    """Judge one ``infer.request`` record; ``span`` is its joined vLLM span.
+
+    Client criteria read the record and server criteria read only ``span``'s
+    attributes, so a missing span leaves the server criteria unknown and is
+    never filled from client values. A request that did not succeed is
+    ``missed`` whatever its criteria say; they are still judged on what was
+    recorded, for diagnosis.
+    """
+    values = {**client_values(record), **server_values(span)}
+    criteria = evaluate_criteria(values, spec)
+    status = str(record.get("status"))
+    outcome = _REQUEST_OUTCOMES[criteria.outcome] if status == "ok" else "missed"
+    return RequestSloOutcome(outcome=outcome, status=status, criteria=criteria.criteria)
+
+
+def evaluate_span(span_attributes: Mapping[str, Any], spec: SloSpec) -> SpanSloOutcome:
+    """Judge an engine-finished span against the policy's server criteria.
+
+    Client criteria are unknown on a span. The outcome is ``criteria_met``,
+    ``criteria_missed`` or ``unknown``, never ``met``: success is unverified.
+    """
+    criteria = evaluate_criteria(server_values(span_attributes), spec, boundary=SERVER)
+    return SpanSloOutcome(outcome=criteria.outcome, criteria=criteria.criteria)
+
+
+def slo_attained(
+    record: Mapping[str, Any], spec: SloSpec, *, span: Mapping[str, Any] | None = None
+) -> bool | None:
+    """True when met, False when missed, None when it cannot be judged."""
+    return evaluate_request(record, spec, span=span).met
+
+
+def client_values(record: Mapping[str, Any]) -> dict[str, CriterionValue]:
+    """The client criteria's values for one ``infer.request`` record."""
+    ttft = _number(record.get("ttft_ms"))
+    e2e = _number(record.get("e2e_latency_ms"))
+    return {
+        "client.ttft": _value(ttft, "no_client_ttft"),
+        "client.ttft_from_intended": _from_intended_ttft(ttft, record),
+        "client.e2e": _value(e2e, "no_client_e2e"),
+        "client.e2e_from_intended": _from_intended_e2e(record),
+        "client.tpot": _client_tpot(record, ttft, e2e),
+    }
+
+
+def server_values(
+    span_attributes: Mapping[str, Any] | None
+) -> dict[str, CriterionValue]:
+    """The per-request server criteria's values from a span's attributes."""
+    if span_attributes is None:
+        return {
+            key: CriterionValue(None, reason="no_joined_span")
+            for key in SPAN_ATTRIBUTES
+        }
+    values = {}
+    for key, attribute in SPAN_ATTRIBUTES.items():
+        seconds = _number(span_attributes.get(attribute))
+        values[key] = _value(
+            None if seconds is None else seconds * 1000.0,
+            f"span_attribute_missing:{attribute}",
+        )
+    return values
+
+
+def _judge(
+    criterion: Criterion,
+    supplied: float | CriterionValue | None,
+    boundary: Literal["client", "server", "both"],
+) -> CriterionOutcome:
+    limit = criterion.max_ms
+    if boundary != "both" and criterion.boundary != boundary:
+        return CriterionOutcome(
+            "unknown", None, limit, f"{criterion.boundary}_boundary"
+        )
+    if criterion.definition.per_request is None:
+        return CriterionOutcome("unknown", None, limit, "aggregate_only")
+    if isinstance(supplied, CriterionValue):
+        return _judge_value(supplied, limit)
+    return _judge_value(CriterionValue(supplied), limit)
+
+
+def _judge_value(value: CriterionValue, limit: float) -> CriterionOutcome:
+    if value.not_applicable:
+        return CriterionOutcome("not_applicable", None, limit, value.reason)
+    if value.value_ms is None:
+        return CriterionOutcome("unknown", None, limit, value.reason or "no_value")
+    if not math.isfinite(value.value_ms):
+        return CriterionOutcome("unknown", value.value_ms, limit, "non_finite_value")
+    outcome: Outcome = "pass" if value.value_ms <= limit else "fail"
+    return CriterionOutcome(outcome, value.value_ms, limit)
+
+
+def _combine(outcomes: Iterable[CriterionOutcome]) -> CriteriaVerdict:
+    kinds = {item.outcome for item in outcomes}
+    if "fail" in kinds:
+        return "criteria_missed"
+    if "unknown" in kinds:
+        return "unknown"
+    return "criteria_met"
+
+
+def _from_intended_ttft(
+    ttft: float | None, record: Mapping[str, Any]
+) -> CriterionValue:
+    lag = _number(record.get("dispatch_lag_ms"))
+    if ttft is None:
+        return CriterionValue(None, reason="no_client_ttft")
+    if lag is None:
+        return CriterionValue(None, reason="no_dispatch_lag")
+    return CriterionValue(ttft + lag)
+
+
+def _from_intended_e2e(record: Mapping[str, Any]) -> CriterionValue:
+    intended, ended = record.get("intended_at_ns"), record.get("ended_at_ns")
+    if not _is_real(intended) or not _is_real(ended):
+        return CriterionValue(None, reason="no_intended_or_end_time")
+    return CriterionValue((ended - intended) / 1_000_000.0)
+
+
+def _client_tpot(
+    record: Mapping[str, Any], ttft: float | None, e2e: float | None
+) -> CriterionValue:
+    """vLLM's formula, only with output tokens the server itself reported.
+
+    A local tokenizer's count is deterministic but is not the served count,
+    so it leaves TPOT unknown. One output token or none has no TPOT; vLLM's
+    benchmark counts that as meeting the limit, and so does this.
+    """
+    if record.get("output_token_source") != "server_usage":
+        return CriterionValue(None, reason="output_tokens_not_server_reported")
+    tokens = record.get("output_tokens")
+    if not isinstance(tokens, int) or isinstance(tokens, bool):
+        return CriterionValue(None, reason="no_output_tokens")
+    if tokens <= 1:
+        return CriterionValue(None, reason="single_output_token", not_applicable=True)
+    if ttft is None or e2e is None:
+        return CriterionValue(None, reason="no_client_ttft_or_e2e")
+    return CriterionValue((e2e - ttft) / (tokens - 1))
+
+
+def _value(value: float | None, reason: str) -> CriterionValue:
+    return CriterionValue(value) if value is not None else CriterionValue(None, reason)
+
+
+def _number(value: Any) -> float | None:
+    return float(value) if _is_real(value) else None
+
+
 def _spec(
     *,
     name: Any,
@@ -475,8 +726,14 @@ def _integral_floats_as_ints(value: Any) -> Any:
 
 __all__ = [
     "CRITERIA",
+    "CriteriaOutcome",
     "Criterion",
     "CriterionDef",
+    "CriterionOutcome",
+    "CriterionValue",
+    "RequestSloOutcome",
+    "SPAN_ATTRIBUTES",
+    "SpanSloOutcome",
     "SLO_EVENT_TYPE",
     "SLO_FORMAT",
     "SLO_VERSION",
@@ -487,4 +744,10 @@ __all__ = [
     "slo_from_artifact",
     "slo_from_document",
     "slo_record",
+    "client_values",
+    "evaluate_criteria",
+    "evaluate_request",
+    "evaluate_span",
+    "server_values",
+    "slo_attained",
 ]

@@ -12,10 +12,17 @@ from stormlog.infer.errors import InferInputError, InferUsageError
 from stormlog.infer.slo import (
     CRITERIA,
     Criterion,
+    CriterionValue,
     SloInterval,
     SloSpec,
+    client_values,
+    evaluate_criteria,
+    evaluate_request,
+    evaluate_span,
     load_slo,
     parse_slo_flags,
+    server_values,
+    slo_attained,
     slo_from_artifact,
     slo_from_document,
     slo_record,
@@ -231,3 +238,201 @@ def test_an_artifact_with_an_invalid_policy_is_invalid() -> None:
     record = {"event_type": "infer.slo", "slo": _document(name="Bad")}
     with pytest.raises(InferInputError, match="infer.slo record: name must start"):
         slo_from_artifact([record])
+
+
+# --- judging requests and spans ------------------------------------------------
+
+
+def _request(**overrides: Any) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "event_type": "infer.request",
+        "status": "ok",
+        "ttft_ms": 100.0,
+        "e2e_latency_ms": 1100.0,
+        "dispatch_lag_ms": 5.0,
+        "intended_at_ns": 1_000_000_000,
+        "ended_at_ns": 2_105_000_000,
+        "output_tokens": 11,
+        "output_token_source": "server_usage",
+    }
+    record.update(overrides)
+    return record
+
+
+def _span(**seconds: float) -> dict[str, Any]:
+    attributes: dict[str, Any] = {
+        "gen_ai.latency.time_to_first_token": 0.08,
+        "gen_ai.latency.e2e": 1.0,
+        "gen_ai.latency.time_in_queue": 0.01,
+    }
+    names = {
+        "ttft": "gen_ai.latency.time_to_first_token",
+        "e2e": "gen_ai.latency.e2e",
+        "queue": "gen_ai.latency.time_in_queue",
+    }
+    for short, value in seconds.items():
+        attributes[names[short]] = value
+    return attributes
+
+
+def test_client_values_follow_the_documented_formulas() -> None:
+    values = client_values(_request())
+
+    assert values["client.ttft"] == CriterionValue(100.0)
+    assert values["client.ttft_from_intended"] == CriterionValue(105.0)
+    assert values["client.e2e"] == CriterionValue(1100.0)
+    assert values["client.e2e_from_intended"] == CriterionValue(1105.0)
+    # (1100 - 100) / (11 - 1)
+    assert values["client.tpot"] == CriterionValue(100.0)
+
+
+def test_server_values_convert_span_seconds_to_milliseconds() -> None:
+    values = server_values(_span(ttft=0.25))
+    assert values["server.ttft"] == CriterionValue(250.0)
+    assert values["server.e2e"] == CriterionValue(1000.0)
+    assert values["server.queue"] == CriterionValue(10.0)
+
+
+def test_a_request_inside_every_limit_is_met_and_limits_are_inclusive() -> None:
+    spec = parse_slo_flags(["ttft:100", "e2e:1100", "server.ttft:80"])
+    outcome = evaluate_request(_request(), spec, span=_span())
+
+    assert outcome.outcome == "met"
+    assert outcome.met is True
+    assert {key: item.outcome for key, item in outcome.criteria.items()} == {
+        "client.ttft": "pass",
+        "client.e2e": "pass",
+        "server.ttft": "pass",
+    }
+    assert slo_attained(_request(), spec, span=_span()) is True
+
+
+def test_one_failing_criterion_misses_even_beside_an_unknown_one() -> None:
+    spec = parse_slo_flags(["ttft:50", "server.ttft:400"])
+    outcome = evaluate_request(_request(), spec)  # no span: server.ttft unknown
+
+    assert outcome.outcome == "missed"
+    assert outcome.criteria["client.ttft"].outcome == "fail"
+    assert outcome.criteria["server.ttft"].outcome == "unknown"
+    assert outcome.criteria["server.ttft"].reason == "no_joined_span"
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "dropped",
+        "unreachable",
+        "delivery_unknown",
+        "rejected",
+        "error",
+        "timeout",
+        "cancelled",
+    ],
+)
+def test_a_request_that_did_not_succeed_is_missed(status: str) -> None:
+    spec = parse_slo_flags(["e2e:5000"])
+    outcome = evaluate_request(_request(status=status), spec)
+
+    assert outcome.outcome == "missed"
+    assert outcome.met is False
+    # The criteria are still judged on what was recorded, for diagnosis.
+    assert outcome.criteria["client.e2e"].outcome == "pass"
+
+
+def test_a_criterion_that_cannot_be_judged_makes_the_request_unknown() -> None:
+    spec = parse_slo_flags(["ttft:500"])
+    outcome = evaluate_request(_request(ttft_ms=None), spec)  # a non-streaming request
+
+    assert outcome.outcome == "unknown"
+    assert outcome.met is None
+    assert outcome.criteria["client.ttft"].reason == "no_client_ttft"
+    assert slo_attained(_request(ttft_ms=None), spec) is None
+
+
+def test_server_criteria_never_read_client_values() -> None:
+    spec = parse_slo_flags(["ttft:500", "server.ttft:400"])
+    slow_server = _span(ttft=0.6)
+
+    outcome = evaluate_request(_request(ttft_ms=100.0), spec, span=slow_server)
+
+    assert outcome.criteria["client.ttft"].outcome == "pass"
+    assert outcome.criteria["server.ttft"].outcome == "fail"
+    assert outcome.criteria["server.ttft"].value_ms == pytest.approx(600.0)
+    assert outcome.outcome == "missed"
+
+
+def test_tpot_needs_server_reported_output_tokens() -> None:
+    spec = parse_slo_flags(["tpot:500"])
+    locally_counted = _request(output_token_source="tiktoken", output_token_exact=True)
+
+    outcome = evaluate_request(locally_counted, spec)
+
+    assert outcome.outcome == "unknown"
+    assert outcome.criteria["client.tpot"].reason == "output_tokens_not_server_reported"
+
+
+def test_tpot_with_one_output_token_is_not_applicable_and_passes() -> None:
+    spec = parse_slo_flags(["tpot:1"])
+    outcome = evaluate_request(_request(output_tokens=1), spec)
+
+    assert outcome.criteria["client.tpot"].outcome == "not_applicable"
+    assert outcome.outcome == "met"
+
+
+def test_aggregate_only_criteria_are_unknown_per_request() -> None:
+    spec = parse_slo_flags(["server.itl:50"])
+    outcome = evaluate_request(_request(), spec, span=_span())
+
+    assert outcome.criteria["server.itl"].reason == "aggregate_only"
+    assert outcome.outcome == "unknown"
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        {},
+        {"gen_ai.latency.time_to_first_token": "0.1"},
+        {"gen_ai.latency.time_to_first_token": True},
+        {"gen_ai.latency.time_to_first_token": float("nan")},
+    ],
+)
+def test_a_span_without_a_usable_attribute_leaves_the_criterion_unknown(
+    attributes: dict[str, Any],
+) -> None:
+    spec = parse_slo_flags(["server.ttft:400"])
+    outcome = evaluate_request(_request(), spec, span=attributes)
+    assert outcome.criteria["server.ttft"].outcome == "unknown"
+    assert outcome.outcome == "unknown"
+
+
+def test_a_span_is_judged_on_server_criteria_without_claiming_success() -> None:
+    spec = parse_slo_flags(["ttft:500", "server.ttft:400", "server.queue:50"])
+
+    within = evaluate_span(_span(), spec)
+    beyond = evaluate_span(_span(ttft=0.5), spec)
+
+    # vLLM emits identical spans for STOP, LENGTH, ABORT, ERROR and IGNORED
+    # finishes, so a span never shows that the request succeeded.
+    assert within.service_success == "unverified"
+    assert within.outcome == "unknown"  # the client criterion is unknown on a span
+    assert within.criteria["client.ttft"].reason == "client_boundary"
+    assert within.criteria["server.ttft"].outcome == "pass"
+    assert beyond.outcome == "criteria_missed"
+
+
+def test_a_server_only_policy_on_a_span_can_meet_its_criteria() -> None:
+    spec = parse_slo_flags(["server.ttft:400", "server.e2e:1000"])
+    outcome = evaluate_span(_span(), spec)
+    assert outcome.outcome == "criteria_met"
+    assert set(outcome.criteria) == {"server.ttft", "server.e2e"}
+
+
+def test_evaluate_criteria_accepts_plain_numbers() -> None:
+    spec = parse_slo_flags(["ttft:100", "server.e2e:900"])
+    outcome = evaluate_criteria({"client.ttft": 100.0, "server.e2e": None}, spec)
+
+    assert outcome.outcome == "unknown"
+    assert outcome.criteria["client.ttft"].outcome == "pass"
+    assert outcome.criteria["server.e2e"].reason == "no_value"
+    infinite = evaluate_criteria({"client.ttft": float("inf")}, spec)
+    assert infinite.criteria["client.ttft"].reason == "non_finite_value"
