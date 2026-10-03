@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_hardware_preflight_evidence",
+  "issue": 118,
+  "local_date": "2026-10-03",
+  "status": "bounded_vllm_restart_passed_clean_shutdown_and_nonroot_packaging_failed",
+  "cloud": {
+    "provider": "JarvisLabs",
+    "machine_id": 524967,
+    "gpu": "L4",
+    "state_after_verified_download": "Paused",
+    "running_instances_after_pause": 0,
+    "paused_instances_after_pause": 1,
+    "balance_before_usd": 19.2475,
+    "balance_after_usd": 17.6179,
+    "observed_balance_decrease_usd": 1.6296,
+    "billing_interpretation": "Account balance decrease is observed but cannot be attributed to this machine or split into compute, storage, and delayed charges. The last managed-run instance_cost was 0.053 USD before pause; paused get returned runtime 0 hours 00 minutes and cost 0.0. No billing-history command was found. No further paid resume pending investigation."
+  },
+  "vllm_restart": {
+    "run_id": "r_8318fdbb",
+    "reused_exact_authorized_script_sha256": "ad1e514555db3754048f87f5a9b16e4f9281a81c8949d87ab2685f282b9b655a",
+    "workload_scope": "One warmup and one measured streaming request, not the approved full workload.",
+    "managed_run_exit_code": 0,
+    "ready": true,
+    "warmup_request_status": "ok",
+    "measured_request_status": "ok",
+    "start_completed": true,
+    "stop_completed": true,
+    "server_exit_after_shutdown": 0,
+    "elapsed_seconds": 44.529,
+    "nsys_sqlite_export_exit_code": 0,
+    "nsys_kernel_rows": 16804,
+    "nsys_unmatched_kernel_correlations": 0,
+    "shutdown_diagnostics": [
+      "vLLM force killed one remaining EngineCore process after profiler stop",
+      "Python resource_tracker reported one leaked semaphore at shutdown"
+    ],
+    "qualification": "restart and bounded capture passed after prior shutdown error; clean teardown and full-workload coverage remain unproven"
+  },
+  "unprivileged_packaging": {
+    "gpu_visibility_run_id": "r_e697ba04",
+    "gpu_visibility_exit_code": 0,
+    "gpu_visibility_result": "nobody can list the NVIDIA L4 with nvidia-smi",
+    "w1_direct_cupti_run_id": "r_9a8b6c05",
+    "w1_direct_cupti_exit_code": 126,
+    "failure": "env: /home/stormlog-preflight-524491/venv/bin/python: Permission denied",
+    "path_evidence": "The pinned venv, helper binary, and workload source are below root-only directories; the venv interpreter also resolves below /root. No CUDA workload launched as nobody.",
+    "qualification": "unsupported_on_current_root_only_image_layout; unprivileged helper capture untested"
+  },
+  "raw_evidence": {
+    "archive": "artifacts/native-probes/preflight-trusted-vllm-14/stormlog-trusted-vllm-recovery-524967.tar",
+    "archive_sha256": "4ee7bab56b56597465b2d63eed091cdfa9a68860049f0aad6e3b14f33dab53b7",
+    "internal_file_hashes_verified": 32,
+    "includes_managed_run_logs_and_exit_codes": true
+  },
+  "readiness": {
+    "bounded_vllm_restart_gate_passed": true,
+    "clean_vllm_shutdown_gate_passed": false,
+    "nonroot_packaging_gate_passed": false,
+    "hardware_preflight_passed": false,
+    "final_trials_started": false,
+    "adoption_result": "unknown"
+  }
+}
