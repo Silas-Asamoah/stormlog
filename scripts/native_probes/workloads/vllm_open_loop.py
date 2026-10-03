@@ -32,6 +32,8 @@ INTERVAL_SECONDS = 0.1
 WARMUP_REQUESTS = 200
 MEASURED_REQUESTS = 2200
 MAX_IN_FLIGHT = 32
+SLO_DEADLINE_MS = 2000
+SLO_OFFER_INTERVAL_SECONDS = MEASURED_REQUESTS * INTERVAL_SECONDS
 
 
 def request_body() -> dict[str, Any]:
@@ -58,6 +60,7 @@ def _request(endpoint: str, request_id: str, timeout: float) -> dict[str, Any]:
     first_chunk: int | None = None
     usage: dict[str, Any] | None = None
     completed = False
+    http_status: int | None = None
     try:
         request = urllib.request.Request(
             endpoint + "/v1/chat/completions",
@@ -69,6 +72,7 @@ def _request(endpoint: str, request_id: str, timeout: float) -> dict[str, Any]:
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=timeout) as response:
+            http_status = response.status
             for raw in response:
                 line = raw.strip()
                 if line == b"data: [DONE]":
@@ -83,7 +87,14 @@ def _request(endpoint: str, request_id: str, timeout: float) -> dict[str, Any]:
                     first_chunk = time.time_ns()
                 if isinstance(payload.get("usage"), dict):
                     usage = payload["usage"]
-        status = "ok" if first_chunk is not None and completed else "error"
+        status = (
+            "ok"
+            if first_chunk is not None
+            and completed
+            and http_status is not None
+            and 200 <= http_status < 300
+            else "error"
+        )
         error = (
             None
             if status == "ok"
@@ -106,6 +117,8 @@ def _request(endpoint: str, request_id: str, timeout: float) -> dict[str, Any]:
         "ttft_ms": (first_chunk - started) / 1_000_000 if first_chunk else None,
         "first_chunk_at_ns": first_chunk,
         "usage": usage,
+        "http_status": http_status,
+        "stream_done": completed,
         "error": error,
     }
 
@@ -481,13 +494,57 @@ def _cupti_capture_status(
 
 
 def _slo_goodput(
-    rows: list[dict[str, Any]], seconds: float, deadline_ms: float | None
+    rows: list[dict[str, Any]],
+    seconds: float,
+    deadline_ms: float | None,
+    *,
+    expected_requests: int | None = None,
 ) -> float | None:
     """Count successful requests within a declared SLO, or retain unknown."""
     if deadline_ms is None or seconds <= 0:
         return None
     if not math.isfinite(deadline_ms) or deadline_ms <= 0:
         raise ValueError("SLO deadline must be finite and positive")
+    if expected_requests is not None:
+        if len(rows) != expected_requests:
+            return None
+        expected_ids = {
+            f"stormlog-118-measured-{index:04d}" for index in range(expected_requests)
+        }
+        if any(not isinstance(row.get("request_id"), str) for row in rows):
+            return None
+        if {row["request_id"] for row in rows} != expected_ids:
+            return None
+        for row in rows:
+            index = int(row["request_id"].rsplit("-", 1)[1])
+            if (
+                row.get("scheduled_offset_ms")
+                != round(index * INTERVAL_SECONDS * 1000, 3)
+                or type(row.get("offered_at_ns")) is not int
+                or row.get("status")
+                not in {"ok", "error", "timeout", "client_rejected"}
+            ):
+                return None
+            if row["status"] == "ok" and (
+                row.get("stream_done") is not True
+                or not isinstance(row.get("http_status"), int)
+                or not 200 <= row["http_status"] < 300
+                or not isinstance(row.get("ended_at_ns"), int)
+                or not isinstance(row.get("e2e_latency_ms"), (int, float))
+                or isinstance(row.get("e2e_latency_ms"), bool)
+                or not math.isfinite(row["e2e_latency_ms"])
+                or row["e2e_latency_ms"] < 0
+                or abs(
+                    row["e2e_latency_ms"]
+                    - (row["ended_at_ns"] - row["offered_at_ns"]) / 1_000_000
+                )
+                > 0.001
+            ):
+                return None
+            if row["status"] in {"error", "timeout"} and not isinstance(
+                row.get("ended_at_ns"), int
+            ):
+                return None
     return (
         float(
             sum(
@@ -508,7 +565,7 @@ def _result(
     started_ns: int,
     ended_ns: int,
     *,
-    slo_deadline_ms: float | None = None,
+    slo_deadline_ms: float | None = SLO_DEADLINE_MS,
 ) -> dict[str, Any]:
     successful = [row for row in rows if row["status"] == "ok"]
     latencies = [float(row["e2e_latency_ms"]) for row in successful]
@@ -530,9 +587,13 @@ def _result(
             "ttft_p95_ms": _percentile(ttft, 0.95),
             "successful_requests_per_second": len(successful) / seconds,
             "slo_goodput_requests_per_second": _slo_goodput(
-                rows, seconds, slo_deadline_ms
+                rows,
+                SLO_OFFER_INTERVAL_SECONDS,
+                slo_deadline_ms,
+                expected_requests=MEASURED_REQUESTS,
             ),
             "slo_deadline_ms": slo_deadline_ms,
+            "slo_offer_interval_seconds": SLO_OFFER_INTERVAL_SECONDS,
         },
         "measurement_window": {
             "range_id": RANGE_ID,

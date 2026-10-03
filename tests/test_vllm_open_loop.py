@@ -11,12 +11,18 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.native_probes.mode_commands import vllm_command, vllm_expected_artifacts
+from scripts.native_probes.mode_commands import (
+    Workload,
+    vllm_command,
+    vllm_expected_artifacts,
+)
 from scripts.native_probes.models import ExperimentMode, WorkloadId
-from scripts.native_probes.planning import build_plan
+from scripts.native_probes.planning import _pressure_controls, build_plan
 from scripts.native_probes.workloads.vllm_open_loop import (
     MEASURED_REQUESTS,
     REVISION,
+    SLO_DEADLINE_MS,
+    SLO_OFFER_INTERVAL_SECONDS,
     _cupti_capture_status,
     _memory_metrics,
     _request,
@@ -162,6 +168,8 @@ def test_resource_process_population_change_is_inconclusive() -> None:
 
 def test_incomplete_stream_is_a_failed_offered_request() -> None:
     class Response:
+        status = 200
+
         def __enter__(self) -> "Response":
             return self
 
@@ -278,6 +286,57 @@ def test_goodput_requires_declared_slo_and_keeps_failures_in_population() -> Non
         _slo_goodput(rows, 2.0, 0)
 
 
+def test_approved_goodput_uses_fixed_offer_interval_and_complete_population() -> None:
+    rows = [
+        {
+            "request_id": f"stormlog-118-measured-{index:04d}",
+            "scheduled_offset_ms": index * 100,
+            "offered_at_ns": index * 100_000_000,
+            "status": "client_rejected",
+        }
+        for index in range(MEASURED_REQUESTS)
+    ]
+    rows[0].update(
+        status="ok",
+        http_status=200,
+        stream_done=True,
+        ended_at_ns=1_800_000_000,
+        e2e_latency_ms=1800,
+        ttft_ms=100,
+    )
+    rows[1].update(
+        status="ok",
+        http_status=200,
+        stream_done=True,
+        ended_at_ns=2_200_000_000,
+        e2e_latency_ms=2100,
+        ttft_ms=100,
+    )
+    rows[-1].update(
+        status="ok",
+        http_status=200,
+        stream_done=True,
+        ended_at_ns=221_500_000_000,
+        e2e_latency_ms=1600,
+        ttft_ms=100,
+    )
+    result = _result(rows, 0, 300_000_000_000)
+    assert result["metrics"]["slo_deadline_ms"] == 2000
+    assert result["metrics"]["slo_offer_interval_seconds"] == 220
+    assert result["metrics"]["slo_goodput_requests_per_second"] == 2 / 220
+    assert (
+        _result(rows[:-1], 0, 300_000_000_000)["metrics"][
+            "slo_goodput_requests_per_second"
+        ]
+        is None
+    )
+    rows[0]["stream_done"] = False
+    assert (
+        _result(rows, 0, 300_000_000_000)["metrics"]["slo_goodput_requests_per_second"]
+        is None
+    )
+
+
 def test_result_metrics_are_normalizable() -> None:
     from scripts.native_probes.normalization import _validated_trial_metrics
 
@@ -321,6 +380,44 @@ def test_approved_protocol_matches_frozen_proposal_and_adapter() -> None:
     )
     assert (
         proposal["vllm"]["arrivals"]["measured_offered_requests"] == MEASURED_REQUESTS
+    )
+
+
+def test_slo_and_w4_values_match_approved_amendment() -> None:
+    root = Path(__file__).resolve().parents[1] / "benchmarks/native_probes"
+    amendment_bytes = (
+        root / "protocol_amendment_proposal_2026-10-02.json"
+    ).read_bytes()
+    amendment = json.loads(amendment_bytes)
+    approval = json.loads(
+        (root / "protocol_amendment_approval_2026-10-02.json").read_text()
+    )
+    assert approval["proposal_sha256"] == hashlib.sha256(amendment_bytes).hexdigest()
+    assert approval["approved_scope"] == [
+        "slo_goodput_reporting",
+        "w4_direct_cupti_pressure.variants",
+    ]
+    assert approval["paid_hardware_authorized"] is False
+    assert approval["final_trials_authorized"] is False
+    assert amendment["slo_goodput_reporting"]["proposed_end_to_end_deadline_ms"] == (
+        SLO_DEADLINE_MS
+    )
+    assert amendment["slo_goodput_reporting"]["proposed_interval_seconds"] == (
+        SLO_OFFER_INTERVAL_SECONDS
+    )
+    variants = amendment["w4_direct_cupti_pressure"]["variants"]
+    planned = _pressure_controls(
+        Workload(WorkloadId.W4_STRESS), ExperimentMode.DIRECT_CUPTI
+    )
+    assert planned["approved_variants"] == variants
+    assert planned["variant_status"] == "unsupported"
+    assert "producer_buffer_bytes" in planned["unsupported"]
+    assert variants["nominal"]["producer_activity_buffer_bytes"] == 8 * 1024**2
+    assert variants["small_buffer"]["producer_activity_buffer_bytes"] == 64 * 1024
+    assert variants["slow_consumer"]["consumer_delay_ms_per_completed_buffer"] == 25
+    assert variants["output_limit"]["output_byte_bound"] == 64 * 1024
+    assert (
+        variants["target_timeout"]["target_timeout_after_measurement_start_ms"] == 500
     )
 
 

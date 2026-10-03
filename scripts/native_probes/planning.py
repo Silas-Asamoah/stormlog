@@ -168,8 +168,39 @@ def _pressure_controls(workload: Workload, mode: ExperimentMode) -> dict[str, An
         supported |= {"output_byte_bound"}
     if mode in {ExperimentMode.EBPF_SEMANTIC, ExperimentMode.HYBRID_CUPTI_EBPF}:
         supported |= {"transport_buffer_bytes", "consumer_delay_ms"}
-    return {
+    result: dict[str, Any] = {
         "values": values,
         "supported": sorted(supported),
         "unsupported": sorted(set(values) - supported),
     }
+    if (
+        workload.workload_id is WorkloadId.W4_STRESS
+        and mode is ExperimentMode.DIRECT_CUPTI
+    ):
+
+        def variant(
+            buffer_bytes: int,
+            output_bytes: int,
+            delay_ms: int = 0,
+            timeout_ms: int | None = None,
+        ) -> dict[str, int | None]:
+            return {
+                "producer_activity_buffer_bytes": buffer_bytes,
+                "output_byte_bound": output_bytes,
+                "consumer_delay_ms_per_completed_buffer": delay_ms,
+                "target_timeout_after_measurement_start_ms": timeout_ms,
+            }
+
+        result["approved_variants"] = {
+            "nominal": variant(8388608, 268435456),
+            "small_buffer": variant(65536, 268435456),
+            "slow_consumer": variant(8388608, 268435456, delay_ms=25),
+            "output_limit": variant(8388608, 65536),
+            "target_timeout": variant(8388608, 268435456, timeout_ms=500),
+        }
+        result["variant_status"] = "unsupported"
+        result["variant_reason"] = (
+            "pinned CUPTI helper has a fixed 4194304-byte activity buffer, "
+            "no consumer-delay control, and no measured-range timeout watchdog"
+        )
+    return result
