@@ -40,9 +40,10 @@ class FakeProfiler(EngineObserver):
         self.controls = controls
         self.producer = producer
         self.active = False
-        self.traces: list[Path] = []
-        # Each stop's span on the loop, in ``time.time_ns()``.
+        # Each stop's span on the loop, and each trace with the time its write
+        # finished, in ``time.time_ns()``: tests time a pause by these.
         self.stops: list[tuple[int, int]] = []
+        self.written: list[tuple[Path, int]] = []
         self._steps: list[Step] = []
         self._correlation = 0
 
@@ -119,14 +120,16 @@ class FakeProfiler(EngineObserver):
         assert directory is not None
         directory.mkdir(parents=True, exist_ok=True)
         host = socket.gethostname()
-        name = f"rank0.{host}_{os.getpid()}.{time.time_ns() // 1_000_000}"
+        # Nanoseconds, as torch's trace handler names them, so two traces
+        # written in the same millisecond don't collide.
+        name = f"rank0.{host}_{os.getpid()}.{time.time_ns()}"
         path = directory / f"{name}.pt.trace.json.gz"
         document = self._document(steps, host)
         partial = path.with_name(path.name + ".tmp")
         with gzip.open(partial, "wt", encoding="utf-8") as handle:
             json.dump(document, handle)
         partial.replace(path)
-        self.traces.append(path)
+        self.written.append((path, time.time_ns()))
         return path
 
     def _document(self, steps: list[Step], host: str) -> dict[str, Any]:

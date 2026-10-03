@@ -142,12 +142,14 @@ def test_a_delayed_or_foreign_trace_appears_on_its_own(tmp_path: Path) -> None:
         post(f"{engine.base_url}/start_profile")
         chat(engine, words(4, "a"), max_tokens=2)
         post(f"{engine.base_url}/stop_profile")
-        immediately = len(_traces(tmp_path))
-        assert wait_until(lambda: len(_traces(tmp_path)) == 1)
         profiler = engine.profiler
         assert profiler is not None
+        assert wait_until(lambda: len(profiler.written) == 1)
+        ((_stop_start, stop_end),) = profiler.stops
+        ((_path, written_ns),) = profiler.written
         profiler.drop_foreign_trace()
-    assert immediately == 0
+    # The write came the delay after the stop returned, on the engine's clock.
+    assert written_ns - stop_end >= 190_000_000
     assert len(_traces(tmp_path)) == 2
 
 
