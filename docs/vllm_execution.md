@@ -54,6 +54,13 @@ the hook's `hello` record names the reason.
 A failure inside the hook is counted and never reaches vLLM: every patched call
 runs vLLM's own code exactly once, and its exceptions pass through unchanged.
 
+The hook never makes vLLM wait on a disk. Records go into a queue that a
+background thread writes out. The queue holds at most 20,000 records and 32 MiB,
+estimated from each record's content and counted until the record is written; a
+record that does not fit is dropped and counted, and so is a single record over
+4 MiB. The thread checks its heartbeat, flush and sealing deadlines after every
+record, so a backlog delays them by one write at most.
+
 ## Raw log format, version 1
 
 ### Layout
@@ -73,9 +80,13 @@ roles and writes one epoch per role.
 
 A segment is sealed by renaming `.part` to `.jsonl`. Sealing happens at 8 MiB,
 after 60 s, when the process exits, and when a file named `flush` appears in the
-epoch directory; the writer deletes it once sealed. Files are created with mode
-`0600`. A reader takes sealed segments whole and only complete lines of an open
-segment.
+epoch directory; the writer deletes `flush` only after a seal succeeds. A seal
+that fails is counted as an error, and retried; until then the segment stays a
+`.part` file and later records are appended to it. A process exit includes a
+forked multiprocessing worker's, which skips `atexit`. Each line is written
+whole or not at all: a failed write is cut back off the file and counted as an
+error and a dropped record. Files are created with mode `0600`. A reader takes
+sealed segments whole and only complete lines of a `.part` segment.
 
 ### Records
 
@@ -86,7 +97,7 @@ Every line is one JSON object with these common fields:
 | `format` | `"stormlog.vllm_hook/1"` |
 | `kind` | the record kind, below |
 | `epoch` | the epoch directory name, `<role>-<pid>-<start ns>` |
-| `seq` | 0, 1, 2, … within the epoch, with no gaps unless records were dropped |
+| `seq` | 0, 1, 2, … within the epoch, with no gaps; a dropped record takes no number |
 
 Times are pairs: `*_wall_ns` from `time.time_ns()` and `*_mono_ns` from
 `time.monotonic_ns()`, read in the same process.
@@ -183,6 +194,10 @@ request's counters. They are null unless the outcome is `kept`.
 `computed_before + scheduled - (drafts_scheduled - accepted_drafts)`, the
 rollback applying only when the output is not stale.
 
+When `update_from_output` raises, the record has `"update_failed": true`, every
+member's `outcome` is `unknown`, and its other fields are null: vLLM's
+exception passes through, and the step's fate was not seen.
+
 **`terminal`**
 
 ```json
@@ -194,13 +209,12 @@ rollback applying only when the output is not stale.
 
 ```json
 {"kind": "heartbeat", "wall_ns": …, "mono_ns": …, "last_seq": 1234,
-When `update_from_output` raises, the record has `"update_failed": true`, every
-member's `outcome` is `unknown`, and its other fields are null: vLLM's
-exception passes through, and the step's fate was not seen.
-
- "dropped": {"scheduled": 0, "completed": 0, "alias": 0, "terminal": 0},
- "errors": 0, "bytes": 1048576, "capped": false}
+ "dropped": {"alias": 3, "alias_oversized": 1},
+ "errors": 0, "bytes": 1048576, "capped": false, "queued": 0}
 ```
+
+`dropped` counts dropped records by kind, and `<kind>_oversized` counts single
+records over 4 MiB. `queued` is the number of records waiting to be written.
 
 A worker's heartbeat adds `range_misses` (serving calls that ran without an
 iteration range), `startup_unranged` (warm-up, dummy and CUDA-graph capture
@@ -210,7 +224,8 @@ calls before the first serving step, which never have one), and
 `status.json` holds the latest heartbeat's fields and is still updated after
 the disk cap stops record writing, so loss stays visible.
 
-**`goodbye`** has `wall_ns`, `mono_ns` and `last_seq`.
+**`goodbye`** has `wall_ns`, `mono_ns` and `last_seq`. A process killed by a
+signal it does not handle writes no `goodbye`.
 
 ## Iteration ranges
 

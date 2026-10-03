@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
 import subprocess
 import sys
+import threading
 import time
 import types
-from collections.abc import Iterator
+from collections import Counter
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,6 +21,7 @@ import pytest
 
 import stormlog.infer.vllm_hook as hook
 from stormlog.infer.vllm_hook import gate
+from stormlog.infer.vllm_hook import writer as writer_module
 from stormlog.infer.vllm_hook.engine import ITERATION_ATTRIBUTE
 from stormlog.infer.vllm_hook.worker import RunnerRecorder
 from stormlog.infer.vllm_hook.writer import EpochWriter, WriterLimits
@@ -663,14 +667,191 @@ def test_the_disk_cap_stops_records_but_not_the_status(tmp_path: Path) -> None:
     assert status["dropped"]["alias"] > 0
 
 
-def test_a_full_queue_drops_and_counts(tmp_path: Path) -> None:
-    writer = EpochWriter(tmp_path, "engine", limits=WriterLimits(queue_bytes=300))
-    for _ in range(50):
-        writer.emit("scheduled", {}, size_hint=200)
+def test_the_queue_counts_bytes_by_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered, release = threading.Event(), threading.Event()
+    write = writer_module._Segment.write
+
+    def stalled(segment: Any, line: bytes) -> bool:
+        entered.set()
+        release.wait(5)
+        return write(segment, line)
+
+    monkeypatch.setattr(writer_module._Segment, "write", stalled)
+    writer = EpochWriter(
+        tmp_path, "engine", limits=WriterLimits(queue_bytes=4096, record_bytes=2048)
+    )
+
+    def burst(tag: str) -> None:
+        for index in range(20):
+            writer.emit("alias", {"internal": f"{tag}{index:03d}" + "x" * 1000})
+
+    with writer._condition:  # the writer thread cannot take any yet
+        burst("a")
+    assert entered.wait(5)  # it took them as one batch, and is stuck writing it
+    burst("b")
+    writer.emit("alias", {"internal": "y" * 4000})
+    release.set()
+    _wait(lambda: sum(p.stat().st_size for p in writer.directory.glob("0*")) > 4096)
+    burst("c")
     writer.close()
 
+    # Each 1 KB ID counts as about 1 KB, so four fit in 4 KB. A batch being
+    # written still counts, so the second burst is dropped whole; once
+    # written, it no longer counts, so the third fits again.
+    written = Counter(
+        record["internal"][0]
+        for record in _epoch_records(writer.directory)
+        if record["kind"] == "alias"
+    )
+    assert (written["a"], written["b"]) == (4, 0)
+    assert written["c"] >= 4
     status = json.loads((writer.directory / "status.json").read_text())
-    assert status["dropped"].get("scheduled", 0) > 0
+    assert status["dropped"]["alias_oversized"] == 1
+    assert status["dropped"]["alias"] == 60 - sum(written.values())
+
+
+def test_a_backlog_does_not_hold_up_the_status_or_sealing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fast = threading.Event()
+    write = writer_module._Segment.write
+
+    def slow(segment: Any, line: bytes) -> bool:
+        if not fast.is_set():
+            time.sleep(0.02)
+        return write(segment, line)
+
+    monkeypatch.setattr(writer_module._Segment, "write", slow)
+    writer = EpochWriter(
+        tmp_path,
+        "engine",
+        limits=WriterLimits(heartbeat_seconds=0.05, segment_bytes=1024),
+    )
+    for index in range(200):
+        writer.emit("alias", {"internal": f"request-{index}"})
+    # Writing the backlog takes 4 s; the status is due after 0.05 s.
+    _wait((writer.directory / "status.json").exists, seconds=2)
+    fast.set()
+    writer.close()
+
+    segments = sorted(writer.directory.glob("*.jsonl"))
+    longest = max(
+        len(line) for path in segments for line in path.read_bytes().splitlines()
+    )
+    assert max(path.stat().st_size for path in segments) <= 1024 + longest + 1
+
+
+def test_a_short_write_leaves_only_whole_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write = os.write
+    failing: dict[str, int] = {}
+
+    def full_disk(fd: int, data: Any) -> int:
+        if failing.get("fd") == fd:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        if "fd" not in failing and b"short-write" in bytes(data):
+            failing["fd"] = fd  # 20 bytes land; the rest of the line fails
+            return write(fd, bytes(data)[:20])
+        return write(fd, data)
+
+    monkeypatch.setattr(os, "write", full_disk)
+    writer = EpochWriter(tmp_path, "engine")
+    writer.emit("alias", {"internal": "short-write"})
+    _wait(lambda: "fd" in failing)
+    failing["fd"] = -1
+    writer.emit("alias", {"internal": "after"})
+    writer.close()
+
+    records = _epoch_records(writer.directory)
+    assert [(r["kind"], r["seq"]) for r in records] == [("alias", 0), ("goodbye", 1)]
+    assert records[0]["internal"] == "after"
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert (status["errors"], status["dropped"]) == (1, {"alias": 1})
+
+
+def test_a_failed_seal_is_counted_retried_and_not_acknowledged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    replace = os.replace
+    refused: list[str] = []
+    refusing = threading.Event()
+    refusing.set()
+
+    def flaky(source: Any, target: Any) -> None:
+        if str(source).endswith(".jsonl.part") and refusing.is_set():
+            refused.append(str(source))
+            raise PermissionError("rename refused")
+        replace(source, target)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    writer = EpochWriter(
+        tmp_path, "engine", limits=WriterLimits(heartbeat_seconds=0.05)
+    )
+    writer.emit("alias", {"internal": "x"})
+    flush = writer.directory / "flush"
+    flush.touch()
+    _wait(lambda: len(refused) >= 2)
+    assert flush.exists() and list(writer.directory.glob("*.part"))
+
+    refusing.clear()
+    _wait(lambda: not flush.exists())
+    writer.close()
+
+    assert list(writer.directory.glob("*.part")) == []
+    records = _epoch_records(writer.directory)
+    assert [r["seq"] for r in records] == list(range(len(records)))
+    assert [r["kind"] for r in records if r["kind"] != "heartbeat"] == [
+        "alias",
+        "goodbye",
+    ]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert status["errors"] >= 2
+
+
+def test_a_forked_worker_finalizes_its_log_on_a_normal_exit(tmp_path: Path) -> None:
+    # multiprocessing ends a forked child with os._exit, which skips atexit.
+    script = (
+        "import multiprocessing, pathlib, sys\n"
+        "from stormlog.infer.vllm_hook.writer import EpochWriter\n"
+        "def child(root):\n"
+        "    EpochWriter(pathlib.Path(root), 'worker').emit('alias', {'internal': 'x'})\n"
+        "process = multiprocessing.get_context('fork').Process(\n"
+        "    target=child, args=(sys.argv[1],))\n"
+        "process.start()\n"
+        "process.join(30)\n"
+        "sys.exit(process.exitcode)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    (epoch,) = tmp_path.glob("*/worker-*")
+    assert list(epoch.glob("*.part")) == []
+    kinds = [r["kind"] for r in _epoch_records(epoch) if r["kind"] != "heartbeat"]
+    assert kinds == ["alias", "goodbye"]
+    assert (epoch / "status.json").exists()
+
+
+def _epoch_records(directory: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for path in sorted(directory.glob("*.jsonl"))
+        for line in path.read_text().splitlines()
+    ]
+
+
+def _wait(condition: Callable[[], bool], seconds: float = 5.0) -> None:
+    deadline = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.01)
 
 
 def test_a_forked_process_gets_its_own_writer(

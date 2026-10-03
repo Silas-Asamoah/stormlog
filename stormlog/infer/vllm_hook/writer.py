@@ -1,10 +1,14 @@
 """The vLLM hook's raw log: one epoch directory per process and role.
 
 Records go into a bounded in-memory queue and a daemon thread writes them, so a
-patched vLLM call never waits on a disk. The queue bounds both the number of
-records and their estimated size; a record that does not fit is dropped and
-counted. Segments are sealed by renaming ``.part`` to ``.jsonl``. A status file
-is rewritten every heartbeat, and keeps being rewritten after the disk cap
+patched vLLM call never waits on a disk. The queue bounds the number of records
+and their estimated size, counted from their content until written; a record
+that does not fit, or is too large on its own, is dropped and counted. The
+thread checks its deadlines after every record, so heartbeats, flush requests
+and sealing stay on time under a backlog. Each line is written whole or not at
+all. Segments are sealed by
+renaming ``.part`` to ``.jsonl``; a failed seal is counted and retried. A status
+file is rewritten every heartbeat, and keeps being rewritten after the disk cap
 stops record writing, so loss stays visible. See ``docs/vllm_execution.md``.
 """
 
@@ -12,6 +16,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import multiprocessing.util
 import os
 import re
 import shutil
@@ -28,6 +33,8 @@ from ..host_clock import host_boot_id
 
 FORMAT = "stormlog.vllm_hook/1"
 EPOCH_NAME = re.compile(r"^(engine|worker)-\d+-\d+$")
+# A queued record: its kind, its fields, and its estimated size in bytes.
+_Queued = tuple[str, dict[str, Any], int]
 
 
 @dataclass(frozen=True)
@@ -40,6 +47,8 @@ class WriterLimits:
     heartbeat_seconds: float = 1.0
     queue_records: int = 20_000
     queue_bytes: int = 32 * 1024 * 1024
+    record_bytes: int = 4 * 1024 * 1024
+    batch_records: int = 256
     close_seconds: float = 2.0
 
 
@@ -75,7 +84,7 @@ class EpochWriter:
         self.key = _write_key(self.directory / "key")
         self._status_fields = status_fields or dict
         self._counters = _Counters()
-        self._queue: deque[tuple[str, dict[str, Any], int]] = deque()
+        self._queue: deque[_Queued] = deque()
         self._queued_bytes = 0
         self._condition = threading.Condition()
         self._closing = False
@@ -85,19 +94,26 @@ class EpochWriter:
         )
         self._thread.start()
         atexit.register(self.close)
+        # A forked multiprocessing child leaves through os._exit, which skips
+        # atexit; multiprocessing's own finalizers still run before it.
+        multiprocessing.util.Finalize(None, self.close, exitpriority=100)
 
-    def emit(self, kind: str, fields: dict[str, Any], size_hint: int = 256) -> None:
-        """Queue one record; drop and count it when the queue is full."""
+    def emit(self, kind: str, fields: dict[str, Any]) -> None:
+        """Queue one record; drop and count it when it does not fit."""
+        size = _estimate(fields, self.limits.record_bytes)
         with self._condition:
+            if size > self.limits.record_bytes:
+                self._counters.dropped[f"{kind}_oversized"] += 1
+                return
             full = (
                 len(self._queue) >= self.limits.queue_records
-                or self._queued_bytes + size_hint > self.limits.queue_bytes
+                or self._queued_bytes + size > self.limits.queue_bytes
             )
             if full or self._closing:
                 self._counters.dropped[kind] += 1
                 return
-            self._queue.append((kind, fields, size_hint))
-            self._queued_bytes += size_hint
+            self._queue.append((kind, fields, size))
+            self._queued_bytes += size
             self._condition.notify()
 
     def count_error(self) -> None:
@@ -125,35 +141,46 @@ class EpochWriter:
         next_beat = time.monotonic() + self.limits.heartbeat_seconds
         while True:
             batch, closing = self._take(next_beat)
-            for kind, fields, _ in batch:
+            for kind, fields, size in batch:
                 self._write(kind, fields)
-            # No heartbeat record on close: goodbye is the epoch's last record,
-            # and sealing rewrites status.json.
-            if time.monotonic() >= next_beat and not closing:
-                self._heartbeat()
-                next_beat = time.monotonic() + self.limits.heartbeat_seconds
-            self._maybe_seal(closing)
+                with self._condition:
+                    self._queued_bytes -= size
+                if self._segment.size >= self.limits.segment_bytes:
+                    self._seal()
+                # Checked per record, so a slow disk delays these by one write.
+                if time.monotonic() >= next_beat:
+                    next_beat = self._on_time(next_beat, closing=False)
+            next_beat = self._on_time(next_beat, closing)
             if closing:
                 return
 
-    def _take(
-        self, next_beat: float
-    ) -> tuple[list[tuple[str, dict[str, Any], int]], bool]:
+    def _on_time(self, next_beat: float, closing: bool) -> float:
+        """Heartbeat, flush and seal when due; return the next heartbeat time."""
+        # No heartbeat record on close: goodbye is the epoch's last record, and
+        # sealing rewrites status.json.
+        if time.monotonic() >= next_beat and not closing:
+            self._heartbeat()
+            next_beat = time.monotonic() + self.limits.heartbeat_seconds
+        self._maybe_seal(closing)
+        return next_beat
+
+    def _take(self, next_beat: float) -> tuple[list[_Queued], bool]:
+        """Up to ``batch_records`` records; the rest wait their turn."""
         with self._condition:
             if not self._queue and not self._closing:
                 self._condition.wait(max(0.0, next_beat - time.monotonic()))
-            batch = list(self._queue)
-            self._queue.clear()
-            self._queued_bytes = 0
-            return batch, self._closing
+            batch: list[_Queued] = []
+            while self._queue and len(batch) < self.limits.batch_records:
+                batch.append(self._queue.popleft())
+            closing = self._closing and not self._queue
+            return batch, closing
 
     def _write(self, kind: str, fields: dict[str, Any]) -> None:
         with self._condition:
-            capped = self._counters.capped
-            seq = self._counters.last_seq + 1
-            if capped:
+            if self._counters.capped:
                 self._counters.dropped[kind] += 1
                 return
+            seq = self._counters.last_seq + 1
         record = {"format": FORMAT, "kind": kind, "epoch": self.epoch, "seq": seq}
         record.update(fields)
         if kind == "goodbye":
@@ -175,12 +202,17 @@ class EpochWriter:
                 self._counters.bytes += len(line)
             else:
                 self._counters.errors += 1
+                self._counters.dropped[kind] += 1
 
     def _heartbeat(self) -> None:
         status = self._status()
         if not self._counters.capped:
             self._write("heartbeat", status)
-        _replace_json(self.directory / "status.json", self._status())
+        self._write_status()
+
+    def _write_status(self) -> None:
+        if not _replace_json(self.directory / "status.json", self._status()):
+            self.count_error()
 
     def _status(self) -> dict[str, Any]:
         with self._condition:
@@ -192,6 +224,7 @@ class EpochWriter:
                 "errors": counters.errors,
                 "bytes": counters.bytes,
                 "capped": counters.capped,
+                "queued": len(self._queue),
             }
         try:
             status.update(self._status_fields())
@@ -202,17 +235,25 @@ class EpochWriter:
     def _maybe_seal(self, closing: bool) -> None:
         flush = self.directory / "flush"
         asked = flush.exists()
-        if (
+        due = (
             closing
             or asked
             or self._segment.size >= self.limits.segment_bytes
             or self._segment.age() >= self.limits.seal_seconds
-        ):
-            self._segment.seal()
-            if asked:
-                _unlink(flush)
-            if closing:
-                _replace_json(self.directory / "status.json", self._status())
+        )
+        if not due:
+            return
+        if self._seal() and asked:
+            # Only a seal that succeeded answers a flush request.
+            _unlink(flush)
+        if closing:
+            self._write_status()
+
+    def _seal(self) -> bool:
+        if self._segment.seal():
+            return True
+        self.count_error()
+        return False
 
 
 class _Segment:
@@ -226,6 +267,7 @@ class _Segment:
         self._fd: int | None = None
 
     def write(self, line: bytes) -> bool:
+        """Append the whole line, or leave the file as it was."""
         try:
             if self._fd is None:
                 self._fd = os.open(
@@ -233,28 +275,45 @@ class _Segment:
                     os.O_WRONLY | os.O_CREAT | os.O_APPEND,
                     0o600,
                 )
-                self.opened_at = time.monotonic()
-            os.write(self._fd, line)
+                self.size = os.fstat(self._fd).st_size
+                if self.opened_at is None:
+                    self.opened_at = time.monotonic()
         except OSError:
             return False
-        self.size += len(line)
-        return True
+        before = self.size
+        if _write_all(self._fd, line):
+            self.size += len(line)
+            return True
+        try:
+            # Cut off a partial line, so the next record starts a valid line.
+            os.ftruncate(self._fd, before)
+        except OSError:
+            pass
+        return False
 
     def age(self) -> float:
         return 0.0 if self.opened_at is None else time.monotonic() - self.opened_at
 
-    def seal(self) -> None:
-        if self._fd is None:
-            return
+    def seal(self) -> bool:
+        """Close and rename the segment; on failure keep it to retry."""
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+        if self.opened_at is None:
+            return True  # nothing written since the last seal
         try:
-            os.close(self._fd)
             os.replace(self._path(".jsonl.part"), self._path(".jsonl"))
         except OSError:
-            pass
-        self._fd = None
+            # Still unsealed: the next write appends to it, and the next seal
+            # retries the rename.
+            return False
         self.index += 1
         self.size = 0
         self.opened_at = None
+        return True
 
     def _path(self, suffix: str) -> Path:
         return self.directory / f"{self.index:06d}{suffix}"
@@ -276,6 +335,39 @@ def remove_old_epochs(
     return removed
 
 
+def _estimate(value: Any, limit: int) -> int:
+    """Bytes a record will take, from its content; stops counting past ``limit``."""
+    total = 0
+    stack = [value]
+    while stack and total <= limit:
+        item = stack.pop()
+        if isinstance(item, str):
+            total += len(item) + 4
+        elif isinstance(item, dict):
+            total += 2 + 2 * len(item)
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple, set)):
+            total += 2 + len(item)
+            stack.extend(item)
+        else:
+            total += 24
+    return total
+
+
+def _write_all(fd: int, data: bytes) -> bool:
+    view = memoryview(data)
+    try:
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                return False
+            view = view[written:]
+    except OSError:
+        return False
+    return True
+
+
 def _stamp() -> dict[str, int]:
     return {"wall_ns": time.time_ns(), "mono_ns": time.monotonic_ns()}
 
@@ -284,23 +376,27 @@ def _write_key(path: Path) -> bytes:
     key = os.urandom(32)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.write(fd, key)
+        if not _write_all(fd, key):
+            raise OSError(f"could not write {path}")
     finally:
         os.close(fd)
     return key
 
 
-def _replace_json(path: Path, payload: dict[str, Any]) -> None:
+def _replace_json(path: Path, payload: dict[str, Any]) -> bool:
     temporary = path.with_name(path.name + ".tmp")
     try:
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            os.write(fd, json.dumps(payload, separators=(",", ":")).encode())
+            data = json.dumps(payload, separators=(",", ":")).encode()
+            if not _write_all(fd, data):
+                return False
         finally:
             os.close(fd)
         os.replace(temporary, path)
     except OSError:
-        pass
+        return False
+    return True
 
 
 def _unlink(path: Path) -> None:
