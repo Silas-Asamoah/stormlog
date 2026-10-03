@@ -160,6 +160,9 @@ class Engine:
         self.stats = EngineStats(created_s=self.start_ns / 1e9)
         self.waiting_capacity = 0
         self._sighted: set[str] = set()
+        # Victims of a reset, listed in the next step's preempted as vLLM's
+        # reset_preempted_req_ids are.
+        self._pending_preempted: list[str] = []
         self._iteration = 0
         self._lock = threading.Lock()
         self._wake = threading.Condition(self._lock)
@@ -251,11 +254,10 @@ class Engine:
         return result
 
     def _reset_in_loop(self, reset_running_requests: bool) -> bool:
-        preempted: list[str] = []
         with self._lock:
             if reset_running_requests:
                 while self.running:
-                    self._preempt(self.running.pop(), preempted)
+                    self._preempt(self.running.pop(), self._pending_preempted)
             return self.pool.reset()
 
     def metrics_snapshot(self) -> StatsSnapshot:
@@ -301,8 +303,11 @@ class Engine:
             members: list[ScheduledMember] = []
             preempted: list[str] = []
             budget = self._schedule_running(members, preempted, budget)
+            # As in vLLM, only this step's own preemptions stop admission.
             if not preempted:
                 self._schedule_waiting(members, budget)
+            carried, self._pending_preempted = self._pending_preempted, []
+            preempted = carried + preempted
             if not members and not preempted:
                 return None
             step = Step(self._iteration, start[0], start[1], members, preempted)

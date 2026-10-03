@@ -220,3 +220,22 @@ def test_resets_run_between_steps_and_never_drop_a_steps_output() -> None:
         finished = list(engine.engine.finished)
     assert outcomes == {"kept"}
     assert {request.output_tokens for request in finished} == {40}
+
+
+def test_a_resets_victims_are_listed_in_the_next_steps_preempted() -> None:
+    # vLLM keeps them in reset_preempted_req_ids, which the next
+    # SchedulerOutput carries (scheduler.py:1416, 1518), as the hook records.
+    config = FakeEngineConfig(step_seconds=0.005, decode_token_seconds=0.001)
+    with FakeEngine(config) as engine:
+        threads = chats_in_background(
+            engine, [words(6, tag) for tag in "ab"], max_tokens=30
+        )
+        assert wait_until(lambda: len(engine.engine.running) == 2)
+        steps_before = len(engine.engine.steps)
+        victims = sorted(request.internal_id for request in engine.engine.running)
+        assert _reset(engine, "?reset_running_requests=true") is True
+        join_all(threads)
+        later = engine.engine.steps[steps_before:]
+    listed = [step for step in later if step.preempted]
+    assert listed, "no step listed the reset's victims"
+    assert sorted(listed[0].preempted) == victims
