@@ -55,6 +55,7 @@ REASON_AMBIGUOUS_SERIES = "ambiguous_series"
 REASON_NO_OBSERVATIONS = "no_observations"
 REASON_OVERFLOW_BUCKET = "quantile_in_overflow_bucket"
 REASON_SERIES_LABELS_CHANGED = "series_labels_changed"
+REASON_DUPLICATE_TIME = "duplicate_scrape_time"
 
 PLACEMENT_COMPLETED = "completed_at"
 PLACEMENT_APPROXIMATE = "approximate"
@@ -165,11 +166,23 @@ def _window_reasons(
         reasons.append(REASON_SCRAPE_FAILED)
     if len(ok) < min_scrapes:
         reasons.append(REASON_TOO_FEW_SCRAPES)
-    if any(b.observed_at_ns < a.observed_at_ns for a, b in zip(scrapes, scrapes[1:])):
-        reasons.append(REASON_OUT_OF_ORDER)
+    reasons.extend(order_reasons(scrapes))
     reasons.extend(window_identity_reasons(ok))
     if engine is not None and any(engine not in _engines(scrape) for scrape in ok):
         reasons.append(REASON_SERIES_MISSING)
+    return reasons
+
+
+def order_reasons(scrapes: Sequence[VllmScrapeRecord]) -> list[str]:
+    """Scrapes must be in strictly increasing stamp order: an earlier stamp
+    after a later one is out of order, and two at one instant give a window
+    of no length."""
+    pairs = list(zip(scrapes, scrapes[1:]))
+    reasons = []
+    if any(b.observed_at_ns < a.observed_at_ns for a, b in pairs):
+        reasons.append(REASON_OUT_OF_ORDER)
+    if any(b.observed_at_ns == a.observed_at_ns for a, b in pairs):
+        reasons.append(REASON_DUPLICATE_TIME)
     return reasons
 
 
@@ -320,6 +333,10 @@ def counter_window(
     """A counter's increase: the sum of its consecutive-scrape deltas."""
     ok = _ok_scrapes(scrapes)
     reasons = list(_pair_preconditions(ok))
+    if reasons:
+        # Pairs out of order, at one instant or from two exporters are not
+        # differenced at all, so their deltas add no misleading reasons.
+        return CounterWindow(None, None, None, tuple(dict.fromkeys(reasons)))
     total = 0.0
     for before, after in zip(ok, ok[1:]):
         delta = _counter_step(before, after, family, labels, engine)
@@ -335,7 +352,7 @@ def counter_window(
 
 
 def _pair_preconditions(ok: Sequence[VllmScrapeRecord]) -> list[str]:
-    reasons = window_identity_reasons(ok)
+    reasons = [*order_reasons(ok), *window_identity_reasons(ok)]
     if len(ok) < 2:
         reasons.append(REASON_TOO_FEW_SCRAPES)
     return reasons
@@ -467,6 +484,8 @@ def _histogram_window(
     consecutive deltas, or the reasons they cannot be."""
     ok = _ok_scrapes(scrapes)
     reasons = _pair_preconditions(ok)
+    if reasons:
+        return None, None, tuple(dict.fromkeys(reasons))
     deltas: list[dict[str, Any]] = []
     for before, after in zip(ok, ok[1:]):
         delta = _histogram_step(before, after, family, labels, engine)
@@ -717,6 +736,7 @@ __all__ = [
     "identity_differences",
     "sample_interval",
     "sample_stats",
+    "order_reasons",
     "series_by_extra",
     "series_match",
     "series_value",

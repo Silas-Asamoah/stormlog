@@ -191,7 +191,11 @@ A series that more than one label set matches, such as
 `ambiguous_series` rather than a sum, and a scrape with several engines needs
 the engine named (`engine_required`). A series whose labels change between
 scrapes (another model name, say) is a different series, so it is never
-differenced across the change (`series_labels_changed`). A histogram's share of observations
+differenced across the change (`series_labels_changed`).
+
+Scrapes must be given in strictly increasing stamp order
+(`scrapes_out_of_order`, `duplicate_scrape_time`), and nothing is differenced
+when they are not. A histogram's share of observations
 above a value, and the bucket holding a quantile, are reported as bounds
 between bucket boundaries; a quantile in the `+Inf` bucket has no upper bound
 (`quantile_in_overflow_bucket`).
