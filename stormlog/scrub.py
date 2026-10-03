@@ -98,6 +98,13 @@ def _value(pattern: re.Pattern[str]) -> Finder:
     return lambda text: (match.span(1) for match in pattern.finditer(text))
 
 
+def _bearer_spans(text: str) -> Iterator[Span]:
+    """A Bearer or Basic token: one with a digit, =, + or /, so prose is not."""
+    for match in _BEARER.finditer(text):
+        if any(char.isdigit() or char in "=+/" for char in match.group(1)):
+            yield match.span(1)
+
+
 def _url_spans(text: str) -> Iterator[Span]:
     """A URL's user information and query; its fragment is never sent."""
     for match in _URL.finditer(text):
@@ -136,7 +143,7 @@ def _key_value_spans(text: str) -> Iterator[Span]:
 _FINDERS: tuple[Finder, ...] = (
     _whole(_PRIVATE_KEY),
     _value(_AUTHORIZATION),
-    _value(_BEARER),
+    _bearer_spans,
     _url_spans,
     _json_member_spans,
     _key_value_spans,

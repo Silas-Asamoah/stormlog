@@ -279,6 +279,23 @@ def test_scrub_text_redacts_quoted_values_of_secret_keys(
     assert scrub_text(text) == scrubbed
 
 
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        # Prose after "basic" or "bearer" is not a token.
+        ("the basic parameters are invalid", "the basic parameters are invalid"),
+        ("Basic authentication required", "Basic authentication required"),
+        ("the bearer received nothing", "the bearer received nothing"),
+        # A token has a digit, =, + or /.
+        ("sent bearer opaque.token-value_123", "sent bearer <redacted>"),
+        ("basic dXNlcjpwYXNzd29yZA== then", "basic <redacted> then"),
+        ("Bearer abcdefgh/ijklmn", "Bearer <redacted>"),
+    ],
+)
+def test_bearer_and_basic_need_a_token_shape(text: str, scrubbed: str) -> None:
+    assert scrub_text(text) == scrubbed
+
+
 def test_scrub_text_leaves_ordinary_text_alone() -> None:
     text = "This model's maximum context length is 32768 tokens; max_tokens 128."
     assert scrub_text(text) == text

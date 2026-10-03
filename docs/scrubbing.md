@@ -112,7 +112,7 @@ What it removes:
 | Shape | Example | Result |
 | --- | --- | --- |
 | an `Authorization` or `Proxy-Authorization` header, to the end of its line | `Authorization: Bearer abc…` | `Authorization: <redacted>` |
-| a Bearer or Basic token | `bearer abc.def-123` | `bearer <redacted>` |
+| a Bearer or Basic token: 8 or more token characters including a digit, `=`, `+` or `/`, so that prose such as "the basic parameters" is left alone | `bearer abc.def-123` | `bearer <redacted>` |
 | URL user information and query strings | `https://u:p@host/x?k=v` | `https://<redacted>@host/x?<redacted>` |
 | a JSON member whose key contains a word from `SECRET_KEY_WORDS` (below) | `"api_key": "abc"` | `"api_key": "<redacted>"` |
 | `key=value` or `key: value` with such a key, the value bare or in single or double quotes | `client_secret=abc`, `password="a b"` | `client_secret=<redacted>`, `password="<redacted>"` |
@@ -139,10 +139,16 @@ seen whole, and text from it is never copied, even when redactions before it
 leave room in the output. So the cut never leaves part of a secret that a
 whole match would have removed, as long as the secret is shorter than the
 margin, however much earlier redactions shrink the text.
-The patterns err on the side of removing too much. For example, a
-`max_tokens="128"` field loses its value, and a key run together with the
-word before it is still removed. A value containing spaces loses only its
-first word, which is one reason consent is needed.
+The patterns err on the side of removing too much. A key matches when any
+word from `SECRET_KEY_WORDS` appears anywhere in it, so `max_tokens="128"`,
+`session_id: s-123`, `keyboard: present`, `bypass=true` and
+`Author: Jane Doe` all lose their values, and a key run together with the
+word before it is still removed. A bare value containing spaces loses only
+its first word, which is one reason consent is needed.
+
+These are not covered: a URL's fragment, which is never sent to a server;
+JSON nested inside a JSON string, whose quotes are escaped; and a Bearer or
+Basic token made only of letters.
 
 `truncate_utf8(text, max_bytes)` returns the longest prefix whose UTF-8
 encoding fits `max_bytes`, and never splits a character. A lone surrogate,
