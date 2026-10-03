@@ -90,6 +90,18 @@ def test_a_quick_scrape_inside_a_slow_one_s_interval_is_out_of_order() -> None:
     assert evaluate_signal("kv_preemption_pressure", window).exceeds is None
 
 
+def test_two_scrapes_sampled_at_one_midpoint_are_out_of_order() -> None:
+    # [0 s, 2 s] and [0.5 s, 1.5 s] share the midpoint 1 s: the window would
+    # last no time, and which sampled first is unknown.
+    window = [
+        scrape(exposition(counters={PREEMPTIONS: 5.0}), 0.0, duration_ms=2_000),
+        scrape(exposition(counters={PREEMPTIONS: 9.0}), 0.5, duration_ms=1_000),
+    ]
+    check = check_window(window)
+    assert check.reasons == (REASON_OUT_OF_ORDER,) and check.seconds == 0.0
+    assert counter_window(window, PREEMPTIONS).reasons == (REASON_OUT_OF_ORDER,)
+
+
 def test_overlapping_scrapes_whose_midpoints_advance_are_in_order() -> None:
     window = [
         scrape(exposition(counters={PREEMPTIONS: 5.0}), 0.0, duration_ms=1_500),
