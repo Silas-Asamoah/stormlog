@@ -556,3 +556,14 @@ def test_a_client_abort_records_no_request_statistics() -> None:
     assert sum(engine.stats.success.values()) == 0
     assert histograms["vllm:e2e_request_latency_seconds"].count == 0
     assert histograms["vllm:request_generation_tokens"].count == 0
+
+
+def test_a_one_token_completion_adds_a_zero_time_per_output_token() -> None:
+    # vLLM's mean time per output token is 0 for a single token, and it is
+    # observed for every finished request (metrics/stats.py, loggers.py).
+    engine = _stepped_engine()
+    request = _request(engine, "r", words(6, "p"), max_tokens=1)
+    _step(engine)
+    tpot = engine.stats.histograms["vllm:request_time_per_output_token_seconds"]
+    assert request.finished
+    assert (tpot.count, tpot.total) == (1, 0.0)

@@ -602,11 +602,12 @@ class Engine:
         stats.observe(
             "vllm:request_decode_time_seconds", (now - request.first_token_ns) / 1e9
         )
-        if request.output_tokens > 1:
-            stats.observe(
-                "vllm:request_time_per_output_token_seconds",
-                (now - request.first_token_ns) / 1e9 / (request.output_tokens - 1),
-            )
+        # vLLM's mean excludes the first token, and is 0 for a single token.
+        decoded = request.output_tokens - 1
+        stats.observe(
+            "vllm:request_time_per_output_token_seconds",
+            (now - request.first_token_ns) / 1e9 / decoded if decoded > 0 else 0.0,
+        )
 
     def _notify_free(self, request: FakeRequest) -> None:
         for observer in self.observers:
