@@ -565,3 +565,41 @@ closes it, stamping when each call was requested and when it returned. A start
 that fails is never followed by a stop. vLLM writes the trace inside the stop
 call while its step loop waits, so the stop's interval, plus #219's drain, is
 I1's effect.
+
+### The catalog and the plan
+
+`examples.qualification.catalog` is A.4's catalog: each episode type's label
+(`expects`, `secondary`, `allows`), its cause class, and how it is injected.
+
+| Method | Types |
+| --- | --- |
+| Neighbor traffic | F1, F2, F3, T1, T2, T3, T3b, W1 |
+| Pulses to a role's process | F4a, F4b, H0, P (P pulses a sidecar) |
+| One profiler window | I1 |
+| Nothing | N |
+
+T2's mixed prefill is `allowed` rather than secondary, because no #218 edge
+leads from a workload change to it. The short twins (S-x), the TP=2 types
+(F5, R0, F6) and the outages (X1–X3) are refused for now: they need #219's
+predicates, a second GPU and #220's tools.
+
+A plan, `stormlog.qualify.plan/1`, holds:
+- the profile and a seed;
+- the binding (`vllm-0.30`);
+- the victim's workload: rate, token shape, prefix groups, shared-prefix
+  ratio, SLO;
+- the timeline: priming, baseline, episode length, the 60 s minimum and
+  150 s timeout for recovery, final recovery;
+- the episodes in order, each dose filled from the catalog's defaults.
+
+`load_plan` refuses a plan that can't be run, listing every problem: an
+unknown type, a neighbor without a rate or a concurrency, a pulse past the
+pulser's caps, a capture that isn't between 0 and 60 s.
+
+```json
+{"format": "stormlog.qualify.plan/1", "profile": "dx-off", "seed": 7,
+ "victim": {"rate_per_second": 3.0, "input_tokens": 512, "output_tokens": 64,
+            "prefix_groups": 4, "shared_prefix_ratio": 0.75},
+ "episodes": [{"type": "F2"}, {"type": "N"},
+              {"type": "F1", "dose": {"rate_per_second": 24, "input_tokens": 128, "output_tokens": 16}}]}
+```
