@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .config import VLLM_VERSION, Controls, FakeEngineConfig
 from .engine import Engine, FakeRequest, prompt_tokens
+from .metrics import render_metrics
 
 TOKEN_TEXT = " tok"
 
@@ -254,6 +255,20 @@ def _server_info(handler: _Handler) -> None:
     handler.send_json(200, info)
 
 
+def _metrics(handler: _Handler) -> None:
+    fake = handler.fake
+    controls = fake.controls
+    if controls.metrics_mode == "fail":
+        handler.send_bytes(500, b"metrics unavailable", "text/plain")
+        return
+    if controls.metrics_mode == "slow":
+        time.sleep(controls.metrics_delay_seconds)
+    text = render_metrics(
+        fake.engine.metrics_snapshot(), fake.config, fake.engine.start_ns / 1e9
+    )
+    handler.send_bytes(200, text.encode(), "text/plain; version=0.0.4")
+
+
 def _chat(handler: _Handler) -> None:
     body = handler.read_json()
     request = handler.fake.new_request(
@@ -375,6 +390,7 @@ GET_ROUTES: dict[str, Route] = {
     "/v1/models": _models,
     "/version": _version,
     "/server_info": _server_info,
+    "/metrics": _metrics,
 }
 POST_ROUTES: dict[str, Route] = {
     "/v1/chat/completions": _chat,
