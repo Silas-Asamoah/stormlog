@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import signal
@@ -14,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
+from examples.qualification.fake_engine.__main__ import config_from_args
 from examples.qualification.fake_engine.process import (
     ROOT,
     FakeEngineProcess,
@@ -148,6 +150,13 @@ def test_the_subprocess_keeps_the_callers_python_path(
     ]
     monkeypatch.delenv("PYTHONPATH")
     assert _environment()["PYTHONPATH"] == str(ROOT)
+
+
+def test_the_command_lines_defaults_are_the_configs() -> None:
+    # Only the kill switch differs: a separate process may be killed.
+    assert config_from_args([]) == dataclasses.replace(
+        FakeEngineConfig(), allow_kill=True
+    )
 
 
 @pytest.mark.parametrize("target", ["engine", "frontend"])

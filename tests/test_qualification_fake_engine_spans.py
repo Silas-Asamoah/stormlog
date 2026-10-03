@@ -21,6 +21,8 @@ from stormlog.infer.vllm_spans import JSON_MEDIA, PROTOBUF_MEDIA, OtlpSpanReceiv
 from stormlog.infer.vllm_telemetry import VllmSpanRecord
 from tests.qualification_fake_engine_helpers import (
     chat,
+    of_type,
+    records,
     run_profile,
     wait_until,
     words,
@@ -185,21 +187,30 @@ def test_the_receiver_refuses_oversized_and_inflating_bodies() -> None:
 
 
 def test_infer_profile_joins_the_fake_spans(tmp_path: Path) -> None:
+    # The default configuration, so this also pins the default encoding:
+    # vLLM's exporter sends protobuf.
     port = _free_port()
     config = FakeEngineConfig(
         step_seconds=0.001,
         spans_endpoint=f"http://127.0.0.1:{port}/v1/traces",
         span_export_seconds=0.05,
     )
+    output = tmp_path / "infer.jsonl"
     with FakeEngine(config) as engine:
         report = run_profile(
             engine,
-            tmp_path / "infer.jsonl",
+            output,
             vllm_spans_listen=f"127.0.0.1:{port}",
             vllm_spans_drain_seconds=1.0,
         )
     (case,) = report["telemetry"]["vllm"]["cases"].values()
     assert case["spans"]["requests_with_span"] == 4
+    (capability,) = [
+        item
+        for item in of_type(records(output), "infer.capabilities")
+        if item["component"] == "vllm.spans"
+    ]
+    assert capability["metadata"]["spans_by_media"] == {PROTOBUF_MEDIA: 4}
 
 
 class _ScriptedCollector(ThreadingHTTPServer):
