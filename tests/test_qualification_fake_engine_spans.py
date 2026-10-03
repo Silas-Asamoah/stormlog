@@ -104,6 +104,42 @@ def test_spans_leave_as_protobuf_like_vllms_exporter_unless_json_is_asked(
     assert spans[0].attributes["gen_ai.usage.completion_tokens"] == 2
 
 
+def test_a_span_carries_the_requests_sampling_parameters() -> None:
+    # vLLM adds top_p, max_tokens, temperature and n when each is set and not
+    # zero (OutputProcessor.do_tracing); unset ones take SamplingParams'
+    # defaults of 1.0.
+    spans: list[VllmSpanRecord] = []
+    with _receiver() as receiver:
+        with _engine(receiver) as engine:
+            chat(
+                engine,
+                "x",
+                max_tokens=3,
+                request_id="stormlog-run-1-set",
+                sampling={"top_p": 0.25, "temperature": 0.5},
+            )
+            chat(
+                engine,
+                "y",
+                max_tokens=2,
+                request_id="stormlog-run-1-greedy",
+                sampling={"temperature": 0.0},
+            )
+        assert wait_until(lambda: _received(receiver, spans) >= 2)
+    by_request = {span.request_id: span.attributes for span in spans}
+    chosen, greedy = (
+        by_request["stormlog-run-1-set"],
+        by_request["stormlog-run-1-greedy"],
+    )
+    assert (chosen["gen_ai.request.top_p"], chosen["gen_ai.request.temperature"]) == (
+        0.25,
+        0.5,
+    )
+    assert (chosen["gen_ai.request.max_tokens"], chosen["gen_ai.request.n"]) == (3, 1)
+    assert greedy["gen_ai.request.top_p"] == 1.0
+    assert "gen_ai.request.temperature" not in greedy
+
+
 def test_a_traceparent_makes_the_span_its_child() -> None:
     spans: list[VllmSpanRecord] = []
     traceparent = f"00-{TRACE_ID}-{PARENT}-01"

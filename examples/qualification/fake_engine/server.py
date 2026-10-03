@@ -173,6 +173,8 @@ class FakeEngine:
             max_tokens=max(1, int(limit)),
             arrival_ns=time.time_ns(),
             traceparent=traceparent,
+            top_p=_sampling(body, "top_p"),
+            temperature=_sampling(body, "temperature"),
         )
         return self.engine.submit(request)
 
@@ -376,6 +378,12 @@ def _fault_kill(handler: _Handler) -> None:
     handler.wfile.flush()
     # Like SIGKILL: no flush, no goodbye, no atexit.
     os._exit(137)
+
+
+def _sampling(body: dict[str, Any], key: str) -> float:
+    """A sampling parameter from the body; unset or null is vLLM's 1.0."""
+    value = body.get(key)
+    return 1.0 if value is None else float(value)
 
 
 def _health(handler: _Handler) -> None:

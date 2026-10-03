@@ -23,14 +23,17 @@ def chat(
     request_id: str | None = None,
     headers: dict[str, str] | None = None,
     timeout: float = 30.0,
+    sampling: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    """One chat completion; the streamed chunks, or the single JSON body."""
+    """One chat completion; the streamed chunks, or the single JSON body.
+    ``sampling`` adds parameters such as ``top_p`` to the body."""
     body = {
         "model": engine.config.model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": stream,
         "max_tokens": max_tokens,
         "stream_options": {"include_usage": True},
+        **(sampling or {}),
     }
     sent = {"Content-Type": "application/json", **(headers or {})}
     if request_id is not None:

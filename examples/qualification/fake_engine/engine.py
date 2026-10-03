@@ -48,6 +48,9 @@ class FakeRequest:
     max_tokens: int
     arrival_ns: int
     traceparent: str | None = None
+    # Sampling parameters, with vLLM's SamplingParams defaults.
+    top_p: float = 1.0
+    temperature: float = 1.0
     status: str = "WAITING"
     computed: int = 0
     committed: int = 0

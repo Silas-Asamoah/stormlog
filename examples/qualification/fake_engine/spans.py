@@ -190,11 +190,17 @@ def request_span(request: FakeRequest) -> dict[str, Any]:
         "gen_ai.request.id": request.external_id,
         "gen_ai.usage.prompt_tokens": request.prompt_len,
         "gen_ai.usage.completion_tokens": request.output_tokens,
-        "gen_ai.request.max_tokens": request.max_tokens,
-        "gen_ai.request.n": 1,
-        "gen_ai.request.top_p": 1.0,
         "gen_ai.latency.e2e": (end - request.arrival_ns) / 1e9,
     }
+    # vLLM adds each sampling parameter only when it is set and not zero.
+    for key, value in (
+        ("gen_ai.request.top_p", request.top_p),
+        ("gen_ai.request.max_tokens", request.max_tokens),
+        ("gen_ai.request.temperature", request.temperature),
+        ("gen_ai.request.n", 1),
+    ):
+        if value:
+            attributes[key] = value
     attributes.update(_latencies(request, end))
     return {
         "traceId": trace_id,

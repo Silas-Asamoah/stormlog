@@ -211,7 +211,10 @@ What it serves, as vLLM 0.30.0 does:
 - `spans_endpoint` exports each request's `llm_request` span over OTLP/HTTP as
   protobuf, the only encoding vLLM's OpenTelemetry exporter sends, so it needs
   the `infer-otlp` extra. `span_encoding="json"` sends OTLP/JSON instead. A
-  `traceparent` header makes the span its child. A failed export is retried as
+  `traceparent` header makes the span its child. Like vLLM's, the span carries
+  the request's `top_p`, `max_tokens`, `temperature` and `n` when each is not
+  zero; unset ones take vLLM's `SamplingParams` default of 1.0 (a real server
+  may apply the model's generation config instead). A failed export is retried as
   opentelemetry-sdk 1.44.0 retries it: 408, 5xx and connection errors, with
   backoff, inside `span_export_timeout_seconds` (10 s, as
   `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`); a 429 or other client error is final.
