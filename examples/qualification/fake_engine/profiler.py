@@ -41,6 +41,8 @@ class FakeProfiler(EngineObserver):
         self.producer = producer
         self.active = False
         self.traces: list[Path] = []
+        # Each stop's span on the loop, in ``time.time_ns()``.
+        self.stops: list[tuple[int, int]] = []
         self._steps: list[Step] = []
         self._correlation = 0
 
@@ -79,8 +81,10 @@ class FakeProfiler(EngineObserver):
 
     def _stop_in_loop(self) -> int:
         # A stop with nothing running also answers 200.
+        started = time.time_ns()
         if self.active:
             self._close_window()
+        self.stops.append((started, time.time_ns()))
         return 200
 
     # ------------------------------------------------------------ the loop

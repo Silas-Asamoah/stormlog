@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import http.client
-import time
 import urllib.error
 from pathlib import Path
 
@@ -77,14 +76,17 @@ def test_the_stop_holds_the_step_loop(tmp_path: Path) -> None:
         post(f"{engine.base_url}/start_profile")
         threads = chats_in_background(engine, [words(4, "a")], max_tokens=400)
         assert wait_until(lambda: len(engine.engine.steps) > 5)
-        before = time.time_ns()
         post(f"{engine.base_url}/stop_profile")
-        after = time.time_ns()
         engine.engine.abort(next(iter(engine.engine.live.values())))
         join_all(threads)
         starts = [step.exec_start_ns for step in engine.engine.steps]
-    assert after - before >= 300_000_000
-    assert sum(1 for start in starts if before < start < after) <= 1
+        profiler = engine.profiler
+        assert profiler is not None
+        ((stop_start, stop_end),) = profiler.stops
+    # Judged on the loop's own clock: a client's bracket around the call also
+    # holds the steps that ran before the call reached the loop.
+    assert stop_end - stop_start >= 300_000_000
+    assert not any(stop_start <= start <= stop_end for start in starts)
 
 
 def test_a_server_without_a_profiler_refuses_both_routes(tmp_path: Path) -> None:
