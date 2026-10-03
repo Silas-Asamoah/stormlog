@@ -61,6 +61,18 @@ def run_trial(
     )
     if status is ResultStatus.PASS and missing_required:
         status = ResultStatus.PARTIAL
+    pressure_unsupported = (
+        spec.workload_id.value == "w4-stress"
+        and spec.mode.value == "direct-cupti"
+        and spec.pressure_controls.get("variant_status") == "unsupported"
+    )
+    if status is ResultStatus.PASS and pressure_unsupported:
+        status = ResultStatus.UNSUPPORTED
+    limitations = _limitations(status, return_code, missing_required, malformed_result)
+    if pressure_unsupported:
+        limitations.append(
+            str(spec.pressure_controls.get("variant_reason", "W4 pressure unsupported"))
+        )
     manifest = {
         "schema_version": 2,
         "artifact_kind": "native_probe_trial",
@@ -90,9 +102,7 @@ def run_trial(
         "loss": (workload_result.get("loss", {}) if workload_result else {}),
         "pressure_controls": dict(spec.pressure_controls),
         "artifacts": artifacts,
-        "limitations": _limitations(
-            status, return_code, missing_required, malformed_result
-        ),
+        "limitations": limitations,
     }
     write_manifest(trial_directory / "manifest.json", manifest)
     return manifest
@@ -523,7 +533,7 @@ def _limitations(
     missing_required: bool,
     malformed_result: bool,
 ) -> list[str]:
-    if status is ResultStatus.PASS:
+    if status in {ResultStatus.PASS, ResultStatus.UNSUPPORTED}:
         return []
     if missing_required and return_code == 0:
         return ["one or more required profiler artifacts were not usable"]

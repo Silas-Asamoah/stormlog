@@ -274,6 +274,47 @@ def test_runner_rejects_secret_environment_keys(tmp_path: Path) -> None:
         run_trial(spec, tmp_path)
 
 
+def test_w4_pressure_unsupported_cannot_pass_and_preserves_process_failure(
+    tmp_path: Path,
+) -> None:
+    payload = json.dumps(
+        {
+            "artifact_kind": "workload_result",
+            "metrics": {"latency_ms": 2.5},
+            "measurement_window": _window(),
+            "ground_truth": {},
+        }
+    )
+    pressure = {
+        "variant_status": "unsupported",
+        "variant_reason": "pinned helper cannot apply pressure controls",
+    }
+    for exit_code, expected in ((0, "unsupported"), (7, "fail")):
+        spec = TrialSpec(
+            trial_id=f"w4-pressure-{exit_code}",
+            configuration_id="control",
+            workload_id=WorkloadId.W4_STRESS,
+            mode=ExperimentMode.DIRECT_CUPTI,
+            repetition=0,
+            command=CommandSpec(
+                (
+                    sys.executable,
+                    "-c",
+                    f"import sys; print({payload!r}); sys.exit({exit_code})",
+                ),
+                {},
+                5.0,
+            ),
+            pressure_controls=pressure,
+        )
+        result = run_trial(spec, tmp_path)
+        _validate(result, "trial.schema.json")
+        assert result["status"] == expected
+        assert result["return_code"] == exit_code
+        assert result["pressure_controls"] == pressure
+        assert "pinned helper cannot apply" in result["limitations"][-1]
+
+
 def test_runner_downgrades_missing_result_and_malformed_trace(tmp_path: Path) -> None:
     malformed_payload = json.dumps(
         {
