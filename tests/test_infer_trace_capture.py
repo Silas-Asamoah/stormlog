@@ -979,6 +979,104 @@ def test_ctrl_c_during_the_start_still_stops_the_profiler(tmp_path: Path) -> Non
     assert [w.stop_reason for w in windows.windows] == ["cancelled"]
 
 
+class _BlockingControl(_FakeControl):
+    """Holds one route's call until released; ``entered`` is set inside it."""
+
+    def __init__(self, trace_dir: Path, route: str, **kwargs: Any) -> None:
+        super().__init__(trace_dir, **kwargs)
+        self.route = route
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def post(self, route: str) -> ControlResult:
+        if route == self.route:
+            self.entered.set()
+            assert self.release.wait(5)
+        return super().post(route)
+
+
+def _cancel_twice_while_blocked(
+    windows: TraceWindows, control: _BlockingControl, *, first_cancel_opens: bool
+) -> None:
+    """Cancel the window's task, then cancel it again inside the held call."""
+
+    async def scenario() -> None:
+        async def body() -> None:
+            async with windows.window("c1", "measured"):
+                await asyncio.sleep(5)
+
+        task = asyncio.create_task(body())
+        if first_cancel_opens:  # the held call starts only after a cancel
+            await asyncio.sleep(0.05)
+            task.cancel()
+        assert await asyncio.to_thread(control.entered.wait, 5)
+        if not first_cancel_opens:
+            task.cancel()
+            await asyncio.sleep(0.05)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        control.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("start_status", [200, None])
+def test_repeated_cancellation_during_the_start_still_stops_and_records(
+    tmp_path: Path, start_status: int | None
+) -> None:
+    control = _BlockingControl(tmp_path, "/start_profile", start_status=start_status)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    _cancel_twice_while_blocked(windows, control, first_cancel_opens=False)
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    (window,) = windows.windows
+    assert window.stop is not None and window.stop.ok
+    assert "may still be running" not in (window.note or "")
+
+
+def test_repeated_cancellation_during_the_stop_waits_for_it(tmp_path: Path) -> None:
+    control = _BlockingControl(tmp_path, "/stop_profile")
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    _cancel_twice_while_blocked(windows, control, first_cancel_opens=True)
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    (window,) = windows.windows
+    # The record was written after the stop returned, not before.
+    assert window.stop is not None and window.stop.ok
+    assert "may still be running" not in (window.note or "")
+
+
+def test_ctrl_c_after_a_cancel_during_the_start_still_stops(tmp_path: Path) -> None:
+    """asyncio.run cancels the task again on its way out of the Ctrl+C."""
+    control = _BlockingControl(tmp_path, "/start_profile", start_status=None)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    async def main() -> None:
+        async def body() -> None:
+            async with windows.window("c1", "measured"):
+                await asyncio.sleep(5)
+
+        task = asyncio.create_task(body())
+        assert await asyncio.to_thread(control.entered.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        threading.Timer(0.1, control.release.set).start()
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(main())
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    records = windows.take_records(session_id="s1")
+    assert [(r["start_outcome"], r["stop_status"]) for r in records] == [
+        (START_UNKNOWN, 200)
+    ]
+
+
 @pytest.mark.parametrize(
     ("bound", "reason"), [(None, "phase_end"), (0.01, "time_bound")]
 )
