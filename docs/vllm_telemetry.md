@@ -137,7 +137,7 @@ the text report. Per measured case and per `engine` label:
 | `derived.prefix_cache` | queries, hits and the hit ratio, in tokens | counters |
 | `derived.kv_cache` | peak and mean usage as a fraction, and in blocks when `cache_config_info` names `num_gpu_blocks` | gauge plus info labels |
 | `derived.mfu` | the estimated FLOPs and bytes per GPU, or `not_enabled`; zeros are `unresolved` while the generated token delta is | counters |
-| `spans` | requests with a span, and p50/p95/mean of each native latency attribute | joined spans |
+| `spans` | requests with a span, and p50/p95/mean of each native latency attribute | joined spans, each once by trace and span id: a repeated delivery (an exporter retry, two overlapping files) is counted as a duplicate, one that differs from the first as conflicting, and the first is the one kept |
 
 The window runs from the scrape before the first send to the scrape after
 the drain, and the report says `includes_drain: true`, so rates are over the

@@ -129,7 +129,13 @@ def _request(
     }
 
 
-def _span(request_id: str | None, **attributes: Any) -> dict[str, Any]:
+def _span(
+    request_id: str | None,
+    *,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    **attributes: Any,
+) -> dict[str, Any]:
     values: dict[str, Any] = {
         "gen_ai.request.id": (
             f"chatcmpl-{request_id}" if request_id else "chatcmpl-random"
@@ -149,6 +155,8 @@ def _span(request_id: str | None, **attributes: Any) -> dict[str, Any]:
         source="otlp_http_receiver",
         name="llm_request",
         clock_domain="gpu-box/unix_epoch_ns",
+        trace_id=trace_id,
+        span_id=span_id,
         start_unix_ns=T0,
         end_unix_ns=T0 + SECOND // 2,
         attributes=values,
@@ -669,6 +677,60 @@ class TestNonFinite:
         assert counters["generation_tokens"]["state"] == STATE_RESOLVED
 
 
+class TestDuplicateSpans:
+    def _spans(self) -> list[dict[str, Any]]:
+        """Two requests whose spans say 10 ms and 1,000 ms of inference."""
+        spans = []
+        for index, seconds in enumerate([0.01, 1.0]):
+            span = _span(
+                _request(index)["x_request_id"],
+                trace_id=str(index) * 32,
+                span_id=str(index) * 16,
+            )
+            span["attributes"]["gen_ai.latency.time_in_model_inference"] = seconds
+            spans.append(span)
+        return spans
+
+    def test_a_span_delivered_twice_weighs_once(self, tmp_path: Path) -> None:
+        # An OTLP retry after a lost response, or two overlapping files,
+        # deliver the same span again. It must count once in the statistics,
+        # and the extra delivery must be visible as what it is.
+        spans = self._spans()
+        once = analyze_inference_events(
+            _artifact(tmp_path, _standard_scrapes(), spans=spans)
+        )["telemetry"]["vllm"]
+        twice = analyze_inference_events(
+            _artifact(
+                tmp_path, _standard_scrapes(), spans=[spans[0], spans[0], spans[1]]
+            )
+        )["telemetry"]["vllm"]
+        key = "time_in_model_inference"
+        assert once["cases"][CASE]["spans"]["latency"][key]["p50_ms"] == 505.0
+        assert twice["cases"][CASE]["spans"]["latency"][key]["p50_ms"] == 505.0
+        assert twice["cases"][CASE]["spans"]["latency"][key]["mean_ms"] == 505.0
+        assert twice["cases"][CASE]["spans"]["spans"] == 2
+        assert (twice["spans"]["total"], twice["spans"]["joined"]) == (2, 2)
+        assert twice["spans"]["deliveries"] == 3
+        assert twice["spans"]["duplicates"] == 1
+        assert twice["spans"]["conflicting_duplicates"] == 0
+
+    def test_a_conflicting_duplicate_is_diagnosed(self, tmp_path: Path) -> None:
+        spans = self._spans()
+        conflicting = dict(spans[0])
+        conflicting["attributes"] = {
+            **spans[0]["attributes"],
+            "gen_ai.latency.time_in_model_inference": 5.0,
+        }
+        block = analyze_inference_events(
+            _artifact(tmp_path, _standard_scrapes(), spans=[*spans, conflicting])
+        )["telemetry"]["vllm"]
+        key = "time_in_model_inference"
+        # The first delivery is kept; the conflict is counted, not averaged in.
+        assert block["cases"][CASE]["spans"]["latency"][key]["mean_ms"] == 505.0
+        assert block["spans"]["duplicates"] == 1
+        assert block["spans"]["conflicting_duplicates"] == 1
+
+
 class TestNamesAndEngines:
     def test_retired_name_is_normalised_and_flagged(self, tmp_path: Path) -> None:
         old = PRE.replace("vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc")
@@ -734,12 +796,11 @@ class TestSpans:
             _request(2, x_request_id=None),
             _request(0, phase="warmup"),
         ]
+        slower = _span("stormlog-run-1-c8_in512_out128_measured_0_1")
+        slower["attributes"]["gen_ai.latency.time_in_model_inference"] = 0.63
         spans = [
             _span("stormlog-run-1-c8_in512_out128_measured_0_0"),
-            _span(
-                "stormlog-run-1-c8_in512_out128_measured_0_1",
-                **{"gen_ai.latency.time_in_model_inference": 0.63},
-            ),
+            slower,
             _span("stormlog-run-9-other"),
             _span(None),
             _span("stormlog-run-1-c8_in512_out128_warmup_0_0"),

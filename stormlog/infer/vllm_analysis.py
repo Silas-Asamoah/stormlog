@@ -866,6 +866,9 @@ class _SpanJoin:
     joined: int
     unjoined: dict[str, int]
     sources: dict[str, int]
+    deliveries: int = 0
+    duplicates: int = 0
+    conflicting: int = 0
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -873,6 +876,9 @@ class _SpanJoin:
             "joined": self.joined,
             "unjoined_by_reason": dict(sorted(self.unjoined.items())),
             "sources": dict(sorted(self.sources.items())),
+            "deliveries": self.deliveries,
+            "duplicates": self.duplicates,
+            "conflicting_duplicates": self.conflicting,
             "note": RESIDENCY_NOTE,
         }
 
@@ -898,6 +904,8 @@ def _join_spans(
         for r in requests
         if isinstance(r.get("x_request_id"), str)
     }
+    deliveries = len(spans)
+    spans, duplicates, conflicting = _unique_spans(spans)
     by_request: dict[str, list[VllmSpanRecord]] = {}
     unjoined: dict[str, int] = {}
     sources: dict[str, int] = {}
@@ -909,7 +917,57 @@ def _join_spans(
         else:
             unjoined[reason or "unknown"] = unjoined.get(reason or "unknown", 0) + 1
     joined = sum(len(items) for items in by_request.values())
-    return _SpanJoin(by_request, len(spans), joined, unjoined, sources)
+    return _SpanJoin(
+        by_request,
+        len(spans),
+        joined,
+        unjoined,
+        sources,
+        deliveries,
+        duplicates,
+        conflicting,
+    )
+
+
+def _unique_spans(
+    spans: list[VllmSpanRecord],
+) -> tuple[list[VllmSpanRecord], int, int]:
+    """Each span once, by (trace_id, span_id); the first delivery is kept.
+
+    An OTLP retry after a lost response, or two overlapping files, deliver
+    a span again. The repeat is counted as a duplicate, and as conflicting
+    when it differs from the first in anything but its delivery, so it
+    never weighs twice in the statistics. A span with no ids cannot be
+    matched and is kept as it is.
+    """
+    seen: dict[tuple[str, str], VllmSpanRecord] = {}
+    unique: list[VllmSpanRecord] = []
+    duplicates = conflicting = 0
+    for span in spans:
+        if span.trace_id is None or span.span_id is None:
+            unique.append(span)
+            continue
+        first = seen.get((span.trace_id, span.span_id))
+        if first is None:
+            seen[(span.trace_id, span.span_id)] = span
+            unique.append(span)
+            continue
+        duplicates += 1
+        if _span_content(first) != _span_content(span):
+            conflicting += 1
+    return unique, duplicates, conflicting
+
+
+def _span_content(span: VllmSpanRecord) -> tuple[Any, ...]:
+    """What the exporter said, apart from when and how it was delivered."""
+    return (
+        span.name,
+        span.kind,
+        span.start_unix_ns,
+        span.end_unix_ns,
+        span.attributes,
+        span.status,
+    )
 
 
 def _unjoined_reason(
