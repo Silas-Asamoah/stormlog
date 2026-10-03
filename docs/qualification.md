@@ -603,3 +603,19 @@ pulser's caps, a capture that isn't between 0 and 60 s.
  "episodes": [{"type": "F2"}, {"type": "N"},
               {"type": "F1", "dose": {"rate_per_second": 24, "input_tokens": 128, "output_tokens": 16}}]}
 ```
+
+### The victim
+
+`python -m examples.qualification.victim --probes DIR -- <infer profile
+arguments>` runs the profile exactly as `stormlog infer profile` would, and
+adds three probes in its own process:
+
+- **Phase markers** in `DIR/markers/`, one file per phase start and end. The
+  harness times its episodes against the measured window from them, while the
+  run is still going.
+- **The append-time probe:** each artifact line's index and when its append
+  was flushed, in `DIR/append-times.jsonl`. A client record is ready for an
+  analyzer then, and the replay cuts the client artifact by these times.
+- **The client idle probe:** a 10 ms timer on its own thread. A tick that
+  comes 20 ms late or more is noted in `DIR/client-idle.jsonl`, so a stall
+  on the client's own host is seen.
