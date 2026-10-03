@@ -1,0 +1,383 @@
+"""The fake engine's HTTP front end, shaped like vLLM 0.30's API server."""
+
+from __future__ import annotations
+
+import json
+import secrets
+import socket
+import threading
+import time
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
+
+from .config import VLLM_VERSION, Controls, FakeEngineConfig
+from .engine import Engine, FakeRequest, prompt_tokens
+
+TOKEN_TEXT = " tok"
+
+
+class FakeEngine:
+    """A running fake engine: the step loop plus its HTTP server.
+
+    ``with FakeEngine(FakeEngineConfig()) as engine:`` starts both on a free
+    loopback port; ``engine.base_url`` is the server root.
+    """
+
+    def __init__(self, config: FakeEngineConfig | None = None) -> None:
+        self.config = config or FakeEngineConfig()
+        self.controls = Controls()
+        self.engine = Engine(self.config)
+        self._frontend = threading.Event()
+        self._frontend.set()
+        self._server: _Server | None = None
+        self._thread: threading.Thread | None = None
+
+    # ------------------------------------------------------------ lifecycle
+
+    def start(self) -> FakeEngine:
+        self._server = _Server((self.config.host, self.config.port), _Handler)
+        self._server.fake = self
+        self.engine.start()
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, name="fake-engine-http", daemon=True
+        )
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._frontend.set()
+        self.engine.stop()
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=10)
+
+    def __enter__(self) -> FakeEngine:
+        return self.start()
+
+    def __exit__(self, *_exc: object) -> None:
+        self.stop()
+
+    @property
+    def base_url(self) -> str:
+        if self._server is None:
+            raise RuntimeError("the fake engine is not started")
+        host, port = self._server.server_address[:2]
+        name = host.decode() if isinstance(host, bytes) else str(host)
+        return f"http://{name}:{port}"
+
+    @property
+    def endpoint(self) -> str:
+        return f"{self.base_url}/v1/chat/completions"
+
+    @property
+    def metrics_url(self) -> str:
+        return f"{self.base_url}/metrics"
+
+    # ------------------------------------------------------------ faults
+
+    def pause_frontend(self, seconds: float | None = None) -> None:
+        """Hold every API response (as if the API server were stopped); the
+        engine keeps stepping. ``/_fault/`` routes still answer."""
+        self._frontend.clear()
+        if seconds is not None:
+            timer = threading.Timer(seconds, self._frontend.set)
+            timer.daemon = True
+            timer.start()
+
+    def resume_frontend(self) -> None:
+        self._frontend.set()
+
+    def pause_engine(self, seconds: float | None = None) -> None:
+        self.engine.pause(seconds)
+
+    def resume_engine(self) -> None:
+        self.engine.resume()
+
+    def wait_frontend(self) -> None:
+        self._frontend.wait()
+
+    # ------------------------------------------------------------ requests
+
+    def new_request(
+        self, body: dict[str, Any], request_id: str | None, traceparent: str | None
+    ) -> FakeRequest:
+        external = f"chatcmpl-{request_id or uuid.uuid4().hex}"
+        internal = (
+            f"{external}-{secrets.token_hex(4)}"
+            if self.config.request_id_randomization
+            else external
+        )
+        text = " ".join(
+            str(message.get("content") or "")
+            for message in body.get("messages") or []
+            if isinstance(message, dict)
+        )
+        limit = body.get("max_tokens") or body.get("max_completion_tokens") or 16
+        request = FakeRequest(
+            internal_id=internal,
+            external_id=external,
+            prompt=prompt_tokens(text),
+            max_tokens=max(1, int(limit)),
+            arrival_ns=time.time_ns(),
+            traceparent=traceparent,
+        )
+        return self.engine.submit(request)
+
+    def server_info(self) -> dict[str, Any]:
+        config = self.config
+        return {
+            "vllm_config": {
+                "model_config": {"model": config.model, "max_model_len": 4096},
+                "cache_config": {
+                    "block_size": config.block_size,
+                    "num_gpu_blocks": config.num_gpu_blocks,
+                    "enable_prefix_caching": config.enable_prefix_caching,
+                },
+                "scheduler_config": {
+                    "max_num_seqs": config.max_num_seqs,
+                    "max_num_batched_tokens": config.max_num_batched_tokens,
+                    "async_scheduling": False,
+                },
+                "parallel_config": {
+                    "tensor_parallel_size": 1,
+                    "pipeline_parallel_size": 1,
+                    "data_parallel_size": 1,
+                    "distributed_executor_backend": "uni",
+                },
+                "compilation_config": {"cudagraph_mode": "NONE"},
+                "profiler_config": {
+                    "profiler": "torch" if config.trace_dir else None,
+                    "torch_profiler_dir": (
+                        str(config.trace_dir) if config.trace_dir else None
+                    ),
+                },
+            },
+            "vllm_env": {"VLLM_SERVER_DEV_MODE": True},
+            "system_env": {"fake_engine": True},
+        }
+
+
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+    fake: FakeEngine
+
+
+Route = Callable[["_Handler"], None]
+
+
+class _Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server: _Server
+
+    def setup(self) -> None:
+        super().setup()
+        # Streamed chunks are small; without this, Nagle's algorithm and the
+        # peer's delayed ACK hold each one for tens of milliseconds.
+        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    @property
+    def fake(self) -> FakeEngine:
+        return self.server.fake
+
+    @property
+    def route(self) -> str:
+        return urlparse(self.path).path
+
+    def query(self, name: str) -> str | None:
+        values = parse_qs(urlparse(self.path).query).get(name)
+        return values[0] if values else None
+
+    def do_GET(self) -> None:  # noqa: N802
+        self._dispatch(GET_ROUTES)
+
+    def do_POST(self) -> None:  # noqa: N802
+        self._dispatch(POST_ROUTES)
+
+    def _dispatch(self, routes: dict[str, Route]) -> None:
+        handler = routes.get(self.route)
+        if handler is None:
+            self.send_json(404, {"error": f"no route {self.route}"})
+            return
+        if not self.route.startswith("/_fault/"):
+            self.fake.wait_frontend()
+        handler(self)
+
+    def read_body(self) -> bytes:
+        return self.rfile.read(int(self.headers.get("Content-Length") or 0))
+
+    def read_json(self) -> dict[str, Any]:
+        raw = self.read_body()
+        value = json.loads(raw) if raw else {}
+        return value if isinstance(value, dict) else {}
+
+    def send_json(self, status: int, payload: Any) -> None:
+        self.send_bytes(status, json.dumps(payload).encode(), "application/json")
+
+    def send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return None
+
+
+def _health(handler: _Handler) -> None:
+    handler.send_bytes(200, b"", "text/plain")
+
+
+def _models(handler: _Handler) -> None:
+    model = handler.fake.config.model
+    handler.send_json(
+        200,
+        {
+            "object": "list",
+            "data": [{"id": model, "object": "model", "max_model_len": 4096}],
+        },
+    )
+
+
+def _version(handler: _Handler) -> None:
+    handler.send_json(200, {"version": VLLM_VERSION})
+
+
+def _server_info(handler: _Handler) -> None:
+    info = handler.fake.server_info()
+    if handler.query("config_format") != "json":
+        info = {**info, "vllm_config": str(info["vllm_config"])}
+    handler.send_json(200, info)
+
+
+def _chat(handler: _Handler) -> None:
+    body = handler.read_json()
+    request = handler.fake.new_request(
+        body,
+        handler.headers.get("X-Request-Id"),
+        handler.headers.get("traceparent"),
+    )
+    stream = bool(body.get("stream"))
+    usage = bool((body.get("stream_options") or {}).get("include_usage"))
+    try:
+        if stream:
+            _stream_completion(handler, request, include_usage=usage)
+        else:
+            _whole_completion(handler, request)
+    except (BrokenPipeError, ConnectionResetError):
+        handler.fake.engine.abort(request)
+        handler.close_connection = True
+
+
+def _usage(request: FakeRequest) -> dict[str, int]:
+    return {
+        "prompt_tokens": request.prompt_len,
+        "completion_tokens": request.output_tokens,
+        "total_tokens": request.prompt_len + request.output_tokens,
+    }
+
+
+def _whole_completion(handler: _Handler, request: FakeRequest) -> None:
+    reason = _drain(request)
+    handler.fake.wait_frontend()
+    handler.send_json(
+        200,
+        {
+            "id": request.external_id,
+            "object": "chat.completion",
+            "model": handler.fake.config.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": TOKEN_TEXT * request.output_tokens,
+                    },
+                    "finish_reason": reason,
+                }
+            ],
+            "usage": _usage(request),
+        },
+    )
+
+
+def _drain(request: FakeRequest) -> str:
+    while True:
+        kind, value = request.events.get()
+        if kind == "finish":
+            return str(value)
+
+
+def _stream_completion(
+    handler: _Handler, request: FakeRequest, *, include_usage: bool
+) -> None:
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream")
+    handler.send_header("Transfer-Encoding", "chunked")
+    handler.end_headers()
+    model = handler.fake.config.model
+    started = False
+    while True:
+        kind, value = request.events.get()
+        handler.fake.wait_frontend()
+        if kind == "finish":
+            break
+        if not started:
+            _send_chunk(handler, _delta(request, model, {"role": "assistant"}))
+            started = True
+        _send_chunk(handler, _delta(request, model, {"content": TOKEN_TEXT}))
+    _send_chunk(handler, _delta(request, model, {}, finish_reason=str(value)))
+    if include_usage:
+        _send_chunk(
+            handler,
+            {
+                "id": request.external_id,
+                "object": "chat.completion.chunk",
+                "model": model,
+                "choices": [],
+                "usage": _usage(request),
+            },
+        )
+    _write_chunk(handler, b"data: [DONE]\n\n")
+    _write_chunk(handler, b"")
+
+
+def _delta(
+    request: FakeRequest,
+    model: str,
+    delta: dict[str, Any],
+    *,
+    finish_reason: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": request.external_id,
+        "object": "chat.completion.chunk",
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+
+
+def _send_chunk(handler: _Handler, payload: dict[str, Any]) -> None:
+    _write_chunk(handler, f"data: {json.dumps(payload)}\n\n".encode())
+
+
+def _write_chunk(handler: _Handler, data: bytes) -> None:
+    handler.wfile.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
+    handler.wfile.flush()
+
+
+GET_ROUTES: dict[str, Route] = {
+    "/health": _health,
+    "/v1/models": _models,
+    "/version": _version,
+    "/server_info": _server_info,
+}
+POST_ROUTES: dict[str, Route] = {
+    "/v1/chat/completions": _chat,
+}
+
+__all__ = ["GET_ROUTES", "POST_ROUTES", "FakeEngine"]
