@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import http.client
 import json
+import threading
 import urllib.error
 from collections import Counter
 from pathlib import Path
@@ -170,6 +171,36 @@ def test_a_delayed_or_foreign_trace_appears_on_its_own(tmp_path: Path) -> None:
     # The write came the delay after the stop returned, on the engine's clock.
     assert written_ns - stop_end >= 190_000_000
     assert len(_traces(tmp_path)) == 2
+
+
+def _complete(path: Path) -> bool:
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            json.load(handle)
+    except (EOFError, OSError, ValueError):
+        return False
+    return True
+
+
+def test_a_trace_is_written_in_place_and_reads_truncated_until_done(
+    tmp_path: Path,
+) -> None:
+    # torch's export_chrome_trace streams gzip into the final name, so a
+    # reader can find the trace present but cut short while the stop writes it.
+    with _engine(tmp_path, trace_write_seconds=1.0) as engine:
+        post(f"{engine.base_url}/start_profile")
+        chat(engine, words(8, "a"), max_tokens=20)
+        stopping = threading.Thread(
+            target=post, args=(f"{engine.base_url}/stop_profile",)
+        )
+        stopping.start()
+        assert wait_until(lambda: bool(_traces(tmp_path)))
+        (path,) = _traces(tmp_path)
+        early = _complete(path)
+        stopping.join()
+        late = _complete(path)
+    assert (early, late) == (False, True)
+    assert sorted(p.name for p in (tmp_path / "traces").iterdir()) == [path.name]
 
 
 def test_infer_profile_captures_and_imports_a_window(tmp_path: Path) -> None:

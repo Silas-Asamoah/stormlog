@@ -65,6 +65,9 @@ class Controls:
     profiler_status: int = 200
     start_pause_seconds: float = 0.0
     stop_pause_seconds: float = 0.05
+    # How long the stop takes to write the trace, streamed into its final
+    # name as torch's gzip export does; and a delay before the write starts.
+    trace_write_seconds: float = 0.0
     trace_write_delay_seconds: float = 0.0
     # (a) The start runs, then the connection closes without an answer.
     drop_start_response: bool = False

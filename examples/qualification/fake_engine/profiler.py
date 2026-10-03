@@ -5,7 +5,8 @@ utility calls, so the stop's pause (vLLM writes the trace inside the call)
 holds serving. The trace is a small gzipped Kineto file, one iteration range
 per profiled step with a launch and a kernel inside it; when the hook log is
 on, its ranges name the hook's own iterations, so an import links the work
-to the steps.
+to the steps. Like torch's export, the write streams into the trace's final
+name, so a reader can find it present but truncated.
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ from .config import Controls, FakeEngineConfig
 from .engine import Engine, EngineObserver, Step
 
 NOT_CONFIGURED = 404
+# Pieces a timed trace write is streamed in.
+WRITE_PIECES = 8
 
 
 class FakeProfiler(EngineObserver):
@@ -124,11 +127,15 @@ class FakeProfiler(EngineObserver):
         # written in the same millisecond don't collide.
         name = f"rank0.{host}_{os.getpid()}.{time.time_ns()}"
         path = directory / f"{name}.pt.trace.json.gz"
-        document = self._document(steps, host)
-        partial = path.with_name(path.name + ".tmp")
-        with gzip.open(partial, "wt", encoding="utf-8") as handle:
-            json.dump(document, handle)
-        partial.replace(path)
+        data = json.dumps(self._document(steps, host)).encode()
+        seconds = self.controls.trace_write_seconds
+        pieces = WRITE_PIECES if seconds > 0 else 1
+        size = -(-len(data) // pieces)
+        with gzip.open(path, "wb") as handle:
+            for start in range(0, len(data), size):
+                handle.write(data[start : start + size])
+                handle.flush()
+                time.sleep(seconds / pieces)
         self.written.append((path, time.time_ns()))
         return path
 
