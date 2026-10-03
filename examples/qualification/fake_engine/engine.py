@@ -54,6 +54,8 @@ class FakeRequest:
     block_ids: list[int] = field(default_factory=list)
     block_hashes: list[int] = field(default_factory=list)
     preemptions: int = 0
+    # Preempted and not yet scheduled again: vLLM's output lists it as new.
+    resumed: bool = False
     cached_at_admission: int | None = None
     first_scheduled_ns: int | None = None
     first_token_ns: int | None = None
@@ -380,6 +382,7 @@ class Engine:
         first = request.internal_id not in self._sighted
         self._sighted.add(request.internal_id)
         before = request.computed
+        resumed, request.resumed = request.resumed, False
         return ScheduledMember(
             request=request,
             tokens=tokens,
@@ -387,7 +390,11 @@ class Engine:
             first_sighting=first,
             recompute=(not first) and before < request.committed,
             output_before=request.output_tokens,
-            context=request.output_tokens == 0 or request.num_tokens - before > 1,
+            # vLLM's phase: context for a request new in this output, a resumed
+            # one included, or one still in its context phase.
+            context=resumed
+            or request.output_tokens == 0
+            or request.num_tokens - before > 1,
         )
 
     def _grow(self, request: FakeRequest, tokens: int) -> bool:
@@ -408,6 +415,7 @@ class Engine:
         victim.block_ids = []
         victim.computed = 0
         victim.status = "PREEMPTED"
+        victim.resumed = True
         victim.preemptions += 1
         self.waiting.appendleft(victim)
         self.stats.preemptions += 1

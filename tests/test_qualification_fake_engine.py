@@ -293,3 +293,21 @@ def test_a_resumed_request_reuses_its_own_generated_blocks() -> None:
     (member,) = step.members
     assert request.prompt_len == 10
     assert member.computed_before == 16
+
+
+def test_the_first_step_after_a_resume_is_context() -> None:
+    # vLLM puts a resumed request in the output's new requests, so the hook's
+    # phase is context even when only one token is left to compute: all 23
+    # recompute memberships in the real preempt5 log are context.
+    engine = _stepped_engine()
+    request = _request(engine, "r", words(6, "p"), max_tokens=20)
+    while request.output_tokens < 7:
+        _step(engine)
+    _preempt(engine, request)
+    resumed = _step(engine)
+    following = _step(engine)
+    (first,) = resumed.members
+    (second,) = following.members
+    assert (first.computed_before, request.prompt_len + 6) == (16, 16)
+    assert first.tokens == 1
+    assert (first.context, second.context) == (True, False)
