@@ -103,3 +103,78 @@ inside the victim's measured window, with at least 30 s of clean time before
 the action, counted from when the window opened or the previous episode
 recovered. Every attempted episode is published; accuracy is computed over
 the `valid` ones.
+
+## Scoring: `score_v1`
+
+`score_episode(injection, diagnosis, config)` scores one episode against the
+diagnosis of its run: a `stormlog.report` from `diagnose_artifact`, or its
+payload. `summarize(scores, config)` turns the episodes into the claims. The
+rules are frozen before any evaluation data is drawn.
+
+**The candidate set.** These are every finding, of any kind, subject or role,
+that passes the temporal rule, less the neutral secondaries. The set is
+ranked by #218's total `rank`, and top-1 and top-3 are taken over it.
+
+- **The temporal rule.** Take
+  `S = [effect_onset − pre_grace, effect_end + grace(kind)]`. Here
+  `pre_grace` is the finding's `window.resolution_ns + window.uncertainty_ns`,
+  and `grace` is frozen per finding kind (`ScoreConfig.grace_ns`). A finding
+  qualifies when it starts inside `S` and at least half of its window lies
+  inside. A finding with no window, or a run-wide one, never does.
+- **A neutral secondary** names an upstream in `secondary_to` that passes
+  four checks:
+  - it is an eligible candidate;
+  - it matches one of the label's `expects`, `secondary` or `allows` entries;
+  - one of #218's edges joins the two, with each end at a component the edge
+    allows;
+  - the secondary's window lies inside the upstream's window ± grace.
+
+  Any other secondary is scored as if it were primary.
+
+**A match** has all of these:
+- the label's kind;
+- `role: primary`;
+- an eligible claim;
+- the label's cause;
+- at least the label's severity;
+- the label's location. At L1 that is the component; at L2 it also needs the
+  rank and engine where the label names them.
+
+A secondary of the right kind never matches, because the diagnoser said the
+mechanism followed from something else. Nor is it a false claim, because it
+names the true mechanism.
+
+**False claims.** A false claim is a fault claim among the candidates that
+has all of these properties:
+- it is eligible, has cause `fault`, and is at `warning`;
+- it is not neutral;
+- it is not of the label's kind at the label's component;
+- it is not declared in `secondary` or `allows`.
+
+In a negative run it is a false positive; in a fault episode it is counted as
+spurious.
+
+**Misses**, each counted against accuracy:
+
+| Label | The episode |
+| --- | --- |
+| `outranked` | has a match, but below the gated top-k |
+| `ineligible` | has a finding of the label's kind that #218 made `claim: observation` |
+| `secondary_only` | has one only as a secondary |
+| `mismatch` | has one with the wrong cause, severity or location |
+| `coverage_gap` | has none, and the diagnosis didn't assess the kind |
+| `no_finding` | has none, and the kind was assessed |
+
+**The claims.**
+
+| Claim | Population | Gate |
+| --- | --- | --- |
+| Accuracy per episode type (top-1 at L2) | `valid` fault episodes of the types in the support matrix | Clopper–Pearson lower bound ≥ 0.78 in every stratum |
+| False-positive rate | `valid` negative runs, one negative episode each | upper bound ≤ 0.05 |
+| False claims per negative hour | the same | descriptive: the exact Poisson bound |
+| Incident attribution | fault episodes with victim impact | descriptive |
+| Condition localization | fault episodes. An eligible finding of the label's kind at its location counts, in any role, cause or severity | descriptive |
+
+Spurious claims, duplicate matches and the miss labels are reported
+alongside. `Summary.to_record(config)` records the score version, the edge
+table's version, the gated metric and level, and the targets.
