@@ -103,7 +103,11 @@ It needs no import, so an online trigger can run it on the records it tails;
 the diagnoser runs the same rules on imported steps.
 
 Work is *ready* during a stretch when a request ran in the step before it
-and in the step after it. A stretch the scheduler spent paused with
+and in the step after it. The step before a gap between steps is the one
+whose completion starts it, without the request finishing there: under
+async scheduling a request's second step is scheduled before its first
+completes, so the step scheduled just before it may come after an idle
+stretch in which nothing was ready. A stretch the scheduler spent paused with
 `PAUSED_ALL` (from the hook's `pause` records), or one the caller excludes
 with `exclude_wall` (for example its own profiler stop), has no ready work.
 Where a stall sits decides what it can be blamed on:

@@ -300,6 +300,41 @@ def test_async_scheduling_overlap_is_not_a_stall() -> None:
     assert signal.exceeds is False
 
 
+def _idle_then_a_new_request(idle_ns: int) -> list[dict[str, Any]]:
+    """The shape of a real vLLM 0.30.0 run under async scheduling: request a
+    runs and finishes, an empty step follows, the engine idles with nothing
+    to run, then request b arrives, and each of its steps is scheduled 3 ms
+    before the one before it completes."""
+    records: list[dict[str, Any]] = [hello("engine", 2600, 1)]
+    ends = [T + (index + 1) * CADENCE for index in range(30)]
+    for index, end in enumerate(ends):
+        last = index == len(ends) - 1
+        records.append(scheduled(index, end - CADENCE - 3 * MS, _decode("a")))
+        finish = "length" if last else None
+        records.append(completed(index, end, [done("a", finish_reason=finish)]))
+    records.append(scheduled(30, ends[-1] - 3 * MS, []))
+    records.append(completed(30, ends[-1] + MS, []))
+    end = ends[-1] + MS + idle_ns + CADENCE
+    records.append(scheduled(31, end - CADENCE, _decode("b")))
+    records.append(completed(31, end, [done("b")]))
+    for index in range(32, 62):
+        records.append(scheduled(index, end - 3 * MS, _decode("b")))
+        end += CADENCE
+        records.append(completed(index, end, [done("b")]))
+    records.sort(key=lambda r: r.get("start_mono_ns", r.get("mono_ns", 0)))
+    return _sequenced(records)
+
+
+def test_an_idle_engine_before_an_async_request_is_not_a_stall() -> None:
+    """Request b's second step is scheduled before its first completes, so
+    the latest completion before it is a's, before the idle stretch. Work is
+    ready only when a request ran in the step whose completion starts the
+    stretch: here none did, and 2 s of idling is no stall."""
+    signal = engine_loop_gap(_idle_then_a_new_request(2_000 * MS))
+    assert signal.exceeds is False
+    assert signal.value is not None and signal.value < 50 * MS
+
+
 def test_async_late_schedule_call_is_a_host_stall() -> None:
     signal = engine_loop_gap(_async_loop(60, late_after=40))
     assert signal.exceeds is True
