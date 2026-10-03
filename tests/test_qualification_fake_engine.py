@@ -11,7 +11,13 @@ import pytest
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
 from examples.qualification.fake_engine.blocks import BlockPool
-from examples.qualification.fake_engine.engine import TEMPLATE_TOKENS
+from examples.qualification.fake_engine.engine import (
+    TEMPLATE_TOKENS,
+    Engine,
+    FakeRequest,
+    Step,
+    prompt_tokens,
+)
 from tests.qualification_fake_engine_helpers import (
     chat,
     chats_in_background,
@@ -239,3 +245,51 @@ def test_a_resets_victims_are_listed_in_the_next_steps_preempted() -> None:
     listed = [step for step in later if step.preempted]
     assert listed, "no step listed the reset's victims"
     assert sorted(listed[0].preempted) == victims
+
+
+def _stepped_engine(*, num_gpu_blocks: int = 64) -> Engine:
+    """An engine whose steps a test drives by hand: its loop never starts."""
+    config = FakeEngineConfig(
+        block_size=4, num_gpu_blocks=num_gpu_blocks, max_num_batched_tokens=256
+    )
+    return Engine(config)
+
+
+def _request(engine: Engine, name: str, prompt: str, max_tokens: int) -> FakeRequest:
+    return engine.submit(
+        FakeRequest(
+            internal_id=f"{name}-0a1b2c3d",
+            external_id=name,
+            prompt=prompt_tokens(prompt),
+            max_tokens=max_tokens,
+            arrival_ns=time.time_ns(),
+        )
+    )
+
+
+def _step(engine: Engine) -> Step:
+    step = engine._schedule()
+    assert step is not None
+    engine._complete(step)
+    return step
+
+
+def _preempt(engine: Engine, request: FakeRequest) -> None:
+    with engine._lock:
+        engine.running.remove(request)
+        engine._preempt(request, [])
+
+
+def test_a_resumed_request_reuses_its_own_generated_blocks() -> None:
+    # vLLM hashes and caches every full block, generated tokens included, so a
+    # request resumed after preemption hits blocks past its prompt.
+    engine = _stepped_engine()
+    request = _request(engine, "r", words(6, "p"), max_tokens=20)
+    while request.output_tokens < 9:
+        _step(engine)
+    _preempt(engine, request)
+    step = engine._schedule()
+    assert step is not None
+    (member,) = step.members
+    assert request.prompt_len == 10
+    assert member.computed_before == 16

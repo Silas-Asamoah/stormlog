@@ -25,6 +25,8 @@ from .stats import EngineStats, StatsSnapshot, snapshot
 
 # A fixed chat-template prefix, as a server's template adds to every prompt.
 TEMPLATE_TOKENS = ("<|im_start|>", "user", "\n", "<|im_end|>")
+# Every sampled token; its blocks still hash apart, as hashes chain.
+GENERATED_TOKEN = "tok"
 STATUS_FOR_REASON = {
     "length": "FINISHED_LENGTH_CAPPED",
     "stop": "FINISHED_STOPPED",
@@ -67,6 +69,11 @@ class FakeRequest:
     @property
     def num_tokens(self) -> int:
         return self.prompt_len + self.output_tokens
+
+    @property
+    def tokens(self) -> tuple[str, ...]:
+        """The prompt and every sampled token, as vLLM's block hashes see them."""
+        return self.prompt + (GENERATED_TOKEN,) * self.output_tokens
 
     @property
     def finished(self) -> bool:
@@ -337,6 +344,8 @@ class Engine:
             self.waiting and budget > 0 and len(self.running) < self.config.max_num_seqs
         ):
             request = self.waiting[0]
+            # A resumed request can reuse its generated blocks too.
+            request.block_hashes = self.pool.block_hashes(request.tokens)
             cached = self.pool.lookup(request.block_hashes, request.num_tokens)
             self.pool.touch(cached)
             request.block_ids = list(cached)
@@ -454,7 +463,11 @@ class Engine:
             freed.append(request)
 
     def _cache_full_blocks(self, request: FakeRequest) -> None:
-        full = min(request.computed, request.prompt_len) // self.config.block_size
+        """Cache every full computed block, generated tokens included, as
+        vLLM does."""
+        full = request.computed // self.config.block_size
+        if len(request.block_hashes) < full:
+            request.block_hashes = self.pool.block_hashes(request.tokens)
         for index in range(min(full, len(request.block_hashes))):
             self.pool.cache(request.block_ids[index], request.block_hashes[index])
 
@@ -536,6 +549,7 @@ class Engine:
 
 
 __all__ = [
+    "GENERATED_TOKEN",
     "TEMPLATE_TOKENS",
     "Engine",
     "EngineObserver",

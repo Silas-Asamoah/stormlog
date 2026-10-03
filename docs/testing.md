@@ -148,8 +148,10 @@ series vLLM exports:
   prefill.
 - **KV blocks.** When they run out, the newest running request is preempted
   and recomputed, as vLLM's scheduler does.
-- **Prefix cache.** Freed blocks keep their hashes in an LRU queue, so a shared
-  prefix is reused until other traffic evicts it.
+- **Prefix cache.** Every full block is hashed and cached, generated tokens
+  included, so a request resumed after preemption reuses blocks past its
+  prompt. Freed blocks keep their hashes in an LRU queue, so a shared prefix is
+  reused until other traffic evicts it.
 
 Nothing is computed: each step sleeps for a simulated cost. Prompts are counted
 as whitespace words plus a fixed four-token chat template.
