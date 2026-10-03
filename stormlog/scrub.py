@@ -517,8 +517,17 @@ _JSON_SHORT = {
 
 
 def _spellings(value: str) -> re.Pattern[str]:
-    """A lookahead matching every spelling of ``value`` that KnownSecrets covers."""
-    options = ["".join(_char_spellings(char) for char in value)]
+    """A lookahead matching every spelling of ``value`` that KnownSecrets covers.
+
+    The value as given is one alternative on its own. In the per-character
+    spellings a backslash is never plain, only escaped: a plain backslash
+    and the first half of an escaped one would both match each backslash
+    of a run, and backtracking over the choices is exponential in the run.
+    """
+    options = [
+        re.escape(value),
+        "".join(_char_spellings(char) for char in value),
+    ]
     raw = value.encode("utf-8", "surrogatepass")
     for encoded in (base64.b64encode(raw), base64.urlsafe_b64encode(raw)):
         text = encoded.decode("ascii")
@@ -530,8 +539,11 @@ def _spellings(value: str) -> re.Pattern[str]:
 
 
 def _char_spellings(char: str) -> str:
-    """One character as given, percent-encoded or JSON-escaped."""
-    options = [re.escape(char)]
+    """One character as given, percent-encoded or JSON-escaped.
+
+    A backslash is never given plain here; see ``_spellings``.
+    """
+    options = [] if char == BACKSLASH else [re.escape(char)]
     options.append(
         "".join("%" + _hex(byte, 2) for byte in char.encode("utf-8", "surrogatepass"))
     )

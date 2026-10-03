@@ -68,11 +68,15 @@ partly encoded is still found. These are not covered:
 - double encoding, such as `%252F`;
 - base64 of a longer string that contains the value, where it starts at
   another offset;
-- HTML entities and other character encodings, such as UTF-16.
+- HTML entities and other character encodings, such as UTF-16;
+- a value holding a backslash, partly encoded with that backslash left
+  plain. The value as given, and its fully JSON-escaped spelling, are
+  found; mixing the two would make matching exponential in a run of
+  backslashes.
 
 Finding every spelling costs more than a plain search: about 30 ms per
-megabyte for each value. Exporters redact bounded strings, and `scrub_text`
-bounds its input first.
+megabyte for each value, whatever the value holds. Exporters redact bounded
+strings, and `scrub_text` bounds its input first.
 
 A Basic authorization header encodes `user:password` as one string, so
 `url_secrets(url)` returns that pair alongside the password itself, decoded

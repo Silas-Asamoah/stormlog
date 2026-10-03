@@ -118,6 +118,34 @@ def test_known_secrets_redact_equivalent_escapes(value: str, form: str) -> None:
     assert secrets.redact(f"[{form}]") == "[<redacted>]"
 
 
+def test_a_value_with_a_run_of_backslashes_is_matched_in_linear_time() -> None:
+    # Each backslash could be a plain one or half of an escaped one; a
+    # pattern that tries both backtracks exponentially in the run's length.
+    code = (
+        "import time\n"
+        "from stormlog.scrub import KnownSecrets, scrub_text\n"
+        "value = chr(92) * 24 + 'Z'\n"
+        "secrets = KnownSecrets([value])\n"
+        "started = time.perf_counter()\n"
+        "scrub_text(chr(92) * 5000, max_bytes=1024, secrets=secrets)\n"
+        "print(time.perf_counter() - started)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=20
+    )
+    assert result.returncode == 0, result.stderr
+    assert float(result.stdout) < 1.0
+
+
+def test_a_value_with_backslashes_is_found_plain_and_escaped() -> None:
+    value = "ab" + BACKSLASH * 2 + "cd-secret"
+    secrets = KnownSecrets([value])
+    plain = f"x {value} y"
+    escaped = "x ab" + BACKSLASH * 4 + "cd-secret y"
+    assert secrets.redact(plain) == "x <redacted> y"
+    assert secrets.redact(escaped) == "x <redacted> y"
+
+
 def test_known_secrets_replace_a_longer_value_whole() -> None:
     # One value contains another; replacing the shorter one first would
     # leave the rest of the longer one behind.
