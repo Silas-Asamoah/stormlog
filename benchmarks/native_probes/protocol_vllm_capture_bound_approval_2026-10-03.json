@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_protocol_vllm_capture_bound_approval",
+  "issue": 118,
+  "proposal_path": "benchmarks/native_probes/protocol_vllm_capture_bound_proposal_2026-10-03.json",
+  "proposal_sha256": "242d461bbc8efcbd6f4cdc77b2b31ed31268b9859bb782f9f52573a86fdcc552",
+  "approval_source": "user reply 'Approve the 4 GiB cap and helper hashes' on 2026-10-03",
+  "approved_scope": "vllm_direct_cupti_nominal_encoded_output_bound_4294967296_bytes_per_process",
+  "helper_source_sha256": "51e8fc43ffca33cc5ec3cb1adde09e458fbcee11301e57a5979664429458f204",
+  "helper_binary_sha256": "70569ef7f94110e503fc7d5f9ff9bd2cfe41e7296195f9466683650cfd86b4ac",
+  "numeric_acceptance_policy_and_vllm_workload_unchanged": true,
+  "w4_setpoints_unchanged": true,
+  "final_trials_authorized_only_after_hardware_preflight": true,
+  "final_trials_started": false,
+  "status": "approved_pending_implementation_validation_and_hardware_preflight"
+}
