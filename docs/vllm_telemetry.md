@@ -167,6 +167,50 @@ prefix (`vllm:kv_offload_*`, `vllm:spec_decode_*`, `vllm:diffusion_*`): those
 are listed as `optional_present` and kept raw. A retired name is normalised
 under its successor, kept as `deprecated_alias_of`, and listed as retired.
 
+### Windows of scrapes
+
+`stormlog.infer.scrape_window` aggregates any window of scrapes the caller
+chooses, for one `engine` label, and is what windowed analyses use (online
+triggers and the incident diagnoser). It follows the rules above and adds
+two:
+
+- **Consecutive deltas.** A counter's or histogram's change over the window
+  is the sum of its changes between consecutive scrapes. A value that went
+  backwards between two interior scrapes is `counter_reset` even when the
+  window's first and last values look consistent; the case blocks above,
+  which compare only the phase-start and phase-end scrapes, cannot see that.
+- **Sample intervals.** A scrape sampled the server at some instant between
+  its stamp (`observed_at_ns`) and its response. A window's duration is
+  measured between the first and last scrapes' interval midpoints, and rates
+  carry the bounds the intervals allow. A scrape bounded only by its
+  `duration_ms` misses the fetch thread's start delay, so its window says
+  `placement: approximate`.
+
+A series that more than one label set matches, such as
+`vllm:num_requests_waiting_by_reason` without a `reason`, is
+`ambiguous_series` rather than a sum, and a scrape with several engines needs
+the engine named (`engine_required`). The window is checked as a whole, not
+family by family: a signal that divides one family by another would otherwise
+read each from whichever engine exported it. A series whose labels change
+between scrapes (another model name, say) is a different series, so it is
+never differenced across the change (`series_labels_changed`).
+
+Scrapes must be given in strictly increasing stamp order
+(`scrapes_out_of_order`, `duplicate_scrape_time`), and nothing is differenced
+when they are not. Their sample midpoints must increase too: a quick scrape
+inside a slow one's interval may have sampled first, so it is
+`scrapes_out_of_order` as well. A failed scrape inside a window leaves fewer
+samples, and counters are differenced across it; a failed first or last scrape
+shortens the window the caller chose, so the window is `scrape_failed`. Each
+change of a histogram between consecutive scrapes must itself be a histogram:
+cumulative counts that never fall as the boundary rises, none above the change
+in `_count`, and the `+Inf` bucket equal to it. Two scrapes that are each
+valid can differ by a change that is not one, and its shares would fall
+outside 0 to 1, so such a window is `histogram_inconsistent`. A histogram's
+share of observations above a value, and the bucket holding a quantile, are
+reported as bounds between bucket boundaries; a quantile in the `+Inf` bucket
+has no upper bound (`quantile_in_overflow_bucket`).
+
 ## Metric map
 
 Residency means wall-clock time in a scheduler phase, measured on the

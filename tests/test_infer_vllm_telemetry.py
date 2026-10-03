@@ -136,6 +136,8 @@ class TestScrapeRecord:
             {"observed_at_ns": 0},
             {"interval_ms": 0},
             {"duration_ms": -1.0},
+            {"duration_ms": float("nan")},
+            {"duration_ms": float("inf")},
             {"case_id": ""},
             {"http_status": -1},
             {"clock_domain": ""},
