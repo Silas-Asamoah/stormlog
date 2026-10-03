@@ -79,6 +79,10 @@ class SignalConfig:
     thresholds: Mapping[str, float] = field(default_factory=dict)
     reference: float | None = None
 
+    def __post_init__(self) -> None:
+        if self.reference is not None and not 0.0 <= self.reference <= 1.0:
+            raise ValueError("reference must be a hit ratio between 0 and 1")
+
 
 @dataclass(frozen=True)
 class SignalValue:

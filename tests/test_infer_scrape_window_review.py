@@ -3,7 +3,9 @@ duplicate stamps, inconsistent histograms and an invalid reference."""
 
 from __future__ import annotations
 
-from stormlog.infer.diagnosis_signals import evaluate_signal
+import pytest
+
+from stormlog.infer.diagnosis_signals import SignalConfig, evaluate_signal
 from stormlog.infer.scrape_window import (
     REASON_DUPLICATE_TIME,
     REASON_HISTOGRAM_INCONSISTENT,
@@ -103,3 +105,9 @@ def test_a_histogram_whose_count_disagrees_with_its_inf_bucket_is_refused() -> N
     share = histogram_share_above(series([start, end]), E2E, 0.1)
     assert share.reasons == (REASON_HISTOGRAM_INCONSISTENT,)
     assert share.lo is None and share.hi is None
+
+
+@pytest.mark.parametrize("reference", [-0.1, 1.5, float("nan")])
+def test_a_prefix_reference_outside_zero_to_one_is_refused(reference: float) -> None:
+    with pytest.raises(ValueError, match="reference"):
+        SignalConfig(reference=reference)
