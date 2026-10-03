@@ -21,7 +21,8 @@ from stormlog.infer.scrape_window import (
     histogram_quantile_bounds,
     histogram_share_above,
 )
-from tests.vllm_scrape_helpers import LABELS, exposition, scrape, series
+from stormlog.infer.vllm_telemetry import VllmScrapeRecord
+from tests.vllm_scrape_helpers import LABELS, START, exposition, scrape, series
 
 PREEMPTIONS = "vllm:num_preemptions_total"
 HITS = "vllm:prefix_cache_hits_total"
@@ -238,3 +239,42 @@ def test_a_signal_never_combines_two_engines_families() -> None:
 def test_one_engine_needs_no_name() -> None:
     window = series([exposition(gauges={WAITING: 9})] * 2)
     assert check_window(window).sufficient
+
+
+def _refused_windows() -> dict[str, list[VllmScrapeRecord]]:
+    """Windows the window layer refuses, each with every family the three
+    metric signals read, on one engine unless the case is about engines."""
+
+    def text(i: float, start: float = START) -> str:
+        return exposition(
+            gauges={WAITING: 5.0},
+            counters={PREEMPTIONS: i, HITS: i, QUERIES: 10 * i},
+            start=start,
+        )
+
+    return {
+        "failed_first": series([None, text(0), text(2)]),
+        "failed_last": series([text(0), text(2), None]),
+        "out_of_order": [scrape(text(2), 2.0), scrape(text(0), 1.0)],
+        "one_instant": [scrape(text(0), 1.0), scrape(text(2), 1.0)],
+        "midpoints_inverted": [
+            scrape(text(0), 0.0, duration_ms=20_000),
+            scrape(text(2), 1.0),
+        ],
+        "restarted": series([text(0), text(2, start=1_790_000_900.0)]),
+        "two_engines": series([_split_engines(0.0, 0.0), _split_engines(5.0, 10.0)]),
+    }
+
+
+@pytest.mark.parametrize("window", sorted(_refused_windows()))
+@pytest.mark.parametrize(
+    "kind", ["queue_saturation", "kv_preemption_pressure", "prefix_cache_loss"]
+)
+def test_every_signal_abstains_over_a_refused_window(kind: str, window: str) -> None:
+    # The composed path a trigger takes: evaluate_signal runs check_window
+    # first, so a window it refuses never reaches a verdict.
+    signal = evaluate_signal(
+        kind, _refused_windows()[window], SignalConfig(reference=0.8)
+    )
+    assert (signal.sufficient, signal.exceeds) == (False, None)
+    assert signal.reason is not None
