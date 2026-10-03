@@ -594,3 +594,60 @@ def test_reserved_uri_characters_in_a_file_name_open_that_file(tmp_path: Path) -
 
     assert events == {name: 5 for name in names}
     assert {p.name for p in tmp_path.iterdir()} == {"other.sqlite", *names}
+
+
+def _with_device_uuid_column(
+    path: Path, pid: int, gpu_id: int | None, uuid: str
+) -> Path:
+    """Give TARGET_INFO_CUDA_DEVICE the optional ``uuid`` column for one row."""
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("alter table TARGET_INFO_CUDA_DEVICE add column uuid text")
+        db.execute(
+            "update TARGET_INFO_CUDA_DEVICE set gpuId = ?, uuid = ? where pid = ?",
+            (gpu_id, uuid, pid),
+        )
+        db.commit()
+    return path
+
+
+def test_a_device_row_names_its_gpu_by_uuid_without_a_gpu_id(tmp_path: Path) -> None:
+    path = _with_device_uuid_column(
+        _export(tmp_path / "run.sqlite"), 200, None, "GPU-cccc-2222"
+    )
+
+    capture = TraceFileCollector([path]).collect(run_id="r", session_id="s")
+
+    assert capture.summary is not None
+    summary = capture.summary["traces"][0]
+    device = summary["devices"]["200/0"]
+    assert (device["device_uuid"], device["device_uuid_source"]) == (
+        "GPU-cccc-2222",
+        "trace",
+    )
+    assert summary["notes"] == []
+
+
+def test_a_device_uuid_that_matches_a_listed_gpu_takes_its_name(tmp_path: Path) -> None:
+    path = _with_device_uuid_column(
+        _export(tmp_path / "run.sqlite"), 200, None, "aaaa-0000"
+    )
+
+    trace = load_nsys_sqlite(path)
+
+    named = {
+        (e.pid, e.device_uuid, e.device_name) for e in trace.gpu_events if e.pid == 200
+    }
+    assert named == {(200, "GPU-aaaa-0000", "NVIDIA A30")}
+
+
+def test_a_device_row_naming_two_gpus_is_refused(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    path = _with_device_uuid_column(
+        _export(tmp_path / "run.sqlite"), 200, 0, "GPU-cccc-2222"
+    )
+
+    with pytest.raises(ValueError, match="both GPU-cccc-2222 and GPU 0"):
+        load_nsys_sqlite(path)
+    assert main(["import-trace", str(artifact), str(path)]) == int(
+        ExitCode.INVALID_INPUT
+    )

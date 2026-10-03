@@ -180,16 +180,57 @@ def _devices(db: sqlite3.Connection, tables: set[str]) -> _Devices:
     # process used, whatever its CUDA_VISIBLE_DEVICES.
     devices = _Devices(only_gpu=next(iter(gpus.values())) if len(gpus) == 1 else None)
     if "TARGET_INFO_CUDA_DEVICE" in tables:
-        query = "select pid, cudaId, gpuId from TARGET_INFO_CUDA_DEVICE"
-        for pid, cuda_id, gpu_id in db.execute(query):
-            if None not in (pid, cuda_id, gpu_id) and int(gpu_id) in gpus:
-                devices.by_process[(int(pid), int(cuda_id))] = gpus[int(gpu_id)]
+        devices.by_process = _process_devices(db, gpus)
     elif len(gpus) > 1:
         devices.note = (
             "this export does not say which GPU each process's CUDA devices "
             "are; re-export the report with nsys 2025.1 or later to name them"
         )
     return devices
+
+
+GpuEntry = tuple[str | None, str | None]
+
+
+def _process_devices(
+    db: sqlite3.Connection, gpus: dict[int, GpuEntry]
+) -> dict[tuple[int, int], GpuEntry]:
+    """Each process's CUDA ordinal mapped to its GPU by TARGET_INFO_CUDA_DEVICE.
+
+    ``gpuId`` points at a ``TARGET_INFO_GPU`` row. NVIDIA's schema reference
+    also lists an optional ``uuid`` column that names the GPU directly, even
+    when ``gpuId`` is NULL; the nsys 2025.1 and 2025.6 exports seen so far
+    carried only ``gpuId``, so which exporters write it is unverified.
+    """
+    columns = _columns(db, "TARGET_INFO_CUDA_DEVICE")
+    uuid_column = "uuid" if "uuid" in columns else "NULL"
+    query = f"select pid, cudaId, gpuId, {uuid_column} from TARGET_INFO_CUDA_DEVICE"
+    mapping: dict[tuple[int, int], GpuEntry] = {}
+    for pid, cuda_id, gpu_id, uuid in db.execute(query):
+        entry = _device_row(gpus, gpu_id, uuid, f"process {pid}'s device {cuda_id}")
+        if pid is not None and cuda_id is not None and entry is not None:
+            mapping[(int(pid), int(cuda_id))] = entry
+    return mapping
+
+
+def _device_row(
+    gpus: dict[int, GpuEntry], gpu_id: Any, uuid: Any, what: str
+) -> GpuEntry | None:
+    """The GPU a device row names: by its own ``uuid``, else by ``gpuId``.
+
+    A row that names two different GPUs is not read either way.
+    """
+    listed = gpus.get(int(gpu_id)) if gpu_id is not None else None
+    direct = _nvml_uuid(uuid)
+    if direct is None:
+        return listed
+    if listed is not None and listed[0] not in (None, direct):
+        raise ValueError(
+            "malformed Nsight Systems SQLite export: TARGET_INFO_CUDA_DEVICE "
+            f"names {what} both {direct} and GPU {gpu_id} ({listed[0]})"
+        )
+    names = {gpu_uuid: name for gpu_uuid, name in gpus.values()}
+    return direct, names.get(direct, listed[1] if listed else None)
 
 
 def _unnamed_devices_note(events: list[GpuEvent]) -> list[str]:

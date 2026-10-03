@@ -304,6 +304,11 @@ stormlog infer import-trace infer.jsonl run.sqlite
   every GPU on the host. With several GPUs, the devices stay unmeasured and the
   import says to re-export the report with a newer nsys, which adds the
   mapping. Any device the report does not name is listed in a summary note.
+  NVIDIA's schema reference also lists an optional `uuid` column in that
+  mapping table, which names a process's device directly even without a GPU
+  id; it is read when present. The 2025.1 and 2025.6 exports checked carried
+  only the GPU id, so which exporters write it is unverified. A row that
+  names two different GPUs makes the export invalid.
 - **`--device-uuid` only fills gaps.** It is used for a device the report does
   not name. A UUID that contradicts the report's is refused, and a UUID the
   report names cannot be overridden. An ordinal given for a device the report
