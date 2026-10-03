@@ -276,7 +276,7 @@ running the command twice adds nothing twice.
 `elapsed_ns` is the scheduler residence from `schedule()` to the processed
 output; one `infer.membership` per (request, attempt, iteration, role),
 whose role follows vLLM's `phase` (`context` is `prefill`, `generation` is
-`decode`, a step with drafts is `spec_decode`, no phase is `unknown`), with
+`decode` or, with drafts scheduled, `spec_decode`; no phase is `unknown`), with
 the step's token counts, outcome and, for the step a request was freed in,
 its finish; one `infer.request` per backend execution, holding admission
 facts only; and one `infer.clock_alignment` per epoch from the hello's

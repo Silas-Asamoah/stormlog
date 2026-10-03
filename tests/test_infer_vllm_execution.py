@@ -680,3 +680,23 @@ def test_the_role_follows_vllm_phase_not_the_token_counts(tmp_path: Path) -> Non
     assert memberships[(OWN1, "0")].role == "unknown"  # no phase: not guessed
     assert memberships[(OWN0, "1")].role == "decode"  # phase wins over counts
     assert result.summary["epochs"][EPOCH]["config"]["v2_model_runner"] is True
+
+
+def test_drafts_make_spec_decode_only_in_generation(tmp_path: Path) -> None:
+    records = [
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 10),
+        alias(OWN1, f"chatcmpl-{X1}", T0 - 9),
+        scheduled(
+            0,
+            T0,
+            [
+                member(OWN0, scheduled=4, sighting="repeat", drafts=3),
+                # Resumed with drafts in flight: still context for the step.
+                member(OWN1, scheduled=4, sighting="repeat", phase="context", drafts=3),
+            ],
+        ),
+        completed(0, T0 + SECOND, [done(OWN0), done(OWN1)]),
+    ]
+    engine_log(tmp_path, records)
+    roles = {_attempt(m): m.role for m in _memberships(_reduce(tmp_path))}
+    assert roles == {OWN0: "spec_decode", OWN1: "prefill"}

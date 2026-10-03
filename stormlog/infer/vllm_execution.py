@@ -729,9 +729,10 @@ def _members(record: RawRecord | None) -> list[dict[str, Any]]:
 def _role(member: dict[str, Any]) -> str:
     """vLLM's own phase decides the role, never the token counts: a request
     resumed after preemption recomputes past its prompt and is still context."""
-    if (_integer(member.get("drafts_scheduled")) or 0) > 0:
-        return ROLE_SPEC_DECODE
     phase = _text(member.get("phase"))
+    drafts = _integer(member.get("drafts_scheduled")) or 0
+    if phase == "generation" and drafts > 0:
+        return ROLE_SPEC_DECODE
     return _ROLE_BY_PHASE.get(phase, ROLE_UNKNOWN) if phase else ROLE_UNKNOWN
 
 
