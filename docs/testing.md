@@ -170,6 +170,11 @@ with FakeEngine(config) as engine:
     ...  # engine.endpoint, engine.metrics_url, engine.base_url
 ```
 
+It listens with uvicorn's backlog of 2048, as vLLM's API server does, so a
+burst of clients is never refused. `engine.server_errors` keeps the traceback
+of any exception a request handler raised, for a test to assert there were
+none.
+
 To run it as its own process, so that signals reach it:
 
 ```bash

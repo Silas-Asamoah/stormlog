@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from functools import partial
+from typing import Callable
 
 import pytest
 
@@ -394,3 +396,51 @@ def test_a_request_is_admitted_before_the_loop_can_schedule_it() -> None:
     engine.observers.append(witness)
     _request(engine, "r", words(6, "p"), max_tokens=1)
     assert witness.schedulable_at_admit == [False]
+
+
+def _calls(actions: list[Callable[[], object]]) -> list[str]:
+    """Run every action at once; the errors any of them raised."""
+    errors: list[str] = []
+
+    def run(action: Callable[[], object]) -> None:
+        try:
+            action()
+        except Exception as error:  # every failure is the finding
+            errors.append(repr(error))
+
+    threads = [threading.Thread(target=run, args=(action,)) for action in actions]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+    return errors
+
+
+def test_a_burst_of_connections_is_never_reset() -> None:
+    # The stdlib server listens with a backlog of 5, so a burst of connects
+    # overflowed it and the client saw "Connection reset by peer"; vLLM's
+    # uvicorn listens with 2048.
+    with FakeEngine(FAST) as engine:
+        health = partial(get, f"{engine.base_url}/health")
+        errors = [error for _ in range(3) for error in _calls([health] * 100)]
+        server_errors = list(engine.server_errors)
+    assert (errors, server_errors) == ([], [])
+
+
+def test_resets_while_requests_run_break_no_connection() -> None:
+    config = FakeEngineConfig(
+        step_seconds=0.0005, decode_token_seconds=0.0001, max_num_seqs=64
+    )
+    with FakeEngine(config) as engine:
+        reset = partial(
+            post, f"{engine.base_url}/reset_prefix_cache?reset_running_requests=true"
+        )
+        chats = [
+            partial(chat, engine, words(6, f"r{index}"), max_tokens=200)
+            for index in range(8)
+        ]
+        errors = _calls([*chats, *[reset] * 40])
+        finished = list(engine.engine.finished)
+        server_errors = list(engine.server_errors)
+    assert (errors, server_errors) == ([], [])
+    assert {request.output_tokens for request in finished} == {200}

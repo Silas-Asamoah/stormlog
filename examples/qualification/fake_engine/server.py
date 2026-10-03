@@ -9,6 +9,7 @@ import secrets
 import socket
 import threading
 import time
+import traceback
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
@@ -42,6 +43,8 @@ class FakeEngine:
         self.hook: HookLog | None = None
         self.profiler: FakeProfiler | None = None
         self.spans: SpanExporter | None = None
+        # Each exception a request handler raised, with its traceback.
+        self.server_errors: list[str] = []
 
     # ------------------------------------------------------------ lifecycle
 
@@ -201,7 +204,15 @@ class FakeEngine:
 
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
+    # uvicorn's backlog, which vLLM's API server keeps; the stdlib's 5 resets
+    # connections in any burst of concurrent clients.
+    request_queue_size = 2048
     fake: FakeEngine
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """Print the handler's exception, as the stdlib does, and keep it."""
+        self.fake.server_errors.append(traceback.format_exc())
+        super().handle_error(request, client_address)
 
 
 Route = Callable[["_Handler"], None]
