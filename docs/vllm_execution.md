@@ -302,7 +302,12 @@ file is missing or unreadable cannot key a pseudonym, so without
 their memberships and requests are not written, steps that held only their
 requests are not kept, the import summary counts what was withheld and
 says `withheld` instead of `hmac-sha256-keyed`, and a kept step still counts
-them in `withheld_members`. A reused internal
+them in `withheld_members`. The scheme an epoch was first imported with is
+recorded in the import summary and fixed: a later import of that epoch that
+would switch between pseudonyms and `--raw-foreign-ids` is refused before
+anything is appended, since the same execution would get a second request;
+a withheld epoch wrote no such identity, so any later scheme may follow it.
+A reused internal
 ID (randomization off) is split into one execution per admission, also
 across imports.
 

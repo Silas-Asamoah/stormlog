@@ -39,10 +39,13 @@ from .correlation_events import (
 from .errors import InferInputError, InferUsageError
 from .trace_import import artifact_run_identity
 from .vllm_execution import (
+    SCHEME_RAW,
+    SCHEME_WITHHELD,
     ReduceOptions,
     RunFacts,
     RunRequest,
     Window,
+    foreign_scheme,
     reduce_execution_log,
 )
 from .vllm_execution_log import (
@@ -80,9 +83,60 @@ def import_execution_into_artifact(
     records = _load_records(artifact)
     facts = run_facts_from_records(records, run_id, session_id)
     read = _read_log(directory, execution_high_water(records), now_ns)
+    _check_foreign_schemes(read, execution_foreign_schemes(records), raw_foreign_ids)
     capture = reduce_to_capture(read, facts, ReduceOptions(raw_foreign_ids))
     _append_capture(artifact, run_id, session_id, capture, envelope_path)
     return capture
+
+
+def _execution_summaries(records: Iterable[InferenceRecord]) -> list[dict[str, Any]]:
+    """Every execution import's summary, in artifact order."""
+    summaries = []
+    for record in records:
+        if (
+            not isinstance(record, CapabilityEvent)
+            or record.component != "engine_adapter"
+        ):
+            continue
+        summary = record.metadata.get("summary") or {}
+        execution = summary.get("execution") if isinstance(summary, dict) else None
+        if isinstance(execution, dict):
+            summaries.append(execution)
+    return summaries
+
+
+def execution_foreign_schemes(records: Iterable[InferenceRecord]) -> dict[str, str]:
+    """How each epoch's other clients were written by earlier imports."""
+    schemes: dict[str, str] = {}
+    for execution in _execution_summaries(records):
+        for epoch, summary in (execution.get("epochs") or {}).items():
+            scheme = summary.get("foreign_ids") if isinstance(summary, dict) else None
+            if isinstance(scheme, str) and scheme:
+                schemes[str(epoch)] = scheme
+    return schemes
+
+
+def _check_foreign_schemes(
+    read: LogRead, recorded: dict[str, str], raw_foreign_ids: bool
+) -> None:
+    """Refuse to mix raw IDs and pseudonyms within one epoch.
+
+    An attempt written under one scheme cannot be found under the other, so
+    the same backend execution would get a second request and split
+    memberships. A withheld epoch wrote no other client's identity, so any
+    later scheme may follow it, and withholding may follow either.
+    """
+    for epoch in read.engines():
+        before = recorded.get(epoch.epoch)
+        now = foreign_scheme(epoch, raw_foreign_ids)
+        if before in (None, now) or SCHEME_WITHHELD in (before, now):
+            continue
+        hint = "--raw-foreign-ids" if before == SCHEME_RAW else "no --raw-foreign-ids"
+        raise InferInputError(
+            f"{epoch.epoch}: other clients' IDs were imported as {before}; this "
+            f"import would write them as {now}, which would duplicate their "
+            f"requests. Import this epoch with {hint}, as before."
+        )
 
 
 def record_failed_execution_import(
@@ -363,6 +417,7 @@ def _text(value: Any) -> str | None:
 __all__ = [
     "SOURCE",
     "SUPPORTED",
+    "execution_foreign_schemes",
     "execution_high_water",
     "flush_execution_log",
     "import_execution_into_artifact",

@@ -36,6 +36,7 @@ from stormlog.session import create_session_summary
 from tests.vllm_execution_helpers import (
     BOOT,
     HOST,
+    KEY,
     SECOND,
     WALL_OFFSET,
     alias,
@@ -253,6 +254,113 @@ def test_an_alias_read_again_keeps_its_attempt(tmp_path: Path) -> None:
     assert resolve_inference_events(records).unresolved == ()
     # A third import, with nothing new, adds nothing.
     assert import_execution_into_artifact(artifact, hook, now_ns=NOW).events == ()
+
+
+def _mixed_scheme_log(hook: Path, *, key: bytes | None = KEY) -> list[dict[str, Any]]:
+    first = [
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 10),
+        alias(OTHER, "chatcmpl-stormlog-run-9-c1_x_0", T0 - 9),
+        scheduled(0, T0, [member(OWN0, scheduled=8), member(OTHER, scheduled=8)]),
+        completed(0, T0 + SECOND, [done(OWN0), done(OTHER)]),
+        heartbeat(T0 + SECOND + 5, 5),
+    ]
+    engine_log(hook, first, key=key)
+    return first
+
+
+def _continue_log(
+    hook: Path, first: list[dict[str, Any]], *, key: bytes | None = KEY
+) -> None:
+    engine_log(
+        hook,
+        first
+        + [
+            scheduled(
+                1,
+                T0 + 2 * SECOND,
+                [
+                    member(OWN0, scheduled=1, sighting="repeat"),
+                    member(OTHER, scheduled=1, sighting="repeat"),
+                ],
+            ),
+            completed(1, T0 + 3 * SECOND, [done(OWN0), done(OTHER)]),
+            heartbeat(T0 + 3 * SECOND + 5, 8),
+        ],
+        key=key,
+    )
+
+
+@pytest.mark.parametrize("first_raw", [False, True])
+def test_an_epochs_foreign_id_scheme_is_fixed_by_its_first_import(
+    tmp_path: Path, first_raw: bool
+) -> None:
+    """Pseudonyms then raw IDs (or the reverse) for one epoch would give the
+    same foreign execution two requests and split its memberships
+    (Codex #2): the second import is refused before anything is appended."""
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    hook = tmp_path / "hook"
+    first = _mixed_scheme_log(hook)
+    capture = import_execution_into_artifact(
+        artifact, hook, raw_foreign_ids=first_raw, now_ns=NOW
+    )
+    assert capture.summary is not None
+    assert capture.summary["execution"]["epochs"][EPOCH]["foreign_ids"] == (
+        "raw" if first_raw else "pseudonym"
+    )
+    _continue_log(hook, first)
+    before = artifact.read_text(encoding="utf-8")
+    with pytest.raises(InferInputError, match="would duplicate their requests"):
+        import_execution_into_artifact(
+            artifact, hook, raw_foreign_ids=not first_raw, now_ns=NOW
+        )
+    assert artifact.read_text(encoding="utf-8") == before
+    # The same scheme as before continues the execution, with one request.
+    again = import_execution_into_artifact(
+        artifact, hook, raw_foreign_ids=first_raw, now_ns=NOW
+    )
+    assert [e.EVENT_TYPE for e in again.events] == [
+        "infer.iteration",
+        "infer.membership",
+        "infer.membership",
+    ]
+    records = load_inference_artifact(artifact)
+    foreign = [
+        r
+        for r in records
+        if isinstance(r, RequestEvent) and r.metadata["ownership"] == "foreign"
+    ]
+    assert len(foreign) == 1
+    assert resolve_inference_events(records).unresolved == ()
+
+
+def test_a_withheld_epoch_may_be_imported_under_any_later_scheme(
+    tmp_path: Path,
+) -> None:
+    """Withholding wrote no other client's identity, so nothing can be
+    duplicated when the key turns up or raw IDs are asked for later."""
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    hook = tmp_path / "hook"
+    first = _mixed_scheme_log(hook, key=None)
+    capture = import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    assert capture.summary is not None
+    assert capture.summary["execution"]["epochs"][EPOCH]["foreign_ids"] == "withheld"
+    _continue_log(hook, first, key=KEY)  # the key file is there now
+    later = import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    assert later.summary is not None
+    assert later.summary["execution"]["epochs"][EPOCH]["foreign_ids"] == "pseudonym"
+    assert "infer.request" in [e.EVENT_TYPE for e in later.events]
+
+
+def test_cli_exits_invalid_input_for_a_changed_foreign_id_scheme(
+    tmp_path: Path,
+) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    hook = tmp_path / "hook"
+    first = _mixed_scheme_log(hook)
+    assert main(["import-execution", str(artifact), str(hook)]) == int(ExitCode.OK)
+    _continue_log(hook, first)
+    code = main(["import-execution", str(artifact), str(hook), "--raw-foreign-ids"])
+    assert code == int(ExitCode.INVALID_INPUT)
 
 
 def test_run_facts_come_from_the_artifact(tmp_path: Path) -> None:

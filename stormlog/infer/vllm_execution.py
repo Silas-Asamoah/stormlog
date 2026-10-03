@@ -206,6 +206,23 @@ def reduce_execution_log(
     )
 
 
+SCHEME_PSEUDONYM = "pseudonym"
+SCHEME_RAW = "raw"
+SCHEME_WITHHELD = "withheld"
+
+
+def foreign_scheme(epoch: EpochRead, raw_foreign_ids: bool) -> str:
+    """How an import with these options writes an epoch's other clients:
+    raw IDs, keyed pseudonyms, or nothing (withheld without the key)."""
+    if raw_foreign_ids:
+        return SCHEME_RAW
+    return SCHEME_PSEUDONYM if epoch.key else SCHEME_WITHHELD
+
+
+def _foreign_scheme(epoch: EpochRead, options: ReduceOptions) -> str:
+    return foreign_scheme(epoch, options.raw_foreign_ids)
+
+
 def _pseudonym_scheme(epochs: dict[str, dict[str, Any]], options: ReduceOptions) -> str:
     """What other clients' identities in this import are: keyed pseudonyms,
     raw IDs, or withheld because an epoch's key was missing."""
@@ -705,6 +722,9 @@ class _EpochReducer:
             finish_unattached_seqs=sorted(self.unattached),
             executions=_ownership_counts(self.executions),
             pseudonym_key="epoch" if self.epoch.key else "missing",
+            # How other clients' identities were written; fixed for the
+            # epoch once recorded, since a mix would duplicate their requests.
+            foreign_ids=_foreign_scheme(self.epoch, self.options),
             withheld={
                 "executions": sum(e.withheld for e in self.executions.values()),
                 "memberships": self.counts.get("withheld_memberships", 0),
@@ -931,6 +951,9 @@ def _text(value: Any) -> str | None:
 __all__ = [
     "FOREIGN",
     "OWN",
+    "SCHEME_PSEUDONYM",
+    "SCHEME_RAW",
+    "SCHEME_WITHHELD",
     "REASON_COMPLETED_MISSING",
     "REASON_EPOCH_ENDED",
     "SOURCE",
@@ -943,5 +966,6 @@ __all__ = [
     "RunFacts",
     "RunRequest",
     "Window",
+    "foreign_scheme",
     "reduce_execution_log",
 ]
