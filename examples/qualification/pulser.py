@@ -85,6 +85,30 @@ class Pulse:
         }
 
 
+# vLLM 0.30 titles its processes; a role is found by its title.
+ROLE_TITLES = {
+    "engine_core": "EngineCore",
+    "worker_tp0": "Worker_TP0",
+    "worker_tp1": "Worker_TP1",
+}
+
+
+def discover_roles(api_server_pid: int) -> dict[str, Target]:
+    """The API server and the processes under it, by role: each named by
+    its pid and start time, so a later signal reaches the same process."""
+    server = psutil.Process(api_server_pid)
+    roles = {"api_server": Target.of(api_server_pid, "api_server")}
+    for child in server.children(recursive=True):
+        try:
+            title = " ".join([child.name(), *child.cmdline()])
+        except psutil.Error:
+            continue
+        for role, marker in ROLE_TITLES.items():
+            if marker in title and role not in roles:
+                roles[role] = Target.of(child.pid, role)
+    return roles
+
+
 def check_schedule(pulse_seconds: float, period_seconds: float) -> None:
     """Refuse a pulse longer than 2 s, or a duty cycle above 50%."""
     if not 0 < pulse_seconds <= MAX_PULSE_SECONDS:
@@ -241,6 +265,8 @@ __all__ = [
     "PulseRefused",
     "Pulser",
     "Target",
+    "ROLE_TITLES",
     "check_schedule",
+    "discover_roles",
     "watchdog",
 ]

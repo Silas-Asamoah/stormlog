@@ -507,6 +507,11 @@ F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
 Each pulse's stop, confirmation and continue times are kept, so effect timing
 can start from the first confirmed stop.
 
+`discover_roles(api_server_pid)` names the processes under a vLLM API server by
+the titles vLLM 0.30 gives them: `EngineCore`, `Worker_TP0`, `Worker_TP1`.
+Each is returned as a target with its start time, so a later signal reaches
+the same process.
+
 ### Neighbor traffic
 
 `examples.qualification.neighbor` injects another tenant's load: F1, F2 and
