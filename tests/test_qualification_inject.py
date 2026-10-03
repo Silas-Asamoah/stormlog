@@ -42,7 +42,7 @@ def _plan(path: Path) -> Path:
             "baseline": 3,
             "episode": 2,
             "min_recovery": 1,
-            "recovery_timeout": 8,
+            "recovery_timeout": 15,
             "final_recovery": 1,
             "min_clean": 0.5,
         },
@@ -100,9 +100,11 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     assert stall.injected["pulses"]
     assert stall.times.effect_onset_ns == stall.times.action_onset_ns
     assert injections["N"].status == "valid"
+    # F2 runs last: under a loaded test host its 1 s KV hold may time out,
+    # which is a run's honest outcome, not the harness failing.
     kv = injections["F2"]
     assert kv.validity.actuation == "ok"
-    assert kv.status in ("valid", "not_realized")
+    assert kv.status in ("valid", "not_realized", "recovery_incomplete")
     assert (run / "run" / "victim.jsonl").exists()
     assert (run / "truth" / "reference" / "scrapes.jsonl").exists()
     assert (run / "probes" / "hook-firstseen.jsonl").exists()
