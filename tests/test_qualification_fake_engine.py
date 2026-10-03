@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from functools import partial
+from pathlib import Path
 from typing import Callable
 
 import pytest
@@ -21,6 +22,7 @@ from examples.qualification.fake_engine.engine import (
     Step,
     prompt_tokens,
 )
+from examples.qualification.fake_engine.hook_log import HookLog
 from tests.qualification_fake_engine_helpers import (
     chat,
     chats_in_background,
@@ -444,3 +446,34 @@ def test_resets_while_requests_run_break_no_connection() -> None:
         server_errors = list(engine.server_errors)
     assert (errors, server_errors) == ([], [])
     assert {request.output_tokens for request in finished} == {200}
+
+
+def test_a_reset_by_hand_lists_its_victims_in_the_next_scheduled_record(
+    tmp_path: Path,
+) -> None:
+    # An engine driven by hand has no loop to run the reset on, so it runs at
+    # once; the victims still reach the hook's next scheduled record.
+    engine = _stepped_engine()
+    hook = HookLog(tmp_path / "hook", engine.config)
+    engine.observers.append(hook)
+    try:
+        request = _request(engine, "r", words(6, "p"), max_tokens=20)
+        step = _step(engine)
+        hook.on_scheduled(step)
+        assert engine.reset_prefix_cache(True)
+        following = _step(engine)
+        hook.on_scheduled(following)
+    finally:
+        hook.close()
+    records = [
+        json.loads(line)
+        for path in (tmp_path / "hook").rglob("*.jsonl")
+        for line in path.read_text().splitlines()
+    ]
+    preempted = [
+        internal
+        for record in records
+        if record["kind"] == "scheduled"
+        for internal in record["preempted"]
+    ]
+    assert preempted == [request.internal_id]

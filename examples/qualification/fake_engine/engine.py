@@ -181,6 +181,9 @@ class Engine:
         self._wake = threading.Condition(self._lock)
         self._gate = Hold()
         self._calls: deque[_LoopCall] = deque()
+        # Whether the loop takes calls; before start and after its last
+        # drain, a call runs at once on the caller's thread.
+        self._loop_running = False
         self._stopping = False
         self._snapshot = self._take_snapshot()
         self._thread = threading.Thread(
@@ -190,6 +193,7 @@ class Engine:
     # ------------------------------------------------------------ lifecycle
 
     def start(self) -> None:
+        self._loop_running = True
         self._thread.start()
 
     def stop(self) -> None:
@@ -247,8 +251,14 @@ class Engine:
         utility calls; a paused loop runs it once released."""
         call = _LoopCall(action)
         with self._wake:
-            self._calls.append(call)
-            self._wake.notify_all()
+            queued = self._loop_running
+            if queued:
+                self._calls.append(call)
+                self._wake.notify_all()
+        if not queued:
+            # No loop runs steps now (a test drives them by hand, or it has
+            # stopped), so now is between steps.
+            return action()
         if not call.done.wait(timeout):
             raise TimeoutError("the engine loop did not run the call in time")
         if call.error is not None:
@@ -296,6 +306,9 @@ class Engine:
             self._complete(step)
             if not step.total_tokens and self._has_requests():
                 time.sleep(0.001)  # vLLM's yield after a step that ran nothing
+        with self._lock:
+            self._loop_running = False
+        self._run_calls()  # those queued before the loop stopped taking calls
 
     def _run_calls(self) -> None:
         while True:
