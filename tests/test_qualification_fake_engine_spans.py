@@ -233,6 +233,11 @@ def test_infer_profile_joins_the_fake_spans(tmp_path: Path) -> None:
     assert capability["metadata"]["spans_by_media"] == {PROTOBUF_MEDIA: 4}
 
 
+# A scripted answer that comes only after the client has given up.
+HANG = 0
+HANG_SECONDS = 2.0
+
+
 class _ScriptedCollector(ThreadingHTTPServer):
     """Answers each export with the next scripted status, then 200."""
 
@@ -251,6 +256,9 @@ class _ScriptedHandler(BaseHTTPRequestHandler):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
         self.server.arrivals.append(time.monotonic())
         status = self.server.script.pop(0) if self.server.script else 200
+        if status == HANG:
+            time.sleep(HANG_SECONDS)
+            status = 200
         self.send_response(status)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -303,6 +311,38 @@ def test_a_429_or_other_client_error_is_final() -> None:
         time.sleep(1.5)
         statuses = list(exporter.statuses)
     assert statuses == [429]
+
+
+def test_a_read_timeout_is_final() -> None:
+    # The SDK retries only a requests ConnectionError, and its post is repeated
+    # at once only for one. A collector that took the body and never answered
+    # raises ReadTimeout, which is neither, so the batch is not sent again.
+    with _exporter([HANG], timeout=0.5) as (exporter, collector):
+        assert wait_until(lambda: exporter.failed == 1, timeout=5)
+        time.sleep(1.5)
+        arrivals = len(collector.arrivals)
+    assert arrivals == 1
+
+
+def test_a_refused_connection_is_retried() -> None:
+    # A refused connection is a ConnectionError: posted again at once, then
+    # retried after the backoff while the deadline allows.
+    with socket.socket() as closed:
+        closed.bind(("127.0.0.1", 0))
+        port = int(closed.getsockname()[1])
+    exporter = SpanExporter(
+        f"http://127.0.0.1:{port}/v1/traces", Controls(), interval=0.02, timeout=1.5
+    )
+    exporter.start()
+    exporter.on_free(
+        FakeRequest("r-0a1b2c3d", "r", prompt_tokens("x"), 1, time.time_ns())
+    )
+    try:
+        assert wait_until(lambda: exporter.failed == 1, timeout=10)
+        attempts = len(exporter.statuses)
+    finally:
+        exporter.close()
+    assert attempts == 4
 
 
 def test_retries_stop_at_the_export_timeout() -> None:

@@ -226,7 +226,8 @@ What it serves, as vLLM 0.30.0 does:
   may apply the model's generation config instead). A failed export is retried as
   opentelemetry-sdk 1.44.0 retries it: 408, 5xx and connection errors, with
   backoff, inside `span_export_timeout_seconds` (10 s, as
-  `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`); a 429 or other client error is final.
+  `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`); a 429 or other client error is final,
+  as is a read timeout once the body has been sent.
 
 **Fault controls,** over `/_fault/` routes that answer even while the front end
 is held:

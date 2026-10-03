@@ -36,6 +36,11 @@ ABUSIVE_BYTES = 33 * 1024 * 1024
 # opentelemetry-exporter-otlp-proto-http 1.44.0: at most six attempts, 2**n s
 # apart with 20% jitter, all inside one export timeout.
 MAX_ATTEMPTS = 6
+# What a post reports when no HTTP answer came. Like requests'
+# ConnectionError, a failed connect, send or read is retried; like its
+# ReadTimeout, no answer in time after the body went is final.
+CONNECTION_ERROR = 0
+READ_TIMEOUT = -1
 
 
 class SpanExporter(EngineObserver):
@@ -146,7 +151,8 @@ class SpanExporter(EngineObserver):
     def _export(self, body: bytes) -> None:
         """One batch, as the SDK's exporter sends it: 408, 5xx and connection
         errors are retried with backoff inside the timeout; any other answer,
-        429 included, is final. A close abandons the retries."""
+        429 included, and a read timeout are final. A close abandons the
+        retries."""
         deadline = time.monotonic() + self.timeout
         for attempt in range(MAX_ATTEMPTS):
             backoff = 2**attempt * random.uniform(0.8, 1.2)
@@ -161,7 +167,7 @@ class SpanExporter(EngineObserver):
 
     def _attempt(self, body: bytes, timeout: float) -> int:
         status = self._post(body, encoding=None, timeout=timeout)
-        if status == 0:
+        if status == CONNECTION_ERROR:
             # The SDK posts once more at once when a kept-alive connection
             # breaks, before counting the attempt as failed.
             status = self._post(body, encoding=None, timeout=timeout)
@@ -179,15 +185,22 @@ class SpanExporter(EngineObserver):
                 status = int(answer.status)
         except urllib.error.HTTPError as error:
             status = int(error.code)
-        except (urllib.error.URLError, OSError):
-            status = 0
+        except urllib.error.URLError:
+            # Raised while connecting or sending.
+            status = CONNECTION_ERROR
+        except TimeoutError:
+            # Raised while waiting for the answer.
+            status = READ_TIMEOUT
+        except OSError:
+            # A reset or close while reading the answer.
+            status = CONNECTION_ERROR
         self.statuses.append(status)
         return status
 
 
 def _retryable(status: int) -> bool:
-    """The SDK's rule: a connection error (0 here), 408 or any 5xx."""
-    return status in (0, 408) or 500 <= status <= 599
+    """The SDK's rule: a connection error, 408 or any 5xx."""
+    return status in (CONNECTION_ERROR, 408) or 500 <= status <= 599
 
 
 def request_span(request: FakeRequest, ids: Identities | None = None) -> dict[str, Any]:
