@@ -139,6 +139,36 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+@contextlib.contextmanager
+def _serving(handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
+    """One handler class on a loopback port; yields its origin."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+class _TruncatingHandler(BaseHTTPRequestHandler):
+    """Promises 1,000 bytes of metrics, sends 28, and closes the connection."""
+
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.send_response(200)
+        self.send_header("Content-Length", "1000")
+        self.end_headers()
+        self.wfile.write(b"vllm:num_requests_running 0\n")
+        self.close_connection = True
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return None
+
+
 def _run(
     tmp_path: Path,
     origin: str,
@@ -456,6 +486,17 @@ class TestScraperUnits:
         assert result.http_status is None
         assert result.error is not None
         assert result.duration_ms >= 0
+
+    def test_a_truncated_metrics_response_is_a_failed_scrape(self) -> None:
+        # The body ends 972 bytes early, so the read raises
+        # http.client.IncompleteRead, which is neither a URLError nor an
+        # OSError. Optional telemetry must record that, not end the run.
+        with _serving(_TruncatingHandler) as origin:
+            result = fetch_metrics(f"{origin}/metrics", timeout_seconds=5)
+        assert result.text is None
+        assert result.http_status == 200
+        assert result.error is not None and "IncompleteRead" in result.error
+        assert "972 more expected" in result.error
 
     def test_scraper_warns_once_and_counts(self) -> None:
         warnings: list[str] = []

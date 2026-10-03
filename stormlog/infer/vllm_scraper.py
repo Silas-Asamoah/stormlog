@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import http.client
 import threading
 import time
 import urllib.error
@@ -120,9 +121,19 @@ def fetch_metrics(
     started = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            body = response.read().decode("utf-8", errors="replace")
+            status = int(response.status)
+            try:
+                body = response.read().decode("utf-8", errors="replace")
+            except http.client.HTTPException as exc:
+                # A body cut short of its Content-Length (IncompleteRead) is
+                # an http.client error, not an OSError: still a failed
+                # scrape, never the run's end.
+                elapsed = (time.perf_counter() - started) * 1000.0
+                return FetchResult(
+                    None, status, f"{type(exc).__name__}: {exc}", elapsed
+                )
             elapsed = (time.perf_counter() - started) * 1000.0
-            return FetchResult(body, int(response.status), None, elapsed)
+            return FetchResult(body, status, None, elapsed)
     except urllib.error.HTTPError as exc:
         elapsed = (time.perf_counter() - started) * 1000.0
         return FetchResult(None, exc.code, f"HTTP {exc.code}", elapsed)
