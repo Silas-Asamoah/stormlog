@@ -97,6 +97,9 @@ class RunFacts:
     existing_iterations: frozenset[EntityRef] = frozenset()
     existing_attempts: frozenset[EntityRef] = frozenset()
     existing_alignments: frozenset[str] = frozenset()  # event ids
+    # Admissions the artifact already holds, by (epoch, alias seq): a replayed
+    # alias continues that attempt instead of becoming a new one.
+    existing_admissions: dict[tuple[str, int], EntityRef] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,7 @@ class Execution:
     alias: dict[str, Any] | None = None
     alias_seq: int | None = None
     admitted_mono_ns: int | None = None  # None: admitted before these records
+    attempt: EntityRef | None = None  # fixed when the artifact holds this admission
     prompt_tokens: int | None = None  # at the first sighting; may grow if resumable
     cached_at_admission: int | None = None
     resumable: bool | None = None
@@ -285,8 +289,16 @@ class _EpochReducer:
         return execution
 
     def _admit_execution(self, internal: str, record: RawRecord) -> None:
+        """One execution per alias record; an alias read again (a mark held
+        back by another request) keeps the attempt it already has."""
         binding = self.binder.bind(internal, _text(record.data.get("external")))
-        key = self._free_key(internal, binding)
+        known = self.facts.existing_admissions.get((self.epoch.epoch, record.seq))
+        if known is None:
+            key = self._free_key(internal, binding)
+        elif binding.ownership == OWN:
+            key = known.id
+        else:
+            key = f"{internal}@{record.seq}"  # never emitted: the attempt is fixed
         self.executions[key] = Execution(
             key,
             internal,
@@ -294,6 +306,7 @@ class _EpochReducer:
             alias=record.data,
             alias_seq=record.seq,
             admitted_mono_ns=_integer(record.data.get("mono_ns")),
+            attempt=known,
         )
 
     def _latest_known_key(self, internal: str, binding: Binding) -> str:
@@ -523,7 +536,7 @@ class _EpochReducer:
 
     def _membership_event(self, ref: EntityRef, member: Member) -> MembershipEvent:
         role = _role(member.data)
-        attempt = self._attempt_ref(member.execution.key, member.execution.binding)
+        attempt = self._attempt_for(member.execution)
         return MembershipEvent(
             context=self._context(),
             event_id=f"membership:{self.producer}:{ref.id}:{attempt.id}:{role}",
@@ -541,7 +554,7 @@ class _EpochReducer:
         for execution in self.executions.values():
             if not execution.memberships:
                 continue
-            attempt = self._attempt_ref(execution.key, execution.binding)
+            attempt = self._attempt_for(execution)
             if attempt in self.facts.existing_attempts:
                 continue
             events.append(self._request(execution, attempt))
@@ -556,6 +569,10 @@ class _EpochReducer:
             "child_index": binding.child_index,
             "completion_index": binding.completion_index,
             "reused_internal_id": execution.reused,
+            # The admission's identity: a later import that reads this alias
+            # again (behind a mark another request held back) reuses the attempt.
+            "epoch": self.epoch.epoch,
+            "admission_seq": execution.alias_seq,
             "admission_seen": execution.alias is not None,
             "admitted_wall_ns": _integer(alias.get("wall_ns")),
             "cached_at_admission": execution.cached_at_admission,
@@ -584,8 +601,12 @@ class _EpochReducer:
         binding = execution.binding
         if binding.ownership == OWN and binding.request is not None:
             return EntityRef("stormlog", binding.request.request_id)
-        attempt = self._attempt_ref(execution.key, binding)
-        return EntityRef(binding.ownership, attempt.id)
+        return EntityRef(binding.ownership, self._attempt_for(execution).id)
+
+    def _attempt_for(self, execution: Execution) -> EntityRef:
+        if execution.attempt is not None:
+            return execution.attempt
+        return self._attempt_ref(execution.key, execution.binding)
 
     def _attempt_ref(self, key: str, binding: Binding) -> EntityRef:
         if binding.ownership == OWN or self.options.raw_foreign_ids:

@@ -231,6 +231,7 @@ def run_facts_from_records(
     referenced: set[EntityRef] = set()
     iterations: set[EntityRef] = set()
     attempts: set[EntityRef] = set()
+    admissions: dict[tuple[str, int], EntityRef] = {}
     alignments: set[str] = set()
     client_clock_domain: str | None = None
     for record in records:
@@ -244,6 +245,7 @@ def run_facts_from_records(
         elif isinstance(record, RequestEvent):
             if record.attempt_ref is not None:
                 attempts.add(record.attempt_ref)
+                _note_admission(admissions, record)
         elif isinstance(record, ClockAlignmentEvent):
             alignments.add(record.event_id)
         elif isinstance(record, LegacyInferenceRecord):
@@ -258,7 +260,19 @@ def run_facts_from_records(
         existing_iterations=frozenset(iterations),
         existing_attempts=frozenset(attempts),
         existing_alignments=frozenset(alignments),
+        existing_admissions=admissions,
     )
+
+
+def _note_admission(
+    admissions: dict[tuple[str, int], EntityRef], record: RequestEvent
+) -> None:
+    """Index an execution import's request by the alias that admitted it."""
+    epoch, seq = record.metadata.get("epoch"), record.metadata.get("admission_seq")
+    if record.context.source != SOURCE or record.attempt_ref is None:
+        return
+    if isinstance(epoch, str) and isinstance(seq, int) and not isinstance(seq, bool):
+        admissions[(epoch, seq)] = record.attempt_ref
 
 
 def _legacy_facts(

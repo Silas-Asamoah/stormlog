@@ -209,6 +209,52 @@ def test_a_second_import_adds_only_what_became_final(tmp_path: Path) -> None:
     assert resolve_inference_events(records).unresolved == ()
 
 
+def test_an_alias_read_again_keeps_its_attempt(tmp_path: Path) -> None:
+    """An admission that has not run yet holds the mark behind another
+    request's alias; reading that alias again must not admit it twice
+    (Astra #1)."""
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    hook = tmp_path / "hook"
+    waiting = "chatcmpl-other-11111111"
+    first = [
+        alias(waiting, "chatcmpl-other", T0 - 20),
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 10),
+        scheduled(0, T0, [member(OWN0, scheduled=8)]),
+        completed(0, T0 + SECOND, [done(OWN0)]),
+    ]
+    engine_log(hook, first)
+    one = import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    assert one.summary is not None
+    assert one.summary["execution"]["high_water"] == {EPOCH: 0}
+    engine_log(
+        hook,
+        first
+        + [
+            scheduled(
+                1, T0 + 2 * SECOND, [member(OWN0, scheduled=1, sighting="repeat")]
+            ),
+            completed(1, T0 + 3 * SECOND, [done(OWN0)]),
+        ],
+    )
+    two = import_execution_into_artifact(artifact, hook, now_ns=NOW)
+    assert [e.EVENT_TYPE for e in two.events] == ["infer.iteration", "infer.membership"]
+    records = load_inference_artifact(artifact)
+    requests = [r for r in records if isinstance(r, RequestEvent)]
+    assert [r.attempt_ref for r in requests] == [EntityRef(PRODUCER, OWN0)]
+    assert (requests[0].metadata["epoch"], requests[0].metadata["admission_seq"]) == (
+        EPOCH,
+        2,
+    )
+    memberships = [r for r in records if isinstance(r, MembershipEvent)]
+    assert [(m.iteration_ref.id, m.attempt_ref) for m in memberships] == [
+        ("0", EntityRef(PRODUCER, OWN0)),
+        ("1", EntityRef(PRODUCER, OWN0)),
+    ]
+    assert resolve_inference_events(records).unresolved == ()
+    # A third import, with nothing new, adds nothing.
+    assert import_execution_into_artifact(artifact, hook, now_ns=NOW).events == ()
+
+
 def test_run_facts_come_from_the_artifact(tmp_path: Path) -> None:
     artifact = _artifact(tmp_path / "infer.jsonl")
     facts = run_facts_from_records(load_inference_artifact(artifact), RUN, SESSION)
