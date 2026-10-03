@@ -683,17 +683,18 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
     already have reached the engine, and a proxy can answer 408 after
     forwarding it.
   - `unknown` (5xx, a timeout, a dropped connection, a malformed reply, or a
-    redirect, which is never followed):
-    Stormlog sends `/stop_profile` at once, with `stop_reason` `start_unknown`,
-    before the phase. Once that stop is confirmed, the phase runs unprofiled.
-    A trace that stop writes is still listed.
+    redirect, which is never followed): Stormlog sends `/stop_profile` at
+    once, with `stop_reason` `start_unknown`, before the phase. Once that stop
+    is confirmed, the phase runs unprofiled. A trace that stop writes is still
+    listed.
 
   vLLM 0.30.0 answers 200 to a second `/start_profile` and to `/stop_profile`
   with nothing running, so Stormlog cannot tell from HTTP whether another
-  profile was already active. Do not point two profilers at one server. If a
-  worker trace appears before Stormlog's stop, for example from a profile
-  configured with `max_iterations`, the window's `stop_reason` is
-  `stopped_by_server`.
+  profile was already active. Do not point two profilers at one server: an
+  unknown start is stopped, so a proxy's 502 or a timeout while another
+  operator is profiling ends their profile too. If a worker trace appears
+  before Stormlog's stop, for example from a profile configured with
+  `max_iterations`, the window's `stop_reason` is `stopped_by_server`.
 - **Record.** Each window writes an `infer.trace_window` event, also when the
   run is cancelled: case, phase, control URL (credentials and query removed),
   when the window was requested, when the `/start_profile` call itself was
