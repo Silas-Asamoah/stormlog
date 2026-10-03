@@ -243,7 +243,14 @@ class Engine:
 
     def reset_prefix_cache(self, reset_running_requests: bool) -> bool:
         """vLLM's semantics: refused while blocks are held, unless every
-        running request is preempted first."""
+        running request is preempted first. Like vLLM's utility call it runs on
+        the step loop, between steps, so no step is in flight when it acts."""
+        result: bool = self.call_in_loop(
+            lambda: self._reset_in_loop(reset_running_requests)
+        )
+        return result
+
+    def _reset_in_loop(self, reset_running_requests: bool) -> bool:
         preempted: list[str] = []
         with self._lock:
             if reset_running_requests:
@@ -425,10 +432,10 @@ class Engine:
             member.outcome = "discarded_finished"
             return
         if request.status != "RUNNING":
-            # Preempted while the step ran (a reset with reset_running_requests):
-            # vLLM drops the step's output for it.
-            member.outcome = "dropped_stale"
-            return
+            # Only async scheduling can preempt a request while its step is in
+            # flight (vLLM then records dropped_stale); this engine schedules
+            # synchronously and runs resets between steps.
+            raise AssertionError(f"{request.internal_id} was preempted mid-step")
         request.computed += member.tokens
         request.committed = request.computed
         self._cache_full_blocks(request)

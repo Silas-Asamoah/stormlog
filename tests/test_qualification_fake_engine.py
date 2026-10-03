@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from functools import partial
 
 import pytest
@@ -198,3 +199,24 @@ def test_a_reset_is_refused_while_blocks_are_held_unless_it_preempts() -> None:
     assert (refused, preempting) == (False, True)
     assert request.preemptions == 1
     assert request.output_tokens == 200
+
+
+def test_resets_run_between_steps_and_never_drop_a_steps_output() -> None:
+    # vLLM runs a reset as a utility call on the engine loop, between steps, so
+    # with synchronous scheduling no step's output is ever dropped as stale.
+    config = FakeEngineConfig(step_seconds=0.02, decode_token_seconds=0.001)
+    with FakeEngine(config) as engine:
+        threads = chats_in_background(
+            engine, [words(6, tag) for tag in "ab"], max_tokens=40
+        )
+        assert wait_until(lambda: len(engine.engine.running) == 2)
+        for _ in range(20):
+            assert _reset(engine, "?reset_running_requests=true") is True
+            time.sleep(0.007)
+        join_all(threads)
+        outcomes = {
+            member.outcome for step in engine.engine.steps for member in step.members
+        }
+        finished = list(engine.engine.finished)
+    assert outcomes == {"kept"}
+    assert {request.output_tokens for request in finished} == {40}
