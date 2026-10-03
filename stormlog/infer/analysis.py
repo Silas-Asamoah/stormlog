@@ -91,7 +91,14 @@ def analyze_inference_events(
     timelines = [(member, _member_timeline(member)) for member in members]
     ok_requests = [record for record in requests if record.get("status") == "ok"]
     cases = _case_reports(
-        records, requests, samples, timelines, "group" in join, spans, policy
+        records,
+        requests,
+        samples,
+        timelines,
+        "group" in join,
+        spans,
+        policy,
+        _server_admitted_ids(records, spans, external_spans),
     )
     if timelines:
         join["case_coverage"] = _coverage_counts(cases)
@@ -179,6 +186,52 @@ def _joined_spans(
         raise InferInputError(f"vLLM telemetry: {_reason(exc)}") from exc
 
 
+def _server_admitted_ids(
+    records: list[dict[str, Any]],
+    spans: JoinedSpans,
+    external_spans: list[VllmSpanRecord],
+) -> set[str] | None:
+    """The requests the server confirmed it saw, or None with no server source.
+
+    A request with a joined span reached the engine, and so did one whose
+    spans conflict: the conflict is in what they say, not in whether they
+    exist. The execution hook's records confirm a request by its
+    ``X-Request-Id`` too. A span receiver that got nothing is a source that
+    confirms nothing; no source at all leaves the count unknown, never 0.
+    """
+    hook_ids = _hook_request_ids(records)
+    if not (hook_ids or external_spans or _span_source(records)):
+        return None
+    return set(spans.by_request) | set(spans.quarantined) | hook_ids
+
+
+def _hook_request_ids(records: list[dict[str, Any]]) -> set[str]:
+    """The run's requests the execution hook saw, by ``X-Request-Id``."""
+    ids = set()
+    for record in records:
+        if (
+            record.get("event_type") != "infer.request"
+            or record.get("schema_version") != 2
+        ):
+            continue
+        x_request_id = (record.get("metadata") or {}).get("x_request_id")
+        if x_request_id:
+            ids.add(str(x_request_id))
+    return ids
+
+
+def _span_source(records: list[dict[str, Any]]) -> bool:
+    """Whether the run received spans, or ran a receiver for them."""
+    for record in records:
+        if record.get("event_type") == "infer.vllm_span":
+            return True
+        config = record.get("config")
+        if record.get("event_type") == "infer.session" and isinstance(config, dict):
+            if config.get("vllm_spans") is not None:
+                return True
+    return False
+
+
 def _case_reports(
     records: list[dict[str, Any]],
     requests: list[dict[str, Any]],
@@ -187,13 +240,14 @@ def _case_reports(
     grouped: bool,
     spans: JoinedSpans,
     policy: _Policy | None,
+    server_ids: set[str] | None,
 ) -> dict[str, dict[str, Any]]:
     by_case: dict[str, list[dict[str, Any]]] = {}
     for record in requests:
         by_case.setdefault(str(record.get("case_id", "unknown")), []).append(record)
     windows = _measured_windows(records)
     cache_states = _case_records(records, "infer.cache_state")
-    populations = case_populations(records)
+    populations = case_populations(records, server_admitted_ids=server_ids)
     cases = {}
     for case_id, case_requests in sorted(by_case.items()):
         cases[case_id] = _case_report(

@@ -938,3 +938,38 @@ class TestReportShape:
         assert report["telemetry"]["vllm"]["capabilities"]["vllm.metrics"][
             "collected"
         ] == ["queue_depth"]
+
+
+def test_joined_spans_count_requests_the_server_admitted(tmp_path: Path) -> None:
+    requests = [_request(i) for i in range(2)]
+    spans = [_span(str(requests[0]["x_request_id"]))]
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    with_spans = analyze_inference_events(
+        _artifact(tmp_path / "a", [], requests, spans)
+    )
+    population = with_spans["cases"][CASE]["population"]
+    assert (population["server_admitted"], population["server_evidence_coverage"]) == (
+        1,
+        0.5,
+    )
+
+    # Without any server source the count is unknown, never 0.
+    without = analyze_inference_events(_artifact(tmp_path / "b", [], requests))
+    population = without["cases"][CASE]["population"]
+    assert (population["server_admitted"], population["server_evidence_coverage"]) == (
+        None,
+        None,
+    )
+
+
+def test_a_receiver_that_got_no_span_admits_nothing(tmp_path: Path) -> None:
+    path = _artifact(tmp_path, [], [_request(i) for i in range(2)])
+    records = _records(path)
+    records[0]["config"]["vllm_spans"] = {"listen": "127.0.0.1:4318"}
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    population = analyze_inference_events(path)["cases"][CASE]["population"]
+    assert (population["server_admitted"], population["server_evidence_coverage"]) == (
+        0,
+        0.0,
+    )

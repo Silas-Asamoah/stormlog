@@ -209,8 +209,8 @@ Every measured request lands in exactly one count, by status:
 | `successful`, `failed`, `timed_out`, `cancelled` | Statuses `ok`, `error`, `timeout`, `cancelled` |
 | `other` | Any other status, by name; never dropped |
 | `censored` | `timed_out + cancelled`: latency known only to exceed what was observed |
-| `server_admitted` | Requests the server confirmed it saw, through a joined span or execution record; `null` when the run has no such evidence |
-| `server_evidence_coverage` | `server_admitted / accepted`; `null` without server evidence |
+| `server_admitted` | Requests the server confirmed it saw: a joined span (conflicting spans included), or an execution hook record with the request's `X-Request-Id`. `null` when the run has no server source; `0` when it ran a span receiver that received nothing |
+| `server_evidence_coverage` | `server_admitted / accepted`; `null` without a server source |
 
 ### Cohort checks
 
