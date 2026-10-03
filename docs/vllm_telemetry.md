@@ -195,7 +195,9 @@ differenced across the change (`series_labels_changed`).
 
 Scrapes must be given in strictly increasing stamp order
 (`scrapes_out_of_order`, `duplicate_scrape_time`), and nothing is differenced
-when they are not. A histogram's share of observations
+when they are not. A failed scrape inside a window leaves fewer samples, and
+counters are differenced across it; a failed first or last scrape shortens the
+window the caller chose, so the window is `scrape_failed`. A histogram's share of observations
 above a value, and the bucket holding a quantile, are reported as bounds
 between bucket boundaries; a quantile in the `+Inf` bucket has no upper bound
 (`quantile_in_overflow_bucket`).

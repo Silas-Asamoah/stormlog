@@ -78,6 +78,10 @@ class WindowCheck:
     seconds: float | None
     seconds_bounds: tuple[float, float] | None
     placement: str
+    # Failed scrapes inside the window; they leave fewer samples, and a
+    # counter is differenced across them, so only a failed first or last
+    # scrape (which shortens the window itself) makes it insufficient.
+    failed: int = 0
 
 
 @dataclass(frozen=True)
@@ -152,6 +156,7 @@ def check_window(
         seconds=seconds,
         seconds_bounds=bounds,
         placement=_placement(ok),
+        failed=len(scrapes) - len(ok),
     )
 
 
@@ -162,7 +167,13 @@ def _window_reasons(
     min_scrapes: int,
 ) -> list[str]:
     reasons: list[str] = []
-    if len(ok) != len(scrapes):
+    if (
+        scrapes
+        and SCRAPE_OK != scrapes[0].status
+        or scrapes[-1:]
+        and (SCRAPE_OK != scrapes[-1].status)
+    ):
+        # A failed boundary scrape shortens the window the caller chose.
         reasons.append(REASON_SCRAPE_FAILED)
     if len(ok) < min_scrapes:
         reasons.append(REASON_TOO_FEW_SCRAPES)

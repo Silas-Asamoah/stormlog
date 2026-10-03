@@ -7,6 +7,7 @@ from stormlog.infer.diagnosis_signals import evaluate_signal
 from stormlog.infer.scrape_window import (
     REASON_DUPLICATE_TIME,
     REASON_OUT_OF_ORDER,
+    REASON_SCRAPE_FAILED,
     REASON_SERIES_LABELS_CHANGED,
     check_window,
     counter_window,
@@ -62,3 +63,31 @@ def test_two_scrapes_at_one_instant_give_no_window() -> None:
     assert REASON_DUPLICATE_TIME in check.reasons
     assert counter_window(window, PREEMPTIONS).reasons == (REASON_DUPLICATE_TIME,)
     assert evaluate_signal("kv_preemption_pressure", window).exceeds is None
+
+
+def test_an_interior_failed_scrape_does_not_blank_the_window() -> None:
+    texts: list[str | None] = [exposition(gauges={WAITING: 9})] * 2
+    window = series([*texts, None, *texts])
+    check = check_window(window)
+    assert check.sufficient and check.failed == 1
+    signal = evaluate_signal("queue_saturation", window)
+    assert (signal.sufficient, signal.exceeds) == (True, True)
+
+
+def test_a_failed_boundary_scrape_still_blanks_the_window() -> None:
+    texts: list[str | None] = [exposition(gauges={WAITING: 9})] * 3
+    for window in (series([None, *texts]), series([*texts, None])):
+        check = check_window(window)
+        assert REASON_SCRAPE_FAILED in check.reasons and not check.sufficient
+
+
+def test_a_counter_delta_across_an_interior_failure_is_valid() -> None:
+    window = series(
+        [
+            exposition(counters={PREEMPTIONS: 1.0}),
+            None,
+            exposition(counters={PREEMPTIONS: 4.0}),
+        ]
+    )
+    counter = counter_window(window, PREEMPTIONS)
+    assert (counter.delta, counter.reasons) == (3.0, ())
