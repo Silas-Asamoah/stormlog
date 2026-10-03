@@ -576,3 +576,21 @@ def test_a_uuid_matching_one_named_process_is_not_applied_to_another(
     )
 
     assert code == int(ExitCode.USAGE)
+
+
+def test_reserved_uri_characters_in_a_file_name_open_that_file(tmp_path: Path) -> None:
+    """SQLite takes the path as a URI, so ``%6f`` must not decode to ``o``, and
+    ``#`` or ``?`` must not cut the name short or drop ``mode=ro``."""
+    other = _export(tmp_path / "other.sqlite")
+    with closing(sqlite3.connect(other)) as db:
+        db.execute("delete from CUPTI_ACTIVITY_KIND_KERNEL")
+        db.commit()
+    names = ["%6fther.sqlite", "capture#1.sqlite", "capture?1.sqlite", "run 2.sqlite"]
+
+    events = {
+        name: len(load_nsys_sqlite(_export(tmp_path / name)).gpu_events)
+        for name in names
+    }
+
+    assert events == {name: 5 for name in names}
+    assert {p.name for p in tmp_path.iterdir()} == {"other.sqlite", *names}

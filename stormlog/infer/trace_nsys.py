@@ -60,8 +60,11 @@ NVTX_RANGE_TYPES = (59, 60)
 def load_nsys_sqlite(path: str | Path) -> KinetoTrace:
     """Read an ``nsys export --type sqlite`` file."""
     path = Path(path)
+    # SQLite reads a URI, so the name is percent-encoded: a raw "%6f" would
+    # open a different file, and "#" or "?" would cut the name and drop mode=ro.
+    uri = path.resolve().as_uri() + "?mode=ro"
     try:
-        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
+        with closing(sqlite3.connect(uri, uri=True)) as db:
             return _load(db, path)
     except sqlite3.DatabaseError as exc:
         raise ValueError(f"not an Nsight Systems SQLite export: {exc}") from exc
