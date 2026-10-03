@@ -197,12 +197,15 @@ Scrapes must be given in strictly increasing stamp order
 (`scrapes_out_of_order`, `duplicate_scrape_time`), and nothing is differenced
 when they are not. A failed scrape inside a window leaves fewer samples, and
 counters are differenced across it; a failed first or last scrape shortens the
-window the caller chose, so the window is `scrape_failed`. A histogram whose
-`_count` disagrees with its `+Inf` bucket over the window is
-`histogram_inconsistent`. A histogram's share of observations
-above a value, and the bucket holding a quantile, are reported as bounds
-between bucket boundaries; a quantile in the `+Inf` bucket has no upper bound
-(`quantile_in_overflow_bucket`).
+window the caller chose, so the window is `scrape_failed`. Each change of a
+histogram between consecutive scrapes must itself be a histogram: cumulative
+counts that never fall as the boundary rises, none above the change in
+`_count`, and the `+Inf` bucket equal to it. Two scrapes that are each valid
+can differ by a change that is not one, and its shares would fall outside 0
+to 1, so such a window is `histogram_inconsistent`. A histogram's share of
+observations above a value, and the bucket holding a quantile, are reported
+as bounds between bucket boundaries; a quantile in the `+Inf` bucket has no
+upper bound (`quantile_in_overflow_bucket`).
 
 ## Metric map
 

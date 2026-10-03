@@ -503,6 +503,8 @@ def _histogram_window(
         delta = _histogram_step(before, after, family, labels, engine)
         if delta["state"] != STATE_RESOLVED:
             reasons.append(delta["state"])
+        elif not _consistent_step(delta):
+            reasons.append(REASON_HISTOGRAM_INCONSISTENT)
         deltas.append(delta)
     if reasons:
         return None, None, tuple(dict.fromkeys(reasons))
@@ -521,11 +523,24 @@ def _summed_window(
         (bucket_boundary(le), sum(float(delta["buckets"][i][1]) for delta in deltas))
         for i, le in enumerate(les)
     )
+    return count, buckets, ()
+
+
+def _consistent_step(delta: Mapping[str, Any]) -> bool:
+    """One step's deltas are themselves a histogram: cumulative counts that
+    never fall as the boundary rises, none above the step's count, and the
+    ``+Inf`` bucket equal to it. Two scrapes that are each valid can differ
+    by a step that is not one, and its shares would fall outside 0 to 1."""
+    count = float(delta["count"])
+    buckets = sorted((bucket_boundary(le), float(c)) for le, c in delta["buckets"])
+    counts = [c for _, c in buckets]
+    if any(after < before for before, after in zip(counts, counts[1:])):
+        return False
+    if any(c > count for c in counts):
+        return False
     # Every observation is at or below +Inf: a _count that disagrees with the
     # +Inf bucket makes every share computed from either one unreliable.
-    if buckets and math.isinf(buckets[-1][0]) and buckets[-1][1] != count:
-        return None, None, (REASON_HISTOGRAM_INCONSISTENT,)
-    return count, buckets, ()
+    return not buckets or not math.isinf(buckets[-1][0]) or buckets[-1][1] == count
 
 
 def _histogram_step(

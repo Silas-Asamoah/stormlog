@@ -7,6 +7,7 @@ import pytest
 
 from stormlog.infer.diagnosis_signals import SignalConfig, evaluate_signal
 from stormlog.infer.scrape_window import (
+    REASON_COUNTER_RESET,
     REASON_DUPLICATE_TIME,
     REASON_HISTOGRAM_INCONSISTENT,
     REASON_OUT_OF_ORDER,
@@ -15,6 +16,7 @@ from stormlog.infer.scrape_window import (
     check_window,
     counter_window,
     gauge_window,
+    histogram_quantile_bounds,
     histogram_share_above,
 )
 from tests.vllm_scrape_helpers import LABELS, exposition, scrape, series
@@ -105,6 +107,48 @@ def test_a_histogram_whose_count_disagrees_with_its_inf_bucket_is_refused() -> N
     share = histogram_share_above(series([start, end]), E2E, 0.1)
     assert share.reasons == (REASON_HISTOGRAM_INCONSISTENT,)
     assert share.lo is None and share.hi is None
+
+
+def test_a_step_that_is_not_a_histogram_is_refused() -> None:
+    # Each scrape is a valid histogram and every part grew, but the step's
+    # buckets [8, 1, 1] cannot hold one new observation: shares would be -7.
+    start = exposition(histograms={E2E: ((("0.1", 0), ("0.5", 10), ("+Inf", 10)), 2.0)})
+    end = exposition(histograms={E2E: ((("0.1", 8), ("0.5", 11), ("+Inf", 11)), 2.3)})
+    window = series([start, end])
+    for share in (
+        histogram_share_above(window, E2E, 0.1),
+        histogram_share_above(window, E2E, 0.3),
+    ):
+        assert share.reasons == (REASON_HISTOGRAM_INCONSISTENT,)
+        assert share.lo is None and share.hi is None
+    p90 = histogram_quantile_bounds(window, E2E, 0.9)
+    assert p90.reasons == (REASON_HISTOGRAM_INCONSISTENT,) and p90.hi is None
+
+
+def test_a_step_with_a_bucket_above_its_count_is_refused() -> None:
+    # No +Inf bucket to compare with: the finite bucket alone exceeds the count.
+    start = exposition(histograms={E2E: ((("0.1", 0), ("0.5", 0)), 0.0)})
+    end = exposition(histograms={E2E: ((("0.1", 5), ("0.5", 5)), 1.0)}).replace(
+        f"{E2E}_count{{{LABELS}}} 5", f"{E2E}_count{{{LABELS}}} 2"
+    )
+    share = histogram_share_above(series([start, end]), E2E, 0.1)
+    assert share.reasons == (REASON_HISTOGRAM_INCONSISTENT,)
+
+
+def test_a_consistent_step_still_resolves_and_a_falling_bucket_is_a_reset() -> None:
+    start = exposition(histograms={E2E: ((("0.1", 2), ("0.5", 3), ("+Inf", 4)), 1.0)})
+    grown = exposition(histograms={E2E: ((("0.1", 3), ("0.5", 6), ("+Inf", 8)), 3.0)})
+    share = histogram_share_above(series([start, grown]), E2E, 0.5)
+    # The step's buckets are [1, 3, 4]: one of its four observations is above.
+    assert (share.count_delta, share.lo, share.hi, share.reasons) == (
+        4.0,
+        0.25,
+        0.25,
+        (),
+    )
+    fell = exposition(histograms={E2E: ((("0.1", 1), ("0.5", 6), ("+Inf", 8)), 3.0)})
+    reset = histogram_share_above(series([start, fell]), E2E, 0.5)
+    assert reset.reasons == (REASON_COUNTER_RESET,)
 
 
 @pytest.mark.parametrize("reference", [-0.1, 1.5, float("nan")])
