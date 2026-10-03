@@ -342,6 +342,8 @@ The report includes:
   - each with its sample count, whether the case has enough requests for it,
     and its order-statistic confidence interval (see
     [Inference SLOs and goodput](inference_slo.md));
+  - and, for each status other than `ok`, how many requests ended with it and
+    how long they ran before they did;
 - a `streaming` block of chunk-level figures: content chunks per response,
   chunk gaps, and mean tokens per chunk when the server reports usage. A
   chunk can carry several tokens, so chunk gaps are never reported as

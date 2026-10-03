@@ -163,3 +163,31 @@ def test_server_latency_comes_only_from_each_requests_own_span() -> None:
 def test_without_spans_there_are_no_server_metrics() -> None:
     metrics = latency_summary([_streamed(0)])["metrics"]
     assert not [key for key in metrics if key.startswith("server.")]
+
+
+def test_requests_that_did_not_succeed_keep_their_observed_time_by_status() -> None:
+    requests = [
+        _streamed(0),
+        _streamed(1, status="timeout", e2e_latency_ms=60_000.0),
+        _streamed(2, status="timeout", e2e_latency_ms=59_990.0),
+        _streamed(3, status="error", e2e_latency_ms=12.0),
+        _streamed(4, status="dropped", e2e_latency_ms=None),
+    ]
+    unsuccessful = latency_summary(requests)["unsuccessful"]
+
+    assert set(unsuccessful) == {"timeout", "error", "dropped"}
+    timeouts = unsuccessful["timeout"]
+    assert timeouts["count"] == 2
+    assert timeouts["elapsed_ms"] == {"min": 59_990.0, "p50": 59_995.0, "max": 60_000.0}
+    assert timeouts["elapsed_missing"] == 0
+    assert unsuccessful["error"]["elapsed_ms"]["max"] == 12.0
+    # A dropped request was never sent, so it has no elapsed time at all.
+    assert unsuccessful["dropped"] == {
+        "count": 1,
+        "elapsed_ms": {"min": None, "p50": None, "max": None},
+        "elapsed_missing": 1,
+    }
+
+
+def test_a_case_where_everything_succeeded_has_no_unsuccessful_entries() -> None:
+    assert latency_summary([_streamed(0), _streamed(1)])["unsuccessful"] == {}

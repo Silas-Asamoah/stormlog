@@ -5,7 +5,8 @@ report uses the same boundaries as SLO policies: ``client.*`` values come
 from Stormlog's client, ``server.*`` values only from a request's own joined
 vLLM span. Every quantile is given twice, over the successful requests and
 with every request that did not succeed ranked worst, and each says whether
-the case has enough requests to trust it.
+the case has enough requests to trust it. What the requests that did not
+succeed were observed to take is kept apart, by status.
 
 Streamed chunks are reported as chunks. A chunk can carry several tokens,
 so chunk gaps are never called inter-token latency.
@@ -67,7 +68,30 @@ def latency_summary(
 
         for key in SERVER_METRICS:
             metrics[key] = _metric(requests, key, from_span, rule, levels)
-    return {"rule": rule.to_record(), "metrics": metrics}
+    return {
+        "rule": rule.to_record(),
+        "metrics": metrics,
+        "unsuccessful": unsuccessful_summary(requests),
+    }
+
+
+def unsuccessful_summary(
+    requests: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """How long each request that did not succeed ran, by status.
+
+    This is the time until Stormlog saw the request end, not a latency the
+    request would have had: only for a timeout is it a lower bound on one.
+    A dropped request was never sent and has no time.
+    """
+    by_status: dict[str, list[Mapping[str, Any]]] = {}
+    for record in requests:
+        if record.get("status") != "ok":
+            by_status.setdefault(str(record.get("status")), []).append(record)
+    return {
+        status: _elapsed_record(records)
+        for status, records in sorted(by_status.items())
+    }
 
 
 def streaming_summary(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -162,6 +186,23 @@ def _timeout_elapsed(failures: Sequence[Mapping[str, Any]]) -> list[float] | Non
     return [float(value) for value in elapsed if is_number(value)]
 
 
+def _elapsed_record(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    elapsed = [
+        float(value)
+        for value in (r.get("e2e_latency_ms") for r in records)
+        if is_number(value)
+    ]
+    return {
+        "count": len(records),
+        "elapsed_ms": {
+            "min": min(elapsed, default=None),
+            "p50": quantile(elapsed, 0.5),
+            "max": max(elapsed, default=None),
+        },
+        "elapsed_missing": len(records) - len(elapsed),
+    }
+
+
 def _estimate_record(estimate: QuantileEstimate) -> dict[str, Any]:
     return {
         "value_ms": estimate.value_ms,
@@ -214,4 +255,5 @@ __all__ = [
     "SERVER_METRICS",
     "latency_summary",
     "streaming_summary",
+    "unsuccessful_summary",
 ]
