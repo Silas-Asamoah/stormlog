@@ -71,12 +71,14 @@ _URL = re.compile(r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*://([^\s\"'<>]*)")
 _JSON_MEMBER = re.compile(
     _JSON_STRING + r"\s*:\s*(?:" + _JSON_STRING + r'|([^\s,}\]"]+))'
 )
-# The value is a double- or single-quoted string, escapes included, or a
-# bare word; for a quoted one, what is inside the quotes is redacted.
-_KEY_VALUE = re.compile(
-    rf"(?<![{_KEY_CHARS}])([{_KEY_CHARS}]+)\s*[=:]\s*"
-    r"(?:" + _JSON_STRING + r"|'((?:[^'\\]|\\.)*)'|([^\s&,;\"']+))"
-)
+# A key and its separator, without the value: a key that is not
+# secret-like must not consume the text after it, which can hold the next
+# pair ("error: password=..."). The value is read separately, and only
+# for a secret-like key.
+_KEY_SEPARATOR = re.compile(rf"(?<![{_KEY_CHARS}])([{_KEY_CHARS}]+)\s*[=:]\s*")
+_DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
+_SINGLE_QUOTED = re.compile(r"'((?:[^'\\]|\\.)*)'")
+_BARE_VALUE = re.compile(r"[^\s&,;\"'(){}\[\]<>]+")
 # Well-known credential shapes. No word boundary in front of most: a key
 # glued to the text before it is still a key, and removing a little too
 # much is the safe mistake. Each class covers the prefix that follows it,
@@ -149,11 +151,42 @@ def _json_unescaped(key: str) -> str:
 
 
 def _key_value_spans(text: str) -> Iterator[Span]:
-    for match in _KEY_VALUE.finditer(text):
+    bare = _BareRuns(text)
+    for match in _KEY_SEPARATOR.finditer(text):
         if is_forbidden_key_name(match.group(1)):
-            group = next(g for g in (2, 3, 4) if match.group(g) is not None)
-            if match.end(group) > match.start(group):
-                yield match.span(group)
+            span = _value_span(text, match.end(), bare)
+            if span is not None:
+                yield span
+
+
+class _BareRuns:
+    """Where a bare value ends, computed once per run of value characters.
+
+    In a chain such as "password=password=...", every key's value is a
+    suffix of one run, and all of them end where the run ends; rescanning
+    the run for each key would take quadratic time.
+    """
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.start = self.end = -1
+
+    def end_from(self, position: int) -> int:
+        if not self.start <= position < self.end:
+            match = _BARE_VALUE.match(self.text, position)
+            self.start = position
+            self.end = match.end() if match else position
+        return self.end
+
+
+def _value_span(text: str, position: int, bare: _BareRuns) -> Span | None:
+    """The value starting at ``position``: inside its quotes, or a bare word."""
+    for quoted in (_DOUBLE_QUOTED, _SINGLE_QUOTED):
+        match = quoted.match(text, position)
+        if match:
+            return match.span(1) if match.end(1) > match.start(1) else None
+    end = bare.end_from(position)
+    return (position, end) if end > position else None
 
 
 _FINDERS: tuple[Finder, ...] = (

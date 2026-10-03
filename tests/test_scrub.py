@@ -314,6 +314,36 @@ def test_json_members_are_read_as_json(text: str, scrubbed: str) -> None:
     assert scrub_text(text) == scrubbed
 
 
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        # A key that is not secret-like must not swallow the pair after it.
+        ("error: password=hunter2-secret", "error: password=<redacted>"),
+        (
+            "Invalid configuration: api_key=opaque-credential-123",
+            "Invalid configuration: api_key=<redacted>",
+        ),
+        ("ValueError: token=opaque-value", "ValueError: token=<redacted>"),
+        ("error: password: hunter2-secret", "error: password: <redacted>"),
+        ("error:password=hunter2-secret", "error:password=<redacted>"),
+        ("x=password=hunter2-secret", "x=password=<redacted>"),
+        ("request: {api_key=opaque-value}", "request: {api_key=<redacted>}"),
+        ("cfg:(password=hunter2-secret)", "cfg:(password=<redacted>)"),
+        ("status:401;token=opaque-value", "status:401;token=<redacted>"),
+        ('error: "password=hunter2-secret"', 'error: "password=<redacted>"'),
+        ("msg='token=opaque-credential-1'", "msg='token=<redacted>'"),
+        (
+            "note: 'it is fine, password=hunter2-secret and isn't'",
+            "note: 'it is fine, password=<redacted> and isn't'",
+        ),
+        # A secret key's value is redacted whatever it contains.
+        ("password=token=abc", "password=<redacted>"),
+    ],
+)
+def test_only_a_secret_key_consumes_a_value(text: str, scrubbed: str) -> None:
+    assert scrub_text(text) == scrubbed
+
+
 def test_scrub_text_leaves_ordinary_text_alone() -> None:
     text = "This model's maximum context length is 32768 tokens; max_tokens 128."
     assert scrub_text(text) == text
@@ -340,7 +370,7 @@ def test_scrub_text_removes_a_known_secret_no_pattern_recognises() -> None:
             "https://host/<redacted>?<redacted>",
         ),
         (
-            "see https://host/abcdefgh/v1?token=opaque#frag now",
+            "see https://host/abcdefgh/v1?q=opaque#frag now",
             ["abcdefgh"],
             "see https://host/<redacted>/v1?<redacted>#frag now",
         ),
@@ -478,6 +508,13 @@ ADVERSARIAL = (
     ('"-----BEGIN PRIVATE KEY-----\\n" * 1800', None),
     # A string that never closes because every later quote is escaped.
     ("'\"' + ('a' + chr(92) + '\"') * 15000", None),
+    # Chains of keys, each of which starts a value.
+    ('"a=" * 26000', None),
+    ('"a: " * 17000', None),
+    ('"password=" * 5000', None),
+    ('"password: " * 4500', None),
+    ('"a=\'" * 17000', None),
+    ("'a=\"' * 17000", None),
     ("'password=\"' * 5000", None),
     ('"password=\'" * 5000', None),
 )
