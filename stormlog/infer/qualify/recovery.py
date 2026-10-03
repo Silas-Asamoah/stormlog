@@ -186,19 +186,25 @@ class NoEvents:
         return self.times
 
 
-class MedianAtLeast:
-    """The interval's median sample is at least ``threshold``."""
+class MedianWithin:
+    """The interval's median sample lies in [low, high]."""
 
-    def __init__(self, points: Sequence[Point], threshold: float) -> None:
+    def __init__(
+        self,
+        points: Sequence[Point],
+        low: float = float("-inf"),
+        high: float = float("inf"),
+    ) -> None:
         self.times = [time for time, _value in points]
         self.values = [value for _time, value in points]
-        self.threshold = threshold
+        self.low = low
+        self.high = high
 
     def holds(self, start_ns: int, end_ns: int) -> bool:
         first = bisect.bisect_left(self.times, start_ns)
         last = bisect.bisect_right(self.times, end_ns)
         values = self.values[first:last]
-        return bool(values) and statistics.median(values) >= self.threshold
+        return bool(values) and self.low <= statistics.median(values) <= self.high
 
     def change_points(self) -> Sequence[int]:
         return self.times
@@ -311,16 +317,19 @@ def _kv_criteria(context: Context) -> list[Criterion]:
 
 def _cache_criteria(context: Context) -> list[Criterion]:
     threshold = context.thresholds.cached_recovered_at
-    return [MedianAtLeast(context.signals.cached_fraction, threshold)]
+    return [MedianWithin(context.signals.cached_fraction, low=threshold)]
 
 
 def _cadence_criteria(context: Context, *, chunks: bool) -> list[Criterion]:
+    """Cadence is back when the median step gap (and, for the front end, the
+    median chunk gap) is within the baseline's p95: a served engine idles
+    between requests, so some single gap in any interval is longer."""
     signals, baseline = context.signals, context.baseline
     criteria: list[Criterion] = [
-        AllWithin(signals.step_gaps(), high=baseline.step_gap_p95)
+        MedianWithin(signals.step_gaps(), high=baseline.step_gap_p95)
     ]
     if chunks:
-        criteria.append(AllWithin(signals.chunk_gaps, high=baseline.chunk_gap_p95))
+        criteria.append(MedianWithin(signals.chunk_gaps, high=baseline.chunk_gap_p95))
     return criteria
 
 
@@ -613,7 +622,7 @@ __all__ = [
     "Context",
     "Criterion",
     "Mechanism",
-    "MedianAtLeast",
+    "MedianWithin",
     "NoEvents",
     "Signals",
     "Thresholds",
