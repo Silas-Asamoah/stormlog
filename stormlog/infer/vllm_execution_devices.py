@@ -65,20 +65,23 @@ class TraceBinding:
     """The GPU UUIDs a trace's processes map to, and what could not be mapped."""
 
     status: str
-    uuids: dict[int, str] = field(default_factory=dict)
+    # By pid, then CUDA ordinal: a worker's GPU applies to its own process
+    # only, never to a process no epoch matched.
+    uuids: dict[int, dict[int, str]] = field(default_factory=dict)
     workers: dict[int, str] = field(default_factory=dict)  # pid -> epoch
     ambiguous: dict[int, list[str]] = field(default_factory=dict)
     unmatched: list[int] = field(default_factory=list)
-    conflicts: list[int] = field(default_factory=list)  # ordinals
 
     def summary(self) -> dict[str, Any]:
         return {
             "status": self.status,
-            "device_uuids": {str(k): v for k, v in sorted(self.uuids.items())},
+            "device_uuids": {
+                str(pid): {str(ordinal): uuid for ordinal, uuid in sorted(m.items())}
+                for pid, m in sorted(self.uuids.items())
+            },
             "workers": {str(k): v for k, v in sorted(self.workers.items())},
             "ambiguous": {str(k): v for k, v in sorted(self.ambiguous.items())},
             "unmatched": list(self.unmatched),
-            "conflicts": list(self.conflicts),
         }
 
 
@@ -202,31 +205,23 @@ def _worker_epoch(epoch: EpochRead) -> WorkerEpoch:
 class _Matches:
     """What binding found per pid, folded into one trace's device map."""
 
-    uuids: dict[int, str] = field(default_factory=dict)
+    uuids: dict[int, dict[int, str]] = field(default_factory=dict)
     workers: dict[int, str] = field(default_factory=dict)
     ambiguous: dict[int, list[str]] = field(default_factory=dict)
     unmatched: list[int] = field(default_factory=list)
-    conflicts: set[int] = field(default_factory=set)
 
     def add(self, pid: int, found: list[WorkerEpoch]) -> None:
         if len(found) == 1:
             self.workers[pid] = found[0].epoch
-            self._add_uuid(found[0])
+            worker = found[0]
+            if worker.cuda_ordinal is not None and worker.device_uuid is not None:
+                self.uuids[pid] = {worker.cuda_ordinal: worker.device_uuid}
         elif found:
             self.ambiguous[pid] = [w.epoch for w in found]
         else:
             self.unmatched.append(pid)
 
-    def _add_uuid(self, worker: WorkerEpoch) -> None:
-        if worker.cuda_ordinal is None or worker.device_uuid is None:
-            return
-        known = self.uuids.get(worker.cuda_ordinal)
-        if known is not None and known != worker.device_uuid:
-            self.conflicts.add(worker.cuda_ordinal)
-        self.uuids.setdefault(worker.cuda_ordinal, worker.device_uuid)
-
     def binding(self, wanted: list[int]) -> TraceBinding:
-        uuids = {k: v for k, v in self.uuids.items() if k not in self.conflicts}
         if not wanted or not self.workers:
             status = STATUS_NONE
         elif len(self.workers) == len(wanted):
@@ -234,12 +229,7 @@ class _Matches:
         else:
             status = STATUS_PARTIAL
         return TraceBinding(
-            status,
-            uuids,
-            self.workers,
-            self.ambiguous,
-            self.unmatched,
-            sorted(self.conflicts),
+            status, self.uuids, self.workers, self.ambiguous, self.unmatched
         )
 
 

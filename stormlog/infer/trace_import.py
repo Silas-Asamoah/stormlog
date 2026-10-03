@@ -226,7 +226,7 @@ class TraceFileCollector:
             return _registered_only(attachment, path, "max_bytes")
         try:
             trace = _load(path, file_format)
-            uuids, sources, binding = self._device_uuids(trace, path)
+            uuids, by_pid, binding = self._device_uuids(trace, path)
             capture = capture_trace(
                 trace,
                 path,
@@ -235,7 +235,7 @@ class TraceFileCollector:
                 attachment=attachment,
                 device_uuids=uuids,
                 detail=self.detail,
-                device_uuid_sources=sources,
+                device_uuids_by_pid=by_pid,
             )
         except InferUsageError:
             raise
@@ -248,17 +248,14 @@ class TraceFileCollector:
 
     def _device_uuids(
         self, trace: KinetoTrace, path: Path
-    ) -> tuple[dict[int, str], dict[int, str], TraceBinding | None]:
-        """UUIDs by ordinal with their sources: the execution log's worker
-        hellos fill what ``--device-uuid`` did not give; the option wins."""
+    ) -> tuple[dict[int, str], dict[int, dict[int, str]], TraceBinding | None]:
+        """``--device-uuid`` entries by ordinal, and the execution log's by
+        process and ordinal; the option wins where both name an ordinal."""
         given = self.device_uuids.for_trace(path)
         if self.worker_index is None:
             return given, {}, None
         binding = self.worker_index.bind_trace(trace)
-        uuids = {**binding.uuids, **given}
-        sources = {index: "execution_log" for index in binding.uuids}
-        sources.update({index: "option" for index in given})
-        return uuids, sources, binding
+        return given, {pid: dict(m) for pid, m in binding.uuids.items()}, binding
 
 
 def _check_shared_devices(

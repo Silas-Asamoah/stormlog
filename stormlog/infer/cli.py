@@ -1218,8 +1218,6 @@ def _binding_note(binding: dict[str, Any]) -> str:
         parts.append(f"no worker epoch covers process {pids}")
     for pid, epochs in binding.get("ambiguous", {}).items():
         parts.append(f"process {pid} matches {len(epochs)} worker epochs")
-    if binding.get("conflicts"):
-        parts.append(f"device {binding['conflicts']} differs between processes")
     if not parts:
         parts.append(f"status {binding.get('status')}")
     return "; ".join(parts) + "; give --device-uuid for it"

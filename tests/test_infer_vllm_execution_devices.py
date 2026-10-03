@@ -18,6 +18,7 @@ from stormlog.infer.correlation_events import (
     load_inference_artifact,
 )
 from stormlog.infer.errors import InferInputError
+from stormlog.infer.trace_import import import_traces_into_artifact
 from stormlog.infer.trace_kineto import load_kineto_trace
 from stormlog.infer.vllm_execution_devices import (
     STATUS_BOUND,
@@ -152,7 +153,8 @@ def test_a_trace_binds_to_the_worker_alive_on_its_host_and_pid(tmp_path: Path) -
         host=HOST, pids=[2601], start_wall_ns=W0 + SECOND, end_wall_ns=W0 + 2 * SECOND
     )
     assert inside.status == STATUS_BOUND
-    assert inside.uuids == {0: "GPU-a"} and inside.workers == {2601: "worker-2601-7"}
+    assert inside.uuids == {2601: {0: "GPU-a"}}
+    assert inside.workers == {2601: "worker-2601-7"}
     # Before the hello, or long after the last heartbeat: not this process.
     before = index.bind(
         host=HOST, pids=[2601], start_wall_ns=W0 - SECOND, end_wall_ns=W0 + SECOND
@@ -201,14 +203,16 @@ def test_a_reused_pid_is_told_apart_by_lifetime(tmp_path: Path) -> None:
     first = index.bind(
         host=HOST, pids=[2601], start_wall_ns=W0 + SECOND, end_wall_ns=W0 + 4 * SECOND
     )
-    assert first.uuids == {0: "GPU-a"} and first.workers == {2601: "worker-2601-7"}
+    assert first.uuids == {2601: {0: "GPU-a"}}
+    assert first.workers == {2601: "worker-2601-7"}
     second = index.bind(
         host=HOST,
         pids=[2601],
         start_wall_ns=W0 + 25 * SECOND,
         end_wall_ns=W0 + 30 * SECOND,
     )
-    assert second.uuids == {0: "GPU-b"} and second.workers == {2601: "worker-2601-8"}
+    assert second.uuids == {2601: {0: "GPU-b"}}
+    assert second.workers == {2601: "worker-2601-8"}
     # A window after the first process ended and before the second began.
     between = index.bind(
         host=HOST,
@@ -246,7 +250,7 @@ def test_two_live_epochs_for_one_pid_are_ambiguous(tmp_path: Path) -> None:
     )
 
     assert binding.status == STATUS_PARTIAL
-    assert binding.uuids == {1: "GPU-c"}
+    assert binding.uuids == {2602: {1: "GPU-c"}}
     assert binding.ambiguous == {2601: ["worker-2601-7", "worker-2601-8"]}
     assert binding.summary()["ambiguous"] == {
         "2601": ["worker-2601-7", "worker-2601-8"]
@@ -264,7 +268,7 @@ def test_a_loaded_trace_binds_by_its_window_and_launching_pid(tmp_path: Path) ->
         trace
     )
 
-    assert binding.status == STATUS_BOUND and binding.uuids == {0: "GPU-a"}
+    assert binding.status == STATUS_BOUND and binding.uuids == {2601: {0: "GPU-a"}}
 
 
 def test_import_trace_takes_the_device_from_the_execution_log(
@@ -347,6 +351,63 @@ def test_an_unmatched_process_is_reported_and_left_unmeasured(
     assert (
         "execution log: no worker epoch covers process 2601; give --device-uuid" in out
     )
+
+
+def test_a_matched_workers_gpu_stays_with_its_own_process(tmp_path: Path) -> None:
+    """An Nsight report with two processes that both call their GPU device 0,
+    without a device table: only the process a worker hello matched gets
+    that worker's GPU; the other stays unmeasured (Astra #4)."""
+    from tests.test_infer_trace_nsys import SESSION_NS, _unnamed
+
+    trace = _unnamed(tmp_path)
+    mono = SESSION_NS - WALL_OFFSET
+    hook = write_epoch(
+        tmp_path / "hook",
+        "worker",
+        100,
+        SESSION_NS - 1000,
+        [
+            hello(
+                "worker",
+                100,
+                SESSION_NS - 1000,
+                mono_ns=mono - 1000,
+                engine_pid=99,
+                cuda_ordinal=0,
+                device_uuid="GPU-bbbb-1111",
+            ),
+            goodbye(mono + 1_000_000, 1),
+        ],
+    ).parent.parent
+    artifact = _artifact(tmp_path / "infer.jsonl")
+
+    capture = import_traces_into_artifact(artifact, [trace], execution_dir=hook)
+
+    assert capture.summary is not None
+    (summary,) = capture.summary["traces"]
+    binding = summary["execution_log"]
+    assert (binding["status"], binding["unmatched"]) == ("partial", [200])
+    assert binding["device_uuids"] == {"100": {"0": "GPU-bbbb-1111"}}
+    devices = {
+        k: (v["device_uuid"], v["device_uuid_source"])
+        for k, v in summary["devices"].items()
+    }
+    assert devices == {
+        "100/0": ("GPU-bbbb-1111", "execution_log"),
+        "200/0": (None, None),
+    }
+    activities = [
+        r
+        for r in load_inference_artifact(artifact)
+        if isinstance(r, ActivityReferenceEvent)
+    ]
+    assert sorted({(a.context.pid, a.context.device_uuid) for a in activities}) == [
+        (100, "GPU-bbbb-1111"),
+        (200, None),
+    ]
+    # (An unscoped --device-uuid for an ordinal two processes share is still
+    # refused, as test_infer_trace_nsys checks; a single-process trace's
+    # option still wins over the log, as checked above.)
 
 
 def test_a_missing_execution_dir_is_invalid_input(tmp_path: Path) -> None:
