@@ -152,6 +152,10 @@ series vLLM exports:
   included, so a request resumed after preemption reuses blocks past its
   prompt. Freed blocks keep their hashes in an LRU queue, so a shared prefix is
   reused until other traffic evicts it.
+- **Aborts.** A client that disconnects aborts its request. An abort that
+  arrives while a step runs takes effect before that step's update, as in
+  vLLM, so the hook records the member as `discarded_finished` and still
+  counts the token the sampler produced.
 
 Nothing is computed: each step sleeps for a simulated cost. Prompts are counted
 as whitespace words plus a fixed four-token chat template.

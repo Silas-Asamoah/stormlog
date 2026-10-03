@@ -450,6 +450,10 @@ class Engine:
         self, member: ScheduledMember, freed: list[FakeRequest]
     ) -> None:
         request = member.request
+        # The sampler's count, which the hook reads before the update whatever
+        # the outcome: a token once the step completes the request's context.
+        context_end = request.prompt_len + member.output_before
+        member.sampled = int(member.computed_before + member.tokens >= context_end)
         if request.finished:
             member.outcome = "discarded_finished"
             return
@@ -461,9 +465,8 @@ class Engine:
         request.computed += member.tokens
         request.committed = request.computed
         self._cache_full_blocks(request)
-        if request.computed < request.num_tokens:
+        if not member.sampled:
             return
-        member.sampled = 1
         self._sample(request)
         if request.output_tokens >= request.max_tokens:
             self._finish(request, "length")

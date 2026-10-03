@@ -247,10 +247,10 @@ def test_a_resets_victims_are_listed_in_the_next_steps_preempted() -> None:
     assert sorted(listed[0].preempted) == victims
 
 
-def _stepped_engine(*, num_gpu_blocks: int = 64) -> Engine:
+def _stepped_engine(*, max_num_batched_tokens: int = 256) -> Engine:
     """An engine whose steps a test drives by hand: its loop never starts."""
     config = FakeEngineConfig(
-        block_size=4, num_gpu_blocks=num_gpu_blocks, max_num_batched_tokens=256
+        block_size=4, num_gpu_blocks=64, max_num_batched_tokens=max_num_batched_tokens
     )
     return Engine(config)
 
@@ -311,3 +311,21 @@ def test_the_first_step_after_a_resume_is_context() -> None:
     assert (first.computed_before, request.prompt_len + 6) == (16, 16)
     assert first.tokens == 1
     assert (first.context, second.context) == (True, False)
+
+
+@pytest.mark.parametrize(("budget", "sampled"), [(256, 1), (4, 0)])
+def test_a_member_aborted_mid_step_keeps_the_samplers_count(
+    budget: int, sampled: int
+) -> None:
+    # vLLM 0.30 applies aborts that arrive during execution before the update
+    # (core.py:611-613), so the member is discarded_finished, but the hook
+    # still counts what the sampler produced: one token unless the step was a
+    # partial prefill.
+    engine = _stepped_engine(max_num_batched_tokens=budget)
+    request = _request(engine, "r", words(6, "p"), max_tokens=20)
+    step = engine._schedule()
+    assert step is not None
+    engine.abort(request)
+    engine._complete(step)
+    (member,) = step.members
+    assert (member.outcome, member.sampled) == ("discarded_finished", sampled)
