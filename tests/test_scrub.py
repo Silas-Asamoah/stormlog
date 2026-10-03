@@ -430,6 +430,29 @@ def test_single_quoted_keys_are_read_as_members(text: str, scrubbed: str) -> Non
     assert scrub_text(text) == scrubbed
 
 
+# A JSON-escaped quote, as JSON written inside a JSON string spells one.
+EQ = BACKSLASH + '"'
+
+
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        (f"password={EQ}opaque-value{EQ}", f"password={EQ}<redacted>{EQ}"),
+        (
+            '{"error": "{' + f"{EQ}api_key{EQ}: {EQ}opaque{EQ}" + '}"}',
+            '{"error": "{' + f"{EQ}api_key{EQ}: {EQ}<redacted>{EQ}" + '}"}',
+        ),
+        (
+            '{"detail": "' + f"{EQ}token{EQ}:{EQ}opaque, more" + '"}',
+            '{"detail": "' + f"{EQ}token{EQ}:{EQ}<redacted>" + '"}',
+        ),
+        (f"{EQ}model{EQ}: {EQ}gpt{EQ}", f"{EQ}model{EQ}: {EQ}gpt{EQ}"),
+    ],
+)
+def test_values_in_escaped_quotes_are_read(text: str, scrubbed: str) -> None:
+    assert scrub_text(text) == scrubbed
+
+
 def test_scrub_text_leaves_ordinary_text_alone() -> None:
     text = "This model's maximum context length is 32768 tokens; max_tokens 128."
     assert scrub_text(text) == text
@@ -602,6 +625,9 @@ ADVERSARIAL = (
     ('"a: " * 17000', None),
     ('"password=" * 5000', None),
     ('"password: " * 4500', None),
+    ("('password=' + chr(92) + '\"') * 4000", None),
+    ("(chr(92) + '\"api_key' + chr(92) + '\": ') * 3000", None),
+    ("(chr(92) + '\"a') * 17000", None),
     ('"a=\'" * 17000', None),
     ("'a=\"' * 17000", None),
     ("'password=\"' * 5000", None),

@@ -74,7 +74,8 @@ _HASH = re.compile("#")
 # just before an opening quote, and starting at each escaped quote of an
 # unclosed string would rescan it from every one, quadratically.
 _QUOTED_KEY = re.compile(
-    r"""(?<!\\)(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*:\s*"""
+    r"""(?<!\\)(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|"""
+    r"""\\"([^"\\]*)\\")\s*:\s*"""
 )
 # A key and its separator, without the value: a key that is not
 # secret-like must not consume the text after it, which can hold the next
@@ -86,6 +87,10 @@ _KEY_SEPARATOR = re.compile(rf"(?<![{_KEY_CHARS}])([{_KEY_CHARS}]+)\s*[=:]\s*")
 # still its value.
 _DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)(?:"|\\?\Z)')
 _SINGLE_QUOTED = re.compile(r"'((?:[^'\\]|\\.)*)(?:'|\\?\Z)")
+# A value in escaped quotes, as JSON inside a JSON string spells it: it ends
+# at the escaped closing quote, at the enclosing string's own quote, or at
+# the end of the text.
+_ESCAPED_QUOTED = re.compile(r'\\"((?:[^"\\]|\\[^"])*)(?:\\"|"|\\?\Z)')
 _BARE_VALUE = re.compile(r"[^\s&,;\"'(){}\[\]<>]+")
 # Well-known credential shapes. No word boundary in front: a key glued to
 # the text before it is still a key, and removing a little too much is the
@@ -182,7 +187,7 @@ def _member_spans(text: str) -> Iterator[Span]:
     """The value of each member whose key, escapes decoded, is secret-like."""
     bare = _BareRuns(text)
     for match in _QUOTED_KEY.finditer(text):
-        key = match.group(1) if match.group(1) is not None else match.group(2)
+        key = next(group for group in match.groups() if group is not None)
         if is_forbidden_key_name(_json_unescaped(key)):
             span = _value_span(text, match.end(), bare)
             if span is not None:
@@ -229,7 +234,7 @@ class _BareRuns:
 
 def _value_span(text: str, position: int, bare: _BareRuns) -> Span | None:
     """The value starting at ``position``: inside its quotes, or a bare word."""
-    for quoted in (_DOUBLE_QUOTED, _SINGLE_QUOTED):
+    for quoted in (_DOUBLE_QUOTED, _SINGLE_QUOTED, _ESCAPED_QUOTED):
         match = quoted.match(text, position)
         if match:
             return match.span(1) if match.end(1) > match.start(1) else None

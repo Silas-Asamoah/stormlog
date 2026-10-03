@@ -146,8 +146,11 @@ word from `SECRET_KEY_WORDS` appears anywhere in it, so `max_tokens="128"`,
 word before it is still removed. A bare value containing spaces loses only
 its first word, which is one reason consent is needed.
 
+Keys and values in escaped quotes, as JSON written inside a JSON string
+spells them (`{\"api_key\": \"...\"}`), are read too.
+
 These are not covered: a URL's fragment, which is never sent to a server;
-JSON nested inside a JSON string, whose quotes are escaped; and a Bearer or
+JSON escaped twice, inside a string inside a string; and a Bearer or
 Basic token that is a single all-lowercase word, such as `bearer abcdefghij`.
 
 `truncate_utf8(text, max_bytes)` returns the longest prefix whose UTF-8
