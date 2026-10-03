@@ -2,6 +2,8 @@
 
 import base64
 import json
+import subprocess
+import sys
 import urllib.parse
 
 import pytest
@@ -197,9 +199,19 @@ def test_scrub_text_cuts_after_redacting_so_no_fragment_is_left() -> None:
     assert "sk-" not in scrubbed and "kkkk" not in scrubbed
 
 
-def test_scrub_text_bounds_its_input_before_matching() -> None:
-    text = "a" * 10_000_000
-    assert scrub_text(text, max_bytes=16) == "a" * 16
+def test_scrub_text_bounds_its_input_before_matching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[int] = []
+
+    class Recording:
+        def sub(self, _replacement: object, text: str) -> str:
+            seen.append(len(text))
+            return text
+
+    monkeypatch.setattr(scrub, "_PATTERNS", ((Recording(), ""),))
+    assert scrub_text("a" * 10_000_000, max_bytes=16) == "a" * 16
+    assert seen == [16 + scrub.INPUT_MARGIN_CHARS]
 
 
 @pytest.mark.parametrize(
@@ -246,3 +258,48 @@ def test_is_forbidden_key_name_admits_ordinary_resource_names(name: str) -> None
 def test_free_text_patterns_use_the_same_words_as_the_key_check() -> None:
     for word in SECRET_KEY_WORDS:
         assert scrub_text(f"x_{word}_y=opaque-value") == f"x_{word}_y=<redacted>"
+
+
+# Inputs that made the earlier patterns backtrack polynomially (Astra F1,
+# Fable P1): a long run of key-like tokens, scheme-like runs, many "://",
+# a quote followed by key words, runs of "eyJ", many BEGIN lines.
+ADVERSARIAL = (
+    ('"key." * 1300', None),
+    ('"key." * 1300', 1024),
+    ('"key-" * 3000', 16),
+    ('"key-" * 13000', None),
+    ('"auth_" * 10000', None),
+    ('"a." * 26000', None),
+    ('"a-" * 26000', None),
+    ('"x://" * 13000', None),
+    ('"http://" * 7400', None),
+    ("'\"' + 'key' * 17000", None),
+    ("'\"' + ('key' + 'a' * 10) * 4000", None),
+    ('"eyJ" * 17000', None),
+    ('"eyJ" + "a" * 52000', None),
+    ('"authorization " * 3700', None),
+    ('"-----BEGIN PRIVATE KEY-----\\n" * 1800', None),
+)
+
+
+def test_scrub_text_stays_linear_on_adversarial_input() -> None:
+    # In a child process, so a regression fails on a timeout instead of
+    # hanging the suite.
+    code = (
+        "import json, sys, time\n"
+        "from stormlog.scrub import scrub_text\n"
+        f"cases = {ADVERSARIAL!r}\n"
+        "worst = 0.0\n"
+        "for expression, max_bytes in cases:\n"
+        "    text = eval(expression)\n"
+        "    started = time.perf_counter()\n"
+        "    scrub_text(text, max_bytes=max_bytes)\n"
+        "    worst = max(worst, time.perf_counter() - started)\n"
+        "print(json.dumps(worst))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=20
+    )
+    assert result.returncode == 0, result.stderr
+    # Each input is up to 52,000 characters; linear matching takes milliseconds.
+    assert json.loads(result.stdout) < 1.0

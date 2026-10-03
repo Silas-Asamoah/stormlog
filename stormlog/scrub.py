@@ -11,7 +11,7 @@ import base64
 import json
 import re
 import urllib.parse
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import overload
 
 REDACTED = "<redacted>"
@@ -42,8 +42,14 @@ SECRET_KEY_WORDS: tuple[str, ...] = (
     "signature",
     "private",
 )
-_SECRET_WORDS = "|".join(SECRET_KEY_WORDS)
-_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+# Every pattern matches in linear time: each one can start only where a
+# run of its characters starts (a lookbehind for the same class), and a
+# key's words are checked by is_forbidden_key_name on the whole token in a
+# callback, never by alternation inside the pattern, which backtracks
+# polynomially on runs such as "key.key.key.".
+_KEY_CHARS = "A-Za-z0-9_.-"
+_JSON_STRING = r'"((?:[^"\\]|\\.)*)"'
+_PATTERNS: tuple[tuple[re.Pattern[str], str | Callable[[re.Match[str]], str]], ...] = (
     # A private key block, including one cut before its END line.
     (
         re.compile(
@@ -58,31 +64,33 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1\2 " + REDACTED,
     ),
     (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"), r"\1 " + REDACTED),
-    # URL user information, then URL query strings.
-    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@"), r"\1" + REDACTED + "@"),
+    # A URL, as one token: its user information and query are removed.
     (
-        re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^\s?#\"'<>]*)\?[^\s#\"'<>]*"),
-        r"\1?" + REDACTED,
+        re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)([^\s\"'<>]*)"),
+        lambda match: match.group(1) + _url_rest(match.group(2)),
     ),
     # A JSON member whose key looks secret-like: "api_key": "..."
     (
-        re.compile(
-            r'(?i)("[^"\\]*(?:' + _SECRET_WORDS + r')[^"\\]*"\s*:\s*)'
-            r'"(?:[^"\\]|\\.)*"'
+        re.compile(_JSON_STRING + r"(\s*:\s*)" + _JSON_STRING),
+        lambda match: (
+            f'"{match.group(1)}"{match.group(2)}"{REDACTED}"'
+            if is_forbidden_key_name(match.group(1))
+            else match.group(0)
         ),
-        r'\1"' + REDACTED + '"',
     ),
     # key=value or key: value with a secret-like key.
     (
-        re.compile(
-            r"(?i)\b([A-Za-z0-9_.-]*(?:" + _SECRET_WORDS + r")[A-Za-z0-9_.-]*)"
-            r"(\s*[=:]\s*)([^\s&,;\"']+)"
+        re.compile(rf"(?<![{_KEY_CHARS}])([{_KEY_CHARS}]+)(\s*[=:]\s*)([^\s&,;\"']+)"),
+        lambda match: (
+            match.group(1) + match.group(2) + REDACTED
+            if is_forbidden_key_name(match.group(1))
+            else match.group(0)
         ),
-        r"\1\2" + REDACTED,
     ),
-    # Well-known credential shapes. No word boundary in front: a key glued
-    # to the text before it is still a key, and removing a little too much
-    # is the safe mistake.
+    # Well-known credential shapes. No word boundary in front of most: a
+    # key glued to the text before it is still a key, and removing a little
+    # too much is the safe mistake. Each class covers the prefix that
+    # follows it, so a run of repeated prefixes is one match.
     (re.compile(r"sk-[A-Za-z0-9_-]{16,}"), REDACTED),
     (re.compile(r"hf_[A-Za-z0-9]{20,}"), REDACTED),
     (re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"), REDACTED),
@@ -90,10 +98,30 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"github_pat_[A-Za-z0-9_]{20,}"), REDACTED),
     (re.compile(r"xox[abposr]-[A-Za-z0-9-]{10,}"), REDACTED),
     (
-        re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+        re.compile(
+            r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+            r"\.[A-Za-z0-9_-]{8,}"
+        ),
         REDACTED,
     ),
 )
+
+
+def _url_rest(rest: str) -> str:
+    """A URL after its scheme, with user information and query removed."""
+    authority_end = len(rest)
+    for mark in "/?#":
+        found = rest.find(mark)
+        if found >= 0:
+            authority_end = min(authority_end, found)
+    at = rest.rfind("@", 0, authority_end)
+    if at >= 0:
+        rest = REDACTED + rest[at:]
+    query = rest.find("?")
+    if query >= 0:
+        fragment = rest.find("#", query)
+        rest = rest[: query + 1] + REDACTED + (rest[fragment:] if fragment >= 0 else "")
+    return rest
 
 
 @overload

@@ -106,7 +106,10 @@ What it removes:
 
 The steps run in a fixed order:
 1. The text is first cut to `max_bytes` + 4,096 characters
-   (`INPUT_MARGIN_CHARS`), so a large body cannot make the patterns slow.
+   (`INPUT_MARGIN_CHARS`), so the work is bounded by `max_bytes` whatever
+   the body's size. Every pattern also runs in time linear in its input:
+   each can start only where a run of its characters starts, and a key's
+   words are checked on the whole key, never by backtracking.
 2. The exact values in `secrets` are redacted.
 3. The patterns run.
 4. The cut to `max_bytes` comes last.
