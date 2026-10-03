@@ -6,14 +6,16 @@ from __future__ import annotations
 from stormlog.infer.diagnosis_signals import evaluate_signal
 from stormlog.infer.scrape_window import (
     REASON_DUPLICATE_TIME,
+    REASON_HISTOGRAM_INCONSISTENT,
     REASON_OUT_OF_ORDER,
     REASON_SCRAPE_FAILED,
     REASON_SERIES_LABELS_CHANGED,
     check_window,
     counter_window,
     gauge_window,
+    histogram_share_above,
 )
-from tests.vllm_scrape_helpers import exposition, scrape, series
+from tests.vllm_scrape_helpers import LABELS, exposition, scrape, series
 
 PREEMPTIONS = "vllm:num_preemptions_total"
 WAITING = "vllm:num_requests_waiting"
@@ -91,3 +93,13 @@ def test_a_counter_delta_across_an_interior_failure_is_valid() -> None:
     )
     counter = counter_window(window, PREEMPTIONS)
     assert (counter.delta, counter.reasons) == (3.0, ())
+
+
+def test_a_histogram_whose_count_disagrees_with_its_inf_bucket_is_refused() -> None:
+    start = exposition(histograms={E2E: ((("0.1", 1), ("+Inf", 2)), 1.0)})
+    end = exposition(histograms={E2E: ((("0.1", 3), ("+Inf", 11)), 9.0)}).replace(
+        f"{E2E}_count{{{LABELS}}} 11", f"{E2E}_count{{{LABELS}}} 20"
+    )
+    share = histogram_share_above(series([start, end]), E2E, 0.1)
+    assert share.reasons == (REASON_HISTOGRAM_INCONSISTENT,)
+    assert share.lo is None and share.hi is None

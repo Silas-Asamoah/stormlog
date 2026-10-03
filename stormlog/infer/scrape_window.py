@@ -56,6 +56,7 @@ REASON_NO_OBSERVATIONS = "no_observations"
 REASON_OVERFLOW_BUCKET = "quantile_in_overflow_bucket"
 REASON_SERIES_LABELS_CHANGED = "series_labels_changed"
 REASON_DUPLICATE_TIME = "duplicate_scrape_time"
+REASON_HISTOGRAM_INCONSISTENT = "histogram_inconsistent"
 
 PLACEMENT_COMPLETED = "completed_at"
 PLACEMENT_APPROXIMATE = "approximate"
@@ -516,11 +517,15 @@ def _summed_window(
         return None, None, (REASON_BOUNDARIES_CHANGED,)
     les = next(iter(shapes))
     count = sum(float(delta["count"]) for delta in deltas)
-    buckets = [
+    buckets = sorted(
         (bucket_boundary(le), sum(float(delta["buckets"][i][1]) for delta in deltas))
         for i, le in enumerate(les)
-    ]
-    return count, sorted(buckets), ()
+    )
+    # Every observation is at or below +Inf: a _count that disagrees with the
+    # +Inf bucket makes every share computed from either one unreliable.
+    if buckets and math.isinf(buckets[-1][0]) and buckets[-1][1] != count:
+        return None, None, (REASON_HISTOGRAM_INCONSISTENT,)
+    return count, buckets, ()
 
 
 def _histogram_step(
