@@ -13,6 +13,7 @@ answers ``requires_hook``, ``requires_trace`` or ``requires_client``.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
@@ -20,6 +21,7 @@ from typing import Any
 
 from . import diagnosis_vocabulary as kinds
 from .diagnosis_thresholds import (
+    DEFAULT_THRESHOLDS,
     KV_PREEMPTIONS,
     PREFIX_HIT_RATIO_DROP,
     QUEUE_MEDIAN_WAITING,
@@ -70,8 +72,10 @@ class SignalConfig:
     """How to evaluate one window.
 
     ``thresholds`` overrides entries of the shared table by key; a result
-    says when it did. ``reference`` is the prefix-cache hit ratio a window is
-    compared with, which only the caller can know.
+    says when it did. A key the table lacks, or a value that is not a finite
+    number, is refused: a NaN would never be exceeded and a misspelt key
+    never read, both silently. ``reference`` is the prefix-cache hit ratio a
+    window is compared with, which only the caller can know.
     """
 
     engine: str | None = None
@@ -82,6 +86,11 @@ class SignalConfig:
     def __post_init__(self) -> None:
         if self.reference is not None and not 0.0 <= self.reference <= 1.0:
             raise ValueError("reference must be a hit ratio between 0 and 1")
+        unknown = sorted(set(self.thresholds) - set(DEFAULT_THRESHOLDS))
+        if unknown:
+            raise ValueError(f"unknown threshold keys: {', '.join(unknown)}")
+        if not all(math.isfinite(value) for value in self.thresholds.values()):
+            raise ValueError("threshold overrides must be finite numbers")
 
 
 @dataclass(frozen=True)

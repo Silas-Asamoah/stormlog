@@ -37,8 +37,9 @@ A cause is one of `fault`, `workload_change`, `instrumentation` and
 Online triggers and the diagnoser read thresholds from one versioned table,
 `stormlog.infer.diagnosis_thresholds` (version `diagnosis_thresholds_v1`), so
 they cannot disagree about what a threshold is. A caller may override an
-entry; every result records the table version and whether it did. The values
-are provisional until they are read from real runs.
+entry; every result records the table version and whether it did. An override
+of a key the table lacks, or with a value that is not a finite number, is
+refused. The values are provisional until they are read from real runs.
 
 | Key | Value | Meaning |
 | --- | --- | --- |

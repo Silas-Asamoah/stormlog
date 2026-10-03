@@ -179,6 +179,32 @@ def test_a_consistent_step_still_resolves_and_a_falling_bucket_is_a_reset() -> N
     assert reset.reasons == (REASON_COUNTER_RESET,)
 
 
+@pytest.mark.parametrize(
+    "thresholds, message",
+    [
+        ({"queue_saturation.median_waiting_requests": float("nan")}, "finite"),
+        ({"kv_preemption_pressure.preemptions": float("inf")}, "finite"),
+        ({"queue_saturation.median_waiting_requestz": 3.0}, "unknown"),
+    ],
+)
+def test_a_threshold_override_that_could_never_decide_is_refused(
+    thresholds: dict[str, float], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        SignalConfig(thresholds=thresholds)
+
+
+def test_a_known_finite_override_is_used_and_said() -> None:
+    window = series([exposition(gauges={WAITING: 5})] * 2)
+    config = SignalConfig(thresholds={"queue_saturation.median_waiting_requests": 6})
+    signal = evaluate_signal("queue_saturation", window, config)
+    assert (signal.exceeds, signal.threshold, signal.threshold_overridden) == (
+        False,
+        6.0,
+        True,
+    )
+
+
 @pytest.mark.parametrize("reference", [-0.1, 1.5, float("nan")])
 def test_a_prefix_reference_outside_zero_to_one_is_refused(reference: float) -> None:
     with pytest.raises(ValueError, match="reference"):
