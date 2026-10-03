@@ -162,6 +162,16 @@ def test_a_step_that_is_not_a_histogram_is_refused() -> None:
     assert p90.reasons == (REASON_HISTOGRAM_INCONSISTENT,) and p90.hi is None
 
 
+def test_a_step_whose_cumulative_counts_fall_is_refused() -> None:
+    # Every part grew and no bucket exceeds the step's count of 5, but the
+    # step's cumulative buckets [3, 2, 5] fall: the share above 0.3 would be
+    # bounded by lo 0.6 > hi 0.4.
+    start = exposition(histograms={E2E: ((("0.1", 0), ("0.5", 5), ("+Inf", 5)), 1.0)})
+    end = exposition(histograms={E2E: ((("0.1", 3), ("0.5", 7), ("+Inf", 10)), 2.0)})
+    share = histogram_share_above(series([start, end]), E2E, 0.3)
+    assert share.reasons == (REASON_HISTOGRAM_INCONSISTENT,)
+
+
 def test_a_step_with_a_bucket_above_its_count_is_refused() -> None:
     # No +Inf bucket to compare with: the finite bucket alone exceeds the count.
     start = exposition(histograms={E2E: ((("0.1", 0), ("0.5", 0)), 0.0)})
