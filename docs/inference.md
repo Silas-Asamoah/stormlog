@@ -256,7 +256,7 @@ reads the answer, and records it as one of:
 | Answer | Meaning |
 | --- | --- |
 | `acknowledged` | The server answered `success: true`. |
-| `refused` | The server kept answering `success: false`. A refused reset is retried every half second for up to 10 seconds; the record keeps the number of attempts. It counts as a failed reset. |
+| `refused` | The server kept answering `success: false`. A refused reset is retried every half second for up to `--cache-reset-timeout` seconds (default 10; 0 tries once); the record keeps the number of attempts. It counts as a failed reset. |
 | `accepted_unverified` | A 2xx answer without a `success` field, such as SGLang's text reply. |
 
 The `infer.cache_state` record and the report's `cache` block record:

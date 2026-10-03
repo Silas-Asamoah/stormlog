@@ -389,3 +389,34 @@ def test_a_case_without_a_reset_was_not_attempted() -> None:
         session_id="s", case_id="c1", requested="cold", reset=None, warmup_requests=0
     )
     assert (record["attempted"], record["acknowledged"]) == (False, False)
+
+
+def test_the_profile_retries_a_held_reset_for_the_configured_time(
+    tmp_path: Path,
+) -> None:
+    with _answering_server(b'{"success": false}') as url:
+        run_profile_with_fake_client(
+            tmp_path,
+            latency_seconds=0.0,
+            request_count=1,
+            cache_state="cold",
+            cache_reset_url=url,
+            cache_reset_timeout_seconds=0.0,
+        )
+    (record,) = _cache_records(tmp_path)
+    # No time to retry: the one refusal is the answer.
+    assert record["reset"]["answer"] == "refused"
+    assert record["reset"]["attempts"] == 1
+    assert _AnsweringResetHandler.calls == 1
+    lines = (tmp_path / "infer.jsonl").read_text().splitlines()
+    records = [json.loads(line) for line in lines]
+    session = next(r for r in records if r.get("event_type") == "infer.session")
+    assert session["config"]["cache_reset_timeout_seconds"] == 0.0
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf"])
+def test_cli_rejects_a_reset_timeout_it_cannot_wait(tmp_path: Path, value: str) -> None:
+    code, stderr = _cli(tmp_path, "--cache-reset-timeout", value)
+    assert code == ExitCode.USAGE
+    assert "--cache-reset-timeout must be a finite number >= 0" in stderr
+    assert not (tmp_path / "infer.jsonl").exists()

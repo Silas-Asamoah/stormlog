@@ -281,6 +281,9 @@ class InferenceProfiler:
                         "prompts": self.prompt_spec.to_record(),
                         "cache_state": self.config.cache_state,
                         "cache_reset_url": redact_url(self.config.cache_reset_url),
+                        "cache_reset_timeout_seconds": (
+                            self.config.cache_reset_timeout_seconds
+                        ),
                         "vllm_metrics": (
                             self.vllm_scraper.config_record()
                             if self.vllm_scraper is not None
@@ -533,6 +536,7 @@ class InferenceProfiler:
                 self.config.cache_reset_url,
                 timeout_seconds=self.config.timeout_seconds,
                 api_key=self.config.api_key,
+                retry_seconds=self.config.cache_reset_timeout_seconds,
             )
             if not reset.succeeded and self.on_warning is not None:
                 self.on_warning(

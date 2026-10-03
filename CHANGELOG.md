@@ -282,8 +282,8 @@ the flaky benchmark memory gates
   reset. vLLM's `/reset_prefix_cache` answers 200 with `{"success": false}`
   while blocks are still held. The answer is now read and recorded as
   `acknowledged`, `refused` or `accepted_unverified`. A refused reset is
-  retried for up to 10 seconds, then counts as a failed reset, so the case
-  is not labelled a cold start. `infer.cache_state` records and the report's
+  retried for up to `--cache-reset-timeout` seconds (default 10), then
+  counts as a failed reset, so the case is not labelled a cold start. `infer.cache_state` records and the report's
   `cache` block gain `attempted` and `acknowledged`, and the reset's
   `success`, `answer` and `attempts`. (#213)
 - The benchmark harness's memory gates no longer fail on runner noise:

@@ -25,7 +25,7 @@ from .arrivals import (
     ArrivalTrace,
     load_arrival_trace,
 )
-from .cache_state import CACHE_STATES, COLD, UNSPECIFIED
+from .cache_state import CACHE_STATES, COLD, RESET_RETRY_SECONDS, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
 from .errors import InferInputError, InferUsageError
 from .profile import InferenceProfiler
@@ -650,6 +650,16 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
             "vLLM /reset_prefix_cache or SGLang /flush_cache"
         ),
     )
+    parser.add_argument(
+        "--cache-reset-timeout",
+        type=float,
+        default=RESET_RETRY_SECONDS,
+        metavar="SECONDS",
+        help=(
+            "How long to retry a reset the server refuses, as vLLM does while "
+            f"blocks are held (default: {RESET_RETRY_SECONDS:g}; 0 tries once)"
+        ),
+    )
 
 
 def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
@@ -853,6 +863,7 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         prefix_groups=args.prefix_groups,
         cache_state=args.cache_state,
         cache_reset_url=args.cache_reset_url,
+        cache_reset_timeout_seconds=args.cache_reset_timeout,
         extra_body=_extra_body(args.extra_body),
         vllm_metrics_url=resolve_metrics_url(endpoint, args.vllm_metrics),
         vllm_metrics_interval_seconds=(
@@ -1021,7 +1032,7 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
         raise ValueError("Use either --duration or --requests, not both")
     _validate_arrival_arguments(args)
     _validate_prompt_arguments(args)
-    _validate_http_url(args.cache_reset_url, "--cache-reset-url")
+    _validate_cache_arguments(args)
     _validate_trace_arguments(args)
     if args.timeout <= 0:
         raise ValueError("--timeout must be > 0")
@@ -1054,6 +1065,12 @@ def _validate_vllm_metrics_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--vllm-metrics-interval only applies with --vllm-metrics")
     if not math.isfinite(interval) or interval < 0.1:
         raise ValueError("--vllm-metrics-interval must be a number of seconds >= 0.1")
+
+
+def _validate_cache_arguments(args: argparse.Namespace) -> None:
+    _validate_http_url(args.cache_reset_url, "--cache-reset-url")
+    if not math.isfinite(args.cache_reset_timeout) or args.cache_reset_timeout < 0:
+        raise ValueError("--cache-reset-timeout must be a finite number >= 0")
 
 
 def _validate_vllm_span_arguments(args: argparse.Namespace) -> None:

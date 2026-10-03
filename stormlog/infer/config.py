@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from .arrivals import BURST, CLOSED, RATE_MODES, REPLAY, ArrivalSpec, ArrivalTrace
-from .cache_state import UNSPECIFIED
+from .cache_state import RESET_RETRY_SECONDS, UNSPECIFIED
 from .prompts import REPEAT, PromptSpec
 
 if TYPE_CHECKING:
@@ -126,6 +126,8 @@ class ProfileConfig:
     extra_body: dict[str, Any] | None = None
     # POSTed before each case, e.g. vLLM /reset_prefix_cache or SGLang /flush_cache.
     cache_reset_url: str | None = None
+    # How long a reset the server refuses (vLLM's success false) is retried.
+    cache_reset_timeout_seconds: float = RESET_RETRY_SECONDS
     # vLLM's Prometheus endpoint, scraped at phase boundaries and on a cadence;
     # None leaves native telemetry off.
     vllm_metrics_url: str | None = None
