@@ -189,8 +189,8 @@ def reduce_execution_log(
             high_water[epoch.epoch] = summary["high_water_seq"]
     for epoch in read.workers():
         epochs[epoch.epoch] = {**epoch.summary(), "reduced": False}
-        if epoch.last_seq is not None:
-            high_water[epoch.epoch] = epoch.last_seq
+        if epoch.consumed_seq is not None:
+            high_water[epoch.epoch] = epoch.consumed_seq
     return ReduceResult(
         events, {"epochs": epochs, "pseudonyms": "hmac-sha256-keyed"}, high_water
     )
@@ -606,20 +606,19 @@ class _EpochReducer:
 
     def _high_water(self, pending: list[Iteration]) -> int | None:
         """Just below the first record a later import still needs: a pending
-        step, or the admission of a request no final step has shown yet."""
-        last = self.epoch.last_seq
+        step, the admission of a request no final step has shown yet, or a
+        sequence not read yet (the mark never passes what was read)."""
+        consumed = self.epoch.consumed_seq
         before = self.epoch.high_water_before
-        if last is None:
-            return before
-        if self.epoch.state != STATE_ALIVE:
-            return last
+        if consumed is None or self.epoch.state != STATE_ALIVE:
+            return consumed
         waiting = [item.scheduled.seq for item in pending]
         waiting.extend(
             e.alias_seq
             for e in self.executions.values()
             if e.alias_seq is not None and not e.seen_final
         )
-        mark = min(waiting) - 1 if waiting else last
+        mark = min(min(waiting) - 1, consumed) if waiting else consumed
         return mark if before is None else max(mark, before)
 
     def _summary(

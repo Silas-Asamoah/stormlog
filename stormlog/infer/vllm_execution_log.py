@@ -59,7 +59,12 @@ class EpochRead:
     goodbye: dict[str, Any] | None = None
     status: dict[str, Any] | None = None
     key: bytes | None = None
+    # The highest sequence read, the highest one read with nothing missing
+    # below it (what an import may safely consume), and the writer's own
+    # count from status.json, which only says how far behind the read is.
     last_seq: int | None = None
+    contiguous_seq: int | None = None
+    writer_last_seq: int | None = None
     high_water_before: int | None = None
     truncated: bool = False
     gaps: int = 0
@@ -80,6 +85,16 @@ class EpochRead:
     def of_kind(self, kind: str) -> list[RawRecord]:
         return [record for record in self.records if record.kind == kind]
 
+    @property
+    def consumed_seq(self) -> int | None:
+        """The mark an import may advance to from this read alone: the
+        contiguous sequence, never the writer's count from status.json."""
+        if self.contiguous_seq is None:
+            return self.high_water_before
+        if self.high_water_before is None:
+            return self.contiguous_seq
+        return max(self.contiguous_seq, self.high_water_before)
+
     def summary(self) -> dict[str, Any]:
         """The epoch's state for an import summary; no record content."""
         status = self.status or {}
@@ -91,9 +106,9 @@ class EpochRead:
             "state": self.state,
             "records": len(self.records),
             "last_seq": self.last_seq,
-            "high_water_seq": (
-                self.last_seq if self.last_seq is not None else self.high_water_before
-            ),
+            "contiguous_seq": self.contiguous_seq,
+            "writer_last_seq": self.writer_last_seq,
+            "high_water_seq": self.consumed_seq,
             "truncated": self.truncated,
             "gaps": self.gaps,
             "dropped": dict(status.get("dropped") or {}),
@@ -183,15 +198,43 @@ def _epoch_from_directory(
     )
 
 
+_RELIST_ATTEMPTS = 3
+
+
+class _Vanished(Exception):
+    """A listed ``.part`` segment was sealed (renamed) before it was opened."""
+
+
 def _read_epoch(epoch: EpochRead, now_ns: int) -> None:
     seen: dict[int, RawRecord] = {}
-    for segment in _segments(epoch.directory):
-        for record in _read_segment(epoch, segment):
-            # The first delivery of a sequence number is the one kept.
-            seen.setdefault(record.seq, record)
+    for attempt in range(_RELIST_ATTEMPTS):
+        # The writer may seal a segment between the listing and the open; the
+        # sealed file is then read under its new name on the next listing,
+        # and a sequence already seen is not taken twice.
+        if not _read_segments(epoch, seen, report=attempt == _RELIST_ATTEMPTS - 1):
+            break
     epoch.status = _read_json_file(epoch.directory / "status.json", epoch.errors)
     epoch.key = _read_key(epoch.directory / "key", epoch.errors)
     _settle(epoch, seen, now_ns)
+
+
+def _read_segments(
+    epoch: EpochRead, seen: dict[int, RawRecord], *, report: bool
+) -> bool:
+    """Read every listed segment into ``seen``; True when one vanished."""
+    vanished = False
+    for segment in _segments(epoch.directory):
+        try:
+            records = _read_segment(epoch, segment)
+        except _Vanished:
+            vanished = True
+            if report:
+                epoch.errors.append(f"{segment.name}: sealed while being read")
+            continue
+        for record in records:
+            # The first delivery of a sequence number is the one kept.
+            seen.setdefault(record.seq, record)
+    return vanished
 
 
 def _segments(directory: Path) -> list[Path]:
@@ -207,6 +250,11 @@ def _segments(directory: Path) -> list[Path]:
 def _read_segment(epoch: EpochRead, path: Path) -> list[RawRecord]:
     try:
         data = path.read_bytes()
+    except FileNotFoundError as exc:
+        if path.suffix == ".part":
+            raise _Vanished(path.name) from exc
+        epoch.errors.append(f"{path.name}: {exc}")
+        return []
     except OSError as exc:
         epoch.errors.append(f"{path.name}: {exc}")
         return []
@@ -301,14 +349,21 @@ def _settle(epoch: EpochRead, seen: dict[int, RawRecord], now_ns: int) -> None:
 
 
 def _sequence_facts(epoch: EpochRead, seen: dict[int, RawRecord]) -> None:
-    """Gaps and the highest sequence, from the records and the status file."""
+    """Gaps and the sequences read; the writer's own count stays apart.
+
+    The hook numbers records only as it writes them, so a hole below the
+    highest sequence read is data not yet visible, not a dropped record:
+    the contiguous sequence stops before it.
+    """
     if seen:
         lowest, highest = min(seen), max(seen)
         epoch.gaps = highest - lowest + 1 - len(seen)
         epoch.last_seq = highest
-    status_seq = _integer((epoch.status or {}).get("last_seq"))
-    if status_seq is not None:
-        epoch.last_seq = max(status_seq, epoch.last_seq or -1)
+        contiguous = lowest if lowest == 0 else None
+        while contiguous is not None and contiguous + 1 in seen:
+            contiguous += 1
+        epoch.contiguous_seq = contiguous
+    epoch.writer_last_seq = _integer((epoch.status or {}).get("last_seq"))
 
 
 def _last_seen(epoch: EpochRead, seen: dict[int, RawRecord]) -> int | None:

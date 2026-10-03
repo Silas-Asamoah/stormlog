@@ -103,8 +103,12 @@ def test_gaps_and_the_status_file_extend_the_sequence_facts(tmp_path: Path) -> N
     (epoch,) = read_execution_log(tmp_path, now_ns=NOW).epochs
     assert [r.seq for r in epoch.records] == [0, 1, 5, 6]
     assert epoch.gaps == 3
-    assert epoch.last_seq == 9
+    # The sequences read, the contiguous ones an import may consume, and the
+    # writer's own count are three different facts.
+    assert (epoch.last_seq, epoch.contiguous_seq, epoch.writer_last_seq) == (6, 1, 9)
+    assert epoch.consumed_seq == 1
     summary = epoch.summary()
+    assert summary["high_water_seq"] == 1
     assert summary["dropped"] == {
         "scheduled": 2,
         "completed": 0,
@@ -197,6 +201,85 @@ def test_worker_and_engine_epochs_are_told_apart(tmp_path: Path) -> None:
     assert (summary["range_misses"], summary["startup_unranged"]) == (1, 9)
     assert (summary["pending_samples"], summary["queued"]) == (2, 3)
     assert summary["dropped"] == {"alias_oversized": 1}
+
+
+def _append(directory: Path, seq: int, record: dict[str, object]) -> None:
+    line = json.dumps({"format": FORMAT, "epoch": directory.name, "seq": seq, **record})
+    with (directory / "000001.jsonl.part").open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+def test_the_consumed_mark_never_passes_records_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A writer that appends between the segment read and the status read
+    must not move the mark past what was delivered (Astra #3)."""
+    import stormlog.infer.vllm_execution_log as reader
+
+    directory = engine_log(
+        tmp_path, [], sealed=0, status={"wall_ns": NOW, "last_seq": 0}
+    )
+    real = reader._read_json_file
+    fired = False
+
+    def status_after_a_late_write(
+        path: Path, errors: list[str]
+    ) -> dict[str, object] | None:
+        nonlocal fired
+        if not fired:
+            fired = True
+            _append(directory, 1, scheduled(0, T0, []))
+            (directory / "status.json").write_text(
+                json.dumps({"wall_ns": NOW, "last_seq": 1}), encoding="utf-8"
+            )
+        return real(path, errors)
+
+    monkeypatch.setattr(reader, "_read_json_file", status_after_a_late_write)
+    (epoch,) = read_execution_log(tmp_path, now_ns=NOW).epochs
+    assert [r.seq for r in epoch.records] == [0]
+    assert epoch.writer_last_seq == 1
+    assert epoch.consumed_seq == 0 and epoch.summary()["high_water_seq"] == 0
+    # The next read, from that mark, delivers the step.
+    (again,) = read_execution_log(
+        tmp_path, high_water={directory.name: 0}, now_ns=NOW
+    ).epochs
+    assert [r.seq for r in again.records] == [1]
+
+
+def test_a_segment_sealed_between_listing_and_reading_is_read_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import stormlog.infer.vllm_execution_log as reader
+
+    directory = engine_log(tmp_path, [], sealed=0)
+    _append(directory, 1, scheduled(0, T0, []))
+    real = reader._read_segment
+    fired = False
+
+    def seal_before_open(epoch: reader.EpochRead, path: Path) -> list[reader.RawRecord]:
+        nonlocal fired
+        if not fired and path.suffix == ".part":
+            fired = True
+            path.rename(path.with_suffix(""))  # the writer seals it first
+        return real(epoch, path)
+
+    monkeypatch.setattr(reader, "_read_segment", seal_before_open)
+    (epoch,) = read_execution_log(tmp_path, now_ns=NOW).epochs
+    assert [r.seq for r in epoch.records] == [0, 1]
+    assert epoch.errors == [] and epoch.consumed_seq == 1
+
+
+def test_a_hole_in_the_sequences_holds_the_mark_back(tmp_path: Path) -> None:
+    directory = engine_log(tmp_path, [scheduled(0, T0, [])], sealed=2)
+    _append(directory, 4, scheduled(2, T0, []))  # seqs 2 and 3 not visible yet
+    (epoch,) = read_execution_log(tmp_path, now_ns=NOW).epochs
+    assert [r.seq for r in epoch.records] == [0, 1, 4]
+    assert (epoch.last_seq, epoch.contiguous_seq, epoch.consumed_seq) == (4, 1, 1)
+    # An earlier mark is never lowered by a later, shorter read.
+    (again,) = read_execution_log(
+        tmp_path, high_water={directory.name: 3}, now_ns=NOW
+    ).epochs
+    assert again.consumed_seq == 3
 
 
 def test_a_missing_directory_is_an_error(tmp_path: Path) -> None:
