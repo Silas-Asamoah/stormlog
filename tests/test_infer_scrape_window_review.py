@@ -1,5 +1,6 @@
 """Window edge cases found in review: label changes, ordering, failures,
-duplicate stamps, inconsistent histograms and an invalid reference."""
+duplicate stamps, inconsistent histograms, an invalid reference and a window
+over several engines."""
 
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ from stormlog.infer.diagnosis_signals import SignalConfig, evaluate_signal
 from stormlog.infer.scrape_window import (
     REASON_COUNTER_RESET,
     REASON_DUPLICATE_TIME,
+    REASON_ENGINE_REQUIRED,
     REASON_HISTOGRAM_INCONSISTENT,
     REASON_OUT_OF_ORDER,
     REASON_SCRAPE_FAILED,
@@ -22,6 +24,8 @@ from stormlog.infer.scrape_window import (
 from tests.vllm_scrape_helpers import LABELS, exposition, scrape, series
 
 PREEMPTIONS = "vllm:num_preemptions_total"
+HITS = "vllm:prefix_cache_hits_total"
+QUERIES = "vllm:prefix_cache_queries_total"
 WAITING = "vllm:num_requests_waiting"
 E2E = "vllm:e2e_request_latency_seconds"
 
@@ -155,3 +159,32 @@ def test_a_consistent_step_still_resolves_and_a_falling_bucket_is_a_reset() -> N
 def test_a_prefix_reference_outside_zero_to_one_is_refused(reference: float) -> None:
     with pytest.raises(ValueError, match="reference"):
         SignalConfig(reference=reference)
+
+
+def _split_engines(hits: float, queries: float) -> str:
+    """Engine 0 exports the hits and engine 1 the queries."""
+    text = exposition(counters={HITS: hits, QUERIES: queries})
+    for family in (QUERIES, "vllm:prefix_cache_queries_created"):
+        text = text.replace(f'{family}{{engine="0"', f'{family}{{engine="1"')
+    return text
+
+
+def test_a_signal_never_combines_two_engines_families() -> None:
+    window = series([_split_engines(0.0, 0.0), _split_engines(50.0, 100.0)])
+    check = check_window(window)
+    assert check.reasons == (REASON_ENGINE_REQUIRED,) and not check.sufficient
+    mixed = evaluate_signal("prefix_cache_loss", window, SignalConfig(reference=0.8))
+    assert (mixed.sufficient, mixed.reason, mixed.exceeds) == (
+        False,
+        REASON_ENGINE_REQUIRED,
+        None,
+    )
+    for engine in ("0", "1"):
+        named = SignalConfig(reference=0.8, engine=engine)
+        assert check_window(window, engine=engine).sufficient
+        assert evaluate_signal("prefix_cache_loss", window, named).exceeds is None
+
+
+def test_one_engine_needs_no_name() -> None:
+    window = series([exposition(gauges={WAITING: 9})] * 2)
+    assert check_window(window).sufficient

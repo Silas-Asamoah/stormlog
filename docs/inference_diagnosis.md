@@ -73,5 +73,8 @@ signal over its threshold means a mechanism is *suspected* in the engine's
 traffic; it does not say whose requests it hurt. A prefix-cache signal in
 particular cannot tell another client's prompts lowering the ratio from the
 cache losing a victim's prefixes, and it gives no verdict without a reference
-ratio (`requires_reference`); a reference outside 0-1 is refused. Kinds that metrics alone cannot decide answer
-`requires_hook`, `requires_trace` or `requires_client`.
+ratio (`requires_reference`); a reference outside 0-1 is refused. Every
+figure of one signal comes from one engine: behind an exporter with several,
+`config.engine` names it, and without it the window is `engine_required`.
+Kinds that metrics alone cannot decide answer `requires_hook`,
+`requires_trace` or `requires_client`.

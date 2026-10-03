@@ -189,9 +189,11 @@ two:
 A series that more than one label set matches, such as
 `vllm:num_requests_waiting_by_reason` without a `reason`, is
 `ambiguous_series` rather than a sum, and a scrape with several engines needs
-the engine named (`engine_required`). A series whose labels change between
-scrapes (another model name, say) is a different series, so it is never
-differenced across the change (`series_labels_changed`).
+the engine named (`engine_required`). The window is checked as a whole, not
+family by family: a signal that divides one family by another would otherwise
+read each from whichever engine exported it. A series whose labels change
+between scrapes (another model name, say) is a different series, so it is
+never differenced across the change (`series_labels_changed`).
 
 Scrapes must be given in strictly increasing stamp order
 (`scrapes_out_of_order`, `duplicate_scrape_time`), and nothing is differenced

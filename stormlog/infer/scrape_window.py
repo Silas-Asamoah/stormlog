@@ -180,9 +180,19 @@ def _window_reasons(
         reasons.append(REASON_TOO_FEW_SCRAPES)
     reasons.extend(order_reasons(scrapes))
     reasons.extend(window_identity_reasons(ok))
-    if engine is not None and any(engine not in _engines(scrape) for scrape in ok):
-        reasons.append(REASON_SERIES_MISSING)
+    reasons.extend(_engine_reasons(ok, engine))
     return reasons
+
+
+def _engine_reasons(ok: Sequence[VllmScrapeRecord], engine: str | None) -> list[str]:
+    """A window's figures are one engine's. A named engine must be in every
+    scrape; with none named, no scrape may hold several, or two families of
+    one signal could each be read from a different engine."""
+    if engine is not None:
+        missing = any(engine not in _engines(scrape) for scrape in ok)
+        return [REASON_SERIES_MISSING] if missing else []
+    several = any(len(_engines(scrape)) > 1 for scrape in ok)
+    return [REASON_ENGINE_REQUIRED] if several else []
 
 
 def order_reasons(scrapes: Sequence[VllmScrapeRecord]) -> list[str]:
