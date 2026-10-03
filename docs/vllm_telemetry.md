@@ -167,6 +167,33 @@ prefix (`vllm:kv_offload_*`, `vllm:spec_decode_*`, `vllm:diffusion_*`): those
 are listed as `optional_present` and kept raw. A retired name is normalised
 under its successor, kept as `deprecated_alias_of`, and listed as retired.
 
+### Windows of scrapes
+
+`stormlog.infer.scrape_window` aggregates any window of scrapes the caller
+chooses, for one `engine` label, and is what windowed analyses use (online
+triggers and the incident diagnoser). It follows the rules above and adds
+two:
+
+- **Consecutive deltas.** A counter's or histogram's change over the window
+  is the sum of its changes between consecutive scrapes. A value that went
+  backwards between two interior scrapes is `counter_reset` even when the
+  window's first and last values look consistent; the case blocks above,
+  which compare only the phase-start and phase-end scrapes, cannot see that.
+- **Sample intervals.** A scrape sampled the server at some instant between
+  its stamp (`observed_at_ns`) and its response. A window's duration is
+  measured between the first and last scrapes' interval midpoints, and rates
+  carry the bounds the intervals allow. A scrape bounded only by its
+  `duration_ms` misses the fetch thread's start delay, so its window says
+  `placement: approximate`.
+
+A series that more than one label set matches, such as
+`vllm:num_requests_waiting_by_reason` without a `reason`, is
+`ambiguous_series` rather than a sum, and a scrape with several engines needs
+the engine named (`engine_required`). A histogram's share of observations
+above a value, and the bucket holding a quantile, are reported as bounds
+between bucket boundaries; a quantile in the `+Inf` bucket has no upper bound
+(`quantile_in_overflow_bucket`).
+
 ## Metric map
 
 Residency means wall-clock time in a scheduler phase, measured on the
