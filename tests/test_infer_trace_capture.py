@@ -214,6 +214,49 @@ def test_a_start_without_a_clear_answer_is_stopped_before_the_phase(
     )
 
 
+@pytest.mark.parametrize(
+    "failure", [BrokenPipeError("stderr closed"), KeyboardInterrupt()]
+)
+@pytest.mark.parametrize("cancel_during_start", [False, True])
+def test_a_failing_warning_never_skips_the_stop_or_the_record(
+    tmp_path: Path, failure: BaseException, cancel_during_start: bool
+) -> None:
+    """The CLI's warning writes to stderr, which can fail or be interrupted."""
+    import time
+
+    class _SlowLostStart(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            if route == "/start_profile" and cancel_during_start:
+                time.sleep(0.2)
+            return super().post(route)
+
+    def warn(_message: str) -> None:
+        raise failure
+
+    control = _SlowLostStart(tmp_path, start_status=None)
+    windows = TraceWindows(_config(tmp_path), control=control, on_warning=warn)
+
+    async def scenario() -> None:
+        async def body() -> None:
+            async with windows.window("c1", "measured"):
+                await asyncio.sleep(5)
+
+        task = asyncio.create_task(body())
+        if cancel_during_start:
+            await asyncio.sleep(0.05)
+            task.cancel()
+        await task
+
+    with pytest.raises((type(failure), asyncio.CancelledError)):
+        asyncio.run(scenario())
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    records = windows.take_records(session_id="s1")
+    assert [(r["start_outcome"], r["stop_status"]) for r in records] == [
+        (START_UNKNOWN, 200)
+    ]
+
+
 def test_start_outcome_classifies_every_answer() -> None:
     assert start_outcome(ControlResult(200)) == START_ACKNOWLEDGED
     assert start_outcome(ControlResult(204)) == START_ACKNOWLEDGED
