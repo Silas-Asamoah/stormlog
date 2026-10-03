@@ -51,6 +51,15 @@ the flaky benchmark memory gates
     unverified, since vLLM emits spans for failed requests too.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `--slo KEY:MS` (repeatable) and `--slo-file FILE` on `stormlog infer
+  profile` and `stormlog infer analyze`. `profile` records the policy in the
+  artifact as `infer.slo`; `analyze` judges by the flags, or else by the
+  policy the artifact recorded. The report gains a top-level `slo` block
+  (name, digest, source, policy) and, per case, SLO attainment and SLO
+  goodput at the offered load as lower and upper bounds with evidence
+  coverage, `null` with a reason when the policy cannot be judged. A
+  malformed flag, or both options at once, exits 2; a missing or invalid
+  policy file exits 5. (#213)
 - `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
   hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,
   `infer.membership`, `infer.request` and `infer.clock_alignment` records:

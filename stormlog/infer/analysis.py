@@ -15,7 +15,13 @@ from .correlation_accounting import AlignedTimestamp
 from .errors import InferInputError
 from .host_clock import is_boot_qualified
 from .latency_report import latency_summary, streaming_summary
-from .populations import CasePopulation, MeasuredInterval, case_populations, rate
+from .populations import (
+    CasePopulation,
+    MeasuredInterval,
+    case_populations,
+    goodput,
+    rate,
+)
 from .report_stats import int_value as _int_value
 from .report_stats import is_number as _is_number
 from .report_stats import number_values as _number_values
@@ -32,6 +38,7 @@ from .server_clock import (
 )
 from .server_group import members as group_members
 from .server_group import membership_issue
+from .slo import SloSpec, slo_from_artifact
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
 from .vllm_analysis import (
     JoinedSpans,
@@ -60,9 +67,15 @@ def analyze_inference_events(
     clock_offset_ns: int | None = None,
     clock_uncertainty_ns: int | None = None,
     vllm_span_paths: Iterable[str | Path] = (),
+    slo: SloSpec | None = None,
+    slo_source: str = "flags",
 ) -> dict[str, Any]:
-    """Analyze an inference profiling JSONL artifact."""
+    """Analyze an inference profiling JSONL artifact.
+
+    ``slo`` overrides the policy the artifact recorded, if it recorded one.
+    """
     records = _load_jsonl(path)
+    policy = _policy(records, slo, slo_source)
     requests, samples = _partition_inference_records(records)
     server_samples = _load_server_samples(server_telemetry_paths)
     external_spans = _external_spans(records, vllm_span_paths)
@@ -77,7 +90,9 @@ def analyze_inference_events(
     )
     timelines = [(member, _member_timeline(member)) for member in members]
     ok_requests = [record for record in requests if record.get("status") == "ok"]
-    cases = _case_reports(records, requests, samples, timelines, "group" in join, spans)
+    cases = _case_reports(
+        records, requests, samples, timelines, "group" in join, spans, policy
+    )
     if timelines:
         join["case_coverage"] = _coverage_counts(cases)
     failed = [record for record in requests if record.get("status") != "ok"]
@@ -86,6 +101,7 @@ def analyze_inference_events(
         # case's declared interval (throughput.interval_seconds) instead of
         # the span of its successful requests (the old duration_seconds).
         "analysis_version": ANALYSIS_VERSION,
+        "slo": None if policy is None else policy.to_record(),
         "summary": {
             "total_requests": len(requests),
             "successful_requests": len(ok_requests),
@@ -107,6 +123,31 @@ def analyze_inference_events(
 
 
 ANALYSIS_VERSION = 2
+
+
+@dataclass(frozen=True)
+class _Policy:
+    """The SLO policy a report judges cases against, and where it came from."""
+
+    spec: SloSpec
+    source: str
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "name": self.spec.name,
+            "digest": self.spec.digest(),
+            "source": self.source,
+            "policy": self.spec.to_record(),
+        }
+
+
+def _policy(
+    records: list[dict[str, Any]], slo: SloSpec | None, source: str
+) -> _Policy | None:
+    if slo is not None:
+        return _Policy(slo, source)
+    recorded = slo_from_artifact(records)
+    return None if recorded is None else _Policy(recorded, "artifact")
 
 
 def _external_spans(
@@ -145,6 +186,7 @@ def _case_reports(
     timelines: list[tuple[_Member, _ServerTimeline]],
     grouped: bool,
     spans: JoinedSpans,
+    policy: _Policy | None,
 ) -> dict[str, dict[str, Any]]:
     by_case: dict[str, list[dict[str, Any]]] = {}
     for record in requests:
@@ -165,6 +207,14 @@ def _case_reports(
         cases[case_id]["cache"] = cache_summary(cache_states.get(case_id))
         cases[case_id]["latency"] = latency_summary(case_requests, spans=spans)
         cases[case_id]["streaming"] = streaming_summary(case_requests)
+        if policy is not None:
+            cases[case_id]["slo"] = goodput(
+                case_requests,
+                policy.spec,
+                populations[case_id].intervals.rate,
+                spans=spans,
+                slo_source=policy.source,
+            ).to_record()
     return cases
 
 
@@ -316,6 +366,7 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
     ]
     if isinstance(case, dict):
         lines.extend(_interval_lines(throughput, case.get("population")))
+        lines.extend(_slo_lines(case.get("slo")))
         lines.extend(arrival_lines(case.get("arrivals"), case.get("latency_ms")))
         lines.extend(prompt_lines(case.get("prompts")))
         lines.extend(cache_lines(case.get("cache")))
@@ -337,6 +388,31 @@ def _interval_lines(throughput: Any, population: Any) -> list[str]:
         issues = ", ".join(str(issue) for issue in population.get("issues", []))
         lines.append(f"  cohort invalid: {issues}")
     return lines
+
+
+def _slo_lines(slo: Any) -> list[str]:
+    """Attainment and goodput as bounds, or why the policy could not judge."""
+    if not isinstance(slo, dict):
+        return []
+    name = slo.get("slo_name")
+    if slo.get("status") != "evaluated":
+        return [f"  SLO {name}: unmeasurable ({slo.get('reason')})"]
+    low, high = slo.get("attainment_lower"), slo.get("attainment_upper")
+    attainment = (
+        _fmt_share(low) if low == high else f"{_fmt_share(low)}-{_fmt_share(high)}"
+    )
+    rates = (slo.get("goodput_lower_rps"), slo.get("goodput_upper_rps"))
+    goodput_text = (
+        _fmt(rates[0]) if rates[0] == rates[1] else f"{_fmt(rates[0])}-{_fmt(rates[1])}"
+    )
+    return [
+        f"  SLO {name}: attainment {attainment} of {slo.get('offered')} offered, "
+        f"goodput {goodput_text} req/s, {slo.get('unknown')} unknown"
+    ]
+
+
+def _fmt_share(value: Any) -> str:
+    return f"{float(value):.1%}" if isinstance(value, (int, float)) else "-"
 
 
 def _server_case_lines(memory: Any) -> list[str]:

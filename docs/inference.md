@@ -346,6 +346,10 @@ The report includes:
   chunk gaps, and mean tokens per chunk when the server reports usage. A
   chunk can carry several tokens, so chunk gaps are never reported as
   inter-token latency
+- with an SLO policy (`--slo`, `--slo-file`, or the `infer.slo` record
+  `infer profile` wrote), a top-level `slo` block naming the policy and, per
+  case, SLO attainment and goodput as lower and upper bounds (see
+  [Inference SLOs and goodput](inference_slo.md))
 - failure rate
 - highest recorded client-local device memory when system telemetry is available
 - scoped server memory observations when a matching on-host collector artifact is supplied
@@ -367,8 +371,8 @@ requests. That span shrank when the last requests failed or timed out, which
 flattered a failing run. The old key is gone, so a consumer that reads it
 fails rather than misreading the new figures.
 
-`infer analyze` exits `5` when the artifact, a `--server-telemetry` file or a
-`--vllm-spans` file is missing, unparsable, or invalid, which includes an
+`infer analyze` exits `5` when the artifact, a `--server-telemetry` file, a
+`--vllm-spans` file or the `--slo-file` policy is missing, unparsable, or invalid, which includes an
 artifact with no `infer.session` or `infer.request` records. Otherwise it exits `0`, even when
 every request in the artifact failed: analysis reports findings without
 failing.

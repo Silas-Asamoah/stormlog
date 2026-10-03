@@ -12,6 +12,7 @@ from .cache_state import UNSPECIFIED
 from .prompts import REPEAT, PromptSpec
 
 if TYPE_CHECKING:
+    from .slo import SloSpec
     from .trace_capture import TraceCaptureConfig
 
 DEFAULT_ENDPOINT_PATH = "/chat/completions"
@@ -140,6 +141,10 @@ class ProfileConfig:
     # The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR as this host sees it;
     # its final steps are imported when the run ends. None imports nothing.
     vllm_execution_dir: Path | None = None
+    # The SLO policy to record in the artifact as infer.slo, and whether it
+    # came from a file or from --slo flags. None records none.
+    slo: SloSpec | None = None
+    slo_source: str | None = None
 
     def prompt_spec(self) -> PromptSpec:
         return PromptSpec(

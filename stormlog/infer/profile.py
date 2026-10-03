@@ -42,6 +42,7 @@ from .openai_client import (
 )
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
+from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
 from .trace_capture import TraceWindows
 from .vllm_execution_devices import WorkerIndex
@@ -310,6 +311,14 @@ class InferenceProfiler:
                     prompt_spec=self.prompt_spec,
                 )
             )
+            if self.config.slo is not None:
+                writer.append(
+                    slo_record(
+                        self.config.slo,
+                        session_id=self.session.session_id,
+                        source=self.config.slo_source or "flags",
+                    )
+                )
             stop_sampling = asyncio.Event()
             sample_task = asyncio.create_task(
                 self._sample_system_loop(

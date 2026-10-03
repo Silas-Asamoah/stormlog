@@ -37,6 +37,7 @@ from .server_collector import (
     NvmlUnavailableError,
     collect_server_telemetry,
 )
+from .slo import SloSpec, load_slo, parse_slo_flags
 from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
 from .trace_import import import_traces_into_artifact, parse_device_uuids
 from .vllm_execution_import import import_execution_into_artifact
@@ -290,6 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
             "for the exporter's final batch (default: 6; vLLM flushes every 5 s)"
         ),
     )
+    _add_slo_arguments(profile_parser, "record in the artifact and judge the run by")
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
     _add_cache_arguments(profile_parser)
@@ -351,6 +353,10 @@ def build_parser() -> argparse.ArgumentParser:
             "it may be given alone"
         ),
     )
+    _add_slo_arguments(
+        analyze_parser,
+        "judge the cases by, instead of the policy the artifact recorded",
+    )
     collector_parser = subparsers.add_parser(
         "collect-server",
         help="Collect scoped process and NVML memory on the inference host",
@@ -409,6 +415,37 @@ def build_parser() -> argparse.ArgumentParser:
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
     return parser
+
+
+def _add_slo_arguments(parser: argparse.ArgumentParser, purpose: str) -> None:
+    parser.add_argument(
+        "--slo",
+        action="append",
+        default=[],
+        metavar="KEY:MS",
+        help=(
+            f"An SLO criterion to {purpose}, such as ttft:500 or "
+            "server.ttft:400 (milliseconds; a key without a boundary is a "
+            "client criterion); repeatable"
+        ),
+    )
+    parser.add_argument(
+        "--slo-file",
+        default=None,
+        metavar="FILE",
+        help=f"A stormlog.infer.slo policy file to {purpose}",
+    )
+
+
+def _slo_policy(args: argparse.Namespace) -> tuple[SloSpec | None, str]:
+    """The policy from --slo or --slo-file, and which one gave it."""
+    if args.slo and args.slo_file:
+        raise InferUsageError("use --slo or --slo-file, not both")
+    if args.slo_file:
+        return load_slo(args.slo_file), "file"
+    if args.slo:
+        return parse_slo_flags(args.slo), "flags"
+    return None, "flags"
 
 
 def _add_import_trace_parser(subparsers: Any) -> None:
@@ -768,6 +805,7 @@ def _usage_errors() -> Iterator[None]:
 
 def _profile_config(args: argparse.Namespace) -> ProfileConfig:
     endpoint = resolve_endpoint(endpoint=args.endpoint, base_url=args.base_url)
+    slo, slo_source = _slo_policy(args)
     return ProfileConfig(
         endpoint=endpoint,
         model=args.model,
@@ -828,6 +866,8 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         vllm_execution_dir=(
             Path(args.vllm_execution_dir) if args.vllm_execution_dir else None
         ),
+        slo=slo,
+        slo_source=slo_source if slo is not None else None,
     )
 
 
@@ -873,6 +913,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if not input_path.exists():
         print(f"Error: Input file '{args.input_file}' not found", file=sys.stderr)
         return int(ExitCode.INVALID_INPUT)
+    slo, slo_source = _slo_policy(args)
     report = analyze_inference_events(
         input_path,
         server_telemetry_paths=args.server_telemetry,
@@ -880,6 +921,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         clock_offset_ns=args.clock_offset_ns,
         clock_uncertainty_ns=args.clock_uncertainty_ns,
         vllm_span_paths=args.vllm_spans,
+        slo=slo,
+        slo_source=slo_source,
     )
     if args.format == "json":
         payload = json.dumps(report, indent=2, sort_keys=True) + "\n"

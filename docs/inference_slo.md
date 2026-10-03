@@ -81,6 +81,39 @@ ttft:500 server.ttft:400 tpot:50
 
 Flags have no targets and judge the measured window.
 
+## On the command line
+
+`stormlog infer profile` and `stormlog infer analyze` both take a policy:
+
+```bash
+stormlog infer profile ... --slo ttft:500 --slo server.ttft:400
+stormlog infer analyze infer.jsonl --slo-file slo.json
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--slo KEY:MS` | One criterion, written as under Flags above. Repeat it for more. |
+| `--slo-file FILE` | A policy file. Not together with `--slo`. |
+
+`profile` writes the policy into the artifact as an `infer.slo` record and
+judges the run by it in its closing report. `analyze` judges by the policy
+its options give, or, without them, by the one the artifact recorded; the
+report's `slo.source` says which (`flags`, `file` or `artifact`). With
+neither, the report's `slo` is `null` and no case has an `slo` block.
+
+A malformed flag, an unknown criterion, or both options at once exits `2`.
+A policy file that is missing, unreadable or invalid exits `5`; `profile`
+refuses both before it sends anything.
+
+The report gains a top-level `slo` block, with the policy's `name`, `digest`,
+`source` and the `policy` document itself, and each case gains an `slo` block:
+the evaluation described under Attainment and goodput below, over the case's
+rate interval. The text report prints one line per case:
+
+```text
+  SLO interactive: attainment 96.0%-98.5% of 200 offered, goodput 9.60-9.85 req/s, 5 unknown
+```
+
 ## Python API
 
 ```python
