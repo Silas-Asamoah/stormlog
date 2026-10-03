@@ -58,6 +58,7 @@ REASON_REQUIRES_HOOK = "requires_hook"
 REASON_TOO_FEW_STEPS = "too_few_steps"
 REASON_RECORDS_DROPPED = "hook_records_dropped"
 REASON_CAPPED = "hook_capped"
+REASON_WRITER_ERRORS = "hook_writer_errors"
 REASON_EPOCH_CHANGED = "epoch_changed"
 OBSERVES_PAUSE = "pause"
 # vLLM's pause states: only PAUSED_ALL stops steps; PAUSED_NEW stops admissions
@@ -194,14 +195,22 @@ def record_reasons(records: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _heartbeat_reasons(records: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Drop counts that rose between heartbeats, and a capped writer."""
+    """Drop counts (every kind, oversized records included) or write errors
+    that rose between heartbeats, and a capped writer: any of them means a
+    record may be missing that no sequence gap shows."""
     beats = [record for record in records if record.get("kind") == "heartbeat"]
     reasons = []
     if len({_dropped(beat) for beat in beats}) > 1:
         reasons.append(REASON_RECORDS_DROPPED)
+    if len({_count(beat.get("errors")) for beat in beats}) > 1:
+        reasons.append(REASON_WRITER_ERRORS)
     if any(beat.get("capped") for beat in beats):
         reasons.append(REASON_CAPPED)
     return reasons
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _dropped(heartbeat: Mapping[str, Any]) -> int:
@@ -532,6 +541,12 @@ __all__ = [
     "LOCUS_BETWEEN_STEPS",
     "LOCUS_IN_SCHEDULE",
     "LOCUS_WITHIN_STEP",
+    "REASON_CAPPED",
+    "REASON_EPOCH_CHANGED",
+    "REASON_RECORDS_DROPPED",
+    "REASON_REQUIRES_HOOK",
+    "REASON_TOO_FEW_STEPS",
+    "REASON_WRITER_ERRORS",
     "LoopGapConfig",
     "Stall",
     "Step",

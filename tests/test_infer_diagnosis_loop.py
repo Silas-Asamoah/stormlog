@@ -19,6 +19,7 @@ from stormlog.infer.diagnosis_loop import (
     REASON_RECORDS_DROPPED,
     REASON_REQUIRES_HOOK,
     REASON_TOO_FEW_STEPS,
+    REASON_WRITER_ERRORS,
     LoopGapConfig,
     engine_loop_gap,
     pause_intervals,
@@ -324,3 +325,15 @@ def test_a_long_prefill_step_is_not_measured_against_decode_steps() -> None:
     signal = engine_loop_gap(records)
     assert signal.exceeds is False
     assert signal.detail["baseline"] == BASELINE_FLOOR
+
+
+def test_writer_errors_rising_between_heartbeats_give_no_verdict() -> None:
+    """A failed write is cut back and counted as an error, not always as a
+    drop, so rising errors also mean the records may be incomplete."""
+    records = _loop(20) + [
+        heartbeat(T + 10 * MS, 5),
+        heartbeat(T + 20 * MS, 6, errors=1),
+    ]
+    signal = engine_loop_gap(_sequenced(records))
+    assert signal.reason == REASON_WRITER_ERRORS
+    assert signal.exceeds is None
