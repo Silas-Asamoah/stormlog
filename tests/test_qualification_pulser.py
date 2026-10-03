@@ -12,6 +12,7 @@ import time
 import urllib.error
 from typing import Iterator
 
+import psutil
 import pytest
 
 from examples.qualification.fake_engine.process import FakeEngineProcess, _environment
@@ -21,6 +22,7 @@ from examples.qualification.pulser import (
     PulseRefused,
     Target,
     check_schedule,
+    discover_roles,
 )
 from tests.qualification_fake_engine_helpers import get, wait_until
 
@@ -133,3 +135,33 @@ def test_the_watchdog_continues_a_target_whose_harness_was_killed(
         if harness.poll() is None:
             harness.kill()
     assert _answers(server, timeout=2)
+
+
+def test_roles_are_found_under_the_api_server_by_title() -> None:
+    # A stand-in tree: an API server whose children carry vLLM's titles.
+    script = textwrap.dedent(
+        """
+        import subprocess, sys, time
+        children = [
+            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", title])
+            for title in ("VLLM::EngineCore", "VLLM::Worker_TP0")
+        ]
+        print("ready", flush=True)
+        time.sleep(30)
+        """
+    )
+    server = subprocess.Popen(
+        [sys.executable, "-c", script], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert server.stdout is not None
+        assert server.stdout.readline().strip() == "ready"
+        roles = discover_roles(server.pid)
+        assert sorted(roles) == ["api_server", "engine_core", "worker_tp0"]
+        assert all(target.is_alive() for target in roles.values())
+        assert roles["api_server"].pid == server.pid
+    finally:
+        for child in psutil.Process(server.pid).children(recursive=True):
+            child.kill()
+        server.kill()
+        server.wait()
