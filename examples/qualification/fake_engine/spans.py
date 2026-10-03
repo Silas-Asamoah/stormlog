@@ -37,8 +37,9 @@ ABUSIVE_BYTES = 33 * 1024 * 1024
 # apart with 20% jitter, all inside one export timeout.
 MAX_ATTEMPTS = 6
 # What a post reports when no HTTP answer came. Like requests'
-# ConnectionError, a failed connect, send or read is retried; like its
-# ReadTimeout, no answer in time after the body went is final.
+# ConnectionError, a failed connect, send or read, or an answer that is not
+# HTTP, is retried; like its ReadTimeout, no answer in time after the body
+# went is final.
 CONNECTION_ERROR = 0
 READ_TIMEOUT = -1
 
@@ -191,8 +192,8 @@ class SpanExporter(EngineObserver):
         except TimeoutError:
             # Raised while waiting for the answer.
             status = READ_TIMEOUT
-        except OSError:
-            # A reset or close while reading the answer.
+        except (OSError, http.client.HTTPException):
+            # A reset, a close or an answer that is not HTTP, while reading.
             status = CONNECTION_ERROR
         self.statuses.append(status)
         return status

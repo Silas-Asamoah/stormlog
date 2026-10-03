@@ -324,12 +324,8 @@ def test_a_read_timeout_is_final() -> None:
     assert arrivals == 1
 
 
-def test_a_refused_connection_is_retried() -> None:
-    # A refused connection is a ConnectionError: posted again at once, then
-    # retried after the backoff while the deadline allows.
-    with socket.socket() as closed:
-        closed.bind(("127.0.0.1", 0))
-        port = int(closed.getsockname()[1])
+def _attempts_until_failed(port: int) -> int:
+    """Posts for one span batch sent to ``port``, until the exporter gives up."""
     exporter = SpanExporter(
         f"http://127.0.0.1:{port}/v1/traces", Controls(), interval=0.02, timeout=1.5
     )
@@ -339,9 +335,37 @@ def test_a_refused_connection_is_retried() -> None:
     )
     try:
         assert wait_until(lambda: exporter.failed == 1, timeout=10)
-        attempts = len(exporter.statuses)
+        return len(exporter.statuses)
     finally:
         exporter.close()
+
+
+def test_a_refused_connection_is_retried() -> None:
+    # A refused connection is a ConnectionError: posted again at once, then
+    # retried after the backoff while the deadline allows.
+    with socket.socket() as closed:
+        closed.bind(("127.0.0.1", 0))
+        port = int(closed.getsockname()[1])
+    assert _attempts_until_failed(port) == 4
+
+
+def test_an_answer_that_is_not_http_is_retried() -> None:
+    # requests raises a ConnectionError for it (urllib3's "Connection
+    # aborted." ProtocolError), so the SDK retries it like a refusal.
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+
+        def answer() -> None:
+            with contextlib.suppress(OSError):
+                while True:
+                    client, _address = server.accept()
+                    with client:
+                        client.recv(65536)
+                        client.sendall(b"not http\r\n\r\n")
+
+        threading.Thread(target=answer, daemon=True).start()
+        attempts = _attempts_until_failed(int(server.getsockname()[1]))
     assert attempts == 4
 
 
