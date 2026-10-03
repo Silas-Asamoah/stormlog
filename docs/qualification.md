@@ -506,3 +506,23 @@ F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
 
 Each pulse's stop, confirmation and continue times are kept, so effect timing
 can start from the first confirmed stop.
+
+### Neighbor traffic
+
+`examples.qualification.neighbor` injects another tenant's load: F1, F2 and
+F3, and their workload twins.
+
+- **A neighbor** is an `infer profile` run of its own, on a thread of the
+  harness. It has its own run ID, so the hook tells its requests from the
+  victim's by their `X-Request-Id`. It runs with a high in-flight limit and
+  writes its artifact under `truth/`.
+- **Arrivals.** An open-loop neighbor arrives at a fixed rate, so its plan is
+  a schedule, not a distribution. A closed-loop one runs a number of workers,
+  as F2's eight concurrent long requests do.
+- **Actuation** is judged from the neighbor's own artifact:
+  - an open-loop neighbor must reach its planned rate within 5%, with no
+    arrival held for a slot;
+  - a closed-loop one must keep every worker busy;
+  - any failed request is a problem.
+
+  Its first send is the onset of the workload twins' effect.
