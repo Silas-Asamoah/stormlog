@@ -24,6 +24,7 @@ from stormlog.infer.correlation_events import (
 from stormlog.infer.host_clock import wall_clock_domain
 from stormlog.infer.openai_client import (
     ChatCompletionResult,
+    ConnectError,
     EndpointHTTPError,
     OpenAIChatCompletionsClient,
 )
@@ -649,10 +650,19 @@ class InferenceProfileTests(unittest.TestCase):
             classify_failure(EndpointHTTPError(500, "bug")), ("error", 500)
         )
         self.assertEqual(classify_failure(TimeoutError("read")), ("timeout", None))
-        connect_timeout = urllib.error.URLError(TimeoutError("connect"))
-        self.assertEqual(classify_failure(connect_timeout), ("timeout", None))
-        refused = urllib.error.URLError(ConnectionRefusedError())
-        self.assertEqual(classify_failure(refused), ("error", None))
+        # Before the connection completed, the server never saw the request.
+        connect_timeout = urllib.error.URLError(ConnectError(TimeoutError("connect")))
+        self.assertEqual(classify_failure(connect_timeout), ("unreachable", None))
+        refused = urllib.error.URLError(ConnectError(ConnectionRefusedError()))
+        self.assertEqual(classify_failure(refused), ("unreachable", None))
+        # A send-stage failure may have reached the server.
+        reset = urllib.error.URLError(ConnectionResetError())
+        self.assertEqual(classify_failure(reset), ("delivery_unknown", None))
+        send_timeout = urllib.error.URLError(TimeoutError("send"))
+        self.assertEqual(classify_failure(send_timeout), ("delivery_unknown", None))
+        self.assertEqual(
+            classify_failure(EndpointHTTPError(302, "moved")), ("error", 302)
+        )
         self.assertEqual(classify_failure(ValueError("bad")), ("error", None))
 
     def test_profile_marks_session_incomplete_when_analysis_fails(self) -> None:

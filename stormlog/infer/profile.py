@@ -36,6 +36,7 @@ from .host_clock import host_boot_id, wall_clock_domain
 from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
 from .openai_client import (
     ChatCompletionResult,
+    ConnectError,
     EndpointHTTPError,
     OpenAIChatCompletionsClient,
 )
@@ -1316,22 +1317,27 @@ EXECUTION_FLUSH_TIMEOUT_SECONDS = 10.0
 
 
 def classify_failure(exc: BaseException) -> tuple[str, int | None]:
-    """Return the request status for a failure and its HTTP status, if any."""
+    """Return the request status for a failure and its HTTP status, if any.
+
+    urllib wraps every error from connecting and sending in ``URLError``.
+    A failure inside ``connect()``, before any byte of the request was sent,
+    is ``unreachable``: the server never saw the request. A failure while
+    sending is ``delivery_unknown``: the server may have received it. A
+    timeout while waiting for the response, or a read that stalls, is
+    ``timeout``. Redirects are not followed, so a 3xx is an ``error``.
+    """
     http_status = exc.status if isinstance(exc, EndpointHTTPError) else None
     if http_status in REJECTED_HTTP_STATUSES:
         return "rejected", http_status
-    if _is_timeout(exc):
+    if isinstance(exc, urllib.error.URLError) and not isinstance(
+        exc, urllib.error.HTTPError
+    ):
+        if isinstance(exc.reason, ConnectError):
+            return "unreachable", None
+        return "delivery_unknown", None
+    if isinstance(exc, TimeoutError):
         return "timeout", http_status
     return "error", http_status
-
-
-def _is_timeout(exc: BaseException) -> bool:
-    if isinstance(exc, TimeoutError):
-        return True
-    # urllib wraps a connect timeout in URLError.
-    return isinstance(exc, urllib.error.URLError) and isinstance(
-        exc.reason, TimeoutError
-    )
 
 
 class _RequestCounter:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -17,6 +18,69 @@ class EndpointHTTPError(RuntimeError):
     def __init__(self, status: int, message: str) -> None:
         super().__init__(f"HTTP {status}: {message}")
         self.status = status
+
+
+class ConnectError(OSError):
+    """``connect()`` failed, so no byte of the request was sent.
+
+    That covers a refused or timed-out connection, a TLS handshake that did
+    not finish, and a socket the peer reset before ``connect()`` returned.
+    urllib wraps this in ``URLError``, as it does every error from sending,
+    and the reason tells the two apart: a request that failed here never
+    reached the server.
+    """
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(f"{type(cause).__name__}: {cause}")
+        self.cause = cause
+
+
+class _TrackedHTTPConnection(http.client.HTTPConnection):
+    def connect(self) -> None:
+        try:
+            super().connect()
+        except OSError as exc:
+            raise ConnectError(exc) from exc
+
+
+class _TrackedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self) -> None:
+        try:
+            super().connect()
+        except OSError as exc:
+            raise ConnectError(exc) from exc
+
+
+class _TrackedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(_TrackedHTTPConnection, req)
+
+
+class _TrackedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        options: dict[str, Any] = {"context": getattr(self, "_context", None)}
+        check_hostname = getattr(self, "_check_hostname", None)
+        if check_hostname is not None:
+            options["check_hostname"] = check_hostname
+        return self.do_open(_TrackedHTTPSConnection, req, **options)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Report a redirect as the HTTP error it is instead of following it.
+
+    urllib would re-send a redirected POST as a GET to another address, after
+    the first server had already received the request.
+    """
+
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def inference_opener() -> urllib.request.OpenerDirector:
+    """An opener that marks connect-stage failures and follows no redirects."""
+    return urllib.request.build_opener(
+        _NoRedirect(), _TrackedHTTPHandler(), _TrackedHTTPSHandler()
+    )
 
 
 @dataclass(frozen=True)
@@ -54,6 +118,7 @@ class OpenAIChatCompletionsClient:
         self.api_key = api_key
         self.max_tokens_field = max_tokens_field
         self.extra_body = validate_extra_body(extra_body, max_tokens_field)
+        self._opener = inference_opener()
 
     def complete(
         self,
@@ -99,7 +164,7 @@ class OpenAIChatCompletionsClient:
         started_at_ns = time.time_ns()
         started_perf = time.perf_counter()
         try:
-            with urllib.request.urlopen(
+            with self._opener.open(
                 request,
                 timeout=self.timeout_seconds,
             ) as response:
