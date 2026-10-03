@@ -86,6 +86,8 @@ class FakeEngine:
             self._server.server_close()
         if self._thread is not None:
             self._thread.join(timeout=10)
+        if self.profiler is not None:
+            self.profiler.shutdown()
         if self.spans is not None:
             self.spans.close()
         if self.hook is not None:

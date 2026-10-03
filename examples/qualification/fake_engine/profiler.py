@@ -18,6 +18,7 @@ import os
 import socket
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,15 @@ from .engine import Engine, EngineObserver, Step
 NOT_CONFIGURED = 404
 # Pieces a timed trace write is streamed in.
 WRITE_PIECES = 8
+
+
+@dataclass(eq=False)
+class _DelayedWrite:
+    """A trace written later; whoever claims it first writes it."""
+
+    steps: list[Step]
+    timer: threading.Timer | None = None
+    claimed: bool = field(default=False)
 
 
 class FakeProfiler(EngineObserver):
@@ -50,6 +60,8 @@ class FakeProfiler(EngineObserver):
         self.written: list[tuple[Path, int]] = []
         self._steps: list[Step] = []
         self._correlation = 0
+        self._delayed: list[_DelayedWrite] = []
+        self._delayed_lock = threading.Lock()
 
     # ------------------------------------------------------------ routes
 
@@ -92,6 +104,22 @@ class FakeProfiler(EngineObserver):
         self.stops.append((started, time.time_ns()))
         return 200
 
+    def shutdown(self) -> None:
+        """As vLLM's worker shuts its profiler down: stop an open window and
+        write its trace; then finish every delayed write, so no trace appears
+        after the engine has stopped. Call it once the step loop has stopped."""
+        if self.active and self.config.trace_dir is not None:
+            self._close_window()
+        with self._delayed_lock:
+            delayed, self._delayed = self._delayed, []
+        for write in delayed:
+            if self._claim(write):
+                assert write.timer is not None
+                write.timer.cancel()
+                self._write(write.steps)
+            elif write.timer is not None:
+                write.timer.join()
+
     # ------------------------------------------------------------ the loop
 
     def on_executed(self, step: Step) -> None:
@@ -118,9 +146,21 @@ class FakeProfiler(EngineObserver):
         if delay <= 0:
             self._write(steps)
             return
-        timer = threading.Timer(delay, self._write, args=(steps,))
-        timer.daemon = True
-        timer.start()
+        write = _DelayedWrite(steps)
+        write.timer = threading.Timer(delay, self._write_delayed, args=(write,))
+        write.timer.daemon = True
+        with self._delayed_lock:
+            self._delayed.append(write)
+        write.timer.start()
+
+    def _write_delayed(self, write: _DelayedWrite) -> None:
+        if self._claim(write):
+            self._write(write.steps)
+
+    def _claim(self, write: _DelayedWrite) -> bool:
+        with self._delayed_lock:
+            claimed, write.claimed = write.claimed, True
+        return not claimed
 
     # ------------------------------------------------------------ the trace
 

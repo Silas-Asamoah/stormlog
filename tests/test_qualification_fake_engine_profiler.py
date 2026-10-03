@@ -6,6 +6,7 @@ import gzip
 import http.client
 import json
 import threading
+import time
 import urllib.error
 from collections import Counter
 from pathlib import Path
@@ -229,6 +230,30 @@ def test_a_stop_leaves_vllms_profiler_table_beside_the_trace(
     if dump:
         assert "Self CUDA time total" in table.read_text()
     assert len(_traces(tmp_path)) == 1
+
+
+def test_a_shutdown_flushes_an_open_window(tmp_path: Path) -> None:
+    # vLLM's worker shuts its profiler down on exit, which stops a running
+    # profile and writes its trace (gpu_worker.py:1489-1490, wrapper.py).
+    with _engine(tmp_path) as engine:
+        post(f"{engine.base_url}/start_profile")
+        chat(engine, words(8, "a"), max_tokens=3)
+        profiler = engine.profiler
+        assert profiler is not None
+    (path,) = _traces(tmp_path)
+    assert not profiler.active
+    assert len(load_kineto_trace(path).gpu_events) == 3
+
+
+def test_a_shutdown_finishes_a_delayed_write_before_returning(tmp_path: Path) -> None:
+    with _engine(tmp_path, trace_write_delay_seconds=0.5) as engine:
+        post(f"{engine.base_url}/start_profile")
+        chat(engine, words(4, "a"), max_tokens=2)
+        post(f"{engine.base_url}/stop_profile")
+        pending = len(_traces(tmp_path))
+    at_stop = len(_traces(tmp_path))
+    time.sleep(0.7)
+    assert (pending, at_stop, len(_traces(tmp_path))) == (0, 1, 1)
 
 
 def test_infer_profile_captures_and_imports_a_window(tmp_path: Path) -> None:
