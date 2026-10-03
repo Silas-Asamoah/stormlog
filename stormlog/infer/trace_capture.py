@@ -38,6 +38,7 @@ from .correlation_capture import (
 )
 from .trace_import import DeviceUuids, TraceFileCollector
 from .trace_kineto import SUPPORTED, Detail
+from .vllm_execution_devices import WorkerIndex
 
 VLLM_TORCH = "vllm-torch"
 TRACE_MODES = (VLLM_TORCH,)
@@ -367,12 +368,19 @@ class TraceWindows:
         return None
 
     def import_into(
-        self, artifact: Path, *, run_id: str, session: SessionSummary
+        self,
+        artifact: Path,
+        *,
+        run_id: str,
+        session: SessionSummary,
+        worker_index: WorkerIndex | None = None,
     ) -> None:
         """Append every window's traces to the artifact; warn instead of failing.
 
         With no trace to import, the trace collector is still recorded, with
-        nothing collected and each window's reason in its summary.
+        nothing collected and each window's reason in its summary. The
+        ``worker_index`` is the vLLM execution hook's, which names each traced
+        process's GPU where ``--trace-device-uuid`` does not.
         """
         files = [path for window in self.windows for path in window.files]
         try:
@@ -384,6 +392,7 @@ class TraceWindows:
                     device_uuids=self.config.device_uuids,
                     detail=self.config.detail,
                     max_bytes=self.config.max_bytes,
+                    worker_index=worker_index,
                 )
                 if files
                 else _NothingCollected(self.windows)

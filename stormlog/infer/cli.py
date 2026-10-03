@@ -257,6 +257,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds between vLLM metrics scrapes inside a phase (default: 1)",
     )
     profile_parser.add_argument(
+        "--vllm-execution-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR as this host sees "
+            "it; when the run ends, its final scheduler steps are imported and "
+            "its worker hellos name the GPU of each traced process"
+        ),
+    )
+    profile_parser.add_argument(
         "--vllm-spans-listen",
         nargs="?",
         const=DEFAULT_SPANS_LISTEN,
@@ -805,6 +815,9 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
             6.0 if args.vllm_spans_drain is None else args.vllm_spans_drain
         ),
         trace=_trace_config(args, endpoint),
+        vllm_execution_dir=(
+            Path(args.vllm_execution_dir) if args.vllm_execution_dir else None
+        ),
     )
 
 
@@ -965,6 +978,17 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--sample-interval must be > 0")
     _validate_vllm_metrics_arguments(args)
     _validate_vllm_span_arguments(args)
+    _validate_execution_dir_argument(args)
+
+
+def _validate_execution_dir_argument(args: argparse.Namespace) -> None:
+    directory = args.vllm_execution_dir
+    if directory is not None and not Path(directory).is_dir():
+        _print_warning(
+            f"--vllm-execution-dir {directory} does not exist yet; the execution "
+            "log is imported only if the hook writes it there and this host can "
+            "read it"
+        )
 
 
 def _validate_vllm_metrics_arguments(args: argparse.Namespace) -> None:

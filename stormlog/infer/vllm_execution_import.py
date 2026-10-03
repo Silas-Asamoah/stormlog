@@ -12,7 +12,8 @@ requests.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +45,13 @@ from .vllm_execution import (
     Window,
     reduce_execution_log,
 )
-from .vllm_execution_log import FORMAT, LogRead, read_execution_log
+from .vllm_execution_log import (
+    FORMAT,
+    STATE_ALIVE,
+    EpochRead,
+    LogRead,
+    read_execution_log,
+)
 
 SOURCE = "stormlog.infer.import_execution"
 SUPPORTED = ("iterations", "memberships", "requests", "clock_alignment")
@@ -74,17 +81,107 @@ def import_execution_into_artifact(
     facts = run_facts_from_records(records, run_id, session_id)
     read = _read_log(directory, execution_high_water(records), now_ns)
     capture = reduce_to_capture(read, facts, ReduceOptions(raw_foreign_ids))
+    _append_capture(artifact, run_id, session_id, capture, envelope_path)
+    return capture
 
-    class _Ready:
-        def collect(self, *, run_id: str, session_id: str) -> EngineCapture:
-            return capture
 
+def record_failed_execution_import(
+    artifact: str | Path,
+    directory: str | Path,
+    error: str,
+    *,
+    envelope_path: str | Path | None = None,
+) -> EngineCapture:
+    """Record that the log was configured but could not be imported.
+
+    The engine adapter's capability event then says what was supported and
+    that nothing was collected, with the error in its summary, so the
+    analysis reports partial coverage rather than an absent component.
+    """
+    run_id, session_id = artifact_run_identity(artifact)
+    capture = EngineCapture(
+        capabilities=CaptureCapabilities(SUPPORTED, SUPPORTED, ()),
+        summary={"execution": {"directory": str(directory), "failed": error}},
+    )
+    _append_capture(artifact, run_id, session_id, capture, envelope_path)
+    return capture
+
+
+def flush_execution_log(
+    directory: str | Path,
+    *,
+    timeout_seconds: float = 10.0,
+    poll_seconds: float = 0.25,
+    now_ns: int | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Ask every live epoch's writer to seal its open segment, and wait for
+    proof that it did: the ``flush`` file gone, or a record written after the
+    request (a heartbeat comes every second). Ended epochs need no flush.
+    """
+    read = read_execution_log(directory, now_ns=now_ns)
+    waiting, errors = _request_flushes(read)
+    requested = sorted(waiting)
+    deadline = clock() + timeout_seconds
+    while waiting and clock() < deadline:
+        sleep(poll_seconds)
+        for epoch in read_execution_log(directory, now_ns=now_ns).epochs:
+            if epoch.epoch in waiting and _sealed(epoch, waiting[epoch.epoch]):
+                del waiting[epoch.epoch]
+    return {
+        "requested": requested,
+        "flushed": [name for name in requested if name not in waiting],
+        "timed_out": sorted(waiting),
+        "errors": errors,
+    }
+
+
+def _request_flushes(read: LogRead) -> tuple[dict[str, int], list[str]]:
+    """Touch ``flush`` in every live epoch; return each one's last sequence."""
+    waiting: dict[str, int] = {}
+    errors: list[str] = []
+    for epoch in read.epochs:
+        if epoch.state != STATE_ALIVE:
+            continue
+        try:
+            (epoch.directory / "flush").touch()
+        except OSError as exc:
+            errors.append(f"{epoch.epoch}: {exc}")
+            continue
+        waiting[epoch.epoch] = epoch.last_seq if epoch.last_seq is not None else -1
+    return waiting, errors
+
+
+def _sealed(epoch: EpochRead, last_seq_before: int) -> bool:
+    if not (epoch.directory / "flush").exists():
+        return True
+    return epoch.last_seq is not None and epoch.last_seq > last_seq_before
+
+
+class _Fixed:
+    """An engine adapter that hands ``append_inference_capture`` a capture."""
+
+    def __init__(self, capture: EngineCapture) -> None:
+        self.capture = capture
+
+    def collect(self, *, run_id: str, session_id: str) -> EngineCapture:
+        return self.capture
+
+
+def _append_capture(
+    artifact: str | Path,
+    run_id: str,
+    session_id: str,
+    capture: EngineCapture,
+    envelope_path: str | Path | None,
+) -> None:
     try:
         append_inference_capture(
             artifact,
             run_id=run_id,
             session=create_session_summary(source=SOURCE, session_id=session_id),
-            engine_adapter=_Ready(),
+            engine_adapter=_Fixed(capture),
             envelope_path=envelope_path,
         )
     except (InferInputError, InferUsageError):
@@ -92,7 +189,6 @@ def import_execution_into_artifact(
     except ValueError as exc:
         # Every remaining rejection is about the artifact or its envelope.
         raise InferInputError(f"cannot import into {artifact}: {exc}") from exc
-    return capture
 
 
 def reduce_to_capture(
@@ -254,7 +350,9 @@ __all__ = [
     "SOURCE",
     "SUPPORTED",
     "execution_high_water",
+    "flush_execution_log",
     "import_execution_into_artifact",
+    "record_failed_execution_import",
     "reduce_to_capture",
     "run_facts_from_records",
 ]
