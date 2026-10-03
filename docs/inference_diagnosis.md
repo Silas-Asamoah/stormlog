@@ -121,8 +121,9 @@ the decision never depends on what happened after the stall. With `config.now_wa
 counts from the last completion (`detail["ongoing"]`).
 
 The records give no verdict (`sufficient` is False) when they come from two
-epochs (`epoch_changed`), skip a `seq` or show drop counts rising between
-heartbeats (`hook_records_dropped`), come from a capped writer
-(`hook_capped`), hold no completed step (`too_few_steps`) or are absent
+epochs (`epoch_changed`), skip a `seq` or show drop counts (of any kind,
+oversized records included) rising between heartbeats
+(`hook_records_dropped`), show write errors rising between heartbeats
+(`hook_writer_errors`), come from a capped writer (`hook_capped`), hold no completed step (`too_few_steps`) or are absent
 (`requires_hook`). `detail["pause_capability"]` says whether the hook records
 pauses; without it a pause looks like a stall with ready work.
