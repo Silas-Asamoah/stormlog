@@ -427,6 +427,33 @@ def test_the_view_keeps_each_engine_epochs_producer() -> None:
     assert view.producers == [(100, "vllm:a"), (900, "vllm:b")]
 
 
+def test_a_label_names_the_engine_serving_at_its_action() -> None:
+    from examples.qualification.inject import name_engine
+    from stormlog.infer.qualify.ground_truth import Expectation
+
+    expects = (
+        Expectation("kv_preemption_pressure", "kv_cache"),
+        Expectation("load_increase", "workload", cause="workload_change"),
+    )
+    named = name_engine(expects, "vllm:a")
+    assert [e.engine for e in named] == ["vllm:a", None]
+    assert name_engine(expects, None) == expects
+
+
+def test_the_engine_serving_is_the_last_to_say_hello_by_then() -> None:
+    from examples.qualification.inject import _Truth
+    from examples.qualification.outcomes import Slo
+    from stormlog.infer.qualify.ground_truth import PhaseWindow
+
+    truth = _Truth("q221-r", PhaseWindow(0, 1), (True, 1.0), Slo(), [], (0, 0),
+                   None, False, producers=((900, "vllm:b"), (100, "vllm:a")))  # fmt: skip
+    assert truth.producer_at(500) == "vllm:a"
+    assert truth.producer_at(1000) == "vllm:b"
+    # Before any hello, or with no action time: the first engine.
+    assert truth.producer_at(50) == "vllm:a"
+    assert truth.producer_at(None) == "vllm:a"
+
+
 def test_the_view_says_where_a_moment_fell_in_the_step_loop() -> None:
     # A.4 (#218 R12): where each F4a pulse landed decides what the engine
     # was doing when it stopped: inside schedule(), in a step's execution
