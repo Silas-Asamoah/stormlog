@@ -54,7 +54,10 @@ Finder = Callable[[str], Iterator[Span]]
 # text as given; scrub_text merges them with the known secrets' spans and
 # replaces them all at once, so no replacement can hide another match.
 _KEY_CHARS = "A-Za-z0-9_.-"
-_JSON_STRING = r'"((?:[^"\\]|\\.)*)"'
+# A string never starts at an escaped quote: in valid JSON a backslash never
+# comes just before an opening quote, and starting at each escaped quote of
+# an unclosed string would rescan it from every one, quadratically.
+_JSON_STRING = r'(?<!\\)"((?:[^"\\]|\\.)*)"'
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?"
     r"(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"

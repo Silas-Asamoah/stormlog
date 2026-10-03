@@ -432,6 +432,10 @@ ADVERSARIAL = (
     ('"eyJ" + "a" * 52000', None),
     ('"authorization " * 3700', None),
     ('"-----BEGIN PRIVATE KEY-----\\n" * 1800', None),
+    # A string that never closes because every later quote is escaped.
+    ("'\"' + ('a' + chr(92) + '\"') * 15000", None),
+    ("'password=\"' * 5000", None),
+    ('"password=\'" * 5000', None),
 )
 
 
