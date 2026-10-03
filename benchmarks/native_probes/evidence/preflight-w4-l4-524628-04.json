@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_hardware_preflight_evidence",
+  "issue": 118,
+  "local_date": "2026-10-03",
+  "status": "bounded_w4_controls_observed_remaining_hardware_gates_pending",
+  "authorization": {
+    "uploaded_source_archive_sha256": "02f61f534084fba9c3c015986157ca4a2c6604c9745f966db3583224b841ed07",
+    "uploaded_driver_sha256": "b1bc55e7773da6bb3af4c488599b635ec91718a31944a9e3802305eff8eddb15",
+    "source": "user explicitly authorized these exact two files for bounded W4 hardware checks",
+    "final_trials_started": false
+  },
+  "cloud": {
+    "provider": "JarvisLabs",
+    "machine_id": 524628,
+    "gpu": "L4",
+    "instance_count": 1,
+    "state_after_verified_download": "Paused",
+    "running_instances_after_pause": 0,
+    "paused_instances_after_pause": 1,
+    "balance_before_usd": 23.6327,
+    "balance_after_usd": 23.5868,
+    "observed_balance_decrease_usd": 0.0459,
+    "provider_get_after_pause_runtime": "0 hours 00 minutes",
+    "provider_get_after_pause_cost_usd": 0.0,
+    "cost_interpretation": "Balance decrease includes storage charges; provider resets runtime and cost after pause, so exact billable runtime is unavailable."
+  },
+  "execution": {
+    "run_id": "r_6ea84237",
+    "managed_run_exit_code": 0,
+    "first_import_smoke_exit_code": 1,
+    "first_import_smoke_failure": "Incorrect smoke command imported scripts.native_probes.cuda_microbench instead of scripts.native_probes.workloads.cuda_microbench; uploaded package was intact.",
+    "corrected_import_smoke_exit_code": 0,
+    "helper_binary_sha256": "70569ef7f94110e503fc7d5f9ff9bd2cfe41e7296195f9466683650cfd86b4ac",
+    "variants": [
+      {
+        "name": "nominal",
+        "trial_status": "unsupported",
+        "return_code": 0,
+        "delivered_records": 72203,
+        "local_dropped_records": 0,
+        "cupti_dropped_records": 0,
+        "decoded_and_status_counts_match": true,
+        "control_errors": []
+      },
+      {
+        "name": "small_buffer",
+        "trial_status": "unsupported",
+        "return_code": 0,
+        "activity_buffer_bytes": 65536,
+        "delivered_records": 72203,
+        "local_dropped_records": 0,
+        "cupti_dropped_records": 0,
+        "decoded_and_status_counts_match": true,
+        "control_errors": []
+      },
+      {
+        "name": "slow_consumer",
+        "trial_status": "unsupported",
+        "return_code": 0,
+        "consumer_delay_ms": 25,
+        "delivered_records": 72203,
+        "local_dropped_records": 0,
+        "cupti_dropped_records": 0,
+        "decoded_and_status_counts_match": true,
+        "control_errors": []
+      },
+      {
+        "name": "output_limit",
+        "trial_status": "unsupported",
+        "return_code": 0,
+        "maximum_output_bytes": 65536,
+        "encoded_bytes_written": 64913,
+        "delivered_records": 2665,
+        "local_dropped_records": 69538,
+        "cupti_dropped_records": 0,
+        "decoded_and_status_counts_match": true,
+        "control_errors": []
+      },
+      {
+        "name": "target_timeout",
+        "trial_status": "timeout",
+        "return_code": -15,
+        "watchdog_fired": true,
+        "configured_timeout_after_measurement_start_ms": 500,
+        "partial_trace_bytes_retained": 4200980,
+        "finalized_status_present": false,
+        "control_errors": []
+      }
+    ],
+    "interpretation": "The bounded control checks observed the intended settings and failure signals. All non-timeout trial manifests remain unsupported, and this does not qualify full-workload capture capacity or final trials."
+  },
+  "raw_evidence": {
+    "archive": "artifacts/native-probes/preflight-w4-524623-04/w4-evidence-524628.tar.gz",
+    "archive_sha256": "227d213ce3cf075c39d440ee3c5649cae3cfbdc2b6f9de8d5f9f34d0236a95a1",
+    "internal_file_hashes_verified": 59,
+    "timeout_socket_note": "An ephemeral Unix socket in the timeout trial was ignored by tar; the partial trace, manifest, marker, and logs were retained."
+  },
+  "readiness": {
+    "bounded_w4_controls_observed": true,
+    "hardware_preflight_passed": false,
+    "final_trials_started": false,
+    "remaining_gates": [
+      "bounded full-workload vLLM capture capacity with no dropped records",
+      "GPU, pinned host, and collector buffer memory accounting or explicit inconclusive claims",
+      "trusted Nsight correlation and external kernel coverage",
+      "public-engine and Proton start-stop output",
+      "packaging, privilege, container, coexistence, and failure-recovery qualification",
+      "review revised helper source and binary hashes before final observations"
+    ]
+  }
+}
