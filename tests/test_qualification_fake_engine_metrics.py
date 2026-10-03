@@ -277,3 +277,20 @@ def test_every_waiting_request_waits_for_capacity(limit: dict[str, Any]) -> None
         "capacity": waiting,
         "deferred": 0.0,
     }
+
+
+def test_the_page_counts_each_finished_request_once_per_histogram() -> None:
+    # Over HTTP: every per-request histogram, queue time included, holds one
+    # sample per finished request, and a one-token completion's time per
+    # output token is 0.
+    with FakeEngine(FAST) as engine:
+        for tag in "abc":
+            chat(engine, words(4, tag), max_tokens=1)
+        scrape = _scrape(engine)
+    for name in (
+        "vllm:request_queue_time_seconds",
+        "vllm:e2e_request_latency_seconds",
+        "vllm:request_prefill_kv_computed_tokens",
+    ):
+        assert _histogram(scrape, name)[0] == 3, name
+    assert _histogram(scrape, "vllm:request_time_per_output_token_seconds") == (3, 0)
