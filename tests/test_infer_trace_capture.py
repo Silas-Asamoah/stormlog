@@ -315,28 +315,53 @@ def test_start_outcome_classifies_every_answer() -> None:
     )
 
 
-def test_the_start_request_is_stamped_around_the_call_itself(tmp_path: Path) -> None:
+def test_the_start_request_is_stamped_around_the_call_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not around the directory snapshot before it, nor the executor's wait."""
+    import itertools
     import time
 
-    stamps: dict[str, int] = {}
+    ticks = itertools.count(1)
+    lock = threading.Lock()
+
+    def clock() -> int:
+        with lock:
+            return next(ticks)
+
+    monkeypatch.setattr(time, "time_ns", clock)
+    marks: dict[str, int] = {}
 
     class _Timed(_FakeControl):
         def post(self, route: str) -> ControlResult:
-            if route == "/start_profile":
-                stamps["inside"] = time.time_ns()
-            return super().post(route)
+            if route != "/start_profile":
+                return super().post(route)
+            marks["post_entered"] = clock()
+            try:
+                return super().post(route)
+            finally:
+                marks["post_left"] = clock()
 
-    control = _Timed(tmp_path)
-    windows = TraceWindows(_config(tmp_path), control=control)
+    class _Windows(TraceWindows):
+        def _snapshot(self, window: Any) -> dict[str, int] | None:
+            try:
+                return super()._snapshot(window)
+            finally:
+                marks["snapshot_done"] = clock()
+
+    windows = _Windows(_config(tmp_path), control=_Timed(tmp_path))
 
     window = _run_window(windows)
 
     assert window.start_outcome == START_ACKNOWLEDGED
-    assert window.start_requested_at_ns is not None
-    assert window.start_returned_at_ns is not None
-    assert window.requested_at_ns <= window.start_requested_at_ns
-    assert window.start_requested_at_ns <= stamps["inside"]
-    assert stamps["inside"] <= window.start_returned_at_ns
+    assert (
+        window.requested_at_ns
+        < marks["snapshot_done"]
+        < window.start_requested_at_ns
+        < marks["post_entered"]
+        < marks["post_left"]
+        < window.start_returned_at_ns
+    )
     assert window.started_at_ns == window.start_returned_at_ns
     record = window.to_record(session_id="s1")
     assert record["start_requested_at_ns"] == window.start_requested_at_ns
