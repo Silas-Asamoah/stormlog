@@ -54,9 +54,11 @@ class FakeProfiler(EngineObserver):
         self.controls = controls
         self.producer = producer
         self.active = False
-        # Each stop's span on the loop, and each trace with the time its write
+        # Each stop's span on the loop, each window close's span (a stop's,
+        # or the worker's own), and each trace with the time its write
         # finished, in ``time.time_ns()``: tests time a pause by these.
         self.stops: list[tuple[int, int]] = []
+        self.closes: list[tuple[int, int]] = []
         self.written: list[tuple[Path, int]] = []
         self._steps: list[Step] = []
         self._correlation = 0
@@ -122,22 +124,29 @@ class FakeProfiler(EngineObserver):
 
     # ------------------------------------------------------------ the loop
 
-    def on_executed(self, step: Step) -> None:
-        if not self.active:
-            return
-        self._steps.append(step)
+    def on_scheduled(self, step: Step) -> None:
         limit = self.controls.profiler_max_iterations
-        if limit is not None and len(self._steps) >= limit:
-            # (c) The worker stops itself, pause included, and nobody calls stop.
+        if self.active and limit is not None and len(self._steps) >= limit:
+            # (c) The worker stops itself, pause included, and nobody calls
+            # stop. vLLM's worker counts a step as its execution starts and
+            # stops once the count passes max_iterations, so the stop holds
+            # the next step, scheduled but not yet run, and never comes while
+            # the engine idles.
             self._close_window()
 
+    def on_executed(self, step: Step) -> None:
+        if self.active:
+            self._steps.append(step)
+
     def _close_window(self) -> None:
+        started = time.time_ns()
         self.active = False
         steps, self._steps = self._steps, []
         time.sleep(self.controls.stop_pause_seconds)
         self._write_or_schedule(steps)
         if self.config.torch_profiler_dump_cuda_time_total:
             self._write_table(steps)
+        self.closes.append((started, time.time_ns()))
 
     def _write_or_schedule(self, steps: list[Step]) -> None:
         if not self.controls.stop_writes_trace:

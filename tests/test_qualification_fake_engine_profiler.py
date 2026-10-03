@@ -159,6 +159,29 @@ def test_max_iterations_ends_the_window_without_a_stop(tmp_path: Path) -> None:
     assert len(load_kineto_trace(path).gpu_events) == 3
 
 
+def test_max_iterations_stops_when_the_next_step_starts(tmp_path: Path) -> None:
+    # vLLM's worker counts profiled steps as each execute_model starts and
+    # stops once the count passes max_iterations, before that step runs
+    # (WorkerProfiler.step), so the window holds exactly that many steps and
+    # stays open while no further step comes.
+    with _engine(tmp_path, profiler_max_iterations=4) as engine:
+        post(f"{engine.base_url}/start_profile")
+        chat(engine, words(4, "a"), max_tokens=3)
+        assert wait_until(lambda: len(engine.engine.steps) == 4)
+        time.sleep(0.2)
+        profiler = engine.profiler
+        assert profiler is not None
+        assert (profiler.active, _traces(tmp_path)) == (True, [])
+        chat(engine, words(4, "b"), max_tokens=1)
+        assert wait_until(lambda: len(_traces(tmp_path)) == 1)
+        fifth = engine.engine.steps[4]
+        ((closed_start, closed_end),) = profiler.closes
+    (path,) = _traces(tmp_path)
+    assert len(load_kineto_trace(path).gpu_events) == 3
+    # The fifth step was scheduled, then held by the stop, then run.
+    assert fifth.start_wall_ns <= closed_start <= closed_end <= fifth.exec_start_ns
+
+
 def test_a_delayed_or_foreign_trace_appears_on_its_own(tmp_path: Path) -> None:
     with _engine(tmp_path, trace_write_delay_seconds=0.2) as engine:
         post(f"{engine.base_url}/start_profile")

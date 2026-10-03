@@ -76,7 +76,8 @@ class Controls:
     drop_start_response: bool = False
     # (b) The stop answers 200 but writes no trace.
     stop_writes_trace: bool = True
-    # (c) Stop by itself after this many profiled steps, like max_iterations.
+    # (c) Stop by itself after this many profiled steps, like max_iterations:
+    # when the next step starts, so not while the engine idles.
     profiler_max_iterations: int | None = None
     # /metrics: "ok", "slow" (answer after metrics_delay_seconds) or "fail" (500).
     metrics_mode: str = "ok"
