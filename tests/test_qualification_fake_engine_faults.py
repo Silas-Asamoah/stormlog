@@ -148,3 +148,35 @@ def test_the_subprocess_keeps_the_callers_python_path(
     ]
     monkeypatch.delenv("PYTHONPATH")
     assert _environment()["PYTHONPATH"] == str(ROOT)
+
+
+@pytest.mark.parametrize("target", ["engine", "frontend"])
+def test_stacked_pauses_hold_until_the_last_one_ends(target: str) -> None:
+    # An earlier, shorter pause's timer must not release a later one.
+    with FakeEngine(FAST) as engine:
+        pause = engine.pause_engine if target == "engine" else engine.pause_frontend
+
+        def paused() -> bool:
+            if target == "engine":
+                return engine.engine.paused
+            return engine.frontend_paused
+
+        pause(0.2)
+        pause(0.7)
+        time.sleep(0.45)
+        held_past_the_first = paused()
+        assert wait_until(lambda: not paused(), timeout=5)
+        pause(0.2)
+        pause()
+        time.sleep(0.45)
+        held_without_a_deadline = paused()
+        if target == "engine":
+            engine.resume_engine()
+        else:
+            engine.resume_frontend()
+        released = not paused()
+    assert (held_past_the_first, held_without_a_deadline, released) == (
+        True,
+        True,
+        True,
+    )

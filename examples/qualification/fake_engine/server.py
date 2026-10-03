@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .config import MAX_MODEL_LEN, VLLM_VERSION, Controls, FakeEngineConfig
 from .engine import Engine, FakeRequest, prompt_tokens
+from .hold import Hold
 from .hook_log import HookLog
 from .metrics import render_metrics
 from .profiler import FakeProfiler
@@ -35,8 +36,7 @@ class FakeEngine:
         self.config = config or FakeEngineConfig()
         self.controls = Controls()
         self.engine = Engine(self.config)
-        self._frontend = threading.Event()
-        self._frontend.set()
+        self._frontend = Hold()
         self._server: _Server | None = None
         self._thread: threading.Thread | None = None
         self.hook: HookLog | None = None
@@ -76,7 +76,7 @@ class FakeEngine:
         return self
 
     def stop(self) -> None:
-        self._frontend.set()
+        self._frontend.resume()
         self.engine.stop()
         if self._server is not None:
             self._server.shutdown()
@@ -114,15 +114,16 @@ class FakeEngine:
 
     def pause_frontend(self, seconds: float | None = None) -> None:
         """Hold every API response (as if the API server were stopped); the
-        engine keeps stepping. ``/_fault/`` routes still answer."""
-        self._frontend.clear()
-        if seconds is not None:
-            timer = threading.Timer(seconds, self._frontend.set)
-            timer.daemon = True
-            timer.start()
+        engine keeps stepping. ``/_fault/`` routes still answer. Pauses stack,
+        as the engine's do."""
+        self._frontend.pause(seconds)
 
     def resume_frontend(self) -> None:
-        self._frontend.set()
+        self._frontend.resume()
+
+    @property
+    def frontend_paused(self) -> bool:
+        return self._frontend.held
 
     def pause_engine(self, seconds: float | None = None) -> None:
         self.engine.pause(seconds)
@@ -318,6 +319,7 @@ def _fault_state(handler: _Handler) -> None:
             "finished": len(engine.finished),
             "preemptions": engine.stats.preemptions,
             "engine_paused": engine.paused,
+            "frontend_paused": handler.fake.frontend_paused,
             "pid": os.getpid(),
         },
     )

@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from .blocks import BlockPool
 from .config import FakeEngineConfig
+from .hold import Hold
 from .stats import EngineStats, StatsSnapshot, snapshot
 
 # A fixed chat-template prefix, as a server's template adds to every prompt.
@@ -178,8 +179,7 @@ class Engine:
         self._iteration = 0
         self._lock = threading.Lock()
         self._wake = threading.Condition(self._lock)
-        self._gate = threading.Event()
-        self._gate.set()
+        self._gate = Hold()
         self._calls: deque[_LoopCall] = deque()
         self._stopping = False
         self._snapshot = self._take_snapshot()
@@ -196,7 +196,7 @@ class Engine:
         with self._wake:
             self._stopping = True
             self._wake.notify_all()
-        self._gate.set()
+        self._gate.resume()
         self._thread.join(timeout=10)
         with self._lock:
             pending = [*self.waiting, *self.running]
@@ -231,19 +231,16 @@ class Engine:
     # ------------------------------------------------------------ controls
 
     def pause(self, seconds: float | None = None) -> None:
-        """Hold the step loop before its next step; release after ``seconds``."""
-        self._gate.clear()
-        if seconds is not None:
-            timer = threading.Timer(seconds, self._gate.set)
-            timer.daemon = True
-            timer.start()
+        """Hold the step loop before its next step; release after ``seconds``,
+        or on ``resume()``. Pauses stack: the last to end releases it."""
+        self._gate.pause(seconds)
 
     def resume(self) -> None:
-        self._gate.set()
+        self._gate.resume()
 
     @property
     def paused(self) -> bool:
-        return not self._gate.is_set()
+        return self._gate.held
 
     def call_in_loop(self, action: Callable[[], Any], timeout: float = 60.0) -> Any:
         """Run ``action`` on the step loop between steps, as vLLM runs its
