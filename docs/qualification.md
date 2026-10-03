@@ -115,7 +115,9 @@ measured window with length.
 2. **Realization:** the mechanism occurred, on the victim's own requests
    where it can be attributed to them.
 3. **Observation completeness** of the diagnosed configuration's capture.
-   This is reported, never used to drop an episode.
+   This is reported, never used to drop an episode. Until PR D assesses the
+   capture, the harness publishes `not_assessed`, or `incomplete` when the
+   reference channel itself lacked a signal a realization check needed.
 4. **Victim impact:** whether the episode raised the victim's SLO violations.
    `assess_impact` gives `impact` when the effect window has at least three
    violations, and a one-sided Fisher exact test against the baseline gives
@@ -426,8 +428,11 @@ ranked by #218's total `rank`, and top-1 and top-3 are taken over it.
 - the label's location. At L1 that is the component; at L2 it also needs the
   rank and engine where the label names them. They are read from #218's
   location block: the engine is `location.engine_producer`, the hook
-  producer that names the engine, and the rank `location.rank`. A label
-  names the engine by the reference hook hello's producer.
+  producer that names the engine, and the rank `location.rank`. The
+  harness names the engine in every expectation at an engine component
+  (`scheduler`, `kv_cache`, `prefix_cache`, `engine_core`, `api_server`,
+  where #218 sets `engine_producer`): the producer of the engine epoch whose
+  hello the reference channel last saw before the episode's action.
 
 A secondary of the right kind never matches, because the diagnoser said the
 mechanism followed from something else. Nor is it a false claim, because it
@@ -480,3 +485,364 @@ everything the score froze: its version, the edge table's version, the
 gated metric and level, the targets and confidence, the grace per kind
 (the default shown for a kind without its own), the support matrix and the
 negative types.
+
+## The harness
+
+> **Source checkout only.** `examples.qualification` is not shipped in the
+> PyPI package.
+
+### The reference channel
+
+Every run keeps a reference channel beside the configuration being
+diagnosed, and the harness reads only it to judge effect timing, realization
+and recovery. `examples.qualification.reference` is the vLLM 0.30 binding's
+reader:
+
+- **`HookTailer`** reads the execution hook's raw log, under the run's
+  `truth/reference/hook`, as it is written. It takes complete lines only and
+  never reads a record twice; a sealed segment continues from where its
+  `.part` was read. It notes when each record was first seen
+  (`probes/hook-firstseen.jsonl`) and when each segment was sealed
+  (`probes/seal-observations.jsonl`). A damaged line (a torn write) is
+  skipped and counted, and a segment found shorter than what was read is
+  read again; both are noted in `probes/hook-problems.jsonl`. So is a record
+  that parses but lacks a field the view reads (`bad_record`): it is skipped
+  whole, since each record is read in full before any of it is applied, and
+  the records after it in the same poll still arrive. At the end of
+  the run every epoch it read is copied into `truth/reference/hook`, before
+  the run is hashed, so the replay has the records its first-seen notes
+  describe. Each epoch's pseudonym `key` is left behind: with it, anyone
+  holding the published truth could turn an import's pseudonyms back into
+  other clients' request IDs. Every client of a qualification run is
+  Stormlog's own, so a re-import of the copy uses `--raw-foreign-ids` (or
+  leaves the neighbors' IDs withheld). The harness's
+  poller records a poll that fails in `probes/poll-errors.jsonl` and polls
+  on; it stops, a poll in progress waited out, before the run is hashed. The replay uses these times to cut the
+  hook log to what an online analyzer could have read.
+- **`VictimView`** keeps the victim's series from the engine's records. Victim
+  requests are the ones whose `X-Request-Id` carries the victim's run prefix.
+  - **Wait:** from its `alias` to the start of the step that first schedules
+    it.
+  - **Cached fraction:** that step's prefix-cache hit over the victim's
+    shared prefix, at most 1.
+  - **Preemption:** the request's ID in a step's `preempted`.
+  - **Cadence:** every step's start is kept.
+- **`scrape_metrics`** reads `/metrics` once: the waiting count summed over engines,
+  the highest KV usage, and vLLM's prefix-cache counters
+  (`vllm:prefix_cache_queries` and `vllm:prefix_cache_hits`, in tokens)
+  summed over engines. `ReferenceChannel` takes one per poll, into
+  `truth/reference/scrapes.jsonl`. `hit_ratios` turns consecutive scrapes
+  into the engine-wide hit ratio T3b's realization reads: hits over queries
+  added in between, skipping an interval with no queries or a counter that
+  fell.
+- **`chunk_gaps`** rebuilds the victim's gaps between streamed chunks from its
+  client records.
+- **`request_spans`** takes each finished victim request's send and end from
+  the same records, and `merge_spans` makes them the in-flight intervals
+  that busy-time cadence needs (`Signals.in_flight`). A victim request
+  that hasn't finished yet is in flight from its send (the victim's send
+  probe) or its admission (its `alias`), whichever is known, to the latest
+  poll: a request stuck in a stall is busy time, even one sent while the
+  engine was hung and admitting nothing, so a stall still open at the poll
+  is seen. The victim artifact and its sends are read incrementally.
+
+`ReferenceChannel.signals()` returns them as the `Signals` that
+`stormlog.infer.qualify.recovery` reads.
+
+### The signal pulser
+
+`examples.qualification.pulser` stops a serving process and continues it:
+F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
+5 ms twin. A pulse is `SIGSTOP`, a confirmed stop, a wait and `SIGCONT`:
+
+- **The right process.** A target is its pid and its start time, checked
+  before every signal, so a recycled pid is never signalled.
+- **A confirmed stop.** After `SIGSTOP` the pulser polls until the process is
+  stopped, within 1 s, and records the latency.
+- **Always continued.** The target is continued:
+  - in a `finally` around each pulse;
+  - at `atexit`;
+  - by `Pulser.close`;
+  - by SIGTERM and SIGHUP handlers, which continue every target before the
+    harness exits (their default action would skip `finally` and `atexit`);
+  - by a watchdog (`examples.qualification.watchdog`) in a session of its
+    own, ignoring SIGINT, SIGTERM and SIGHUP, so a signal to the harness's
+    process group (Ctrl+C, a job's SIGTERM, an ssh disconnect) never reaches
+    it. It reads a pipe from the harness: end of file means the harness is
+    gone, however it died, and the target is continued at once. It also
+    continues a target stopped more than 1 s past the longest pulse.
+- **No stop without a watchdog.** The pulser waits for the watchdog to say
+  it is ready before its first stop, replaces a watchdog that died before the
+  next one, and refuses to pulse if it can't. While a stop is held it checks
+  every 10 ms that the watchdog still watches (alive, and not itself
+  stopped); if not, it continues the target at once and refuses the pulse.
+  So a stop is left in place only if the watchdog and the harness are both
+  killed within the same 10 ms or so: two independent kills, the one
+  residual risk. Measured (rev-220-a, three trials each, the watchdog
+  killed and then the harness's group): 0 or 2 ms apart, the target was
+  left stopped every time; 5 ms apart, twice; 20 or 50 ms apart, never.
+  Each check is a status read on the harness's host, about 200 in a 2 s
+  pulse, not work on the engine's; checking every 50 ms would cut that
+  fivefold but widen the window to about 50 ms, so the check stays at
+  10 ms.
+- **Caps.** A pulse lasts at most 2 s, at a duty cycle of at most 50%; a
+  `Pulser` asked for a longer cap gets 2 s, and its watchdog the limit for
+  2 s. A pulse ends its length after `SIGSTOP` was sent, timed on the
+  monotonic clock, however long the stop took to confirm and whatever the
+  wall clock does. The next pulse waits at least the rest of the period,
+  and at least as long as the target was actually stopped, so a schedule
+  that falls behind keeps the cap instead of catching up back to back.
+
+Each pulse records where it landed in the step loop (A.4, #218 R12), from the
+reference hook's records: `in_schedule` (inside a step's `schedule()` call),
+`in_step` (after it, before the step completed: execution or a GPU wait) or
+`between_steps`. Each pulse's stop, confirmation and continue times are
+kept, with `held_ns`, the measured time from `SIGSTOP` to `SIGCONT`
+(`continued_by_other` when the target was already running, continued by the
+watchdog's limit or an operator, so it was stopped for less), so effect
+timing can start from the first confirmed stop.
+
+`continued_by_other` is one status read just before `SIGCONT`, so it sees
+only a target running at that moment. A continue by someone else followed
+by another stop (a second actor) reads as stopped, and the flag stays false
+although the target ran for part of the hold. A status read that fails
+reads as running. Nothing scores on the flag: a stall is timed to
+`continue_sent_ns` either way, and a scorer that wants to set such pulses
+aside has to read it.
+
+`discover_roles(api_server_pid)` names the processes under a vLLM API server by
+the titles vLLM 0.30 gives them, matched exactly on `argv[0]` (which vLLM's
+retitling replaces; the 15-character `comm` would truncate it):
+`VLLM::EngineCore` among the server's children, and `VLLM::Worker_TP<rank>`
+among EngineCore's, with the rank parsed, so `Worker_TP10` is rank 10. A
+helper whose arguments merely mention EngineCore is not it. A missing or
+ambiguous EngineCore is refused. Each role is returned as a target with its
+start time.
+
+### Neighbor traffic
+
+`examples.qualification.neighbor` injects another tenant's load: F1, F2 and
+F3, and their workload twins.
+
+- **A neighbor** is an `infer profile` run of its own, on a thread of the
+  harness. It has its own run ID, so the hook tells its requests from the
+  victim's by their `X-Request-Id`. It runs with a high in-flight limit and
+  writes its artifact under `truth/`.
+- **Arrivals.** An open-loop neighbor arrives at a fixed rate, so its plan is
+  a schedule, not a distribution. A closed-loop one runs a number of workers,
+  as F2's eight concurrent long requests do.
+- **Actuation** is judged from the neighbor's own artifact, on what was
+  actually sent:
+  - an open-loop neighbor must reach its planned rate within 5% overall and
+    in every 5 s window of actual send times, with no arrival held for a
+    slot and a p95 dispatch lag under 0.25 s, so a schedule sent late in a
+    burst doesn't pass;
+  - a closed-loop one must keep its workers busy: at least 90% of them in
+    flight on average;
+  - the server's own token counts must match the dose: the median prompt
+    within a factor of 2 (the client counts words), the median output at
+    least 90% of it;
+  - any failed request is a problem.
+
+  Its first send is the onset of the workload twins' effect.
+
+### The capture pause (I1)
+
+`examples.qualification.capture.capture_window` opens one profiler window and
+closes it, stamping when each call was requested and when it returned. A start
+the server refused is never followed by a stop. An ambiguous one (a timeout
+or a reset: the server may have started) is, and so is a window cut short
+by an interrupt, so the server is never left profiling. vLLM writes the trace
+inside the stop call while its step loop waits, so the stop's interval, plus
+#219's drain, is I1's effect. In DX-OFF the window is opened directly, not by
+#219's watcher, so there is no drain to add.
+
+### The catalog and the plan
+
+`examples.qualification.catalog` is A.4's catalog: each episode type's label
+(`expects`, `secondary`, `allows`), its cause class, and how it is injected.
+
+| Method | Types |
+| --- | --- |
+| Neighbor traffic | F1, F2, F3, T1, T2, T3, T3b, W1 |
+| Pulses to a role's process | F4a, F4b, H0, P (P pulses a sidecar) |
+| One profiler window | I1 |
+| Nothing | N |
+
+T2's mixed prefill is `allowed` rather than secondary, because no #218 edge
+leads from a workload change to it. The short twins (S-x), the TP=2 types
+(F5, R0, F6) and the outages (X1–X3) are refused for now: they need #219's
+predicates, a second GPU and #220's tools.
+
+A plan, `stormlog.qualify.plan/1`, holds:
+- the profile and a seed;
+- the binding (`vllm-0.30`);
+- the victim's workload: rate, token shape, prefix groups, shared-prefix
+  ratio, SLO;
+- the timeline: priming, baseline, episode length, the 60 s minimum and
+  150 s timeout for recovery, final recovery;
+- the episodes in order, each dose filled from the catalog's defaults;
+- overrides of recovery's thresholds: windows in seconds (`window`, `hold`,
+  `cadence_hold`, `priming_window`), the queue minimums as counts
+  (`min_wait_samples`, `min_gauge_samples`), and the fractions.
+
+`load_plan` refuses a plan that can't be run, listing every problem: an
+unknown type or one this harness doesn't run yet, a neighbor without a rate
+or a concurrency, a pulse past the pulser's caps, a capture that isn't
+between 0 and 60 s, a timeline or victim value that isn't a number in range
+(a minimum recovery longer than the timeout among them), an unknown
+threshold override, and a plan with no episode. Once those are right, a plan
+with a queue episode (F1, T1, W1) needs a baseline and a hold long enough for
+queue recovery's samples: one more scrape than `min_gauge_samples` at the
+harness's one scrape a second (6 s by default), and the victim's expected
+requests at least `min_wait_samples` (20 by default: 6.7 s at 3 requests/s).
+A shorter window could never recover such an episode, which would time out
+and end the run.
+
+```json
+{"format": "stormlog.qualify.plan/1", "profile": "dx-off", "seed": 7,
+ "victim": {"rate_per_second": 3.0, "input_tokens": 512, "output_tokens": 64,
+            "prefix_groups": 4, "shared_prefix_ratio": 0.75},
+ "episodes": [{"type": "F2"}, {"type": "N"},
+              {"type": "F1", "dose": {"rate_per_second": 24, "input_tokens": 128, "output_tokens": 16}}]}
+```
+
+### The victim
+
+`python -m examples.qualification.victim --probes DIR -- <infer profile
+arguments>` runs the profile exactly as `stormlog infer profile` would, and
+adds four probes in its own process:
+
+- **Phase markers** in `DIR/markers/`, one file per phase start and end. The
+  harness times its episodes against the measured window from them, while the
+  run is still going.
+- **The append-time probe:** each artifact line's index and when its append
+  was flushed, in `DIR/append-times.jsonl`. A client record is ready for an
+  analyzer then, and the replay cuts the client artifact by these times.
+- **The client idle probe:** a 10 ms timer on its own thread. A tick that
+  comes 20 ms late or more is noted in `DIR/client-idle.jsonl`, so a stall
+  on the client's own host is seen.
+- **The send probe:** each request's `X-Request-Id` and when the client
+  sent it, in `DIR/victim-sends.jsonl`, so the harness counts a request in
+  flight from its send, before the engine admits it or while it is hung.
+
+### The inject command
+
+```bash
+python -m examples.qualification inject --plan PLAN.json --out ROOT \
+  --base-url URL --model M --reference-channel HOOK_DIR \
+  [--api-server-pid PID] [--target sidecar=PID ...] [--label q221-...] \
+  -- [extra infer profile arguments for the victim]
+```
+
+The harness never launches the server; #213's `run_plan` does. It is given
+the server's URL, the processes a plan may pulse, and the hook directory the
+server writes (`STORMLOG_VLLM_HOOK_DIR`, as this host sees it).
+`--api-server-pid` finds the server's roles with `discover_roles`;
+`--target ROLE=PID` names any other process. Every target is bound to its
+start time at startup: an episode whose target has since exited, or whose
+pid now names another process, is not actuated, and nothing is signalled.
+One run goes:
+
+1. **Start.** The victim starts, at the plan's rate with its shared-prefix
+   prompts, and the reference channel is polled every second.
+2. **Priming,** then the priming check. If it fails, every episode of the run
+   is a `protocol_failure`, still published.
+3. **Baseline,** measured for recovery's thresholds.
+4. **Episodes, in the plan's order.** Each waits until the previous one's
+   recovery has held, at least the minimum after its action, and its own
+   clean time (30 s by default) after the previous effect ended. Then it is
+   actuated by neighbor traffic, pulses, a profiler window or nothing, and
+   its recovery is watched live. A recovery timeout skips the remaining
+   episodes; they are published as `not_actuated`.
+5. **Final recovery.** The victim is stopped with its `--stop-file`: its
+   measured window ends, it drains, runs its post-run imports and completes,
+   so the diagnoser gets a whole artifact (it is interrupted only if that
+   takes more than 180 s). Then each episode's
+   `stormlog.qualify.injection/1` record is written to
+   `truth/injections.jsonl` with:
+   - its effect timing and realization checks, and its realized
+     mechanisms: the label's when realized, plus any A.4 adds (an F4b whose
+     engine stopped stepping adds `host_stall@engine_core`, which its label
+     then also allows);
+   - its impact on the victim's SLO (when the plan sets one), counted by
+     arrival in the effect window against the baseline;
+   - its run's label (`run_id`) and the victim artifact's clock domain. The
+     status is `incomparable` when that isn't this host's clock;
+   - its actions: when the injector's action started and ended, on the wall
+     and monotonic clocks, and how it ended;
+   - its status.
+
+   Beside them, `truth/run.json` (`stormlog.qualify.run/1`) holds the run's
+   measured, priming, baseline and final-recovery windows, and a failed
+   priming check as the run's protocol failure. The measured window ends
+   where the victim's measured phase window did (`window_ended_at_ns`), not
+   after its drain: drain time has completions but no arrivals to score. The victim runs under the
+   run's label as its `--run-id`, so its artifact names the run its truth
+   belongs to.
+
+The run is published atomically (see below), whatever ends it. An episode
+whose actuation raised (a stop that never took, a target gone) is published
+as `not_actuated` with the error, its dose and, for pulses, every pulse that
+completed before it, then the one the failure cut short. A run that fails
+part way (the victim exiting before it measures, say) or is interrupted
+publishes every episode it attempted, the rest as skipped (`run_ended`, or
+`recovery_timeout` after a recovery timeout), with the reason as the run
+record's protocol failure. An episode interrupted mid-action is published
+`not_actuated` with actuation `interrupted`, its dose and, for pulses, every
+pulse that completed, then the one in progress: the target was stopped, and
+the truth says so. A completed pulse's record says `completed: true`; one
+cut short says `completed: false`, with its stop's send time, and its
+confirmation and `SIGCONT` times, or null where it never got that far (no
+`SIGCONT` goes to a target that is gone). A target that exits mid-pulse is
+named as such, not as a watchdog that stopped watching (a watchdog exits
+once its target is gone). `inject` then exits 1, or 130
+when interrupted by Ctrl+C. SIGTERM and SIGHUP (a job's timeout, an ssh
+disconnect) interrupt it the same way from the moment the run starts,
+whether or not any pulse has run, and it exits 128 plus the signal's number.
+Once the run is being finished (the victim draining, the truth being
+written), SIGTERM, SIGHUP and SIGINT are held until it is published: the
+first cuts the victim's drain short with SIGINT, so the victim still records
+its end, and a second kills it. The run is then recorded as interrupted, and
+`inject` exits as the first such signal would have, once the run is
+published.
+
+**The run directory** is named by an opaque label, `q221-<16 hex>`, that says
+nothing about its episodes:
+
+```text
+<root>/<label>/
+  run/      victim.jsonl            the only path handed to the diagnoser
+  truth/    run.json, injections.jsonl, episodes.json, plan.json, neighbor-<n>.jsonl,
+            reference/scrapes.jsonl, reference/hook/<host>/<epoch>/
+  probes/   markers/, append-times.jsonl, client-idle.jsonl, victim-sends.jsonl,
+            hook-firstseen.jsonl, seal-observations.jsonl, victim.log
+  SHA256SUMS
+```
+
+It is written under `<root>/.<label>.partial`. Once `SHA256SUMS` is written
+last, the directory is renamed into place, so a reader never sees half a
+run. `SHA256SUMS` lists every file and ends with a line giving their count
+and a digest of the lines above it, and the digest of the whole file is kept
+beside the run, in `<root>/<label>.sha256`. Every file, the run's
+directories and the root are fsynced around the rename. `run_dir.verify`
+reports any file changed, missing or unlisted, a `SHA256SUMS` truncated or
+edited, and one that differs from the digest beside the run.
+
+Two limits. **The sidecar travels with the run:** a run copied without its
+`<label>.sha256` fails `verify` ("no digest of SHA256SUMS beside the run"),
+so every archive of a run, such as the release assets uploaded to the audit
+repository, carries the sidecar beside it. **The sums catch damage, not a
+forger:** they have no key, so whoever rewrites a file, `SHA256SUMS`, its
+count line and the sidecar together passes `verify`. Trust in a run rests
+on where it is kept, not on the sums.
+
+**The victim's outcomes** for impact are a stand-in for #213's
+`evaluate_request` on the client criteria, used until #213 lands, and the
+rule is the same:
+- **Violation:** a request that did not succeed (timed out, rejected, in
+  error, never sent, or cancelled), or a successful one with a criterion
+  above its limit.
+- **Unknown:** a successful one with no failed criterion but a value missing,
+  not finite or negative, which no latency can be.
+- **Met:** every criterion within its limit.
