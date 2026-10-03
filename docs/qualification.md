@@ -449,3 +449,39 @@ everything the score froze: its version, the edge table's version, the
 gated metric and level, the targets and confidence, the grace per kind
 (the default shown for a kind without its own), the support matrix and the
 negative types.
+
+## The harness
+
+> **Source checkout only.** `examples.qualification` is not shipped in the
+> PyPI package.
+
+### The reference channel
+
+Every run keeps a reference channel beside the configuration being
+diagnosed, and the harness reads only it to judge effect timing, realization
+and recovery. `examples.qualification.reference` is the vLLM 0.30 binding's
+reader:
+
+- **`HookTailer`** reads the execution hook's raw log, under the run's
+  `truth/reference/hook`, as it is written. It takes complete lines only and
+  never reads a record twice; a sealed segment continues from where its
+  `.part` was read. It notes when each record was first seen
+  (`probes/hook-firstseen.jsonl`) and when each segment was sealed
+  (`probes/seal-observations.jsonl`). The replay uses these times to cut the
+  hook log to what an online analyzer could have read.
+- **`VictimView`** keeps the victim's series from the engine's records. Victim
+  requests are the ones whose `X-Request-Id` carries the victim's run prefix.
+  - **Wait:** from its `alias` to the start of the step that first schedules
+    it.
+  - **Cached fraction:** that step's prefix-cache hit over the victim's
+    shared prefix, at most 1.
+  - **Preemption:** the request's ID in a step's `preempted`.
+  - **Cadence:** every step's start is kept.
+- **`scrape`** reads `/metrics` once: the waiting count summed over engines
+  and the highest KV usage. `ReferenceChannel` takes one per poll, into
+  `truth/reference/scrapes.jsonl`.
+- **`chunk_gaps`** rebuilds the victim's gaps between streamed chunks from its
+  client records.
+
+`ReferenceChannel.signals()` returns them as the `Signals` that
+`stormlog.infer.qualify.recovery` reads.
