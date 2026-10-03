@@ -477,7 +477,7 @@ reader:
     shared prefix, at most 1.
   - **Preemption:** the request's ID in a step's `preempted`.
   - **Cadence:** every step's start is kept.
-- **`scrape`** reads `/metrics` once: the waiting count summed over engines
+- **`scrape_metrics`** reads `/metrics` once: the waiting count summed over engines
   and the highest KV usage. `ReferenceChannel` takes one per poll, into
   `truth/reference/scrapes.jsonl`.
 - **`chunk_gaps`** rebuilds the victim's gaps between streamed chunks from its
@@ -588,3 +588,61 @@ adds three probes in its own process:
 - **The client idle probe:** a 10 ms timer on its own thread. A tick that
   comes 20 ms late or more is noted in `DIR/client-idle.jsonl`, so a stall
   on the client's own host is seen.
+
+### The inject command
+
+```bash
+python -m examples.qualification inject --plan PLAN.json --out ROOT \
+  --base-url URL --model M --reference-channel HOOK_DIR \
+  [--label q221-...] [--target engine_core=PID --target api_server=PID ...] \
+  -- [extra infer profile arguments for the victim]
+```
+
+The harness never launches the server; #213's `run_plan` does. It is given
+the server's URL, the pid of each role a plan may pulse, and the hook
+directory the server writes (`STORMLOG_VLLM_HOOK_DIR`, as this host sees it).
+One run goes:
+
+1. **Start.** The victim starts, at the plan's rate with its shared-prefix
+   prompts, and the reference channel is polled every second.
+2. **Priming,** then the priming check. If it fails, every episode of the run
+   is a `protocol_failure`, still published.
+3. **Baseline,** measured for recovery's thresholds.
+4. **Episodes, in the plan's order.** Each waits until the previous one's
+   recovery has held, at least the minimum after its action, and its own
+   clean time (30 s by default) after the previous effect ended. Then it is
+   actuated by neighbor traffic, pulses, a profiler window or nothing, and
+   its recovery is watched live. A recovery timeout skips the remaining
+   episodes; they are published as `not_actuated`.
+5. **Final recovery.** The victim is stopped, and each episode's
+   `stormlog.qualify.injection/1` record is written to
+   `truth/injections.jsonl` with:
+   - its effect timing and realization checks;
+   - its impact on the victim's SLO (when the plan sets one), counted by
+     arrival in the effect window against the baseline;
+   - its status.
+
+The run is published atomically (see below).
+
+**The run directory** is named by an opaque label, `q221-<16 hex>`, that says
+nothing about its episodes:
+
+```text
+<root>/<label>/
+  run/      victim.jsonl            the only path handed to the diagnoser
+  truth/    injections.jsonl, episodes.json, plan.json, neighbor-<n>.jsonl, reference/
+  probes/   markers/, append-times.jsonl, client-idle.jsonl, hook-firstseen.jsonl,
+            seal-observations.jsonl, victim.log
+  SHA256SUMS
+```
+
+It is written under `<root>/.<label>.partial`. Once `SHA256SUMS` is written
+last, the directory is renamed into place, so a reader never sees half a
+run. `run_dir.verify` checks a run against its sums.
+
+**The victim's outcomes** for impact are a stand-in for #213's
+`evaluate_request`, used until #213 lands, and the rule is the same:
+- **Met:** a request that met the SLO.
+- **Violation:** one that missed it, or failed, being timed out, rejected,
+  in error, or never sent.
+- **Unknown:** one that was cancelled.
