@@ -296,6 +296,24 @@ def test_bearer_and_basic_need_a_token_shape(text: str, scrubbed: str) -> None:
     assert scrub_text(text) == scrubbed
 
 
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        # A key whose word is hidden behind a JSON escape.
+        (
+            '{"api_' + U + '006bey":"opaque-credential-value"}',
+            '{"api_' + U + '006bey":"<redacted>"}',
+        ),
+        # A value that is not a string.
+        ('{"api_key":1234567890}', '{"api_key":<redacted>}'),
+        ('{"client_secret": true, "n": 1}', '{"client_secret": <redacted>, "n": 1}'),
+        ('{"model": 7}', '{"model": 7}'),
+    ],
+)
+def test_json_members_are_read_as_json(text: str, scrubbed: str) -> None:
+    assert scrub_text(text) == scrubbed
+
+
 def test_scrub_text_leaves_ordinary_text_alone() -> None:
     text = "This model's maximum context length is 32768 tokens; max_tokens 128."
     assert scrub_text(text) == text

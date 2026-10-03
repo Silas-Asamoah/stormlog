@@ -8,6 +8,7 @@ Each exporter documents its own allowlists. See ``docs/scrubbing.md``.
 from __future__ import annotations
 
 import base64
+import json
 import re
 import urllib.parse
 from collections.abc import Callable, Iterable, Iterator
@@ -65,7 +66,11 @@ _PRIVATE_KEY = re.compile(
 _AUTHORIZATION = re.compile(r"(?i)\b(?:proxy-)?authorization\s*[:=]\s*([^\r\n]+)")
 _BEARER = re.compile(r"(?i)\b(?:bearer|basic)\s+([A-Za-z0-9._~+/=-]{8,})")
 _URL = re.compile(r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*://([^\s\"'<>]*)")
-_JSON_MEMBER = re.compile(_JSON_STRING + r"\s*:\s*" + _JSON_STRING)
+# A member's value is a string, whose inside is redacted, or a bare value
+# such as a number or true.
+_JSON_MEMBER = re.compile(
+    _JSON_STRING + r"\s*:\s*(?:" + _JSON_STRING + r'|([^\s,}\]"]+))'
+)
 # The value is a double- or single-quoted string, escapes included, or a
 # bare word; for a quoted one, what is inside the quotes is redacted.
 _KEY_VALUE = re.compile(
@@ -128,8 +133,19 @@ def _url_spans(text: str) -> Iterator[Span]:
 
 def _json_member_spans(text: str) -> Iterator[Span]:
     for match in _JSON_MEMBER.finditer(text):
-        if is_forbidden_key_name(match.group(1)):
-            yield match.span(2)
+        if is_forbidden_key_name(_json_unescaped(match.group(1))):
+            group = 2 if match.group(2) is not None else 3
+            if match.end(group) > match.start(group):
+                yield match.span(group)
+
+
+def _json_unescaped(key: str) -> str:
+    """A JSON string's content with its escapes decoded, or as given."""
+    try:
+        decoded = json.loads(f'"{key}"')
+    except ValueError:
+        return key
+    return decoded if isinstance(decoded, str) else key
 
 
 def _key_value_spans(text: str) -> Iterator[Span]:
