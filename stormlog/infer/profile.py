@@ -246,15 +246,19 @@ class InferenceProfiler:
                 # await would raise here and skip the rest of this block.
                 stop_sampling.set()
                 await _wait_for(sample_task)
-                if completed:
-                    await self._wait_for_late_spans()
-                stop_spans.set()
-                await _wait_for(span_task)
-                self._stop_span_receiver(writer)
-                # Written on the way out of an interrupted run too, so the
-                # artifact says what the engine exposed before it says why
-                # the run stopped.
-                self._write_capabilities(writer)
+                try:
+                    # The one optional step of the shutdown: a cancel that
+                    # lands in this wait must not skip the steps after it.
+                    if completed:
+                        await self._wait_for_late_spans()
+                finally:
+                    stop_spans.set()
+                    await _wait_for(span_task)
+                    self._stop_span_receiver(writer)
+                    # Written on the way out of an interrupted run too, so
+                    # the artifact says what the engine exposed before it
+                    # says why the run stopped.
+                    self._write_capabilities(writer)
 
     async def _wait_for_late_spans(self) -> None:
         """Keep the receiver up after the last phase for the exporter's last batch.

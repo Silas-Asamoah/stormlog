@@ -468,6 +468,7 @@ class OtlpSpanReceiver:
         self.stats = ReceiverStats()
         self._queue: queue.SimpleQueue[VllmSpanRecord] = queue.SimpleQueue()
         self._lock = threading.Lock()
+        self._stopped = False
         receiver = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -523,9 +524,15 @@ class OtlpSpanReceiver:
         self._thread.start()
 
     def stop(self) -> None:
+        self._stopped = True
         self._server.shutdown()
         self._thread.join(timeout=5)
         self._server.server_close()
+
+    @property
+    def stopped(self) -> bool:
+        """True once ``stop`` has run: the listener is closed for good."""
+        return self._stopped
 
     def drain(self) -> list[VllmSpanRecord]:
         records: list[VllmSpanRecord] = []

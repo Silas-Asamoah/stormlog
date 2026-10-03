@@ -8,16 +8,20 @@ readers, the receiver's gate and the v2 mapping need no extra.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
+import signal
 import socket
 import threading
+import time
 import urllib.error
 import urllib.request
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
+from unittest import mock
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -772,6 +776,47 @@ def _of_type(records: list[dict[str, Any]], event_type: str) -> list[dict[str, A
     return [r for r in records if r.get("event_type") == event_type]
 
 
+def _records(path: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _receiver_config(
+    origin: str, output: Path, listen: str, drain_seconds: float
+) -> ProfileConfig:
+    """Two quick requests, then a drain wait long enough to be interrupted in."""
+    return ProfileConfig(
+        endpoint=f"{origin}/v1/chat/completions",
+        model="fake-model",
+        concurrency=(1,),
+        input_tokens=(8,),
+        output_tokens=(4,),
+        output_path=str(output),
+        stream=False,
+        request_count=2,
+        tokenizer="none",
+        system_sampler="none",
+        run_id="run-1",
+        vllm_spans_listen=listen,
+        vllm_spans_drain_seconds=drain_seconds,
+    )
+
+
+def _assert_shutdown_completed(
+    records: list[dict[str, Any]], profiler: InferenceProfiler
+) -> None:
+    """A stopped run still wrote its capabilities and closed its receiver."""
+    components = [c["component"] for c in _of_type(records, "infer.capabilities")]
+    assert components == ["vllm.spans"]
+    assert records[-1]["event_type"] == "infer.session"
+    assert records[-1]["status"] == "interrupted"
+    assert profiler.span_receiver is not None
+    assert profiler.span_receiver.stopped
+
+
 def _span_capability(records: list[dict[str, Any]]) -> dict[str, Any]:
     return [
         r
@@ -826,6 +871,67 @@ class TestProfileReceiver:
         assert len(_of_type(caught, "infer.vllm_span")) == 2
         session = _of_type(caught, "infer.session")[0]
         assert session["config"]["vllm_spans"]["drain_seconds"] == 1.5
+
+    def test_cancelling_during_the_drain_still_stops_and_records(
+        self, tmp_path: Path
+    ) -> None:
+        # The drain wait is the one optional step of the shutdown. A cancel
+        # landing in it must not skip the steps after it: stopping the
+        # receiver, its last flush, and the capability records.
+        _otlp()
+        port = _free_port()
+        output = tmp_path / "infer.jsonl"
+        with _exporting_vllm(f"http://127.0.0.1:{port}/v1/traces") as origin:
+            profiler = InferenceProfiler(
+                _receiver_config(origin, output, f"127.0.0.1:{port}", 6.0)
+            )
+            entered = asyncio.Event()
+            original = profiler._wait_for_late_spans
+
+            async def observed() -> None:
+                entered.set()
+                await original()
+
+            async def interrupt() -> float:
+                run = asyncio.create_task(profiler._run_async())
+                await entered.wait()
+                started = time.perf_counter()
+                run.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await run
+                return time.perf_counter() - started
+
+            with mock.patch.object(profiler, "_wait_for_late_spans", observed):
+                try:
+                    unwound = asyncio.run(interrupt())
+                finally:
+                    profiler.request_executor.shutdown(wait=True)
+        assert unwound < 3.0
+        _assert_shutdown_completed(_records(output), profiler)
+
+    def test_a_real_sigint_during_the_drain_still_stops_and_records(
+        self, tmp_path: Path
+    ) -> None:
+        # The same, with the signal itself: on Python 3.10 asyncio.run then
+        # cancels every task, and the main one is asleep in the drain.
+        _otlp()
+        port = _free_port()
+        output = tmp_path / "infer.jsonl"
+        with _exporting_vllm(f"http://127.0.0.1:{port}/v1/traces") as origin:
+            profiler = InferenceProfiler(
+                _receiver_config(origin, output, f"127.0.0.1:{port}", 6.0)
+            )
+            timer = threading.Timer(0.8, signal.raise_signal, (signal.SIGINT,))
+            started = time.perf_counter()
+            timer.start()
+            try:
+                with pytest.raises(KeyboardInterrupt):
+                    profiler.run()
+            finally:
+                timer.cancel()
+            elapsed = time.perf_counter() - started
+        assert elapsed < 4.0
+        _assert_shutdown_completed(_records(output), profiler)
 
     def test_without_the_extra_the_run_warns_once_and_records_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

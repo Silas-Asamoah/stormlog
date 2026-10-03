@@ -68,8 +68,10 @@ deadline for the whole scrape, not per byte, so a server that stopped
 answering, or one that dribbles its answer, cannot hold the stop back;
 keeps the spans received so far; and writes the capability records before
 the session's last word. That holds on Python 3.10 too, where Ctrl+C
-cancels every task of the run at once. The receiver binds before any
-request is
+cancels every task of the run at once, and when the stop lands in the
+`--vllm-spans-drain` wait after the last phase: the wait is given up,
+the receiver is still stopped and its spans still kept. The receiver
+binds before any request is
 sent; a port it cannot bind is recorded as unavailable, with the error, and
 the run goes on without spans. Without the `infer-otlp` extra the receiver
 still listens and accepts OTLP JSON, but vLLM's exporter sends protobuf, so
