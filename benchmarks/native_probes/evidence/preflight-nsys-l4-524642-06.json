@@ -54,6 +54,25 @@
     "archive_sha256": "92eeb6247bf61f13586dd4c8f9615ca02e1c357186c33f25708d88db7e3b5656",
     "internal_file_hashes_verified": 14
   },
+  "w1_measured_export_analysis": {
+    "sqlite_sha256": "43f0db7fd8ba51d37bd4ce25fc7af682f3917fa13351f29a6623dbe1057ef395",
+    "analyzer": "scripts/native_probes/nsys_reference.py",
+    "analyzer_sha256": "9ca9778e0734627a848a67904a6bc5717207808f9ab1c0d4997c6b5be576ebd5",
+    "selection_rule": "Kernel correlated to a successful CUDA host launch entirely inside the unique measured NVTX range; device execution may occur after range end.",
+    "status": "valid_export_external_completeness_unverified",
+    "measured_launches": 150,
+    "kernel_counts_by_name": {
+      "Kernel2": 50,
+      "splitKreduce_kernel": 50,
+      "vectorized_elementwise_kernel": 50
+    },
+    "kernels_executing_after_range_end": 32,
+    "missing_kernel_correlations": 0,
+    "duplicate_launch_correlations": 0,
+    "failed_cuda_launches": 0,
+    "comparison_with_direct_cupti": "pending",
+    "nvtx_completeness_warning_retained": true
+  },
   "readiness": {
     "hardware_preflight_passed": false,
     "final_trials_started": false,
