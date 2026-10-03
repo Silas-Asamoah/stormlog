@@ -178,7 +178,9 @@ with FakeEngine(config) as engine:
 It listens with uvicorn's backlog of 2048, as vLLM's API server does, so a
 burst of clients is never refused. `engine.server_errors` keeps the traceback
 of any exception a request handler raised, for a test to assert there were
-none.
+none. If a part fails to start, such as the bind to a busy port, `start()`
+stops the parts already started before it raises, and `stop()` is safe to
+call again.
 
 To run it as its own process, so that signals reach it:
 

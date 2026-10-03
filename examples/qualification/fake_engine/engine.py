@@ -200,7 +200,8 @@ class Engine:
             self._stopping = True
             self._wake.notify_all()
         self._gate.resume()
-        self._thread.join(timeout=10)
+        if self._thread.ident is not None:  # started
+            self._thread.join(timeout=10)
         with self._lock:
             pending = [*self.waiting, *self.running]
         for request in pending:

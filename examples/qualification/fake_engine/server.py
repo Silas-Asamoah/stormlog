@@ -49,6 +49,16 @@ class FakeEngine:
     # ------------------------------------------------------------ lifecycle
 
     def start(self) -> FakeEngine:
+        """Start every part; if one fails, such as the bind, stop the parts
+        already started before raising."""
+        try:
+            self._start_parts()
+        except BaseException:
+            self.stop()
+            raise
+        return self
+
+    def _start_parts(self) -> None:
         if self.config.hook_dir is not None:
             self.hook = HookLog(self.config.hook_dir, self.config)
             self.engine.observers.append(self.hook)
@@ -76,9 +86,9 @@ class FakeEngine:
             target=self._server.serve_forever, name="fake-engine-http", daemon=True
         )
         self._thread.start()
-        return self
 
     def stop(self) -> None:
+        """Stop every part that started; safe to call again."""
         self._frontend.resume()
         self.engine.stop()
         if self._server is not None:

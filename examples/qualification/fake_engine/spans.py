@@ -74,7 +74,8 @@ class SpanExporter(EngineObserver):
     def close(self) -> None:
         """Send what is still queued, whatever its delay, then stop."""
         self._stop.set()
-        self._thread.join(timeout=10)
+        if self._thread.ident is not None:  # started
+            self._thread.join(timeout=10)
         self._flush(everything=True)
 
     def on_free(self, request: FakeRequest) -> None:

@@ -180,3 +180,27 @@ def test_stacked_pauses_hold_until_the_last_one_ends(target: str) -> None:
         True,
         True,
     )
+
+
+def test_a_failed_bind_stops_everything_started_before_it(tmp_path: Path) -> None:
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = int(taken.getsockname()[1])
+        engine = FakeEngine(
+            FakeEngineConfig(
+                port=port,
+                hook_dir=tmp_path / "hook",
+                spans_endpoint="http://127.0.0.1:9/v1/traces",
+            )
+        )
+        with pytest.raises(OSError):
+            engine.start()
+    assert engine.hook is not None and engine.spans is not None
+    threads = [
+        engine.hook.engine_writer._thread,
+        engine.hook.worker_writer._thread,
+        engine.spans._thread,
+    ]
+    assert [thread.name for thread in threads if thread.is_alive()] == []
+    engine.stop()  # safe again, and for parts that never started
