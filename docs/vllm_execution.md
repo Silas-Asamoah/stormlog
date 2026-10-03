@@ -296,7 +296,13 @@ forms are tried when it is unknown). Every other ID is foreign, or
 unresolved when it has no alias and does not parse. Foreign and unresolved
 executions appear only as `HMAC-SHA256(HMAC(epoch key, run_id), id)[:16]`,
 stable within a run and different in every other artifact;
-`--raw-foreign-ids` records their IDs as vLLM saw them. A reused internal
+`--raw-foreign-ids` records their IDs as vLLM saw them. An epoch whose key
+file is missing or unreadable cannot key a pseudonym, so without
+`--raw-foreign-ids` other clients' identities from that epoch are withheld:
+their memberships and requests are not written, steps that held only their
+requests are not kept, the import summary counts what was withheld and
+says `withheld` instead of `hmac-sha256-keyed`, and a kept step still counts
+them in `withheld_members`. A reused internal
 ID (randomization off) is split into one execution per admission, also
 across imports.
 

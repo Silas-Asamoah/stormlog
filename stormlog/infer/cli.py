@@ -1158,6 +1158,13 @@ def _epoch_line(epoch: dict[str, Any]) -> str:
         line += (
             f"; {dropped} records dropped by the hook, {epoch.get('gaps', 0)} missing"
         )
+    withheld = epoch.get("withheld") or {}
+    if any(withheld.values()):
+        line += (
+            f"; no epoch key: {withheld.get('memberships', 0)} memberships, "
+            f"{withheld.get('executions', 0)} requests and "
+            f"{withheld.get('foreign_only_steps', 0)} steps of other clients withheld"
+        )
     return line
 
 

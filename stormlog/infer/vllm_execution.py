@@ -130,6 +130,7 @@ class Execution:
     alias_seq: int | None = None
     admitted_mono_ns: int | None = None  # None: admitted before these records
     attempt: EntityRef | None = None  # fixed when the artifact holds this admission
+    withheld: bool = False  # another client's, in an epoch without a key
     prompt_tokens: int | None = None  # at the first sighting; may grow if resumable
     cached_at_admission: int | None = None
     resumable: bool | None = None
@@ -159,6 +160,9 @@ class Iteration:
     state: str = STATE_COMPLETE
     reason: str | None = None
     members: list[Member] = field(default_factory=list)
+    # Every scheduled member's ownership, withheld ones included.
+    ownerships: list[str] = field(default_factory=list)
+    withheld_members: int = 0
 
     @property
     def number(self) -> int | None:
@@ -196,8 +200,22 @@ def reduce_execution_log(
         if epoch.consumed_seq is not None:
             high_water[epoch.epoch] = epoch.consumed_seq
     return ReduceResult(
-        events, {"epochs": epochs, "pseudonyms": "hmac-sha256-keyed"}, high_water
+        events,
+        {"epochs": epochs, "pseudonyms": _pseudonym_scheme(epochs, options)},
+        high_water,
     )
+
+
+def _pseudonym_scheme(epochs: dict[str, dict[str, Any]], options: ReduceOptions) -> str:
+    """What other clients' identities in this import are: keyed pseudonyms,
+    raw IDs, or withheld because an epoch's key was missing."""
+    if options.raw_foreign_ids:
+        return "raw"
+    if any(
+        e.get("reduced") and e.get("pseudonym_key") != "epoch" for e in epochs.values()
+    ):
+        return "withheld"
+    return "hmac-sha256-keyed"
 
 
 class _EpochReducer:
@@ -214,6 +232,9 @@ class _EpochReducer:
         self.mono_domain = f"{self.host}/{self.boot}/monotonic_ns"
         self.wall_domain = f"{self.host}/{self.boot}/unix_epoch_ns"
         self.binder = _Binder(facts, _randomization(self.hello))
+        # Without the epoch's key no pseudonym can be keyed, so other clients'
+        # identities are withheld unless raw IDs were asked for.
+        self.withhold = epoch.key is None and not options.raw_foreign_ids
         self.executions: dict[str, Execution] = {}
         self.iterations: dict[str, Iteration] = {}
         self.counts: dict[str, int] = {}
@@ -391,13 +412,17 @@ class _EpochReducer:
         executions = [self._member_execution(m, item) for m in _members(item.scheduled)]
         for execution in executions:
             execution.seen_final = True
+        item.ownerships = [e.binding.ownership for e in executions]
         if ref in self.facts.referenced_iterations:
             return True
-        if any(e.binding.ownership == OWN for e in executions):
+        if OWN in item.ownerships:
             return True
         if not executions:
             # An idle scheduler step: nothing to attribute, nothing lost.
             self._count("empty_counted")
+            return False
+        if self.withhold:
+            self._count("foreign_only_withheld")
             return False
         if self._placed_in_a_window(item):
             self._count("foreign_only_placed")
@@ -438,6 +463,11 @@ class _EpochReducer:
             member = Member(
                 item, execution, data, outcomes.get(str(data.get("internal")))
             )
+            if self.withhold and execution.binding.ownership != OWN:
+                execution.withheld = True
+                item.withheld_members += 1
+                self._count("withheld_memberships")
+                continue
             item.members.append(member)
             execution.memberships.append(member)
 
@@ -611,11 +641,16 @@ class _EpochReducer:
     def _attempt_ref(self, key: str, binding: Binding) -> EntityRef:
         if binding.ownership == OWN or self.options.raw_foreign_ids:
             return EntityRef(self.producer, key)
+        if self.withhold:
+            # Never written: a withheld execution gets no membership or request.
+            return EntityRef(self.producer, "withheld")
         return EntityRef(self.producer, self._pseudonym(key))
 
     def _pseudonym(self, key: str) -> str:
         """``HMAC(HMAC(epoch key, run_id), key)``: stable within a run, and
         not derivable from the ID without the key file."""
+        if not self.epoch.key:
+            raise ValueError("a pseudonym needs the epoch's key")
         inner = hmac.new(
             self.epoch.key or b"", self.facts.run_id.encode(), hashlib.sha256
         )
@@ -664,7 +699,12 @@ class _EpochReducer:
             ),
             finish_unattached=self.counts.get("finish_unattached", 0),
             executions=_ownership_counts(self.executions),
-            pseudonym_key="epoch" if self.epoch.key else "run_id_only",
+            pseudonym_key="epoch" if self.epoch.key else "missing",
+            withheld={
+                "executions": sum(e.withheld for e in self.executions.values()),
+                "memberships": self.counts.get("withheld_memberships", 0),
+                "foreign_only_steps": self.counts.get("foreign_only_withheld", 0),
+            },
             high_water_seq=self._high_water(pending),
         )
         return summary
@@ -806,7 +846,7 @@ def _iteration_metadata(
     start: int | None,
     end: int | None,
 ) -> dict[str, Any]:
-    ownerships = [m.execution.binding.ownership for m in item.members]
+    ownerships = item.ownerships
     return {
         "state": item.state,
         "incomplete_reason": item.reason,
@@ -826,6 +866,7 @@ def _iteration_metadata(
         "run_members": ownerships.count(OWN),
         "foreign_members": ownerships.count(FOREIGN),
         "unresolved_members": ownerships.count(UNRESOLVED),
+        "withheld_members": item.withheld_members,
     }
 
 

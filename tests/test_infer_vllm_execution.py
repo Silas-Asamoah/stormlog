@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 from pathlib import Path
 from typing import Any
 
@@ -452,11 +454,74 @@ def test_pseudonyms_are_keyed_by_the_epoch_key_and_the_run(tmp_path: Path) -> No
     assert keyed == foreign(_reduce(tmp_path))  # stable
     assert keyed != foreign(_reduce(tmp_path, _facts(run_id="run-2")))
     assert keyed != foreign(_reduce(other_root))
-    missing = tmp_path / "missing"
-    engine_log(missing, records, key=None)
-    unkeyed = _reduce(missing)
-    assert unkeyed.summary["epochs"][EPOCH]["pseudonym_key"] == "run_id_only"
-    assert _reduce(tmp_path).summary["epochs"][EPOCH]["pseudonym_key"] == "epoch"
+    keyed_result = _reduce(tmp_path)
+    assert keyed_result.summary["epochs"][EPOCH]["pseudonym_key"] == "epoch"
+    assert keyed_result.summary["pseudonyms"] == "hmac-sha256-keyed"
+
+
+def test_without_the_epoch_key_other_clients_identities_are_withheld(
+    tmp_path: Path,
+) -> None:
+    """A pseudonym keyed by the public run_id alone could be tested against
+    candidate IDs by anyone holding the artifact (Astra #2): without the
+    key, other clients' identities are not written at all."""
+    unparsable = "weird-id-7"
+    records = [
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 10),
+        alias(OTHER, "chatcmpl-stormlog-run-9-c1_x_0", T0 - 9),
+        scheduled(
+            0,
+            T0,
+            [
+                member(OWN0, scheduled=8),
+                member(OTHER, scheduled=8),
+                member(unparsable, scheduled=2),
+            ],
+        ),
+        completed(0, T0 + SECOND, [done(OWN0), done(OTHER), done(unparsable)]),
+        # A step with only other clients' requests, inside the run's window.
+        scheduled(1, T0 + 2 * SECOND, [member(OTHER, scheduled=1, sighting="repeat")]),
+        completed(1, T0 + 2 * SECOND + 10, [done(OTHER)]),
+    ]
+    engine_log(tmp_path, records, key=None)
+    window = Window("phase", T0 + WALL_OFFSET - SECOND, T0 + WALL_OFFSET + 3 * SECOND)
+    result = _reduce(tmp_path, _facts(windows=(window,)))
+    assert _iteration_ids(result) == ["0"]
+    (membership,) = _memberships(result)
+    assert membership.request_ref == EntityRef("stormlog", REQUEST0)
+    assert set(_requests(result)) == {OWN0}
+    iteration = _by_type(result.events)["infer.iteration"][0]
+    assert (iteration.metadata["members"], iteration.metadata["withheld_members"]) == (
+        3,
+        2,
+    )
+    assert iteration.metadata["foreign_members"] == 1
+    epoch = result.summary["epochs"][EPOCH]
+    assert epoch["pseudonym_key"] == "missing"
+    assert epoch["withheld"] == {
+        "executions": 2,
+        "memberships": 2,
+        "foreign_only_steps": 1,
+    }
+    assert result.summary["pseudonyms"] == "withheld"
+    # Nothing in the records is the run_id-only pseudonym an attacker could
+    # recompute, nor the IDs themselves.
+    inner = hmac.new(b"", RUN.encode(), hashlib.sha256).digest()
+    weak = hmac.new(inner, OTHER.encode(), hashlib.sha256).hexdigest()[:16]
+    text = str([e.to_record() for e in result.events])
+    assert weak not in text and OTHER not in text and unparsable not in text
+    # Raw IDs are the explicit way out, and the summary says so.
+    raw = reduce_execution_log(
+        read_execution_log(tmp_path, now_ns=NOW),
+        _facts(windows=(window,)),
+        ReduceOptions(raw_foreign_ids=True),
+    )
+    assert _iteration_ids(raw) == ["0", "1"] and raw.summary["pseudonyms"] == "raw"
+    assert {r.metadata["ownership"] for r in _requests(raw).values()} == {
+        OWN,
+        FOREIGN,
+        UNRESOLVED,
+    }
 
 
 def test_foreign_only_iterations_are_kept_only_when_placed(tmp_path: Path) -> None:
