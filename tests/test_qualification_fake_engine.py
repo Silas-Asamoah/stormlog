@@ -17,6 +17,7 @@ from tests.qualification_fake_engine_helpers import (
     get,
     in_threads,
     join_all,
+    post,
     wait_until,
     words,
 )
@@ -167,3 +168,33 @@ def test_every_request_finishes_with_its_cap(tokens: int) -> None:
     assert len(finished) == 4
     assert {request.output_tokens for request in finished} == {tokens}
     assert {request.finish_reason for request in finished} == {"length"}
+
+
+def _reset(engine: FakeEngine, query: str = "") -> object:
+    status, body = post(f"{engine.base_url}/reset_prefix_cache{query}")
+    assert status == 200
+    return json.loads(body)["success"]
+
+
+def test_an_idle_reset_forgets_every_cached_prefix() -> None:
+    shared = words(40, "shared")
+    with FakeEngine(FAST) as engine:
+        chat(engine, shared + " one", max_tokens=1)
+        assert _reset(engine) is True
+        chat(engine, shared + " two", max_tokens=1)
+        second = engine.engine.finished[-1]
+    assert (second.cached_at_admission or 0) == 0
+
+
+def test_a_reset_is_refused_while_blocks_are_held_unless_it_preempts() -> None:
+    config = FakeEngineConfig(step_seconds=0.001, decode_token_seconds=0.002)
+    with FakeEngine(config) as engine:
+        (thread,) = chats_in_background(engine, [words(8, "a")], max_tokens=200)
+        assert wait_until(lambda: bool(engine.engine.running))
+        refused = _reset(engine)
+        preempting = _reset(engine, "?reset_running_requests=true")
+        join_all([thread])
+        (request,) = engine.engine.finished
+    assert (refused, preempting) == (False, True)
+    assert request.preemptions == 1
+    assert request.output_tokens == 200

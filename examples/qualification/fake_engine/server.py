@@ -269,6 +269,15 @@ def _metrics(handler: _Handler) -> None:
     handler.send_bytes(200, text.encode(), "text/plain; version=0.0.4")
 
 
+def _reset_prefix_cache(handler: _Handler) -> None:
+    """vLLM 0.30's dev route: 200 with ``success: false`` while blocks are
+    held, unless ``reset_running_requests`` preempts every running request."""
+    handler.read_body()
+    running = (handler.query("reset_running_requests") or "").lower() == "true"
+    success = handler.fake.engine.reset_prefix_cache(running)
+    handler.send_json(200, {"success": success})
+
+
 def _chat(handler: _Handler) -> None:
     body = handler.read_json()
     request = handler.fake.new_request(
@@ -394,6 +403,7 @@ GET_ROUTES: dict[str, Route] = {
 }
 POST_ROUTES: dict[str, Route] = {
     "/v1/chat/completions": _chat,
+    "/reset_prefix_cache": _reset_prefix_cache,
 }
 
 __all__ = ["GET_ROUTES", "POST_ROUTES", "FakeEngine"]
