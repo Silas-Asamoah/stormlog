@@ -156,8 +156,9 @@ class HttpProfilerControl:
                 return ControlResult(int(response.status))
         except urllib.error.HTTPError as exc:
             return ControlResult(exc.code, f"HTTP {exc.code}")
-        except (OSError, http.client.HTTPException) as exc:
-            # HTTPException covers a malformed reply (BadStatusLine and the like).
+        except (OSError, http.client.HTTPException, ValueError) as exc:
+            # HTTPException covers a malformed reply (BadStatusLine and the
+            # like); ValueError an API key a header cannot carry (not latin-1).
             return ControlResult(None, f"{type(exc).__name__}: {exc}")
 
 
@@ -284,9 +285,16 @@ class TraceWindows:
     def _send_start(self, window: TraceWindow) -> ControlResult:
         window.start_requested_at_ns = time.time_ns()
         try:
-            return self.control.post("/start_profile")
+            return self._post("/start_profile")
         finally:
             window.start_returned_at_ns = time.time_ns()
+
+    def _post(self, route: str) -> ControlResult:
+        """The control's answer; one that raises gave no answer (unknown)."""
+        try:
+            return self.control.post(route)
+        except Exception as exc:
+            return ControlResult(None, f"{type(exc).__name__}: {exc}")
 
     def _warn_start(self, window: TraceWindow) -> None:
         if window.start_outcome == START_REJECTED:
@@ -357,7 +365,7 @@ class TraceWindows:
             window.note = (
                 f"could not read {self.config.trace_dir}: {exc.strerror or exc}"
             )
-        window.stop = self.control.post("/stop_profile")
+        window.stop = self._post("/stop_profile")
         window.stopped_at_ns = time.time_ns()
 
     async def _close(

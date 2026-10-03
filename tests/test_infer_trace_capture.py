@@ -469,6 +469,42 @@ def test_a_redirected_start_is_not_followed_and_is_unknown() -> None:
     assert window.stop == ControlResult(302, "HTTP 302")
 
 
+def test_a_control_that_raises_is_an_unknown_answer(tmp_path: Path) -> None:
+    """ProfilerControl promises never to raise; a window survives one that does."""
+
+    class _Raising:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def post(self, route: str) -> ControlResult:
+            self.calls.append(route)
+            raise RuntimeError("boom")
+
+    control = _Raising()
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    window = _run_window(windows)
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    assert window.start == ControlResult(None, "RuntimeError: boom")
+    assert window.start_outcome == START_UNKNOWN
+    assert window.stop == ControlResult(None, "RuntimeError: boom")
+    assert len(windows.take_records(session_id="s1")) == 1
+
+
+def test_an_api_key_http_cannot_carry_is_a_failed_call() -> None:
+    """A header value outside latin-1 raises UnicodeEncodeError in http.client."""
+    with _routes() as server:
+        control = HttpProfilerControl(
+            f"http://127.0.0.1:{server.server_port}", api_key="key\u2019", timeout=5
+        )
+        result = control.post("/start_profile")
+
+    assert result.status is None
+    assert result.error is not None and result.error.startswith("UnicodeEncodeError")
+    assert server.calls == []  # type: ignore[attr-defined]
+
+
 def test_a_start_whose_reply_is_lost_is_stopped_over_http(tmp_path: Path) -> None:
     """The engine started profiling, then the connection dropped before the reply."""
     import socket
