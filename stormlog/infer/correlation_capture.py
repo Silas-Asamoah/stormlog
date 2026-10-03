@@ -79,8 +79,11 @@ class TraceAttachment:
 
 @dataclass(frozen=True)
 class EngineCapture:
+    """Engine evidence; ``summary`` is recorded on the adapter's capability event."""
+
     capabilities: CaptureCapabilities
     events: tuple[CorrelationEvent, ...] = ()
+    summary: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -319,7 +322,7 @@ def _capability_event(
     result: EngineCapture | TraceCapture | None,
 ) -> CapabilityEvent:
     capabilities = result.capabilities if result else CaptureCapabilities()
-    summary = result.summary if isinstance(result, TraceCapture) else None
+    summary = result.summary if result else None
     return CapabilityEvent(
         context=CorrelationContext(
             run_id=run_id,

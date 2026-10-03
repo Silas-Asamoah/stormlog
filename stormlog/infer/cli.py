@@ -39,6 +39,7 @@ from .server_collector import (
 )
 from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
 from .trace_import import import_traces_into_artifact, parse_device_uuids
+from .vllm_execution_import import import_execution_into_artifact
 from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
 from .vllm_spans import DEFAULT_SPANS_LISTEN, parse_listen_address
 
@@ -71,6 +72,8 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         return cmd_collect_server(args)
     if args.infer_command == "import-trace":
         return cmd_import_trace(args)
+    if args.infer_command == "import-execution":
+        return cmd_import_execution(args)
     parser.error(f"Unsupported infer command: {args.infer_command}")
 
 
@@ -394,6 +397,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of group members; each rank 0..N-1 needs a collector",
     )
     _add_import_trace_parser(subparsers)
+    _add_import_execution_parser(subparsers)
     return parser
 
 
@@ -435,6 +439,32 @@ def _add_import_trace_parser(subparsers: Any) -> None:
         ),
     )
     import_parser.add_argument(
+        "--envelope", default=None, help="Run envelope (default: beside the artifact)"
+    )
+
+
+def _add_import_execution_parser(subparsers: Any) -> None:
+    parser = subparsers.add_parser(
+        "import-execution",
+        help="Add a vLLM execution hook's scheduler steps to an artifact",
+    )
+    parser.add_argument("artifact", help="Inference JSONL with a run identity")
+    parser.add_argument(
+        "directory",
+        help=(
+            "The hook's STORMLOG_VLLM_HOOK_DIR, copied or mounted from the "
+            "server host; only steps that are final since the last import are added"
+        ),
+    )
+    parser.add_argument(
+        "--raw-foreign-ids",
+        action="store_true",
+        help=(
+            "Record other clients' request IDs as vLLM saw them instead of keyed "
+            "pseudonyms (the artifact then names requests that are not yours)"
+        ),
+    )
+    parser.add_argument(
         "--envelope", default=None, help="Run envelope (default: beside the artifact)"
     )
 
@@ -1045,6 +1075,54 @@ def cmd_import_trace(args: argparse.Namespace) -> int:
     for path in (capture.summary or {}).get("already_imported", []):
         print(f"Skipped {path}: already imported into this run")
     return int(ExitCode.OK)
+
+
+def cmd_import_execution(args: argparse.Namespace) -> int:
+    """Append a vLLM execution log's final steps to an existing artifact."""
+    capture = import_execution_into_artifact(
+        args.artifact,
+        args.directory,
+        raw_foreign_ids=args.raw_foreign_ids,
+        envelope_path=args.envelope,
+    )
+    _print_execution_summary((capture.summary or {}).get("execution", {}))
+    return int(ExitCode.OK)
+
+
+def _print_execution_summary(summary: dict[str, Any]) -> None:
+    counts = summary.get("records", {})
+    print(
+        f"Imported execution log {summary.get('directory')}: "
+        f"{counts.get('iterations', 0)} iterations, "
+        f"{counts.get('memberships', 0)} memberships, "
+        f"{counts.get('requests', 0)} requests, "
+        f"{counts.get('clock_alignment', 0)} clock alignments"
+    )
+    for name, epoch in sorted(summary.get("epochs", {}).items()):
+        print(f"  {name}: {_epoch_line(epoch)}")
+        for error in epoch.get("errors", []):
+            print(f"    error: {error}")
+    for note in summary.get("notes", []):
+        print(f"  note: {note}")
+
+
+def _epoch_line(epoch: dict[str, Any]) -> str:
+    if not epoch.get("reduced"):
+        return f"{epoch.get('role')} epoch, {epoch.get('state')}; not reduced"
+    waiting = epoch.get("iterations_pending", 0)
+    line = (
+        f"{epoch.get('state')}; kept {epoch.get('iterations_kept', 0)} steps "
+        f"({epoch.get('iterations_incomplete', 0)} incomplete), {waiting} pending, "
+        f"{epoch.get('iterations_already_imported', 0)} already imported, "
+        f"{epoch.get('foreign_only_counted', 0)} foreign-only counted; "
+        f"high-water seq {epoch.get('high_water_seq')}"
+    )
+    dropped = sum(int(value) for value in (epoch.get("dropped") or {}).values())
+    if dropped or epoch.get("gaps"):
+        line += (
+            f"; {dropped} records dropped by the hook, {epoch.get('gaps', 0)} missing"
+        )
+    return line
 
 
 def _print_trace_summary(summary: dict[str, Any]) -> None:
