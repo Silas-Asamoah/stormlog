@@ -37,6 +37,7 @@ from .vllm_analysis import (
     vllm_lines,
     vllm_report,
 )
+from .vllm_execution_report import execution_lines, execution_report
 from .workload_report import (
     length_summary,
     prompt_lines,
@@ -89,6 +90,7 @@ def analyze_inference_events(
             "server_join": join,
             "server_targets": _server_targets(server_samples),
             "vllm": vllm,
+            "execution": execution_report(records),
         },
     }
 
@@ -186,6 +188,7 @@ def format_analysis_text(report: dict[str, Any]) -> str:
     lines.append("Memory observations: client-local")
     lines.extend(_server_status_lines(join))
     lines.extend(vllm_lines(vllm))
+    lines.extend(execution_lines(telemetry.get("execution")))
     if isinstance(cases, dict) and cases:
         lines.append("")
         lines.append("Cases:")

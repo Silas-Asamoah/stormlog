@@ -42,6 +42,12 @@ from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter
 from .trace_capture import TraceWindows
+from .vllm_execution_devices import WorkerIndex
+from .vllm_execution_import import (
+    flush_execution_log,
+    import_execution_into_artifact,
+    record_failed_execution_import,
+)
 from .vllm_scraper import (
     INTERRUPT_SCRAPE_TIMEOUT_SECONDS,
     VllmMetricsScraper,
@@ -105,6 +111,7 @@ class InferenceProfiler:
             if config.trace is not None
             else None
         )
+        self.execution_dir = config.vllm_execution_dir
 
     def _build_vllm_scraper(self) -> VllmMetricsScraper | None:
         """The ``/metrics`` scraper when native vLLM telemetry is on."""
@@ -166,20 +173,79 @@ class InferenceProfiler:
                 )
             raise
 
+        await self._import_server_evidence(output_path)
         try:
             report = analyze_inference_events(output_path)
         except Exception:
             self._write_terminal_session(output_path=output_path, report=None)
             raise
         self._write_terminal_session(output_path=output_path, report=report)
+        return report
+
+    async def _import_server_evidence(self, output_path: Path) -> None:
+        """Traces, then the execution log, before the analysis reads the artifact.
+
+        The hook's worker hellos name each traced process's GPU, so the log is
+        flushed and indexed first. A failed import warns and records what was
+        not collected instead of failing the finished run.
+        """
+        index = (
+            await asyncio.to_thread(self._execution_index)
+            if self.execution_dir is not None
+            else None
+        )
         if self.traces is not None:
             await asyncio.to_thread(
                 self.traces.import_into,
                 output_path,
                 run_id=self.run_id,
                 session=self.session,
+                worker_index=index,
             )
-        return report
+        if self.execution_dir is not None:
+            await asyncio.to_thread(self._import_execution, output_path)
+
+    def _execution_index(self) -> WorkerIndex | None:
+        """Seal the hook's open segments, then index its worker hellos."""
+        directory = self.execution_dir
+        assert directory is not None
+        try:
+            flush = flush_execution_log(
+                directory, timeout_seconds=EXECUTION_FLUSH_TIMEOUT_SECONDS
+            )
+            if flush["timed_out"]:
+                self._warn(
+                    f"vLLM execution log {directory}: no heartbeat from "
+                    f"{', '.join(flush['timed_out'])} within "
+                    f"{EXECUTION_FLUSH_TIMEOUT_SECONDS:g} s of the flush request; "
+                    "its last records may be missing from this import"
+                )
+            return WorkerIndex.from_directory(directory)
+        except Exception as exc:
+            self._warn(
+                f"vLLM execution log {directory} could not be read ({exc}); "
+                "traces are imported without its device map"
+            )
+            return None
+
+    def _import_execution(self, output_path: Path) -> None:
+        directory = self.execution_dir
+        assert directory is not None
+        try:
+            import_execution_into_artifact(output_path, directory)
+        except Exception as exc:  # a finished run must not fail on its import
+            self._warn(
+                f"vLLM execution log {directory} was not imported ({exc}); run "
+                "`stormlog infer import-execution` on it"
+            )
+            try:
+                record_failed_execution_import(output_path, directory, str(exc))
+            except Exception as record_exc:
+                self._warn(f"the failed import could not be recorded ({record_exc})")
+
+    def _warn(self, message: str) -> None:
+        if self.on_warning is not None:
+            self.on_warning(message)
 
     async def _capture(self, output_path: Path) -> None:
         self._start_span_receiver()
@@ -223,6 +289,11 @@ class InferenceProfiler:
                                 "drain_seconds": self.config.vllm_spans_drain_seconds,
                             }
                             if self.span_receiver is not None
+                            else None
+                        ),
+                        "vllm_execution_dir": (
+                            str(self.execution_dir)
+                            if self.execution_dir is not None
                             else None
                         ),
                     },
@@ -1238,6 +1309,9 @@ def _lag_ms(arrival: Arrival, sent_at_ns: int) -> float:
 
 # The server declined the request: rate limited or overloaded.
 REJECTED_HTTP_STATUSES = frozenset({429, 503})
+# How long the finished run waits for the vLLM execution hook to seal its open
+# segments (a heartbeat per second confirms it) before importing the log.
+EXECUTION_FLUSH_TIMEOUT_SECONDS = 10.0
 
 
 def classify_failure(exc: BaseException) -> tuple[str, int | None]:

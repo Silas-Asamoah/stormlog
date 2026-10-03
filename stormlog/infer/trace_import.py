@@ -34,6 +34,7 @@ from .trace_kineto import (
     load_kineto_trace,
 )
 from .trace_nsys import load_nsys_sqlite
+from .vllm_execution_devices import TraceBinding, WorkerIndex
 
 
 def artifact_run_identity(path: str | Path) -> tuple[str, str]:
@@ -189,6 +190,7 @@ class TraceFileCollector:
         device_uuids: DeviceUuids | dict[int, str] | None = None,
         detail: Detail = "launch",
         max_bytes: int | None = None,
+        worker_index: WorkerIndex | None = None,
     ) -> None:
         if not paths:
             raise InferUsageError("at least one trace file is required")
@@ -200,6 +202,8 @@ class TraceFileCollector:
         self.device_uuids = _as_device_uuids(device_uuids).bind(self.paths)
         self.detail = detail
         self.max_bytes = max_bytes
+        # The vLLM execution log's worker hellos, which name each process's GPU.
+        self.worker_index = worker_index
 
     def collect(self, *, run_id: str, session_id: str) -> TraceCapture:
         captures = [self._import(path, run_id, session_id) for path in self.paths]
@@ -221,19 +225,37 @@ class TraceFileCollector:
             # Registered so `import-trace` can import it later; not parsed now.
             return _registered_only(attachment, path, "max_bytes")
         try:
-            return capture_trace(
-                _load(path, file_format),
+            trace = _load(path, file_format)
+            uuids, by_pid, binding = self._device_uuids(trace, path)
+            capture = capture_trace(
+                trace,
                 path,
                 run_id=run_id,
                 session_id=session_id,
                 attachment=attachment,
-                device_uuids=self.device_uuids.for_trace(path),
+                device_uuids=uuids,
                 detail=self.detail,
+                device_uuids_by_pid=by_pid,
             )
         except InferUsageError:
             raise
         except (ValueError, OSError) as exc:
             raise InferInputError(f"{path}: {exc}") from exc
+        if binding is None:
+            return capture
+        summary = dict(capture.summary or {}, execution_log=binding.summary())
+        return replace(capture, summary=summary)
+
+    def _device_uuids(
+        self, trace: KinetoTrace, path: Path
+    ) -> tuple[dict[int, str], dict[int, dict[int, str]], TraceBinding | None]:
+        """``--device-uuid`` entries by ordinal, and the execution log's by
+        process and ordinal; the option wins where both name an ordinal."""
+        given = self.device_uuids.for_trace(path)
+        if self.worker_index is None:
+            return given, {}, None
+        binding = self.worker_index.bind_trace(trace)
+        return given, {pid: dict(m) for pid, m in binding.uuids.items()}, binding
 
 
 def _check_shared_devices(
@@ -353,24 +375,29 @@ def import_traces_into_artifact(
     device_uuids: DeviceUuids | dict[int, str] | None = None,
     detail: Detail = "launch",
     envelope_path: str | Path | None = None,
+    execution_dir: str | Path | None = None,
 ) -> TraceCapture:
     """Append the traces' GPU activity to ``artifact`` and return what was added.
 
     A trace this artifact already imported from the same file is skipped and
     listed in the summary's ``already_imported``; importing it again would only
     duplicate its records. A trace that was only registered, for example over a
-    size bound, can still be imported.
+    size bound, can still be imported. ``execution_dir`` is the vLLM execution
+    hook's directory, whose worker hellos name each traced process's GPU.
     """
     run_id, session_id = artifact_run_identity(artifact)
     # Bound to every requested trace, so a selector for one that is skipped
     # below as already imported still names a trace.
     uuids = _as_device_uuids(device_uuids).bind(list(traces))
+    index = WorkerIndex.from_directory(execution_dir) if execution_dir else None
     imported = imported_trace_paths(artifact)
     skipped = [str(t) for t in traces if Path(t).resolve() in imported]
     pending = [t for t in traces if str(t) not in skipped]
     if not pending:
         return _nothing_imported(skipped)
-    collector = TraceFileCollector(pending, device_uuids=uuids, detail=detail)
+    collector = TraceFileCollector(
+        pending, device_uuids=uuids, detail=detail, worker_index=index
+    )
     captured: list[TraceCapture] = []
 
     class _Recording:

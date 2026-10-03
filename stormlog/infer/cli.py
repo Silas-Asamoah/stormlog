@@ -39,6 +39,7 @@ from .server_collector import (
 )
 from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
 from .trace_import import import_traces_into_artifact, parse_device_uuids
+from .vllm_execution_import import import_execution_into_artifact
 from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
 from .vllm_spans import DEFAULT_SPANS_LISTEN, parse_listen_address
 
@@ -71,6 +72,8 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         return cmd_collect_server(args)
     if args.infer_command == "import-trace":
         return cmd_import_trace(args)
+    if args.infer_command == "import-execution":
+        return cmd_import_execution(args)
     parser.error(f"Unsupported infer command: {args.infer_command}")
 
 
@@ -254,6 +257,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds between vLLM metrics scrapes inside a phase (default: 1)",
     )
     profile_parser.add_argument(
+        "--vllm-execution-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR as this host sees "
+            "it; when the run ends, its final scheduler steps are imported and "
+            "its worker hellos name the GPU of each traced process"
+        ),
+    )
+    profile_parser.add_argument(
         "--vllm-spans-listen",
         nargs="?",
         const=DEFAULT_SPANS_LISTEN,
@@ -394,6 +407,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of group members; each rank 0..N-1 needs a collector",
     )
     _add_import_trace_parser(subparsers)
+    _add_import_execution_parser(subparsers)
     return parser
 
 
@@ -435,6 +449,52 @@ def _add_import_trace_parser(subparsers: Any) -> None:
         ),
     )
     import_parser.add_argument(
+        "--vllm-execution-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR; its worker hellos "
+            "name the GPU of each traced process (by host, pid and lifetime), so "
+            "--device-uuid is only needed where that leaves a gap"
+        ),
+    )
+    import_parser.add_argument(
+        "--envelope", default=None, help="Run envelope (default: beside the artifact)"
+    )
+
+
+def _add_import_execution_parser(subparsers: Any) -> None:
+    parser = subparsers.add_parser(
+        "import-execution",
+        help="Add a vLLM execution hook's scheduler steps to an artifact",
+    )
+    parser.add_argument("artifact", help="Inference JSONL with a run identity")
+    parser.add_argument(
+        "directory",
+        help=(
+            "The hook's STORMLOG_VLLM_HOOK_DIR, copied or mounted from the "
+            "server host; only steps that are final since the last import are added"
+        ),
+    )
+    parser.add_argument(
+        "--raw-foreign-ids",
+        action="store_true",
+        help=(
+            "Record other clients' request IDs as vLLM saw them instead of keyed "
+            "pseudonyms (the artifact then names requests that are not yours)"
+        ),
+    )
+    parser.add_argument(
+        "--server-stopped",
+        action="store_true",
+        help=(
+            "The server that wrote this log is no longer running: an epoch "
+            "without a goodbye record is gone and its pending steps are final. "
+            "Without it, silence is judged only on the server's own host and "
+            "boot; from anywhere else such an epoch's pending steps wait"
+        ),
+    )
+    parser.add_argument(
         "--envelope", default=None, help="Run envelope (default: beside the artifact)"
     )
 
@@ -765,6 +825,9 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
             6.0 if args.vllm_spans_drain is None else args.vllm_spans_drain
         ),
         trace=_trace_config(args, endpoint),
+        vllm_execution_dir=(
+            Path(args.vllm_execution_dir) if args.vllm_execution_dir else None
+        ),
     )
 
 
@@ -925,6 +988,17 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--sample-interval must be > 0")
     _validate_vllm_metrics_arguments(args)
     _validate_vllm_span_arguments(args)
+    _validate_execution_dir_argument(args)
+
+
+def _validate_execution_dir_argument(args: argparse.Namespace) -> None:
+    directory = args.vllm_execution_dir
+    if directory is not None and not Path(directory).is_dir():
+        _print_warning(
+            f"--vllm-execution-dir {directory} does not exist yet; the execution "
+            "log is imported only if the hook writes it there and this host can "
+            "read it"
+        )
 
 
 def _validate_vllm_metrics_arguments(args: argparse.Namespace) -> None:
@@ -1039,12 +1113,83 @@ def cmd_import_trace(args: argparse.Namespace) -> int:
         device_uuids=parse_device_uuids(args.device_uuid),
         detail=args.detail,
         envelope_path=args.envelope,
+        execution_dir=args.vllm_execution_dir,
     )
     for summary in (capture.summary or {}).get("traces", []):
         _print_trace_summary(summary)
     for path in (capture.summary or {}).get("already_imported", []):
         print(f"Skipped {path}: already imported into this run")
     return int(ExitCode.OK)
+
+
+def cmd_import_execution(args: argparse.Namespace) -> int:
+    """Append a vLLM execution log's final steps to an existing artifact."""
+    capture = import_execution_into_artifact(
+        args.artifact,
+        args.directory,
+        raw_foreign_ids=args.raw_foreign_ids,
+        envelope_path=args.envelope,
+        server_stopped=args.server_stopped,
+    )
+    _print_execution_summary((capture.summary or {}).get("execution", {}))
+    return int(ExitCode.OK)
+
+
+def _print_execution_summary(summary: dict[str, Any]) -> None:
+    counts = summary.get("records", {})
+    print(
+        f"Imported execution log {summary.get('directory')}: "
+        f"{counts.get('iterations', 0)} iterations, "
+        f"{counts.get('memberships', 0)} memberships, "
+        f"{counts.get('requests', 0)} requests, "
+        f"{counts.get('clock_alignment', 0)} clock alignments"
+    )
+    for name, epoch in sorted(summary.get("epochs", {}).items()):
+        print(f"  {name}: {_epoch_line(epoch)}")
+        for error in epoch.get("errors", []):
+            print(f"    error: {error}")
+    for note in summary.get("notes", []):
+        print(f"  note: {note}")
+
+
+def _epoch_line(epoch: dict[str, Any]) -> str:
+    state = _state_text(epoch)
+    if not epoch.get("reduced"):
+        return f"{epoch.get('role')} epoch, {state}; not reduced"
+    waiting = epoch.get("iterations_pending", 0)
+    line = (
+        f"{state}; kept {epoch.get('iterations_kept', 0)} steps "
+        f"({epoch.get('iterations_incomplete', 0)} incomplete), {waiting} pending, "
+        f"{epoch.get('iterations_already_imported', 0)} already imported, "
+        f"{epoch.get('foreign_only_counted', 0)} foreign-only counted, "
+        f"{epoch.get('empty_counted', 0)} empty; "
+        f"high-water seq {epoch.get('high_water_seq')}"
+    )
+    dropped = sum(int(value) for value in (epoch.get("dropped") or {}).values())
+    if dropped or epoch.get("gaps"):
+        line += (
+            f"; {dropped} records dropped by the hook, {epoch.get('gaps', 0)} missing"
+        )
+    withheld = epoch.get("withheld") or {}
+    if any(withheld.values()):
+        line += (
+            f"; no epoch key: {withheld.get('memberships', 0)} memberships, "
+            f"{withheld.get('executions', 0)} requests and "
+            f"{withheld.get('foreign_only_steps', 0)} steps of other clients withheld"
+        )
+    return line
+
+
+def _state_text(epoch: dict[str, Any]) -> str:
+    """The epoch's liveness; an unjudged one says why and what to do."""
+    state = str(epoch.get("state"))
+    if state != "unknown":
+        return state
+    reason = epoch.get("state_reason") or "liveness not judged"
+    return (
+        f"unknown ({reason}: pending steps wait; pass --server-stopped if the "
+        "server that wrote this log has stopped)"
+    )
 
 
 def _print_trace_summary(summary: dict[str, Any]) -> None:
@@ -1069,13 +1214,34 @@ def _print_trace_summary(summary: dict[str, Any]) -> None:
     )
     for reason, count in summary["unresolved_gpu_events"].items():
         print(f"  unresolved ({reason}): {count}")
+    _print_trace_devices(summary)
+    for note in summary.get("notes", []):
+        print(f"  note: {note}")
+
+
+def _print_trace_devices(summary: dict[str, Any]) -> None:
     for device, values in summary["devices"].items():
         uuid = values["device_uuid"] or "unknown UUID, not measured"
+        if values.get("device_uuid_source") == "execution_log":
+            uuid += ", from the vLLM execution log"
         pid, _, ordinal = str(device).rpartition("/")
         label = f"process {pid} device {ordinal}" if pid else f"device {device}"
         print(
             f"  {label} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
             f"summed {values['summed_ns'] / 1e6:.3f} ms"
         )
-    for note in summary.get("notes", []):
-        print(f"  note: {note}")
+    binding = summary.get("execution_log")
+    if binding is not None and binding.get("status") != "bound":
+        print(f"  execution log: {_binding_note(binding)}")
+
+
+def _binding_note(binding: dict[str, Any]) -> str:
+    parts = []
+    if binding.get("unmatched"):
+        pids = ", ".join(str(pid) for pid in binding["unmatched"])
+        parts.append(f"no worker epoch covers process {pids}")
+    for pid, epochs in binding.get("ambiguous", {}).items():
+        parts.append(f"process {pid} matches {len(epochs)} worker epochs")
+    if not parts:
+        parts.append(f"status {binding.get('status')}")
+    return "; ".join(parts) + "; give --device-uuid for it"

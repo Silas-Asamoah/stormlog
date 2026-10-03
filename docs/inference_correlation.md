@@ -165,6 +165,11 @@ stormlog infer import-trace infer.jsonl rank0.pt.trace.json.gz \
   --device-uuid 0=GPU-6d1f0c5e-... --detail launch
 ```
 
+The same artifact takes vLLM's scheduler steps and their requests from the
+[vLLM execution hook](vllm_execution.md#import) with
+`stormlog infer import-execution infer.jsonl DIR`, and the hook's worker
+hellos can name each trace's GPU (`--vllm-execution-dir`, below).
+
 ### Linking GPU work to iterations
 
 A CUDA kernel, copy, or memset carries the correlation ID of the CPU runtime or
@@ -203,7 +208,13 @@ That is the expected result for an engine that does not emit them yet.
   and the CUPTI version. The engine version is recorded when the trace carries
   it; vLLM 0.30.0 stamps it only for scheduled profiles, not for traces taken
   with `/start_profile` and `/stop_profile`.
-- **Device.** Pass `--device-uuid INDEX=UUID` for each device. The index is the
+- **Device.** With `--vllm-execution-dir DIR`, the vLLM execution hook's
+  worker `hello` records ([vLLM execution hook](vllm_execution.md)) name the
+  GPU of each traced process: a worker epoch on the trace's host, with its
+  launching pid, alive across the trace's time window, is the process that
+  wrote it. A pid that no epoch covers, or that several cover, is reported and
+  left to `--device-uuid`, which always wins. Otherwise pass
+  `--device-uuid INDEX=UUID` for each device. The index is the
   CUDA device ordinal inside the traced process, after `CUDA_VISIBLE_DEVICES`,
   which is not necessarily the host's NVML index. Two processes can both call
   their GPU device 0, so `--device-uuid TRACE_FILE:INDEX=UUID` scopes a UUID to

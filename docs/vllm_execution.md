@@ -244,3 +244,127 @@ and the `sample_tokens` call that completes it, in a profiler range named
 [Importing profiler traces](inference_correlation.md#importing-profiler-traces)).
 Internal dummy runs, CUDA-graph capture and warm-up get no range; they run
 before the first serving step.
+
+## Import
+
+```bash
+stormlog infer import-execution infer.jsonl /var/tmp/stormlog-vllm
+stormlog infer import-execution infer.jsonl copied-log/ --server-stopped
+stormlog infer profile ... --vllm-execution-dir /var/tmp/stormlog-vllm
+```
+
+`import-execution` reduces the raw log into canonical records and appends
+them to an artifact that holds an `infer.artifact` record. `infer profile
+--vllm-execution-dir` does the same when the run ends: it asks every live
+epoch to seal its open segment (a `flush` file), waits up to 10 s for the
+writer's heartbeat, indexes the worker hellos, imports the traces with the
+GPU UUIDs those hellos name, reduces the execution log, and only then
+analyzes the artifact and writes the report. A log that cannot be read or
+imported is a warning and a capability record with nothing collected; the
+run itself does not fail. Exit codes are in the
+[report contract](report_contract.md).
+
+**Final steps only.** A step is reduced once it is final: its `completed`
+record arrived, or it never will because the epoch ended or is gone, or a
+later step completed, which makes it `incomplete`. A pending step waits for
+a later import. Nothing is corrected after it is written: each epoch's
+high-water sequence is kept in the engine adapter's capability summary, and
+a later import starts from there, so running the command twice adds nothing
+twice.
+
+**Liveness.** An epoch has ended when it wrote `goodbye`. Without one, the
+import may call it gone only on evidence from the clock that wrote its
+stamps: when the import runs on the epoch's own host and boot (the hello's
+`host` and `boot_id` equal the importer's own), it compares the epoch's last
+heartbeat `mono_ns` with its own monotonic clock, and 30 s of silence means
+gone; that clock is immune to wall-clock steps. From any other host, or
+when the importer's boot ID is unknown, the two clocks are unrelated, so
+liveness is not judged: the epoch is `unknown`, its pending steps wait, its
+mark is held back, and the summary says why. For a log copied from a
+server that has since stopped, `--server-stopped` says so, and every epoch
+without `goodbye` is then gone and its pending steps final. `infer profile`
+imports while its server may still be up and needs no such flag.
+
+**Records.** One `infer.iteration` per step on the engine's monotonic clock
+(`<host>/<boot id>/monotonic_ns`, `clock_kind` `monotonic`), whose
+`elapsed_ns` is the scheduler residence from `schedule()` to the processed
+output; one `infer.membership` per (request, attempt, iteration, role),
+whose role follows vLLM's `phase` (`context` is `prefill`, `generation` is
+`decode` or, with drafts scheduled, `spec_decode`; no phase is `unknown`), with
+the step's token counts, outcome and, for the step a request was freed in,
+its finish; one `infer.request` per backend execution, holding admission
+facts only; and one `infer.clock_alignment` per epoch from the hello's
+wall/monotonic pair, with half the sampling gap as its uncertainty. The raw
+log is never registered as an attachment. A step whose `update_from_output`
+raised (`update_failed`) keeps its memberships with outcome `unknown`, no
+output tokens and nothing read from its counters; the coverage block counts
+such steps. A request's `input_tokens` is its prompt at the first sighting;
+a `resumable` request's later prompts are on its memberships.
+
+**Binding.** A request is the run's when its alias `external` is
+`chatcmpl-<x_request_id>` or `cmpl-<x_request_id>-<i>` for an
+`x_request_id` the artifact recorded; without an alias, the internal ID's
+shape only proposes the same exact match, with vLLM's random suffix
+stripped only when the hello says `request_id_randomization` is on (both
+forms are tried when it is unknown). Every other ID is foreign, or
+unresolved when it has no alias and does not parse. Foreign and unresolved
+executions appear only as `HMAC-SHA256(HMAC(epoch key, run_id), id)[:16]`,
+stable within a run and different in every other artifact;
+`--raw-foreign-ids` records their IDs as vLLM saw them. An epoch whose key
+file is missing or unreadable cannot key a pseudonym, so without
+`--raw-foreign-ids` other clients' identities from that epoch are withheld:
+their memberships and requests are not written, steps that held only their
+requests are not kept, the import summary counts what was withheld and
+says `withheld` instead of `hmac-sha256-keyed`, and a kept step still counts
+them in `withheld_members`. The scheme an epoch was first imported with is
+recorded in the import summary and fixed: a later import of that epoch that
+would switch between pseudonyms and `--raw-foreign-ids` is refused before
+anything is appended, since the same execution would get a second request;
+a withheld epoch wrote no such identity, so any later scheme may follow it.
+A reused internal
+ID (randomization off) is split into one execution per admission, also
+across imports.
+
+**Which steps are kept.** Steps an imported GPU activity references and
+steps with a run member are always kept. A step with only other clients'
+requests is kept when the engine's wall clock is the client's (same host
+and boot) and the step lies inside a run phase or trace window; otherwise
+it is counted in the summary, not written. A step that scheduled no request
+(an idle scheduler call) is counted as empty, not written.
+
+**Device binding for traces.** A worker hello names the worker's host, pid,
+CUDA ordinal and GPU UUID. `import-trace --vllm-execution-dir DIR` and the
+profile's own import bind a trace to the worker epoch that was alive on the
+trace's host, with its launching pid, across the trace's time window; a pid
+that no epoch covers, or that several cover, is reported and left to
+`--device-uuid`, which always wins.
+
+## Coverage
+
+`stormlog infer analyze` reports the import under `telemetry.execution`,
+and the text report prints it after the vLLM telemetry lines. The block
+keeps five questions apart, each a union of busy intervals per device and
+clock scope, never a sum:
+
+1. **Linkage.** Measured GPU busy time with an iteration link against
+   without, by the trace importer's reason.
+2. **Membership.** Linked time whose step has complete, incomplete or no
+   membership (a step the import has not written yet).
+3. **Ownership.** Linked time in steps that ran only this run's requests
+   (`run`), only other clients' (`foreign`), or both (`mixed`, claimed only
+   when a run member and another client's are both established). A step
+   with an unresolved member, an ID that had no alias and does not parse,
+   is `unresolved` whether or not a run member sits beside it, since the
+   split is unknown. A step is shared, and its case figure non-additive,
+   when any member is not established as this run's.
+4. **Measurement.** GPU activity without a device UUID or device clock is
+   counted with its summed duration and never added to a device's union.
+5. **Capture loss.** Records the hook dropped, missing sequences, steps
+   still pending or incomplete, worker serving calls that ran without a
+   range, and finishes no step could carry. The warm-up and graph-capture
+   calls before the first serving step (`startup_unranged`) are shown apart:
+   they never have a range, so they are not loss.
+
+A case's figure covers every step one of its requests shared, so a case
+that shared a batch with another case or with other clients is labelled
+`non_additive`. No per-request GPU cost is computed.
