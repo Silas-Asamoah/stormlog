@@ -21,6 +21,8 @@ from stormlog.infer.vllm_spans import JSON_MEDIA, PROTOBUF_MEDIA, OtlpSpanReceiv
 from stormlog.infer.vllm_telemetry import VllmSpanRecord
 from tests.qualification_fake_engine_helpers import (
     chat,
+    chats_in_background,
+    join_all,
     of_type,
     records,
     run_profile,
@@ -144,6 +146,24 @@ def test_a_span_carries_the_requests_sampling_parameters() -> None:
     assert (chosen["gen_ai.request.max_tokens"], chosen["gen_ai.request.n"]) == (3, 1)
     assert greedy["gen_ai.request.top_p"] == 1.0
     assert "gen_ai.request.temperature" not in greedy
+
+
+def test_a_client_abort_gets_no_span() -> None:
+    # vLLM makes the span when its front end sees a request finish
+    # (OutputProcessor.do_tracing); a client abort drops the request's state
+    # first (OutputProcessor.abort_requests), so no span is ever made.
+    spans: list[VllmSpanRecord] = []
+    with _receiver() as receiver:
+        with _engine(receiver) as engine:
+            threads = chats_in_background(engine, [words(4, "a")], max_tokens=400)
+            assert wait_until(lambda: len(engine.engine.live) == 1)
+            engine.engine.abort(next(iter(engine.engine.live.values())))
+            join_all(threads)
+            chat(engine, "y", max_tokens=1, request_id="stormlog-run-1-kept")
+        # Closing the engine flushed every span it had queued.
+        assert wait_until(lambda: _received(receiver, spans) >= 1)
+        _received(receiver, spans)
+    assert [span.request_id for span in spans] == ["stormlog-run-1-kept"]
 
 
 def test_a_traceparent_makes_the_span_its_child() -> None:

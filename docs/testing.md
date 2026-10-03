@@ -162,7 +162,8 @@ series vLLM exports:
   arrives while a step runs takes effect before that step's update, as in
   vLLM, so the hook records the member as `discarded_finished` and still
   counts the token the sampler produced. As in vLLM, a client's abort adds
-  nothing to `request_success_total` or the per-request histograms.
+  nothing to `request_success_total` or the per-request histograms, and
+  makes no span.
 
 Nothing is computed: each step sleeps for a simulated cost. Prompts are counted
 as whitespace words plus a fixed four-token chat template.

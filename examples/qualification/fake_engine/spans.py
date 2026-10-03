@@ -81,6 +81,11 @@ class SpanExporter(EngineObserver):
         self._flush(everything=True)
 
     def on_free(self, request: FakeRequest) -> None:
+        if request.finish_reason == "abort":
+            # vLLM makes the span when its front end sees the request finish
+            # (OutputProcessor.do_tracing); a client abort drops the
+            # request's state first, so it never gets one.
+            return
         ready = time.time_ns() + int(self.controls.span_delay_seconds * 1e9)
         with self._lock:
             self._pending.append((ready, request_span(request, self.ids)))
