@@ -6,13 +6,14 @@ then start and stop it over HTTP (``/start_profile`` and ``/stop_profile``).
 This module opens one window per profiled phase, closes it at the phase's end,
 at a time bound, or on cancellation, and finds the worker traces vLLM wrote.
 A start the server may have received, whether it answered 2xx or not at all,
-is always followed by a stop: the engine runs ``/start_profile`` before the
-HTTP reply goes out, so a lost or failed reply can leave it profiling. Only a
-4xx, which never reaches the engine, is not stopped. vLLM 0.30.0 answers 200
-to a second ``/start_profile`` and to ``/stop_profile`` with nothing running,
-so a client cannot tell from HTTP whether another profile was already active;
-do not run two profilers against one server. The traces are imported after
-the run.
+is always followed by one stop: the engine runs ``/start_profile`` before the
+HTTP reply goes out, so a lost or failed reply can leave it profiling. A stop
+that fails is not retried; the window's record says the profiler may still be
+running. Only a 4xx, which never reaches the engine, is not stopped. vLLM
+0.30.0 answers 200 to a second ``/start_profile`` and to ``/stop_profile``
+with nothing running, so a client cannot tell from HTTP whether another
+profile was already active; do not run two profilers against one server. The
+traces are imported after the run.
 
 The profiler adds no synchronization per request; the server writes the trace
 while handling ``/stop_profile``, so that call can take tens of seconds.
@@ -354,8 +355,10 @@ class TraceWindows:
             if _may_be_profiling(window) and before is not None:
                 window.files = await asyncio.to_thread(self._find_files, window, before)
         finally:
-            if window.started:
-                window.note = window.note or self._files_note(window)
+            # Written from what the stop returned, never ahead of it.
+            window.note = _joined(
+                window.note or self._result_note(window), _stop_note(window)
+            )
             self.windows.append(window)
             self._unwritten.append(window)
 
@@ -407,6 +410,16 @@ class TraceWindows:
             previous = current
             time.sleep(self.config.settle_seconds)
         return sorted(directory / name for name in previous or {})
+
+    def _result_note(self, window: TraceWindow) -> str | None:
+        if window.start_outcome != START_UNKNOWN:
+            return self._files_note(window) if window.started else None
+        unknown = "the start's answer does not say whether the profiler started"
+        if window.stop is None or not window.stop.ok:
+            return unknown  # the stop's own note says what is left
+        if window.stop_reason == "start_unknown":
+            return f"{unknown}; it was stopped before the phase, which ran unprofiled"
+        return f"{unknown}; it was stopped"
 
     def _files_note(self, window: TraceWindow) -> str | None:
         if self.config.trace_dir is None:
@@ -494,11 +507,22 @@ def _mark_started(window: TraceWindow) -> None:
     window.started_at_ns = window.start_returned_at_ns if window.started else None
     if window.start_outcome == START_REJECTED:
         window.note = "the profiler did not start; see start_status and start_error"
-    elif window.start_outcome == START_UNKNOWN:
-        window.note = (
-            "the start's answer does not say whether the profiler started; "
-            "it was stopped, and the phase ran unprofiled"
-        )
+
+
+def _stop_note(window: TraceWindow) -> str | None:
+    """Said when a profile may have started and no stop was confirmed."""
+    if not _may_be_profiling(window) or (window.stop is not None and window.stop.ok):
+        return None
+    if window.stop is None:
+        return "no stop could be sent; the profiler may still be running"
+    return (
+        "the stop was sent once and not confirmed (see stop_status and "
+        "stop_error); the profiler may still be running"
+    )
+
+
+def _joined(*notes: str | None) -> str | None:
+    return "; ".join(note for note in notes if note) or None
 
 
 def _may_be_profiling(window: TraceWindow) -> bool:

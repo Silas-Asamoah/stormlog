@@ -257,6 +257,52 @@ def test_a_failing_warning_never_skips_the_stop_or_the_record(
     ]
 
 
+@pytest.mark.parametrize("start_status", [200, None])
+def test_a_failed_stop_is_recorded_as_one(
+    tmp_path: Path, start_status: int | None
+) -> None:
+    """A stop that did not reach the engine leaves the profiler running."""
+
+    class _StopFails(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            self.calls.append(route)
+            if route == "/start_profile":
+                if start_status is None:
+                    return ControlResult(None, "TimeoutError: timed out")
+                return ControlResult(start_status)
+            return ControlResult(503, "HTTP 503")
+
+    warnings: list[str] = []
+    control = _StopFails(tmp_path)
+    windows = TraceWindows(
+        _config(tmp_path), control=control, on_warning=warnings.append
+    )
+
+    window = _run_window(windows)
+
+    # Sent once, never retried, and said.
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    assert window.stop is not None and window.stop.status == 503
+    assert window.note is not None
+    assert "unprofiled" not in window.note
+    assert "may still be running" in window.note
+    assert warnings[-1] == (
+        "c1 measured: the profiler did not confirm the stop (HTTP 503)"
+    )
+
+
+def test_an_unknown_start_stopped_before_the_phase_says_so(tmp_path: Path) -> None:
+    control = _FakeControl(tmp_path, start_status=None)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    window = _run_window(windows)
+
+    assert window.note == (
+        "the start's answer does not say whether the profiler started; "
+        "it was stopped before the phase, which ran unprofiled"
+    )
+
+
 def test_start_outcome_classifies_every_answer() -> None:
     assert start_outcome(ControlResult(200)) == START_ACKNOWLEDGED
     assert start_outcome(ControlResult(204)) == START_ACKNOWLEDGED

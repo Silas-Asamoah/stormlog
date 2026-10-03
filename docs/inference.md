@@ -666,8 +666,10 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
 - **Window.** By default each case's measured phase is profiled
   (`--trace-phase warmup` profiles warmup instead). The window closes when the
   phase ends, when `--trace-max-seconds` elapses (the phase keeps running
-  unprofiled), or when the run is cancelled; the profiler is stopped in every
-  case.
+  unprofiled), or when the run is cancelled. In every case Stormlog sends one
+  `/stop_profile`. A stop that fails is not retried: Stormlog warns, and the
+  window's record keeps the stop's status and error and says the profiler may
+  still be running.
 - **Ownership.** Stormlog stops every profile its own `/start_profile` may
   have started. vLLM runs the start in the engine before it replies, so the
   reply alone does not show whether profiling began. Each window's
@@ -677,7 +679,8 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
     routes): the start never reached the engine; nothing is stopped.
   - `unknown` (5xx, a timeout, a dropped connection or a malformed reply):
     Stormlog sends `/stop_profile` at once, with `stop_reason` `start_unknown`,
-    and the phase runs unprofiled. A trace that stop writes is still listed.
+    before the phase. Once that stop is confirmed, the phase runs unprofiled.
+    A trace that stop writes is still listed.
 
   vLLM 0.30.0 answers 200 to a second `/start_profile` and to `/stop_profile`
   with nothing running, so Stormlog cannot tell from HTTP whether another
