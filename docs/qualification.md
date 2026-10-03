@@ -104,6 +104,64 @@ the action, counted from when the window opened or the previous episode
 recovered. Every attempted episode is published; accuracy is computed over
 the `valid` ones.
 
+## Effect timing, realization and recovery
+
+The harness keeps a reference channel beside every diagnosed configuration:
+the execution hook, a tailer, and scrapes every second. `recovery` reads it as
+time series on the victim's clock (`Signals`). Those are the victim's own
+admission waits and cached fractions, the preemptions of its requests, the
+waiting and KV-usage gauges, hook step starts, and the victim's chunk gaps.
+The injector's own times are `Actions`. Nothing here depends on the diagnosed
+configuration's capture.
+
+`Baseline.measure` takes these from the baseline segment:
+- the p95 wait;
+- the range of the waiting count;
+- the maximum KV usage;
+- the p95 step gap and chunk gap;
+- the median cached fraction.
+
+`effect_timing(episode_type, context)` gives each mechanism's onset, its end
+(the start of the first interval over which its recovery criteria hold) and
+when recovery held:
+
+| Episodes | Effect onset | Recovered when, for 10 s |
+| --- | --- | --- |
+| F1 / T1 | the first 5 s window whose median victim wait exceeds the baseline p95 (F1); the neighbor's first send (T1) | waits are at most the baseline p95, and the waiting count is within the baseline's range |
+| F2 / T2 | the first victim preemption (F2); the neighbor's first admission (T2) | no victim preemption, and KV usage at most the baseline maximum + 0.05 |
+| F3 / T3 / T3b | the first 5 s window whose median victim cached fraction is below 0.5 (F3); the neighbor's first send (T3, T3b) | the median cached fraction is at least 0.9 |
+| F4a / F4b / H0 / P | the first stop confirmed (state `T`) | from the last `SIGCONT`, every step gap is within the baseline p95 for 5 s; for F4b, every chunk gap too |
+| W1 | the neighbor's first send | the queue and KV criteria |
+| I1 | the stop request | at the stop's return plus #219's drain |
+
+`realization(episode_type, context, timing)` applies the catalog's checks:
+
+| Episode | Realized when |
+| --- | --- |
+| F1 | its onset was reached, with no victim preemption |
+| F2 | at least one victim request was preempted |
+| F3 | the victim's cached fraction fell below 0.5 |
+| F4a | no hook step started during a pulse |
+| F4b | the engine kept stepping during the pulses |
+| T1 | the waits stayed within the baseline |
+| T2 | nothing was preempted |
+| T3, T3b | the cached fraction stayed at 0.9 or more |
+| H0 | the stopped state was confirmed |
+| I1 | the capture started and stopped |
+
+Each check is recorded with its value.
+
+Two functions drive a run:
+- `priming_check` is the run's precondition: the victim's median cached
+  fraction over the last 10 s of priming is at least 0.9. Otherwise the run
+  is a protocol failure.
+- `next_episode` lets the next episode start once the previous one's recovery
+  has held, and no sooner than 60 s after its action ended. 150 s after the
+  action, it times out, and the run's remaining episodes are skipped.
+
+The thresholds are frozen from `dev_v1` in `Thresholds`; the defaults are the
+design's.
+
 ## Scoring: `score_v1`
 
 `score_episode(injection, diagnosis, config)` scores one episode against the
