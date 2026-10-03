@@ -454,18 +454,30 @@ class Engine:
     def _complete(self, step: Step) -> None:
         freed: list[FakeRequest] = []
         with self._lock:
-            if step.members:
-                # A step with no members has no request outputs, and the front
-                # end records no iteration for it.
-                self.stats.observe("vllm:iteration_tokens_total", step.total_tokens)
             for member in step.members:
                 self._complete_member(member, freed)
+            self._observe_iteration(step)
             self.steps.append(step)
             self._snapshot = self._take_snapshot()
         for request in freed:
             self._notify_free(request)
         for observer in self.observers:
             observer.on_completed(step)
+
+    def _observe_iteration(self, step: Step) -> None:
+        """vLLM's front end records an iteration only for an output that
+        carries tokens: the prompt tokens computed for the requests whose
+        first token it carries, plus the tokens generated."""
+        kept = [m for m in step.members if m.outcome == "kept" and m.sampled]
+        if not kept:
+            return
+        computed = sum(
+            m.request.prompt_len - (m.request.cached_at_admission or 0)
+            for m in kept
+            if m.output_before == 0
+        )
+        generated = sum(m.sampled for m in kept)
+        self.stats.observe("vllm:iteration_tokens_total", computed + generated)
 
     def _complete_member(
         self, member: ScheduledMember, freed: list[FakeRequest]

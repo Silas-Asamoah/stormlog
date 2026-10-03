@@ -355,3 +355,20 @@ def test_the_loop_runs_the_empty_step_after_the_last_finish() -> None:
         time.sleep(0.05)
         steps = list(engine.engine.steps)
     assert [len(step.members) for step in steps] == [1, 1, 0]
+
+
+def test_iteration_tokens_count_outputs_as_vllms_front_end_does() -> None:
+    # vLLM 0.30 records an iteration only for an output that carries tokens
+    # (async_llm.py:792-793) and observes the prompt tokens computed for the
+    # requests whose first token it carries, plus the tokens generated
+    # (metrics/loggers.py, PrometheusStatLogger.record).
+    engine = _stepped_engine(max_num_batched_tokens=4)
+    request = _request(engine, "r", words(6, "p"), max_tokens=2)
+    iterations = engine.stats.histograms["vllm:iteration_tokens_total"]
+    chunks = [_step(engine), _step(engine)]
+    assert iterations.count == 0
+    _step(engine)
+    _step(engine)
+    assert [member.tokens for step in chunks for member in step.members] == [4, 4]
+    assert request.prompt_len == 10
+    assert (iterations.count, iterations.total) == (2, 10 + 1 + 1)
