@@ -253,9 +253,11 @@ def find_stalls(
     completions = _Completions(steps)
     stalls: list[Stall] = []
     for before, after in zip(steps, steps[1:]):
-        if not (before.members & after.members):
-            continue
-        stalls.extend(_stalls_between(after, completions))
+        if before.members & after.members:
+            stalls.append(_in_schedule(after))
+        between = _between(after, completions)
+        if between is not None:
+            stalls.append(between)
     stalls.extend(_stalls_within(steps))
     ongoing = _ongoing(steps, now_wall_ns)
     if ongoing is not None:
@@ -277,34 +279,41 @@ class _Completions:
         return self.steps[index - 1] if index else None
 
 
-def _stalls_between(after: Step, completions: _Completions) -> list[Stall]:
-    """The gap from the latest completion before ``after``'s schedule() entry,
-    and ``after``'s time inside schedule()."""
-    stalls = [
-        Stall(
-            LOCUS_IN_SCHEDULE,
-            ATTRIBUTION_HOST,
-            after.end_mono_ns - after.start_mono_ns,
-            after.start_mono_ns,
-            after.start_wall_ns,
-            after.end_wall_ns,
-            work_bucket(after.total_tokens),
-        )
-    ]
+def _in_schedule(after: Step) -> Stall:
+    """``after``'s time inside schedule(), host work on a request that ran
+    in the step before it."""
+    return Stall(
+        LOCUS_IN_SCHEDULE,
+        ATTRIBUTION_HOST,
+        after.end_mono_ns - after.start_mono_ns,
+        after.start_mono_ns,
+        after.start_wall_ns,
+        after.end_wall_ns,
+        work_bucket(after.total_tokens),
+    )
+
+
+def _between(after: Step, completions: _Completions) -> Stall | None:
+    """The gap from the latest completion before ``after``'s schedule()
+    entry to that entry, when a request the completed step ran, and did not
+    finish, runs in ``after``: only then was work ready across it. Under
+    async scheduling that completion can be of a step from before an idle
+    stretch, since a request's second step is scheduled before its first
+    completes."""
     last = completions.latest_before(after.start_mono_ns)
-    if last is not None and last.completed_mono_ns is not None:
-        stalls.append(
-            Stall(
-                LOCUS_BETWEEN_STEPS,
-                ATTRIBUTION_HOST,
-                after.start_mono_ns - last.completed_mono_ns,
-                last.completed_mono_ns,
-                last.completed_wall_ns or after.start_wall_ns,
-                after.start_wall_ns,
-                work_bucket(after.total_tokens),
-            )
-        )
-    return stalls
+    if last is None or last.completed_mono_ns is None:
+        return None
+    if not (last.members - last.finished) & after.members:
+        return None
+    return Stall(
+        LOCUS_BETWEEN_STEPS,
+        ATTRIBUTION_HOST,
+        after.start_mono_ns - last.completed_mono_ns,
+        last.completed_mono_ns,
+        last.completed_wall_ns or after.start_wall_ns,
+        after.start_wall_ns,
+        work_bucket(after.total_tokens),
+    )
 
 
 def _stalls_within(steps: Sequence[Step]) -> list[Stall]:
