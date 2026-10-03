@@ -211,12 +211,14 @@ class Engine:
 
     def submit(self, request: FakeRequest) -> FakeRequest:
         request.block_hashes = self.pool.block_hashes(request.prompt)
+        # Observed before the loop can see it, as the hook writes alias before
+        # vLLM hands the request to its scheduler.
+        for observer in self.observers:
+            observer.on_admit(request)
         with self._wake:
             self.live[request.internal_id] = request
             self.waiting.append(request)
             self._wake.notify_all()
-        for observer in self.observers:
-            observer.on_admit(request)
         return request
 
     def abort(self, request: FakeRequest) -> None:

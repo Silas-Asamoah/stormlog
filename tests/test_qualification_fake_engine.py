@@ -14,6 +14,7 @@ from examples.qualification.fake_engine.blocks import BlockPool
 from examples.qualification.fake_engine.engine import (
     TEMPLATE_TOKENS,
     Engine,
+    EngineObserver,
     FakeRequest,
     Step,
     prompt_tokens,
@@ -372,3 +373,24 @@ def test_iteration_tokens_count_outputs_as_vllms_front_end_does() -> None:
     assert [member.tokens for step in chunks for member in step.members] == [4, 4]
     assert request.prompt_len == 10
     assert (iterations.count, iterations.total) == (2, 10 + 1 + 1)
+
+
+class _AdmissionWitness(EngineObserver):
+    def __init__(self, engine: Engine) -> None:
+        self.engine = engine
+        self.schedulable_at_admit: list[bool] = []
+
+    def on_admit(self, request: FakeRequest) -> None:
+        with self.engine._lock:
+            self.schedulable_at_admit.append(request in self.engine.waiting)
+
+
+def test_a_request_is_admitted_before_the_loop_can_schedule_it() -> None:
+    # The hook writes alias before vLLM's preprocess_add_request hands the
+    # request to the scheduler, so no scheduled record can precede it; an
+    # importer reads a use before the alias as an earlier execution.
+    engine = _stepped_engine()
+    witness = _AdmissionWitness(engine)
+    engine.observers.append(witness)
+    _request(engine, "r", words(6, "p"), max_tokens=1)
+    assert witness.schedulable_at_admit == [False]
