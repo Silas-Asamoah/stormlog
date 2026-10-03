@@ -298,6 +298,29 @@ class VllmMetricsScraper:
         result, compact = await _off_loop(fetch)
         return self._record(observed_at_ns, marker, case_id, phase, result, compact)
 
+    def abandoned(
+        self,
+        *,
+        marker: str,
+        case_id: str | None,
+        phase: str | None,
+        observed_at_ns: int,
+        deadline_seconds: float,
+    ) -> VllmScrapeRecord:
+        """The record of a scrape given up at an overall deadline.
+
+        The fetch itself may still be reading on its thread; its result is
+        dropped, so this failed record is the only trace of the scrape.
+        """
+        result = FetchResult(
+            None,
+            None,
+            f"abandoned: the {deadline_seconds:g} s deadline of the interrupted "
+            "run passed while the response was still arriving",
+            deadline_seconds * 1000.0,
+        )
+        return self._failed(observed_at_ns, marker, case_id, phase, result)
+
     def _timeout(self, override: float | None) -> float:
         return self.timeout_seconds if override is None else override
 

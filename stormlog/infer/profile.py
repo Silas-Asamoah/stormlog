@@ -547,14 +547,49 @@ class InferenceProfiler:
                 scrape_task.cancel()
                 await _wait_for(scrape_task)
             # A cancelled phase still gets its end scrape, on a short clock.
-            await self._scrape(
-                scraper,
-                MARKER_PHASE_END,
-                case_id,
-                phase,
-                writer,
-                timeout_seconds=None if completed else INTERRUPT_SCRAPE_TIMEOUT_SECONDS,
+            if completed:
+                await self._scrape(scraper, MARKER_PHASE_END, case_id, phase, writer)
+            else:
+                await self._bounded_end_scrape(scraper, case_id, phase, writer)
+
+    async def _bounded_end_scrape(
+        self,
+        scraper: VllmMetricsScraper,
+        case_id: str,
+        phase: str,
+        writer: JsonlEventWriter,
+    ) -> None:
+        """The end scrape of a cancelled phase, under one overall deadline.
+
+        The short timeout given to the fetch is a socket inactivity timeout,
+        so a response that keeps dribbling bytes inside it would hold the
+        stop open for as long as it liked. The same bound is applied to the
+        scrape as a whole; past it the fetch is left to its daemon thread
+        and the record says the deadline passed.
+        """
+        observed_at_ns = time.time_ns()
+        deadline = INTERRUPT_SCRAPE_TIMEOUT_SECONDS
+        task = asyncio.ensure_future(
+            scraper.scrape_async(
+                marker=MARKER_PHASE_END,
+                case_id=case_id,
+                phase=phase,
+                timeout_seconds=deadline,
             )
+        )
+        if await _wait_for(task, deadline):
+            record = task.result()
+        else:
+            task.cancel()
+            await _wait_for(task)
+            record = scraper.abandoned(
+                marker=MARKER_PHASE_END,
+                case_id=case_id,
+                phase=phase,
+                observed_at_ns=observed_at_ns,
+                deadline_seconds=deadline,
+            )
+        writer.append(record.to_record())
 
     async def _run_arrivals(
         self,

@@ -53,6 +53,8 @@ class _FakeVllmHandler(BaseHTTPRequestHandler):
     metrics_body = METRICS_TEXT
     # GETs of /metrics past this many hang until the fixture releases them.
     metrics_hang_after: int | None = None
+    # GETs of /metrics past this many dribble the body 64 bytes every 50 ms.
+    metrics_drip_after: int | None = None
     metrics_release = threading.Event()
     metrics_gets = 0
 
@@ -73,6 +75,15 @@ class _FakeVllmHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; version=0.0.4")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
+        if (
+            cls.metrics_drip_after is not None
+            and cls.metrics_gets > cls.metrics_drip_after
+        ):
+            for start in range(0, len(body), 64):
+                self.wfile.write(body[start : start + 64])
+                self.wfile.flush()
+                time.sleep(0.05)
+            return
         self.wfile.write(body)
 
     def do_POST(self) -> None:  # noqa: N802
@@ -113,12 +124,14 @@ def _fake_vllm(
     metrics_status: int = 200,
     metrics_body: str = METRICS_TEXT,
     metrics_hang_after: int | None = None,
+    metrics_drip_after: int | None = None,
 ) -> Iterator[str]:
     _FakeVllmHandler.seen_request_ids = []
     _FakeVllmHandler.seen_metrics_auth = []
     _FakeVllmHandler.metrics_status = metrics_status
     _FakeVllmHandler.metrics_body = metrics_body
     _FakeVllmHandler.metrics_hang_after = metrics_hang_after
+    _FakeVllmHandler.metrics_drip_after = metrics_drip_after
     _FakeVllmHandler.metrics_release = threading.Event()
     _FakeVllmHandler.metrics_gets = 0
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeVllmHandler)
@@ -287,10 +300,12 @@ def _assert_interrupted_artifact(records: list[dict[str, Any]]) -> None:
     """The artifact of a run stopped while an interval scrape hung."""
     scrapes = _of_type(records, "infer.vllm_scrape")
     # The given-up interval scrape leaves no record at all; the end scrape
-    # timed out on its own short clock.
+    # failed on its own short clock, by the socket timeout or the overall
+    # deadline, whichever the hung server tripped first.
     assert [s["marker"] for s in scrapes] == [MARKER_PHASE_START, MARKER_PHASE_END]
     assert scrapes[0]["status"] == "ok"
-    assert scrapes[1]["status"] == "error" and "timed out" in scrapes[1]["error"]
+    assert scrapes[1]["status"] == "error"
+    assert "timed out" in scrapes[1]["error"] or "deadline" in scrapes[1]["error"]
     assert [r["event_type"] for r in records[-2:]] == [
         "infer.capabilities",
         "infer.session",
@@ -474,6 +489,43 @@ class TestProfileScrapes:
         # fetch would otherwise be waited for.
         assert unwound < 6.0
         _assert_interrupted_artifact(_records(output))
+
+    def test_the_interrupted_end_scrape_has_an_overall_deadline(
+        self, tmp_path: Path
+    ) -> None:
+        # The end scrape's short timeout is a socket inactivity timeout: a
+        # response that keeps dribbling bytes inside it would hold the stop
+        # open for as long as it liked. With the bound scaled to 0.3 s and
+        # 64-byte chunks every 50 ms, the end scrape must be given up at the
+        # bound and recorded as such, not read to its end and marked ok.
+        output = tmp_path / "infer.jsonl"
+        body = "vllm:num_requests_running 0\n" * 64  # 29 chunks, about 1.4 s
+        with _fake_vllm(metrics_body=body, metrics_drip_after=1) as origin:
+            profiler = InferenceProfiler(_hung_scrape_config(origin, output))
+
+            async def interrupt() -> float:
+                run = asyncio.create_task(profiler._run_async())
+                await asyncio.sleep(0.6)
+                started = time.perf_counter()
+                run.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await run
+                return time.perf_counter() - started
+
+            try:
+                with mock.patch(
+                    "stormlog.infer.profile.INTERRUPT_SCRAPE_TIMEOUT_SECONDS", 0.3
+                ):
+                    unwound = asyncio.run(interrupt())
+            finally:
+                profiler.request_executor.shutdown(wait=True)
+        # Two 0.3 s bounds (the interval scrape in flight, then the end
+        # scrape), not the 1.4 s the dribbling response takes.
+        assert unwound < 1.2
+        scrapes = _of_type(_records(output), "infer.vllm_scrape")
+        assert scrapes[-1]["marker"] == MARKER_PHASE_END
+        assert scrapes[-1]["status"] == "error"
+        assert "deadline" in scrapes[-1]["error"]
 
     def test_a_real_sigint_during_a_hung_scrape_still_ends_the_artifact(
         self, tmp_path: Path

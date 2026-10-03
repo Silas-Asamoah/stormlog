@@ -63,8 +63,9 @@ clock alignment is involved. A scrape that fails or returns something that
 is not Prometheus text is recorded with its reason and the run goes on; the
 first failure is printed once. A run stopped with Ctrl+C waits at most
 2 s for an interval scrape still in flight, then leaves it to its thread
-and records nothing from it; takes the phase-end scrape with a 2 s
-timeout, so a server that stopped answering cannot hold the stop back;
+and records nothing from it; takes the phase-end scrape under a 2 s
+deadline for the whole scrape, not per byte, so a server that stopped
+answering, or one that dribbles its answer, cannot hold the stop back;
 keeps the spans received so far; and writes the capability records before
 the session's last word. That holds on Python 3.10 too, where Ctrl+C
 cancels every task of the run at once. The receiver binds before any
