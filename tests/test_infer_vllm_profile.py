@@ -153,6 +153,40 @@ def _serving(handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
         server.server_close()
 
 
+class _RedirectingHandler(BaseHTTPRequestHandler):
+    """Answers /metrics with a 302 to another origin's /metrics."""
+
+    protocol_version = "HTTP/1.1"
+    target = ""
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.send_response(302)
+        self.send_header("Location", f"{type(self).target}/metrics")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return None
+
+
+class _RecordingHandler(BaseHTTPRequestHandler):
+    """Serves one metrics line and records every Authorization header it saw."""
+
+    protocol_version = "HTTP/1.1"
+    seen: list[str | None] = []
+
+    def do_GET(self) -> None:  # noqa: N802
+        type(self).seen.append(self.headers.get("Authorization"))
+        body = b"vllm:num_requests_running 0\n"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return None
+
+
 class _TruncatingHandler(BaseHTTPRequestHandler):
     """Promises 1,000 bytes of metrics, sends 28, and closes the connection."""
 
@@ -486,6 +520,26 @@ class TestScraperUnits:
         assert result.http_status is None
         assert result.error is not None
         assert result.duration_ms >= 0
+
+    def test_a_redirect_is_refused_so_the_token_stays_on_its_origin(self) -> None:
+        # urllib follows a redirect and forwards Authorization to wherever it
+        # points, so a /metrics on the endpoint's origin that redirects would
+        # hand the endpoint's token to another origin. A scrape is of one
+        # URL: the redirect is recorded, named, and not followed.
+        _RecordingHandler.seen = []
+        with (
+            _serving(_RecordingHandler) as other,
+            _serving(_RedirectingHandler) as origin,
+        ):
+            _RedirectingHandler.target = other
+            result = fetch_metrics(
+                f"{origin}/metrics", timeout_seconds=5, api_key="secret"
+            )
+        assert _RecordingHandler.seen == []
+        assert result.text is None
+        assert result.http_status == 302
+        assert result.error is not None
+        assert "redirect" in result.error and f"{other}/metrics" in result.error
 
     def test_a_truncated_metrics_response_is_a_failed_scrape(self) -> None:
         # The body ends 972 bytes early, so the read raises

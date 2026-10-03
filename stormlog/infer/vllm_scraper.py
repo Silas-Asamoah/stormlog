@@ -110,6 +110,30 @@ class FetchResult:
     duration_ms: float
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect, so the 3xx is answered as an error.
+
+    urllib would follow it and forward the Authorization header to wherever
+    it points, so a /metrics on the endpoint's origin that redirects would
+    hand the endpoint's token to another origin. A scrape is of one URL:
+    the redirect is recorded with its target and never followed.
+    """
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 def fetch_metrics(
     url: str, *, timeout_seconds: float, api_key: str | None = None
 ) -> FetchResult:
@@ -120,7 +144,7 @@ def fetch_metrics(
     request = urllib.request.Request(url, headers=headers, method="GET")
     started = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with _OPENER.open(request, timeout=timeout_seconds) as response:
             status = int(response.status)
             try:
                 body = response.read().decode("utf-8", errors="replace")
@@ -136,10 +160,18 @@ def fetch_metrics(
             return FetchResult(body, status, None, elapsed)
     except urllib.error.HTTPError as exc:
         elapsed = (time.perf_counter() - started) * 1000.0
-        return FetchResult(None, exc.code, f"HTTP {exc.code}", elapsed)
+        return FetchResult(None, exc.code, _http_error_text(exc), elapsed)
     except (urllib.error.URLError, OSError, ValueError) as exc:
         elapsed = (time.perf_counter() - started) * 1000.0
         return FetchResult(None, None, f"{type(exc).__name__}: {exc}", elapsed)
+
+
+def _http_error_text(exc: urllib.error.HTTPError) -> str:
+    """``HTTP 503``, or for a refused redirect also where it pointed."""
+    location = exc.headers.get("Location") if exc.headers is not None else None
+    if 300 <= exc.code < 400 and location:
+        return f"HTTP {exc.code}: redirect to {redact_url(location) or location} not followed"
+    return f"HTTP {exc.code}"
 
 
 def _fetch_and_parse(

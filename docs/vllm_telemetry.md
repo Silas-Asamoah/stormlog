@@ -53,7 +53,7 @@ stormlog infer profile \
 
 | Flag | What it does |
 | --- | --- |
-| `--vllm-metrics [URL]` | Scrape `/metrics` just before each phase's first send, after its drain, and every `--vllm-metrics-interval` seconds (default 1) in between. Without a URL, the endpoint's origin plus `/metrics`. The endpoint's bearer token (`--api-key`, `OPENAI_API_KEY`) goes with the scrape only when the URL has the endpoint's scheme, host and port; any other origin is scraped without credentials, and the run says so once. |
+| `--vllm-metrics [URL]` | Scrape `/metrics` just before each phase's first send, after its drain, and every `--vllm-metrics-interval` seconds (default 1) in between. Without a URL, the endpoint's origin plus `/metrics`. The endpoint's bearer token (`--api-key`, `OPENAI_API_KEY`) goes with the scrape only when the URL has the endpoint's scheme, host and port; any other origin is scraped without credentials, and the run says so once. A redirect is never followed: that scrape fails and names the target, so the token cannot be forwarded off its origin. |
 | `--vllm-spans-listen [HOST:PORT]` | Run an OTLP/HTTP receiver (default `127.0.0.1:4318`) for the length of the run and keep every span vLLM exports to it. |
 | `--vllm-spans-drain SECONDS` | Keep the receiver listening this long after the last phase (default 6), because vLLM's exporter flushes spans in batches every 5 s (`OTEL_BSP_SCHEDULE_DELAY`), so the last requests' spans leave after the last answer. |
 | `infer analyze --vllm-spans FILE` | Load spans someone else collected: an OTLP JSON export, or one span per line. May be given more than once. |
