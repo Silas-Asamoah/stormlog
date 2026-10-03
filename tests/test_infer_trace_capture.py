@@ -422,6 +422,53 @@ def test_http_control_reports_status_and_never_raises() -> None:
     assert result.status is None and result.error is not None
 
 
+class _Redirecting(BaseHTTPRequestHandler):
+    """Answers every POST with a redirect, and a GET with 200: a login page."""
+
+    def do_POST(self) -> None:  # noqa: N802
+        self.server.calls.append(f"POST {self.path}")  # type: ignore[attr-defined]
+        self.send_response(302)
+        self.send_header("Location", "/login")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.server.calls.append(f"GET {self.path}")  # type: ignore[attr-defined]
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return None
+
+
+def test_a_redirected_start_is_not_followed_and_is_unknown() -> None:
+    """Following it would turn the POST into a GET elsewhere, whose 200 would
+    read as an acknowledged start."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Redirecting)
+    server.calls = []  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        windows = TraceWindows(
+            _config(None, control_url=f"http://127.0.0.1:{server.server_port}"),
+            api_key="secret",
+        )
+        window = _run_window(windows)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert server.calls == [  # type: ignore[attr-defined]
+        "POST /start_profile",
+        "POST /stop_profile",
+    ]
+    assert window.start == ControlResult(302, "HTTP 302")
+    assert window.start_outcome == START_UNKNOWN
+    assert window.stop == ControlResult(302, "HTTP 302")
+
+
 def test_a_start_whose_reply_is_lost_is_stopped_over_http(tmp_path: Path) -> None:
     """The engine started profiling, then the connection dropped before the reply."""
     import socket

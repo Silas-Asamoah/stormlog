@@ -677,7 +677,8 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
   - `acknowledged` (2xx): the window runs, and is stopped at its end.
   - `rejected` (4xx, for example a server started without the profiler
     routes): the start never reached the engine; nothing is stopped.
-  - `unknown` (5xx, a timeout, a dropped connection or a malformed reply):
+  - `unknown` (5xx, a timeout, a dropped connection, a malformed reply, or a
+    redirect, which is never followed):
     Stormlog sends `/stop_profile` at once, with `stop_reason` `start_unknown`,
     before the phase. Once that stop is confirmed, the phase runs unprofiled.
     A trace that stop writes is still listed.

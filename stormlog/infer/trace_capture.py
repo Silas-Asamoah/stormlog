@@ -124,6 +124,20 @@ class ProfilerControl(Protocol):
     def post(self, route: str) -> ControlResult: ...
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect, so the 3xx is the call's answer.
+
+    urllib would follow it as a GET to wherever it points, with the API key,
+    and that page's 200 would read as an acknowledged start.
+    """
+
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 class HttpProfilerControl:
     """POST to vLLM's profiler routes with the profile's API key."""
 
@@ -138,7 +152,7 @@ class HttpProfilerControl:
             f"{self.root}{route}", data=b"", headers=headers, method="POST"
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with _OPENER.open(request, timeout=self.timeout) as response:
                 return ControlResult(int(response.status))
         except urllib.error.HTTPError as exc:
             return ControlResult(exc.code, f"HTTP {exc.code}")
