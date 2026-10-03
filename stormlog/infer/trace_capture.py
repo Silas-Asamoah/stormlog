@@ -5,11 +5,14 @@ vLLM's torch profiler is configured when the server starts
 then start and stop it over HTTP (``/start_profile`` and ``/stop_profile``).
 This module opens one window per profiled phase, closes it at the phase's end,
 at a time bound, or on cancellation, and finds the worker traces vLLM wrote.
-It stops the profiler only after its own start succeeded. vLLM 0.30.0 answers
-200 to a second ``/start_profile`` and to ``/stop_profile`` with nothing
-running, so a client cannot tell from HTTP whether another profile was already
-active; do not run two profilers against one server. The traces are imported
-after the run.
+A start the server may have received, whether it answered 2xx or not at all,
+is always followed by a stop: the engine runs ``/start_profile`` before the
+HTTP reply goes out, so a lost or failed reply can leave it profiling. Only a
+4xx, which never reaches the engine, is not stopped. vLLM 0.30.0 answers 200
+to a second ``/start_profile`` and to ``/stop_profile`` with nothing running,
+so a client cannot tell from HTTP whether another profile was already active;
+do not run two profilers against one server. The traces are imported after
+the run.
 
 The profiler adds no synchronization per request; the server writes the trace
 while handling ``/stop_profile``, so that call can take tens of seconds.
@@ -47,6 +50,10 @@ TRACE_PHASES = ("measured", "warmup")
 # when every parallel group exists (MoE models); the API server's own trace is
 # named *.async_llm.* and is not GPU work.
 TRACE_GLOB = "*.pt.trace.json*"
+# What a /start_profile call established about the server's profiler.
+START_ACKNOWLEDGED = "acknowledged"
+START_REJECTED = "rejected"
+START_UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -97,6 +104,20 @@ class ControlResult:
         return self.status is not None and 200 <= self.status < 300
 
 
+def start_outcome(result: ControlResult) -> str:
+    """``acknowledged`` (2xx), ``rejected`` (4xx), else ``unknown``.
+
+    A 4xx means the route refused the call before the engine saw it. A 5xx, a
+    timeout, a reset or a malformed reply comes after the call may have
+    started the profiler, so the profiler's state is unknown.
+    """
+    if result.ok:
+        return START_ACKNOWLEDGED
+    if result.status is not None and 400 <= result.status < 500:
+        return START_REJECTED
+    return START_UNKNOWN
+
+
 class ProfilerControl(Protocol):
     def post(self, route: str) -> ControlResult: ...
 
@@ -135,6 +156,10 @@ class TraceWindow:
     started: bool = False
     started_at_ns: int | None = None
     start: ControlResult | None = None
+    start_outcome: str | None = None
+    # Wall times taken immediately around the /start_profile request itself.
+    start_requested_at_ns: int | None = None
+    start_returned_at_ns: int | None = None
     stop: ControlResult | None = None
     stop_reason: str | None = None
     stopped_at_ns: int | None = None
@@ -158,6 +183,9 @@ class TraceWindow:
             "requested_at_ns": self.requested_at_ns,
             "started": self.started,
             "started_at_ns": self.started_at_ns,
+            "start_outcome": self.start_outcome,
+            "start_requested_at_ns": self.start_requested_at_ns,
+            "start_returned_at_ns": self.start_returned_at_ns,
             "start_status": self.start.status if self.start else None,
             "start_error": self.start.error if self.start else None,
             "stop_status": self.stop.status if self.stop else None,
@@ -206,7 +234,7 @@ class TraceWindows:
         # every remaining task (Python 3.10 included), and the start's answer
         # is needed to know whether to stop the profiler.
         start = asyncio.get_running_loop().run_in_executor(
-            None, self.control.post, "/start_profile"
+            None, self._send_start, window
         )
         try:
             window.start = await asyncio.shield(start)
@@ -219,6 +247,10 @@ class TraceWindows:
         timer = self._bound(window)
         reason = "phase_end"
         try:
+            if window.start_outcome == START_UNKNOWN:
+                # The server may be profiling with nobody to stop it: stop it
+                # now, and let the phase run unprofiled.
+                await self._stop(window, "start_unknown")
             yield window
         except BaseException:
             reason = "cancelled"
@@ -229,13 +261,27 @@ class TraceWindows:
             finally:
                 await self._close(window, reason, before)
 
+    def _send_start(self, window: TraceWindow) -> ControlResult:
+        window.start_requested_at_ns = time.time_ns()
+        try:
+            return self.control.post("/start_profile")
+        finally:
+            window.start_returned_at_ns = time.time_ns()
+
     def _mark_started(self, window: TraceWindow) -> None:
         assert window.start is not None
-        window.started = window.start.ok
-        window.started_at_ns = time.time_ns() if window.started else None
-        if not window.started:
+        window.start_outcome = start_outcome(window.start)
+        window.started = window.start_outcome == START_ACKNOWLEDGED
+        window.started_at_ns = window.start_returned_at_ns if window.started else None
+        if window.start_outcome == START_REJECTED:
             window.note = "the profiler did not start; see start_status and start_error"
             self._warn(window, "could not start the profiler")
+        elif window.start_outcome == START_UNKNOWN:
+            window.note = (
+                "the start's answer does not say whether the profiler started; "
+                "it was stopped, and the phase ran unprofiled"
+            )
+            self._warn(window, "the profiler may have started; stopping it")
 
     async def _abandon(
         self,
@@ -266,8 +312,12 @@ class TraceWindows:
         await self._stop(window, "time_bound")
 
     async def _stop(self, window: TraceWindow, reason: str) -> None:
-        """Send the stop once; a cancellation waits for it before going through."""
-        if not window.started:
+        """Send the stop once; a cancellation waits for it before going through.
+
+        Every start the server may have received is stopped: acknowledged or
+        unknown. Only a rejected start, which never reached the engine, is not.
+        """
+        if not _may_be_profiling(window):
             return
         first = window.stopping is None
         if window.stopping is None:
@@ -303,7 +353,7 @@ class TraceWindows:
         """Stop, look for the traces, and record the window whatever happens."""
         try:
             await self._stop(window, reason)
-            if window.started and before is not None:
+            if _may_be_profiling(window) and before is not None:
                 window.files = await asyncio.to_thread(self._find_files, window, before)
         finally:
             if window.started:
@@ -438,6 +488,11 @@ class _NothingCollected:
         )
 
 
+def _may_be_profiling(window: TraceWindow) -> bool:
+    """The server may have started profiling for this window."""
+    return window.start_outcome in (START_ACKNOWLEDGED, START_UNKNOWN)
+
+
 def _flush_over(
     started: float, seen: dict[str, int] | None, config: TraceCaptureConfig
 ) -> bool:
@@ -476,6 +531,9 @@ def _is_worker_trace(name: str) -> bool:
 
 
 __all__ = [
+    "START_ACKNOWLEDGED",
+    "START_REJECTED",
+    "START_UNKNOWN",
     "TRACE_MODES",
     "TRACE_PHASES",
     "VLLM_TORCH",
@@ -486,4 +544,5 @@ __all__ = [
     "TraceWindow",
     "TraceWindows",
     "server_root",
+    "start_outcome",
 ]

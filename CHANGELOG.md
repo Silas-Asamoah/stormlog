@@ -221,6 +221,14 @@ the flaky benchmark memory gates
   run, and a budgets file that is valid JSON but not an object no longer
   crashes with an `AttributeError` after the run.
   ([#249](https://github.com/Silas-Asamoah/stormlog/pull/249))
+- `stormlog infer profile --trace vllm-torch` now stops the profiler after a
+  `/start_profile` that answered 5xx, timed out, or lost its reply. vLLM runs
+  the start before it replies, so such a server could be left profiling, its
+  memory growing, until the next stop. Each `infer.trace_window` record now
+  carries `start_outcome` (`acknowledged`, `rejected` or `unknown`) and the
+  times the start request was sent and answered. Only a 4xx, which never
+  reaches the engine, is left unstopped.
+  ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
 
 ## [0.3.10] - 2026-10-01
 
