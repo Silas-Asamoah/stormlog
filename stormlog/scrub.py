@@ -75,15 +75,21 @@ _HASH = re.compile("#")
 # A member's value is a string, whose inside is redacted, or a bare value
 # such as a number or true.
 _JSON_MEMBER = re.compile(
-    _JSON_STRING + r"\s*:\s*(?:" + _JSON_STRING + r'|([^\s,}\]"]+))'
+    _JSON_STRING
+    + r"\s*:\s*(?:"
+    + r'(?<!\\)"((?:[^"\\]|\\.)*)(?:"|\\?\Z)'
+    + r'|([^\s,}\]"]+))'
 )
 # A key and its separator, without the value: a key that is not
 # secret-like must not consume the text after it, which can hold the next
 # pair ("error: password=..."). The value is read separately, and only
 # for a secret-like key.
 _KEY_SEPARATOR = re.compile(rf"(?<![{_KEY_CHARS}])([{_KEY_CHARS}]+)\s*[=:]\s*")
-_DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
-_SINGLE_QUOTED = re.compile(r"'((?:[^'\\]|\\.)*)'")
+# A quoted value ends at its closing quote, or at the end of the text when
+# it has none, as in a truncated body: what follows its opening quote is
+# still its value.
+_DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)(?:"|\\?\Z)')
+_SINGLE_QUOTED = re.compile(r"'((?:[^'\\]|\\.)*)(?:'|\\?\Z)")
 _BARE_VALUE = re.compile(r"[^\s&,;\"'(){}\[\]<>]+")
 # Well-known credential shapes. No word boundary in front: a key glued to
 # the text before it is still a key, and removing a little too much is the

@@ -393,6 +393,28 @@ def test_a_jwt_glued_to_a_word_is_still_found(text: str, scrubbed: str) -> None:
     assert scrub_text(text) == scrubbed
 
 
+@pytest.mark.parametrize(
+    ("text", "max_bytes", "scrubbed"),
+    [
+        # A quoted value with no closing quote, as in a truncated body.
+        ('password="opaque-credential-value', None, 'password="<redacted>'),
+        ("password='opaque value", None, "password='<redacted>"),
+        ('{"api_key": "opaque-credential-value', None, '{"api_key": "<redacted>'),
+        # Its closing quote is past the input bound.
+        (
+            'password="opaque-credential-value ' + "x" * 4196 + '"',
+            80,
+            'password="<redacted>',
+        ),
+    ],
+    ids=["double", "single", "json-member", "past-the-bound"],
+)
+def test_an_unclosed_quoted_value_ends_at_the_end_of_the_text(
+    text: str, max_bytes: int | None, scrubbed: str
+) -> None:
+    assert scrub_text(text, max_bytes=max_bytes) == scrubbed
+
+
 def test_scrub_text_leaves_ordinary_text_alone() -> None:
     text = "This model's maximum context length is 32768 tokens; max_tokens 128."
     assert scrub_text(text) == text
