@@ -700,6 +700,93 @@ def test_ctrl_c_during_the_start_still_stops_the_profiler(tmp_path: Path) -> Non
     assert [w.stop_reason for w in windows.windows] == ["cancelled"]
 
 
+@pytest.mark.parametrize(
+    ("bound", "reason"), [(None, "phase_end"), (0.01, "time_bound")]
+)
+def test_ctrl_c_during_the_stop_still_sends_it_and_records_the_window(
+    tmp_path: Path, bound: float | None, reason: str
+) -> None:
+    """The stop first checks the trace directory; Ctrl+C can land right there."""
+    import threading
+    import time
+
+    control = _FakeControl(tmp_path)
+    windows = TraceWindows(_config(tmp_path, max_seconds=bound), control=control)
+    checking = threading.Event()
+    real_check = windows._wrote_before_stop
+
+    def slow_check(before: dict[str, int] | None) -> bool:
+        checking.set()
+        time.sleep(0.2)
+        return real_check(before)
+
+    windows._wrote_before_stop = slow_check  # type: ignore[method-assign]
+
+    async def main() -> None:
+        async def body() -> None:
+            async with windows.window("c1", "measured"):
+                await asyncio.sleep(5 if bound else 0)
+
+        asyncio.create_task(body())
+        await asyncio.to_thread(checking.wait, 5)
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(main())
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    records = windows.take_records(session_id="s1")
+    assert [(r["stop_reason"], r["stop_status"]) for r in records] == [(reason, 200)]
+
+
+def test_an_unreadable_trace_dir_still_stops_and_records_the_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control = _FakeControl(None)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    def unreadable(*_args: Any) -> Any:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(windows, "_wrote_before_stop", unreadable)
+    monkeypatch.setattr(windows, "_new_files", unreadable)
+
+    window = _run_window(windows)
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    assert (window.stop_reason, window.files) == ("phase_end", [])
+    assert window.note == f"could not read {tmp_path}: Permission denied"
+    assert len(windows.take_records(session_id="s1")) == 1
+
+
+def test_a_trace_dir_unreadable_at_the_start_is_not_searched_later(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the files already there, new ones cannot be told apart."""
+    from stormlog.infer import trace_capture
+
+    control = _FakeControl(tmp_path)
+    windows = TraceWindows(_config(tmp_path), control=control)
+    real = trace_capture._worker_traces
+    calls = {"n": 0}
+
+    def first_call_fails(directory: Path) -> list[Path]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError(13, "Permission denied")
+        return real(directory)
+
+    monkeypatch.setattr(trace_capture, "_worker_traces", first_call_fails)
+
+    window = _run_window(windows)
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    assert window.files == []
+    assert window.note == (
+        f"could not read {tmp_path} before the start: Permission denied"
+    )
+
+
 def test_warmup_tracing_needs_warmup_requests(tmp_path: Path) -> None:
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):

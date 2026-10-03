@@ -18,7 +18,6 @@ while handling ``/stop_profile``, so that call can take tens of seconds.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import http.client
 import time
 import urllib.error
@@ -140,7 +139,12 @@ class TraceWindow:
     stopped_at_ns: int | None = None
     files: list[Path] = field(default_factory=list)
     note: str | None = None
-    before: dict[str, int] = field(default_factory=dict, repr=False)
+    # Worker traces present before the start; None when they could not be read.
+    before: dict[str, int] | None = field(default=None, repr=False)
+    # The stop in flight, shared by the time bound and the window's close.
+    stopping: asyncio.Future[None] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def to_record(self, *, session_id: str) -> dict[str, Any]:
         return {
@@ -196,8 +200,7 @@ class TraceWindows:
         window = TraceWindow(
             case_id, phase, self.config.control_url, requested_at_ns=time.time_ns()
         )
-        before = await asyncio.to_thread(self._snapshot)
-        window.before = before
+        before = window.before = await asyncio.to_thread(self._snapshot, window)
         # A bare executor future, not a task: on Ctrl+C, asyncio.run cancels
         # every remaining task (Python 3.10 included), and the start's answer
         # is needed to know whether to stop the profiler.
@@ -220,8 +223,10 @@ class TraceWindows:
             reason = "cancelled"
             raise
         finally:
-            await _finish_timer(timer, window)
-            await self._close(window, reason, before)
+            try:
+                await _finish_timer(timer, window)
+            finally:
+                await self._close(window, reason, before)
 
     def _mark_started(self, window: TraceWindow) -> None:
         assert window.start is not None
@@ -235,7 +240,7 @@ class TraceWindows:
         self,
         window: TraceWindow,
         start: asyncio.Future[ControlResult],
-        before: dict[str, int],
+        before: dict[str, int] | None,
     ) -> None:
         # Bounded by the control timeout of the start request itself.
         window.start = await start
@@ -260,36 +265,78 @@ class TraceWindows:
         await self._stop(window, "time_bound")
 
     async def _stop(self, window: TraceWindow, reason: str) -> None:
-        if not window.started or window.stop_reason is not None:
+        """Send the stop once; a cancellation waits for it before going through."""
+        if not window.started:
             return
-        window.stop_reason = reason
-        if await asyncio.to_thread(self._wrote_before_stop, window.before):
-            # A profile with max_iterations stops itself and writes its trace.
-            window.stop_reason = "stopped_by_server"
-        window.stop = await asyncio.to_thread(self.control.post, "/stop_profile")
-        window.stopped_at_ns = time.time_ns()
-        if not window.stop.ok:
+        first = window.stopping is None
+        if window.stopping is None:
+            window.stop_reason = reason
+            window.stopping = asyncio.get_running_loop().run_in_executor(
+                None, self._send_stop, window
+            )
+        try:
+            await asyncio.shield(window.stopping)
+        except asyncio.CancelledError:
+            # The server keeps profiling until it is told to stop: wait for the
+            # stop (bounded by the control timeout), then let Ctrl+C through.
+            await window.stopping
+            raise
+        if first and window.stop is not None and not window.stop.ok:
             self._warn(window, "the profiler did not confirm the stop")
 
-    async def _close(
-        self, window: TraceWindow, reason: str, before: dict[str, int]
-    ) -> None:
-        await self._stop(window, reason)
-        if window.started:
-            window.files = await asyncio.to_thread(self._new_files, before)
-            window.note = self._files_note(window)
-        self.windows.append(window)
-        self._unwritten.append(window)
+    def _send_stop(self, window: TraceWindow) -> None:
+        try:
+            if self._wrote_before_stop(window.before):
+                # A profile with max_iterations stops itself and writes its trace.
+                window.stop_reason = "stopped_by_server"
+        except OSError as exc:
+            window.note = (
+                f"could not read {self.config.trace_dir}: {exc.strerror or exc}"
+            )
+        window.stop = self.control.post("/stop_profile")
+        window.stopped_at_ns = time.time_ns()
 
-    def _snapshot(self) -> dict[str, int]:
+    async def _close(
+        self, window: TraceWindow, reason: str, before: dict[str, int] | None
+    ) -> None:
+        """Stop, look for the traces, and record the window whatever happens."""
+        try:
+            await self._stop(window, reason)
+            if window.started and before is not None:
+                window.files = await asyncio.to_thread(self._find_files, window, before)
+        finally:
+            if window.started:
+                window.note = window.note or self._files_note(window)
+            self.windows.append(window)
+            self._unwritten.append(window)
+
+    def _find_files(self, window: TraceWindow, before: dict[str, int]) -> list[Path]:
+        try:
+            return self._new_files(before)
+        except OSError as exc:
+            window.note = (
+                f"could not read {self.config.trace_dir}: {exc.strerror or exc}"
+            )
+            return []
+
+    def _snapshot(self, window: TraceWindow) -> dict[str, int] | None:
         directory = self.config.trace_dir
         if directory is None or not directory.is_dir():
             return {}
-        return {path.name: path.stat().st_size for path in _worker_traces(directory)}
+        try:
+            return {
+                path.name: path.stat().st_size for path in _worker_traces(directory)
+            }
+        except OSError as exc:
+            # Without the files already there, new ones cannot be told apart.
+            window.note = (
+                f"could not read {directory} before the start: {exc.strerror or exc}"
+            )
+            return None
 
-    def _wrote_before_stop(self, before: dict[str, int]) -> bool:
+    def _wrote_before_stop(self, before: dict[str, int] | None) -> bool:
         directory = self.config.trace_dir
-        if directory is None or not directory.is_dir():
+        if before is None or directory is None or not directory.is_dir():
             return False
         return any(path.name not in before for path in _worker_traces(directory))
 
@@ -391,13 +438,16 @@ def _flush_over(
 
 
 async def _finish_timer(timer: asyncio.Task[None] | None, window: TraceWindow) -> None:
-    """Cancel a time bound that has not fired; let one that is stopping finish."""
+    """Cancel a time bound that has not fired; let one that is stopping finish.
+
+    ``asyncio.wait`` does not raise the timer's own cancellation, while a
+    cancellation of the caller still goes through.
+    """
     if timer is None:
         return
     if window.stop_reason is None:
         timer.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await timer
+    await asyncio.wait({timer})
 
 
 def _worker_traces(directory: Path) -> list[Path]:
