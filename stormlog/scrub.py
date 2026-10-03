@@ -141,13 +141,7 @@ def _url_spans(text: str) -> Iterator[Span]:
     question = _NextMatch(text, _QUESTION)
     hash_mark = _NextMatch(text, _HASH)
     for match in re.finditer("://", text):
-        start = match.start()
-        scheme = start
-        while scheme > 0 and text[scheme - 1] in _SCHEME_CHARS:
-            scheme -= 1
-        while scheme < start and not text[scheme].isalpha():
-            scheme += 1
-        if scheme == start:
+        if not _has_scheme(text, match.start()):
             continue
         after = match.end()
         stop = _AUTHORITY_END.search(text, after)
@@ -161,6 +155,14 @@ def _url_spans(text: str) -> Iterator[Span]:
             fragment = min(hash_mark.at_or_after(query), end)
             if fragment > query + 1:
                 yield query + 1, fragment
+
+
+def _has_scheme(text: str, end: int) -> bool:
+    """Whether the scheme characters before ``end`` include a letter to start one."""
+    start = end
+    while start > 0 and text[start - 1] in _SCHEME_CHARS:
+        start -= 1
+    return any(char.isalpha() for char in text[start:end])
 
 
 class _NextMatch:
