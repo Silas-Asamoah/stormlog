@@ -745,6 +745,17 @@ def test_an_escaped_record_over_the_limit_is_dropped(tmp_path: Path) -> None:
     assert status["dropped"] == {"alias_oversized": 1}
 
 
+def test_goodbye_is_the_last_record(tmp_path: Path) -> None:
+    # Every pass of the writer is past a zero heartbeat interval.
+    writer = EpochWriter(tmp_path, "engine", limits=WriterLimits(heartbeat_seconds=0))
+    for index in range(3):
+        writer.emit("alias", {"internal": f"r{index}"})
+    writer.close()
+
+    kinds = [record["kind"] for record in _epoch_records(writer.directory)]
+    assert kinds.count("goodbye") == 1 and kinds[-1] == "goodbye"
+
+
 def test_a_backlog_does_not_hold_up_the_status_or_sealing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -88,6 +88,8 @@ class EpochWriter:
         self._queued_bytes = 0
         self._condition = threading.Condition()
         self._closing = False
+        # Set once goodbye is written; no heartbeat record may follow it.
+        self._ended = False
         self._segment = _Segment(self.directory)
         self._thread = threading.Thread(
             target=self._run, name=f"stormlog-vllm-{role}", daemon=True
@@ -200,13 +202,14 @@ class EpochWriter:
             if written:
                 self._counters.last_seq = seq
                 self._counters.bytes += len(line)
+                self._ended = self._ended or kind == "goodbye"
             else:
                 self._counters.errors += 1
                 self._counters.dropped[kind] += 1
 
     def _heartbeat(self) -> None:
         status = self._status()
-        if not self._counters.capped:
+        if not self._counters.capped and not self._ended:
             self._write("heartbeat", status)
         self._write_status()
 
