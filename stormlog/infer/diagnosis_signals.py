@@ -228,6 +228,8 @@ def _window_detail(check: WindowCheck) -> dict[str, Any]:
     return {
         "scope": SCOPE,
         "scrapes": check.scrapes,
+        # Failed scrapes inside the window: a caller need not count again.
+        "failed_scrapes": check.failed,
         "window_seconds": check.seconds,
         "placement": check.placement,
     }

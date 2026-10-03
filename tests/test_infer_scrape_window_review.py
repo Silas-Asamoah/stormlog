@@ -107,6 +107,7 @@ def test_an_interior_failed_scrape_does_not_blank_the_window() -> None:
     assert check.sufficient and check.failed == 1
     signal = evaluate_signal("queue_saturation", window)
     assert (signal.sufficient, signal.exceeds) == (True, True)
+    assert (signal.detail["scrapes"], signal.detail["failed_scrapes"]) == (4, 1)
 
 
 def test_a_failed_boundary_scrape_still_blanks_the_window() -> None:

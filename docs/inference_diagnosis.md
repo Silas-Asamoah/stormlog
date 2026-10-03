@@ -61,7 +61,7 @@ returns a `SignalValue`:
 | `reason` | the first reason it did not; all of them are in `detail["reasons"]` |
 | `exceeds` | the verdict against the threshold; `None` whenever `sufficient` is False |
 | `threshold`, `thresholds_version`, `threshold_overridden` | which threshold decided |
-| `detail` | supporting figures, and `scope: engine_global` |
+| `detail` | supporting figures; `scope: engine_global`; the window's successful `scrapes`, `failed_scrapes` inside it, `window_seconds` and `placement` |
 
 | Kind | `value` | Supporting detail |
 | --- | --- | --- |
