@@ -618,6 +618,57 @@ class TestExporterIdentity:
         assert prompt["state"] == "exporter_identity_unknown"
 
 
+def _with_sample(text: str, family: str, sample: str) -> str:
+    """The text with every sample of one scalar family replaced."""
+    changed = re.sub(
+        rf"(?m)^({re.escape(family)}\{{[^\n]+?\}}) [^\n]+$", rf"\1 {sample}", text
+    )
+    assert changed != text
+    return changed
+
+
+class TestNonFinite:
+    @pytest.mark.parametrize("sample", ["NaN", "+Inf"])
+    def test_a_non_finite_gauge_leaves_only_its_fields_unresolved(
+        self, tmp_path: Path, sample: str
+    ) -> None:
+        # The record keeps the value as the strict-JSON string; the report
+        # must not die on it, and must not carry it into a block count.
+        start = _with_sample(PRE, "vllm:kv_cache_usage_perc", sample)
+        end = _with_sample(POST, "vllm:kv_cache_usage_perc", sample)
+        report = analyze_inference_events(
+            _artifact(tmp_path, _standard_scrapes(start, end))
+        )
+        json.dumps(report, allow_nan=False)
+        engine = report["telemetry"]["vllm"]["cases"][CASE]["engines"]["0"]
+        usage = engine["gauges"]["kv_cache_usage"]
+        assert usage["state"] == "non_finite_sample"
+        assert usage["stats"]["_"]["non_finite"] == 4
+        assert usage["stats"]["_"]["max"] is None
+        kv = engine["derived"]["kv_cache"]
+        assert kv["state"] == "non_finite_sample"
+        assert kv["max_usage_fraction"] is None and kv["max_blocks_in_use"] is None
+        assert kv["num_gpu_blocks"] == 1715728 // 16
+        assert engine["counters"]["prompt_tokens"]["state"] == STATE_RESOLVED
+
+    def test_a_non_finite_counter_is_unresolved_not_a_nan_delta(
+        self, tmp_path: Path
+    ) -> None:
+        end = _with_sample(POST, "vllm:prompt_tokens_total", "NaN")
+        report = analyze_inference_events(
+            _artifact(tmp_path, _standard_scrapes(end=end))
+        )
+        json.dumps(report, allow_nan=False)
+        counters = report["telemetry"]["vllm"]["cases"][CASE]["engines"]["0"][
+            "counters"
+        ]
+        prompt = counters["prompt_tokens"]
+        assert prompt["by_label"]["_"]["state"] == "non_finite_sample"
+        assert prompt["by_label"]["_"]["end"] == "NaN"
+        assert prompt["state"] == STATE_UNRESOLVED and prompt["delta"] is None
+        assert counters["generation_tokens"]["state"] == STATE_RESOLVED
+
+
 class TestNamesAndEngines:
     def test_retired_name_is_normalised_and_flagged(self, tmp_path: Path) -> None:
         old = PRE.replace("vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc")

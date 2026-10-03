@@ -11,6 +11,7 @@ never a zero.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,7 @@ from .vllm_metrics import (
     Discovery,
     HistogramValue,
     created_family_for,
+    encode_number,
     family_group,
     resolve_name,
 )
@@ -56,6 +58,7 @@ REASON_COUNTER_RECREATED = "counter_recreated"
 REASON_SERIES_MISSING = "series_missing"
 REASON_BOUNDARIES_CHANGED = "bucket_boundaries_changed"
 REASON_NOT_ENABLED = "not_enabled"
+REASON_NON_FINITE = "non_finite_sample"
 
 SPAN_LATENCY_ATTRIBUTES: tuple[tuple[str, str], ...] = (
     ("time_in_queue", "gen_ai.latency.time_in_queue"),
@@ -482,6 +485,10 @@ def _delta(
 ) -> dict[str, Any]:
     if not isinstance(a, float) or not isinstance(b, float):
         return {"state": REASON_SERIES_MISSING, "delta": None}
+    if not (math.isfinite(a) and math.isfinite(b)):
+        # Kept as the strict-JSON strings the record uses, never subtracted.
+        start, end = encode_number(a), encode_number(b)
+        return {"state": REASON_NON_FINITE, "delta": None, "start": start, "end": end}
     if epoch_reason is not None:
         return {"state": epoch_reason, "delta": None, "start": a, "end": b}
     if recreated:
@@ -575,6 +582,8 @@ def _histogram_delta(
     if parts is None:
         # A _sum or _count the exposition lacked is not a zero to subtract.
         return {"state": REASON_SERIES_MISSING, "missing": _missing_components(a, b)}
+    if not _finite_histograms(a, b, parts):
+        return {"state": REASON_NON_FINITE}
     reason = _histogram_reason(a, b, epoch_reason, recreated)
     if reason is not None:
         return {"state": reason}
@@ -627,6 +636,14 @@ def _complete(
     return a.count, a.sum, b.count, b.sum
 
 
+def _finite_histograms(
+    a: HistogramValue, b: HistogramValue, parts: tuple[float, ...]
+) -> bool:
+    """Every count, sum and bucket of both is a finite number."""
+    counts = [count for _, count in (*a.buckets, *b.buckets)]
+    return all(math.isfinite(value) for value in (*parts, *counts))
+
+
 def _missing_components(a: HistogramValue, b: HistogramValue) -> list[str]:
     parts = (
         ("start_sum", a.sum),
@@ -658,19 +675,24 @@ def _gauge_field(
     if not series:
         result["state"] = REASON_SERIES_MISSING
         return result
-    result["state"] = STATE_RESOLVED
-    result["stats"] = {key: _stats(values) for key, values in series.items()}
+    stats = {key: _stats(values) for key, values in series.items()}
+    tainted = any(item["non_finite"] for item in stats.values())
+    result["state"] = REASON_NON_FINITE if tainted else STATE_RESOLVED
+    result["stats"] = stats
     result["labels"] = last_labels
     return result
 
 
 def _stats(values: list[float]) -> dict[str, Any]:
+    """Over the finite samples; a NaN or an infinity is counted, not averaged."""
+    finite = [value for value in values if math.isfinite(value)]
     return {
-        "min": min(values),
-        "mean": sum(values) / len(values),
-        "max": max(values),
-        "last": values[-1],
+        "min": min(finite) if finite else None,
+        "mean": sum(finite) / len(finite) if finite else None,
+        "max": max(finite) if finite else None,
+        "last": finite[-1] if finite else None,
         "samples": len(values),
+        "non_finite": len(values) - len(finite),
     }
 
 

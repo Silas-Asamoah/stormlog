@@ -159,6 +159,7 @@ reasons when the two scrapes cannot be compared:
 | `series_missing` | One scrape lacks the series, or a histogram's `_sum` or `_count` sample (`missing` names which); neither is ever taken as zero |
 | `bucket_boundaries_changed` | The histogram's `le` set differs between the scrapes |
 | `not_enabled` | The MFU counters stayed at zero while tokens were generated |
+| `non_finite_sample` | A sample was `NaN` or infinite: a counter or histogram with one is not differenced, a gauge's statistics cover its finite samples and count the others, and nothing derived from the value resolves; the rest of the report completes |
 
 A series the catalog does not name is kept under its native name and listed
 as unknown, unless it belongs to an optional subsystem the catalog knows by
