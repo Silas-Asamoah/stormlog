@@ -43,15 +43,11 @@ from .vllm_execution import OWN, STATE_INCOMPLETE
 from .vllm_execution_import import SOURCE
 
 NON_ADDITIVE = "steps shared between cases or with other clients count in each"
-_LOSS_COUNTERS = (
-    "gaps",
-    "iterations_pending",
-    "iterations_incomplete",
-    "iterations_update_failed",
-    "range_misses",
-    "finish_unattached",
-    "startup_unranged",
-)
+# Latest-value counters per epoch: what the writer or the last read says now.
+# Step loss is counted from the canonical records instead, and unattached
+# finishes from their record sequences, so a later import that reads the same
+# log again cannot make the report look better than the data is.
+_LOSS_COUNTERS = ("gaps", "iterations_pending", "range_misses", "startup_unranged")
 
 
 @dataclass
@@ -146,7 +142,7 @@ def execution_report(records: list[dict[str, Any]]) -> dict[str, Any]:
         "requests": _request_counts(graph.requests.values(), records),
         "gpu": {key: scope.summary() for key, scope in sorted(scopes.items())},
         "unmeasured": unmeasured,
-        "capture_loss": _capture_loss(imports),
+        "capture_loss": _capture_loss(imports, steps),
         "cases": _case_coverage(steps, scopes),
         "non_additive": NON_ADDITIVE,
     }
@@ -302,27 +298,37 @@ def _request_counts(requests: Any, records: list[dict[str, Any]]) -> dict[str, A
     }
 
 
-def _capture_loss(imports: list[dict[str, Any]]) -> dict[str, Any]:
-    """Per epoch, the latest import's view; summed across epochs."""
+def _capture_loss(imports: list[dict[str, Any]], steps: _Steps) -> dict[str, Any]:
+    """Per epoch the latest import's counters, summed across epochs; step
+    loss from the records the artifact holds; unattached finishes by their
+    record sequence across every import."""
     latest: dict[str, dict[str, Any]] = {}
+    unattached: set[tuple[str, int]] = set()
     for item in imports:
         for name, epoch in (item.get("epochs") or {}).items():
             if isinstance(epoch, dict):
                 latest[str(name)] = epoch
+                for seq in epoch.get("finish_unattached_seqs") or []:
+                    unattached.add((str(name), int(seq)))
     dropped: Counter[str] = Counter()
     totals: Counter[str] = Counter()
     for epoch in latest.values():
         _add_epoch_loss(epoch, dropped, totals)
+    iterations = steps.iterations.values()
     return {
         "epochs": len(latest),
         "dropped": dict(dropped),
         "missing_sequences": totals["gaps"],
         "pending_iterations": totals["iterations_pending"],
-        "incomplete_iterations": totals["iterations_incomplete"],
+        "incomplete_iterations": sum(
+            it.metadata.get("state") == STATE_INCOMPLETE for it in iterations
+        ),
         # Steps whose update_from_output raised: every member's outcome unknown.
-        "update_failed_iterations": totals["iterations_update_failed"],
+        "update_failed_iterations": sum(
+            bool(it.metadata.get("update_failed")) for it in iterations
+        ),
         "range_misses": totals["range_misses"],
-        "finish_unattached": totals["finish_unattached"],
+        "finish_unattached": len(unattached),
         # Not loss: the calls before the first serving step never have a range.
         "startup_unranged": totals["startup_unranged"],
         "truncated_epochs": totals["truncated"],

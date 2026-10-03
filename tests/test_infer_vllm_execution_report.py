@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from stormlog.infer.correlation_events import (
     ActivityReferenceEvent,
+    ArtifactIdentityEvent,
     CapabilityEvent,
     CorrelationContext,
     EntityRef,
 )
 from stormlog.infer.vllm_execution import ReduceOptions, RunFacts, RunRequest
-from stormlog.infer.vllm_execution_import import reduce_to_capture
+from stormlog.infer.vllm_execution_import import (
+    import_execution_into_artifact,
+    reduce_to_capture,
+)
 from stormlog.infer.vllm_execution_log import read_execution_log
 from stormlog.infer.vllm_execution_report import execution_lines, execution_report
 from tests.vllm_execution_helpers import (
@@ -24,10 +29,12 @@ from tests.vllm_execution_helpers import (
     completed,
     done,
     engine_log,
+    failed,
     goodbye,
     member,
     producer,
     scheduled,
+    terminal,
 )
 
 PID, START = 2600, 1_790_000_000_000_000_000
@@ -290,6 +297,61 @@ def test_nothing_imported_is_not_available() -> None:
     assert execution_lines(report) == []
 
 
+def _client_artifact(path: Path) -> Path:
+    identity = ArtifactIdentityEvent(
+        context=_context("stormlog.infer.profile", "wall"),
+        event_id="artifact",
+        artifact_kind="inference_jsonl",
+        created_at_ns=1,
+    )
+    lines = [identity.to_record(), _legacy_request(REQUEST_A, XA, "c1_in8_out4")]
+    path.write_text(
+        "".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8"
+    )
+    return path
+
+
+def test_a_re_import_never_improves_the_capture_loss(tmp_path: Path) -> None:
+    """Step loss comes from the records the artifact holds and unattached
+    finishes from their sequences, so reading an unchanged log again
+    reports the same loss, not zero (Astra #5)."""
+    artifact = _client_artifact(tmp_path / "infer.jsonl")
+    engine_log(
+        tmp_path / "hook",
+        [
+            alias(OWN_A, f"chatcmpl-{XA}", T0 - 10),
+            scheduled(0, T0, [member(OWN_A, scheduled=8)]),
+            completed(0, T0 + SECOND, [failed(OWN_A)], update_failed=True),
+            scheduled(
+                1, T0 + SECOND + 10, [member(OWN_A, scheduled=1, sighting="repeat")]
+            ),
+            terminal(OTHER, T0 + 2 * SECOND),
+            goodbye(T0 + 3 * SECOND, 6),
+        ],
+    )
+    expected = {
+        "incomplete_iterations": 1,
+        "update_failed_iterations": 1,
+        "finish_unattached": 1,
+    }
+    seen = []
+    for _ in range(2):
+        capture = import_execution_into_artifact(
+            artifact, tmp_path / "hook", now_ns=NOW
+        )
+        records = [
+            json.loads(line)
+            for line in artifact.read_text(encoding="utf-8").splitlines()
+        ]
+        loss = execution_report(records)["capture_loss"]
+        seen.append((len(capture.events), {k: loss[k] for k in expected}))
+    assert seen == [(6, expected), (0, expected)]
+    # The text line says the same after both imports.
+    assert "1 incomplete, 1 update failures, 0 range misses, 1 finishes unattached" in (
+        execution_lines(execution_report(records))[-2]
+    )
+
+
 def test_capture_loss_keeps_worker_counters_and_unattached_finishes_apart() -> None:
     epochs = {
         "engine-1-1": {
@@ -298,8 +360,7 @@ def test_capture_loss_keeps_worker_counters_and_unattached_finishes_apart() -> N
             "dropped": {"scheduled": 1, "alias_oversized": 1, "terminal": 2},
             "gaps": 3,
             "iterations_pending": 1,
-            "iterations_update_failed": 1,
-            "finish_unattached": 2,
+            "finish_unattached_seqs": [7, 9],
         },
         "worker-2-1": {
             "role": "worker",
@@ -323,7 +384,9 @@ def test_capture_loss_keeps_worker_counters_and_unattached_finishes_apart() -> N
     loss = execution_report([capability.to_record()])["capture_loss"]
     # An oversized record is a drop like any other.
     assert loss["dropped"] == {"scheduled": 1, "alias_oversized": 1, "terminal": 2}
-    assert loss["update_failed_iterations"] == 1
+    # Step loss is read from the records, of which this summary-only artifact
+    # has none; the two unattached finishes come from their sequences.
+    assert loss["update_failed_iterations"] == 0
     assert (loss["missing_sequences"], loss["pending_iterations"]) == (3, 1)
     assert (loss["range_misses"], loss["startup_unranged"]) == (1, 9)
     assert loss["finish_unattached"] == 2

@@ -238,6 +238,9 @@ class _EpochReducer:
         self.executions: dict[str, Execution] = {}
         self.iterations: dict[str, Iteration] = {}
         self.counts: dict[str, int] = {}
+        # Terminals no step could carry, by record sequence: each is one
+        # lost finish however many imports read it.
+        self.unattached: list[int] = []
 
     def reduce(self) -> tuple[list[CorrelationEvent], dict[str, Any]]:
         self._gather()
@@ -494,6 +497,7 @@ class _EpochReducer:
                 last.finish = _finish(execution.terminal, in_step=False)
             else:
                 self._count("finish_unattached")
+                self.unattached.append(seq)
 
     def _freed_in(self, execution: Execution, seq: int) -> Member | None:
         for member in execution.memberships:
@@ -698,6 +702,7 @@ class _EpochReducer:
                 "completed_without_scheduled", 0
             ),
             finish_unattached=self.counts.get("finish_unattached", 0),
+            finish_unattached_seqs=sorted(self.unattached),
             executions=_ownership_counts(self.executions),
             pseudonym_key="epoch" if self.epoch.key else "missing",
             withheld={
