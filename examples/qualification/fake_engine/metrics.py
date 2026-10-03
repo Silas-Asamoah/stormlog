@@ -81,7 +81,6 @@ def render_metrics(
 
 
 def _gauges(lines: list[str], snapshot: StatsSnapshot, engine: dict[str, str]) -> None:
-    deferred = snapshot.waiting - snapshot.waiting_capacity
     gauges = (
         ("vllm:num_requests_running", snapshot.running),
         ("vllm:num_requests_waiting", snapshot.waiting),
@@ -92,10 +91,9 @@ def _gauges(lines: list[str], snapshot: StatsSnapshot, engine: dict[str, str]) -
         lines.append(_sample(name, engine, value))
     name = "vllm:num_requests_waiting_by_reason"
     _family(lines, name, "gauge", "Waiting requests by reason")
-    for reason, value in (
-        ("capacity", snapshot.waiting_capacity),
-        ("deferred", deferred),
-    ):
+    # vLLM labels its ordinary waiting queue capacity, and deferred only the
+    # requests its scheduler skipped, which this engine never does.
+    for reason, value in (("capacity", snapshot.waiting), ("deferred", 0)):
         lines.append(_sample(name, {**engine, "reason": reason}, value))
     # Never asleep: this engine has no sleep mode.
     name = "vllm:engine_sleep_state"

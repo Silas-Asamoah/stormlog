@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import re
+import time
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
+from examples.qualification.fake_engine.engine import Engine, FakeRequest, prompt_tokens
+from examples.qualification.fake_engine.metrics import render_metrics
 from stormlog.infer.config import ProfileConfig
 from stormlog.infer.profile import InferenceProfiler
 from stormlog.infer.vllm_metrics import (
@@ -239,4 +245,35 @@ def test_prompt_sources_and_request_parameters_count_as_in_vllm() -> None:
         "awake": 1.0,
         "weights_offloaded": 0.0,
         "discard_all": 0.0,
+    }
+
+
+@pytest.mark.parametrize(
+    "limit",
+    [
+        {"max_num_batched_tokens": 4},
+        {"max_num_seqs": 1},
+        {"num_gpu_blocks": 6, "block_size": 4},
+    ],
+    ids=["token-budget", "sequence-limit", "kv-preemption"],
+)
+def test_every_waiting_request_waits_for_capacity(limit: dict[str, Any]) -> None:
+    # vLLM labels its ordinary waiting queue capacity, and deferred only its
+    # skipped queue (PrometheusStatLogger.record), which this engine lacks.
+    engine = Engine(FakeEngineConfig(**limit))
+    for tag in "abc":
+        engine.submit(
+            FakeRequest(f"{tag}-0a1b2c3d", tag, prompt_tokens(words(4, tag)), 8, 0)
+        )
+    while not (engine.waiting and engine.steps):
+        step = engine._schedule()
+        assert step is not None
+        engine._complete(step)
+    page = render_metrics(engine.metrics_snapshot(), engine.config, time.time())
+    scrape = compact_scrape(parse_prometheus_text(page))
+    waiting = _value(scrape, "vllm:num_requests_waiting")
+    assert waiting == len(engine.waiting) > 0
+    assert _by(scrape, "vllm:num_requests_waiting_by_reason", "reason") == {
+        "capacity": waiting,
+        "deferred": 0.0,
     }

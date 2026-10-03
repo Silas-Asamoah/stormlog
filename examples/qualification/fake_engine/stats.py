@@ -163,8 +163,9 @@ class StatsSnapshot:
 
     taken_ns: int
     running: int
+    # vLLM's ordinary waiting queue; the page labels it capacity. This engine
+    # has no skipped (deferred) queue.
     waiting: int
-    waiting_capacity: int
     kv_usage: float
     stats: EngineStats
 
@@ -174,7 +175,6 @@ def snapshot(
     taken_ns: int,
     running: int,
     waiting: int,
-    waiting_capacity: int,
     kv_usage: float,
     stats: EngineStats,
 ) -> StatsSnapshot:
@@ -182,7 +182,6 @@ def snapshot(
         taken_ns=taken_ns,
         running=running,
         waiting=waiting,
-        waiting_capacity=waiting_capacity,
         kv_usage=kv_usage,
         stats=copy.deepcopy(stats),
     )

@@ -168,7 +168,6 @@ class Engine:
         self.steps: list[Step] = []
         self.start_ns = time.time_ns()
         self.stats = EngineStats(created_s=self.start_ns / 1e9)
-        self.waiting_capacity = 0
         self._sighted: set[str] = set()
         # Victims of a reset, listed in the next step's preempted as vLLM's
         # reset_preempted_req_ids are.
@@ -368,7 +367,6 @@ class Engine:
         return budget
 
     def _schedule_waiting(self, members: list[ScheduledMember], budget: int) -> None:
-        self.waiting_capacity = 0
         while (
             self.waiting and budget > 0 and len(self.running) < self.config.max_num_seqs
         ):
@@ -383,15 +381,12 @@ class Engine:
             if not self._grow(request, want):
                 self.pool.free(request.block_ids)
                 request.block_ids, request.computed = [], 0
-                self.waiting_capacity = len(self.waiting)
                 return
             self.waiting.popleft()
             self.running.append(request)
             self._admit(request)
             members.append(self._member(request, want))
             budget -= want
-        if self.waiting and len(self.running) >= self.config.max_num_seqs:
-            self.waiting_capacity = len(self.waiting)
 
     def _admit(self, request: FakeRequest) -> None:
         request.status = "RUNNING"
@@ -622,7 +617,6 @@ class Engine:
             taken_ns=time.time_ns(),
             running=len(self.running),
             waiting=len(self.waiting),
-            waiting_capacity=self.waiting_capacity,
             kv_usage=self.pool.usage(),
             stats=self.stats,
         )
