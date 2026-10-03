@@ -85,9 +85,12 @@ class EngineCapture:
 
 @dataclass(frozen=True)
 class TraceCapture:
+    """Trace evidence; ``summary`` is recorded on the collector's capability event."""
+
     capabilities: CaptureCapabilities
     events: tuple[CorrelationEvent, ...] = ()
     attachments: tuple[TraceAttachment, ...] = ()
+    summary: dict[str, Any] | None = None
 
 
 class EngineAdapter(Protocol):
@@ -316,6 +319,7 @@ def _capability_event(
     result: EngineCapture | TraceCapture | None,
 ) -> CapabilityEvent:
     capabilities = result.capabilities if result else CaptureCapabilities()
+    summary = result.summary if isinstance(result, TraceCapture) else None
     return CapabilityEvent(
         context=CorrelationContext(
             run_id=run_id,
@@ -334,6 +338,7 @@ def _capability_event(
             provenance="observed",
         ),
         event_id=f"{component}:{uuid4()}",
+        metadata={"summary": summary} if summary else {},
         component=component,
         available=result is not None,
         supported=list(capabilities.supported),
@@ -433,7 +438,9 @@ def _trace_attachment_row(
         trace_path = envelope.parent / trace_path
     if attachment.storage == "copy" and not trace_path.is_file():
         raise ValueError("copied trace path must exist")
-    row["path"] = os.path.relpath(trace_path, envelope.parent)
+    # Relative between resolved paths: a lexical relpath that climbs out of a
+    # symlinked directory (/scratch -> /mnt/nvme/scratch) would not open.
+    row["path"] = os.path.relpath(trace_path.resolve(), envelope.parent.resolve())
     return row
 
 
