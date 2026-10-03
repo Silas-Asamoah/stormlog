@@ -33,6 +33,14 @@ the flaky benchmark memory gates
   an exporter has consent to send; `truncate_utf8`; and
   `is_forbidden_key_name`. Documented in `docs/scrubbing.md`; the wider
   artifact policy stays with #111. (#220)
+- `stormlog infer analyze` gives each case:
+  - a `latency` block: p50/p90/p95/p99 of each client latency metric, and of
+    vLLM's own TTFT, end-to-end and queue time when spans are joined;
+  - for each quantile, its value over the successful requests and with
+    failures ranked worst, its sample count, whether the case has enough
+    requests, and its order-statistic confidence interval;
+  - a `streaming` block of chunk-level figures, never called inter-token
+    latency. (#213)
 - `stormlog.infer.slo`: SLO policies whose criteria name their boundary
   (`client.ttft`, `server.ttft`, ...), so client and server latency are never
   mixed. Policies come from a versioned JSON file (`stormlog.infer.slo` v1),

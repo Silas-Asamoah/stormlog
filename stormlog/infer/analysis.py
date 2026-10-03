@@ -14,6 +14,7 @@ from .cache_state import cache_lines, cache_summary
 from .correlation_accounting import AlignedTimestamp
 from .errors import InferInputError
 from .host_clock import is_boot_qualified
+from .latency_report import latency_summary, streaming_summary
 from .populations import CasePopulation, MeasuredInterval, case_populations, rate
 from .report_stats import int_value as _int_value
 from .report_stats import is_number as _is_number
@@ -33,12 +34,15 @@ from .server_group import members as group_members
 from .server_group import membership_issue
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
 from .vllm_analysis import (
+    JoinedSpans,
+    joined_span_attributes,
     load_external_spans,
     vllm_case_lines,
     vllm_lines,
     vllm_report,
 )
 from .vllm_execution_report import execution_lines, execution_report
+from .vllm_spans import VllmSpanRecord
 from .workload_report import (
     length_summary,
     prompt_lines,
@@ -61,7 +65,9 @@ def analyze_inference_events(
     records = _load_jsonl(path)
     requests, samples = _partition_inference_records(records)
     server_samples = _load_server_samples(server_telemetry_paths)
-    vllm = _vllm_telemetry(records, vllm_span_paths)
+    external_spans = _external_spans(records, vllm_span_paths)
+    vllm = _vllm_telemetry(records, external_spans)
+    spans = _joined_spans(records, external_spans)
     join, members = _server_join(
         records,
         server_samples,
@@ -71,7 +77,7 @@ def analyze_inference_events(
     )
     timelines = [(member, _member_timeline(member)) for member in members]
     ok_requests = [record for record in requests if record.get("status") == "ok"]
-    cases = _case_reports(records, requests, samples, timelines, "group" in join)
+    cases = _case_reports(records, requests, samples, timelines, "group" in join, spans)
     if timelines:
         join["case_coverage"] = _coverage_counts(cases)
     failed = [record for record in requests if record.get("status") != "ok"]
@@ -103,13 +109,32 @@ def analyze_inference_events(
 ANALYSIS_VERSION = 2
 
 
-def _vllm_telemetry(
+def _external_spans(
     records: list[dict[str, Any]], span_paths: Iterable[str | Path]
-) -> dict[str, Any]:
-    """The vLLM block; a span file or record that cannot be read is an input error."""
+) -> list[VllmSpanRecord]:
+    """Span files given on the command line; one that cannot be read is invalid."""
     try:
-        return vllm_report(records, load_external_spans(records, span_paths))
+        return load_external_spans(records, span_paths)
     except (OSError, ValueError) as exc:
+        raise InferInputError(f"vLLM telemetry: {_reason(exc)}") from exc
+
+
+def _vllm_telemetry(
+    records: list[dict[str, Any]], external_spans: list[VllmSpanRecord]
+) -> dict[str, Any]:
+    """The vLLM block; a span record that cannot be read is an input error."""
+    try:
+        return vllm_report(records, external_spans)
+    except (OSError, ValueError) as exc:
+        raise InferInputError(f"vLLM telemetry: {_reason(exc)}") from exc
+
+
+def _joined_spans(
+    records: list[dict[str, Any]], external_spans: list[VllmSpanRecord]
+) -> JoinedSpans:
+    try:
+        return joined_span_attributes(records, external_spans)
+    except ValueError as exc:
         raise InferInputError(f"vLLM telemetry: {_reason(exc)}") from exc
 
 
@@ -119,6 +144,7 @@ def _case_reports(
     samples: list[dict[str, Any]],
     timelines: list[tuple[_Member, _ServerTimeline]],
     grouped: bool,
+    spans: JoinedSpans,
 ) -> dict[str, dict[str, Any]]:
     by_case: dict[str, list[dict[str, Any]]] = {}
     for record in requests:
@@ -137,6 +163,8 @@ def _case_reports(
             populations[case_id],
         )
         cases[case_id]["cache"] = cache_summary(cache_states.get(case_id))
+        cases[case_id]["latency"] = latency_summary(case_requests, spans=spans)
+        cases[case_id]["streaming"] = streaming_summary(case_requests)
     return cases
 
 

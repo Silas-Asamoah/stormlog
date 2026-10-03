@@ -334,6 +334,18 @@ The report includes:
 - first streamed chunk latency
 - requests/sec, output tokens/sec and total tokens/sec of the successful
   requests, per second of the case's rate interval
+- a `latency` block for each latency metric (`client.ttft`, `client.e2e`,
+  `client.tpot`, the `*_from_intended` variants, and `server.ttft`,
+  `server.e2e` and `server.queue` when vLLM spans are joined), with p50, p90,
+  p95 and p99:
+  - each over the successful requests and with failures ranked worst;
+  - each with its sample count, whether the case has enough requests for it,
+    and its order-statistic confidence interval (see
+    [Inference SLOs and goodput](inference_slo.md));
+- a `streaming` block of chunk-level figures: content chunks per response,
+  chunk gaps, and mean tokens per chunk when the server reports usage. A
+  chunk can carry several tokens, so chunk gaps are never reported as
+  inter-token latency
 - failure rate
 - highest recorded client-local device memory when system telemetry is available
 - scoped server memory observations when a matching on-host collector artifact is supplied
