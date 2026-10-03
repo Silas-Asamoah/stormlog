@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 import errno
 import json
 import os
@@ -29,6 +30,16 @@ from stormlog.infer.vllm_hook.writer import EpochWriter, WriterLimits
 # ---------------------------------------------------------------- vLLM fakes
 
 
+class FinishReason(enum.IntEnum):
+    """vLLM 0.30.0's enum: its name is upper case, its string lower case."""
+
+    STOP = 0
+    LENGTH = 1
+
+    def __str__(self) -> str:
+        return ("stop", "length")[self.value]
+
+
 @dataclass
 class FakeRequest:
     request_id: str
@@ -47,8 +58,8 @@ class FakeRequest:
     def is_finished(self) -> bool:
         return self.finished
 
-    def get_finished_reason(self) -> str | None:
-        return "length" if self.finished else None
+    def get_finished_reason(self) -> FinishReason | None:
+        return FinishReason.LENGTH if self.finished else None
 
 
 @dataclass
@@ -93,7 +104,7 @@ class ModelRunnerOutput:
 class EngineCoreOutput:
     request_id: str
     new_token_ids: list[int]
-    finish_reason: str | None = None
+    finish_reason: FinishReason | None = None
 
 
 @dataclass
@@ -360,6 +371,7 @@ def test_two_requests_share_iterations_and_finish(vllm: dict[str, Any]) -> None:
     terminals = {r["internal"]: r for r in _of(records, "terminal")}
     assert set(terminals) == {"a-1", "b-1"}
     assert terminals["b-1"]["output_tokens"] == 2
+    assert terminals["b-1"]["finish_reason"] == "length"
     assert [r["seq"] for r in records] == list(range(len(records)))
     # Nothing outlives the requests: per-request state goes with _free_request.
     recorder = getattr(scheduler, hook.RECORDER_ATTRIBUTE)

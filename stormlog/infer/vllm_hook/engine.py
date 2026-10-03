@@ -308,10 +308,10 @@ def _emitted(result: Any) -> dict[str, tuple[int, str | None]] | None:
     emitted: dict[str, tuple[int, str | None]] = {}
     for outputs in result.values():
         for item in getattr(outputs, "outputs", None) or ():
-            reason = getattr(item, "finish_reason", None)
             emitted[str(item.request_id)] = (
                 len(item.new_token_ids or ()),
-                None if reason is None else str(getattr(reason, "name", reason)),
+                # vLLM's FinishReason prints as "stop", "length" and so on.
+                _optional_str(getattr(item, "finish_reason", None)),
             )
     return emitted
 
