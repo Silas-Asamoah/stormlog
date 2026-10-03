@@ -46,6 +46,12 @@ refused. The values are provisional until they are read from real runs.
 | `queue_saturation.median_waiting_requests` | 1 | requests waiting in the window's median scrape |
 | `kv_preemption_pressure.preemptions` | 1 | preemptions counted in the window |
 | `prefix_cache_loss.hit_ratio_drop` | 0.2 | fall of the prefix-cache hit ratio below the caller's reference |
+| `host_stall.stall_factor` | 10 | an engine-loop stall is at least this many times the median completion cadence before it |
+| `host_stall.stall_floor_ns` | 50 ms | and at least this long |
+| `host_stall.no_baseline_floor_ns` | 500 ms | or, with no earlier busy steps to compare with, at least this long |
+| `host_stall.baseline_window_ns` | 30 s | the window of earlier busy steps the cadence is taken from |
+| `host_stall.min_busy_steps` | 20 | busy steps that window needs |
+| `host_stall.matched_bin_min_steps` | 20 | steps of the stall's own work bucket (scheduled tokens within a factor of two) needed to compare it with steps of its size |
 
 ## Online signals
 
@@ -79,3 +85,44 @@ figure of one signal comes from one engine: behind an exporter with several,
 `config.engine` names it, and without it the window is `engine_required`.
 Kinds that metrics alone cannot decide answer `requires_hook`,
 `requires_trace` or `requires_client`.
+
+## Engine-loop stalls
+
+`stormlog.infer.diagnosis_loop.engine_loop_gap(records, config)` reads one
+engine epoch's raw [execution hook](vllm_execution.md) records (the
+`scheduled`, `completed`, `heartbeat` and, from hooks that record them,
+`pause` records, in `seq` order) and returns a `SignalValue` for the longest
+stretch in which the engine made no progress while it had work it could run.
+It needs no import, so an online trigger can run it on the records it tails;
+the diagnoser runs the same rules on imported steps.
+
+Work is *ready* during a stretch when a request ran in the step before it
+and in the step after it. A stretch the scheduler spent paused with
+`PAUSED_ALL` (from the hook's `pause` records), or one the caller excludes
+with `exclude_wall` (for example its own profiler stop), has no ready work.
+Where a stall sits decides what it can be blamed on:
+
+| `detail["locus"]` | Stretch | `detail["attribution"]` |
+| --- | --- | --- |
+| `between_steps` | a step's completion to the next `schedule()` entry | `host` |
+| `in_schedule` | inside `schedule()` | `host` |
+| `within_step` | a step's own time after `schedule()` returned (or after the previous completion, under async scheduling) | `host_or_gpu`: without a GPU trace the two cannot be told apart |
+
+A stall exceeds when it is at least `stall_factor` times the median
+completion cadence of the busy steps that completed in the `baseline_window`
+before it, and at least `stall_floor_ns`. Steps are compared with steps of
+their own size: the cadence is taken over earlier steps whose scheduled
+tokens lie within a factor of two of the stall's step when enough share it
+(`detail["baseline"]` is `matched`), so a step running a long prefill is not
+measured against decode-only steps. Otherwise it is taken over all busy
+steps (`unmatched`), provided some were at least that large, and otherwise
+replaced by `no_baseline_floor_ns` (`floor`). Only earlier steps count, so
+the decision never depends on what happened after the stall. With `config.now_wall_ns`, a stall still going on
+counts from the last completion (`detail["ongoing"]`).
+
+The records give no verdict (`sufficient` is False) when they come from two
+epochs (`epoch_changed`), skip a `seq` or show drop counts rising between
+heartbeats (`hook_records_dropped`), come from a capped writer
+(`hook_capped`), hold no completed step (`too_few_steps`) or are absent
+(`requires_hook`). `detail["pause_capability"]` says whether the hook records
+pauses; without it a pause looks like a stall with ready work.
