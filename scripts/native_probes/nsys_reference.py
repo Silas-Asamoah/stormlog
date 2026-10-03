@@ -37,7 +37,14 @@ def _inspect(connection: sqlite3.Connection, range_name: str) -> dict[str, Any]:
             "nameId",
             "returnValue",
         },
-        "CUPTI_ACTIVITY_KIND_KERNEL": {"start", "end", "correlationId", "shortName"},
+        "CUPTI_ACTIVITY_KIND_KERNEL": {
+            "start",
+            "end",
+            "correlationId",
+            "shortName",
+            "graphId",
+            "graphNodeId",
+        },
         "StringIds": {"id", "value"},
     }
     for table, columns in required.items():
@@ -57,31 +64,51 @@ def _inspect(connection: sqlite3.Connection, range_name: str) -> dict[str, Any]:
             f"expected one complete measured NVTX range; found {len(ranges)}"
         )
     start, end = ranges[0]
-    launches = connection.execute(
-        """SELECT r.correlationId, r.start, r.end, r.returnValue,
-                  rn.value, k.start, k.end, kn.value
+    rows = connection.execute(
+        """SELECT r.rowid, r.correlationId, r.start, r.end, r.returnValue,
+                  rn.value, k.rowid, k.start, k.end, kn.value,
+                  k.graphId, k.graphNodeId
         FROM CUPTI_ACTIVITY_KIND_RUNTIME AS r
         LEFT JOIN StringIds AS rn ON r.nameId = rn.id
         LEFT JOIN CUPTI_ACTIVITY_KIND_KERNEL AS k
           ON r.correlationId = k.correlationId
         LEFT JOIN StringIds AS kn ON k.shortName = kn.id
         WHERE r.start >= ? AND r.end <= ?
-          AND (rn.value LIKE '%LaunchKernel%' OR rn.value LIKE '%launchKernel%')
+          AND (rn.value LIKE '%LaunchKernel%' OR rn.value LIKE '%launchKernel%'
+               OR rn.value LIKE '%GraphLaunch%')
         ORDER BY r.start, r.correlationId""",
         (start, end),
     ).fetchall()
-    if not launches:
+    if not rows:
         return _unavailable("no measured CUDA kernel launches were exported")
-    identifiers = [row[0] for row in launches]
-    missing = sum(row[0] is None or row[5] is None for row in launches)
-    duplicates = len(identifiers) - len(set(identifiers))
-    failures = sum(row[3] != 0 for row in launches)
-    invalid = sum(
-        row[1] > row[2] or (row[5] is not None and row[5] >= row[6]) for row in launches
+    grouped: dict[int, list[tuple[Any, ...]]] = {}
+    for row in rows:
+        grouped.setdefault(row[0], []).append(row)
+    missing = sum(
+        any(row[1] is None or row[6] is None for row in group)
+        for group in grouped.values()
     )
-    unnamed = sum(row[7] is None for row in launches)
-    names = Counter(row[7] for row in launches if row[7] is not None)
-    after_range = sum(row[5] is not None and row[5] >= end for row in launches)
+    duplicates = 0
+    graph_replays = 0
+    for group in grouped.values():
+        if "GraphLaunch" in group[0][5]:
+            graph_replays += 1
+            nodes = [(row[10], row[11]) for row in group]
+            if any(graph is None or node is None for graph, node in nodes):
+                duplicates += 1
+            duplicates += len(nodes) - len(set(nodes))
+        else:
+            duplicates += max(0, len(group) - 1)
+    correlations = [group[0][1] for group in grouped.values()]
+    duplicates += len(correlations) - len(set(correlations))
+    failures = sum(group[0][4] != 0 for group in grouped.values())
+    invalid = sum(
+        row[2] > row[3] or (row[7] is not None and row[7] >= row[8]) for row in rows
+    )
+    unnamed = sum(row[6] is not None and row[9] is None for row in rows)
+    names = Counter(row[9] for row in rows if row[6] is not None and row[9] is not None)
+    after_range = sum(row[7] is not None and row[7] >= end for row in rows)
+    measured_count = sum(row[6] is not None for row in rows)
     problems = []
     for label, count in (
         ("missing kernel correlation", missing),
@@ -97,7 +124,9 @@ def _inspect(connection: sqlite3.Connection, range_name: str) -> dict[str, Any]:
         "range_name": range_name,
         "range_start_ns": start,
         "range_end_ns": end,
-        "measured_launches": len(launches),
+        "measured_launches": measured_count,
+        "measured_host_launch_calls": len(grouped),
+        "measured_graph_replays": graph_replays,
         "kernel_counts_by_name": dict(sorted(names.items())),
         "kernels_executing_after_range_end": after_range,
         "missing_kernel_correlations": missing,

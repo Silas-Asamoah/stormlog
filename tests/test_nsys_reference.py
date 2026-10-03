@@ -17,16 +17,17 @@ def _export(path: Path, *, duplicate: bool = False, missing: bool = False) -> No
             CREATE TABLE CUPTI_ACTIVITY_KIND_RUNTIME
               (start INTEGER, end INTEGER, correlationId INTEGER, nameId INTEGER, returnValue INTEGER);
             CREATE TABLE CUPTI_ACTIVITY_KIND_KERNEL
-              (start INTEGER, end INTEGER, correlationId INTEGER, shortName INTEGER);
+              (start INTEGER, end INTEGER, correlationId INTEGER, shortName INTEGER,
+               graphId INTEGER, graphNodeId INTEGER);
             INSERT INTO StringIds VALUES (1, 'cudaLaunchKernel'), (2, 'work_kernel');
             INSERT INTO NVTX_EVENTS VALUES (100, 200, 'stormlog-native-probe-measured', NULL);
             INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES (110, 120, 7, 1, 0);
-            INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (210, 220, 7, 2);
+            INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (210, 220, 7, 2, NULL, NULL);
             """
         )
         if duplicate:
             connection.execute(
-                "INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (221, 230, 7, 2)"
+                "INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (221, 230, 7, 2, NULL, NULL)"
             )
         if missing:
             connection.execute("DELETE FROM CUPTI_ACTIVITY_KIND_KERNEL")
@@ -48,6 +49,26 @@ def test_duplicate_or_missing_correlation_is_partial(tmp_path: Path) -> None:
         path = tmp_path / f"{condition}.sqlite"
         _export(path, **{condition: True})
         assert measured_kernels(path)["status"] == "partial"
+
+
+def test_graph_replay_maps_one_host_launch_to_distinct_nodes(tmp_path: Path) -> None:
+    path = tmp_path / "graph.sqlite"
+    _export(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE StringIds SET value = 'cudaGraphLaunch_v10000' WHERE id = 1"
+        )
+        connection.execute(
+            "UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET graphId = 2, graphNodeId = 1"
+        )
+        connection.execute(
+            "INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (221, 230, 7, 2, 2, 2)"
+        )
+    result = measured_kernels(path)
+    assert result["status"] == "valid_export"
+    assert result["measured_launches"] == 2
+    assert result["measured_host_launch_calls"] == 1
+    assert result["measured_graph_replays"] == 1
 
 
 def test_missing_export_and_missing_range_are_unavailable(tmp_path: Path) -> None:
