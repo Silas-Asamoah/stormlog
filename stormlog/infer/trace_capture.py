@@ -31,7 +31,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from ..session import SessionSummary
 from .cache_state import redact_url
@@ -55,6 +55,7 @@ TRACE_GLOB = "*.pt.trace.json*"
 START_ACKNOWLEDGED = "acknowledged"
 START_REJECTED = "rejected"
 START_UNKNOWN = "unknown"
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -286,7 +287,8 @@ class TraceWindows:
         before: dict[str, int] | None,
     ) -> None:
         # Bounded by the control timeout of the start request itself.
-        window.start = await start
+        result, _ = await _wait_out(start)
+        window.start = result
         _mark_started(window)
         try:
             self._warn_start(window)
@@ -324,13 +326,11 @@ class TraceWindows:
             window.stopping = asyncio.get_running_loop().run_in_executor(
                 None, self._send_stop, window
             )
-        try:
-            await asyncio.shield(window.stopping)
-        except asyncio.CancelledError:
-            # The server keeps profiling until it is told to stop: wait for the
-            # stop (bounded by the control timeout), then let Ctrl+C through.
-            await window.stopping
-            raise
+        # The server keeps profiling until it is told to stop: wait for the
+        # stop (bounded by the control timeout), then let Ctrl+C through.
+        _, interrupted = await _wait_out(window.stopping)
+        if interrupted:
+            raise asyncio.CancelledError
         if first and window.stop is not None and not window.stop.ok:
             self._warn(window, "the profiler did not confirm the stop")
 
@@ -528,6 +528,25 @@ def _joined(*notes: str | None) -> str | None:
 def _may_be_profiling(window: TraceWindow) -> bool:
     """The server may have started profiling for this window."""
     return window.start_outcome in (START_ACKNOWLEDGED, START_UNKNOWN)
+
+
+async def _wait_out(future: asyncio.Future[_T]) -> tuple[_T, bool]:
+    """The result of a control call already running on a thread, however many
+    cancellations arrive meanwhile, and whether one did.
+
+    Every wait is shielded: cancelling the call's future would not stop its
+    thread, and the cleanup needs what it returns. A second cancellation, or
+    ``asyncio.run`` cancelling every task on its way out of a Ctrl+C, would
+    otherwise skip the stop and the record.
+    """
+    interrupted = False
+    while True:
+        try:
+            return await asyncio.shield(future), interrupted
+        except asyncio.CancelledError:
+            if future.cancelled():
+                raise
+            interrupted = True
 
 
 def _flush_over(
