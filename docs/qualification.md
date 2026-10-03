@@ -485,3 +485,24 @@ reader:
 
 `ReferenceChannel.signals()` returns them as the `Signals` that
 `stormlog.infer.qualify.recovery` reads.
+
+### The signal pulser
+
+`examples.qualification.pulser` stops a serving process and continues it:
+F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
+5 ms twin. A pulse is `SIGSTOP`, a confirmed stop, a wait and `SIGCONT`:
+
+- **The right process.** A target is its pid and its start time, checked
+  before every signal, so a recycled pid is never signalled.
+- **A confirmed stop.** After `SIGSTOP` the pulser polls until the process is
+  stopped, within 1 s, and records the latency.
+- **Always continued.** The target is continued:
+  - in a `finally` around each pulse;
+  - at `atexit`;
+  - by `Pulser.close`;
+  - by a watchdog process that continues it when the harness is killed
+    outright, or when it stays stopped more than 1 s past the longest pulse.
+- **Caps.** A pulse lasts at most 2 s, at a duty cycle of at most 50%.
+
+Each pulse's stop, confirmation and continue times are kept, so effect timing
+can start from the first confirmed stop.
