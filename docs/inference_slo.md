@@ -229,6 +229,38 @@ intended arrival (or, without one, its send) falls in. `membership="overlap"`
 counts every request whose span meets the segment, for example the requests
 in flight during a profiler's stop.
 
+## Attainment and goodput
+
+`stormlog.infer.populations.goodput(requests, spec, interval, spans=None)`
+judges a case's offered requests (dropped ones included) against a policy. It
+returns a `stormlog.infer.slo_evaluation` v1 result:
+
+| Field | Meaning |
+| --- | --- |
+| `offered`, `met`, `missed`, `unknown` | Request outcomes, as in `evaluate_request` |
+| `attainment_lower` | `met / offered`: unknown outcomes counted as missed |
+| `attainment_upper` | `(met + unknown) / offered`: unknown outcomes counted as met |
+| `evidence_coverage` | The share of successful requests whose every criterion could be judged |
+| `goodput_lower_rps`, `goodput_upper_rps` | Met (and met plus unknown) requests per second of the case's rate interval |
+| `goodput_lower_output_tps` | Output tokens of met requests per second |
+| `per_criterion` | For each criterion: pass, fail, not-applicable and unknown counts among successful requests, and its own marginal attainment bounds over offered requests |
+| `population_declared`, `population_evaluated` | The policy's population and the one judged; both `offered` here. An online watcher that sees only engine-finished spans says so. |
+
+Missing evidence widens the bounds instead of moving a single figure. A lost
+span therefore cannot look like an SLO violation, and cannot hide one either.
+
+This is **SLO goodput at the offered load**: good requests per second at one
+offered load, as vLLM's benchmark computes it. It is not DistServe's goodput,
+which is the highest request rate that still meets an attainment target, and
+one run does not establish that capacity.
+
+A case where no request succeeded is still measurable: every request is
+missed, and goodput is 0. The evaluation is `unmeasurable` (`null`, never 0),
+with a `reason`, when a criterion cannot be judged per request at all:
+- it is aggregate-only, such as `server.itl`;
+- no successful request could be judged on it, such as client TTFT without
+  streaming, or a server criterion without spans.
+
 ## Latency quantiles and how much data they need
 
 `stormlog.infer.quantiles` estimates latency quantiles and says whether a

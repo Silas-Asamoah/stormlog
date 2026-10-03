@@ -22,7 +22,7 @@ import re
 from collections import Counter
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from .arrivals import (
     BURST,
@@ -33,6 +33,16 @@ from .arrivals import (
     scheduled_endpoint,
 )
 from .report_stats import int_value, is_number
+from .slo import (
+    CriterionCounts,
+    RequestSloOutcome,
+    SloEvaluation,
+    SloSpec,
+    evaluate_request,
+)
+
+if TYPE_CHECKING:
+    from .vllm_analysis import JoinedSpans
 
 OK: Final = "ok"
 DROPPED: Final = "dropped"
@@ -648,6 +658,135 @@ def _require_unique_names(segments: Sequence[Segment]) -> None:
         raise ValueError(f"segment {', '.join(repeated)} is defined more than once")
 
 
+def goodput(
+    requests: Sequence[Mapping[str, Any]],
+    spec: SloSpec,
+    interval: MeasuredInterval | None,
+    *,
+    spans: JoinedSpans | None = None,
+    slo_source: str = "flags",
+) -> SloEvaluation:
+    """Judge a case's offered requests against ``spec``; rates per ``interval``.
+
+    ``requests`` are the case's measured requests, dropped ones included;
+    ``spans`` are their joined vLLM spans, for server criteria.
+    """
+    outcomes = [_judged(record, spec, spans) for record in requests]
+    met = sum(1 for outcome in outcomes if outcome.outcome == "met")
+    unknown = sum(1 for outcome in outcomes if outcome.outcome == "unknown")
+    good_tokens = sum(
+        int_value(record.get("output_tokens"))
+        for record, outcome in zip(requests, outcomes)
+        if outcome.outcome == "met"
+    )
+    reason = _unmeasurable(spec, outcomes)
+    figures = _figures(met, unknown, len(outcomes), good_tokens, interval)
+    return SloEvaluation(
+        slo_name=spec.name,
+        slo_digest=spec.digest(),
+        slo_source=slo_source,
+        status="evaluated" if reason is None else "unmeasurable",
+        reason=reason,
+        population_declared=spec.population,
+        population_evaluated="offered",
+        offered=len(outcomes),
+        met=met,
+        missed=len(outcomes) - met - unknown,
+        unknown=unknown,
+        evidence_coverage=_evidence_coverage(outcomes),
+        per_criterion=_per_criterion(spec, outcomes, len(outcomes)),
+        interval=interval,
+        **(figures if reason is None else dict.fromkeys(figures)),
+    )
+
+
+def _figures(
+    met: int,
+    unknown: int,
+    offered: int,
+    good_tokens: int,
+    interval: MeasuredInterval | None,
+) -> dict[str, float | None]:
+    """Attainment and goodput bounds: unknown outcomes missed, then met."""
+    return {
+        "attainment_lower": _share(met, offered),
+        "attainment_upper": _share(met + unknown, offered),
+        "goodput_lower_rps": rate(met, interval),
+        "goodput_upper_rps": rate(met + unknown, interval),
+        "goodput_lower_output_tps": rate(good_tokens, interval),
+    }
+
+
+def _judged(
+    record: Mapping[str, Any], spec: SloSpec, spans: JoinedSpans | None
+) -> RequestSloOutcome:
+    request_id = str(record.get("x_request_id"))
+    if spans is None:
+        return evaluate_request(record, spec)
+    return evaluate_request(
+        record,
+        spec,
+        span=spans.by_request.get(request_id),
+        missing_span_reason=spans.quarantined.get(request_id, "no_joined_span"),
+    )
+
+
+def _unmeasurable(spec: SloSpec, outcomes: Sequence[RequestSloOutcome]) -> str | None:
+    """Why the policy cannot be judged per request here, or None.
+
+    An aggregate-only criterion never can. Nor can a criterion that no
+    successful request could be judged on, such as client TTFT without
+    streaming or a server criterion without spans. Requests that did not
+    succeed are missed whatever their criteria say, so a case where none
+    succeeded is still measurable: its goodput is zero.
+    """
+    successful = [outcome for outcome in outcomes if outcome.status == OK]
+    for criterion in spec.criteria:
+        if criterion.definition.per_request is None:
+            return f"{criterion.key}: aggregate_only"
+        judged = [outcome.criteria[criterion.key] for outcome in successful]
+        if judged and all(item.outcome == "unknown" for item in judged):
+            reasons = Counter(item.reason for item in judged)
+            return f"{criterion.key}: {reasons.most_common(1)[0][0]}"
+    return None
+
+
+def _evidence_coverage(outcomes: Sequence[RequestSloOutcome]) -> float | None:
+    successful = [outcome for outcome in outcomes if outcome.status == OK]
+    complete = sum(
+        1
+        for outcome in successful
+        if all(item.outcome != "unknown" for item in outcome.criteria.values())
+    )
+    return _share(complete, len(successful))
+
+
+def _per_criterion(
+    spec: SloSpec, outcomes: Sequence[RequestSloOutcome], offered: int
+) -> dict[str, CriterionCounts]:
+    counts = {}
+    for criterion in spec.criteria:
+        judged = Counter(
+            outcome.criteria[criterion.key].outcome
+            for outcome in outcomes
+            if outcome.status == OK
+        )
+        good = judged["pass"] + judged["not_applicable"]
+        counts[criterion.key] = CriterionCounts(
+            passed=judged["pass"],
+            failed=judged["fail"],
+            not_applicable=judged["not_applicable"],
+            unknown=judged["unknown"],
+            attainment_lower=_share(good, offered),
+            attainment_upper=_share(good + judged["unknown"], offered),
+        )
+    return counts
+
+
+def _share(part: int, whole: int) -> float | None:
+    return part / whole if whole else None
+
+
 def rate(count: float, interval: MeasuredInterval | None) -> float | None:
     """``count`` per second of ``interval``; None when it has no length."""
     seconds = interval.seconds if interval is not None else None
@@ -665,5 +804,6 @@ __all__ = [
     "SegmentPopulation",
     "case_populations",
     "count_population",
+    "goodput",
     "rate",
 ]

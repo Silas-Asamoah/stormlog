@@ -11,8 +11,11 @@ from stormlog.infer.populations import (
     Segment,
     case_populations,
     count_population,
+    goodput,
     rate,
 )
+from stormlog.infer.slo import parse_slo_flags
+from stormlog.infer.vllm_analysis import JoinedSpans
 
 SECOND = 1_000_000_000
 START = 100 * SECOND
@@ -299,3 +302,105 @@ def test_rates_need_an_interval_with_length() -> None:
 def test_count_population_takes_any_iterable() -> None:
     population = count_population(r for r in [_request(0), _request(1, "dropped")])
     assert (population.offered, population.sent, population.successful) == (2, 1, 1)
+
+
+# --- goodput -------------------------------------------------------------------
+
+
+def _ok(index: int, ttft: float | None, **overrides: Any) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "ttft_ms": ttft,
+        "e2e_latency_ms": 500.0,
+        "output_tokens": 10,
+        "output_token_source": "server_usage",
+    }
+    fields.update(overrides)
+    return _request(index, **fields)
+
+
+ONE_SECOND = MeasuredInterval("scheduled_window", 0, SECOND, "arrival_cohort")
+
+
+def test_goodput_counts_good_requests_per_second_of_the_interval() -> None:
+    requests = [_ok(0, 100.0), _ok(1, 300.0), _ok(2, 150.0), _request(3, "timeout")]
+    evaluation = goodput(requests, parse_slo_flags(["ttft:200"]), ONE_SECOND)
+
+    assert evaluation.status == "evaluated"
+    assert (evaluation.offered, evaluation.met, evaluation.missed) == (4, 2, 2)
+    assert evaluation.attainment_lower == evaluation.attainment_upper == 0.5
+    assert evaluation.goodput_lower_rps == 2.0
+    assert evaluation.goodput_lower_output_tps == 20.0
+    assert evaluation.evidence_coverage == 1.0
+    counts = evaluation.per_criterion["client.ttft"]
+    assert (counts.passed, counts.failed) == (2, 1)
+    record = evaluation.to_record()
+    assert (record["format"], record["version"]) == ("stormlog.infer.slo_evaluation", 1)
+    assert record["interval"]["kind"] == "scheduled_window"
+
+
+def test_a_failed_only_case_is_measurable_and_its_goodput_is_zero() -> None:
+    requests = [_request(i, "error") for i in range(5)]
+    evaluation = goodput(requests, parse_slo_flags(["ttft:200"]), ONE_SECOND)
+    assert evaluation.status == "evaluated"
+    assert (evaluation.met, evaluation.missed) == (0, 5)
+    assert evaluation.goodput_lower_rps == 0.0
+    assert evaluation.attainment_lower == 0.0
+    assert evaluation.evidence_coverage is None  # nothing succeeded to judge
+
+
+def test_unknown_outcomes_widen_the_bounds_instead_of_moving_one_figure() -> None:
+    requests = [_ok(0, 100.0), _ok(1, 100.0), _ok(2, 100.0), _ok(3, 100.0)]
+    spec = parse_slo_flags(["ttft:200", "server.ttft:200"])
+    spans = JoinedSpans(
+        by_request={
+            "stormlog-run-c1_measured_0": {"gen_ai.latency.time_to_first_token": 0.1},
+            "stormlog-run-c1_measured_1": {"gen_ai.latency.time_to_first_token": 0.1},
+            "stormlog-run-c1_measured_2": {"gen_ai.latency.time_to_first_token": 0.1},
+        },
+        quarantined={"stormlog-run-c1_measured_3": "conflicting_spans"},
+    )
+    evaluation = goodput(requests, spec, ONE_SECOND, spans=spans)
+
+    assert (evaluation.met, evaluation.unknown) == (3, 1)
+    assert evaluation.attainment_lower == 0.75
+    assert evaluation.attainment_upper == 1.0
+    assert (evaluation.goodput_lower_rps, evaluation.goodput_upper_rps) == (3.0, 4.0)
+    assert evaluation.evidence_coverage == 0.75
+    assert evaluation.per_criterion["server.ttft"].unknown == 1
+
+
+def test_a_criterion_no_successful_request_can_be_judged_is_unmeasurable() -> None:
+    not_streamed = [_ok(i, None) for i in range(3)]
+    evaluation = goodput(not_streamed, parse_slo_flags(["ttft:200"]), ONE_SECOND)
+    assert evaluation.status == "unmeasurable"
+    assert evaluation.reason == "client.ttft: no_client_ttft"
+    assert evaluation.attainment_lower is None
+    assert evaluation.goodput_lower_rps is None
+
+
+def test_an_aggregate_only_criterion_is_unmeasurable_per_request() -> None:
+    evaluation = goodput(
+        [_ok(0, 100.0)], parse_slo_flags(["server.itl:50"]), ONE_SECOND
+    )
+    assert evaluation.status == "unmeasurable"
+    assert evaluation.reason == "server.itl: aggregate_only"
+
+
+def test_marginal_attainment_is_judged_per_criterion() -> None:
+    requests = [_ok(0, 100.0), _ok(1, 300.0), _ok(2, 100.0, e2e_latency_ms=900.0)]
+    spec = parse_slo_flags(["ttft:200", "e2e:800"])
+    evaluation = goodput(requests, spec, ONE_SECOND)
+    assert evaluation.met == 1  # joint: both criteria
+    assert evaluation.per_criterion["client.ttft"].attainment_lower == pytest.approx(
+        2 / 3
+    )
+    assert evaluation.per_criterion["client.e2e"].attainment_lower == pytest.approx(
+        2 / 3
+    )
+
+
+def test_goodput_without_an_interval_has_no_rate() -> None:
+    evaluation = goodput([_ok(0, 100.0)], parse_slo_flags(["ttft:200"]), None)
+    assert evaluation.status == "evaluated"
+    assert evaluation.goodput_lower_rps is None
+    assert evaluation.attainment_lower == 1.0

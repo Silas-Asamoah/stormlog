@@ -26,11 +26,14 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeGuard
 from .errors import InferInputError, InferUsageError
 
 if TYPE_CHECKING:
+    from .populations import MeasuredInterval
     from .vllm_analysis import JoinedSpans
 
 SLO_FORMAT = "stormlog.infer.slo"
 SLO_VERSION = 1
 SLO_EVENT_TYPE = "infer.slo"
+EVALUATION_FORMAT = "stormlog.infer.slo_evaluation"
+EVALUATION_VERSION = 1
 
 CLIENT: Final = "client"
 SERVER: Final = "server"
@@ -425,6 +428,90 @@ class SpanSloOutcome:
     service_success: Literal["unverified"] = "unverified"
 
 
+@dataclass(frozen=True)
+class CriterionCounts:
+    """One criterion over a case: outcomes among successful requests, and
+    its marginal attainment bounds over every offered request."""
+
+    passed: int
+    failed: int
+    not_applicable: int
+    unknown: int
+    attainment_lower: float | None
+    attainment_upper: float | None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "pass": self.passed,
+            "fail": self.failed,
+            "not_applicable": self.not_applicable,
+            "unknown": self.unknown,
+            "attainment_lower": self.attainment_lower,
+            "attainment_upper": self.attainment_upper,
+        }
+
+
+@dataclass(frozen=True)
+class SloEvaluation:
+    """A case judged against a policy (``stormlog.infer.slo_evaluation`` v1).
+
+    ``attainment_lower`` counts unknown outcomes as missed and
+    ``attainment_upper`` as met, so missing evidence widens the bounds and
+    never moves a single figure. Goodput is SLO goodput at the offered load:
+    good requests per second of the case's rate interval, as vLLM's benchmark
+    computes it, not the highest rate that meets a target. An unmeasurable
+    evaluation (a criterion no successful request could be judged on, or one
+    that is aggregate-only) has no attainment or goodput, never zero.
+    """
+
+    slo_name: str
+    slo_digest: str
+    slo_source: str
+    status: Literal["evaluated", "unmeasurable"]
+    reason: str | None
+    population_declared: str
+    population_evaluated: str
+    offered: int
+    met: int
+    missed: int
+    unknown: int
+    attainment_lower: float | None
+    attainment_upper: float | None
+    evidence_coverage: float | None
+    per_criterion: Mapping[str, CriterionCounts]
+    interval: MeasuredInterval | None
+    goodput_lower_rps: float | None
+    goodput_upper_rps: float | None
+    goodput_lower_output_tps: float | None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "format": EVALUATION_FORMAT,
+            "version": EVALUATION_VERSION,
+            "slo_name": self.slo_name,
+            "slo_digest": self.slo_digest,
+            "slo_source": self.slo_source,
+            "status": self.status,
+            "reason": self.reason,
+            "population_declared": self.population_declared,
+            "population_evaluated": self.population_evaluated,
+            "offered": self.offered,
+            "met": self.met,
+            "missed": self.missed,
+            "unknown": self.unknown,
+            "attainment_lower": self.attainment_lower,
+            "attainment_upper": self.attainment_upper,
+            "evidence_coverage": self.evidence_coverage,
+            "per_criterion": {
+                key: counts.to_record() for key, counts in self.per_criterion.items()
+            },
+            "interval": None if self.interval is None else self.interval.to_record(),
+            "goodput_lower_rps": self.goodput_lower_rps,
+            "goodput_upper_rps": self.goodput_upper_rps,
+            "goodput_lower_output_tps": self.goodput_lower_output_tps,
+        }
+
+
 def evaluate_criteria(
     values: Mapping[str, float | CriterionValue | None],
     spec: SloSpec,
@@ -768,6 +855,7 @@ __all__ = [
     "CRITERIA",
     "CriteriaOutcome",
     "Criterion",
+    "CriterionCounts",
     "CriterionDef",
     "CriterionOutcome",
     "CriterionValue",
@@ -777,6 +865,9 @@ __all__ = [
     "SLO_EVENT_TYPE",
     "SLO_FORMAT",
     "SLO_VERSION",
+    "EVALUATION_FORMAT",
+    "EVALUATION_VERSION",
+    "SloEvaluation",
     "SloInterval",
     "SloSpec",
     "load_slo",
