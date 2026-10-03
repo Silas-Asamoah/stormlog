@@ -705,7 +705,7 @@ def test_the_queue_counts_bytes_by_content(
     burst("b")
     writer.emit("alias", {"internal": "y" * 4000})
     release.set()
-    _wait(lambda: sum(p.stat().st_size for p in writer.directory.glob("0*")) > 4096)
+    _wait(lambda: _queued_bytes(writer) == 0)  # written, and released
     burst("c")
     writer.close()
 
@@ -759,21 +759,21 @@ def test_a_short_write_leaves_only_whole_lines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write = os.write
-    failing: dict[str, int] = {}
+    disk: dict[str, int] = {}
 
     def full_disk(fd: int, data: Any) -> int:
-        if failing.get("fd") == fd:
+        # 20 bytes of the marked line land, then the disk is full exactly once.
+        if disk.get("full") == fd:
+            disk["full"] = -1
             raise OSError(errno.ENOSPC, "No space left on device")
-        if "fd" not in failing and b"short-write" in bytes(data):
-            failing["fd"] = fd  # 20 bytes land; the rest of the line fails
+        if "full" not in disk and b"short-write" in bytes(data):
+            disk["full"] = fd
             return write(fd, bytes(data)[:20])
         return write(fd, data)
 
     monkeypatch.setattr(os, "write", full_disk)
     writer = EpochWriter(tmp_path, "engine")
     writer.emit("alias", {"internal": "short-write"})
-    _wait(lambda: "fd" in failing)
-    failing["fd"] = -1
     writer.emit("alias", {"internal": "after"})
     writer.close()
 
@@ -857,6 +857,11 @@ def _epoch_records(directory: Path) -> list[dict[str, Any]]:
         for path in sorted(directory.glob("*.jsonl"))
         for line in path.read_text().splitlines()
     ]
+
+
+def _queued_bytes(writer: EpochWriter) -> int:
+    with writer._condition:
+        return writer._queued_bytes
 
 
 def _wait(condition: Callable[[], bool], seconds: float = 5.0) -> None:
