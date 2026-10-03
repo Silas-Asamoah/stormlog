@@ -331,8 +331,13 @@ clock scope, never a sum:
    without, by the trace importer's reason.
 2. **Membership.** Linked time whose step has complete, incomplete or no
    membership (a step the import has not written yet).
-3. **Ownership.** Linked time in steps that ran only this run's requests,
-   only other clients' (`foreign`), both (`mixed`), or unresolved IDs.
+3. **Ownership.** Linked time in steps that ran only this run's requests
+   (`run`), only other clients' (`foreign`), or both (`mixed`, claimed only
+   when a run member and another client's are both established). A step
+   with an unresolved member, an ID that had no alias and does not parse,
+   is `unresolved` whether or not a run member sits beside it, since the
+   split is unknown. A step is shared, and its case figure non-additive,
+   when any member is not established as this run's.
 4. **Measurement.** GPU activity without a device UUID or device clock is
    counted with its summed duration and never added to a device's union.
 5. **Capture loss.** Records the hook dropped, missing sequences, steps

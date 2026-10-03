@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -309,6 +310,65 @@ def _client_artifact(path: Path) -> Path:
         "".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8"
     )
     return path
+
+
+def test_unresolved_members_are_not_reported_as_mixed(tmp_path: Path) -> None:
+    """``mixed`` means a run member and another client's are both
+    established; an unresolved ID leaves the split unknown (Astra #6)."""
+    opaque = "opaque-id-no-alias"
+    engine_log(
+        tmp_path,
+        [
+            alias(OWN_A, f"chatcmpl-{XA}", T0 - 10),
+            alias(OTHER, "chatcmpl-another-client", T0 - 9),
+            # foreign + unresolved: no run member is established.
+            scheduled(0, T0, [member(OTHER, scheduled=8), member(opaque, scheduled=8)]),
+            completed(0, T0 + SECOND, [done(OTHER), done(opaque)]),
+            # run + unresolved: the other member may or may not be ours.
+            scheduled(
+                1,
+                T0 + 2 * SECOND,
+                [
+                    member(OWN_A, scheduled=8),
+                    member(opaque, scheduled=1, sighting="repeat"),
+                ],
+            ),
+            completed(1, T0 + 3 * SECOND, [done(OWN_A), done(opaque)]),
+            # run + foreign: both established, so mixed.
+            scheduled(
+                2,
+                T0 + 4 * SECOND,
+                [
+                    member(OWN_A, scheduled=1, sighting="repeat"),
+                    member(OTHER, scheduled=1, sighting="repeat"),
+                ],
+            ),
+            completed(2, T0 + 5 * SECOND, [done(OWN_A), done(OTHER)]),
+            goodbye(T0 + 6 * SECOND, 8),
+        ],
+    )
+    facts = replace(
+        _facts(), referenced_iterations=frozenset({EntityRef(PRODUCER, "0")})
+    )
+    capture = reduce_to_capture(read_execution_log(tmp_path, now_ns=NOW), facts)
+    records = [
+        _legacy_request(REQUEST_A, XA, "c1_in8_out4"),
+        *[event.to_record() for event in capture.events],
+        _activity("k0", 0, 10, iteration="0"),
+        _activity("k1", 20, 30, iteration="1"),
+        _activity("k2", 40, 50, iteration="2"),
+    ]
+    report = execution_report(records)
+    assert report["iterations"]["ownership"] == {"unresolved": 2, "mixed": 1}
+    assert report["memberships"] == {"foreign": 2, "unresolved": 2, "run": 2}
+    scope = report["gpu"]["GPU-a@kineto:node-7:trace"]
+    assert scope["ownership_ns"] == {"mixed": 10 * MS, "unresolved": 20 * MS}
+    # Steps 1 and 2 each hold someone not established as this run's.
+    assert report["cases"]["c1_in8_out4"]["shared_iterations"] == 2
+    assert report["cases"]["c1_in8_out4"]["non_additive"] is True
+    assert (
+        "ownership mixed 10.000 ms, unresolved 20.000 ms" in execution_lines(report)[1]
+    )
 
 
 def test_a_re_import_never_improves_the_capture_loss(tmp_path: Path) -> None:

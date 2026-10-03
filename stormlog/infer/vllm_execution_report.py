@@ -39,7 +39,7 @@ from .correlation_events import (
     parse_inference_record,
 )
 from .trace_kineto import merge_intervals
-from .vllm_execution import OWN, STATE_INCOMPLETE
+from .vllm_execution import FOREIGN, OWN, STATE_INCOMPLETE, UNRESOLVED
 from .vllm_execution_import import SOURCE
 
 NON_ADDITIVE = "steps shared between cases or with other clients count in each"
@@ -101,10 +101,29 @@ class _Steps:
         return "complete"
 
     def ownership(self, ref: EntityRef) -> str:
-        owners = {_ownership(m) for m in self.members.get(ref, [])}
-        if not owners:
-            return "none"
-        return next(iter(owners)) if len(owners) == 1 else "mixed"
+        """Established ownership only: ``mixed`` needs both a run member and
+        another client's; an unresolved member leaves the split unknown."""
+        run, foreign, unresolved = self._member_counts(ref)
+        if run and foreign:
+            return "mixed"
+        if unresolved:
+            return UNRESOLVED
+        if run:
+            return OWN
+        return FOREIGN if foreign else "none"
+
+    def _member_counts(self, ref: EntityRef) -> tuple[int, int, int]:
+        """Run, foreign and unresolved members: from the step's own counts,
+        which include members withheld for privacy, else its memberships."""
+        iteration = self.iterations.get(ref)
+        metadata = iteration.metadata if iteration is not None else {}
+        run = _count(metadata.get("run_members"))
+        foreign = _count(metadata.get("foreign_members"))
+        unresolved = _count(metadata.get("unresolved_members"))
+        if run is not None and foreign is not None and unresolved is not None:
+            return run, foreign, unresolved
+        owners = Counter(_ownership(m) for m in self.members.get(ref, []))
+        return owners[OWN], owners[FOREIGN], owners[UNRESOLVED]
 
     def cases(self, ref: EntityRef) -> set[str]:
         return {
@@ -114,7 +133,9 @@ class _Steps:
         }
 
     def shared(self, ref: EntityRef) -> bool:
-        return len(self.cases(ref)) > 1 or self.ownership(ref) == "mixed"
+        """Shared with another case, or with anyone not established as this run."""
+        _run, foreign, unresolved = self._member_counts(ref)
+        return len(self.cases(ref)) > 1 or foreign > 0 or unresolved > 0
 
 
 def execution_report(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -201,6 +222,10 @@ def _cases(records: list[dict[str, Any]]) -> dict[str, str]:
         if record.get("event_type") == "infer.request" and record.get("x_request_id"):
             cases[str(record.get("request_id"))] = str(record.get("case_id"))
     return cases
+
+
+def _count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _ownership(membership: MembershipEvent) -> str:
