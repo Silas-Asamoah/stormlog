@@ -187,6 +187,10 @@ class FakeEngine:
                     "torch_profiler_dir": (
                         str(config.trace_dir) if config.trace_dir else None
                     ),
+                    "torch_profiler_use_gzip": True,
+                    "torch_profiler_dump_cuda_time_total": (
+                        config.torch_profiler_dump_cuda_time_total
+                    ),
                 },
             },
             "vllm_env": {"VLLM_SERVER_DEV_MODE": True},

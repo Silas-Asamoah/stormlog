@@ -38,6 +38,8 @@ class FakeEngineConfig:
     hook_seal_seconds: float = 60.0
     # vLLM's torch_profiler_dir; None means the profiler is not configured.
     trace_dir: Path | None = None
+    # vLLM's default: each stop also writes profiler_out_0.txt, a kernel table.
+    torch_profiler_dump_cuda_time_total: bool = True
     # An OTLP/HTTP traces endpoint (``http://host:port/v1/traces``); None
     # exports no spans.
     spans_endpoint: str | None = None

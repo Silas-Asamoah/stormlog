@@ -6,7 +6,8 @@ holds serving. The trace is a small gzipped Kineto file, one iteration range
 per profiled step with a launch and a kernel inside it; when the hook log is
 on, its ranges name the hook's own iterations, so an import links the work
 to the steps. Like torch's export, the write streams into the trace's final
-name, so a reader can find it present but truncated.
+name, so a reader can find it present but truncated. As vLLM does by default,
+each stop then writes ``profiler_out_0.txt``, the profiler's kernel table.
 """
 
 from __future__ import annotations
@@ -106,6 +107,11 @@ class FakeProfiler(EngineObserver):
         self.active = False
         steps, self._steps = self._steps, []
         time.sleep(self.controls.stop_pause_seconds)
+        self._write_or_schedule(steps)
+        if self.config.torch_profiler_dump_cuda_time_total:
+            self._write_table(steps)
+
+    def _write_or_schedule(self, steps: list[Step]) -> None:
         if not self.controls.stop_writes_trace:
             return
         delay = self.controls.trace_write_delay_seconds
@@ -139,6 +145,27 @@ class FakeProfiler(EngineObserver):
         self.written.append((path, time.time_ns()))
         return path
 
+    def _write_table(self, steps: list[Step]) -> None:
+        """vLLM's profiler_out_<rank>.txt: torch's key_averages table sorted
+        by self CUDA time, cut down to the fake kernel, rewritten each stop."""
+        directory = self.config.trace_dir
+        assert directory is not None
+        directory.mkdir(parents=True, exist_ok=True)
+        worked = [step for step in steps if step.total_tokens]
+        cuda_us = sum(_kernel_us(step) for step in worked)
+        rule = "-" * 24 + "  " + "  ".join(["-" * 12] * 3)
+        lines = [
+            rule,
+            f"{'Name':>24}  {'Self CUDA':>12}  {'Self CUDA %':>12}  {'# of Calls':>12}",
+            rule,
+            f"{'fake_decode_kernel':>24}  {cuda_us / 1000:>10.3f}ms  "
+            f"{100.0 if worked else 0.0:>11.2f}%  {len(worked):>12}",
+            rule,
+            f"Self CPU time total: {len(worked) * 0.001:.3f}ms",
+            f"Self CUDA time total: {cuda_us / 1000:.3f}ms",
+        ]
+        (directory / "profiler_out_0.txt").write_text("\n".join(lines) + "\n\n")
+
     def _document(self, steps: list[Step], host: str) -> dict[str, Any]:
         base_ns = steps[0].exec_start_ns if steps else time.time_ns()
         events: list[dict[str, Any]] = []
@@ -157,7 +184,7 @@ class FakeProfiler(EngineObserver):
         pid = os.getpid()
         tid = self.engine.loop_thread_id or 0
         start_us = (step.exec_start_ns - base_ns) / 1000.0
-        span_us = max((step.exec_end_ns - step.exec_start_ns) / 1000.0, 4.0)
+        span_us = _span_us(step)
         ranged = {
             "ph": "X",
             "cat": "user_annotation",
@@ -191,10 +218,18 @@ class FakeProfiler(EngineObserver):
                 "pid": 0,
                 "tid": 7,
                 "ts": start_us + 2.0,
-                "dur": max(span_us - 3.0, 1.0),
+                "dur": _kernel_us(step),
                 "args": {"device": 0, "stream": 7, "correlation": correlation},
             },
         ]
+
+
+def _span_us(step: Step) -> float:
+    return max((step.exec_end_ns - step.exec_start_ns) / 1000.0, 4.0)
+
+
+def _kernel_us(step: Step) -> float:
+    return max(_span_us(step) - 3.0, 1.0)
 
 
 __all__ = ["NOT_CONFIGURED", "FakeProfiler"]

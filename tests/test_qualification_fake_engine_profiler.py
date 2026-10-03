@@ -18,6 +18,7 @@ from stormlog.infer.trace_kineto import index_spans, link_gpu_event, load_kineto
 from tests.qualification_fake_engine_helpers import (
     chat,
     chats_in_background,
+    get,
     join_all,
     of_type,
     post,
@@ -200,7 +201,34 @@ def test_a_trace_is_written_in_place_and_reads_truncated_until_done(
         stopping.join()
         late = _complete(path)
     assert (early, late) == (False, True)
-    assert sorted(p.name for p in (tmp_path / "traces").iterdir()) == [path.name]
+    names = sorted(p.name for p in (tmp_path / "traces").iterdir())
+    assert names == sorted([path.name, "profiler_out_0.txt"])
+
+
+@pytest.mark.parametrize("dump", [True, False])
+def test_a_stop_leaves_vllms_profiler_table_beside_the_trace(
+    tmp_path: Path, dump: bool
+) -> None:
+    # vLLM writes profiler_out_<rank>.txt at each stop while
+    # torch_profiler_dump_cuda_time_total is on, its default
+    # (profiler/wrapper.py:286-293 and 327-334, config/profiler.py:94).
+    config = FakeEngineConfig(
+        step_seconds=0.001,
+        trace_dir=tmp_path / "traces",
+        torch_profiler_dump_cuda_time_total=dump,
+    )
+    with FakeEngine(config) as engine:
+        post(f"{engine.base_url}/start_profile")
+        chat(engine, words(8, "a"), max_tokens=3)
+        post(f"{engine.base_url}/stop_profile")
+        info = json.loads(get(f"{engine.base_url}/server_info?config_format=json")[1])
+    table = tmp_path / "traces" / "profiler_out_0.txt"
+    profiler_config = info["vllm_config"]["profiler_config"]
+    assert profiler_config["torch_profiler_dump_cuda_time_total"] is dump
+    assert table.exists() is dump
+    if dump:
+        assert "Self CUDA time total" in table.read_text()
+    assert len(_traces(tmp_path)) == 1
 
 
 def test_infer_profile_captures_and_imports_a_window(tmp_path: Path) -> None:

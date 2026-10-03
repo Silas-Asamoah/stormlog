@@ -42,6 +42,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--hook-dir", type=Path, default=None)
     parser.add_argument("--hook-seal-seconds", type=float, default=60.0)
     parser.add_argument("--trace-dir", type=Path, default=None)
+    parser.add_argument("--no-dump-cuda-time-total", action="store_true")
     parser.add_argument("--spans-endpoint", default=None)
     parser.add_argument("--span-export-seconds", type=float, default=0.25)
     parser.add_argument(
@@ -69,6 +70,7 @@ def config_from_args(argv: Sequence[str] | None = None) -> FakeEngineConfig:
         hook_dir=args.hook_dir,
         hook_seal_seconds=args.hook_seal_seconds,
         trace_dir=args.trace_dir,
+        torch_profiler_dump_cuda_time_total=not args.no_dump_cuda_time_total,
         spans_endpoint=args.spans_endpoint,
         span_export_seconds=args.span_export_seconds,
         span_encoding=args.span_encoding,

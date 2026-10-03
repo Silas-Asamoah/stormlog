@@ -187,7 +187,7 @@ What it serves, as vLLM 0.30.0 does:
 | `POST /v1/chat/completions` | Streamed or whole, with usage. A request is named `chatcmpl-<X-Request-Id>`, plus vLLM's random suffix unless `request_id_randomization=False` |
 | `GET /metrics` | vLLM's series names, labels and histogram buckets. The page is taken after each step, so it holds the last step's values while the loop is paused |
 | `POST /reset_prefix_cache` | Runs on the step loop between steps, as vLLM's utility calls do. `{"success": false}` while blocks are held. With `reset_running_requests=true`, it preempts every running request first, and the next step lists them in its `preempted` |
-| `POST /start_profile`, `/stop_profile` | Run between steps, with a configurable stop pause. Repeated calls answer 200. The stop writes a gzipped `rank0.*.pt.trace.json.gz` whose iteration ranges name the hook's steps, streamed into its final name as torch's export does, so a reader can find it truncated while it is written (`trace_write_seconds`). Without `trace_dir` both answer 404 |
+| `POST /start_profile`, `/stop_profile` | Run between steps, with a configurable stop pause. Repeated calls answer 200. The stop writes a gzipped `rank0.*.pt.trace.json.gz` whose iteration ranges name the hook's steps, streamed into its final name as torch's export does, so a reader can find it truncated while it is written (`trace_write_seconds`). As in vLLM by default, it then writes `profiler_out_0.txt`, a kernel table, beside the trace (off with `torch_profiler_dump_cuda_time_total=False`). Without `trace_dir` both answer 404 |
 | `GET /server_info`, `/version`, `/v1/models`, `/health` | Descriptive answers |
 
 **Optional outputs:**
