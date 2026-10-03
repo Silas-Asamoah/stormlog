@@ -166,7 +166,7 @@ class Engine:
         self.running: list[FakeRequest] = []
         self.live: dict[str, FakeRequest] = {}
         self.finished: list[FakeRequest] = []
-        # (victim, running IDs in order just before it was popped).
+        # (victim, running IDs in order just before it left them).
         self.preemption_log: list[tuple[str, tuple[str, ...]]] = []
         self.steps: list[Step] = []
         self.start_ns = time.time_ns()
@@ -281,7 +281,7 @@ class Engine:
         with self._lock:
             if reset_running_requests:
                 while self.running:
-                    self._preempt(self.running.pop(), self._pending_preempted)
+                    self._preempt(self.running[-1], self._pending_preempted)
             return self.pool.reset()
 
     def metrics_snapshot(self) -> StatsSnapshot:
@@ -362,7 +362,7 @@ class Engine:
             request = self.running[index]
             want = min(request.num_tokens - request.computed, budget)
             while not self._grow(request, want):
-                self._preempt(self.running.pop(), preempted)
+                self._preempt(self.running[-1], preempted)
                 if request.status != "RUNNING":
                     return budget
             members.append(self._member(request, want))
@@ -443,7 +443,9 @@ class Engine:
         return True
 
     def _preempt(self, victim: FakeRequest, preempted: list[str]) -> None:
-        order = tuple(request.internal_id for request in [*self.running, victim])
+        """Preempt a running request; vLLM's scheduler takes the newest."""
+        order = tuple(request.internal_id for request in self.running)
+        self.running.remove(victim)
         self.preemption_log.append((victim.internal_id, order))
         self.pool.free(victim.block_ids)
         victim.block_ids = []

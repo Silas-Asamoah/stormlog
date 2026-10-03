@@ -301,7 +301,6 @@ def _step(engine: Engine) -> Step:
 
 def _preempt(engine: Engine, request: FakeRequest) -> None:
     with engine._lock:
-        engine.running.remove(request)
         engine._preempt(request, [])
 
 
@@ -567,3 +566,17 @@ def test_a_one_token_completion_adds_a_zero_time_per_output_token() -> None:
     tpot = engine.stats.histograms["vllm:request_time_per_output_token_seconds"]
     assert request.finished
     assert (tpot.count, tpot.total) == (1, 0.0)
+
+
+def test_kv_exhaustion_preempts_the_last_admitted_request() -> None:
+    # vLLM pops the newest running request (self.running.pop()). Admitted in
+    # the order a, b, c, each holding its two blocks of six, the first step
+    # that needs another block must preempt c; the log names the running
+    # order as it stood before the victim left it.
+    engine = Engine(FakeEngineConfig(block_size=4, num_gpu_blocks=6, max_num_seqs=4))
+    a, b, c = (_request(engine, tag, words(4, tag), max_tokens=8) for tag in "abc")
+    admitted = _step(engine)
+    assert [member.request for member in admitted.members] == [a, b, c]
+    assert _step(engine).preempted == [c.internal_id]
+    ids = (a.internal_id, b.internal_id, c.internal_id)
+    assert engine.preemption_log == [(c.internal_id, ids)]
