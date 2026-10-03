@@ -11,16 +11,18 @@ import sys
 import time
 import urllib.error
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
+from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig, hook_log
 from examples.qualification.fake_engine.__main__ import config_from_args
 from examples.qualification.fake_engine.process import (
     ROOT,
     FakeEngineProcess,
     _environment,
 )
+from stormlog.infer.vllm_hook.writer import EpochWriter
 from tests.qualification_fake_engine_helpers import (
     chats_in_background,
     get,
@@ -213,3 +215,20 @@ def test_a_failed_bind_stops_everything_started_before_it(tmp_path: Path) -> Non
     ]
     assert [thread.name for thread in threads if thread.is_alive()] == []
     engine.stop()  # safe again, and for parts that never started
+
+
+def test_a_hook_log_that_fails_to_open_stops_the_writer_it_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[EpochWriter] = []
+
+    def writer(root: Path, role: str, **kwargs: Any) -> EpochWriter:
+        if role == "worker":
+            raise OSError("no room for the worker epoch")
+        opened.append(EpochWriter(root, role, **kwargs))
+        return opened[-1]
+
+    monkeypatch.setattr(hook_log, "EpochWriter", writer)
+    with pytest.raises(OSError):
+        hook_log.HookLog(tmp_path / "hook", FakeEngineConfig())
+    assert [w._thread.is_alive() for w in opened] == [False]

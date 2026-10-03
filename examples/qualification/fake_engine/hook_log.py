@@ -30,6 +30,16 @@ class HookLog(EngineObserver):
         self.config = config
         limits = WriterLimits(seal_seconds=config.hook_seal_seconds)
         self.engine_writer = EpochWriter(root, "engine", limits=limits)
+        try:
+            self._open(root, limits)
+        except BaseException:
+            # The caller never gets this log to close, so stop what started.
+            self.engine_writer.close()
+            if hasattr(self, "worker_writer"):
+                self.worker_writer.close()
+            raise
+
+    def _open(self, root: Path, limits: WriterLimits) -> None:
         self.producer = producer_name(self.engine_writer)
         self.engine_writer.emit(
             "hello",
@@ -47,7 +57,7 @@ class HookLog(EngineObserver):
                 "rank": {"global": 0, "tp": 0, "pp": 0, "dp": 0},
                 "local_rank": 0,
                 "cuda_ordinal": 0,
-                "device_uuid": config.device_uuid,
+                "device_uuid": self.config.device_uuid,
                 "trace_rank_suffix": "rank0",
             }
         )
