@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_protocol_large_trace_stop_approval",
+  "issue": 118,
+  "proposal_path": "benchmarks/native_probes/protocol_large_trace_stop_proposal_2026-10-03.json",
+  "proposal_sha256": "48c8a0271dad7ce0d73da33df3f96aff8729815674467942d9788f6547cfc01d",
+  "approval_source": "user reply 'Approve 300-second stop wait' on 2026-10-03",
+  "approved_scope": "vllm_direct_cupti_stop_ack_wait_300_seconds_per_process",
+  "numeric_acceptance_policy_workload_capture_bound_and_w4_setpoints_unchanged": true,
+  "helper_source_sha256": "51e8fc43ffca33cc5ec3cb1adde09e458fbcee11301e57a5979664429458f204",
+  "helper_binary_sha256": "70569ef7f94110e503fc7d5f9ff9bd2cfe41e7296195f9466683650cfd86b4ac",
+  "final_trials_authorized_only_after_hardware_preflight": true,
+  "final_trials_started": false,
+  "status": "approved_pending_implementation_validation_and_hardware_preflight"
+}

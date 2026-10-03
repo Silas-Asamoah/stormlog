@@ -43,6 +43,7 @@ CUPTI_TRACE_ENCODING = "stormlog-zlib-frames-v1"
 CUPTI_TRACE_MAGIC = b"SLCPTZ1\n"
 CUPTI_FRAME_HEADER = struct.Struct("<III")
 CUPTI_MAX_FRAME_BYTES = 16 * 1024 * 1024
+CUPTI_STOP_TIMEOUT_SECONDS = 300
 
 
 def request_body() -> dict[str, Any]:
@@ -413,7 +414,7 @@ def _gpu_process_pids() -> tuple[set[int] | None, str | None]:
 def _stop_cupti_helpers(
     directory: Path,
     *,
-    timeout: float = 30,
+    timeout: float = CUPTI_STOP_TIMEOUT_SECONDS,
     expected_controls: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Finalize every live injected process before stopping the vLLM server."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import os
 import socket
@@ -26,6 +27,7 @@ from scripts.native_probes.mode_commands import (
 from scripts.native_probes.models import ExperimentMode, WorkloadId
 from scripts.native_probes.planning import _pressure_controls, build_plan
 from scripts.native_probes.workloads.vllm_open_loop import (
+    CUPTI_STOP_TIMEOUT_SECONDS,
     MEASURED_REQUESTS,
     REVISION,
     SLO_DEADLINE_MS,
@@ -43,6 +45,14 @@ from scripts.native_probes.workloads.vllm_open_loop import (
     run,
     schedule,
 )
+
+
+def test_approved_cupti_stop_wait_is_bounded() -> None:
+    assert CUPTI_STOP_TIMEOUT_SECONDS == 300
+    assert (
+        inspect.signature(_stop_cupti_helpers).parameters["timeout"].default
+        == CUPTI_STOP_TIMEOUT_SECONDS
+    )
 
 
 def test_overloaded_arrivals_are_retained_without_shifting_schedule() -> None:
