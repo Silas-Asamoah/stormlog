@@ -160,35 +160,35 @@ def test_the_command_lines_defaults_are_the_configs() -> None:
 
 
 @pytest.mark.parametrize("target", ["engine", "frontend"])
-def test_stacked_pauses_hold_until_the_last_one_ends(target: str) -> None:
-    # An earlier, shorter pause's timer must not release a later one.
+@pytest.mark.parametrize(
+    "pauses",
+    [(0.2, 0.7), (0.7, 0.2), (0.2, None), (None, 0.2)],
+    ids=["shorter-first", "longer-first", "untimed-last", "untimed-first"],
+)
+def test_stacked_pauses_hold_until_the_last_one_ends(
+    target: str, pauses: tuple[float | None, float | None]
+) -> None:
+    # The gate opens when the pause that ends last ends, whatever the order:
+    # neither a shorter pause's timer nor the latest pause releases it.
     with FakeEngine(FAST) as engine:
-        pause = engine.pause_engine if target == "engine" else engine.pause_frontend
+        if target == "engine":
+            pause, resume = engine.pause_engine, engine.resume_engine
+        else:
+            pause, resume = engine.pause_frontend, engine.resume_frontend
 
         def paused() -> bool:
             if target == "engine":
                 return engine.engine.paused
             return engine.frontend_paused
 
-        pause(0.2)
-        pause(0.7)
+        for seconds in pauses:
+            pause(seconds)
         time.sleep(0.45)
-        held_past_the_first = paused()
-        assert wait_until(lambda: not paused(), timeout=5)
-        pause(0.2)
-        pause()
-        time.sleep(0.45)
-        held_without_a_deadline = paused()
-        if target == "engine":
-            engine.resume_engine()
-        else:
-            engine.resume_frontend()
-        released = not paused()
-    assert (held_past_the_first, held_without_a_deadline, released) == (
-        True,
-        True,
-        True,
-    )
+        held = paused()
+        if None in pauses:
+            resume()
+        released = wait_until(lambda: not paused(), timeout=5)
+    assert (held, released) == (True, True)
 
 
 def test_a_failed_bind_stops_everything_started_before_it(tmp_path: Path) -> None:
