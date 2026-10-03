@@ -258,6 +258,34 @@ def test_cupti_stop_retains_missing_ack() -> None:
             assert result["errors"]
 
 
+def test_cupti_stop_times_out_and_keeps_partial_trace() -> None:
+    with tempfile.TemporaryDirectory(prefix="cupti-stop-", dir="/tmp") as temporary:
+        root = Path(temporary)
+        process = root / "pid-123-test"
+        process.mkdir(mode=0o700)
+        partial = process / "activity.partial"
+        partial.write_bytes(b"incomplete trace")
+        path = process / "stop.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(path))
+            os.chmod(path, 0o600)
+            listener.listen(1)
+
+            def serve() -> None:
+                connection, _ = listener.accept()
+                with connection:
+                    assert connection.recv(4) == b"STOP"
+                    time.sleep(0.2)
+
+            worker = threading.Thread(target=serve, daemon=True)
+            worker.start()
+            result = _stop_cupti_helpers(root, timeout=0.05)
+            worker.join(timeout=1)
+            assert result["complete"] is False
+            assert any("TimeoutError" in error for error in result["errors"])
+            assert partial.read_bytes() == b"incomplete trace"
+
+
 def test_cupti_capture_requires_every_target_and_clean_flush(tmp_path: Path) -> None:
     cupti = tmp_path / "cupti"
     cupti.mkdir()
@@ -294,6 +322,34 @@ def test_cupti_capture_requires_every_target_and_clean_flush(tmp_path: Path) -> 
     capture, loss = _cupti_capture_status(tmp_path, samples)
     assert capture["complete"] is False
     assert loss["vendor_activity"]["lost_records"] == 2
+
+
+def test_cupti_capture_keeps_two_process_traces_distinct(tmp_path: Path) -> None:
+    for pid in (12, 13):
+        process = tmp_path / "cupti" / f"pid-{pid}-distinct"
+        process.mkdir(parents=True)
+        (process / "activity.ndjson").write_text(
+            json.dumps({"pid": pid}) + "\n", encoding="utf-8"
+        )
+        (process / "cupti_status.json").write_text(
+            json.dumps(
+                {
+                    "pid": pid,
+                    "finalized": True,
+                    "initialization_error": None,
+                    "delivered_records": 1,
+                    "cupti_dropped_records": 0,
+                    "local_dropped_records": 0,
+                    "bytes_dropped": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+    samples = [{"processes": [{"pid": pid, "role": "target"} for pid in (12, 13)]}]
+    capture, loss = _cupti_capture_status(tmp_path, samples, {12, 13})
+    assert capture["complete"] is True
+    assert capture["reported_pids"] == [12, 13]
+    assert loss["vendor_activity"]["lost_records"] == 0
 
 
 def test_cupti_capture_rejects_invalid_or_unobserved_process_status(
@@ -485,7 +541,8 @@ def test_slo_and_w4_values_match_approved_amendment() -> None:
     )
     assert planned["approved_variants"] == variants
     assert planned["variant_status"] == "unsupported"
-    assert "producer_buffer_bytes" in planned["unsupported"]
+    assert "producer_buffer_bytes" in planned["supported"]
+    assert "consumer_delay_ms" in planned["supported"]
     assert variants["nominal"]["producer_activity_buffer_bytes"] == 8 * 1024**2
     assert variants["small_buffer"]["producer_activity_buffer_bytes"] == 64 * 1024
     assert variants["slow_consumer"]["consumer_delay_ms_per_completed_buffer"] == 25
@@ -526,6 +583,64 @@ def test_approved_stop_rule_and_cupti_pressure_environment(tmp_path: Path) -> No
             tmp_path,
             cupti_library=library,
         )
+
+
+def test_w4_plan_expands_approved_single_intervention_variants(tmp_path: Path) -> None:
+    approved = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "benchmarks/native_probes/protocol_amendment_proposal_2026-10-02.json"
+        ).read_text(encoding="utf-8")
+    )["w4_direct_cupti_pressure"]["variants"]
+    library = tmp_path / "libstormlog_cupti_injection.so"
+    library.write_bytes(b"placeholder")
+    plan = build_plan(
+        configuration_id="w4-local",
+        vendor="nvidia",
+        workloads=[WorkloadId.W4_STRESS],
+        modes=[ExperimentMode.OFF, ExperimentMode.DIRECT_CUPTI],
+        repetitions=5,
+        seed=118,
+        environment_artifact="environment.json",
+        artifact_root=tmp_path,
+        cupti_library=library,
+    )
+    assert len(plan["trials"]) == 30
+    direct = [row for row in plan["trials"] if row["mode"] == "direct-cupti"]
+    assert len({row["trial_id"] for row in plan["trials"]}) == 30
+    assert {row["pressure_controls"]["variant_name"] for row in direct} == {
+        "nominal",
+        "small_buffer",
+        "slow_consumer",
+        "output_limit",
+        "target_timeout",
+    }
+    assert all(
+        row["pressure_controls"]["variant_status"] == "unsupported" for row in direct
+    )
+    for row in direct:
+        controls = row["pressure_controls"]
+        environment = row["command"]["environment"]
+        expected = approved[controls["variant_name"]]
+        assert (
+            int(environment["STORMLOG_CUPTI_BUFFER_BYTES"])
+            == expected["producer_activity_buffer_bytes"]
+        )
+        assert (
+            int(environment["STORMLOG_CUPTI_MAX_BYTES"])
+            == expected["output_byte_bound"]
+        )
+        assert (
+            int(environment["STORMLOG_CUPTI_CONSUMER_DELAY_MS"])
+            == expected["consumer_delay_ms_per_completed_buffer"]
+        )
+        if controls["variant_name"] == "target_timeout":
+            assert controls["target_timeout_after_measurement_start_ms"] == 500
+            assert environment["STORMLOG_MEASUREMENT_START_FILE"].endswith(
+                "/measurement-start.ns"
+            )
+        else:
+            assert "STORMLOG_MEASUREMENT_START_FILE" not in environment
 
 
 def test_vllm_plan_separates_modes_and_rejects_unimplemented_modes(

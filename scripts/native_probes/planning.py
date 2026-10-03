@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -16,7 +17,15 @@ from .mode_commands import (
     vllm_expected_artifacts,
     vllm_process_roles,
 )
-from .models import ExperimentMode, WorkloadId
+from .models import CommandSpec, ExperimentMode, WorkloadId
+
+W4_DIRECT_CUPTI_VARIANTS: dict[str, tuple[int, int, int, int | None]] = {
+    "nominal": (8388608, 268435456, 0, None),
+    "small_buffer": (65536, 268435456, 0, None),
+    "slow_consumer": (8388608, 268435456, 25, None),
+    "output_limit": (8388608, 65536, 0, None),
+    "target_timeout": (8388608, 268435456, 0, 500),
+}
 
 
 def counterbalanced_order(
@@ -93,53 +102,92 @@ def build_plan(
         workload = Workload(workload_id, seed=seed)
         for repetition, order in enumerate(orders):
             for mode in order:
-                identity = trial_id(
-                    configuration_id, workload_id.value, mode, repetition
+                variants: list[
+                    tuple[str | None, tuple[int, int, int, int | None] | None]
+                ] = (
+                    list(W4_DIRECT_CUPTI_VARIANTS.items())
+                    if workload_id is WorkloadId.W4_STRESS
+                    and mode is ExperimentMode.DIRECT_CUPTI
+                    else [(None, None)]
                 )
-                directory = artifact_root / configuration_id / "trials" / identity
-                if workload_id is WorkloadId.VLLM:
-                    if vendor != "nvidia":
-                        raise ValueError("the pinned vLLM adapter requires NVIDIA")
-                    command = vllm_command(mode, directory, cupti_library=cupti_library)
-                    artifacts = vllm_expected_artifacts(mode)
-                    roles = vllm_process_roles(mode)
-                    pressure_controls: dict[str, Any] = {}
-                else:
-                    command = microbenchmark_command(
+                for variant_name, settings in variants:
+                    selected_workload = workload
+                    if settings is not None:
+                        selected_workload = replace(
+                            workload,
+                            producer_buffer_bytes=settings[0],
+                            output_byte_bound=settings[1],
+                            consumer_delay_ms=settings[2],
+                        )
+                    identity = trial_id(
+                        configuration_id,
+                        workload_id.value
+                        + (f"-{variant_name}" if variant_name else ""),
                         mode,
-                        workload,
-                        directory,
-                        cupti_library=cupti_library,
-                        vendor=vendor,
+                        repetition,
                     )
-                    artifacts = expected_artifacts(mode, vendor)
-                    roles = process_roles(mode)
-                    pressure_controls = _pressure_controls(workload, mode)
-                trials.append(
-                    {
-                        "trial_id": identity,
-                        "configuration_id": configuration_id,
-                        "workload_id": workload_id.value,
-                        "mode": mode.value,
-                        "repetition": repetition,
-                        "command": {
-                            "argv": list(command.argv),
-                            "environment": dict(command.environment),
-                            "timeout_seconds": command.timeout_seconds,
-                        },
-                        "expected_artifacts": [row.__dict__ for row in artifacts],
-                        "process_roles": [
-                            {
-                                "role": row.role.value,
-                                "discovery": row.discovery,
-                                "argv_contains": row.argv_contains,
-                            }
-                            for row in roles
-                        ],
-                        "measurement_range_id": workload.measurement_range_id,
-                        "pressure_controls": pressure_controls,
-                    }
-                )
+                    directory = artifact_root / configuration_id / "trials" / identity
+                    if workload_id is WorkloadId.VLLM:
+                        if vendor != "nvidia":
+                            raise ValueError("the pinned vLLM adapter requires NVIDIA")
+                        command = vllm_command(
+                            mode, directory, cupti_library=cupti_library
+                        )
+                        artifacts = vllm_expected_artifacts(mode)
+                        roles = vllm_process_roles(mode)
+                        pressure_controls: dict[str, Any] = {}
+                    else:
+                        command = microbenchmark_command(
+                            mode,
+                            selected_workload,
+                            directory,
+                            cupti_library=cupti_library,
+                            vendor=vendor,
+                        )
+                        artifacts = expected_artifacts(mode, vendor)
+                        roles = process_roles(mode)
+                        pressure_controls = _pressure_controls(selected_workload, mode)
+                    if variant_name is not None and settings is not None:
+                        pressure_controls["variant_name"] = variant_name
+                        pressure_controls[
+                            "target_timeout_after_measurement_start_ms"
+                        ] = settings[3]
+                        if settings[3] is not None:
+                            command = CommandSpec(
+                                command.argv,
+                                {
+                                    **command.environment,
+                                    "STORMLOG_MEASUREMENT_START_FILE": str(
+                                        directory.resolve() / "measurement-start.ns"
+                                    ),
+                                },
+                                command.timeout_seconds,
+                            )
+                    trials.append(
+                        {
+                            "trial_id": identity,
+                            "configuration_id": configuration_id,
+                            "workload_id": workload_id.value,
+                            "mode": mode.value,
+                            "repetition": repetition,
+                            "command": {
+                                "argv": list(command.argv),
+                                "environment": dict(command.environment),
+                                "timeout_seconds": command.timeout_seconds,
+                            },
+                            "expected_artifacts": [row.__dict__ for row in artifacts],
+                            "process_roles": [
+                                {
+                                    "role": row.role.value,
+                                    "discovery": row.discovery,
+                                    "argv_contains": row.argv_contains,
+                                }
+                                for row in roles
+                            ],
+                            "measurement_range_id": selected_workload.measurement_range_id,
+                            "pressure_controls": pressure_controls,
+                        }
+                    )
     return {
         "schema_version": 1,
         "artifact_kind": "native_probe_plan",
@@ -165,7 +213,7 @@ def _pressure_controls(workload: Workload, mode: ExperimentMode) -> dict[str, An
     }
     supported = {"launches_per_iteration"}
     if mode is ExperimentMode.DIRECT_CUPTI:
-        supported |= {"output_byte_bound"}
+        supported |= {"producer_buffer_bytes", "output_byte_bound", "consumer_delay_ms"}
     if mode in {ExperimentMode.EBPF_SEMANTIC, ExperimentMode.HYBRID_CUPTI_EBPF}:
         supported |= {"transport_buffer_bytes", "consumer_delay_ms"}
     result: dict[str, Any] = {
@@ -200,7 +248,7 @@ def _pressure_controls(workload: Workload, mode: ExperimentMode) -> dict[str, An
         }
         result["variant_status"] = "unsupported"
         result["variant_reason"] = (
-            "pinned CUPTI helper has a fixed 4194304-byte activity buffer, "
-            "no consumer-delay control, and no measured-range timeout watchdog"
+            "CPU controls are wired, but all W4 pressure effects remain unverified "
+            "on compatible hardware"
         )
     return result

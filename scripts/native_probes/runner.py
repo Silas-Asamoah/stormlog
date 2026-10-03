@@ -49,6 +49,7 @@ def run_trial(
     """Execute one argv-only trial and preserve all outputs and failures."""
     _validate_environment(spec.command.environment)
     trial_directory = output_root / spec.configuration_id / "trials" / spec.trial_id
+    watchdog = _measurement_watchdog(spec, trial_directory)
     trial_directory.mkdir(parents=True, exist_ok=False, mode=0o700)
     if (
         spec.mode is ExperimentMode.DIRECT_CUPTI
@@ -66,7 +67,9 @@ def run_trial(
     stdout_path = logs_directory / "stdout.log"
     stderr_path = logs_directory / "stderr.log"
     started_at_ns = time.time_ns()
-    status, return_code, resources = _execute(spec, stdout_path, stderr_path)
+    status, return_code, resources, watchdog_observation = _execute(
+        spec, stdout_path, stderr_path, watchdog
+    )
     artifacts = _collect_artifacts(spec, trial_directory)
     validate_unique_artifacts(artifacts)
     workload_result = _workload_result(stdout_path)
@@ -91,6 +94,15 @@ def run_trial(
         limitations.append(
             str(spec.pressure_controls.get("variant_reason", "W4 pressure unsupported"))
         )
+    pressure_controls = dict(spec.pressure_controls)
+    if watchdog_observation is not None:
+        pressure_controls["watchdog_observation"] = watchdog_observation
+        if watchdog_observation.get("error") and status in {
+            ResultStatus.PASS,
+            ResultStatus.UNSUPPORTED,
+        }:
+            status = ResultStatus.FAIL
+            limitations.append(str(watchdog_observation["error"]))
     manifest = {
         "schema_version": 2,
         "artifact_kind": "native_probe_trial",
@@ -118,7 +130,7 @@ def run_trial(
             workload_result.get("ground_truth") if workload_result else None
         ),
         "loss": (workload_result.get("loss", {}) if workload_result else {}),
-        "pressure_controls": dict(spec.pressure_controls),
+        "pressure_controls": pressure_controls,
         "artifacts": artifacts,
         "limitations": limitations,
     }
@@ -127,8 +139,11 @@ def run_trial(
 
 
 def _execute(
-    spec: TrialSpec, stdout_path: Path, stderr_path: Path
-) -> tuple[ResultStatus, int | None, dict[str, Any]]:
+    spec: TrialSpec,
+    stdout_path: Path,
+    stderr_path: Path,
+    watchdog: tuple[Path, int] | None,
+) -> tuple[ResultStatus, int | None, dict[str, Any], dict[str, Any] | None]:
     environment = os.environ.copy()
     environment.update(spec.command.environment)
     started = time.monotonic()
@@ -156,16 +171,35 @@ def _execute(
             }
             resources = {role.role.value: dict(unknown) for role in spec.process_roles}
             resources[ProcessRole.SYSTEM.value] = dict(unknown)
-            return ResultStatus.FAIL, None, resources
-        metrics = _observe(
-            process, started, spec.command.timeout_seconds, spec.process_roles
+            return ResultStatus.FAIL, None, resources, None
+        timed_out, resources, watchdog_observation = _observe(
+            process,
+            started,
+            spec.command.timeout_seconds,
+            spec.process_roles,
+            watchdog,
         )
     if process.returncode is None:
         raise RuntimeError("trial process did not reach a terminal state")
     status = ResultStatus.PASS if process.returncode == 0 else ResultStatus.FAIL
-    if metrics[0]:
+    if timed_out:
         status = ResultStatus.TIMEOUT
-    return status, process.returncode, metrics[1]
+    return status, process.returncode, resources, watchdog_observation
+
+
+def _measurement_watchdog(
+    spec: TrialSpec, trial_directory: Path
+) -> tuple[Path, int] | None:
+    value = spec.pressure_controls.get("target_timeout_after_measurement_start_ms")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("measurement watchdog must be a positive integer")
+    marker = spec.command.environment.get("STORMLOG_MEASUREMENT_START_FILE")
+    expected = trial_directory.resolve() / "measurement-start.ns"
+    if marker != str(expected):
+        raise ValueError("measurement watchdog marker must be inside its trial")
+    return expected, value
 
 
 def _observe(
@@ -173,12 +207,23 @@ def _observe(
     started: float,
     timeout_seconds: float,
     role_specs: tuple[ProcessRoleSpec, ...],
-) -> tuple[bool, dict[str, Any]]:
+    watchdog: tuple[Path, int] | None,
+) -> tuple[bool, dict[str, Any], dict[str, Any] | None]:
     root = psutil.Process(process.pid)
     roles = role_specs or (ProcessRoleSpec(ProcessRole.TARGET, "root"),)
     observed: dict[ProcessRole, ProcessMetrics] = {}
     system_start = psutil.cpu_times()
     timed_out = False
+    watchdog_observation: dict[str, Any] | None = (
+        {
+            "configured_timeout_ms": watchdog[1],
+            "marker_monotonic_ns": None,
+            "fired": False,
+            "error": None,
+        }
+        if watchdog is not None
+        else None
+    )
     while process.poll() is None:
         process_rows = _process_tree(root)
         for role in roles:
@@ -187,12 +232,48 @@ def _observe(
                 observed[role.role] = _merge_metrics(
                     observed.get(role.role), _sample_processes(selected)
                 )
+        if watchdog is not None and watchdog_observation is not None:
+            marker_path, delay_ms = watchdog
+            if (
+                watchdog_observation["marker_monotonic_ns"] is None
+                and marker_path.exists()
+            ):
+                try:
+                    marker_ns = int(marker_path.read_text(encoding="ascii").strip())
+                    if marker_ns <= 0 or marker_ns > time.monotonic_ns():
+                        raise ValueError("invalid measurement start time")
+                    watchdog_observation["marker_monotonic_ns"] = marker_ns
+                except (OSError, ValueError) as error:
+                    watchdog_observation["error"] = (
+                        f"invalid measurement marker: {error}"
+                    )
+                    _terminate(process)
+                    break
+            marker_ns = watchdog_observation["marker_monotonic_ns"]
+            if (
+                marker_ns is not None
+                and time.monotonic_ns() >= marker_ns + delay_ms * 1_000_000
+            ):
+                timed_out = True
+                watchdog_observation["fired"] = True
+                _terminate(process)
+                break
         if time.monotonic() - started >= timeout_seconds:
             timed_out = True
+            if watchdog_observation is not None:
+                watchdog_observation["error"] = (
+                    "overall trial timeout before measured watchdog"
+                )
             _terminate(process)
             break
         time.sleep(_POLL_SECONDS)
     process.wait()
+    if (
+        watchdog_observation is not None
+        and watchdog_observation["marker_monotonic_ns"] is None
+        and watchdog_observation["error"] is None
+    ):
+        watchdog_observation["error"] = "measurement start marker missing"
     elapsed_ms = (time.monotonic() - started) * 1_000
     result = {
         role.role.value: _role_manifest(observed.get(role.role), elapsed_ms)
@@ -209,7 +290,7 @@ def _observe(
         "read_bytes": None,
         "write_bytes": None,
     }
-    return timed_out, result
+    return timed_out, result, watchdog_observation
 
 
 def _select_role(

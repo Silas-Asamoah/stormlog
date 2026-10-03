@@ -481,6 +481,75 @@ def test_runner_timeout_retains_partial_evidence(tmp_path: Path) -> None:
     assert all(row["status"] == "present" for row in result["artifacts"])
 
 
+def test_w4_measured_watchdog_retains_partial_trace(tmp_path: Path) -> None:
+    trial_id = "w4-watchdog"
+    directory = tmp_path / "control" / "trials" / trial_id
+    marker = directory / "measurement-start.ns"
+    cupti = directory / "cupti"
+    script = (
+        "import os,pathlib,time; "
+        "pathlib.Path(os.environ['STORMLOG_MEASUREMENT_START_FILE'])"
+        ".write_text(str(time.monotonic_ns())); "
+        "pathlib.Path(os.environ['STORMLOG_CUPTI_OUTPUT_DIR'])"
+        ".joinpath('activity.partial').write_text('partial'); "
+        "time.sleep(10)"
+    )
+    spec = TrialSpec(
+        trial_id=trial_id,
+        configuration_id="control",
+        workload_id=WorkloadId.W4_STRESS,
+        mode=ExperimentMode.DIRECT_CUPTI,
+        repetition=0,
+        command=CommandSpec(
+            (sys.executable, "-c", script),
+            {
+                "STORMLOG_MEASUREMENT_START_FILE": str(marker),
+                "STORMLOG_CUPTI_OUTPUT_DIR": str(cupti),
+            },
+            5.0,
+        ),
+        pressure_controls={
+            "variant_name": "target_timeout",
+            "variant_status": "unsupported",
+            "target_timeout_after_measurement_start_ms": 500,
+        },
+    )
+    result = run_trial(spec, tmp_path)
+    assert result["status"] == "timeout"
+    assert result["return_code"] != 0
+    assert result["pressure_controls"]["watchdog_observation"]["fired"] is True
+    assert (cupti / "activity.partial").read_text() == "partial"
+
+
+def test_w4_watchdog_missing_marker_preserves_nonzero_exit(tmp_path: Path) -> None:
+    trial_id = "w4-missing-marker"
+    directory = tmp_path / "control" / "trials" / trial_id
+    spec = TrialSpec(
+        trial_id=trial_id,
+        configuration_id="control",
+        workload_id=WorkloadId.W4_STRESS,
+        mode=ExperimentMode.DIRECT_CUPTI,
+        repetition=0,
+        command=CommandSpec(
+            (sys.executable, "-c", "import sys; sys.exit(7)"),
+            {
+                "STORMLOG_MEASUREMENT_START_FILE": str(
+                    directory / "measurement-start.ns"
+                ),
+                "STORMLOG_CUPTI_OUTPUT_DIR": str(directory / "cupti"),
+            },
+            5.0,
+        ),
+        pressure_controls={"target_timeout_after_measurement_start_ms": 500},
+    )
+    result = run_trial(spec, tmp_path)
+    assert result["status"] == "fail"
+    assert result["return_code"] == 7
+    assert (
+        "marker missing" in result["pressure_controls"]["watchdog_observation"]["error"]
+    )
+
+
 def test_paired_perturbation_requires_matched_nonzero_baseline() -> None:
     baseline = _paired_trial("off-0", "off", 0, 10.0)
     profiled = _paired_trial("public-0", "public-pytorch", 0, 12.0)

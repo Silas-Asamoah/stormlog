@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import time
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 from ..models import WorkloadId
@@ -307,6 +309,23 @@ def _measure(
 def _range_with_markers(torch: Any, iterations: int, range_id: str) -> Iterator[int]:
     torch.cuda.nvtx.range_push(range_id)
     try:
+        marker = os.environ.get("STORMLOG_MEASUREMENT_START_FILE")
+        if marker is not None:
+            path = Path(marker)
+            if not path.is_absolute():
+                raise ValueError("measurement start file must be absolute")
+            temporary = path.with_name(path.name + ".tmp")
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+            )
+            try:
+                os.write(descriptor, f"{time.monotonic_ns()}\n".encode("ascii"))
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, path)
         yield from range(iterations)
     finally:
         torch.cuda.nvtx.range_pop()
