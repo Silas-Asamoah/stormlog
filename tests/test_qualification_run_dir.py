@@ -1,4 +1,5 @@
-"""A run directory's label, layout and atomic publication."""
+"""A run directory's label, layout and atomic publication, and the victim's
+SLO outcomes for the impact layer."""
 
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from examples.qualification.outcomes import Slo, count_outcomes, outcome
 from examples.qualification.run_dir import RunDirectory, new_label, verify
 
 
@@ -37,6 +39,47 @@ def test_a_run_appears_whole_or_not_at_all(tmp_path: Path) -> None:
     assert verify(published) == ["changed run/victim.jsonl"]
     with pytest.raises(FileExistsError):
         RunDirectory(tmp_path, "q221-0000000000000001").create()
+
+
+def _request(
+    status: str = "ok", ttft: float = 100, e2e: float = 500, at: int = 10
+) -> dict[str, Any]:
+    return {
+        "event_type": "infer.request",
+        "status": status,
+        "ttft_ms": ttft,
+        "e2e_latency_ms": e2e,
+        "started_at_ns": at,
+    }
+
+
+def test_outcomes_follow_213s_rule() -> None:
+    # #213's evaluate_request: anything but ok is missed, cancelled
+    # included; a successful request misses on any failed criterion, else is
+    # unknown on any value no latency can have.
+    slo = Slo(ttft_ms=200, e2e_ms=1000)
+    assert outcome(_request(), slo) == "met"
+    assert outcome(_request(ttft=200), slo) == "met"
+    assert outcome(_request(ttft=300), slo) == "violation"
+    for failed in ("timeout", "rejected", "error", "dropped", "cancelled"):
+        assert outcome(_request(failed), slo) == "violation"
+    for unjudged in (None, float("nan"), float("inf"), -5.0):
+        assert outcome(_request(e2e=unjudged), slo) == "unknown"  # type: ignore[arg-type]
+    assert outcome(_request(ttft=300, e2e=None), slo) == "violation"  # type: ignore[arg-type]
+
+
+def test_outcomes_are_counted_by_arrival() -> None:
+    slo = Slo(ttft_ms=200)
+    records = [
+        _request(at=5),
+        _request(ttft=900, at=10),
+        _request(ttft=-1, at=15),
+        {**_request(at=99), "intended_at_ns": 20},  # arrived at 20, sent at 99
+        _request(at=30),
+        {"event_type": "infer.phase_window"},
+    ]
+    counts = count_outcomes(records, 10, 20, slo)
+    assert (counts.violations, counts.met, counts.unknown) == (1, 1, 1)
 
 
 def _run(tmp_path: Path) -> Path:
