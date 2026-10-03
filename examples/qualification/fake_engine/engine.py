@@ -378,14 +378,19 @@ class Engine:
             # A resumed request can reuse its generated blocks too.
             request.block_hashes = self.pool.block_hashes(request.tokens)
             cached = self.pool.lookup(request.block_hashes, request.num_tokens)
+            computed = len(cached) * self.config.block_size
+            want = min(request.num_tokens - computed, budget)
+            fresh = math.ceil((computed + want) / self.config.block_size) - len(cached)
+            if not self.pool.fits(cached, fresh):
+                # vLLM takes the hits only once the allocation fits
+                # (KVCacheManager.allocate_slots), so a refused admission
+                # leaves them where they were in the free queue.
+                return
             self.pool.touch(cached)
             request.block_ids = list(cached)
-            request.computed = len(cached) * self.config.block_size
-            want = min(request.num_tokens - request.computed, budget)
-            if not self._grow(request, want):
-                self.pool.free(request.block_ids)
-                request.block_ids, request.computed = [], 0
-                return
+            request.computed = computed
+            # It fits, so this takes every block it needs.
+            self._grow(request, want)
             self.waiting.popleft()
             self.running.append(request)
             self._admit(request)

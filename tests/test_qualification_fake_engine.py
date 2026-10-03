@@ -268,12 +268,15 @@ def test_a_resets_victims_are_listed_in_the_next_steps_preempted() -> None:
 
 
 def _stepped_engine(
-    *, max_num_batched_tokens: int = 256, enable_prefix_caching: bool = True
+    *,
+    max_num_batched_tokens: int = 256,
+    enable_prefix_caching: bool = True,
+    num_gpu_blocks: int = 64,
 ) -> Engine:
     """An engine whose steps a test drives by hand: its loop never starts."""
     config = FakeEngineConfig(
         block_size=4,
-        num_gpu_blocks=64,
+        num_gpu_blocks=num_gpu_blocks,
         max_num_batched_tokens=max_num_batched_tokens,
         enable_prefix_caching=enable_prefix_caching,
     )
@@ -317,6 +320,29 @@ def test_a_resumed_request_reuses_its_own_generated_blocks() -> None:
     (member,) = step.members
     assert request.prompt_len == 10
     assert member.computed_before == 16
+
+
+def test_a_refused_admission_leaves_its_cached_hits_in_the_free_queue() -> None:
+    # vLLM takes a waiting request's prefix hits only once its allocation
+    # fits (KVCacheManager.allocate_slots), so a refused admission leaves an
+    # idle hit where it was in the LRU queue instead of moving it to the tail.
+    engine = _stepped_engine(num_gpu_blocks=10)
+    _request(engine, "a", words(8, "a"), max_tokens=1)
+    _step(engine)
+    _request(engine, "d", words(4, "d"), max_tokens=1)
+    _step(engine)
+    running = _request(engine, "c", words(15, "c"), max_tokens=50)
+    _step(engine)
+    refused = _request(engine, "b", f"{words(8, 'a')} {words(16, 'b')}", 1)
+    hits = engine.pool.lookup(engine.pool.block_hashes(refused.tokens), 28)
+    idle = [
+        block_id for block_id in hits if engine.pool.blocks[block_id].ref_count == 0
+    ]
+    queue = list(engine.pool._free)
+    step = _step(engine)
+    assert [member.request for member in step.members] == [running]
+    assert len(idle) == 2 and set(idle) <= set(queue)
+    assert list(engine.pool._free) == queue
 
 
 def test_the_first_step_after_a_resume_is_context() -> None:

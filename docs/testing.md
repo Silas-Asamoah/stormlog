@@ -153,7 +153,9 @@ series vLLM exports:
 - **Prefix cache.** Every full block is hashed and cached, generated tokens
   included, so a request resumed after preemption reuses blocks past its
   prompt. Freed blocks keep their hashes in an LRU queue, so a shared prefix
-  is reused until other traffic evicts it. Two requests that compute the same
+  is reused until other traffic evicts it. A waiting request takes its hits
+  only once its whole allocation fits, so a refused admission leaves them
+  where they were in the queue. Two requests that compute the same
   block each cache a copy, and a hit lasts while either copy stays. As in
   vLLM, the exported prefix-cache counters count each request's first
   admission only, and nothing with caching off; a resumed request's lookups

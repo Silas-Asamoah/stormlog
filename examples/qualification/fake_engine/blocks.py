@@ -75,6 +75,13 @@ class BlockPool:
             found.append(next(iter(copies)))
         return found
 
+    def fits(self, cached: Sequence[int], fresh: int) -> bool:
+        """Whether a request can take its ``cached`` hits and ``fresh`` new
+        blocks. An idle hit leaves the free queue too, so it counts against
+        the free blocks, as in vLLM."""
+        idle = sum(1 for block_id in cached if self.blocks[block_id].ref_count == 0)
+        return fresh + idle <= self.free_count
+
     def touch(self, block_ids: Sequence[int]) -> None:
         """Take a reference on cached blocks, out of the free queue if idle."""
         for block_id in block_ids:
