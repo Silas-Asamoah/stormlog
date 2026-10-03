@@ -18,6 +18,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 find_package(CUDAToolkit 12.0 REQUIRED)
+find_package(ZLIB REQUIRED)
 
 find_path(
     CUPTI_INCLUDE_DIR
@@ -45,6 +46,7 @@ target_link_libraries(
     stormlog_cupti_injection
     PRIVATE
         "${CUPTI_LIBRARY}"
+        ZLIB::ZLIB
         dl
         pthread
 )

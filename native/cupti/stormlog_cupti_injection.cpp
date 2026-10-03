@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #include <atomic>
 #include <chrono>
@@ -29,15 +30,20 @@
 
 namespace {
 
-constexpr char kHelperVersion[] = "0.1.0";
+constexpr char kHelperVersion[] = "0.2.0";
+constexpr char kTraceEncoding[] = "stormlog-zlib-frames-v1";
+constexpr char kTraceMagic[] = "SLCPTZ1\n";
+constexpr std::size_t kFrameBufferBytes = 64U * 1024U;
+constexpr std::uint32_t kCompressionLevel = 3;
+constexpr std::uint64_t kFrameHeaderBytes = 12;
 constexpr char kOutputDirectoryEnv[] = "STORMLOG_CUPTI_OUTPUT_DIR";
 constexpr char kMaximumBytesEnv[] = "STORMLOG_CUPTI_MAX_BYTES";
 constexpr char kActivitiesEnv[] = "STORMLOG_CUPTI_ACTIVITIES";
 constexpr char kBufferBytesEnv[] = "STORMLOG_CUPTI_BUFFER_BYTES";
 constexpr char kConsumerDelayEnv[] = "STORMLOG_CUPTI_CONSUMER_DELAY_MS";
 constexpr char kControlFilename[] = "stop.sock";
-constexpr char kTracePartialFilename[] = "activity.ndjson.partial";
-constexpr char kTraceFilename[] = "activity.ndjson";
+constexpr char kTracePartialFilename[] = "activity.sclz.partial";
+constexpr char kTraceFilename[] = "activity.sclz";
 constexpr char kStatusFilename[] = "cupti_status.json";
 constexpr char kStatusTemporaryFilename[] = "cupti_status.json.tmp";
 constexpr std::size_t kDefaultActivityBufferBytes = 8U * 1024U * 1024U;
@@ -65,6 +71,7 @@ struct CaptureState {
   std::atomic<std::uint64_t> local_dropped_records{0};
   std::atomic<std::uint64_t> bytes_written{0};
   std::atomic<std::uint64_t> bytes_dropped{0};
+  std::atomic<std::uint64_t> uncompressed_bytes_delivered{0};
   int directory_fd{-1};
   int trace_fd{-1};
   std::atomic<int> control_fd{-1};
@@ -74,6 +81,9 @@ struct CaptureState {
   std::uint64_t maximum_bytes{0};
   std::size_t activity_buffer_bytes{kDefaultActivityBufferBytes};
   std::uint64_t consumer_delay_ms{0};
+  std::string frame_buffer;
+  std::uint32_t frame_records{0};
+  bool output_limit_reached{false};
   std::uint64_t started_timestamp_ns{0};
   std::uint64_t ended_timestamp_ns{0};
   std::uint32_t cupti_version{0};
@@ -252,29 +262,95 @@ std::string QueryCudaVersion(const char* symbol_name) {
   return std::to_string(version);
 }
 
+void AppendU32(std::string* output, std::uint32_t value) {
+  for (int index = 0; index < 4; ++index) {
+    output->push_back(static_cast<char>((value >> (index * 8)) & 0xffU));
+  }
+}
+
+void DropBufferedRecords() {
+  g_state.local_dropped_records.fetch_add(g_state.frame_records);
+  g_state.bytes_dropped.fetch_add(g_state.frame_buffer.size());
+  g_state.frame_buffer.clear();
+  g_state.frame_records = 0;
+}
+
+void FlushFrame() {
+  if (g_state.frame_buffer.empty()) {
+    return;
+  }
+  const uLong raw_size = static_cast<uLong>(g_state.frame_buffer.size());
+  if (raw_size > std::numeric_limits<std::uint32_t>::max()) {
+    SetInitializationError("activity frame exceeds 32-bit length");
+    DropBufferedRecords();
+    g_state.output_limit_reached = true;
+    return;
+  }
+  std::string compressed(compressBound(raw_size), '\0');
+  uLongf compressed_size = compressed.size();
+  const int result = compress2(
+      reinterpret_cast<Bytef*>(compressed.data()), &compressed_size,
+      reinterpret_cast<const Bytef*>(g_state.frame_buffer.data()), raw_size,
+      kCompressionLevel);
+  if (result != Z_OK ||
+      compressed_size > std::numeric_limits<std::uint32_t>::max()) {
+    SetInitializationError("activity frame compression failed");
+    DropBufferedRecords();
+    g_state.output_limit_reached = true;
+    return;
+  }
+  compressed.resize(compressed_size);
+  std::string frame;
+  frame.reserve(kFrameHeaderBytes + compressed.size());
+  AppendU32(&frame, static_cast<std::uint32_t>(compressed_size));
+  AppendU32(&frame, static_cast<std::uint32_t>(raw_size));
+  AppendU32(&frame, g_state.frame_records);
+  frame += compressed;
+  const std::uint64_t current = g_state.bytes_written.load();
+  if (frame.size() > g_state.maximum_bytes - current - kFrameHeaderBytes) {
+    g_state.output_limit_reached = true;
+    DropBufferedRecords();
+    return;
+  }
+  if (!WriteAll(g_state.trace_fd, frame)) {
+    if (ftruncate(g_state.trace_fd, static_cast<off_t>(current)) != 0 ||
+        lseek(g_state.trace_fd, static_cast<off_t>(current), SEEK_SET) < 0) {
+      SetSystemError("could not restore trace after a partial frame write");
+    } else {
+      SetInitializationError("could not write a complete trace frame");
+    }
+    g_state.output_limit_reached = true;
+    DropBufferedRecords();
+    return;
+  }
+  g_state.bytes_written.fetch_add(frame.size());
+  g_state.uncompressed_bytes_delivered.fetch_add(raw_size);
+  g_state.delivered_records.fetch_add(g_state.frame_records);
+  g_state.frame_buffer.clear();
+  g_state.frame_records = 0;
+}
+
 void WriteRecord(std::string record) {
   record.push_back('\n');
   std::lock_guard<std::mutex> lock(g_state.output_mutex);
-  const std::uint64_t current = g_state.bytes_written.load();
-  if (current >= g_state.maximum_bytes ||
-      record.size() > g_state.maximum_bytes - current) {
+  if (g_state.output_limit_reached) {
     g_state.local_dropped_records.fetch_add(1);
     g_state.bytes_dropped.fetch_add(record.size());
     return;
   }
-  if (!WriteAll(g_state.trace_fd, record)) {
-    if (ftruncate(g_state.trace_fd, static_cast<off_t>(current)) != 0 ||
-        lseek(g_state.trace_fd, static_cast<off_t>(current), SEEK_SET) < 0) {
-      SetSystemError("could not restore trace after a partial write");
-    } else {
-      SetInitializationError("could not write a complete trace record");
-    }
+  if (g_state.frame_buffer.size() + record.size() > kFrameBufferBytes) {
+    FlushFrame();
+  }
+  if (g_state.output_limit_reached) {
     g_state.local_dropped_records.fetch_add(1);
     g_state.bytes_dropped.fetch_add(record.size());
     return;
   }
-  g_state.bytes_written.fetch_add(record.size());
-  g_state.delivered_records.fetch_add(1);
+  g_state.frame_buffer += record;
+  ++g_state.frame_records;
+  if (g_state.frame_buffer.size() >= kFrameBufferBytes) {
+    FlushFrame();
+  }
 }
 
 std::string RecordPrefix(std::string_view activity_kind,
@@ -528,6 +604,13 @@ void WriteStatus() {
       << ",\"local_dropped_records\":" << g_state.local_dropped_records.load()
       << ",\"bytes_written\":" << g_state.bytes_written.load()
       << ",\"bytes_dropped\":" << g_state.bytes_dropped.load()
+      << ",\"uncompressed_bytes_delivered\":"
+      << g_state.uncompressed_bytes_delivered.load()
+      << ",\"trace_encoding\":" << JsonString(kTraceEncoding)
+      << ",\"zlib_version\":" << JsonString(zlibVersion())
+      << ",\"compression_level\":" << kCompressionLevel
+      << ",\"output_limit_reached\":"
+      << (g_state.output_limit_reached ? "true" : "false")
       << ",\"activity_buffer_bytes\":" << g_state.activity_buffer_bytes
       << ",\"consumer_delay_ms\":" << g_state.consumer_delay_ms
       << ",\"maximum_output_bytes\":" << g_state.maximum_bytes
@@ -579,6 +662,18 @@ void Finalize() {
       }
     }
     if (g_state.trace_fd >= 0) {
+      {
+        std::lock_guard<std::mutex> lock(g_state.output_mutex);
+        FlushFrame();
+        if (!HasInitializationError()) {
+          std::string end_frame(kFrameHeaderBytes, '\0');
+          if (!WriteAll(g_state.trace_fd, end_frame)) {
+            SetInitializationError("could not write trace end frame");
+          } else {
+            g_state.bytes_written.fetch_add(end_frame.size());
+          }
+        }
+      }
       if (fsync(g_state.trace_fd) != 0) {
         SetSystemError("trace fsync failed");
       }
@@ -685,6 +780,10 @@ void Initialize() {
     SetInitializationError("maximum bytes must be a positive integer");
     return;
   }
+  if (g_state.maximum_bytes < sizeof(kTraceMagic) - 1 + kFrameHeaderBytes) {
+    SetInitializationError("maximum bytes cannot hold trace framing");
+    return;
+  }
   if (const char* value = std::getenv(kBufferBytesEnv)) {
     std::uint64_t requested = 0;
     if (!ParsePositiveInteger(value, &requested) || requested < 65536 ||
@@ -746,6 +845,13 @@ void Initialize() {
     WriteStatus();
     return;
   }
+  if (!WriteAll(g_state.trace_fd,
+                std::string_view(kTraceMagic, sizeof(kTraceMagic) - 1))) {
+    SetInitializationError("could not write trace magic");
+    WriteStatus();
+    return;
+  }
+  g_state.bytes_written.store(sizeof(kTraceMagic) - 1);
   const CUptiResult version_result = cuptiGetVersion(&g_state.cupti_version);
   if (version_result != CUPTI_SUCCESS) {
     SetInitializationError("CUPTI version query failed: " +

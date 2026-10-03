@@ -173,7 +173,7 @@ def vllm_expected_artifacts(mode: ExperimentMode) -> tuple[ArtifactExpectation, 
     profiler = {
         ExperimentMode.PUBLIC_ENGINE: ("public-engine", "target", "torch-profiler"),
         ExperimentMode.PROTON: ("proton", "target", "proton-trace"),
-        ExperimentMode.DIRECT_CUPTI: ("cupti", "target", "stormlog-cupti-v1"),
+        ExperimentMode.DIRECT_CUPTI: ("cupti", "target", "stormlog-zlib-frames-v1"),
         ExperimentMode.TRUSTED: ("nsys", "profiler_wrapper", "vendor-native"),
     }
     if mode not in profiler:
@@ -302,7 +302,7 @@ def expected_artifacts(
                 "raw_trace",
                 "cupti",
                 "target",
-                "stormlog-cupti-v1",
+                "stormlog-zlib-frames-v1",
                 True,
                 True,
                 True,

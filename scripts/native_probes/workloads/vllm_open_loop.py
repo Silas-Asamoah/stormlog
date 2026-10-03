@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import importlib.metadata
 import json
 import math
@@ -12,12 +13,14 @@ import signal
 import socket
 import stat
 import statistics
+import struct
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+import zlib
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -36,6 +39,10 @@ MEASURED_REQUESTS = 2200
 MAX_IN_FLIGHT = 32
 SLO_DEADLINE_MS = 2000
 SLO_OFFER_INTERVAL_SECONDS = MEASURED_REQUESTS * INTERVAL_SECONDS
+CUPTI_TRACE_ENCODING = "stormlog-zlib-frames-v1"
+CUPTI_TRACE_MAGIC = b"SLCPTZ1\n"
+CUPTI_FRAME_HEADER = struct.Struct("<III")
+CUPTI_MAX_FRAME_BYTES = 16 * 1024 * 1024
 
 
 def request_body() -> dict[str, Any]:
@@ -471,6 +478,73 @@ def _stop_cupti_helpers(
     return {"reports": reports, "errors": errors, "complete": not errors}
 
 
+def _inspect_cupti_trace(path: Path) -> dict[str, Any]:
+    """Require a terminating frame and verify every compressed JSON record."""
+    digest = hashlib.sha256()
+    records = 0
+    decoded_bytes = 0
+    frames = 0
+    with path.open("rb") as source:
+        if source.read(len(CUPTI_TRACE_MAGIC)) != CUPTI_TRACE_MAGIC:
+            raise ValueError("CUPTI trace magic does not match the pinned codec")
+        while True:
+            header = source.read(CUPTI_FRAME_HEADER.size)
+            if len(header) != CUPTI_FRAME_HEADER.size:
+                raise ValueError("CUPTI trace end frame is missing")
+            encoded_size, raw_size, frame_records = CUPTI_FRAME_HEADER.unpack(header)
+            if (encoded_size, raw_size, frame_records) == (0, 0, 0):
+                if source.read(1):
+                    raise ValueError("CUPTI trace has trailing bytes")
+                break
+            if not (0 < encoded_size <= CUPTI_MAX_FRAME_BYTES):
+                raise ValueError("CUPTI encoded frame size is invalid")
+            if not (0 < raw_size <= CUPTI_MAX_FRAME_BYTES) or frame_records <= 0:
+                raise ValueError("CUPTI decoded frame size or count is invalid")
+            encoded = source.read(encoded_size)
+            if len(encoded) != encoded_size:
+                raise ValueError("CUPTI compressed frame is truncated")
+            decoder = zlib.decompressobj()
+            try:
+                raw = decoder.decompress(encoded, raw_size + 1)
+                if len(raw) > raw_size or decoder.unconsumed_tail:
+                    raise ValueError("CUPTI decoded frame exceeds declared size")
+                raw += decoder.flush()
+            except zlib.error as error:
+                raise ValueError(
+                    f"CUPTI compressed frame is corrupt: {error}"
+                ) from error
+            if (
+                len(raw) != raw_size
+                or not decoder.eof
+                or decoder.unused_data
+                or decoder.unconsumed_tail
+            ):
+                raise ValueError("CUPTI compressed frame does not decode exactly")
+            if not raw.endswith(b"\n"):
+                raise ValueError("CUPTI decoded frame lacks record terminator")
+            lines = raw.splitlines()
+            if len(lines) != frame_records:
+                raise ValueError("CUPTI frame record count does not match")
+            for line in lines:
+                try:
+                    if not isinstance(json.loads(line), dict):
+                        raise ValueError("activity record is not an object")
+                except (UnicodeError, json.JSONDecodeError) as error:
+                    raise ValueError(f"CUPTI record is malformed: {error}") from error
+            digest.update(raw)
+            records += frame_records
+            decoded_bytes += raw_size
+            frames += 1
+    return {
+        "encoding": CUPTI_TRACE_ENCODING,
+        "encoded_bytes": path.stat().st_size,
+        "decoded_bytes": decoded_bytes,
+        "decoded_sha256": digest.hexdigest(),
+        "records": records,
+        "frames": frames,
+    }
+
+
 def _cupti_capture_status(
     output: Path,
     samples: list[dict[str, Any]],
@@ -524,6 +598,7 @@ def _cupti_capture_status(
     dropped = 0
     delivered = 0
     trace_paths: set[Path] = set()
+    trace_validation: list[dict[str, Any]] = []
     for report in reports:
         if report.get("finalized") is not True or report.get("initialization_error"):
             errors.append(f"CUPTI process {report.get('pid')} did not finalize cleanly")
@@ -546,7 +621,16 @@ def _cupti_capture_status(
         ):
             delivered += report["delivered_records"]
             dropped += report["cupti_dropped_records"] + report["local_dropped_records"]
-        trace = Path(report["status_path"]).parent / "activity.ndjson"
+        encoding = report.get("trace_encoding")
+        if encoding == CUPTI_TRACE_ENCODING:
+            trace = Path(report["status_path"]).parent / "activity.sclz"
+        elif encoding is None:
+            trace = Path(report["status_path"]).parent / "activity.ndjson"
+        else:
+            errors.append(
+                f"CUPTI process {report.get('pid')} has unknown trace encoding"
+            )
+            continue
         if trace in trace_paths:
             errors.append(f"CUPTI processes share an activity trace: {trace}")
         trace_paths.add(trace)
@@ -554,12 +638,35 @@ def _cupti_capture_status(
             errors.append(f"CUPTI process {report.get('pid')} has no activity trace")
         else:
             try:
-                with (output / trace).open(encoding="utf-8") as source:
-                    records = 0
-                    for line in source:
-                        if not isinstance(json.loads(line), dict):
-                            raise ValueError("activity record is not an object")
-                        records += 1
+                if encoding == CUPTI_TRACE_ENCODING:
+                    inspected = _inspect_cupti_trace(output / trace)
+                    trace_validation.append({"pid": report.get("pid"), **inspected})
+                    records = inspected["records"]
+                    if inspected["encoded_bytes"] != report.get("bytes_written"):
+                        errors.append(
+                            f"CUPTI process {report.get('pid')} encoded bytes differ from status"
+                        )
+                    if inspected["decoded_bytes"] != report.get(
+                        "uncompressed_bytes_delivered"
+                    ):
+                        errors.append(
+                            f"CUPTI process {report.get('pid')} decoded bytes differ from status"
+                        )
+                    maximum = report.get("maximum_output_bytes")
+                    if (
+                        not isinstance(maximum, int)
+                        or inspected["encoded_bytes"] > maximum
+                    ):
+                        errors.append(
+                            f"CUPTI process {report.get('pid')} exceeded encoded byte bound"
+                        )
+                else:
+                    with (output / trace).open(encoding="utf-8") as source:
+                        records = 0
+                        for line in source:
+                            if not isinstance(json.loads(line), dict):
+                                raise ValueError("activity record is not an object")
+                            records += 1
                 if records != report.get("delivered_records"):
                     errors.append(
                         f"CUPTI process {report.get('pid')} trace record count "
@@ -582,6 +689,7 @@ def _cupti_capture_status(
         "required_gpu_pids": sorted(required),
         "reported_pids": reported,
         "status_reports": reports,
+        "trace_validation": trace_validation,
         "errors": errors,
         "complete": complete,
     }

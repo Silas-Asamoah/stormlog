@@ -7,9 +7,11 @@ import hashlib
 import json
 import os
 import socket
+import struct
 import tempfile
 import threading
 import time
+import zlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,6 +31,7 @@ from scripts.native_probes.workloads.vllm_open_loop import (
     SLO_DEADLINE_MS,
     SLO_OFFER_INTERVAL_SECONDS,
     _cupti_capture_status,
+    _inspect_cupti_trace,
     _memory_metrics,
     _request,
     _result,
@@ -350,6 +353,48 @@ def test_cupti_capture_keeps_two_process_traces_distinct(tmp_path: Path) -> None
     assert capture["complete"] is True
     assert capture["reported_pids"] == [12, 13]
     assert loss["vendor_activity"]["lost_records"] == 0
+
+
+def test_compressed_cupti_trace_verifies_framing_hash_and_bound(tmp_path: Path) -> None:
+    process = tmp_path / "cupti" / "pid-12-distinct"
+    process.mkdir(parents=True)
+    raw = b'{"pid":12}\n'
+    encoded = zlib.compress(raw, level=3)
+    frame = struct.pack("<III", len(encoded), len(raw), 1) + encoded
+    trace = process / "activity.sclz"
+    trace.write_bytes(b"SLCPTZ1\n" + frame + bytes(12))
+    inspected = _inspect_cupti_trace(trace)
+    assert inspected["decoded_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert inspected["records"] == 1
+    status = {
+        "pid": 12,
+        "finalized": True,
+        "initialization_error": None,
+        "trace_encoding": "stormlog-zlib-frames-v1",
+        "delivered_records": 1,
+        "cupti_dropped_records": 0,
+        "local_dropped_records": 0,
+        "bytes_dropped": 0,
+        "bytes_written": trace.stat().st_size,
+        "uncompressed_bytes_delivered": len(raw),
+        "maximum_output_bytes": trace.stat().st_size,
+    }
+    (process / "cupti_status.json").write_text(json.dumps(status))
+    samples = [{"processes": [{"pid": 12, "role": "target"}]}]
+    capture, _ = _cupti_capture_status(tmp_path, samples, {12})
+    assert capture["complete"] is True
+    assert (
+        capture["trace_validation"][0]["decoded_sha256"] == inspected["decoded_sha256"]
+    )
+    status["maximum_output_bytes"] = trace.stat().st_size - 1
+    (process / "cupti_status.json").write_text(json.dumps(status))
+    assert _cupti_capture_status(tmp_path, samples, {12})[0]["complete"] is False
+    trace.write_bytes(trace.read_bytes()[:-1])
+    with pytest.raises(ValueError, match="end frame"):
+        _inspect_cupti_trace(trace)
+    trace.write_bytes(b"SLCPTZ1\n" + frame[:-1] + bytes(12))
+    with pytest.raises(ValueError):
+        _inspect_cupti_trace(trace)
 
 
 def test_cupti_capture_rejects_invalid_or_unobserved_process_status(

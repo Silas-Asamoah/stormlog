@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_protocol_capture_capacity_approval",
+  "issue": 118,
+  "proposal_path": "benchmarks/native_probes/protocol_capture_capacity_proposal_2026-10-02.json",
+  "proposal_sha256": "fad43e5809f991783f3aebae8c9f5eae641ff2e40f6e66a8ea4ad569a56fa165",
+  "approval_source": "user reply 'i approve it so can we run this' on 2026-10-03",
+  "approved_scope": "lossless_direct_cupti_compressed_trace_with_existing_byte_limits_applied_to_encoded_bytes",
+  "paid_hardware_preflight_authorized": true,
+  "final_trials_authorized_after_hardware_preflight_passes": true,
+  "helper_hashes_pending_review": true,
+  "status": "capture_amendment_approved_implementation_and_hardware_preflight_pending"
+}

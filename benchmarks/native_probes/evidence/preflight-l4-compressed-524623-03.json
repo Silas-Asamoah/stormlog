@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_hardware_preflight_evidence",
+  "issue": 118,
+  "local_date": "2026-10-03",
+  "status": "bounded_compressed_stop_smoke_passed_remaining_hardware_gates_pending",
+  "authorization": {
+    "capture_amendment_proposal_sha256": "fad43e5809f991783f3aebae8c9f5eae641ff2e40f6e66a8ea4ad569a56fa165",
+    "source": "user reply 'i approve it so can we run this'",
+    "final_trials_authorized_after_hardware_preflight": true,
+    "final_trials_started": false
+  },
+  "cloud": {
+    "provider": "JarvisLabs",
+    "machine_id": 524623,
+    "gpu": "L4",
+    "region": "IN2",
+    "instance_count": 1,
+    "state_after_verified_download": "Paused",
+    "running_instances_after_pause": 0,
+    "paused_instances_after_pause": 1,
+    "balance_before_usd": 23.6901,
+    "balance_after_usd": 23.6417,
+    "observed_balance_decrease_usd": 0.0484,
+    "provider_get_after_pause_runtime": "0 hours 00 minutes",
+    "provider_get_after_pause_cost_usd": 0.0,
+    "cost_interpretation": "The balance change includes any storage charges. The provider resets runtime and cost fields after pause, so exact billable runtime is unavailable."
+  },
+  "build": {
+    "source_sha256": "51e8fc43ffca33cc5ec3cb1adde09e458fbcee11301e57a5979664429458f204",
+    "source_archive_sha256": "921632ee1ffe593c044b2861631daa830a5570f3fbe472dfee0fc699d941810f",
+    "binary_sha256": "70569ef7f94110e503fc7d5f9ff9bd2cfe41e7296195f9466683650cfd86b4ac",
+    "adapter_sha256": "0525f5dd57c0c3c9243969b3bda329d720ac7850bb3c634a5b4390013fcebb37",
+    "first_configure_exit_code": 1,
+    "first_configure_failure": "ZLIB_LIBRARY and ZLIB_INCLUDE_DIR missing",
+    "zlib_development_package_installed": "zlib1g-dev:amd64 1:1.2.11.dfsg-2ubuntu9.2",
+    "apt_install_command_exit_code": 2,
+    "apt_install_exit_note": "Package installed successfully; trailing dpkg-query shell interpolation failed under set -u. Package version was verified in a separate command.",
+    "retry_configure_exit_code": 0,
+    "retry_build_exit_code": 0,
+    "runtime_zlib_version_reported_by_helper": "1.3.1",
+    "warning": "signedness comparison at source line 476"
+  },
+  "bounded_smoke": {
+    "run_id": "r_542e6ab9",
+    "exit_code": 0,
+    "one_streaming_request_http_status": 200,
+    "terminal_done": true,
+    "server_exit_after_shutdown": 0,
+    "gpu_process_pids": [794],
+    "stop_ack": "OK",
+    "capture_complete": true,
+    "capture_errors": [],
+    "trace_encoding": "stormlog-zlib-frames-v1",
+    "frame_count": 2568,
+    "delivered_records": 357793,
+    "cupti_dropped_records": 0,
+    "local_dropped_records": 0,
+    "bytes_dropped": 0,
+    "encoded_bytes": 10032879,
+    "decoded_bytes": 167646683,
+    "decoded_sha256": "c1b02705e011eb8f321393822c85de3831fd012afac144842a20101728da4b93",
+    "maximum_encoded_bytes": 268435456,
+    "elapsed_seconds": 37.824,
+    "limits": "One request after startup is a bounded hardware smoke, not the approved 200-warmup and 2200-measured-request final workload."
+  },
+  "raw_evidence": {
+    "archive": "artifacts/native-probes/preflight-l4-compressed-524498-03/evidence.tar.gz",
+    "archive_sha256": "b0050effadf8464e61c67812cd57911fd6f30770c0ae0cd3f1f9b795fe024116",
+    "internal_file_hashes_verified": 47,
+    "first_configure_failure_and_apt_command_failure_retained": true
+  },
+  "readiness": {
+    "compressed_one_request_smoke_passed": true,
+    "hardware_preflight_passed": false,
+    "final_trials_started": false,
+    "remaining_gates": [
+      "bounded capacity and each approved W4 intervention on compatible hardware",
+      "GPU, pinned host, and collector buffer memory accounting or explicit inconclusive claims",
+      "trusted Nsight correlation and external kernel coverage",
+      "packaging, privilege, container, coexistence, and failure-recovery qualification",
+      "review revised helper source and binary hashes before final observations"
+    ]
+  }
+}
