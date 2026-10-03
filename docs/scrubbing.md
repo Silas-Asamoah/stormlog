@@ -112,7 +112,7 @@ What it removes:
 | Shape | Example | Result |
 | --- | --- | --- |
 | an `Authorization` or `Proxy-Authorization` header, to the end of its line | `Authorization: Bearer abc…` | `Authorization: <redacted>` |
-| a Bearer or Basic token: 8 or more token characters including a digit, `=`, `+` or `/`, so that prose such as "the basic parameters" is left alone | `bearer abc.def-123` | `bearer <redacted>` |
+| a Bearer or Basic token: 8 or more token characters that are not a single all-lowercase word, so that prose such as "the basic parameters" is left alone | `bearer abc.def-123` | `bearer <redacted>` |
 | URL user information (to the last `@` before the first `/` or space, whatever it holds) and query strings | `https://u:p@host/x?k=v` | `https://<redacted>@host/x?<redacted>` |
 | a JSON member whose key, read with its escapes decoded, contains a word from `SECRET_KEY_WORDS` (below); its value a string or bare, such as a number | `"api_key": "abc"`, `"api_key": 1234` | `"api_key": "<redacted>"`, `"api_key": <redacted>` |
 | `key=value` or `key: value` with such a key, the value bare or in single or double quotes | `client_secret=abc`, `password="a b"` | `client_secret=<redacted>`, `password="<redacted>"` |
@@ -148,7 +148,7 @@ its first word, which is one reason consent is needed.
 
 These are not covered: a URL's fragment, which is never sent to a server;
 JSON nested inside a JSON string, whose quotes are escaped; and a Bearer or
-Basic token made only of letters.
+Basic token that is a single all-lowercase word, such as `bearer abcdefghij`.
 
 `truncate_utf8(text, max_bytes)` returns the longest prefix whose UTF-8
 encoding fits `max_bytes`, and never splits a character. A lone surrogate,

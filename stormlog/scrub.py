@@ -112,9 +112,15 @@ def _value(pattern: re.Pattern[str]) -> Finder:
 
 
 def _bearer_spans(text: str) -> Iterator[Span]:
-    """A Bearer or Basic token: one with a digit, =, + or /, so prose is not."""
+    """A Bearer or Basic token: anything but one all-lowercase word.
+
+    Prose such as "the basic parameters" is left alone. A random token of
+    20 letters and digits is all lower-case letters with a probability of
+    about 3e-8, so real tokens are not missed.
+    """
     for match in _BEARER.finditer(text):
-        if any(char.isdigit() or char in "=+/" for char in match.group(1)):
+        token = match.group(1)
+        if not (token.isascii() and token.isalpha() and token.islower()):
             yield match.span(1)
 
 

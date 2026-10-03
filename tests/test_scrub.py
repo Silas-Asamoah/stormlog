@@ -286,8 +286,15 @@ def test_scrub_text_redacts_quoted_values_of_secret_keys(
         ("the basic parameters are invalid", "the basic parameters are invalid"),
         ("Basic authentication required", "Basic authentication required"),
         ("the bearer received nothing", "the bearer received nothing"),
-        # A token has a digit, =, + or /.
+        # Anything but one all-lowercase word is a token.
         ("sent bearer opaque.token-value_123", "sent bearer <redacted>"),
+        ("Bearer abc.def-ghi_jklmnop", "Bearer <redacted>"),
+        ("Bearer OpaqueTokenWithOnlyLetters", "Bearer <redacted>"),
+        (
+            "{'Authorization': 'Basic dXNlcjpwYXNz'}",
+            "{'Authorization': 'Basic <redacted>'}",
+        ),
+        ("bearer abcdefgh~ijk", "bearer <redacted>"),
         ("basic dXNlcjpwYXNzd29yZA== then", "basic <redacted> then"),
         ("Bearer abcdefgh/ijklmn", "Bearer <redacted>"),
     ],
