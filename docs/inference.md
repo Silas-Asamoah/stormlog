@@ -406,7 +406,7 @@ Stormlog reports client-observed metrics in v1:
   tokenizer or estimate is clearly recorded.
 
 SLO policies use the same boundaries; see
-[Inference SLO policies](inference_slo.md).
+[Inference SLOs and goodput](inference_slo.md).
 
 ## Client-local telemetry
 

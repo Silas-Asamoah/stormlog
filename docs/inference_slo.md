@@ -1,6 +1,6 @@
 [← Back to docs](index.md)
 
-# Inference SLO policies
+# Inference SLOs and goodput
 
 An SLO policy declares the latency each request should meet. Stormlog keeps
 two kinds of latency apart and never relabels one as the other:
@@ -144,6 +144,81 @@ never whether the request succeeded.
 
 `evaluate_criteria(values, spec, boundary=...)` is the shared judge underneath
 both. It takes values keyed by criterion, in milliseconds.
+
+## Populations and intervals
+
+`stormlog.infer.populations.case_populations(records)` describes each
+measured case's request cohort, and the interval its rates divide by.
+
+### Populations
+
+Every measured request lands in exactly one count, by status:
+
+| Field | Requests |
+| --- | --- |
+| `offered` | All of the case's measured requests |
+| `scheduled` | The arrivals an open loop scheduled (`infer.phase_window`); `null` for a closed loop |
+| `dropped` | Never sent |
+| `sent` | `offered − dropped` |
+| `unreachable` | `connect()` failed; no byte was sent |
+| `delivery_unknown` | Sending failed after the connection completed |
+| `rejected` | HTTP 429 or 503 |
+| `accepted` | `sent − unreachable − delivery_unknown − rejected`: the client's view that nothing refused them |
+| `successful`, `failed`, `timed_out`, `cancelled` | Statuses `ok`, `error`, `timeout`, `cancelled` |
+| `other` | Any other status, by name; never dropped |
+| `censored` | `timed_out + cancelled`: latency known only to exceed what was observed |
+| `server_admitted` | Requests the server confirmed it saw, through a joined span or execution record; `null` when the run has no such evidence |
+| `server_evidence_coverage` | `server_admitted / accepted`; `null` without server evidence |
+
+### Cohort checks
+
+The cohort is checked for the records a run should have:
+- unique `request_id` and `x_request_id`;
+- every scheduled arrival's `request_index` exactly once, so a duplicated
+  record cannot stand in for a missing one;
+- one session;
+- every request's times inside its phase, start to drain end.
+
+A failed check sets `cohort_valid: false` and names the problem in `issues`.
+Two notes don't invalidate the cohort:
+- requests an earlier phase left running (`abandoned_requests_at_start`);
+- artifacts written before requests carried an index
+  (`request_index_unrecorded`).
+
+### Intervals
+
+| Interval | What it is |
+| --- | --- |
+| `scheduled_window` | An open loop's own schedule, from the phase start to `scheduled_endpoint_offset_ns`. It doesn't depend on when requests were actually sent. |
+| `dispatch_window` | The first send to the last send. |
+| `drain` | The window end to the drain end. |
+| `measured_span` | The phase start to the drain end. |
+| `request_span` | First start to last end over **every** measured request, failed ones included. Only for artifacts with no phase window. |
+| `segment` | A caller-defined slice; see below. |
+
+The **rate** interval, which every rate divides by, depends on the run:
+
+| Run | Rate interval | Numerator |
+| --- | --- | --- |
+| Open loop | `scheduled_window` | The arrival cohort: requests scheduled in the window, however late they finished |
+| Closed loop | `measured_span` | Every measured request |
+| No phase window | `request_span` | Every measured request |
+
+An old open-loop artifact without a recorded endpoint has it recomputed from
+its seeded workload record. A replay without a duration has none, so its rate
+falls back to `measured_span` with `rate_reason: scheduled_endpoint_unknown`.
+
+The intervals also give the configured rate and the realized offered rate
+(scheduled arrivals per second of the scheduled window).
+
+### Segments
+
+`Segment(name, start_offset_ns, end_offset_ns)` slices a case by offsets from
+its measured phase's start. A segment is clipped to the phase.
+`membership="arrival"`, the default, counts a request in the segment its
+intended arrival (or, without one, its send) falls in. `membership="overlap"`
+counts every request whose span meets the segment, for example the requests
+in flight during a profiler's stop.
 
 ## Related pages
 

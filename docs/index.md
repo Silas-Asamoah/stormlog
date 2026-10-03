@@ -83,7 +83,7 @@ examples/test_guides/README
 
 1. [CLI](cli.md)
 2. [Inference Profiling](inference.md)
-3. [Inference SLO policies](inference_slo.md)
+3. [Inference SLOs and goodput](inference_slo.md)
 4. [Inference execution correlation](inference_correlation.md)
 5. [vLLM native telemetry](vllm_telemetry.md)
 6. [TUI](tui.md)
