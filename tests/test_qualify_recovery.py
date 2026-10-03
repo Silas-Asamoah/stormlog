@@ -136,9 +136,9 @@ def test_an_engine_stall_is_timed_from_the_first_stop_and_recovers_after_the_las
     )
     timing = effect_timing("F4a", context(signals, actions))
     assert timing.onset_ns == 60 * S
-    # The first step after the last pulse, at its SIGCONT, closes a 100 ms
-    # gap; cadence holds for 5 s from just after it.
-    assert timing.end_ns == 62 * S + 100 * MS + 1
+    # From the last SIGCONT the median step gap is the baseline's again; the
+    # one 100 ms gap the pulse left doesn't move it.
+    assert timing.end_ns == 62 * S + 100 * MS
     assert timing.recovery_held_at_ns == timing.end_ns + 5 * S
     assert realization("F4a", context(signals, actions), timing)[0]
     # An engine that kept stepping was not stalled, though the API server was.
@@ -205,3 +205,27 @@ def test_the_next_episode_waits_for_recovery_within_its_limits(
 def test_an_unknown_episode_type_has_no_rule() -> None:
     with pytest.raises(KeyError):
         effect_timing("F9", context(Signals()))
+
+
+def test_cadence_recovers_when_the_step_gaps_look_like_the_baseline_again() -> None:
+    # A served engine idles between requests, so its step gaps have a long
+    # tail: some gap in any 5 s is above the baseline's p95. Recovery is the
+    # median gap back within the baseline's p95, not every gap.
+    import random
+
+    rng = random.Random(221)
+    steps, at = [], 0
+    while at < 120 * S:
+        steps.append(at)
+        at += int(rng.expovariate(1 / 0.03) * S)
+        if PULSES[0][0] <= at <= PULSES[-1][1]:
+            at = max(at, PULSES[-1][1])
+    signals = Signals(step_starts=steps)
+    actions = Actions(
+        first_stop_confirmed_ns=60 * S,
+        last_continue_ns=62 * S + 100 * MS,
+        pulses=PULSES,
+    )
+    timing = effect_timing("F4a", context(signals, actions))
+    assert timing.end_ns is not None
+    assert timing.end_ns - (62 * S + 100 * MS) < 1 * S

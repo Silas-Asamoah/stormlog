@@ -130,7 +130,7 @@ when recovery held:
 | F1 / T1 | the first 5 s window whose median victim wait exceeds the baseline p95 (F1); the neighbor's first send (T1) | waits are at most the baseline p95, and the waiting count is within the baseline's range |
 | F2 / T2 | the first victim preemption (F2); the neighbor's first admission (T2) | no victim preemption, and KV usage at most the baseline maximum + 0.05 |
 | F3 / T3 / T3b | the first 5 s window whose median victim cached fraction is below 0.5 (F3); the neighbor's first send (T3, T3b) | the median cached fraction is at least 0.9 |
-| F4a / F4b / H0 / P | the first stop confirmed (state `T`) | from the last `SIGCONT`, every step gap is within the baseline p95 for 5 s; for F4b, every chunk gap too |
+| F4a / F4b / H0 / P | the first stop confirmed (state `T`) | from the last `SIGCONT`, the median step gap is within the baseline p95 for 5 s; for F4b, the median chunk gap too. A served engine idles between requests, so some single gap in any interval is longer |
 | W1 | the neighbor's first send | the queue and KV criteria |
 | I1 | the stop request | at the stop's return plus #219's drain |
 
