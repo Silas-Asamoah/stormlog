@@ -557,3 +557,11 @@ F3, and their workload twins.
   - any failed request is a problem.
 
   Its first send is the onset of the workload twins' effect.
+
+### The capture pause (I1)
+
+`examples.qualification.capture.capture_window` opens one profiler window and
+closes it, stamping when each call was requested and when it returned. A start
+that fails is never followed by a stop. vLLM writes the trace inside the stop
+call while its step loop waits, so the stop's interval, plus #219's drain, is
+I1's effect.
