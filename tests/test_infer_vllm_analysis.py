@@ -565,6 +565,59 @@ class TestHistogramLabelSets:
         assert queue["by_label"]["rank=1"]["state"] == REASON_SERIES_MISSING
 
 
+def _exporter_scrape(process_start: int | None, tokens: float, waiting: float) -> str:
+    """A tiny scrape from one exporter process, or from none identifiable."""
+    lines = ["# TYPE process_start_time_seconds gauge"]
+    if process_start is not None:
+        lines.append(f"process_start_time_seconds {process_start}")
+    lines += [
+        "# TYPE vllm:prompt_tokens_total counter",
+        f'vllm:prompt_tokens_total{{engine="0",model_name="m"}} {tokens}',
+        "# TYPE vllm:num_requests_waiting gauge",
+        f'vllm:num_requests_waiting{{engine="0",model_name="m"}} {waiting}',
+    ]
+    return "\n".join(lines) + "\n"
+
+
+class TestExporterIdentity:
+    def test_another_exporter_inside_the_window_is_caught(self, tmp_path: Path) -> None:
+        # A load balancer answered the interval scrape from exporter B. The
+        # two boundaries agree, but the window is not A's alone, and B's
+        # gauge must not land in A's summary.
+        scrapes = [
+            _scrape(_exporter_scrape(100, 10, 0), MARKER_PHASE_START, T0 - SECOND),
+            _scrape(_exporter_scrape(200, 1000, 999), MARKER_INTERVAL, T0 + 5 * SECOND),
+            _scrape(_exporter_scrape(100, 20, 0), MARKER_PHASE_END, T0 + 12 * SECOND),
+        ]
+        report = analyze_inference_events(_artifact(tmp_path, scrapes))
+        block = report["telemetry"]["vllm"]
+        assert len(block["engine"]["epochs"]) == 3
+        case = block["cases"][CASE]
+        assert case["state"] == STATE_UNRESOLVED
+        assert case["reasons"] == [REASON_ENGINE_RESTART]
+        assert case["window"]["foreign_scrapes"] == 1
+        engine = case["engines"]["0"]
+        prompt = engine["counters"]["prompt_tokens"]["by_label"]["_"]
+        assert prompt["state"] == REASON_ENGINE_RESTART
+        waiting = engine["gauges"]["queue_depth"]["stats"]["_"]
+        assert (waiting["max"], waiting["samples"]) == (0.0, 2)
+
+    def test_scrapes_with_no_exporter_identity_are_unresolved(
+        self, tmp_path: Path
+    ) -> None:
+        # Without process_start_time_seconds (prometheus multiprocess mode
+        # drops it) a restart cannot be told apart from a quiet window.
+        scrapes = [
+            _scrape(_exporter_scrape(None, 10, 0), MARKER_PHASE_START, T0 - SECOND),
+            _scrape(_exporter_scrape(None, 20, 0), MARKER_PHASE_END, T0 + 12 * SECOND),
+        ]
+        case = _vllm_case(_artifact(tmp_path, scrapes))
+        assert case["state"] == STATE_UNRESOLVED
+        assert case["reasons"] == ["exporter_identity_unknown"]
+        prompt = case["engines"]["0"]["counters"]["prompt_tokens"]["by_label"]["_"]
+        assert prompt["state"] == "exporter_identity_unknown"
+
+
 class TestNamesAndEngines:
     def test_retired_name_is_normalised_and_flagged(self, tmp_path: Path) -> None:
         old = PRE.replace("vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc")

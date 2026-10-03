@@ -151,8 +151,9 @@ reasons when the two scrapes cannot be compared:
 | Reason | Meaning |
 | --- | --- |
 | `scrape_missing:<marker>`, `scrape_failed:<marker>` | The phase has no successful start or end scrape |
-| `engine_restart` | The exporter's `process_start_time_seconds` changed between the two scrapes |
-| `engine_set_changed` | The set of `engine` labels changed |
+| `engine_restart` | The exporter's `process_start_time_seconds` differs on any scrape of the window, the interval ones included; a scrape another exporter answered is counted as `foreign_scrapes` and kept out of the gauge summaries |
+| `engine_set_changed` | The set of `engine` labels differs on any scrape of the window |
+| `exporter_identity_unknown` | A scrape has no `process_start_time_seconds`, so a restart cannot be told from a quiet window |
 | `counter_reset` | The counter, or a histogram's count, sum or bucket, went backwards |
 | `counter_recreated` | The counter's or histogram's `*_created` timestamp changed (a counter's stamp drops `_total`, a histogram's keeps its full name) |
 | `series_missing` | One scrape lacks the series, or a histogram's `_sum` or `_count` sample (`missing` names which); neither is ever taken as zero |
