@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import gzip
 import http.client
+import json
 import urllib.error
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -48,6 +51,22 @@ def test_a_window_writes_a_trace_whose_gpu_work_links_to_steps(tmp_path: Path) -
     assert (started, stopped) == (200, 200)
     assert path.name.startswith("rank0.")
     assert links and all(link.iteration_ref is not None for link in links)
+
+
+def test_an_empty_step_is_ranged_but_launches_nothing(tmp_path: Path) -> None:
+    # vLLM's worker ranges every execute_model call, but its model runner
+    # returns before any forward pass when a step has no tokens
+    # (v1/worker/gpu/model_runner.py:1649-1654).
+    with _engine(tmp_path) as engine:
+        post(f"{engine.base_url}/start_profile")
+        chat(engine, words(8, "a"), max_tokens=3)
+        assert wait_until(lambda: not engine.engine.steps[-1].members)
+        post(f"{engine.base_url}/stop_profile")
+    (path,) = _traces(tmp_path)
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        events = json.load(handle)["traceEvents"]
+    categories = Counter(event["cat"] for event in events)
+    assert (categories["user_annotation"], categories["kernel"]) == (4, 3)
 
 
 def test_repeated_starts_and_stops_answer_200_like_vllm(tmp_path: Path) -> None:

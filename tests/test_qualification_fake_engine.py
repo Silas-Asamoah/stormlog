@@ -329,3 +329,29 @@ def test_a_member_aborted_mid_step_keeps_the_samplers_count(
     engine._complete(step)
     (member,) = step.members
     assert (member.outcome, member.sampled) == ("discarded_finished", sampled)
+
+
+def test_a_finish_leaves_one_empty_step_as_in_vllm() -> None:
+    # vLLM's has_requests() counts requests finished since the last schedule
+    # (scheduler.py:2659-2680), so step() schedules once more after the last
+    # finish (core.py:598-600), and the hook records a step with no members.
+    engine = _stepped_engine()
+    _request(engine, "r", words(6, "p"), max_tokens=1)
+    _step(engine)
+    iterations = engine.stats.histograms["vllm:iteration_tokens_total"]
+    observed = iterations.count
+    empty = _step(engine)
+    assert (empty.members, empty.preempted, empty.total_tokens) == ([], [], 0)
+    # It has no request outputs, so the front end records no iteration for it
+    # (async_llm.py:792-793).
+    assert iterations.count == observed
+    assert engine._schedule() is None
+
+
+def test_the_loop_runs_the_empty_step_after_the_last_finish() -> None:
+    with FakeEngine(FAST) as engine:
+        chat(engine, words(6, "a"), max_tokens=2)
+        assert wait_until(lambda: not engine.engine.steps[-1].members)
+        time.sleep(0.05)
+        steps = list(engine.engine.steps)
+    assert [len(step.members) for step in steps] == [1, 1, 0]

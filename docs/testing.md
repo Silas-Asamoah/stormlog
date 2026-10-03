@@ -145,7 +145,9 @@ series vLLM exports:
 
 - **Scheduling.** Running requests are scheduled first, then waiting ones in
   arrival order, up to `max_num_seqs` and the token budget, with chunked
-  prefill.
+  prefill. As in vLLM, the loop schedules once more after a request finishes,
+  so the hook records a zero-token step with no members, and a trace shows
+  its iteration range with no kernels.
 - **KV blocks.** When they run out, the newest running request is preempted
   and recomputed, as vLLM's scheduler does.
 - **Prefix cache.** Every full block is hashed and cached, generated tokens

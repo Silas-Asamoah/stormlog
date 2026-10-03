@@ -172,6 +172,9 @@ class Engine:
         # Victims of a reset, listed in the next step's preempted as vLLM's
         # reset_preempted_req_ids are.
         self._pending_preempted: list[str] = []
+        # A request finished since the last schedule: vLLM's finished_req_ids,
+        # which keep has_requests() true for one more, maybe empty, step.
+        self._finished_since_schedule = False
         self._iteration = 0
         self._lock = threading.Lock()
         self._wake = threading.Condition(self._lock)
@@ -292,6 +295,8 @@ class Engine:
             for observer in self.observers:
                 observer.on_executed(step)
             self._complete(step)
+            if not step.total_tokens and self._has_requests():
+                time.sleep(0.001)  # vLLM's yield after a step that ran nothing
 
     def _run_calls(self) -> None:
         while True:
@@ -308,6 +313,11 @@ class Engine:
     def _schedule(self) -> Step | None:
         start = (time.time_ns(), time.monotonic_ns())
         with self._lock:
+            # vLLM's step() schedules whenever has_requests(), so a step can
+            # have no members: after the last finish, or while none fit.
+            if not self._has_requests_locked():
+                return None
+            self._finished_since_schedule = False
             budget = self.config.max_num_batched_tokens
             members: list[ScheduledMember] = []
             preempted: list[str] = []
@@ -317,12 +327,17 @@ class Engine:
                 self._schedule_waiting(members, budget)
             carried, self._pending_preempted = self._pending_preempted, []
             preempted = carried + preempted
-            if not members and not preempted:
-                return None
             step = Step(self._iteration, start[0], start[1], members, preempted)
             self._iteration += 1
             step.end_wall_ns, step.end_mono_ns = time.time_ns(), time.monotonic_ns()
             return step
+
+    def _has_requests(self) -> bool:
+        with self._lock:
+            return self._has_requests_locked()
+
+    def _has_requests_locked(self) -> bool:
+        return bool(self.waiting or self.running or self._finished_since_schedule)
 
     def _schedule_running(
         self, members: list[ScheduledMember], preempted: list[str], budget: int
@@ -424,10 +439,13 @@ class Engine:
     def _execute(self, step: Step) -> None:
         config = self.config
         decode = sum(1 for member in step.members if not member.context)
+        # A step with no tokens runs no forward pass.
         seconds = (
             config.step_seconds
             + step.prefill_tokens * config.prefill_token_seconds
             + decode * config.decode_token_seconds
+            if step.total_tokens
+            else 0.0
         )
         step.exec_start_ns = time.time_ns()
         time.sleep(seconds)
@@ -436,7 +454,10 @@ class Engine:
     def _complete(self, step: Step) -> None:
         freed: list[FakeRequest] = []
         with self._lock:
-            self.stats.observe("vllm:iteration_tokens_total", step.total_tokens)
+            if step.members:
+                # A step with no members has no request outputs, and the front
+                # end records no iteration for it.
+                self.stats.observe("vllm:iteration_tokens_total", step.total_tokens)
             for member in step.members:
                 self._complete_member(member, freed)
             self.steps.append(step)
@@ -507,6 +528,7 @@ class Engine:
         request.status = STATUS_FOR_REASON.get(reason, "FINISHED_STOPPED")
         request.finish_reason = reason
         request.finished_ns = now
+        self._finished_since_schedule = True
         if request in self.running:
             self.running.remove(request)
         if request in self.waiting:

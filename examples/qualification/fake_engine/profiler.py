@@ -147,22 +147,26 @@ class FakeProfiler(EngineObserver):
         }
 
     def _step_events(self, step: Step, base_ns: int) -> list[dict[str, Any]]:
-        self._correlation += 1
-        correlation = self._correlation
         pid = os.getpid()
         tid = self.engine.loop_thread_id or 0
         start_us = (step.exec_start_ns - base_ns) / 1000.0
         span_us = max((step.exec_end_ns - step.exec_start_ns) / 1000.0, 4.0)
+        ranged = {
+            "ph": "X",
+            "cat": "user_annotation",
+            "name": iteration_range_name(self.producer, str(step.iteration)),
+            "pid": pid,
+            "tid": tid,
+            "ts": start_us,
+            "dur": span_us,
+        }
+        if not step.total_tokens:
+            # vLLM's model runner returns before any forward pass.
+            return [ranged]
+        self._correlation += 1
+        correlation = self._correlation
         return [
-            {
-                "ph": "X",
-                "cat": "user_annotation",
-                "name": iteration_range_name(self.producer, str(step.iteration)),
-                "pid": pid,
-                "tid": tid,
-                "ts": start_us,
-                "dur": span_us,
-            },
+            ranged,
             {
                 "ph": "X",
                 "cat": "cuda_runtime",
