@@ -86,6 +86,24 @@ def test_known_secrets_replace_a_longer_value_whole() -> None:
     assert secrets.redact("x abcdefgh-and-more y") == "x <redacted> y"
 
 
+@pytest.mark.parametrize(
+    ("values", "text", "redacted"),
+    [
+        # Two values that cross: replacing one must not uncover the other.
+        (["abcdefgh", "efghijkl"], "abcdefghijkl", "<redacted>"),
+        (["abcdefgh1234", "1234xyzwvuts"], "abcdefgh1234xyzwvuts", "<redacted>"),
+        # A value overlapping itself.
+        (["aaaaaaaa"], "x aaaaaaaaaa y", "x <redacted> y"),
+        # Two values side by side stay two redactions.
+        (["abcdefgh", "ijklmnop"], "abcdefgh ijklmnop", "<redacted> <redacted>"),
+    ],
+)
+def test_known_secrets_merge_overlapping_matches(
+    values: list[str], text: str, redacted: str
+) -> None:
+    assert KnownSecrets(values).redact(text) == redacted
+
+
 def test_known_secrets_ignore_empty_and_skip_short_values() -> None:
     secrets = KnownSecrets([None, "", "short", "longer-secret"])
     assert secrets.skipped_short == 1

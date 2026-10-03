@@ -79,8 +79,10 @@ secrets.found_in(text)  # True if any form is present
 Values shorter than 8 characters (`MIN_SECRET_LENGTH`) are skipped and
 counted in `skipped_short`. Replacing a short value everywhere would erase
 ordinary text such as case names and numbers, and a credential that short is
-not protected by redaction anyway. When one value contains another, the
-longer is replaced first, so no tail of it is left behind.
+not protected by redaction anyway. Every occurrence of every value is found
+in the original text before anything is replaced, and overlapping
+occurrences are merged into one redaction, so no part of one value is left
+behind when another that contains it, or crosses it, is replaced.
 
 ## Free text
 

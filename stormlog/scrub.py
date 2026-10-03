@@ -183,19 +183,52 @@ class KnownSecrets:
             self.skipped_short += 1
             return
         forms = set(self._forms) | _encoded_forms(value)
-        # Longest first, so a form that contains another is replaced whole.
-        self._forms = tuple(sorted(forms, key=lambda form: (-len(form), form)))
+        self._forms = tuple(sorted(forms))
 
     def redact(self, text: str) -> str:
-        """``text`` with every form of every registered value replaced."""
+        """``text`` with every form of every registered value replaced.
+
+        Every occurrence is found in the original text first, overlapping
+        ones included, and the spans are merged before anything is
+        replaced, so replacing one value can never uncover part of another.
+        """
+        return replace_spans(text, self.spans(text))
+
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        """Where each form of each value occurs in ``text``, as (start, end)."""
+        found: list[tuple[int, int]] = []
         for form in self._forms:
-            if form in text:
-                text = text.replace(form, REDACTED)
-        return text
+            start = text.find(form)
+            while start >= 0:
+                found.append((start, start + len(form)))
+                start = text.find(form, start + 1)
+        return found
 
     def found_in(self, text: str) -> bool:
         """Whether any form of any registered value occurs in ``text``."""
         return any(form in text for form in self._forms)
+
+
+def replace_spans(text: str, spans: Iterable[tuple[int, int]]) -> str:
+    """``text`` with each span, overlapping or touching spans merged, redacted."""
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in _merged(spans):
+        pieces.append(text[cursor:start])
+        pieces.append(REDACTED)
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces)
+
+
+def _merged(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 def url_secrets(url: str | None) -> list[str]:
