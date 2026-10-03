@@ -119,6 +119,38 @@ def arrival_offsets(
     return _bounded(offsets, count=count, duration_seconds=duration_seconds)
 
 
+def scheduled_endpoint(
+    spec: ArrivalSpec,
+    *,
+    count: int | None,
+    duration_seconds: float | None,
+    seed: int,
+) -> float | None:
+    """When an open-loop schedule's observation window ends, from phase start.
+
+    A duration-limited schedule ends at its duration. A count-limited one ends
+    at the first offset of the unbounded schedule strictly after its last
+    arrival, one whole slot after it: N fixed-rate arrivals at r per second
+    span N/r seconds, and a Poisson count gives the usual N/T_N rate. Ending at
+    the last arrival instead would report 2 requests at 10/s as 20/s. A
+    replay has no slot after its trace, so without a duration it has no end
+    (None), and neither does a closed loop.
+    """
+    if spec.mode == CLOSED:
+        return None
+    if duration_seconds is not None:
+        return float(duration_seconds)
+    if count is None or count < 1 or spec.mode == REPLAY:
+        return None
+    last: float | None = None
+    for index, offset in enumerate(_unbounded_offsets(spec, seed)):
+        if index < count:
+            last = offset
+        elif last is not None and offset > last:
+            return offset
+    return None
+
+
 def _unbounded_offsets(spec: ArrivalSpec, seed: int) -> Iterator[float]:
     if spec.mode == FIXED_RATE:
         return _fixed_offsets(spec)

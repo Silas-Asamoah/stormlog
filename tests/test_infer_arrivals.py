@@ -11,6 +11,7 @@ from stormlog.infer.arrivals import (
     ArrivalTrace,
     arrival_offsets,
     load_arrival_trace,
+    scheduled_endpoint,
 )
 
 
@@ -50,6 +51,54 @@ def test_replay_sends_the_whole_trace_unless_bounded() -> None:
     assert _offsets(spec) == [0.0, 0.1, 0.5, 2.0]
     assert _offsets(spec, count=2) == [0.0, 0.1]
     assert _offsets(spec, duration_seconds=1.0) == [0.0, 0.1, 0.5]
+
+
+def _endpoint(spec: ArrivalSpec, **bounds: Any) -> float | None:
+    values: dict[str, Any] = {"count": None, "duration_seconds": None, "seed": 0}
+    values.update(bounds)
+    return scheduled_endpoint(spec, **values)
+
+
+@pytest.mark.parametrize(("count", "endpoint"), [(1, 0.1), (2, 0.2), (10, 1.0)])
+def test_a_counted_fixed_rate_window_ends_one_slot_after_the_last_arrival(
+    count: int, endpoint: float
+) -> None:
+    # Ending at the last arrival would give 2 requests at 10/s a 0.1 s window
+    # (20/s) and 1 request no window at all.
+    spec = ArrivalSpec(mode="fixed-rate", rate_per_second=10.0)
+    assert _endpoint(spec, count=count) == pytest.approx(endpoint)
+    assert count / endpoint == pytest.approx(10.0)
+
+
+def test_a_counted_poisson_window_ends_at_the_next_scheduled_arrival() -> None:
+    spec = ArrivalSpec(mode="poisson", rate_per_second=5.0)
+    offsets = _offsets(spec, count=101, seed=3)
+    assert _endpoint(spec, count=100, seed=3) == offsets[100]
+    assert offsets[100] > offsets[99]
+
+
+def test_a_counted_burst_window_ends_at_the_next_burst_slot() -> None:
+    spec = ArrivalSpec(mode="burst", burst_size=3, burst_interval_seconds=2.0)
+    assert _endpoint(spec, count=6) == 4.0
+    # A partial last burst still occupies its whole slot.
+    assert _endpoint(spec, count=7) == 6.0
+
+
+def test_a_duration_window_ends_at_the_duration() -> None:
+    spec = ArrivalSpec(mode="poisson", rate_per_second=5.0)
+    assert _endpoint(spec, duration_seconds=60.0) == 60.0
+    trace = ArrivalTrace(offsets_seconds=(0.0, 0.5), source="test")
+    replay = ArrivalSpec(mode="replay", trace=trace)
+    assert _endpoint(replay, duration_seconds=3.0) == 3.0
+
+
+def test_replays_without_a_duration_and_closed_loops_have_no_endpoint() -> None:
+    trace = ArrivalTrace(offsets_seconds=(0.0, 0.5), source="test")
+    assert _endpoint(ArrivalSpec(mode="replay", trace=trace), count=2) is None
+    assert _endpoint(ArrivalSpec(mode="replay", trace=trace)) is None
+    assert _endpoint(ArrivalSpec(), count=4) is None
+    spec = ArrivalSpec(mode="fixed-rate", rate_per_second=10.0)
+    assert _endpoint(spec) is None
 
 
 @pytest.mark.parametrize(

@@ -138,6 +138,19 @@ in it is measured, so each one finishes or times out. Every phase writes an
 `infer.phase_window` record, and each case's `arrivals` block reports
 `window_seconds` and `drain_seconds`.
 
+An open-loop phase's record also gives `scheduled_endpoint_offset_ns`: where
+the schedule itself ends, measured from the phase start. It does not depend on
+when requests were actually sent.
+
+| Phase | Ends at |
+| --- | --- |
+| Limited by `--duration` | The duration |
+| Counted with `--requests` | One whole slot after the last scheduled arrival: the next offset the schedule would have produced |
+
+With a count, two requests at 10/s span 0.2 s, not the 0.1 s between their
+arrivals, and a Poisson count gives the usual N/T_N rate. A replay without
+`--duration`, and a closed loop, have no scheduled endpoint (`null`).
+
 `cancelled` means Stormlog stopped waiting, not that the request stopped. The
 HTTP call keeps running, on the server and on a client thread, until it
 finishes or reaches `--timeout`. So the next phase waits for those calls

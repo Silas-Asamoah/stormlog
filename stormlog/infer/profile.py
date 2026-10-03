@@ -27,7 +27,7 @@ from ..session import (
     update_session_summary,
 )
 from .analysis import analyze_inference_events
-from .arrivals import CLOSED, arrival_offsets
+from .arrivals import CLOSED, arrival_offsets, scheduled_endpoint
 from .cache_state import cache_state_record, reset_cache
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
@@ -887,11 +887,20 @@ class InferenceProfiler:
             window_ended_at_ns = dispatch.started_at_ns + round(duration_seconds * 1e9)
             drain_timeout += (window_ended_at_ns - time.time_ns()) / 1e9
         await _drain(dispatch.tasks, timeout=max(drain_timeout, 0.0))
+        endpoint = scheduled_endpoint(
+            case.arrival,
+            count=total_requests,
+            duration_seconds=duration_seconds,
+            seed=self.config.seed,
+        )
         return _PhaseWindow(
             dispatch.started_at_ns,
             window_ended_at_ns,
             time.time_ns(),
             scheduled_arrivals=len(offsets),
+            scheduled_endpoint_offset_ns=(
+                None if endpoint is None else round(endpoint * 1e9)
+            ),
         )
 
     async def _send(
@@ -1232,6 +1241,9 @@ class _PhaseWindow:
     window_ended_at_ns: int
     drained_at_ns: int
     scheduled_arrivals: int | None = None
+    # Where the schedule's observation window ends, from the phase start: the
+    # duration, or one whole slot after the last counted arrival.
+    scheduled_endpoint_offset_ns: int | None = None
 
     def to_record(
         self,
@@ -1253,6 +1265,7 @@ class _PhaseWindow:
             "drained_at_ns": self.drained_at_ns,
             "drain_timeout_seconds": drain_timeout_seconds,
             "scheduled_arrivals": self.scheduled_arrivals,
+            "scheduled_endpoint_offset_ns": self.scheduled_endpoint_offset_ns,
             "prompts_digest": request.prompts.digest(),
             "abandoned_requests": abandoned.to_record(),
         }
