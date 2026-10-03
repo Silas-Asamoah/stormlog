@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import secrets
@@ -258,6 +259,94 @@ class _Handler(BaseHTTPRequestHandler):
         return None
 
 
+def _target_pause(handler: _Handler, *, pause: bool) -> None:
+    target = handler.query("target")
+    seconds_text = handler.query("seconds")
+    seconds = float(seconds_text) if seconds_text else None
+    fake = handler.fake
+    actions = {
+        ("engine", True): lambda: fake.pause_engine(seconds),
+        ("engine", False): fake.resume_engine,
+        ("frontend", True): lambda: fake.pause_frontend(seconds),
+        ("frontend", False): fake.resume_frontend,
+    }
+    action = actions.get((target or "", pause))
+    if action is None:
+        handler.send_json(400, {"error": "target must be engine or frontend"})
+        return
+    action()
+    handler.send_json(200, {"target": target, "paused": pause})
+
+
+def _fault_pause(handler: _Handler) -> None:
+    handler.read_body()
+    _target_pause(handler, pause=True)
+
+
+def _fault_resume(handler: _Handler) -> None:
+    handler.read_body()
+    _target_pause(handler, pause=False)
+
+
+def _fault_controls(handler: _Handler) -> None:
+    changes = handler.read_json()
+    controls = handler.fake.controls
+    names = {field.name for field in dataclasses.fields(controls)}
+    unknown = sorted(set(changes) - names)
+    if unknown:
+        handler.send_json(400, {"error": f"unknown controls: {', '.join(unknown)}"})
+        return
+    for name, value in changes.items():
+        setattr(controls, name, value)
+    handler.send_json(200, dataclasses.asdict(controls))
+
+
+def _fault_state(handler: _Handler) -> None:
+    engine = handler.fake.engine
+    handler.send_json(
+        200,
+        {
+            "steps": len(engine.steps),
+            "waiting": len(engine.waiting),
+            "running": len(engine.running),
+            "finished": len(engine.finished),
+            "preemptions": engine.stats.preemptions,
+            "engine_paused": engine.paused,
+            "pid": os.getpid(),
+        },
+    )
+
+
+def _fault_foreign_trace(handler: _Handler) -> None:
+    handler.read_body()
+    profiler = handler.fake.profiler
+    if profiler is None or handler.fake.config.trace_dir is None:
+        handler.send_json(409, {"error": "no torch_profiler_dir"})
+        return
+    handler.send_json(200, {"path": str(profiler.drop_foreign_trace())})
+
+
+def _fault_span_body(handler: _Handler) -> None:
+    handler.read_body()
+    spans = handler.fake.spans
+    kind = handler.query("kind") or ""
+    if spans is None or kind not in ("oversized", "gzip_bomb"):
+        handler.send_json(400, {"error": "needs spans_endpoint and a kind"})
+        return
+    handler.send_json(200, {"status": spans.send_abusive(kind)})
+
+
+def _fault_kill(handler: _Handler) -> None:
+    handler.read_body()
+    if not handler.fake.config.allow_kill:
+        handler.send_json(403, {"error": "the kill switch is for a subprocess"})
+        return
+    handler.send_json(200, {"killed": os.getpid()})
+    handler.wfile.flush()
+    # Like SIGKILL: no flush, no goodbye, no atexit.
+    os._exit(137)
+
+
 def _health(handler: _Handler) -> None:
     handler.send_bytes(200, b"", "text/plain")
 
@@ -450,12 +539,19 @@ GET_ROUTES: dict[str, Route] = {
     "/version": _version,
     "/server_info": _server_info,
     "/metrics": _metrics,
+    "/_fault/state": _fault_state,
 }
 POST_ROUTES: dict[str, Route] = {
     "/v1/chat/completions": _chat,
     "/reset_prefix_cache": _reset_prefix_cache,
     "/start_profile": _start_profile,
     "/stop_profile": _stop_profile,
+    "/_fault/pause": _fault_pause,
+    "/_fault/resume": _fault_resume,
+    "/_fault/controls": _fault_controls,
+    "/_fault/foreign_trace": _fault_foreign_trace,
+    "/_fault/span_body": _fault_span_body,
+    "/_fault/kill": _fault_kill,
 }
 
 __all__ = ["GET_ROUTES", "POST_ROUTES", "FakeEngine"]

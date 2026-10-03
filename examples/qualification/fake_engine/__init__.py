@@ -8,6 +8,7 @@ routes and records Stormlog reads from a real server. See
 
 from .config import Controls, FakeEngineConfig
 from .engine import Engine, EngineObserver, FakeRequest, ScheduledMember, Step
+from .process import FakeEngineProcess
 from .server import FakeEngine
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "EngineObserver",
     "FakeEngine",
     "FakeEngineConfig",
+    "FakeEngineProcess",
     "FakeRequest",
     "ScheduledMember",
     "Step",
