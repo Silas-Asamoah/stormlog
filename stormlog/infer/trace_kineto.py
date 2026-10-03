@@ -191,9 +191,16 @@ def capture_trace(
     attachment: TraceAttachment | None = None,
     device_uuids: Mapping[int, str] | None = None,
     detail: Detail = "launch",
+    device_uuid_sources: Mapping[int, str] | None = None,
 ) -> TraceCapture:
-    """Build the capture for a loaded trace of any supported format."""
-    _check_given_uuids(trace, device_uuids or {})
+    """Build the capture for a loaded trace of any supported format.
+
+    ``device_uuid_sources`` says where each given UUID came from, for the
+    summary: ``option`` (the default, ``--device-uuid``) or ``execution_log``.
+    Only option entries are checked against UUIDs the trace names itself.
+    """
+    sources = dict(device_uuid_sources or {})
+    _check_given_uuids(trace, _option_uuids(device_uuids or {}, sources))
     trace_key = attachment.attachment_id if attachment else _trace_key(trace, path)
     builder = _EventBuilder(
         trace=trace,
@@ -202,6 +209,7 @@ def capture_trace(
         trace_key=trace_key,
         attachment_id=attachment.attachment_id if attachment else None,
         device_uuids=dict(device_uuids or {}),
+        device_uuid_sources=sources,
     )
     groups = _group_events(trace, detail)
     events = tuple(
@@ -215,6 +223,17 @@ def capture_trace(
         attachments=(attachment,) if attachment else (),
         summary=_summary(trace, groups, builder, detail, path),
     )
+
+
+def _option_uuids(
+    device_uuids: Mapping[int, str], sources: Mapping[int, str]
+) -> dict[int, str]:
+    """The entries that came from ``--device-uuid``."""
+    return {
+        index: uuid
+        for index, uuid in device_uuids.items()
+        if sources.get(index, "option") == "option"
+    }
 
 
 def _check_given_uuids(trace: KinetoTrace, given: Mapping[int, str]) -> None:
@@ -429,6 +448,7 @@ class _EventBuilder:
     trace_key: str
     attachment_id: str | None
     device_uuids: dict[int, str]
+    device_uuid_sources: dict[int, str] = field(default_factory=dict)
     count: int = 0
     record_spans: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     _contexts: dict[tuple[int | None, int | None, str | None], CorrelationContext] = (
@@ -658,11 +678,12 @@ def _device_entry(
 
 
 def _uuid_source(builder: _EventBuilder, event: GpuEvent) -> str | None:
-    """Where a device's UUID came from: the trace itself or ``--device-uuid``."""
+    """Where a device's UUID came from: the trace itself, ``--device-uuid``
+    (``option``), or the vLLM execution log's worker hellos."""
     if event.device_uuid is not None:
         return "trace"
     if event.device is not None and event.device in builder.device_uuids:
-        return "option"
+        return builder.device_uuid_sources.get(event.device, "option")
     return None
 
 

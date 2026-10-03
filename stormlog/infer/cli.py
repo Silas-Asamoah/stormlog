@@ -439,6 +439,16 @@ def _add_import_trace_parser(subparsers: Any) -> None:
         ),
     )
     import_parser.add_argument(
+        "--vllm-execution-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR; its worker hellos "
+            "name the GPU of each traced process (by host, pid and lifetime), so "
+            "--device-uuid is only needed where that leaves a gap"
+        ),
+    )
+    import_parser.add_argument(
         "--envelope", default=None, help="Run envelope (default: beside the artifact)"
     )
 
@@ -1069,6 +1079,7 @@ def cmd_import_trace(args: argparse.Namespace) -> int:
         device_uuids=parse_device_uuids(args.device_uuid),
         detail=args.detail,
         envelope_path=args.envelope,
+        execution_dir=args.vllm_execution_dir,
     )
     for summary in (capture.summary or {}).get("traces", []):
         _print_trace_summary(summary)
@@ -1147,13 +1158,36 @@ def _print_trace_summary(summary: dict[str, Any]) -> None:
     )
     for reason, count in summary["unresolved_gpu_events"].items():
         print(f"  unresolved ({reason}): {count}")
+    _print_trace_devices(summary)
+    for note in summary.get("notes", []):
+        print(f"  note: {note}")
+
+
+def _print_trace_devices(summary: dict[str, Any]) -> None:
     for device, values in summary["devices"].items():
         uuid = values["device_uuid"] or "unknown UUID, not measured"
+        if values.get("device_uuid_source") == "execution_log":
+            uuid += ", from the vLLM execution log"
         pid, _, ordinal = str(device).rpartition("/")
         label = f"process {pid} device {ordinal}" if pid else f"device {device}"
         print(
             f"  {label} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
             f"summed {values['summed_ns'] / 1e6:.3f} ms"
         )
-    for note in summary.get("notes", []):
-        print(f"  note: {note}")
+    binding = summary.get("execution_log")
+    if binding is not None and binding.get("status") != "bound":
+        print(f"  execution log: {_binding_note(binding)}")
+
+
+def _binding_note(binding: dict[str, Any]) -> str:
+    parts = []
+    if binding.get("unmatched"):
+        pids = ", ".join(str(pid) for pid in binding["unmatched"])
+        parts.append(f"no worker epoch covers process {pids}")
+    for pid, epochs in binding.get("ambiguous", {}).items():
+        parts.append(f"process {pid} matches {len(epochs)} worker epochs")
+    if binding.get("conflicts"):
+        parts.append(f"device {binding['conflicts']} differs between processes")
+    if not parts:
+        parts.append(f"status {binding.get('status')}")
+    return "; ".join(parts) + "; give --device-uuid for it"
