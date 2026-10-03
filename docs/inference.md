@@ -375,6 +375,9 @@ Stormlog reports client-observed metrics in v1:
 - Token throughput uses server usage when available; otherwise the configured
   tokenizer or estimate is clearly recorded.
 
+SLO policies use the same boundaries; see
+[Inference SLO policies](inference_slo.md).
+
 ## Client-local telemetry
 
 Use `--system-sampler` to choose best-effort telemetry:
