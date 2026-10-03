@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_hardware_preflight_evidence",
+  "issue": 118,
+  "local_date": "2026-10-03",
+  "status": "bounded_w1_kernel_population_matches_with_reference_limitations",
+  "cloud": {
+    "provider": "JarvisLabs",
+    "machine_id": 524935,
+    "gpu": "L4",
+    "state_after_verified_download": "Paused",
+    "running_instances_after_pause": 0,
+    "paused_instances_after_pause": 1,
+    "balance_before_usd": 19.4685,
+    "balance_after_usd": 19.4437,
+    "observed_balance_decrease_usd": 0.0248,
+    "balance_scope": "Single bounded W1 direct-CUPTI run, verified download, and storage; exact compute-only cost unavailable after pause.",
+    "managed_run_reported_instance_cost_usd_before_pause": 0.015
+  },
+  "direct_cupti": {
+    "run_id": "r_0856f91b",
+    "managed_run_exit_code": 0,
+    "workload": "W1 eager, seed 118, matrix 512, 10 warmup and 50 measured iterations",
+    "helper_binary_sha256": "70569ef7f94110e503fc7d5f9ff9bd2cfe41e7296195f9466683650cfd86b4ac",
+    "trace_sha256": "dc8cca6416718b7d78ed64a42dc5c920a2b8d81b6f94523d0c2dc508c96b6e02",
+    "decoded_sha256": "28a610fd3406bdc80388e8533a59f9b4343f98fb03f7e18e66fca6b2335cb603",
+    "encoded_bytes": 77836,
+    "decoded_bytes": 1511713,
+    "frames": 24,
+    "records": 3256,
+    "finalized": true,
+    "cupti_dropped_records": 0,
+    "local_dropped_records": 0,
+    "dropped_bytes": 0,
+    "all_kernels": 182,
+    "measured_kernels_by_correlated_host_api": 150,
+    "measured_kernel_class_counts": {
+      "cutlass_Kernel2": 50,
+      "cublasLt_splitKreduce_kernel": 50,
+      "at_vectorized_elementwise_kernel": 50
+    },
+    "kernel_records_without_any_host_api_correlation": 0,
+    "window_clock": "CLOCK_REALTIME",
+    "timestamp_basis": "Linux x86_64 CUPTI defaults to CLOCK_REALTIME and normalizes GPU activity timestamps to CPU time; no custom timestamp callback is registered by the pinned helper.",
+    "timestamp_source": "https://docs.nvidia.com/cupti/api/group__CUPTI__ACTIVITY__API.html"
+  },
+  "trusted_nsys_comparison": {
+    "source_evidence": "benchmarks/native_probes/evidence/preflight-nsys-l4-524642-06.json",
+    "version": "2026.5.1.161-265138896106v0",
+    "measured_kernels_by_correlated_host_launch": 150,
+    "measured_kernel_class_counts": {
+      "Kernel2": 50,
+      "splitKreduce_kernel": 50,
+      "vectorized_elementwise_kernel": 50
+    },
+    "count_agreement": "150/150 across three named W1 kernel classes on separate bounded runs",
+    "remaining_warning": "Nsight reported that not all NVTX events might have been collected; external capture completeness is not proven.",
+    "full_protocol_w1_coverage_claim": false
+  },
+  "raw_evidence": {
+    "archive": "artifacts/native-probes/preflight-w1-direct-524935-09/w1-direct-524935.tar.gz",
+    "archive_sha256": "fb673b6bb682b9bb46dcccc39564027761e3c2ae4035126501367a6e1f9824c2",
+    "internal_file_hashes_verified": 7
+  },
+  "readiness": {
+    "bounded_w1_kernel_population_match": true,
+    "hardware_preflight_passed": false,
+    "final_trials_started": false,
+    "next_step": "Qualify W2 overlap and W3 graph handling, external reference completeness, memory accounting, packaging, privileges, coexistence, and recovery before final observations."
+  }
+}
