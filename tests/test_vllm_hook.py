@@ -439,11 +439,12 @@ def test_worker_ranges_pair_sampling_and_skip_dummy_runs(tmp_path: Path) -> None
     recorder.wrap(runner)
     step = SchedulerOutput([], CachedRequestData(), {}, 0)
     setattr(step, ITERATION_ATTRIBUTE, ("vllm:h:b:1:2", "7"))
+    runner._dummy_run(1)  # V2 warm-up and graph capture: execute_model(dummy_run)
     runner.execute_model(SchedulerOutput([], CachedRequestData(), {}, 0))  # warm-up
 
     assert runner.execute_model(step) is None
     assert runner.sample_tokens(None) == "sampled"
-    runner._dummy_run(1)
+    runner._dummy_run(1)  # once serving, neither start-up nor a miss
     runner.execute_model(SchedulerOutput([], CachedRequestData(), {}, 0))  # no identity
     with pytest.raises(RuntimeError, match="model failed"):
         runner.execute_model("boom")
@@ -451,8 +452,8 @@ def test_worker_ranges_pair_sampling_and_skip_dummy_runs(tmp_path: Path) -> None
 
     # The step and its sampling share one range; the dummy run reached vLLM unranged.
     assert opened == [("vllm:h:b:1:2", "7"), ("vllm:h:b:1:2", "7")]
-    assert ("execute", True) in runner.calls
-    assert (recorder.startup_unranged, recorder.range_misses) == (1, 2)
+    assert runner.calls.count(("execute", True)) == 2
+    assert (recorder.startup_unranged, recorder.range_misses) == (2, 2)
     assert len(recorder.pending) == 0
 
 

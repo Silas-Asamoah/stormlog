@@ -49,6 +49,9 @@ class RunnerRecorder:
 
         def execute_model(scheduler_output: Any, *args: Any, **kwargs: Any) -> Any:
             if kwargs.get("dummy_run"):
+                # V2's warm-up and CUDA-graph capture: never ranged or paired.
+                if not self.serving:
+                    self.startup_unranged += 1
                 return execute(scheduler_output, *args, **kwargs)
             identity = self._identity(scheduler_output)
             with self._range(identity):

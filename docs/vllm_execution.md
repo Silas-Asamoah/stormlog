@@ -189,8 +189,9 @@ rollback applying only when the output is not stale.
 ```
 
 A worker's heartbeat adds `range_misses` (serving calls that ran without an
-iteration range), `startup_unranged` (warm-up and CUDA-graph capture calls
-before the first serving step, which never have one), and `pending_samples`.
+iteration range), `startup_unranged` (warm-up, dummy and CUDA-graph capture
+calls before the first serving step, which never have one), and
+`pending_samples`.
 
 `status.json` holds the latest heartbeat's fields and is still updated after
 the disk cap stops record writing, so loss stays visible.
