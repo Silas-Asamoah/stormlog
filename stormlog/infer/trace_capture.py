@@ -375,17 +375,19 @@ class TraceWindows:
         nothing collected and each window's reason in its summary.
         """
         files = [path for window in self.windows for path in window.files]
-        collector: Any = (
-            KinetoTraceCollector(
-                files,
-                device_uuids=self.config.device_uuids,
-                detail=self.config.detail,
-                max_bytes=self.config.max_bytes,
-            )
-            if files
-            else _NothingCollected(self.windows)
-        )
         try:
+            # Inside the guard: the collector checks the files exist, and one
+            # removed since its window closed must not fail the finished run.
+            collector: Any = (
+                KinetoTraceCollector(
+                    files,
+                    device_uuids=self.config.device_uuids,
+                    detail=self.config.detail,
+                    max_bytes=self.config.max_bytes,
+                )
+                if files
+                else _NothingCollected(self.windows)
+            )
             append_inference_capture(
                 artifact, run_id=run_id, session=session, trace_collector=collector
             )

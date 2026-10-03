@@ -486,6 +486,23 @@ def test_a_failed_import_warns_instead_of_failing_the_run(
     assert warnings and "not imported (disk full)" in warnings[0]
 
 
+def test_a_trace_removed_before_the_import_warns_instead_of_failing(
+    tmp_path: Path,
+) -> None:
+    """A retention job can delete an early window's trace while later cases run."""
+    warnings: list[str] = []
+    windows = TraceWindows(
+        _config(tmp_path), control=_FakeControl(tmp_path), on_warning=warnings.append
+    )
+    window = _run_window(windows)
+    window.files[0].unlink()
+
+    windows.import_into(tmp_path / "infer.jsonl", run_id="r", session=None)  # type: ignore[arg-type]
+
+    assert len(warnings) == 1
+    assert "trace file not found" in warnings[0]
+
+
 def test_a_malformed_reply_is_a_failed_call_not_an_exception() -> None:
     import socket
 
