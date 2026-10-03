@@ -138,6 +138,14 @@ def test_a_histogram_whose_count_disagrees_with_its_inf_bucket_is_refused() -> N
     assert share.lo is None and share.hi is None
 
 
+def test_a_histogram_whose_labels_change_between_scrapes_is_not_differenced() -> None:
+    start = exposition(histograms={E2E: ((("0.1", 1), ("+Inf", 2)), 1.0)})
+    end = _relabelled(exposition(histograms={E2E: ((("0.1", 2), ("+Inf", 7)), 5.0)}))
+    share = histogram_share_above(series([start, end]), E2E, 0.1)
+    assert share.reasons == (REASON_SERIES_LABELS_CHANGED,)
+    assert share.count_delta is None and share.lo is None
+
+
 def test_a_step_that_is_not_a_histogram_is_refused() -> None:
     # Each scrape is a valid histogram and every part grew, but the step's
     # buckets [8, 1, 1] cannot hold one new observation: shares would be -7.
