@@ -575,6 +575,15 @@ def test_a_lone_surrogate_cannot_complete_a_known_secret(max_bytes: int | None) 
     assert scrub_text(text, max_bytes=max_bytes, secrets=secrets) == "<redacted>"
 
 
+def test_a_registered_value_with_a_lone_surrogate_is_still_found() -> None:
+    value = "abcd" + chr(0xDC80) + "efgh-secret"
+    secrets = KnownSecrets([value])
+    text = f"x {value} y"
+    assert scrub_text(text, secrets=secrets) == "x <redacted> y"
+    assert scrub_text(text, max_bytes=64, secrets=secrets) == "x <redacted> y"
+    assert secrets.redact(text) == "x <redacted> y"
+
+
 def test_scrub_text_bounds_its_input_before_matching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -412,8 +412,11 @@ class KnownSecrets:
         if len(value) < MIN_SECRET_LENGTH:
             self.skipped_short += 1
             return
-        if value not in self._patterns:
-            self._patterns[value] = _spellings(value)
+        # scrub_text turns what UTF-8 cannot encode into "?" before matching,
+        # so a value holding a lone surrogate is also registered that way.
+        for form in dict.fromkeys((value, _encodable(value))):
+            if form not in self._patterns:
+                self._patterns[form] = _spellings(form)
 
     def redact(self, text: str) -> str:
         """``text`` with every form of every registered value replaced.
@@ -555,6 +558,11 @@ def _hex(number: int, width: int) -> str:
     )
 
 
+def _encodable(text: str) -> str:
+    """``text`` with each character UTF-8 cannot encode replaced by "?"."""
+    return text.encode("utf-8", "replace").decode("utf-8")
+
+
 def truncate_utf8(text: str, max_bytes: int) -> str:
     """The longest prefix of ``text`` whose UTF-8 encoding fits ``max_bytes``.
 
@@ -589,7 +597,7 @@ def scrub_text(
     # What UTF-8 cannot encode becomes "?" now, one character for one, so
     # the text matched is the text sent: replacing it later could complete
     # a registered value after matching.
-    text = text.encode("utf-8", "replace").decode("utf-8")
+    text = _encodable(text)
     spans = secrets.spans(text) if secrets is not None else []
     for finder in _FINDERS:
         spans.extend(finder(text))
