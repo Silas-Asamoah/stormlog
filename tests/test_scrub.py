@@ -453,6 +453,25 @@ def test_values_in_escaped_quotes_are_read(text: str, scrubbed: str) -> None:
     assert scrub_text(text) == scrubbed
 
 
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        ('{"api_keys": ["opaque-one", "two"]}', '{"api_keys": <redacted>}'),
+        (
+            '{"credentials": {"user": "a", "pass": "b"}, "n": 1}',
+            '{"credentials": <redacted>, "n": 1}',
+        ),
+        ("{'tokens': ['a', 'b']}", "{'tokens': <redacted>}"),
+        ('{"secret": ["a]b", "c}"], "x": 1}', '{"secret": <redacted>, "x": 1}'),
+        ('{"api_keys": ["one", "tw', '{"api_keys": <redacted>'),
+        ("password=[abc, def] next", "password=<redacted> next"),
+        ('{"model": ["a", "b"]}', '{"model": ["a", "b"]}'),
+    ],
+)
+def test_arrays_and_objects_are_redacted_whole(text: str, scrubbed: str) -> None:
+    assert scrub_text(text) == scrubbed
+
+
 def test_scrub_text_leaves_ordinary_text_alone() -> None:
     text = "This model's maximum context length is 32768 tokens; max_tokens 128."
     assert scrub_text(text) == text
@@ -628,6 +647,9 @@ ADVERSARIAL = (
     ("('password=' + chr(92) + '\"') * 4000", None),
     ("(chr(92) + '\"api_key' + chr(92) + '\": ') * 3000", None),
     ("(chr(92) + '\"a') * 17000", None),
+    ("'{\"api_key\": ' * 10000", None),
+    ('"[" * 50000', None),
+    ('"password=[" * 5000', None),
     ('"a=\'" * 17000', None),
     ("'a=\"' * 17000", None),
     ("'password=\"' * 5000", None),

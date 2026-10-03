@@ -185,11 +185,11 @@ class _NextMatch:
 
 def _member_spans(text: str) -> Iterator[Span]:
     """The value of each member whose key, escapes decoded, is secret-like."""
-    bare = _BareRuns(text)
+    values = _Values(text)
     for match in _QUOTED_KEY.finditer(text):
         key = next(group for group in match.groups() if group is not None)
         if is_forbidden_key_name(_json_unescaped(key)):
-            span = _value_span(text, match.end(), bare)
+            span = values.span(match.start(), match.end())
             if span is not None:
                 yield span
 
@@ -204,42 +204,78 @@ def _json_unescaped(key: str) -> str:
 
 
 def _key_value_spans(text: str) -> Iterator[Span]:
-    bare = _BareRuns(text)
+    values = _Values(text)
     for match in _KEY_SEPARATOR.finditer(text):
         if is_forbidden_key_name(match.group(1)):
-            span = _value_span(text, match.end(), bare)
+            span = values.span(match.start(), match.end())
             if span is not None:
                 yield span
 
 
-class _BareRuns:
-    """Where a bare value ends, computed once per run of value characters.
+class _Values:
+    """Read the value after a secret-like key, in linear time overall.
 
-    In a chain such as "password=password=...", every key's value is a
-    suffix of one run, and all of them end where the run ends; rescanning
-    the run for each key would take quadratic time.
+    A bare value ends where its run of value characters ends; in a chain
+    such as "password=password=...", every key's value is a suffix of one
+    run and all of them end where it ends, so that end is computed once
+    per run. An array or object is redacted whole, and a key inside one
+    already redacted is skipped, so nested values are not rescanned.
     """
 
     def __init__(self, text: str) -> None:
         self.text = text
-        self.start = self.end = -1
+        self.run_start = self.run_end = -1
+        self.covered = -1
 
-    def end_from(self, position: int) -> int:
-        if not self.start <= position < self.end:
+    def span(self, key_start: int, position: int) -> Span | None:
+        """The span to redact for a key at ``key_start`` whose value starts at ``position``."""
+        if key_start < self.covered:
+            return None
+        text = self.text
+        if text[position : position + 1] in ("[", "{"):
+            end = _bracket_end(text, position)
+            self.covered = end
+            return position, end
+        for quoted in (_DOUBLE_QUOTED, _SINGLE_QUOTED, _ESCAPED_QUOTED):
+            match = quoted.match(text, position)
+            if match:
+                return match.span(1) if match.end(1) > match.start(1) else None
+        end = self._bare_end(position)
+        return (position, end) if end > position else None
+
+    def _bare_end(self, position: int) -> int:
+        if not self.run_start <= position < self.run_end:
             match = _BARE_VALUE.match(self.text, position)
-            self.start = position
-            self.end = match.end() if match else position
-        return self.end
+            self.run_start = position
+            self.run_end = match.end() if match else position
+        return self.run_end
 
 
-def _value_span(text: str, position: int, bare: _BareRuns) -> Span | None:
-    """The value starting at ``position``: inside its quotes, or a bare word."""
-    for quoted in (_DOUBLE_QUOTED, _SINGLE_QUOTED, _ESCAPED_QUOTED):
-        match = quoted.match(text, position)
-        if match:
-            return match.span(1) if match.end(1) > match.start(1) else None
-    end = bare.end_from(position)
-    return (position, end) if end > position else None
+def _bracket_end(text: str, start: int) -> int:
+    """Where the array or object opening at ``start`` closes, or the text's end.
+
+    Brackets inside quoted strings, in either quote, do not count.
+    """
+    depth = 0
+    quote = ""
+    index = start
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == "\\":
+                index += 1
+            elif char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return len(text)
 
 
 def _jwt_spans(text: str) -> Iterator[Span]:
