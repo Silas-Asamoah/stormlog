@@ -136,12 +136,24 @@ def _patch_engine(settings: _Settings) -> None:
             lambda: recorder.before_update(self, scheduler_output, model_runner_output),
         )
         try:
-            return update(self, scheduler_output, model_runner_output, *args, **kwargs)
-        finally:
+            result = update(
+                self, scheduler_output, model_runner_output, *args, **kwargs
+            )
+        except BaseException:
             _guard(
                 recorder,
-                lambda: recorder.after_update(self, scheduler_output, before or {}),
+                lambda: recorder.after_update(
+                    self, scheduler_output, before or {}, failed=True
+                ),
             )
+            raise
+        _guard(
+            recorder,
+            lambda: recorder.after_update(
+                self, scheduler_output, before or {}, result=result
+            ),
+        )
+        return result
 
     def scheduler_free(self: Any, request: Any, *args: Any, **kwargs: Any) -> Any:
         recorder = getattr(self, RECORDER_ATTRIBUTE, None)

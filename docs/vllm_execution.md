@@ -145,7 +145,7 @@ first `scheduled` record.
     "computed_before": 0, "prompt_tokens": 4000,
     "prefill_scheduled": 2000, "past_prompt_scheduled": 0,
     "drafts_scheduled": 0, "cached_at_admission": 0,
-    "recompute": false, "output_before": 0}]}
+    "recompute": false, "output_before": 0, "resumable": false}]}
 ```
 
 `iteration` counts the engine's `schedule()` calls from 0. `computed_before` is
@@ -154,7 +154,9 @@ own classification: `context` for a request new in this output (including one
 resumed after preemption) or still in its context phase, else `generation`.
 `prefill_scheduled` is the part of the step below the prompt length;
 `past_prompt_scheduled` is the rest, which is decoding for a running request and
-recomputation for a resumed one. `sighting` is
+recomputation for a resumed one. `prompt_tokens` is read from the live request:
+a `resumable` (streaming-input) request's prompt grows with each new input, and
+each turn's prefill is measured against the prompt of that turn. `sighting` is
 `first` the first time the hook sees an internal ID and `repeat` after, whatever
 vLLM's own field calls it. `cached_at_admission` is set on the first sighting
 only.
@@ -166,12 +168,17 @@ only.
  "members": [
    {"internal": "…", "outcome": "kept", "stale": false,
     "sampled": 1, "accepted_drafts": 0, "retained": 1,
-    "computed_after": 2000}]}
+    "finish_reason": null, "computed_after": 2000}]}
 ```
 
 `outcome` is `kept`, `dropped_stale`, `discarded_finished` or `unknown`.
 `sampled` is the number of tokens the step sampled for the request, counted
-before vLLM trims at a stop string. `retained` is how many of them were kept.
+before vLLM trims at a stop string. `retained` is how many tokens vLLM's own
+output for this step carried for the request, and `finish_reason` is the reason
+that output gave, or null if the request did not finish. Both are read from the
+output `update_from_output` returns, so they stay right when vLLM trims at a
+stop, frees the request inside the update, or resets a streaming-input
+request's counters. They are null unless the outcome is `kept`.
 `computed_after` is derived as
 `computed_before + scheduled - (drafts_scheduled - accepted_drafts)`, the
 rollback applying only when the output is not stale.
@@ -187,6 +194,10 @@ rollback applying only when the output is not stale.
 
 ```json
 {"kind": "heartbeat", "wall_ns": …, "mono_ns": …, "last_seq": 1234,
+When `update_from_output` raises, the record has `"update_failed": true`, every
+member's `outcome` is `unknown`, and its other fields are null: vLLM's
+exception passes through, and the step's fate was not seen.
+
  "dropped": {"scheduled": 0, "completed": 0, "alias": 0, "terminal": 0},
  "errors": 0, "bytes": 1048576, "capped": false}
 ```

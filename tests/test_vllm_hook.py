@@ -34,12 +34,17 @@ class FakeRequest:
     drop_stale_output: bool = False
     finished: bool = False
     status: Any = None
+    # Stop after this many output tokens; vLLM trims the sampled list there.
+    max_tokens: int | None = None
+    # A streaming-input request: on a stop its next input is appended instead.
+    resumable: bool = False
+    next_input: int = 0
 
     def is_finished(self) -> bool:
         return self.finished
 
     def get_finished_reason(self) -> str | None:
-        return "stop" if self.finished else None
+        return "length" if self.finished else None
 
 
 @dataclass
@@ -80,6 +85,18 @@ class ModelRunnerOutput:
     sampled_token_ids: list[list[int]]
 
 
+@dataclass
+class EngineCoreOutput:
+    request_id: str
+    new_token_ids: list[int]
+    finish_reason: str | None = None
+
+
+@dataclass
+class EngineCoreOutputs:
+    outputs: list[EngineCoreOutput]
+
+
 class Config(types.SimpleNamespace):
     pass
 
@@ -116,18 +133,38 @@ def _fake_vllm() -> dict[str, types.ModuleType]:
 
         def update_from_output(
             self, scheduler_output: Any, model_runner_output: Any
-        ) -> str:
+        ) -> dict[int, EngineCoreOutputs]:
+            """vLLM 0.30.0's shape: stops trim in place and free inside."""
+            if self.update_error is not None:
+                raise self.update_error
+            outputs = []
             for internal in scheduler_output.num_scheduled_tokens:
                 request = self.requests.get(internal)
                 if request is None or request.finished:
                     continue
+                if request.num_stale_output_tokens and request.drop_stale_output:
+                    continue
                 index = model_runner_output.req_id_to_index[internal]
-                request.num_output_tokens += len(
-                    model_runner_output.sampled_token_ids[index]
-                )
-            if self.update_error is not None:
-                raise self.update_error
-            return "outputs"
+                new = model_runner_output.sampled_token_ids[index]
+                limit = request.max_tokens
+                if limit is not None and request.num_output_tokens + len(new) >= limit:
+                    del new[limit - request.num_output_tokens :]
+                    request.finished = True
+                request.num_output_tokens += len(new)
+                reason = request.get_finished_reason()
+                outputs.append(EngineCoreOutput(internal, list(new), reason))
+                if request.finished and request.resumable:
+                    # The session resets: the output so far and the next input
+                    # become the prompt of the request's next turn.
+                    request.num_prompt_tokens += (
+                        request.num_output_tokens + request.next_input
+                    )
+                    request.num_output_tokens = 0
+                    request.finished = False
+                    request.max_tokens = None
+                elif request.finished:
+                    self._free_request(request)
+            return {0: EngineCoreOutputs(outputs)} if outputs else {}
 
         def _free_request(
             self, request: FakeRequest, delay_free_blocks: bool = False
@@ -278,8 +315,9 @@ def test_two_requests_share_iterations_and_finish(vllm: dict[str, Any]) -> None:
     scheduler.schedule()
     scheduler.requests["a-1"].finished = True  # finished before this output
     scheduler._free_request(scheduler.requests["a-1"])
+    scheduler.requests["b-1"].max_tokens = 2  # its stop: freed inside the update
     scheduler.update_from_output(
-        second, ModelRunnerOutput({"a-1": 0, "b-1": 1}, [[3], [4]])
+        second, ModelRunnerOutput({"a-1": 0, "b-1": 1}, [[3], [4, 5]])
     )
 
     records = _records(vllm["root"], "engine")
@@ -306,10 +344,26 @@ def test_two_requests_share_iterations_and_finish(vllm: dict[str, Any]) -> None:
     assert [m["outcome"] for m in completed[0]["members"]] == ["kept", "kept"]
     assert [m["retained"] for m in completed[0]["members"]] == [1, 1]
     assert completed[0]["members"][0]["computed_after"] == 4
-    outcomes = {m["internal"]: m["outcome"] for m in completed[1]["members"]}
-    assert outcomes == {"a-1": "discarded_finished", "b-1": "kept"}
-    assert _of(records, "terminal")[0]["internal"] == "a-1"
+    second_done = {m["internal"]: m for m in completed[1]["members"]}
+    assert second_done["a-1"]["outcome"] == "discarded_finished"
+    # b-1 sampled two tokens; its stop kept one, and vLLM freed it in the update.
+    assert (second_done["b-1"]["outcome"], second_done["b-1"]["sampled"]) == (
+        "kept",
+        2,
+    )
+    assert second_done["b-1"]["retained"] == 1
+    assert second_done["b-1"]["finish_reason"] == "length"
+    terminals = {r["internal"]: r for r in _of(records, "terminal")}
+    assert set(terminals) == {"a-1", "b-1"}
+    assert terminals["b-1"]["output_tokens"] == 2
     assert [r["seq"] for r in records] == list(range(len(records)))
+    # Nothing outlives the requests: per-request state goes with _free_request.
+    recorder = getattr(scheduler, hook.RECORDER_ATTRIBUTE)
+    assert (recorder.committed, recorder.prompt_tokens, recorder.pending) == (
+        {},
+        {},
+        {},
+    )
 
 
 def test_spec_decode_acceptance_and_stale_outputs(vllm: dict[str, Any]) -> None:
@@ -351,6 +405,39 @@ def test_spec_decode_acceptance_and_stale_outputs(vllm: dict[str, Any]) -> None:
     assert (members["t-1"]["outcome"], members["t-1"]["stale"]) == (
         "dropped_stale",
         True,
+    )
+
+
+def test_streaming_input_keeps_counts_whole(vllm: dict[str, Any]) -> None:
+    scheduler = vllm["Scheduler"](vllm_config())
+    request = FakeRequest("r-1", 4, max_tokens=2, resumable=True, next_input=3)
+    scheduler.requests = {"r-1": request}
+    steps = [
+        SchedulerOutput([_new("r-1", 4)], CachedRequestData(), {"r-1": 4}, 4),
+        SchedulerOutput([], CachedRequestData(["r-1"], [4], [1]), {"r-1": 1}, 1),
+    ]
+    for step, token in zip(steps, (7, 8)):
+        scheduler.next_output = step
+        scheduler.schedule()
+        scheduler.update_from_output(step, ModelRunnerOutput({"r-1": 0}, [[token]]))
+    # The turn ended: vLLM reset its output count and grew its prompt to 4 + 2 + 3.
+    assert (request.num_prompt_tokens, request.num_output_tokens) == (9, 0)
+    resumed = SchedulerOutput(
+        [], CachedRequestData(["r-1"], [5], [0], {"r-1"}), {"r-1": 4}, 4
+    )
+    scheduler.next_output = resumed
+    scheduler.schedule()
+
+    records = _records(vllm["root"], "engine")
+    completed = [c["members"][0] for c in _of(records, "completed")]
+    assert [m["retained"] for m in completed] == [1, 1]
+    assert completed[1]["finish_reason"] == "length"
+    member = _of(records, "scheduled")[2]["members"][0]
+    assert (member["prompt_tokens"], member["prefill_scheduled"]) == (9, 4)
+    assert (member["phase"], member["resumable"], member["recompute"]) == (
+        "context",
+        True,
+        False,
     )
 
 
@@ -436,7 +523,15 @@ def test_vllm_errors_pass_through_and_telemetry_errors_do_not(
     assert scheduler.schedule() is unreadable
 
     records = _records(vllm["root"], "engine")
-    assert len(_of(records, "completed")) == 1  # recorded although vLLM raised
+    # Recorded although vLLM raised, and as unknown: the step's fate is not seen.
+    (completed,) = _of(records, "completed")
+    assert completed["update_failed"] is True
+    (member,) = completed["members"]
+    assert (member["outcome"], member["retained"], member["computed_after"]) == (
+        "unknown",
+        None,
+        None,
+    )
     status = json.loads(next(vllm["root"].glob("*/engine-*/status.json")).read_text())
     assert status["errors"] >= 1
 

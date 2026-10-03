@@ -43,10 +43,11 @@ class EngineRecorder:
     writer: EpochWriter
     producer: str
     next_iteration: int = 0
+    # Per live request: its prompt length, and its committed context. Both are
+    # dropped when vLLM frees the request, so they never outgrow its live set.
     prompt_tokens: dict[str, int] = field(default_factory=dict)
     committed: dict[str, int] = field(default_factory=dict)
     pending: dict[str, _Pending] = field(default_factory=dict)
-    freed_output_tokens: dict[str, int] = field(default_factory=dict)
 
     # ------------------------------------------------------------ admission
 
@@ -89,7 +90,6 @@ class EngineRecorder:
                 "preempted": sorted(getattr(output, "preempted_req_ids", None) or ()),
                 "members": [fields for _, fields in members],
             },
-            size_hint=256 + 220 * len(members),
         )
 
     def _new_members(
@@ -142,9 +142,13 @@ class EngineRecorder:
     ) -> tuple[_Member, dict[str, Any]]:
         scheduled = int(output.num_scheduled_tokens.get(internal, 0))
         drafts = len(output.scheduled_spec_decode_tokens.get(internal, ()) or ())
+        request = scheduler.requests.get(internal)
+        if request is not None:
+            # A resumable (streaming-input) request grows its prompt between
+            # sessions, so the live length wins over the first sighting's.
+            self.prompt_tokens[internal] = int(request.num_prompt_tokens)
         prompt = self.prompt_tokens.get(internal)
         prefill = max(0, min(scheduled, prompt - computed_before)) if prompt else 0
-        request = scheduler.requests.get(internal)
         member = _Member(internal, scheduled, computed_before, prompt, drafts)
         fields = {
             "internal": internal,
@@ -166,6 +170,7 @@ class EngineRecorder:
             "output_before": (
                 int(request.num_output_tokens) if request is not None else None
             ),
+            "resumable": bool(getattr(request, "resumable", False)),
         }
         return member, fields
 
@@ -175,7 +180,6 @@ class EngineRecorder:
         self, scheduler: Any, output: Any, model_output: Any
     ) -> dict[str, dict[str, Any]]:
         """Per member, what vLLM's own output loop is about to read."""
-        self.freed_output_tokens.clear()
         sampled = getattr(model_output, "sampled_token_ids", None) or []
         index_of = getattr(model_output, "req_id_to_index", None) or {}
         snapshot = {}
@@ -185,12 +189,10 @@ class EngineRecorder:
             snapshot[internal] = {
                 "exists": request is not None,
                 "finished": request is not None and bool(request.is_finished()),
-                "output_before": (
-                    int(request.num_output_tokens) if request is not None else None
-                ),
                 "stale": request is not None
                 and int(getattr(request, "num_stale_output_tokens", 0)) > 0,
                 "drop_stale": bool(getattr(request, "drop_stale_output", False)),
+                # Copied now: stop handling trims the sampled list in place.
                 "sampled": (
                     len(sampled[index])
                     if index is not None and index < len(sampled)
@@ -200,28 +202,43 @@ class EngineRecorder:
         return snapshot
 
     def after_update(
-        self, scheduler: Any, output: Any, before: dict[str, dict[str, Any]]
+        self,
+        scheduler: Any,
+        output: Any,
+        before: dict[str, dict[str, Any]],
+        *,
+        result: Any = None,
+        failed: bool = False,
     ) -> None:
+        """Record the step's outcome; a failed update is recorded as unknown."""
         identity = getattr(output, ITERATION_ATTRIBUTE, None)
         if identity is None:
             return
         pending = self.pending.pop(identity[1], None)
+        emitted = None if failed else _emitted(result)
         per_step = int(getattr(scheduler, "num_sampled_tokens_per_step", 1))
         members = [
-            self._completed_member(scheduler, member, before.get(name, {}), per_step)
+            (
+                _failed_member(name)
+                if failed
+                else self._completed_member(
+                    scheduler, member, before.get(name, {}), emitted, per_step
+                )
+            )
             for name, member in (pending.members.items() if pending else ())
         ]
-        self.writer.emit(
-            "completed",
-            {"iteration": identity[1], **_stamp(), "members": members},
-            size_hint=128 + 160 * len(members),
-        )
+        fields: dict[str, Any] = {"iteration": identity[1], **_stamp()}
+        if failed:
+            fields["update_failed"] = True
+        fields["members"] = members
+        self.writer.emit("completed", fields)
 
     def _completed_member(
         self,
         scheduler: Any,
         member: _Member,
         before: dict[str, Any],
+        emitted: dict[str, tuple[int, str | None]] | None,
         per_step: int,
     ) -> dict[str, Any]:
         outcome = _outcome(before)
@@ -233,38 +250,31 @@ class EngineRecorder:
         )
         stale = bool(before.get("stale"))
         computed_after = None
+        retained = None
+        finish = None
         if outcome == "kept":
             rejected = 0 if stale else member.drafts - accepted
             computed_after = member.computed_before + member.scheduled - rejected
-            self.committed[member.internal] = computed_after
+            if emitted is not None:
+                retained, finish = emitted.get(member.internal, (0, None))
+            if member.internal in scheduler.requests:
+                self.committed[member.internal] = computed_after
         return {
             "internal": member.internal,
             "outcome": outcome,
             "stale": stale,
             "sampled": sampled,
             "accepted_drafts": accepted,
-            "retained": self._retained(scheduler, member.internal, before),
+            "retained": retained,
+            "finish_reason": finish,
             "computed_after": computed_after,
         }
-
-    def _retained(
-        self, scheduler: Any, internal: str, before: dict[str, Any]
-    ) -> int | None:
-        output_before = before.get("output_before")
-        if output_before is None:
-            return None
-        request = scheduler.requests.get(internal)
-        if request is not None:
-            return int(request.num_output_tokens) - int(output_before)
-        freed = self.freed_output_tokens.get(internal)
-        return None if freed is None else freed - int(output_before)
 
     # ------------------------------------------------------------ exit
 
     def on_free(self, request: Any) -> None:
         internal = str(request.request_id)
         output_tokens = int(request.num_output_tokens)
-        self.freed_output_tokens[internal] = output_tokens
         self.prompt_tokens.pop(internal, None)
         self.committed.pop(internal, None)
         status = getattr(request, "status", None)
@@ -283,6 +293,40 @@ class EngineRecorder:
                 **_stamp(),
             },
         )
+
+
+def _emitted(result: Any) -> dict[str, tuple[int, str | None]] | None:
+    """Tokens and finish reason vLLM sent each request in this step's output.
+
+    ``update_from_output`` returns ``{client: EngineCoreOutputs}``; counting the
+    emitted tokens is right whatever vLLM's own counters do: stop trimming,
+    a finished request already freed, or a streaming-input session reset.
+    Any other shape is unknown, not zero.
+    """
+    if not isinstance(result, dict):
+        return None
+    emitted: dict[str, tuple[int, str | None]] = {}
+    for outputs in result.values():
+        for item in getattr(outputs, "outputs", None) or ():
+            reason = getattr(item, "finish_reason", None)
+            emitted[str(item.request_id)] = (
+                len(item.new_token_ids or ()),
+                None if reason is None else str(getattr(reason, "name", reason)),
+            )
+    return emitted
+
+
+def _failed_member(internal: str) -> dict[str, Any]:
+    return {
+        "internal": internal,
+        "outcome": "unknown",
+        "stale": None,
+        "sampled": None,
+        "accepted_drafts": None,
+        "retained": None,
+        "finish_reason": None,
+        "computed_after": None,
+    }
 
 
 def _outcome(before: dict[str, Any]) -> str:
