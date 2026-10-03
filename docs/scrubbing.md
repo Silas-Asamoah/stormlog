@@ -114,7 +114,7 @@ What it removes:
 | an `Authorization` or `Proxy-Authorization` header, to the end of its line | `Authorization: Bearer abc…` | `Authorization: <redacted>` |
 | a Bearer or Basic token: 8 or more token characters that are not a single all-lowercase word, so that prose such as "the basic parameters" is left alone | `bearer abc.def-123` | `bearer <redacted>` |
 | URL user information (to the last `@` before the first `/` or space, whatever it holds) and query strings | `https://u:p@host/x?k=v` | `https://<redacted>@host/x?<redacted>` |
-| a JSON member whose key, read with its escapes decoded, contains a word from `SECRET_KEY_WORDS` (below); its value a string or bare, such as a number | `"api_key": "abc"`, `"api_key": 1234` | `"api_key": "<redacted>"`, `"api_key": <redacted>` |
+| a JSON member, or a Python dict repr's single-quoted one, whose key, read with its escapes decoded, contains a word from `SECRET_KEY_WORDS` (below); its value a string or bare, such as a number | `"api_key": "abc"`, `"api_key": 1234` | `"api_key": "<redacted>"`, `"api_key": <redacted>` |
 | `key=value` or `key: value` with such a key, the value bare or in single or double quotes; a quoted value with no closing quote, as in a truncated body, runs to the end | `client_secret=abc`, `password="a b"` | `client_secret=<redacted>`, `password="<redacted>"` |
 | known key formats | `sk-…`, `hf_…`, `AKIA…`/`ASIA…`, `ghp_…` and the other GitHub token prefixes, `github_pat_…`, `xox?-…`, three-part JWTs | `<redacted>` |
 | private key blocks, including one cut before its `END` line | `-----BEGIN PRIVATE KEY-----…` | `<redacted>` |

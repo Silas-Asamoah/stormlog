@@ -290,10 +290,7 @@ def test_scrub_text_redacts_quoted_values_of_secret_keys(
         ("sent bearer opaque.token-value_123", "sent bearer <redacted>"),
         ("Bearer abc.def-ghi_jklmnop", "Bearer <redacted>"),
         ("Bearer OpaqueTokenWithOnlyLetters", "Bearer <redacted>"),
-        (
-            "{'Authorization': 'Basic dXNlcjpwYXNz'}",
-            "{'Authorization': 'Basic <redacted>'}",
-        ),
+        ("headers: Basic dXNlcjpwYXNz", "headers: Basic <redacted>"),
         ("bearer abcdefgh~ijk", "bearer <redacted>"),
         ("basic dXNlcjpwYXNzd29yZA== then", "basic <redacted> then"),
         ("Bearer abcdefgh/ijklmn", "Bearer <redacted>"),
@@ -413,6 +410,24 @@ def test_an_unclosed_quoted_value_ends_at_the_end_of_the_text(
     text: str, max_bytes: int | None, scrubbed: str
 ) -> None:
     assert scrub_text(text, max_bytes=max_bytes) == scrubbed
+
+
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        # Python dict reprs quote their keys with single quotes.
+        ("{'api_key': 'opaque'}", "{'api_key': '<redacted>'}"),
+        (
+            "headers={'authorization': 'Bearer abcdefghijkl'}",
+            "headers={'authorization': '<redacted>'}",
+        ),
+        ("{'password': \"it's here\"}", "{'password': \"<redacted>\"}"),
+        ("{'n': 1, 'secret': 42}", "{'n': 1, 'secret': <redacted>}"),
+        ("{'model': 'gpt'}", "{'model': 'gpt'}"),
+    ],
+)
+def test_single_quoted_keys_are_read_as_members(text: str, scrubbed: str) -> None:
+    assert scrub_text(text) == scrubbed
 
 
 def test_scrub_text_leaves_ordinary_text_alone() -> None:

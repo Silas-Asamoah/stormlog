@@ -55,10 +55,6 @@ Finder = Callable[[str], Iterator[Span]]
 # text as given; scrub_text merges them with the known secrets' spans and
 # replaces them all at once, so no replacement can hide another match.
 _KEY_CHARS = "A-Za-z0-9_.-"
-# A string never starts at an escaped quote: in valid JSON a backslash never
-# comes just before an opening quote, and starting at each escaped quote of
-# an unclosed string would rescan it from every one, quadratically.
-_JSON_STRING = r'(?<!\\)"((?:[^"\\]|\\.)*)"'
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?"
     r"(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
@@ -72,13 +68,13 @@ _URL_END = re.compile(r"[\s\"'<>]")
 _AUTHORITY_END = re.compile(r"[/\s]")
 _QUESTION = re.compile(r"\?")
 _HASH = re.compile("#")
-# A member's value is a string, whose inside is redacted, or a bare value
-# such as a number or true.
-_JSON_MEMBER = re.compile(
-    _JSON_STRING
-    + r"\s*:\s*(?:"
-    + r'(?<!\\)"((?:[^"\\]|\\.)*)(?:"|\\?\Z)'
-    + r'|([^\s,}\]"]+))'
+# A member's key, in double quotes (JSON) or single quotes (a Python dict
+# repr), and its separator; the value is read separately, like a pair's. A
+# key never starts at an escaped quote: valid JSON never has a backslash
+# just before an opening quote, and starting at each escaped quote of an
+# unclosed string would rescan it from every one, quadratically.
+_QUOTED_KEY = re.compile(
+    r"""(?<!\\)(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*:\s*"""
 )
 # A key and its separator, without the value: a key that is not
 # secret-like must not consume the text after it, which can hold the next
@@ -182,12 +178,15 @@ class _NextMatch:
         return self.found
 
 
-def _json_member_spans(text: str) -> Iterator[Span]:
-    for match in _JSON_MEMBER.finditer(text):
-        if is_forbidden_key_name(_json_unescaped(match.group(1))):
-            group = 2 if match.group(2) is not None else 3
-            if match.end(group) > match.start(group):
-                yield match.span(group)
+def _member_spans(text: str) -> Iterator[Span]:
+    """The value of each member whose key, escapes decoded, is secret-like."""
+    bare = _BareRuns(text)
+    for match in _QUOTED_KEY.finditer(text):
+        key = match.group(1) if match.group(1) is not None else match.group(2)
+        if is_forbidden_key_name(_json_unescaped(key)):
+            span = _value_span(text, match.end(), bare)
+            if span is not None:
+                yield span
 
 
 def _json_unescaped(key: str) -> str:
@@ -282,7 +281,7 @@ _FINDERS: tuple[Finder, ...] = (
     _value(_AUTHORIZATION),
     _bearer_spans,
     _url_spans,
-    _json_member_spans,
+    _member_spans,
     _key_value_spans,
     *(_whole(shape) for shape in _SHAPES),
     _jwt_spans,
