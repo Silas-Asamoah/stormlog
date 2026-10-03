@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import struct
 import sys
 import tarfile
+import zlib
 from pathlib import Path
 from typing import Sequence
 
@@ -36,7 +38,12 @@ from scripts.native_probes.normalization import (
 from scripts.native_probes.planning import build_plan, counterbalanced_order, trial_id
 from scripts.native_probes.preflight import collect_environment, write_manifest
 from scripts.native_probes.references import _safe_extract
-from scripts.native_probes.runner import _artifact, _artifact_digest, run_trial
+from scripts.native_probes.runner import (
+    _artifact,
+    _artifact_digest,
+    _usable_cupti_microbench,
+    run_trial,
+)
 from scripts.native_probes.validation import (
     build_unvalidated_matrix,
     validate_matrix_promotions,
@@ -426,6 +433,94 @@ def test_runner_requires_timed_device_kernel_trace_event(tmp_path: Path) -> None
     ]
     trace.write_text(json.dumps(payload), encoding="utf-8")
     assert _usable_chrome_trace(trace)
+
+
+def test_cupti_microbench_requires_one_finalized_timed_kernel(tmp_path: Path) -> None:
+    cupti = tmp_path / "cupti"
+    process = cupti / "pid-123-test"
+    process.mkdir(parents=True)
+
+    def write_record(kind: str) -> None:
+        raw = (
+            json.dumps(
+                {
+                    "activity_kind": kind,
+                    "device_start_ns": 10,
+                    "device_end_ns": 20,
+                    "metadata": {"device_id": 0},
+                }
+            )
+            + "\n"
+        ).encode()
+        encoded = zlib.compress(raw)
+        trace = b"SLCPTZ1\n" + struct.pack("<III", len(encoded), len(raw), 1)
+        trace += encoded + bytes(12)
+        (process / "activity.sclz").write_bytes(trace)
+        (process / "cupti_status.json").write_text(
+            json.dumps(
+                {
+                    "finalized": True,
+                    "initialization_error": None,
+                    "delivered_records": 1,
+                    "bytes_written": len(trace),
+                }
+            )
+        )
+
+    write_record("kernel")
+    assert _usable_cupti_microbench(cupti)
+    write_record("driver")
+    assert not _usable_cupti_microbench(cupti)
+    write_record("kernel")
+    second = cupti / "pid-456-extra"
+    second.mkdir()
+    (second / "cupti_status.json").write_text("{}")
+    assert not _usable_cupti_microbench(cupti)
+
+
+def test_runner_marks_empty_finalized_cupti_trace_partial(tmp_path: Path) -> None:
+    trial_id = "empty-cupti"
+    cupti = tmp_path / "control" / "trials" / trial_id / "cupti"
+    payload = json.dumps(
+        {
+            "artifact_kind": "workload_result",
+            "metrics": {},
+            "measurement_window": _window(),
+            "ground_truth": {},
+        }
+    )
+    script = (
+        "import json,os,pathlib; "
+        "p=pathlib.Path(os.environ['STORMLOG_CUPTI_OUTPUT_DIR'])/'pid-123-test'; "
+        "p.mkdir(); "
+        "(p/'activity.sclz').write_bytes(b'SLCPTZ1\\n'+bytes(12)); "
+        "(p/'cupti_status.json').write_text(json.dumps("
+        "{'finalized':True,'initialization_error':None,"
+        "'delivered_records':0,'bytes_written':20})); "
+        f"print({payload!r})"
+    )
+    spec = TrialSpec(
+        trial_id=trial_id,
+        configuration_id="control",
+        workload_id=WorkloadId.W1_EAGER,
+        mode=ExperimentMode.DIRECT_CUPTI,
+        repetition=0,
+        command=CommandSpec(
+            (sys.executable, "-c", script),
+            {"STORMLOG_CUPTI_OUTPUT_DIR": str(cupti)},
+            5.0,
+        ),
+        expected_artifacts=(
+            ArtifactExpectation(
+                "cupti-trace", "raw_trace", "cupti", "target", "stormlog-zlib-frames-v1"
+            ),
+        ),
+    )
+    result = run_trial(spec, tmp_path)
+    assert result["return_code"] == 0
+    assert result["status"] == "partial"
+    assert result["artifacts"][0]["status"] == "malformed"
+    assert "lacked a valid timed device kernel" in result["limitations"][-1]
 
 
 def test_runner_marks_missing_required_profiler_artifact_partial(

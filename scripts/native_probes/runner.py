@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -25,6 +26,11 @@ from .models import (
 )
 from .normalization import validate_measurement_window, validate_unique_artifacts
 from .preflight import write_manifest
+from .workloads.vllm_open_loop import (
+    CUPTI_FRAME_HEADER,
+    CUPTI_TRACE_MAGIC,
+    _inspect_cupti_trace,
+)
 
 _POLL_SECONDS = 0.05
 _SECRET_MARKERS = ("KEY", "PASSWORD", "SECRET", "TOKEN", "CREDENTIAL")
@@ -72,6 +78,20 @@ def run_trial(
     )
     artifacts = _collect_artifacts(spec, trial_directory)
     validate_unique_artifacts(artifacts)
+    unusable_cupti = False
+    if (
+        status is ResultStatus.PASS
+        and spec.mode is ExperimentMode.DIRECT_CUPTI
+        and spec.workload_id is not WorkloadId.VLLM
+    ):
+        for artifact in artifacts:
+            if (
+                artifact["artifact_id"] == "cupti-trace"
+                and artifact["status"] == "present"
+            ):
+                if not _usable_cupti_microbench(Path(artifact["path"])):
+                    artifact["status"] = "malformed"
+                    unusable_cupti = True
     workload_result = _workload_result(stdout_path)
     metrics = dict(workload_result.get("metrics", {})) if workload_result else {}
     malformed_result = workload_result is None
@@ -90,6 +110,10 @@ def run_trial(
     if status is ResultStatus.PASS and pressure_unsupported:
         status = ResultStatus.UNSUPPORTED
     limitations = _limitations(status, return_code, missing_required, malformed_result)
+    if unusable_cupti:
+        limitations.append(
+            "direct CUPTI trace lacked a valid timed device kernel capture"
+        )
     if pressure_unsupported:
         limitations.append(
             str(spec.pressure_controls.get("variant_reason", "W4 pressure unsupported"))
@@ -576,6 +600,59 @@ def _usable_chrome_trace(path: Path) -> bool:
     events = value.get("traceEvents") if isinstance(value, Mapping) else None
     return isinstance(events, list) and any(
         _is_device_activity_event(event) for event in events
+    )
+
+
+def _usable_cupti_microbench(directory: Path) -> bool:
+    """Reject a finalized but empty injection trace from a successful GPU trial."""
+    statuses = list(directory.glob("pid-*/cupti_status.json"))
+    if len(statuses) != 1:
+        return False
+    trace = statuses[0].parent / "activity.sclz"
+    try:
+        report = json.loads(statuses[0].read_text(encoding="utf-8"))
+        inspected = _inspect_cupti_trace(trace)
+        if (
+            not isinstance(report, Mapping)
+            or report.get("finalized") is not True
+            or report.get("initialization_error") is not None
+            or report.get("delivered_records") != inspected["records"]
+            or report.get("bytes_written") != inspected["encoded_bytes"]
+        ):
+            return False
+        with trace.open("rb") as source:
+            if source.read(len(CUPTI_TRACE_MAGIC)) != CUPTI_TRACE_MAGIC:
+                return False
+            while True:
+                encoded_size, raw_size, records = CUPTI_FRAME_HEADER.unpack(
+                    source.read(CUPTI_FRAME_HEADER.size)
+                )
+                if (encoded_size, raw_size, records) == (0, 0, 0):
+                    return False
+                for line in zlib.decompress(source.read(encoded_size)).splitlines():
+                    row = json.loads(line)
+                    if _is_cupti_kernel(row):
+                        return True
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, zlib.error):
+        return False
+
+
+def _is_cupti_kernel(row: object) -> bool:
+    if not isinstance(row, Mapping) or row.get("activity_kind") != "kernel":
+        return False
+    start = row.get("device_start_ns")
+    end = row.get("device_end_ns")
+    metadata = row.get("metadata")
+    device = metadata.get("device_id") if isinstance(metadata, Mapping) else None
+    return (
+        isinstance(start, int)
+        and not isinstance(start, bool)
+        and isinstance(end, int)
+        and not isinstance(end, bool)
+        and start < end
+        and isinstance(device, int)
+        and not isinstance(device, bool)
+        and device >= 0
     )
 
 
