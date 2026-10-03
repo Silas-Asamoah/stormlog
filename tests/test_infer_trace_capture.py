@@ -161,7 +161,7 @@ def test_other_phases_are_not_profiled(tmp_path: Path) -> None:
 
 
 def test_a_rejected_start_is_recorded_and_never_stopped(tmp_path: Path) -> None:
-    """A 4xx (e.g. a server without the profiler routes) never reached the engine."""
+    """A 404 (a server without the profiler routes) never reached the engine."""
     warnings: list[str] = []
     control = _FakeControl(tmp_path, start_status=404)
     windows = TraceWindows(
@@ -306,8 +306,13 @@ def test_an_unknown_start_stopped_before_the_phase_says_so(tmp_path: Path) -> No
 def test_start_outcome_classifies_every_answer() -> None:
     assert start_outcome(ControlResult(200)) == START_ACKNOWLEDGED
     assert start_outcome(ControlResult(204)) == START_ACKNOWLEDGED
-    assert start_outcome(ControlResult(404, "HTTP 404")) == START_REJECTED
-    assert start_outcome(ControlResult(401, "HTTP 401")) == START_REJECTED
+    for status in (401, 403, 404, 405, 407):
+        assert start_outcome(ControlResult(status)) == START_REJECTED, status
+    # vLLM 0.30.0 answers 400 (or 422) for an exception raised while it
+    # handles the start, which may already have reached the engine; an
+    # intermediary's 408 or 499 can follow a forwarded call.
+    for status in (400, 408, 409, 422, 429, 499):
+        assert start_outcome(ControlResult(status)) == START_UNKNOWN, status
     assert start_outcome(ControlResult(500, "HTTP 500")) == START_UNKNOWN
     assert start_outcome(ControlResult(302, "HTTP 302")) == START_UNKNOWN
     assert start_outcome(ControlResult(None, "TimeoutError: timed out")) == (
@@ -796,7 +801,7 @@ def test_a_cancelled_phase_still_records_its_trace_window(
 
 
 class _FailingStart(_ChatAndProfile):
-    """Refuses the start with a 4xx, which never reaches the engine."""
+    """Refuses the start with a 404: the server has no profiler routes."""
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/start_profile":

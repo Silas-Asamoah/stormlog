@@ -675,8 +675,13 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
   reply alone does not show whether profiling began. Each window's
   `start_outcome` records what the reply established:
   - `acknowledged` (2xx): the window runs, and is stopped at its end.
-  - `rejected` (4xx, for example a server started without the profiler
-    routes): the start never reached the engine; nothing is stopped.
+  - `rejected` (404 or 405, a server started without the profiler routes; or
+    401, 403 or 407 from a proxy in front of it, since vLLM's own API key
+    does not cover these routes): the start never reached the engine, and
+    nothing is stopped. Any other 4xx is `unknown`: vLLM 0.30.0 answers 400
+    or 422 for an exception raised while it handles the start, which may
+    already have reached the engine, and a proxy can answer 408 after
+    forwarding it.
   - `unknown` (5xx, a timeout, a dropped connection, a malformed reply, or a
     redirect, which is never followed):
     Stormlog sends `/stop_profile` at once, with `stop_reason` `start_unknown`,

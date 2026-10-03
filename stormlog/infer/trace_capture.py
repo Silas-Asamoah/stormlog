@@ -9,8 +9,8 @@ A start the server may have received, whether it answered 2xx or not at all,
 is always followed by one stop: the engine runs ``/start_profile`` before the
 HTTP reply goes out, so a lost or failed reply can leave it profiling. A stop
 that fails is not retried; the window's record says the profiler may still be
-running. Only a 4xx, which never reaches the engine, is not stopped. vLLM
-0.30.0 answers 200 to a second ``/start_profile`` and to ``/stop_profile``
+running. Only a 401, 403, 404, 405 or 407, which come before vLLM's handler
+runs, is not stopped. vLLM 0.30.0 answers 200 to a second ``/start_profile`` and to ``/stop_profile``
 with nothing running, so a client cannot tell from HTTP whether another
 profile was already active; do not run two profilers against one server. The
 traces are imported after the run.
@@ -55,6 +55,11 @@ TRACE_GLOB = "*.pt.trace.json*"
 START_ACKNOWLEDGED = "acknowledged"
 START_REJECTED = "rejected"
 START_UNKNOWN = "unknown"
+# Answers that come before vLLM 0.30.0's /start_profile handler runs: 404 and
+# 405 from routing (the profile routes exist only with --profiler-config),
+# and 401, 403 and 407 from something in front of vLLM, whose own API-key
+# check does not cover these routes.
+REJECTING_STATUSES = frozenset({401, 403, 404, 405, 407})
 _T = TypeVar("_T")
 
 
@@ -107,15 +112,21 @@ class ControlResult:
 
 
 def start_outcome(result: ControlResult) -> str:
-    """``acknowledged`` (2xx), ``rejected`` (4xx), else ``unknown``.
+    """``acknowledged`` (2xx), ``rejected`` (``REJECTING_STATUSES``), else
+    ``unknown``.
 
-    A 4xx means the route refused the call before the engine saw it. A 5xx, a
-    timeout, a reset or a malformed reply comes after the call may have
-    started the profiler, so the profiler's state is unknown.
+    Any other answer can follow a start that reached the engine. vLLM 0.30.0's
+    handler awaits the engine's start, and its own profiler's, before it
+    replies, and maps an exception raised meanwhile to 400 (ValueError,
+    TypeError, OverflowError), 422, 501 or 500
+    (``vllm/entrypoints/serve/profile/api_router.py`` and
+    ``serve/exception_handling/error_response.py``). An intermediary can
+    answer 408 or 499 after forwarding the call, and a timeout, a reset or a
+    malformed reply says nothing either.
     """
     if result.ok:
         return START_ACKNOWLEDGED
-    if result.status is not None and 400 <= result.status < 500:
+    if result.status in REJECTING_STATUSES:
         return START_REJECTED
     return START_UNKNOWN
 
