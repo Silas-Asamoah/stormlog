@@ -176,6 +176,13 @@ def test_worker_and_engine_epochs_are_told_apart(tmp_path: Path) -> None:
         2601,
         5,
         [hello("worker", 2601, 5, engine_pid=2600, rank={"tp": 0, "pp": 0, "dp": 0})],
+        status={
+            "wall_ns": NOW - SECOND,
+            "last_seq": 0,
+            "range_misses": 1,
+            "startup_unranged": 9,
+            "pending_samples": 2,
+        },
     )
     read = read_execution_log(tmp_path, now_ns=NOW)
     assert [e.role for e in read.epochs] == ["engine", "worker"]
@@ -184,6 +191,9 @@ def test_worker_and_engine_epochs_are_told_apart(tmp_path: Path) -> None:
     assert worker_hello is not None
     assert worker_hello["producer"].endswith(":2600:5")
     assert (read.workers()[0].host, read.workers()[0].boot_id) == (HOST, BOOT)
+    summary = read.workers()[0].summary()
+    assert (summary["range_misses"], summary["startup_unranged"]) == (1, 9)
+    assert summary["pending_samples"] == 2
 
 
 def test_a_missing_directory_is_an_error(tmp_path: Path) -> None:

@@ -323,7 +323,10 @@ clock scope, never a sum:
 4. **Measurement.** GPU activity without a device UUID or device clock is
    counted with its summed duration and never added to a device's union.
 5. **Capture loss.** Records the hook dropped, missing sequences, steps
-   still pending or incomplete, and worker calls that ran without a range.
+   still pending or incomplete, worker serving calls that ran without a
+   range, and finishes no step could carry. The warm-up and graph-capture
+   calls before the first serving step (`startup_unranged`) are shown apart:
+   they never have a range, so they are not loss.
 
 A case's figure covers every step one of its requests shared, so a case
 that shared a batch with another case or with other clients is labelled

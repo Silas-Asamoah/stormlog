@@ -43,6 +43,14 @@ from .vllm_execution import OWN, STATE_INCOMPLETE
 from .vllm_execution_import import SOURCE
 
 NON_ADDITIVE = "steps shared between cases or with other clients count in each"
+_LOSS_COUNTERS = (
+    "gaps",
+    "iterations_pending",
+    "iterations_incomplete",
+    "range_misses",
+    "finish_unattached",
+    "startup_unranged",
+)
 
 
 @dataclass
@@ -311,6 +319,9 @@ def _capture_loss(imports: list[dict[str, Any]]) -> dict[str, Any]:
         "pending_iterations": totals["iterations_pending"],
         "incomplete_iterations": totals["iterations_incomplete"],
         "range_misses": totals["range_misses"],
+        "finish_unattached": totals["finish_unattached"],
+        # Not loss: the calls before the first serving step never have a range.
+        "startup_unranged": totals["startup_unranged"],
         "truncated_epochs": totals["truncated"],
         "read_errors": totals["errors"],
     }
@@ -320,7 +331,7 @@ def _add_epoch_loss(
     epoch: dict[str, Any], dropped: Counter[str], totals: Counter[str]
 ) -> None:
     dropped.update({k: int(v) for k, v in (epoch.get("dropped") or {}).items()})
-    for name in ("gaps", "iterations_pending", "iterations_incomplete", "range_misses"):
+    for name in _LOSS_COUNTERS:
         totals[name] += int(epoch.get(name) or 0)
     totals["truncated"] += int(bool(epoch.get("truncated")))
     totals["errors"] += len(epoch.get("errors") or [])
@@ -422,7 +433,9 @@ def _loss_text(loss: dict[str, Any]) -> str:
         f"{loss.get('missing_sequences', 0)} missing, "
         f"{loss.get('pending_iterations', 0)} steps pending, "
         f"{loss.get('incomplete_iterations', 0)} incomplete, "
-        f"{loss.get('range_misses', 0)} range misses"
+        f"{loss.get('range_misses', 0)} range misses, "
+        f"{loss.get('finish_unattached', 0)} finishes unattached; "
+        f"{loss.get('startup_unranged', 0)} start-up calls unranged (not loss)"
     )
 
 

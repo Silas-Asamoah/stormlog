@@ -254,6 +254,8 @@ def test_coverage_is_a_union_per_device_and_clock(tmp_path: Path) -> None:
         "pending_iterations": 0,
         "incomplete_iterations": 1,
         "range_misses": 0,
+        "finish_unattached": 0,
+        "startup_unranged": 0,
         "truncated_epochs": 0,
         "read_errors": 0,
     }
@@ -275,7 +277,8 @@ def test_text_lines_name_every_dimension(tmp_path: Path) -> None:
     assert "  unmeasured: 2 GPU activity records" in lines[3]
     assert lines[4] == (
         "  capture loss: 0 records dropped by the hook, 0 missing, 0 steps pending, "
-        "1 incomplete, 0 range misses"
+        "1 incomplete, 0 range misses, 0 finishes unattached; 0 start-up calls "
+        "unranged (not loss)"
     )
     assert lines[5].startswith("  c1_in8_out4: 2 steps, 1 shared (non-additive); ")
 
@@ -284,6 +287,47 @@ def test_nothing_imported_is_not_available() -> None:
     report = execution_report([_legacy_request(REQUEST_A, XA, "c1")])
     assert report == {"available": False}
     assert execution_lines(report) == []
+
+
+def test_capture_loss_keeps_worker_counters_and_unattached_finishes_apart() -> None:
+    epochs = {
+        "engine-1-1": {
+            "role": "engine",
+            "reduced": True,
+            "dropped": {"scheduled": 1, "completed": 0, "alias": 0, "terminal": 2},
+            "gaps": 3,
+            "iterations_pending": 1,
+            "finish_unattached": 2,
+        },
+        "worker-2-1": {
+            "role": "worker",
+            "reduced": False,
+            "dropped": {},
+            "range_misses": 1,
+            "startup_unranged": 9,
+            "pending_samples": 0,
+        },
+    }
+    capability = CapabilityEvent(
+        context=_context("stormlog.infer.capture", "wall"),
+        event_id="engine_adapter:1",
+        metadata={"summary": {"execution": {"directory": "/hook", "epochs": epochs}}},
+        component="engine_adapter",
+        available=True,
+        supported=["iterations"],
+        enabled=["iterations"],
+        collected=[],
+    )
+    loss = execution_report([capability.to_record()])["capture_loss"]
+    assert loss["dropped"] == {
+        "scheduled": 1,
+        "completed": 0,
+        "alias": 0,
+        "terminal": 2,
+    }
+    assert (loss["missing_sequences"], loss["pending_iterations"]) == (3, 1)
+    assert (loss["range_misses"], loss["startup_unranged"]) == (1, 9)
+    assert loss["finish_unattached"] == 2
 
 
 def test_a_failed_import_is_reported_as_such() -> None:
