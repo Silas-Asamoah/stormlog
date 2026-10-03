@@ -40,6 +40,7 @@ vllm_telemetry
 vllm_execution
 inference_diagnosis
 incident_capture
+qualification
 tui
 cookbook/index
 cookbook/always_on
