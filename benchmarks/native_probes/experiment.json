@@ -162,6 +162,7 @@
       "arrival_schedule": "benchmarks/native_probes/final_run_proposal.json#vllm.arrivals",
       "graph_mode": "eager",
       "cache_settings": "prefix_caching_disabled",
+      "direct_cupti_output_bound_bytes": 4294967296,
       "status": "approved_pending_hardware_preflight",
       "approval_record": "benchmarks/native_probes/final_run_approval.json"
     }

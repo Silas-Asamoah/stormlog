@@ -110,7 +110,7 @@ def vllm_command(
             base,
             directory / "vllm",
             cupti_library,
-            256 * 1024 * 1024,
+            4 * 1024 * 1024 * 1024,
             8 * 1024 * 1024,
             0,
         )

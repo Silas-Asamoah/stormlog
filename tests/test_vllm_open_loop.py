@@ -722,6 +722,10 @@ def test_vllm_plan_separates_modes_and_rejects_unimplemented_modes(
         vllm_command(ExperimentMode.PUBLIC_PYTORCH, tmp_path)
     with pytest.raises(ValueError, match="pinned injection library"):
         vllm_command(ExperimentMode.DIRECT_CUPTI, tmp_path)
+    library = tmp_path / "libstormlog_cupti_injection.so"
+    library.touch()
+    direct = vllm_command(ExperimentMode.DIRECT_CUPTI, tmp_path, cupti_library=library)
+    assert direct.environment["STORMLOG_CUPTI_MAX_BYTES"] == "4294967296"
     assert any(
         row.relative_path == "vllm/nsys"
         for row in vllm_expected_artifacts(ExperimentMode.TRUSTED)
