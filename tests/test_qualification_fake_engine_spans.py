@@ -49,7 +49,10 @@ def _receiver() -> Iterator[OtlpSpanReceiver]:
 
 
 def _engine(
-    receiver: OtlpSpanReceiver, *, span_encoding: str = "protobuf"
+    receiver: OtlpSpanReceiver,
+    *,
+    span_encoding: str = "protobuf",
+    seed: int | None = None,
 ) -> FakeEngine:
     return FakeEngine(
         FakeEngineConfig(
@@ -57,6 +60,7 @@ def _engine(
             spans_endpoint=f"http://{receiver.listen}/v1/traces",
             span_export_seconds=0.05,
             span_encoding=span_encoding,
+            seed=seed,
         )
     )
 
@@ -277,3 +281,24 @@ def test_retries_stop_at_the_export_timeout() -> None:
         assert wait_until(lambda: exporter.failed == 1, timeout=10)
         statuses = list(exporter.statuses)
     assert statuses == [503, 503]
+
+
+def _identities(seed: int | None) -> tuple[str, str, str, str]:
+    """A request's IDs and its span's, from a fresh engine and receiver."""
+    spans: list[VllmSpanRecord] = []
+    with _receiver() as receiver:
+        with _engine(receiver, seed=seed) as engine:
+            chat(engine, "x", max_tokens=1)
+            (request,) = engine.engine.finished
+        assert wait_until(lambda: _received(receiver, spans) >= 1)
+    (span,) = spans
+    assert span.trace_id is not None and span.span_id is not None
+    return request.external_id, request.internal_id, span.trace_id, span.span_id
+
+
+def test_a_seed_makes_every_generated_identity_repeat() -> None:
+    # Request IDs without an X-Request-Id, vLLM's random suffixes, and span
+    # and trace IDs all come from the seed, for the same arrival order.
+    assert _identities(7) == _identities(7)
+    first, second = _identities(None), _identities(None)
+    assert all(a != b for a, b in zip(first, second))

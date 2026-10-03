@@ -182,6 +182,12 @@ none. If a part fails to start, such as the bind to a busy port, `start()`
 stops the parts already started before it raises, and `stop()` is safe to
 call again.
 
+Generated identities (request IDs without an `X-Request-Id`, vLLM's random
+suffixes, span and trace IDs) are random unless `seed` is set; with a seed
+they repeat for the same order of arrivals. Concurrent requests over HTTP
+still arrive on real threads and clocks, so a test that needs one exact
+schedule drives an `Engine`'s steps by hand instead of starting its loop.
+
 To run it as its own process, so that signals reach it:
 
 ```bash

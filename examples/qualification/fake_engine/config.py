@@ -50,6 +50,9 @@ class FakeEngineConfig:
     span_encoding: str = "protobuf"
     # OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: how long one export may keep retrying.
     span_export_timeout_seconds: float = 10.0
+    # Seeds every generated identity (request IDs, vLLM's suffixes, span and
+    # trace IDs), so they repeat for the same order of arrivals.
+    seed: int | None = None
     # Only a subprocess may honour the kill switch.
     allow_kill: bool = False
     device_uuid: str = "GPU-00000000-0000-4000-8000-00000000fa4e"

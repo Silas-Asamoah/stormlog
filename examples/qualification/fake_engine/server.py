@@ -5,12 +5,10 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-import secrets
 import socket
 import threading
 import time
 import traceback
-import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
@@ -19,6 +17,7 @@ from .config import MAX_MODEL_LEN, VLLM_VERSION, Controls, FakeEngineConfig
 from .engine import Engine, FakeRequest, prompt_tokens
 from .hold import Hold
 from .hook_log import HookLog
+from .identities import Identities
 from .metrics import render_metrics
 from .profiler import FakeProfiler
 from .spans import SpanExporter
@@ -36,6 +35,7 @@ class FakeEngine:
     def __init__(self, config: FakeEngineConfig | None = None) -> None:
         self.config = config or FakeEngineConfig()
         self.controls = Controls()
+        self.ids = Identities(self.config.seed)
         self.engine = Engine(self.config)
         self._frontend = Hold()
         self._server: _Server | None = None
@@ -76,6 +76,7 @@ class FakeEngine:
                 interval=self.config.span_export_seconds,
                 encoding=self.config.span_encoding,
                 timeout=self.config.span_export_timeout_seconds,
+                ids=self.ids,
             )
             self.engine.observers.append(self.spans)
             self.spans.start()
@@ -154,9 +155,10 @@ class FakeEngine:
     def new_request(
         self, body: dict[str, Any], request_id: str | None, traceparent: str | None
     ) -> FakeRequest:
-        external = f"chatcmpl-{request_id or uuid.uuid4().hex}"
+        # vLLM's random_uuid() when no X-Request-Id names the request.
+        external = f"chatcmpl-{request_id or self.ids.hex(16)}"
         internal = (
-            f"{external}-{secrets.token_hex(4)}"
+            f"{external}-{self.ids.hex(4)}"
             if self.config.request_id_randomization
             else external
         )

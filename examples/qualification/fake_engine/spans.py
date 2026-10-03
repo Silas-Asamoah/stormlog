@@ -13,7 +13,6 @@ import gzip
 import http.client
 import json
 import random
-import secrets
 import threading
 import time
 import urllib.error
@@ -30,6 +29,7 @@ from stormlog.infer.vllm_spans import (
 
 from .config import Controls
 from .engine import EngineObserver, FakeRequest
+from .identities import Identities
 
 # Bigger than the 32 MiB Stormlog's receiver accepts, raw or inflated.
 ABUSIVE_BYTES = 33 * 1024 * 1024
@@ -47,6 +47,7 @@ class SpanExporter(EngineObserver):
         interval: float,
         encoding: str = "protobuf",
         timeout: float = 10.0,
+        ids: Identities | None = None,
     ) -> None:
         if encoding not in ("protobuf", "json"):
             raise ValueError(f"unknown span encoding {encoding!r}")
@@ -56,6 +57,7 @@ class SpanExporter(EngineObserver):
         self.controls = controls
         self.interval = interval
         self.encoding = encoding
+        self.ids = ids or Identities()
         # OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: one export's whole retry window.
         self.timeout = timeout
         self.media = PROTOBUF_MEDIA if encoding == "protobuf" else JSON_MEDIA
@@ -81,7 +83,7 @@ class SpanExporter(EngineObserver):
     def on_free(self, request: FakeRequest) -> None:
         ready = time.time_ns() + int(self.controls.span_delay_seconds * 1e9)
         with self._lock:
-            self._pending.append((ready, request_span(request)))
+            self._pending.append((ready, request_span(request, self.ids)))
 
     def send_abusive(self, kind: str) -> int:
         """(f) One export the receiver must refuse: ``oversized`` or ``gzip_bomb``."""
@@ -183,8 +185,9 @@ def _retryable(status: int) -> bool:
     return status in (0, 408) or 500 <= status <= 599
 
 
-def request_span(request: FakeRequest) -> dict[str, Any]:
-    trace_id, parent = _parent(request.traceparent)
+def request_span(request: FakeRequest, ids: Identities | None = None) -> dict[str, Any]:
+    ids = ids or Identities()
+    trace_id, parent = _parent(request.traceparent, ids)
     end = request.finished_ns or time.time_ns()
     attributes: dict[str, Any] = {
         "gen_ai.request.id": request.external_id,
@@ -204,7 +207,7 @@ def request_span(request: FakeRequest) -> dict[str, Any]:
     attributes.update(_latencies(request, end))
     return {
         "traceId": trace_id,
-        "spanId": secrets.token_hex(8),
+        "spanId": ids.hex(8),
         "parentSpanId": parent or "",
         "name": "llm_request",
         "kind": 2,
@@ -228,12 +231,12 @@ def _latencies(request: FakeRequest, end: int) -> dict[str, float]:
     }
 
 
-def _parent(traceparent: str | None) -> tuple[str, str | None]:
+def _parent(traceparent: str | None, ids: Identities) -> tuple[str, str | None]:
     """The W3C trace ID and parent span ID, or a new trace for a root span."""
     parts = (traceparent or "").split("-")
     if len(parts) == 4 and len(parts[1]) == 32 and len(parts[2]) == 16:
         return parts[1], parts[2]
-    return secrets.token_hex(16), None
+    return ids.hex(16), None
 
 
 def _attribute(key: str, value: Any) -> dict[str, Any]:
