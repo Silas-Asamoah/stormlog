@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .arrivals import BURST, CLOSED, RATE_MODES, REPLAY, ArrivalSpec, ArrivalTrace
 from .cache_state import UNSPECIFIED
 from .prompts import REPEAT, PromptSpec
+
+if TYPE_CHECKING:
+    from .trace_capture import TraceCaptureConfig
 
 DEFAULT_ENDPOINT_PATH = "/chat/completions"
 
@@ -121,6 +124,8 @@ class ProfileConfig:
     extra_body: dict[str, Any] | None = None
     # POSTed before each case, e.g. vLLM /reset_prefix_cache or SGLang /flush_cache.
     cache_reset_url: str | None = None
+    # Optional bounded profiler windows; None records no trace.
+    trace: TraceCaptureConfig | None = None
 
     def prompt_spec(self) -> PromptSpec:
         return PromptSpec(

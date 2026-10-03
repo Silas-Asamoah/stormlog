@@ -36,6 +36,7 @@ from .server_collector import (
     NvmlUnavailableError,
     collect_server_telemetry,
 )
+from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
 from .trace_import import import_traces_into_artifact, parse_device_uuids
 
 
@@ -233,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
     _add_cache_arguments(profile_parser)
+    _add_trace_arguments(profile_parser)
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -492,6 +494,105 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group(
+        "profiler trace",
+        "Bounded vLLM torch-profiler windows. The server must be started with "
+        "--profiler-config.profiler=torch and torch_profiler_dir; Stormlog only "
+        "starts and stops the profiler and imports the worker traces.",
+    )
+    group.add_argument(
+        "--trace", choices=TRACE_MODES, default=None, help="Capture a profiler trace"
+    )
+    group.add_argument(
+        "--trace-dir",
+        default=None,
+        help=(
+            "The server's torch_profiler_dir as this host sees it; without it the "
+            "traces stay on the server for `stormlog infer import-trace`"
+        ),
+    )
+    group.add_argument(
+        "--trace-control-url",
+        default=None,
+        help="Server root for /start_profile and /stop_profile (default: endpoint host)",
+    )
+    group.add_argument(
+        "--trace-phase",
+        choices=TRACE_PHASES,
+        default="measured",
+        help="Phase of each case to profile (default: measured)",
+    )
+    group.add_argument(
+        "--trace-max-seconds",
+        type=float,
+        default=None,
+        help="Stop the profiler after this many seconds even if the phase continues",
+    )
+    group.add_argument(
+        "--trace-max-bytes",
+        type=int,
+        default=None,
+        help="Register but do not import a trace file larger than this",
+    )
+    group.add_argument(
+        "--trace-device-uuid",
+        action="append",
+        default=[],
+        metavar="INDEX=UUID",
+        help="GPU UUID for a CUDA device ordinal in the server process; repeatable",
+    )
+    group.add_argument(
+        "--trace-detail",
+        choices=("launch", "kernel"),
+        default="launch",
+        help="Import one record per launch (default) or per GPU event",
+    )
+
+
+def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig | None:
+    if args.trace is None:
+        return None
+    return TraceCaptureConfig(
+        mode=args.trace,
+        control_url=args.trace_control_url or server_root(endpoint),
+        trace_dir=Path(args.trace_dir) if args.trace_dir else None,
+        phase=args.trace_phase,
+        max_seconds=args.trace_max_seconds,
+        max_bytes=args.trace_max_bytes,
+        device_uuids=parse_device_uuids(args.trace_device_uuid),
+        detail=args.trace_detail,
+    )
+
+
+def _validate_trace_arguments(args: argparse.Namespace) -> None:
+    if args.trace is not None:
+        _validate_http_url(args.trace_control_url, "--trace-control-url")
+        if args.trace_phase == "warmup" and args.warmup_requests < 1:
+            raise ValueError(
+                "--trace-phase warmup needs --warmup-requests >= 1; without "
+                "warmup requests there is no warmup phase to profile"
+            )
+        if args.trace_dir is not None and not Path(args.trace_dir).is_dir():
+            _print_warning(
+                f"--trace-dir {args.trace_dir} does not exist yet; traces are found "
+                "only if the server creates it and this host can read it"
+            )
+        return
+    options: tuple[tuple[str, object, object], ...] = (
+        ("--trace-dir", args.trace_dir, None),
+        ("--trace-control-url", args.trace_control_url, None),
+        ("--trace-phase", args.trace_phase, "measured"),
+        ("--trace-max-seconds", args.trace_max_seconds, None),
+        ("--trace-max-bytes", args.trace_max_bytes, None),
+        ("--trace-device-uuid", args.trace_device_uuid, []),
+        ("--trace-detail", args.trace_detail, "launch"),
+    )
+    given = [flag for flag, value, default in options if value != default]
+    if given:
+        raise ValueError(f"{', '.join(given)} needs --trace")
+
+
 def cmd_profile(args: argparse.Namespace) -> int:
     """Run active inference profiling."""
     with _usage_errors():
@@ -594,6 +695,7 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         cache_state=args.cache_state,
         cache_reset_url=args.cache_reset_url,
         extra_body=_extra_body(args.extra_body),
+        trace=_trace_config(args, endpoint),
     )
 
 
@@ -744,6 +846,7 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
     _validate_arrival_arguments(args)
     _validate_prompt_arguments(args)
     _validate_http_url(args.cache_reset_url, "--cache-reset-url")
+    _validate_trace_arguments(args)
     if args.timeout <= 0:
         raise ValueError("--timeout must be > 0")
     if args.warmup_requests < 0:
@@ -849,6 +952,12 @@ def cmd_import_trace(args: argparse.Namespace) -> int:
 
 
 def _print_trace_summary(summary: dict[str, Any]) -> None:
+    if summary.get("skipped"):
+        print(
+            f"Registered trace {summary['file']} ({summary['bytes']} bytes) "
+            f"without importing it: over the {summary['skipped']} bound"
+        )
+        return
     unresolved = sum(summary["unresolved_gpu_events"].values())
     print(
         f"Imported trace {summary['trace_id'] or '(no trace id)'}: "

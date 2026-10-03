@@ -7,8 +7,9 @@ import json
 import threading
 import time
 import urllib.error
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -40,6 +41,7 @@ from .openai_client import (
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
 from .tokens import TokenCount, TokenCounter, build_token_counter
+from .trace_capture import TraceWindows
 from .workload import workload_record
 
 
@@ -88,6 +90,11 @@ class InferenceProfiler:
         # Pool threads remove finished calls while the event loop reads the set.
         self._unfinished_lock = threading.Lock()
         self._opened_artifact = False
+        self.traces = (
+            TraceWindows(config.trace, api_key=config.api_key, on_warning=on_warning)
+            if config.trace is not None
+            else None
+        )
 
     def _check_schedules(self) -> None:
         """Refuse an open-loop schedule above the arrival cap up front."""
@@ -130,6 +137,13 @@ class InferenceProfiler:
             self._write_terminal_session(output_path=output_path, report=None)
             raise
         self._write_terminal_session(output_path=output_path, report=report)
+        if self.traces is not None:
+            await asyncio.to_thread(
+                self.traces.import_into,
+                output_path,
+                run_id=self.run_id,
+                session=self.session,
+            )
         return report
 
     async def _capture(self, output_path: Path) -> None:
@@ -349,14 +363,16 @@ class InferenceProfiler:
         prompts.warm()
         if abandoned is None:
             abandoned = await self._wait_for_abandoned()
-        if case.arrival.open_loop:
-            window = await self._run_open_phase(
-                request, total_requests, duration_seconds
-            )
-        else:
-            window = await self._run_closed_phase(
-                request, total_requests, duration_seconds
-            )
+        try:
+            async with self._trace_window(case.case_id, phase):
+                window = await self._run_phase_requests(
+                    request, total_requests, duration_seconds
+                )
+        finally:
+            # Written on cancellation too, even one that lands while the
+            # profiler start is in flight, so the artifact names the trace files.
+            for record in self._trace_records():
+                writer.append(record)
         writer.append(
             window.to_record(
                 session_id=self.session.session_id,
@@ -365,6 +381,26 @@ class InferenceProfiler:
                 abandoned=abandoned,
             )
         )
+
+    async def _run_phase_requests(
+        self,
+        request: "_PhaseRequest",
+        total_requests: int | None,
+        duration_seconds: float | None,
+    ) -> "_PhaseWindow":
+        if request.case.arrival.open_loop:
+            return await self._run_open_phase(request, total_requests, duration_seconds)
+        return await self._run_closed_phase(request, total_requests, duration_seconds)
+
+    def _trace_records(self) -> list[dict[str, Any]]:
+        if self.traces is None:
+            return []
+        return self.traces.take_records(session_id=self.session.session_id)
+
+    def _trace_window(self, case_id: str, phase: str) -> Any:
+        if self.traces is None:
+            return _no_trace_window()
+        return self.traces.window(case_id, phase)
 
     def _track(self, call: Future[Any]) -> None:
         with self._unfinished_lock:
@@ -887,6 +923,11 @@ class _PhaseWindow:
             "prompts_digest": request.prompts.digest(),
             "abandoned_requests": abandoned.to_record(),
         }
+
+
+@asynccontextmanager
+async def _no_trace_window() -> AsyncIterator[None]:
+    yield None
 
 
 async def _drain(tasks: list[asyncio.Task[None]], *, timeout: float | None) -> None:

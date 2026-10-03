@@ -169,6 +169,7 @@ class KinetoTraceCollector:
         *,
         device_uuids: DeviceUuids | dict[int, str] | None = None,
         detail: Detail = "launch",
+        max_bytes: int | None = None,
     ) -> None:
         if not paths:
             raise InferUsageError("at least one trace file is required")
@@ -179,6 +180,7 @@ class KinetoTraceCollector:
         # Refuses a per-trace selector that fits none or several of the paths.
         self.device_uuids = _as_device_uuids(device_uuids).bind(self.paths)
         self.detail = detail
+        self.max_bytes = max_bytes
 
     def collect(self, *, run_id: str, session_id: str) -> TraceCapture:
         captures = [self._import(path, run_id, session_id) for path in self.paths]
@@ -193,6 +195,19 @@ class KinetoTraceCollector:
             storage="reference",
             metadata={"format": "kineto-chrome-trace"},
         )
+        size = path.stat().st_size
+        if self.max_bytes is not None and size > self.max_bytes:
+            # Registered so `import-trace` can import it later; not parsed now.
+            return TraceCapture(
+                capabilities=CaptureCapabilities(SUPPORTED, SUPPORTED, ()),
+                attachments=(attachment,),
+                summary={
+                    "file": path.name,
+                    "path": str(path.resolve()),
+                    "bytes": size,
+                    "skipped": "max_bytes",
+                },
+            )
         try:
             return import_kineto_trace(
                 path,
