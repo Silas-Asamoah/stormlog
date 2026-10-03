@@ -47,6 +47,7 @@ GPU_TABLES = {
     "CUPTI_ACTIVITY_KIND_MEMCPY": "gpu_memcpy",
     "CUPTI_ACTIVITY_KIND_MEMSET": "gpu_memset",
 }
+OPTIONAL_COLUMNS = ("shortName", "graphId", "graphNodeId")
 GRAPH_TABLE = "CUPTI_ACTIVITY_KIND_GRAPH_TRACE"
 RUNTIME_TABLE = "CUPTI_ACTIVITY_KIND_RUNTIME"
 CUDA_TABLES = {*GPU_TABLES, GRAPH_TABLE, RUNTIME_TABLE}
@@ -271,14 +272,18 @@ def _gpu_events(
     trace: KinetoTrace,
 ) -> Iterator[GpuEvent]:
     columns = _columns(db, table)
-    name = "shortName" if "shortName" in columns else None
+    # Per-node graph captures mark their rows with graphNodeId; newer exporters
+    # add graphId. Only the kernel table names its rows.
+    optional = ", ".join(
+        column if column in columns else "NULL" for column in OPTIONAL_COLUMNS
+    )
     query = (
         f"select start, end, deviceId, streamId, correlationId, globalPid, "
-        f"{name or 'NULL'} from {table}"
+        f"{optional} from {table}"
     )
-    for start, end, device, stream, correlation, global_pid, name_id in db.execute(
-        query
-    ):
+    for row in db.execute(query):
+        start, end, device, stream, correlation, global_pid = row[:6]
+        name_id, graph_id, node_id = row[6:]
         pid = split_global_id(int(global_pid))[0] if global_pid is not None else None
         uuid, device_name = devices.lookup(pid, _int(device))
         yield GpuEvent(
@@ -289,10 +294,11 @@ def _gpu_events(
             device=_int(device),
             stream=_int(stream),
             correlation=_int(correlation) or None,
-            graph_id=None,
+            graph_id=_int(graph_id) or None,
             pid=pid,
             device_uuid=uuid,
             device_name=device_name,
+            graph_node_id=_int(node_id),
         )
 
 

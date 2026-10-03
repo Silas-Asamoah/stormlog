@@ -290,7 +290,11 @@ stormlog infer import-trace infer.jsonl run.sqlite
 - **Record CUDA graphs per node** with `--cuda-graph-trace=node`. At the default
   graph-level tracing Nsight Systems writes one row per graph launch instead of
   its kernels. Those rows are not imported; the summary counts them under
-  `not_imported`, and the import says to re-record.
+  `not_imported`, and the import says to re-record. Per-node rows carry their
+  graph node id, and newer exporters a graph id too; either marks the work as
+  a graph's in the summary, and a graph id is kept on the record and reported
+  as `cuda_graph_ids`. Without them, a `cudaGraphLaunch` or `cuGraphLaunch`
+  launch call marks it.
 - **Several processes in one report** are handled: launches are matched to GPU
   work by process and correlation ID, and each device is reported per process
   (`"<pid>/<device>"`).

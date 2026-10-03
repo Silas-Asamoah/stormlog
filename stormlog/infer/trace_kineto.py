@@ -43,6 +43,7 @@ GPU_CATEGORIES = {
     "gpu_memset": "gpu_memset",
 }
 LAUNCH_CATEGORIES = frozenset({"cuda_runtime", "cuda_driver"})
+GRAPH_LAUNCH_APIS = ("cudaGraphLaunch", "cuGraphLaunch")
 RANGE_CATEGORIES = frozenset({"user_annotation"})
 SUPPORTED = (
     "gpu_activity",
@@ -71,6 +72,9 @@ class GpuEvent:
     pid: int | None = None
     device_uuid: str | None = None
     device_name: str | None = None
+    # Nsight marks each kernel, copy, or memset of a per-node graph capture
+    # with its graph node; Kineto gives only the graph ID.
+    graph_node_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -606,11 +610,16 @@ def _summary(
 
 
 def _from_graph(trace: KinetoTrace, event: GpuEvent) -> bool:
-    """A CUDA graph's work: a graph ID, or launched by cudaGraphLaunch."""
-    if event.graph_id:
+    """A CUDA graph's work: the event says so, or a graph launch call did.
+
+    The event's own graph or graph node ID is the evidence when the trace
+    records one; otherwise the launch call's name decides, whether it is the
+    runtime API (``cudaGraphLaunch``) or the driver API (``cuGraphLaunch``).
+    """
+    if event.graph_id or event.graph_node_id is not None:
         return True
     launch = trace.launches.get((event.pid, event.correlation or 0))
-    return launch is not None and launch.name.startswith("cudaGraphLaunch")
+    return launch is not None and launch.name.startswith(GRAPH_LAUNCH_APIS)
 
 
 def _device_summary(

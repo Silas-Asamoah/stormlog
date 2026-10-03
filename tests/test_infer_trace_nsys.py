@@ -651,3 +651,62 @@ def test_a_device_row_naming_two_gpus_is_refused(tmp_path: Path) -> None:
     assert main(["import-trace", str(artifact), str(path)]) == int(
         ExitCode.INVALID_INPUT
     )
+
+
+def _graph_columns(path: Path, columns: dict[str, int], launch_api: str) -> Path:
+    """Mark the graph replay's kernels (correlation 2) with the given columns."""
+    with closing(sqlite3.connect(path)) as db:
+        for column, value in columns.items():
+            db.execute(f"alter table CUPTI_ACTIVITY_KIND_KERNEL add column {column}")
+            db.execute(
+                f"update CUPTI_ACTIVITY_KIND_KERNEL set {column} = ? "
+                "where correlationId = 2",
+                (value,),
+            )
+        db.execute("update StringIds set value = ? where id = 3", (launch_api,))
+        db.commit()
+    return path
+
+
+@pytest.mark.parametrize("launch_api", ["cudaGraphLaunch_v10000", "cuGraphLaunch"])
+def test_graph_ids_are_kept_on_records(tmp_path: Path, launch_api: str) -> None:
+    path = _graph_columns(
+        _export(tmp_path / "run.sqlite"), {"graphId": 42, "graphNodeId": 99}, launch_api
+    )
+
+    capture = TraceFileCollector([path]).collect(run_id="r", session_id="s")
+
+    replay = [
+        e
+        for e in capture.events
+        if isinstance(e, ActivityReferenceEvent) and e.cuda_correlation_id == 2
+    ]
+    assert {e.graph_id for e in replay} == {42}
+    assert "cuda_graph_ids" in capture.capabilities.collected
+    assert capture.summary is not None
+    assert capture.summary["traces"][0]["graph_gpu_events"] == 2
+
+
+def test_a_graph_node_id_marks_graph_work_without_a_launch_record(
+    tmp_path: Path,
+) -> None:
+    """nsys 2024.4 kernel rows have graphNodeId but no graphId column."""
+    path = _graph_columns(_export(tmp_path / "run.sqlite"), {"graphNodeId": 99}, "?")
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("delete from CUPTI_ACTIVITY_KIND_RUNTIME where correlationId = 2")
+        db.commit()
+
+    capture = TraceFileCollector([path]).collect(run_id="r", session_id="s")
+
+    assert capture.summary is not None
+    assert capture.summary["traces"][0]["graph_gpu_events"] == 2
+    assert "cuda_graph_ids" not in capture.capabilities.collected
+
+
+def test_a_driver_api_graph_launch_marks_graph_work(tmp_path: Path) -> None:
+    path = _graph_columns(_export(tmp_path / "run.sqlite"), {}, "cuGraphLaunch")
+
+    capture = TraceFileCollector([path]).collect(run_id="r", session_id="s")
+
+    assert capture.summary is not None
+    assert capture.summary["traces"][0]["graph_gpu_events"] == 2
