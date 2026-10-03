@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, TypeVar
 
-from .cache_state import redact_url
+from ..scrub import redact_url
 from .correlation_events import CapabilityEvent, CorrelationContext
 from .vllm_metrics import (
     CATALOG,

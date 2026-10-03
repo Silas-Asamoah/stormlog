@@ -33,8 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
+from ..scrub import redact_url
 from ..session import SessionSummary
-from .cache_state import redact_url
 from .correlation_capture import (
     CaptureCapabilities,
     TraceCapture,

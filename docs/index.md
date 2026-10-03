@@ -32,6 +32,7 @@ installation
 usage
 cli
 report_contract
+scrubbing
 inference
 inference_correlation
 vllm_telemetry
