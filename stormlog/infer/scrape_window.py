@@ -54,6 +54,7 @@ REASON_ENGINE_REQUIRED = "engine_required"
 REASON_AMBIGUOUS_SERIES = "ambiguous_series"
 REASON_NO_OBSERVATIONS = "no_observations"
 REASON_OVERFLOW_BUCKET = "quantile_in_overflow_bucket"
+REASON_SERIES_LABELS_CHANGED = "series_labels_changed"
 
 PLACEMENT_COMPLETED = "completed_at"
 PLACEMENT_APPROXIMATE = "approximate"
@@ -258,12 +259,16 @@ def gauge_window(
     """
     samples: list[float] = []
     reasons: list[str] = []
+    seen: list[Mapping[str, str]] = []
     for scrape in _ok_scrapes(scrapes):
-        value, reason = series_value(scrape.scrape, family, labels, engine)
+        value, found, reason = series_match(scrape.scrape, family, labels, engine)
         if reason is not None:
             reasons.append(reason)
         elif isinstance(value, float):
             samples.append(value)
+            seen.append(found or {})
+    if any(other != seen[0] for other in seen[1:]):
+        reasons.append(REASON_SERIES_LABELS_CHANGED)
     stats = sample_stats(samples)
     if stats["non_finite"]:
         reasons.append(REASON_NON_FINITE)
@@ -343,10 +348,12 @@ def _counter_step(
     labels: Labels | None,
     engine: str | None,
 ) -> dict[str, Any]:
-    a, a_reason = series_value(before.scrape, family, labels, engine)
-    b, b_reason = series_value(after.scrape, family, labels, engine)
+    a, a_labels, a_reason = series_match(before.scrape, family, labels, engine)
+    b, b_labels, b_reason = series_match(after.scrape, family, labels, engine)
     if a_reason or b_reason:
         return {"state": a_reason or b_reason, "delta": None}
+    if a_labels != b_labels:
+        return {"state": REASON_SERIES_LABELS_CHANGED, "delta": None}
     recreated = created_changed(before.scrape, after.scrape, family, labels, engine)
     return counter_pair_delta(a, b, None, recreated)
 
@@ -493,10 +500,12 @@ def _histogram_step(
     labels: Labels | None,
     engine: str | None,
 ) -> dict[str, Any]:
-    a, a_reason = series_value(before.scrape, family, labels, engine)
-    b, b_reason = series_value(after.scrape, family, labels, engine)
+    a, a_labels, a_reason = series_match(before.scrape, family, labels, engine)
+    b, b_labels, b_reason = series_match(after.scrape, family, labels, engine)
     if a_reason or b_reason:
         return {"state": a_reason or b_reason}
+    if a_labels != b_labels:
+        return {"state": REASON_SERIES_LABELS_CHANGED}
     recreated = created_changed(
         before.scrape, after.scrape, family, labels, engine, kind="histogram"
     )
@@ -607,20 +616,32 @@ def series_value(
     ``reason`` or ``finished_reason`` are kept apart unless the caller names
     one.
     """
+    value, _labels, reason = series_match(scrape, family, labels, engine)
+    return value, reason
+
+
+def series_match(
+    scrape: CompactScrape | None,
+    family: str,
+    labels: Labels | None,
+    engine: str | None,
+) -> tuple[Value | None, Mapping[str, str] | None, str | None]:
+    """As :func:`series_value`, with the matched series' full label set, so
+    two scrapes can be checked to hold the same series."""
     if scrape is None:
-        return None, REASON_SERIES_MISSING
+        return None, None, REASON_SERIES_MISSING
     matches = [
         (scrape.labels(set_id), value)
         for set_id, value in scrape.series(family).items()
         if _labels_match(scrape.labels(set_id), labels, engine)
     ]
     if engine is None and len({found.get("engine") for found, _ in matches}) > 1:
-        return None, REASON_ENGINE_REQUIRED
+        return None, None, REASON_ENGINE_REQUIRED
     if not matches:
-        return None, REASON_SERIES_MISSING
+        return None, None, REASON_SERIES_MISSING
     if len(matches) > 1:
-        return None, REASON_AMBIGUOUS_SERIES
-    return matches[0][1], None
+        return None, None, REASON_AMBIGUOUS_SERIES
+    return matches[0][1], matches[0][0], None
 
 
 def _labels_match(
@@ -697,6 +718,7 @@ __all__ = [
     "sample_interval",
     "sample_stats",
     "series_by_extra",
+    "series_match",
     "series_value",
     "share_at_least",
     "window_identity_reasons",

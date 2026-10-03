@@ -189,7 +189,9 @@ two:
 A series that more than one label set matches, such as
 `vllm:num_requests_waiting_by_reason` without a `reason`, is
 `ambiguous_series` rather than a sum, and a scrape with several engines needs
-the engine named (`engine_required`). A histogram's share of observations
+the engine named (`engine_required`). A series whose labels change between
+scrapes (another model name, say) is a different series, so it is never
+differenced across the change (`series_labels_changed`). A histogram's share of observations
 above a value, and the bucket holding a quantile, are reported as bounds
 between bucket boundaries; a quantile in the `+Inf` bucket has no upper bound
 (`quantile_in_overflow_bucket`).
