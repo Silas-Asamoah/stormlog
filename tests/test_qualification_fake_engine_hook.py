@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
@@ -69,10 +70,29 @@ def test_a_profile_imports_the_log_and_binds_every_request(tmp_path: Path) -> No
             assert cached + prefill[request] == item["input_tokens"]
 
 
+def _release_when_waiting(engine: FakeEngine, count: int) -> threading.Thread:
+    """Resume a paused engine once ``count`` requests wait, so they are
+    admitted together whatever the client's timing."""
+
+    def release() -> None:
+        try:
+            wait_until(lambda: len(engine.engine.waiting) >= count)
+        finally:
+            engine.resume_engine()
+
+    thread = threading.Thread(target=release, daemon=True)
+    thread.start()
+    return thread
+
+
 def test_preempted_requests_recompute_and_keep_every_token(tmp_path: Path) -> None:
     hook = tmp_path / "hook"
     output = tmp_path / "infer.jsonl"
     with _engine(hook, num_gpu_blocks=12, block_size=4, max_num_seqs=4) as engine:
+        # Four requests of 7 blocks each cannot all fit in 12, but only if
+        # they overlap; under load the client's sends can drift apart.
+        engine.pause_engine()
+        release = _release_when_waiting(engine, 4)
         run_profile(
             engine,
             output,
@@ -82,6 +102,7 @@ def test_preempted_requests_recompute_and_keep_every_token(tmp_path: Path) -> No
             output_tokens=(10,),
             request_count=8,
         )
+        release.join(timeout=10)
         preemptions = engine.engine.stats.preemptions
     items = records(output)
     memberships = of_type(items, "infer.membership")
