@@ -159,7 +159,19 @@ def test_a_basic_header_is_redacted_through_its_user_password_pair() -> None:
 @pytest.mark.parametrize(
     ("url", "found"),
     [
-        ("https://u:p%40ss-word@h/x", ["p@ss-word", "u:p@ss-word"]),
+        (
+            "https://u:p%40ss-word@h/x",
+            ["u", "p@ss-word", "u:p@ss-word", "u:p%40ss-word"],
+        ),
+        # A user name is registered on its own, whatever the password.
+        (
+            "https://opaque-credential-value:@h/x",
+            ["opaque-credential-value", "", "opaque-credential-value:"],
+        ),
+        (
+            "https://opaque-credential-value:x@h/x",
+            ["opaque-credential-value", "x", "opaque-credential-value:x"],
+        ),
         ("https://ghp_tokenvalue1234@h/x", ["ghp_tokenvalue1234"]),
         ("https://h/x?api-key=abc12345&stream=true", ["abc12345", "true"]),
         ("https://h/x", []),
@@ -170,6 +182,18 @@ def test_url_secrets_lists_the_values_that_may_be_credentials(
     url: str | None, found: list[str]
 ) -> None:
     assert url_secrets(url) == found
+
+
+def test_a_user_name_with_an_empty_password_is_still_redacted() -> None:
+    secrets = KnownSecrets(url_secrets("https://opaque-credential-value:@host/x"))
+    assert secrets.redact("echo opaque-credential-value") == "echo <redacted>"
+
+
+def test_a_basic_header_built_from_the_userinfo_as_written_is_redacted() -> None:
+    # A client that did not decode the URL's %40 before building the header.
+    secrets = KnownSecrets(url_secrets("https://alice:p%40ss-w0rd@h/x"))
+    header = "Basic YWxpY2U6cCU0MHNzLXcwcmQ="
+    assert secrets.redact(header) == "Basic <redacted>"
 
 
 def test_short_url_values_are_not_used_for_redaction() -> None:

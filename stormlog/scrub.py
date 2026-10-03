@@ -261,22 +261,25 @@ def _merged(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
 def url_secrets(url: str | None) -> list[str]:
     """The values in a URL that may be credentials, for ``KnownSecrets``.
 
-    The password, the ``user:password`` pair a Basic header would encode, a
-    user name given without a password (often a token), and every query
-    value.
+    The user name, on its own whatever the password (it is often a token),
+    the password, the ``user:password`` pair a Basic header would encode,
+    decoded and also as written in the URL for a client that did not
+    decode it, and every query value. A fragment is never sent to a
+    server, so it is not read.
     """
     if not url:
         return []
     parts = urllib.parse.urlsplit(url)
     found: list[str] = []
+    user = urllib.parse.unquote(parts.username or "")
+    if user:
+        found.append(user)
     if parts.password is not None:
-        found.append(urllib.parse.unquote(parts.password))
-        found.append(
-            f"{urllib.parse.unquote(parts.username or '')}:"
-            f"{urllib.parse.unquote(parts.password)}"
-        )
-    elif parts.username:
-        found.append(urllib.parse.unquote(parts.username))
+        password = urllib.parse.unquote(parts.password)
+        found.extend([password, f"{user}:{password}"])
+        as_written = f"{parts.username or ''}:{parts.password}"
+        if as_written != found[-1]:
+            found.append(as_written)
     found.extend(
         value
         for _, value in urllib.parse.parse_qsl(parts.query, keep_blank_values=False)

@@ -75,9 +75,11 @@ megabyte for each value. Exporters redact bounded strings, and `scrub_text`
 bounds its input first.
 
 A Basic authorization header encodes `user:password` as one string, so
-`url_secrets(url)` returns that pair alongside the password itself. It also
-returns a user name given without a password, which is often a token, and
-every query value:
+`url_secrets(url)` returns that pair alongside the password itself, decoded
+and also as written in the URL, for a client that built the header without
+decoding it. It also returns the user name on its own, whatever the
+password, since a user name is often a token, and every query value. A URL's
+fragment is never sent to a server, so it is not read:
 
 ```python
 from stormlog.scrub import KnownSecrets, url_secrets
