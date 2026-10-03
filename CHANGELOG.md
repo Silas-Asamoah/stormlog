@@ -245,8 +245,8 @@ the flaky benchmark memory gates
   the start before it replies, so such a server could be left profiling, its
   memory growing, until the next stop. Each `infer.trace_window` record now
   carries `start_outcome` (`acknowledged`, `rejected` or `unknown`) and the
-  times the start request was sent and answered. Only a 4xx, which never
-  reaches the engine, is left unstopped. A stop that fails is warned about
+  times the start request was sent and answered. Only a 401, 403, 404, 405
+  or 407, which come before vLLM's handler runs, is left unstopped. A stop that fails is warned about
   and recorded, not retried, and the record says the profiler may still be
   running.
   ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
