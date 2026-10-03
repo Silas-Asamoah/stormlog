@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import urllib.parse
+from collections.abc import Iterator
 
 import pytest
 
@@ -202,11 +203,39 @@ def test_scrub_text_leaves_ordinary_text_alone() -> None:
     assert scrub_text(text) == text
 
 
-def test_scrub_text_applies_known_secrets_before_patterns() -> None:
-    # An opaque value no pattern recognises is still removed when known.
+def test_scrub_text_removes_a_known_secret_no_pattern_recognises() -> None:
     secrets = KnownSecrets(["opaque-value-without-shape"])
     scrubbed = scrub_text("echo: opaque-value-without-shape", secrets=secrets)
     assert scrubbed == "echo: <redacted>"
+
+
+@pytest.mark.parametrize(
+    ("text", "secrets", "scrubbed"),
+    [
+        (
+            "https://u:p@host/x?k=opaque-credential-value",
+            [],
+            "https://<redacted>@host/x?<redacted>",
+        ),
+        # A known secret in the path must not hide the query from the URL.
+        (
+            "https://host/abcdefgh?x=opaque-value",
+            ["abcdefgh"],
+            "https://host/<redacted>?<redacted>",
+        ),
+        (
+            "see https://host/abcdefgh/v1?token=opaque#frag now",
+            ["abcdefgh"],
+            "see https://host/<redacted>/v1?<redacted>#frag now",
+        ),
+        # A known secret inside a pattern's value is one redaction.
+        ("token=abc-opaque-12345xyz end", ["opaque-12345"], "token=<redacted> end"),
+    ],
+)
+def test_scrub_text_finds_every_span_before_replacing_any(
+    text: str, secrets: list[str], scrubbed: str
+) -> None:
+    assert scrub_text(text, secrets=KnownSecrets(secrets)) == scrubbed
 
 
 def test_scrub_text_cuts_after_redacting_so_no_fragment_is_left() -> None:
@@ -222,12 +251,11 @@ def test_scrub_text_bounds_its_input_before_matching(
 ) -> None:
     seen: list[int] = []
 
-    class Recording:
-        def sub(self, _replacement: object, text: str) -> str:
-            seen.append(len(text))
-            return text
+    def recording(text: str) -> Iterator[tuple[int, int]]:
+        seen.append(len(text))
+        return iter(())
 
-    monkeypatch.setattr(scrub, "_PATTERNS", ((Recording(), ""),))
+    monkeypatch.setattr(scrub, "_FINDERS", (recording,))
     assert scrub_text("a" * 10_000_000, max_bytes=16) == "a" * 16
     assert seen == [16 + scrub.INPUT_MARGIN_CHARS]
 

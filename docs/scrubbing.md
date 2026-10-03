@@ -112,8 +112,12 @@ The steps run in a fixed order:
    the body's size. Every pattern also runs in time linear in its input:
    each can start only where a run of its characters starts, and a key's
    words are checked on the whole key, never by backtracking.
-2. The exact values in `secrets` are redacted.
-3. The patterns run.
+2. Every match is found in that text: each form of each value in
+   `secrets`, and each pattern's span.
+3. Overlapping spans are merged, and each is replaced once with
+   `<redacted>`. No replacement happens before every match is found, so a
+   marker inserted for one match can never hide another, such as a known
+   secret in a URL's path hiding the URL's query.
 4. The cut to `max_bytes` comes last.
 
 Because the cut comes last, it never leaves part of a secret that a whole
