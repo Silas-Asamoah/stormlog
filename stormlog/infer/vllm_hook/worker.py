@@ -4,8 +4,10 @@ The engine core puts ``(producer, iteration)`` on the scheduler output, which
 reaches the worker as the same object (uniproc) or pickled (multiproc). The
 model runner's ``execute_model`` is wrapped in that iteration's range; when it
 returns None, sampling for the same step comes in a later ``sample_tokens``
-call, which a FIFO pairs with it. Internal dummy runs (``dummy_run=True``, used
-for warm-up and CUDA-graph capture) are never ranged or paired.
+call, which a FIFO pairs with it. Internal dummy runs are never ranged or
+paired: the V2 runner's go through ``execute_model(dummy_run=True)``, and the V1
+runner's ``_dummy_run`` never calls ``execute_model``. Warm-up and CUDA-graph
+capture steps before the first serving step are counted as start-up runs.
 """
 
 from __future__ import annotations

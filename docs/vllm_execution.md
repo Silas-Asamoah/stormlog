@@ -45,7 +45,7 @@ the hook's `hello` record names the reason.
 | uniproc and multiproc executors | Ray, external launcher |
 | tensor parallelism of any size | pipeline parallelism, data parallelism > 1 |
 | `Scheduler` and `AsyncScheduler` | other scheduler classes |
-| the V2 GPU model runner (0.30.0's default) | the V1 runner, other runners |
+| the V2 GPU model runner (0.30.0's default) and the V1 runner it falls back to | other runners |
 | async scheduling on or off | |
 | CUDA graphs, chunked prefill | |
 | n-gram speculative decoding | draft-model speculation, adaptive verification |
@@ -138,15 +138,20 @@ first `scheduled` record.
  "start_wall_ns": …, "start_mono_ns": …, "end_wall_ns": …, "end_mono_ns": …,
  "total_tokens": 2048, "zero_token": false, "preempted": ["…"],
  "members": [
-   {"internal": "…", "sighting": "first", "scheduled": 2000,
+   {"internal": "…", "sighting": "first", "phase": "context", "scheduled": 2000,
     "computed_before": 0, "prompt_tokens": 4000,
-    "prefill_scheduled": 2000, "decode_scheduled": 0,
+    "prefill_scheduled": 2000, "past_prompt_scheduled": 0,
     "drafts_scheduled": 0, "cached_at_admission": 0,
     "recompute": false, "output_before": 0}]}
 ```
 
 `iteration` counts the engine's `schedule()` calls from 0. `computed_before` is
-the context before this step, read from the scheduler output. `sighting` is
+the context before this step, read from the scheduler output. `phase` is vLLM's
+own classification: `context` for a request new in this output (including one
+resumed after preemption) or still in its context phase, else `generation`.
+`prefill_scheduled` is the part of the step below the prompt length;
+`past_prompt_scheduled` is the rest, which is decoding for a running request and
+recomputation for a resumed one. `sighting` is
 `first` the first time the hook sees an internal ID and `repeat` after, whatever
 vLLM's own field calls it. `cached_at_admission` is set on the first sighting
 only.

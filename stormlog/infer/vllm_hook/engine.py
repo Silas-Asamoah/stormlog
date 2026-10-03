@@ -108,6 +108,7 @@ class EngineRecorder:
                     internal,
                     computed_before=int(data.num_computed_tokens),
                     first=first,
+                    context=True,
                 )
             )
         return members
@@ -116,6 +117,7 @@ class EngineRecorder:
         self, scheduler: Any, output: Any
     ) -> list[tuple[_Member, dict[str, Any]]]:
         cached = output.scheduled_cached_reqs
+        is_context = getattr(cached, "is_context_phase", None)
         return [
             self._member(
                 scheduler,
@@ -123,6 +125,7 @@ class EngineRecorder:
                 str(internal),
                 computed_before=int(cached.num_computed_tokens[index]),
                 first=str(internal) not in self.prompt_tokens,
+                context=bool(is_context(internal)) if callable(is_context) else None,
             )
             for index, internal in enumerate(cached.req_ids)
         ]
@@ -135,6 +138,7 @@ class EngineRecorder:
         *,
         computed_before: int,
         first: bool,
+        context: bool | None,
     ) -> tuple[_Member, dict[str, Any]]:
         scheduled = int(output.num_scheduled_tokens.get(internal, 0))
         drafts = len(output.scheduled_spec_decode_tokens.get(internal, ()) or ())
@@ -145,11 +149,16 @@ class EngineRecorder:
         fields = {
             "internal": internal,
             "sighting": "first" if first else "repeat",
+            # vLLM's own classification: new in this output, or a cached request
+            # still in its context phase. A recomputed request is context.
+            "phase": (
+                None if context is None else ("context" if context else "generation")
+            ),
             "scheduled": scheduled,
             "computed_before": computed_before,
             "prompt_tokens": prompt,
             "prefill_scheduled": prefill,
-            "decode_scheduled": scheduled - prefill,
+            "past_prompt_scheduled": scheduled - prefill,
             "drafts_scheduled": drafts,
             "cached_at_admission": computed_before if first else None,
             "recompute": (not first)

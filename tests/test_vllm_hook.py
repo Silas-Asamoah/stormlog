@@ -58,6 +58,10 @@ class CachedRequestData:
     req_ids: list[str] = field(default_factory=list)
     num_computed_tokens: list[int] = field(default_factory=list)
     num_output_tokens: list[int] = field(default_factory=list)
+    context_phase: set[str] = field(default_factory=set)
+
+    def is_context_phase(self, req_id: str) -> bool:
+        return req_id in self.context_phase
 
 
 @dataclass
@@ -289,7 +293,11 @@ def test_two_requests_share_iterations_and_finish(vllm: dict[str, Any]) -> None:
     second_members = {m["internal"]: m for m in scheduled[1]["members"]}
     assert second_members["a-1"]["sighting"] == "repeat"
     assert second_members["a-1"]["cached_at_admission"] is None
-    assert second_members["a-1"]["decode_scheduled"] == 1
+    assert second_members["a-1"]["past_prompt_scheduled"] == 1
+    assert (first_members["a-1"]["phase"], second_members["a-1"]["phase"]) == (
+        "context",
+        "generation",
+    )
     completed = _of(records, "completed")
     assert [m["outcome"] for m in completed[0]["members"]] == ["kept", "kept"]
     assert [m["retained"] for m in completed[0]["members"]] == [1, 1]

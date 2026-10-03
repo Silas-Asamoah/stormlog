@@ -22,7 +22,15 @@ SUPPORTED_SCHEDULERS = frozenset(
         "vllm.v1.core.sched.async_scheduler.AsyncScheduler",
     }
 )
-SUPPORTED_RUNNERS = frozenset({"vllm.v1.worker.gpu.model_runner.GPUModelRunner"})
+# Model Runner V2 is 0.30.0's default; it falls back to V1 for n-gram
+# speculation. The hook wraps either through the same execute_model and
+# sample_tokens shapes.
+SUPPORTED_RUNNERS = frozenset(
+    {
+        "vllm.v1.worker.gpu.model_runner.GPUModelRunner",
+        "vllm.v1.worker.gpu_model_runner.GPUModelRunner",
+    }
+)
 SUPPORTED_SPECULATION = frozenset({"ngram"})
 
 
@@ -79,6 +87,7 @@ def config_summary(
         "async_scheduling": getattr(scheduling, "async_scheduling", None),
         "max_num_batched_tokens": getattr(scheduling, "max_num_batched_tokens", None),
         "speculative": getattr(speculative, "method", None) if speculative else None,
+        "v2_model_runner": getattr(vllm_config, "use_v2_model_runner", None),
         "scheduler": _qualname(scheduler),
         "runner": _qualname(runner),
     }
