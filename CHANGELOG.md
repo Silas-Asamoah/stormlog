@@ -33,6 +33,16 @@ the flaky benchmark memory gates
   an exporter has consent to send; `truncate_utf8`; and
   `is_forbidden_key_name`. Documented in `docs/scrubbing.md`; the wider
   artifact policy stays with #111. (#220)
+- `stormlog.infer.slo`: SLO policies whose criteria name their boundary
+  (`client.ttft`, `server.ttft`, ...), so client and server latency are never
+  mixed. Policies come from a versioned JSON file (`stormlog.infer.slo` v1),
+  `KEY:MS` flags, or an artifact's `infer.slo` record.
+  - `evaluate_request` judges an `infer.request` record as met, missed or
+    unknown, with a reason per criterion.
+  - `evaluate_span` judges a vLLM span on server criteria only, with success
+    unverified, since vLLM emits spans for failed requests too.
+  - There is no client inter-token latency; `docs/inference_slo.md` explains
+    why. (#213)
 - `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
   hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,
   `infer.membership`, `infer.request` and `infer.clock_alignment` records:
