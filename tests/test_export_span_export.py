@@ -361,7 +361,8 @@ def test_offers_never_wait_for_the_worker() -> None:
 def test_collector_text_is_kept_only_through_the_consent_scrubber() -> None:
     from stormlog.scrub import scrub_text
 
-    status = b"\x08\x03\x12\x1bbad: Bearer sk-abcdefghijkl"
+    # A Bearer token has a digit, =, + or / since the scrub fixes.
+    status = b"\x08\x03\x12\x1bbad: Bearer sk-abcdefgh1234"
     warning = Reply(
         body=b'{"partialSuccess":{"errorMessage":"slow down"}}',
         content_type="application/json",
