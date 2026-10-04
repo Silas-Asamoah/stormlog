@@ -18,19 +18,20 @@ import zlib
 from collections import Counter, deque
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
-from ..vllm_telemetry import VllmScrapeRecord
+from ..vllm_telemetry import SCRAPE_OK, VllmScrapeRecord
 
 EVICT_AGE = "age"
 EVICT_BYTES = "bytes"
 EVICT_OVERSIZED = "oversized"
 
 # What holding one item costs beyond its compressed bytes: the stamp, its
-# three integers, the bytes object's header, the pair and the deque slot.
-# tracemalloc measures 265 B on CPython 3.10-3.13 and 273 B on 3.14; the
-# margin covers the allocator rounding each object up to 16 bytes.
-ITEM_OVERHEAD_BYTES = 320
+# three integers, the bytes object's header, the item's tuple, its expanded
+# size and the deque slot. tracemalloc measures 289 B on CPython 3.10-3.13
+# and 297 B on 3.14; the margin covers
+# the allocator rounding each object up to 16 bytes.
+ITEM_OVERHEAD_BYTES = 384
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,8 +52,15 @@ class Stamped:
             raise ValueError("done_mono_ns precedes mono_ns")
 
 
-# An item as the ring holds it: its stamps and its compressed JSON.
-Held = tuple[Stamped, bytes]
+class Held(NamedTuple):
+    """An item as the ring holds it: its stamps, its compressed JSON, the
+    size of that JSON expanded, and whether the item says it succeeded, so a
+    reader can count and size items without expanding them."""
+
+    stamp: Stamped
+    blob: bytes
+    size: int
+    ok: bool
 
 
 class BoundedRing:
@@ -66,7 +74,7 @@ class BoundedRing:
             raise ValueError("ring bounds must be > 0")
         self.max_ns = int(max_seconds * 1e9)
         self.max_bytes = max_bytes
-        self._items: deque[tuple[Stamped, bytes]] = deque()
+        self._items: deque[Held] = deque()
         self._bytes = 0
         self.evictions: Counter[str] = Counter()
 
@@ -82,17 +90,18 @@ class BoundedRing:
         """The span between the oldest and newest items held."""
         if not self._items:
             return 0.0
-        return (self._items[-1][0].mono_ns - self._items[0][0].mono_ns) / 1e9
+        return (self._items[-1].stamp.mono_ns - self._items[0].stamp.mono_ns) / 1e9
 
-    def append(self, stamp: Stamped, record: Mapping[str, Any]) -> bool:
+    def append(
+        self, stamp: Stamped, record: Mapping[str, Any], *, ok: bool = True
+    ) -> bool:
         """Hold one item; False when it alone is over the byte bound."""
-        blob = zlib.compress(
-            json.dumps(record, separators=(",", ":"), sort_keys=True).encode(), 1
-        )
+        text = json.dumps(record, separators=(",", ":"), sort_keys=True).encode()
+        blob = zlib.compress(text, 1)
         if _charge(blob) > self.max_bytes:
             self.evictions[EVICT_OVERSIZED] += 1
             return False
-        self._items.append((stamp, blob))
+        self._items.append(Held(stamp, blob, len(text), ok))
         self._bytes += _charge(blob)
         while self._bytes > self.max_bytes:
             self._evict(EVICT_BYTES)
@@ -102,15 +111,15 @@ class BoundedRing:
     def expire(self, now_mono_ns: int) -> None:
         """Drop items older than ``max_seconds`` before ``now_mono_ns``."""
         cutoff = now_mono_ns - self.max_ns
-        while self._items and self._items[0][0].mono_ns < cutoff:
+        while self._items and self._items[0].stamp.mono_ns < cutoff:
             self._evict(EVICT_AGE)
 
     def items(
         self, start_mono_ns: int | None = None, end_mono_ns: int | None = None
     ) -> Iterator[tuple[Stamped, dict[str, Any]]]:
         """Held items whose ``mono_ns`` lies in ``[start, end]``, oldest first."""
-        for stamp, blob in self.compressed(start_mono_ns, end_mono_ns):
-            yield stamp, json.loads(expand(blob))
+        for item in self.compressed(start_mono_ns, end_mono_ns):
+            yield item.stamp, json.loads(expand(item.blob))
 
     def compressed(
         self, start_mono_ns: int | None = None, end_mono_ns: int | None = None
@@ -118,15 +127,14 @@ class BoundedRing:
         """The same items as held: references to their compressed JSON, not
         copies; :func:`expand` turns one back into its text."""
         return [
-            (stamp, blob)
-            for stamp, blob in self._items
-            if (start_mono_ns is None or stamp.mono_ns >= start_mono_ns)
-            and (end_mono_ns is None or stamp.mono_ns <= end_mono_ns)
+            item
+            for item in self._items
+            if (start_mono_ns is None or item.stamp.mono_ns >= start_mono_ns)
+            and (end_mono_ns is None or item.stamp.mono_ns <= end_mono_ns)
         ]
 
     def _evict(self, cause: str) -> None:
-        _stamp, blob = self._items.popleft()
-        self._bytes -= _charge(blob)
+        self._bytes -= _charge(self._items.popleft().blob)
         self.evictions[cause] += 1
 
 
@@ -155,7 +163,9 @@ class ScrapeHistory:
 
         A refused scrape stays out of the parsed tail as well.
         """
-        if not self.ring.append(stamp, record.to_record()):
+        if not self.ring.append(
+            stamp, record.to_record(), ok=record.status == SCRAPE_OK
+        ):
             return False
         self._parsed.append((stamp, record))
         return True

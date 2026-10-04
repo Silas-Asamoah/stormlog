@@ -587,3 +587,38 @@ def test_a_trigger_that_resolves_within_the_post_window_says_when(
     (record,) = harness.of_type(INCIDENT)
     assert record["trigger"]["resolved_at_ns"] is None  # still firing
     assert record["joined_triggers"][0]["resolved_at_ns"] == T0 + 230 * S
+
+
+def test_a_seal_expands_no_scrape_on_the_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seal expanded and parsed every scrape in its windows on the loop
+    to read its status and size: 1.8 s for 180 scrapes of a 135 KiB
+    /metrics, every tick of it late. The history keeps both beside each
+    scrape; only the store's worker expands them, to write them."""
+    from stormlog.infer.watch import incidents as incidents_module
+
+    expanded: list[int] = []
+    real_expand = incidents_module.expand
+
+    def counting(blob: bytes) -> bytes:
+        expanded.append(len(blob))
+        return real_expand(blob)
+
+    monkeypatch.setattr(incidents_module, "expand", counting)
+    queued: list[Callable[[], None]] = []
+
+    def defer(task: Callable[[], None]) -> bool:
+        queued.append(task)
+        return True
+
+    harness = Harness(tmp_path)
+    harness.manager._submit = defer
+    harness.scrapes(80, 262, failed=frozenset({150}))
+    harness.fire(200, pending_since_s=140)
+    harness.tick(261)  # the seal, on the loop
+    assert expanded == [] and len(queued) == 1
+    queued[0]()  # the write, on the store's worker
+    assert len(expanded) == 151
+    (record,) = harness.of_type(INCIDENT)
+    assert record["pre_window"]["fidelity_detail"]["scrapes"]["failed"] == 1

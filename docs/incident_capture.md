@@ -376,14 +376,16 @@ trace-volume settings.
 
 Between incidents the watcher holds its recent scrapes in memory, each
 serialized and compressed: a vLLM 0.30.0 scrape takes about 5.7 KB this way.
-The memory bound counts each one's compressed bytes plus 320 bytes for the
+The memory bound counts each one's compressed bytes plus 384 bytes for the
 Python objects that hold it, so it bounds what is retained even when the
 items are tiny. A scrape larger than the whole bound is refused and counted
 (`oversized`). Only the last few scrapes, as many as the widest trigger
 window or the longest health-trigger tail needs, are also held parsed (about
 130 KB each), and only scrapes the memory holds, so a trigger never judges a
-scrape its incident's bundle cannot contain. A bundle is written from the
-compressed copies, expanded one at a time and never parsed.
+scrape its incident's bundle cannot contain. Each scrape's status and
+expanded size are kept beside it, so sealing an incident reads none of them
+on the watcher's loop; the bundle is written from the compressed copies on
+the store's thread, expanded one at a time and never parsed.
 
 ## Triggers and what "sustained" means
 
