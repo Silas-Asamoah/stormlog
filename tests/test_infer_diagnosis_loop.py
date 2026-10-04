@@ -336,11 +336,14 @@ def test_no_ongoing_stall_once_every_request_finished() -> None:
 
 def _ended(how: str) -> tuple[list[dict[str, Any]], int]:
     """A 60-step loop whose requests ended without a completion naming a
-    finish: cancelled by the client, discarded after an end of sequence
-    under async scheduling, or with the epoch itself ended."""
+    finish: cancelled by the client, before or while their next step was in
+    flight, discarded after an end of sequence under async scheduling, or
+    with the epoch itself ended."""
     records = _loop(60, beats=False)
     end = max(int(r["mono_ns"]) for r in records if r["kind"] == "completed")
-    if how == "aborted":
+    if how == "aborted_in_flight":
+        records.append(scheduled(60, end + MS // 2, _decode("a", "b")))
+    if how.startswith("aborted"):
         records += [
             terminal(n, end + MS, status="FINISHED_ABORTED", finish_reason="abort")
             for n in ("a", "b")
@@ -355,7 +358,9 @@ def _ended(how: str) -> tuple[list[dict[str, Any]], int]:
     return _sequenced(records), end + WALL_OFFSET
 
 
-@pytest.mark.parametrize("how", ["aborted", "discarded", "goodbye"])
+@pytest.mark.parametrize(
+    "how", ["aborted", "aborted_in_flight", "discarded", "goodbye"]
+)
 def test_requests_that_ended_leave_no_ongoing_stall(how: str) -> None:
     records, end = _ended(how)
     signal = engine_loop_gap(records, LoopGapConfig(now_wall_ns=end + SECOND))
