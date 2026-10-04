@@ -194,6 +194,8 @@ def test_with_error_consent_server_text_leaves_but_no_credential(
     outputs, _ = _run(tmp_path, monkeypatch, frozenset({"errors"}))
     leaks = [leak for canary in SECRETS for leak in _found(canary, outputs)]
     assert leaks == []
-    # The documented boundary: an error that echoes the request is exported.
+    # The documented boundary: an error that echoes the request is exported,
+    # and so is the collector's own message, scrubbed.
     assert _found("echoed:", outputs)
     assert _found(PARAM, outputs)
+    assert _found(COLLECTOR, {"capability records": outputs["capability records"]})

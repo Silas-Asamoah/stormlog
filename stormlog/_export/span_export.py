@@ -59,6 +59,10 @@ SCHEDULE_DELAY_SECONDS = 1.0
 MAX_FILE_BYTES = 256 * 1024 * 1024
 
 
+# A write or resolution running this long is reported as stalled.
+STALL_SECONDS = 5.0
+
+
 class SpanSink(Protocol):
     """Where batches go. ``abort`` is final and says whether a body had left."""
 
@@ -71,6 +75,10 @@ class SpanSink(Protocol):
     def abort(self) -> bool: ...
 
     def close(self) -> None: ...
+
+    def stalled(self) -> dict[str, bool]:
+        """Each uncancellable stage, and whether it is stuck now."""
+        ...
 
 
 class HttpSink:
@@ -91,6 +99,9 @@ class HttpSink:
     def close(self) -> None:
         self.transport.watchdog.stop()
 
+    def stalled(self) -> dict[str, bool]:
+        return {"resolve": self.transport.resolver.stalled}
+
 
 class FileSink:
     """OTLP JSON, one export request per line; a line is written whole or not at all."""
@@ -110,6 +121,7 @@ class FileSink:
         self._lock = threading.Lock()
         self._aborted = False
         self._writing = False
+        self._write_started = 0.0
 
     def start(self) -> None:
         self.lines.open()
@@ -119,6 +131,7 @@ class FileSink:
             if self._aborted:
                 return Transmission(NOT_SENT, SEND_FAILED)
             self._writing = True
+            self._write_started = time.monotonic()
         outcome = self.lines.write_line(body)
         with self._lock:
             self._writing = False
@@ -134,6 +147,13 @@ class FileSink:
     def close(self) -> None:
         self.lines.close()
 
+    def stalled(self) -> dict[str, bool]:
+        with self._lock:
+            stuck = self._writing and (
+                time.monotonic() - self._write_started > STALL_SECONDS
+            )
+        return {"write": stuck}
+
 
 @dataclass
 class _Stats:
@@ -143,9 +163,15 @@ class _Stats:
     sent_bytes: int = 0
     encoded_bytes: int = 0
     batches: int = 0
+    # Confirmations that rejected nothing but said something.
+    warnings: int = 0
     first_error: dict[str, Any] | None = None
+    # The collector's own text, kept only by consent, scrubbed.
+    collector_message: str | None = None
     errors: Counter[str] = field(default_factory=Counter)
     flush_seconds: float | None = None
+    # CPU seconds the worker thread used.
+    worker_cpu_seconds: float | None = None
 
 
 @dataclass
@@ -179,6 +205,7 @@ class SpanExporter(Generic[T]):
         limits: SpanLimits = SpanLimits(),
         retry: RetryPolicy = RetryPolicy(),
         breaker: Breaker | None = None,
+        keep_message: Callable[[str], str] | None = None,
         schedule_delay: float = SCHEDULE_DELAY_SECONDS,
         max_batch_spans: int = MAX_BATCH_SPANS,
         max_batch_bytes: int = MAX_BATCH_BYTES,
@@ -193,6 +220,8 @@ class SpanExporter(Generic[T]):
         self.limits = limits
         self.retry = retry
         self.breaker = breaker or Breaker()
+        # With consent to keep a collector's text, how to scrub it first.
+        self.keep_message = keep_message
         self.schedule_delay = schedule_delay
         self.max_batch_spans = max_batch_spans
         self.max_batch_bytes = max_batch_bytes
@@ -235,6 +264,8 @@ class SpanExporter(Generic[T]):
         except Exception:
             # The freeze settles whatever the worker left unfinished.
             self._error("worker")
+        finally:
+            self.stats.worker_cpu_seconds = round(time.thread_time(), 3)
 
     def _loop(self) -> None:
         batch = _Batch()
@@ -389,6 +420,11 @@ class SpanExporter(Generic[T]):
                 }
         stats.retries += retry
         stats.sent_bytes += transmission.sent_bytes
+        result = transmission.result
+        if result is not None and result.rejected == 0 and result.message:
+            stats.warnings += 1
+        if transmission.message and self.keep_message and not stats.collector_message:
+            stats.collector_message = self.keep_message(transmission.message)
 
     def _error(self, entry: str) -> None:
         self.stats.errors[entry] += 1
@@ -447,6 +483,7 @@ class SpanExporter(Generic[T]):
         return {
             "spans": self.accounting(),
             "queue": {
+                "bytes": queue.depth_bytes,
                 "high_water": queue.high_water,
                 "high_water_bytes": queue.high_water_bytes,
                 "capacity_spans": queue.max_items,
@@ -459,7 +496,17 @@ class SpanExporter(Generic[T]):
             "encoded_bytes": stats.encoded_bytes,
             "sent_bytes": stats.sent_bytes,
             "first_error": stats.first_error,
+            "warnings": stats.warnings,
+            "collector_message": stats.collector_message,
             "destination": self.breaker.snapshot(),
+            "stalled": self._stalled(),
             "flush_seconds": stats.flush_seconds,
+            "worker_cpu_seconds": stats.worker_cpu_seconds,
             "internal_errors": dict(stats.errors),
         }
+
+    def _stalled(self) -> dict[str, bool]:
+        try:
+            return self.sink.stalled()
+        except Exception:
+            return {}

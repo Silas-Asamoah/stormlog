@@ -434,8 +434,12 @@ resource keys and the keys left out, the sampling ratio, the trace-context
 policy and declared server sampler, the content items, and the final
 summary: the dispositions above, `sampled_out`, `late_results`, attempts by
 kind and category, retries, batches, encoded and sent bytes, the first
-error's kind, category and status, the transitions, and how long the flush
-at the end took.
+error's kind, category and status, `warnings` (confirmations that rejected
+nothing but carried a message), the transitions, any stage stuck for 5 s
+(`resolve`, or a file `write`), how long the flush at the end took, and the
+worker's CPU time. A collector's own message is kept, as
+`collector_message`, only with `--export-content errors`: it can echo what
+was sent, so it is scrubbed and cut to 256 bytes first.
 
 With Prometheus on too, the same figures are metrics:
 `stormlog_export_spans_{offered,exported,rejected,sampled_out,possibly_duplicated}_total`,
@@ -443,7 +447,9 @@ With Prometheus on too, the same figures are metrics:
 `stormlog_export_spans_dropped_total{reason}`,
 `stormlog_export_spans_unknown_total{reason}`,
 `stormlog_export_in_flight_spans`, `stormlog_export_queue_spans`,
-`stormlog_export_queue_capacity_spans`,
+`stormlog_export_queue_bytes`, `stormlog_export_queue_capacity_spans`,
+`stormlog_export_queue_capacity_bytes`,
+`stormlog_export_queue_high_water_spans`, `stormlog_export_stalled{stage}`,
 `stormlog_export_requests_total{outcome}`, `stormlog_export_retries_total`,
 `stormlog_export_destination_up`,
 `stormlog_export_last_success_timestamp_seconds`,
