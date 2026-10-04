@@ -114,7 +114,9 @@ and in the step after it. The step before a gap between steps is the one
 whose completion starts it, without the request finishing there: under
 async scheduling a request's second step is scheduled before its first
 completes, so the step scheduled just before it may come after an idle
-stretch in which nothing was ready. A request prefilled in chunks is ready
+stretch in which nothing was ready. A memberless, zero-token step (which
+vLLM schedules to send finished IDs) runs nothing and is passed over: the gap
+runs from the step before it. A request prefilled in chunks is ready
 between them; a streaming-input request (`resumable`) never makes a gap
 ready, since between steps it may be waiting for its client's next input. A
 stretch the scheduler spent paused with

@@ -591,6 +591,27 @@ def _two_runs_of(
     return _sequenced(records)
 
 
+def test_an_empty_step_does_not_hide_a_stall_between_two_steps() -> None:
+    """vLLM schedules a memberless, zero-token step to send finished IDs; one
+    between two steps of the same requests runs nothing, so the gap is
+    measured from the step before it."""
+    first = _loop(40, beats=False)
+    end = max(int(r["mono_ns"]) for r in first if r["kind"] == "completed")
+    empty = [scheduled(40, end + MS, []), completed(40, end + 2 * MS, [])]
+    clock = end + 2_000 * MS
+    later = []
+    for index in range(41, 61):
+        later.append(scheduled(index, clock, _decode("a", "b")))
+        clock += CADENCE
+        later.append(completed(index, clock, [done("a"), done("b")]))
+
+    signal = engine_loop_gap(_sequenced([*first, *empty, *later]))
+
+    assert signal.exceeds is True
+    assert signal.detail["locus"] == LOCUS_BETWEEN_STEPS
+    assert signal.value is not None and signal.value >= 1_990 * MS
+
+
 def test_a_streaming_request_waiting_for_input_is_not_ready() -> None:
     """A streaming-input request that ran out of input waits for more without
     being scheduled: its gap is the client's, not a stall."""
