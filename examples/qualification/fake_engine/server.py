@@ -6,9 +6,12 @@ import dataclasses
 import json
 import os
 import socket
+import sys
 import threading
 import time
 import traceback
+import typing
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
@@ -45,12 +48,20 @@ class FakeEngine:
         self.spans: SpanExporter | None = None
         # Each exception a request handler raised, with its traceback.
         self.server_errors: list[str] = []
+        # The error of each client that went away before its answer.
+        self.dropped_clients: list[str] = []
 
     # ------------------------------------------------------------ lifecycle
 
     def start(self) -> FakeEngine:
         """Start every part; if one fails, such as the bind, stop the parts
-        already started before raising."""
+        already started before raising.
+
+        Raises:
+            RuntimeError: when it was already started.
+        """
+        if self._server is not None:
+            raise RuntimeError("the fake engine is already started")
         try:
             self._start_parts()
         except BaseException:
@@ -93,7 +104,9 @@ class FakeEngine:
         self._frontend.resume()
         self.engine.stop()
         if self._server is not None:
-            self._server.shutdown()
+            # shutdown() waits for serve_forever to end, so only once it ran.
+            if self._thread is not None:
+                self._server.shutdown()
             self._server.server_close()
         if self._thread is not None:
             self._thread.join(timeout=10)
@@ -167,12 +180,18 @@ class FakeEngine:
             for message in body.get("messages") or []
             if isinstance(message, dict)
         )
-        limit = body.get("max_tokens") or body.get("max_completion_tokens") or 16
+        prompt = prompt_tokens(text)
+        # vLLM 0.30's get_max_tokens: max_completion_tokens before max_tokens,
+        # and never past the model's room after the prompt, the default.
+        asked = body.get("max_completion_tokens")
+        if asked is None:
+            asked = body.get("max_tokens")
+        room = MAX_MODEL_LEN - len(prompt)
         request = FakeRequest(
             internal_id=internal,
             external_id=external,
-            prompt=prompt_tokens(text),
-            max_tokens=max(1, int(limit)),
+            prompt=prompt,
+            max_tokens=max(1, room if asked is None else min(int(asked), room)),
             arrival_ns=time.time_ns(),
             traceparent=traceparent,
             top_p=_sampling(body, "top_p"),
@@ -226,7 +245,15 @@ class _Server(ThreadingHTTPServer):
     fake: FakeEngine
 
     def handle_error(self, request: Any, client_address: Any) -> None:
-        """Print the handler's exception, as the stdlib does, and keep it."""
+        """Print the handler's exception, as the stdlib does, and keep it.
+
+        A client that went away is not a server error: it is counted, with
+        no traceback, so a burst of clients giving up adds no noise.
+        """
+        error = sys.exc_info()[1]
+        if isinstance(error, ConnectionError):
+            self.fake.dropped_clients.append(type(error).__name__)
+            return
         self.fake.server_errors.append(traceback.format_exc())
         super().handle_error(request, client_address)
 
@@ -265,7 +292,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _dispatch(self, routes: dict[str, Route]) -> None:
         handler = routes.get(self.route)
         if handler is None:
-            self.send_json(404, {"error": f"no route {self.route}"})
+            self.send_json(404, {"detail": "Not Found"})  # FastAPI's answer
             return
         if not self.route.startswith("/_fault/"):
             self.fake.wait_frontend()
@@ -288,6 +315,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def send_empty(self, status: int) -> None:
+        """An answer with no body, as Starlette's bare ``Response`` sends."""
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def log_message(self, _format: str, *_args: object) -> None:
         return None
@@ -323,16 +356,43 @@ def _fault_resume(handler: _Handler) -> None:
 
 
 def _fault_controls(handler: _Handler) -> None:
+    """Set switches by name, each to a value of its field's type: a string
+    for a bool would be truthy, and one for a pause would raise on the loop
+    thread. A float takes an integer too."""
     changes = handler.read_json()
     controls = handler.fake.controls
-    names = {field.name for field in dataclasses.fields(controls)}
-    unknown = sorted(set(changes) - names)
+    kinds = typing.get_type_hints(type(controls))
+    unknown = sorted(set(changes) - set(kinds))
     if unknown:
         handler.send_json(400, {"error": f"unknown controls: {', '.join(unknown)}"})
         return
+    wrong = sorted(
+        name for name, value in changes.items() if not _fits(kinds[name], value)
+    )
+    if wrong:
+        handler.send_json(
+            400, {"error": f"controls of the wrong type: {', '.join(wrong)}"}
+        )
+        return
     for name, value in changes.items():
-        setattr(controls, name, value)
+        setattr(controls, name, float(value) if kinds[name] is float else value)
     handler.send_json(200, dataclasses.asdict(controls))
+
+
+def _fits(kind: Any, value: object) -> bool:
+    """Whether ``value`` is of a field's type: bools only for a bool, and an
+    int or a float for a float."""
+    return any(_is_a(option, value) for option in typing.get_args(kind) or (kind,))
+
+
+def _is_a(option: Any, value: object) -> bool:
+    if option is type(None):
+        return value is None
+    if isinstance(value, bool) or option is bool:
+        return option is bool and isinstance(value, bool)
+    if option is float:
+        return isinstance(value, (int, float))
+    return isinstance(value, option)
 
 
 def _fault_state(handler: _Handler) -> None:
@@ -347,6 +407,9 @@ def _fault_state(handler: _Handler) -> None:
             "preemptions": engine.stats.preemptions,
             "engine_paused": engine.paused,
             "frontend_paused": handler.fake.frontend_paused,
+            # A dead loop is not a paused one: it never steps again.
+            "loop_alive": engine.loop_alive,
+            "loop_error": engine.loop_error,
             "pid": os.getpid(),
         },
     )
@@ -425,7 +488,7 @@ def _metrics(handler: _Handler) -> None:
     text = render_metrics(
         fake.engine.metrics_snapshot(), fake.config, fake.engine.start_ns / 1e9
     )
-    handler.send_bytes(200, text.encode(), "text/plain; version=0.0.4")
+    handler.send_bytes(200, text.encode(), "text/plain; version=0.0.4; charset=utf-8")
 
 
 def _start_profile(handler: _Handler) -> None:
@@ -438,7 +501,7 @@ def _start_profile(handler: _Handler) -> None:
         handler.close_connection = True
         handler.connection.shutdown(socket.SHUT_RDWR)
         return
-    handler.send_json(status, {} if status == 200 else {"error": "not configured"})
+    _profile_answer(handler, status)
 
 
 def _stop_profile(handler: _Handler) -> None:
@@ -446,7 +509,17 @@ def _stop_profile(handler: _Handler) -> None:
     profiler = handler.fake.profiler
     assert profiler is not None
     status = profiler.stop()
-    handler.send_json(status, {} if status == 200 else {"error": "not configured"})
+    _profile_answer(handler, status)
+
+
+def _profile_answer(handler: _Handler, status: int) -> None:
+    """vLLM answers an empty 200. Without --profiler-config its routes don't
+    exist, and FastAPI answers {"detail": "Not Found"}; another status gets
+    FastAPI's body for it."""
+    if status == 200:
+        handler.send_empty(200)
+    else:
+        handler.send_json(status, {"detail": HTTPStatus(status).phrase})
 
 
 def _reset_prefix_cache(handler: _Handler) -> None:

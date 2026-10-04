@@ -8,15 +8,17 @@ import os
 import signal
 import socket
 import sys
+import threading
 import time
 import urllib.error
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig, hook_log
 from examples.qualification.fake_engine.__main__ import config_from_args
+from examples.qualification.fake_engine.engine import Engine, EngineObserver
 from examples.qualification.fake_engine.process import (
     ROOT,
     FakeEngineProcess,
@@ -97,6 +99,28 @@ def test_the_controls_route_flips_switches_and_refuses_unknown_ones() -> None:
     assert changed[0] == 200
     assert json.loads(changed[1])["metrics_mode"] == "fail"
     assert (failing, unknown, bad_target) == (500, 400, 400)
+
+
+def test_the_controls_route_refuses_a_value_of_the_wrong_type() -> None:
+    # Fable's #267 gate, P3-6: "false" for a bool was the truthy string
+    # "false", and a string pause raised on the loop thread. Each switch now
+    # takes its field's type; a float takes an integer too.
+    with FakeEngine(FAST) as engine:
+        url = f"{engine.base_url}/_fault/controls"
+        for wrong in (
+            {"stop_writes_trace": "false"},
+            {"stop_pause_seconds": "0.1"},
+            {"profiler_status": True},
+            {"profiler_max_iterations": 2.5},
+        ):
+            assert post(url, json.dumps(wrong).encode())[0] == 400, wrong
+        assert engine.controls.stop_writes_trace is True
+        right = {"stop_writes_trace": False, "stop_pause_seconds": 1,
+                 "profiler_max_iterations": None}  # fmt: skip
+        status, body = post(url, json.dumps(right).encode())
+    assert status == 200
+    assert json.loads(body)["stop_pause_seconds"] == 1.0
+    assert engine.controls.stop_writes_trace is False
 
 
 def test_trace_and_span_switches_are_reachable_over_http(tmp_path: Path) -> None:
@@ -217,6 +241,52 @@ def test_a_failed_bind_stops_everything_started_before_it(tmp_path: Path) -> Non
     engine.stop()  # safe again, and for parts that never started
 
 
+def _returns_within(seconds: float, action: Callable[[], object]) -> bool:
+    """Whether ``action`` returned (or raised) within ``seconds``; what it
+    raised is kept in ``_RAISED``."""
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            action()
+        except Exception as error:
+            _RAISED.append(error)
+        done.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    return done.wait(seconds)
+
+
+_RAISED: list[Exception] = []
+
+
+def test_a_second_start_is_refused_and_stop_still_returns() -> None:
+    # Fable's #267 gate, P3-3: a second start() raised from deep inside, its
+    # cleanup called stop(), and stop() waited forever in shutdown() on a
+    # server whose serve_forever never ran.
+    engine = FakeEngine(FAST).start()
+    _RAISED.clear()
+    try:
+        assert _returns_within(10, engine.start)
+        assert "already started" in str(_RAISED[-1])
+    finally:
+        assert _returns_within(10, engine.stop)
+
+
+def test_a_start_that_fails_after_the_bind_still_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Any failure between building the server and serving it took the same
+    # path: stop() then hung in shutdown().
+    def broken(self: object) -> None:
+        raise RuntimeError("the engine loop would not start")
+
+    monkeypatch.setattr(Engine, "start", broken)
+    engine = FakeEngine(FAST)
+    assert _returns_within(10, engine.start)
+    assert _returns_within(10, engine.stop)
+
+
 def test_a_hook_log_that_fails_to_open_stops_the_writer_it_started(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -232,3 +302,68 @@ def test_a_hook_log_that_fails_to_open_stops_the_writer_it_started(
     with pytest.raises(OSError):
         hook_log.HookLog(tmp_path / "hook", FakeEngineConfig())
     assert [w._thread.is_alive() for w in opened] == [False]
+
+
+@POSIX_SIGNALS
+def test_a_flood_of_client_tracebacks_never_blocks_the_process() -> None:
+    # Fable's #267 final gate, P2-2: clients that give up while the front
+    # end is held each leave a traceback on the child's output. Unread, the
+    # pipe filled and every stop ended in SIGKILL after 10 s, with no
+    # goodbye. Read to the end, the child stops at once and cleanly.
+    with FakeEngineProcess(["--step-seconds", "0.001"]) as server:
+        assert post(f"{server.base_url}/_fault/pause?target=frontend")[0] == 200
+
+        def give_up() -> None:
+            try:
+                get(f"{server.base_url}/health", timeout=0.05)
+            except OSError:
+                pass
+
+        threads = [threading.Thread(target=give_up) for _ in range(150)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert post(f"{server.base_url}/_fault/resume?target=frontend")[0] == 200
+        assert get(f"{server.base_url}/health")[0] == 200
+        started = time.monotonic()
+        assert server.stop() == 0
+        assert time.monotonic() - started < 2.0
+
+
+def test_a_loop_killed_by_an_observer_says_so_and_ends_its_requests() -> None:
+    # Fable's #267 gate, P3-4: an observer that raised ended the loop
+    # silently: the chat hung, and /_fault/state still answered as if the
+    # loop were only paused.
+    class Broken(EngineObserver):
+        def on_scheduled(self, step: object) -> None:
+            raise OSError("the observer's disk is gone")
+
+    with FakeEngine(FAST) as engine:
+        engine.engine.observers.append(Broken())
+        status, _body = post(
+            engine.endpoint,
+            json.dumps({"model": engine.config.model, "max_tokens": 4,
+                        "messages": [{"role": "user", "content": "hi"}]}).encode(),
+            timeout=10,
+        )  # fmt: skip
+        state = json.loads(get(f"{engine.base_url}/_fault/state")[1])
+    assert state["loop_alive"] is False
+    assert "OSError: the observer's disk is gone" in state["loop_error"]
+
+
+def test_resuming_a_timed_pause_ends_its_timer() -> None:
+    # A timed pause arms a timer; resume() used to leave it running, one
+    # daemon thread per abandoned pause until its deadline.
+    from examples.qualification.fake_engine.hold import Hold
+
+    def timers() -> int:
+        return sum(1 for t in threading.enumerate() if isinstance(t, threading.Timer))
+
+    before = timers()
+    hold = Hold()
+    for _ in range(5):
+        hold.pause(30)
+    hold.resume()
+    assert not hold.held
+    assert wait_until(lambda: timers() == before, timeout=2)

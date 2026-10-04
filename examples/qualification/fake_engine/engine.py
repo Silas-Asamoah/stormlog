@@ -15,6 +15,7 @@ import math
 import queue
 import threading
 import time
+import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -187,6 +188,8 @@ class Engine:
         # drain, a call runs at once on the caller's thread.
         self._loop_running = False
         self._stopping = False
+        # Why the loop died, if an exception ended it.
+        self.loop_error: str | None = None
         self._snapshot = self._take_snapshot()
         self._thread = threading.Thread(
             target=self._run, name="fake-engine-core", daemon=True
@@ -290,7 +293,29 @@ class Engine:
 
     # ------------------------------------------------------------ the loop
 
+    @property
+    def loop_alive(self) -> bool:
+        return self._thread.is_alive() and self.loop_error is None
+
     def _run(self) -> None:
+        """The step loop. An exception (an observer that raises, say) ends
+        it, as one ends vLLM's engine core: the traceback is kept in
+        ``loop_error`` and every pending request is aborted, so no client
+        waits on a loop that will never step again."""
+        try:
+            self._loop()
+        except Exception:
+            self.loop_error = traceback.format_exc()
+            with self._lock:
+                pending = [*self.waiting, *self.running]
+            for request in pending:
+                self.abort(request)
+        finally:
+            with self._lock:
+                self._loop_running = False
+            self._run_calls()  # those queued before the loop stopped taking calls
+
+    def _loop(self) -> None:
         while not self._stopping:
             if not self._gate.wait(timeout=0.05):
                 continue
@@ -309,9 +334,6 @@ class Engine:
             self._complete(step)
             if not step.total_tokens and self._has_requests():
                 time.sleep(0.001)  # vLLM's yield after a step that ran nothing
-        with self._lock:
-            self._loop_running = False
-        self._run_calls()  # those queued before the loop stopped taking calls
 
     def _run_calls(self) -> None:
         while True:
@@ -365,6 +387,7 @@ class Engine:
                 self._preempt(self.running[-1], preempted)
                 if request.status != "RUNNING":
                     return budget
+            self._cache_allocated(request, want)
             members.append(self._member(request, want))
             budget -= want
             index += 1
@@ -391,6 +414,7 @@ class Engine:
             request.computed = computed
             # It fits, so this takes every block it needs.
             self._grow(request, want)
+            self._cache_allocated(request, want)
             self.waiting.popleft()
             self.running.append(request)
             self._admit(request)
@@ -523,7 +547,6 @@ class Engine:
             raise AssertionError(f"{request.internal_id} was preempted mid-step")
         request.computed += member.tokens
         request.committed = request.computed
-        self._cache_full_blocks(request)
         if not member.sampled:
             return
         self._sample(request)
@@ -532,10 +555,14 @@ class Engine:
             member.finish_reason = "length"
             freed.append(request)
 
-    def _cache_full_blocks(self, request: FakeRequest) -> None:
-        """Cache every full computed block, generated tokens included, as
-        vLLM does."""
-        full = request.computed // self.config.block_size
+    def _cache_allocated(self, request: FakeRequest, scheduled: int) -> None:
+        """Cache every full block the step will compute, generated tokens
+        included, when its slots are allocated, as vLLM's allocate_slots does:
+        up to the computed tokens plus those scheduled now, never past the
+        tokens the request has. A request admitted later in the same step
+        then hits them, instead of computing and caching its own copy."""
+        upto = min(request.computed + scheduled, request.num_tokens)
+        full = upto // self.config.block_size
         if len(request.block_hashes) < full:
             request.block_hashes = self.pool.block_hashes(request.tokens)
         for index in range(min(full, len(request.block_hashes))):

@@ -151,12 +151,17 @@ series vLLM exports:
 - **KV blocks.** When they run out, the newest running request is preempted
   and recomputed, as vLLM's scheduler does.
 - **Prefix cache.** Every full block is hashed and cached, generated tokens
-  included, so a request resumed after preemption reuses blocks past its
-  prompt. Freed blocks keep their hashes in an LRU queue, so a shared prefix
-  is reused until other traffic evicts it. A waiting request takes its hits
+  included, when its slots are allocated, as vLLM's `allocate_slots` does: a
+  request admitted later in the same step already hits the blocks an earlier
+  one will compute. A request resumed after preemption reuses blocks past its
+  prompt. Freed blocks keep their hashes in an LRU queue, a request's last
+  block first, so a shared prefix is reused until other traffic evicts it;
+  a freed block with no hash is reused first, as in vLLM, so it never costs a
+  cached block its place. A waiting request takes its hits
   only once its whole allocation fits, so a refused admission leaves them
   where they were in the queue. Two requests that compute the same
-  block each cache a copy, and a hit lasts while either copy stays. As in
+  block before either is cached (the second's lookup ran first) each cache a
+  copy, and a hit lasts while either copy stays. As in
   vLLM, the exported prefix-cache counters count each request's first
   admission only, and nothing with caching off; a resumed request's lookups
   are kept apart.
@@ -181,9 +186,11 @@ with FakeEngine(config) as engine:
 It listens with uvicorn's backlog of 2048, as vLLM's API server does, so a
 burst of clients is never refused. `engine.server_errors` keeps the traceback
 of any exception a request handler raised, for a test to assert there were
-none. If a part fails to start, such as the bind to a busy port, `start()`
-stops the parts already started before it raises, and `stop()` is safe to
-call again.
+none. A client that went away before its answer is not one of them: it is
+counted in `engine.dropped_clients`, with no traceback printed. If a part
+fails to start, such as the bind to a busy port, `start()` stops the parts
+already started before it raises, and `stop()` is safe to call again,
+whatever step failed. A second `start()` is refused.
 
 Generated identities (request IDs without an `X-Request-Id`, vLLM's random
 suffixes, span and trace IDs) are random unless `seed` is set; with a seed
@@ -199,16 +206,19 @@ python -m examples.qualification.fake_engine --port 0 --step-seconds 0.001
 
 It prints `FAKE_ENGINE_URL=<url> PID=<pid>` once it serves.
 `FakeEngineProcess` starts it from a test and always continues it before
-stopping it.
+stopping it. It reads the child's output to the end, keeping the last lines
+in `output_tail`: an unread pipe filled with the tracebacks of clients that
+gave up, and the child then blocked on every write, so a stop ended in
+SIGKILL with no goodbye.
 
 What it serves, as vLLM 0.30.0 does:
 
 | Route | Behaviour |
 | --- | --- |
-| `POST /v1/chat/completions` | Streamed or whole, with usage. A request is named `chatcmpl-<X-Request-Id>`, plus vLLM's random suffix unless `request_id_randomization=False` |
+| `POST /v1/chat/completions` | Streamed or whole, with usage. A request is named `chatcmpl-<X-Request-Id>`, plus vLLM's random suffix unless `request_id_randomization=False`. The token cap is `max_completion_tokens`, else `max_tokens`, at most the room left after the prompt in the 4096-token context, which is also the default, as in vLLM 0.30 |
 | `GET /metrics` | Every `vllm:` family a recorded vLLM 0.30.0 page has, with its labels and histogram buckets. Families this engine never moves (performance estimates, a KV connector's cache, the multi-modal cache) stay at zero, and it never sleeps. Every waiting request is labelled `capacity`: vLLM labels only its skipped queue `deferred`, which this engine has no reason to use. The page is taken after each step, so it holds the last step's values while the loop is paused |
 | `POST /reset_prefix_cache` | Runs on the step loop between steps, as vLLM's utility calls do (at once on an `Engine` whose steps a test drives by hand). `{"success": false}` while blocks are held. With `reset_running_requests=true`, it preempts every running request first, and the next step lists them in its `preempted` |
-| `POST /start_profile`, `/stop_profile` | Run between steps, with a configurable stop pause. Repeated calls answer 200. The stop writes a gzipped `rank0.*.pt.trace.json.gz` whose iteration ranges name the hook's steps, streamed into its final name as torch's export does, so a reader can find it truncated while it is written (`trace_write_seconds`). As in vLLM by default, it then writes `profiler_out_0.txt`, a kernel table, beside the trace (off with `torch_profiler_dump_cuda_time_total=False`). Stopping the engine stops an open window and finishes any delayed write before it returns, as vLLM's worker shuts its profiler down. Without `trace_dir` both answer 404 |
+| `POST /start_profile`, `/stop_profile` | Run between steps, with a configurable stop pause. Repeated calls answer 200. The stop writes a gzipped `rank0.<ns>.pt.trace.json.gz`, named as vLLM's worker names it, whose iteration ranges name the hook's steps, streamed into its final name as torch's export does, so a reader can find it truncated while it is written (`trace_write_seconds`). As in vLLM by default, it then writes `profiler_out_0.txt`, a kernel table, beside the trace (off with `torch_profiler_dump_cuda_time_total=False`). Stopping the engine stops an open window and finishes any delayed write before it returns, as vLLM's worker shuts its profiler down. Each answers an empty 200, as vLLM's do. Without `trace_dir` both answer FastAPI's 404, `{"detail": "Not Found"}`, as an unknown route does |
 | `GET /server_info`, `/version`, `/v1/models`, `/health` | Descriptive answers |
 
 **Optional outputs:**
@@ -235,9 +245,9 @@ is held:
 | Control | Effect |
 | --- | --- |
 | `pause?target=engine` / `frontend` (`&seconds=S`), `resume` | Hold the step loop, or every API answer while the engine keeps stepping. Pauses stack: the hold ends when the last of them does, and `resume` ends them all |
-| `controls` (JSON body) | Set any switch in `Controls`: profiler status, start and stop pauses, a lost start answer, a stop without a trace, a `max_iterations` self-stop (taken, as in vLLM, when the step after the last profiled one starts), a slow or delayed trace write, a failing or slow `/metrics`, late or duplicated spans |
+| `controls` (JSON body) | Set any switch in `Controls`, each to a value of its type (400 otherwise; a float takes an integer): profiler status, start and stop pauses, a lost start answer, a stop without a trace, a `max_iterations` self-stop (taken, as in vLLM, when the step after the last profiled one starts), a slow or delayed trace write, a failing or slow `/metrics`, late or duplicated spans |
 | `foreign_trace`, `span_body?kind=oversized` / `gzip_bomb` | Drop a trace outside any window; send a span body the receiver must refuse |
-| `state` | Steps, queue, preemptions, and whether each side is paused |
+| `state` | Steps, queue, preemptions, whether each side is paused, and whether the step loop is alive: an exception that ends the loop (an observer that raises, say) is kept in `loop_error`, and every pending request is aborted, as an exception ends vLLM's engine core |
 | `kill` | Exit at once, like SIGKILL (subprocess mode only) |
 
 **Not modeled:**

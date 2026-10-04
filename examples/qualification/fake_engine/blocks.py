@@ -3,7 +3,9 @@
 Free blocks wait in an LRU queue; a freed block keeps its hash, so a later
 request with the same prefix can reuse it until an allocation evicts it from
 the queue's head. A request's last full blocks are freed first, as in vLLM, so
-they are evicted first. Like vLLM's ``BlockHashToBlockMap``, a hash keeps every
+they are evicted first. A freed block with no hash (a partial last block, or
+any block with caching off) goes to the queue's head, as vLLM reuses those
+first, so it never costs a cached block its place. Like vLLM's ``BlockHashToBlockMap``, a hash keeps every
 block cached under it, so evicting one copy leaves the others' hits.
 """
 
@@ -123,12 +125,21 @@ class BlockPool:
         self.evictions += 1
 
     def free(self, block_ids: Sequence[int]) -> None:
-        """Drop references, last block first; idle blocks join the queue's tail."""
+        """Drop references, last block first. Idle cached blocks join the
+        queue's tail; idle blocks without a hash go to its head, in that
+        order (vLLM's BlockPool.free_blocks prepends them)."""
+        first: list[int] = []
         for block_id in reversed(block_ids):
             block = self.blocks[block_id]
             block.ref_count -= 1
             if block.ref_count == 0:
-                self._free[block_id] = None
+                if block.block_hash is None:
+                    first.append(block_id)
+                else:
+                    self._free[block_id] = None
+        for block_id in reversed(first):
+            self._free[block_id] = None
+            self._free.move_to_end(block_id, last=False)
 
     def reset(self) -> bool:
         """vLLM's reset: refused while any block is held, else forget hashes."""

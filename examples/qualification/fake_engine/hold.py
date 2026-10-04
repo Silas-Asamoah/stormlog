@@ -18,6 +18,8 @@ class Hold:
         self._lock = threading.Lock()
         # On the monotonic clock; infinite while an untimed pause holds.
         self._until = 0.0
+        # The timers of timed pauses, cancelled when resume() ends them all.
+        self._timers: list[threading.Timer] = []
 
     @property
     def held(self) -> bool:
@@ -35,6 +37,9 @@ class Hold:
         with self._lock:
             self._until = 0.0
             self._open.set()
+            timers, self._timers = self._timers, []
+        for timer in timers:
+            timer.cancel()
 
     def wait(self, timeout: float | None = None) -> bool:
         return self._open.wait(timeout)
@@ -42,6 +47,8 @@ class Hold:
     def _arm(self, seconds: float) -> None:
         timer = threading.Timer(seconds, self._expire)
         timer.daemon = True
+        with self._lock:
+            self._timers = [t for t in self._timers if t.is_alive()] + [timer]
         timer.start()
 
     def _expire(self) -> None:

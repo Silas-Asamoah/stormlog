@@ -5,9 +5,11 @@ from __future__ import annotations
 import gzip
 import http.client
 import json
+import re
 import threading
 import time
 import urllib.error
+import urllib.request
 from collections import Counter
 from pathlib import Path
 
@@ -52,7 +54,8 @@ def test_a_window_writes_a_trace_whose_gpu_work_links_to_steps(tmp_path: Path) -
     index_spans(trace)
     links = [link_gpu_event(trace, event) for event in trace.gpu_events]
     assert (started, stopped) == (200, 200)
-    assert path.name.startswith("rank0.")
+    # Named as vLLM's worker names it: rank0.<ns>.pt.trace.json.gz.
+    assert re.fullmatch(r"rank0\.\d+\.pt\.trace\.json\.gz", path.name)
     assert links and all(link.iteration_ref is not None for link in links)
 
 
@@ -113,14 +116,29 @@ def test_the_stop_holds_the_step_loop(tmp_path: Path) -> None:
 
 def test_a_server_without_a_profiler_refuses_both_routes(tmp_path: Path) -> None:
     with FakeEngine(FakeEngineConfig(step_seconds=0.001)) as engine:
-        unconfigured = post(f"{engine.base_url}/start_profile")[0]
+        unconfigured = post(f"{engine.base_url}/start_profile")
     with _engine(tmp_path, profiler_status=503) as engine:
         refused = (
             post(f"{engine.base_url}/start_profile")[0],
             post(f"{engine.base_url}/stop_profile")[0],
         )
-    assert unconfigured == 404
+    # Without --profiler-config vLLM never adds the routes: FastAPI's 404.
+    assert unconfigured == (404, b'{"detail": "Not Found"}')
     assert refused == (503, 503)
+
+
+def test_the_profile_routes_answer_an_empty_200_and_metrics_names_its_charset(
+    tmp_path: Path,
+) -> None:
+    # vLLM's routes return a bare Response(status_code=200); its /metrics is
+    # prometheus_client's text format in UTF-8.
+    with _engine(tmp_path) as engine:
+        started = post(f"{engine.base_url}/start_profile")
+        stopped = post(f"{engine.base_url}/stop_profile")
+        with urllib.request.urlopen(engine.metrics_url) as answer:
+            content_type = answer.headers["Content-Type"]
+    assert started == (200, b"") and stopped == (200, b"")
+    assert content_type == "text/plain; version=0.0.4; charset=utf-8"
 
 
 def test_a_start_whose_answer_is_lost_still_starts_the_profiler(

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
+import socket
+import struct
 import threading
 import time
 from functools import partial
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 import pytest
 
@@ -61,6 +65,29 @@ def test_a_whole_completion_answers_once() -> None:
         (body,) = chat(engine, words(8, "b"), max_tokens=3, stream=False)
     assert body["choices"][0]["message"]["content"] == " tok" * 3
     assert body["usage"]["completion_tokens"] == 3
+
+
+@pytest.mark.parametrize(
+    ("asked", "expected"),
+    [
+        ({}, 4096 - 9),
+        ({"max_tokens": 3, "max_completion_tokens": 2}, 2),
+        ({"max_tokens": 3, "max_completion_tokens": None}, 3),
+        ({"max_tokens": 10_000}, 4096 - 9),
+    ],
+)
+def test_a_requests_token_cap_follows_vllm_030(
+    asked: dict[str, object], expected: int
+) -> None:
+    # vLLM 0.30's get_max_tokens: max_completion_tokens wins, and the cap
+    # is the model's room after the prompt (max_model_len 4096), which is
+    # also the default; the fake engine used 16.
+    with FakeEngine(FAST) as engine:
+        body = {"messages": [{"role": "user", "content": words(5, "a")}], **asked}
+        request = engine.new_request(body, None, None)
+        assert request.prompt_len == 9  # the template, then five words
+        engine.engine.abort(request)
+    assert request.max_tokens == expected
 
 
 def test_request_ids_follow_vllm_030() -> None:
@@ -167,6 +194,27 @@ def test_a_hash_cached_twice_keeps_its_hit_while_either_copy_stays() -> None:
     pool.free([first])
     assert pool.allocate(1) == [first]
     assert pool.lookup([block_hash], 5) == [second]
+
+
+def test_freed_blocks_are_queued_for_reuse_as_in_vllm() -> None:
+    # vLLM's BlockPool.free_blocks: a block without a hash is reused first
+    # (prepended), so it never costs a cached block its place; cached
+    # blocks queue at the tail, a request's last block first, so its tail
+    # blocks are evicted before its head (Fable's #267 gate, P3-1 and M10).
+    pool = BlockPool(4, 4, caching=True)
+    prompt = pool.allocate(2)
+    assert prompt == [0, 1]
+    hashes = pool.block_hashes([str(n) for n in range(8)])
+    pool.cache(0, hashes[0])
+    pool.cache(1, hashes[1])
+    scratch = pool.allocate(2)
+    pool.free(prompt)
+    pool.free(scratch or [])
+    assert pool.allocate(1) == [3]
+    assert pool.evictions == 0 and pool.lookup(hashes, 9) == [0, 1]
+    # Then the uncached block, then the prompt's last block before its first.
+    assert pool.allocate(2) == [2, 1]
+    assert pool.lookup(hashes, 9) == [0]
 
 
 def test_descriptive_routes_answer_like_vllm() -> None:
@@ -305,6 +353,24 @@ def _step(engine: Engine) -> Step:
 def _preempt(engine: Engine, request: FakeRequest) -> None:
     with engine._lock:
         engine._preempt(request, [])
+
+
+def test_a_request_admitted_in_the_same_step_hits_its_siblings_blocks() -> None:
+    # vLLM caches a request's full blocks when its slots are allocated
+    # (KVCacheManager.allocate_slots), so a second request with the same
+    # prompt admitted later in the same schedule() hits them. Caching only
+    # after the step completed gave it no hits, and each request its own copy.
+    engine = _stepped_engine()
+    first = _request(engine, "a", words(40, "p"), max_tokens=2)
+    second = _request(engine, "b", words(40, "p"), max_tokens=2)
+    step = _step(engine)
+    assert [member.request for member in step.members] == [first, second]
+    assert first.prompt_len == 44
+    # The lookup leaves the last prompt token to compute: 10 blocks of 4.
+    assert (first.cached_at_admission, second.cached_at_admission) == (0, 40)
+    assert engine.stats.prefix_hits == 40
+    assert second.block_ids[:10] == first.block_ids[:10]
+    assert engine.pool.held_count() == 11 + 1
 
 
 def test_a_resumed_request_reuses_its_own_generated_blocks() -> None:
@@ -474,6 +540,52 @@ def test_a_burst_of_connections_is_never_reset() -> None:
     assert (errors, server_errors) == ([], [])
 
 
+def test_a_client_that_goes_away_is_counted_not_reported() -> None:
+    # Fable's #267 final gate: each client that gave up while the front end
+    # was held printed a traceback and filled server_errors, which a test
+    # reads as a fault of the fake engine.
+    with FakeEngine(FAST) as engine:
+        address = urlparse(engine.base_url).netloc
+        clients = [http.client.HTTPConnection(address) for _ in range(5)]
+        for client in clients:
+            # Answered first, so the server holds each connection open.
+            client.request("GET", "/health")
+            assert client.getresponse().read() == b""
+        assert post(f"{engine.base_url}/_fault/pause?target=frontend")[0] == 200
+        for client in clients:
+            client.request("GET", "/health")
+            # Linger 0: the close resets the connection at once.
+            client.sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+            client.close()
+        assert post(f"{engine.base_url}/_fault/resume?target=frontend")[0] == 200
+        assert wait_until(lambda: len(engine.dropped_clients) == 5)
+        assert get(f"{engine.base_url}/health")[0] == 200
+        server_errors = list(engine.server_errors)
+    assert server_errors == []
+
+
+def test_a_handler_error_is_reported_not_counted_as_a_dropped_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Fable's closure of #276: only a client that went away is counted and
+    # kept quiet. A handler that raises anything else is a fault of the fake
+    # engine, and it still reaches server_errors.
+    def broken(self: FakeEngine) -> dict[str, object]:
+        raise ValueError("server_info broke")
+
+    monkeypatch.setattr(FakeEngine, "server_info", broken)
+    with FakeEngine(FAST) as engine:
+        with pytest.raises(OSError):
+            get(f"{engine.base_url}/server_info")
+        assert wait_until(lambda: len(engine.server_errors) == 1)
+        server_errors = list(engine.server_errors)
+        dropped = list(engine.dropped_clients)
+    assert "ValueError: server_info broke" in server_errors[0]
+    assert dropped == []
+
+
 def test_resets_while_requests_run_break_no_connection() -> None:
     config = FakeEngineConfig(
         step_seconds=0.0005, decode_token_seconds=0.0001, max_num_seqs=64
@@ -606,3 +718,74 @@ def test_kv_exhaustion_preempts_the_last_admitted_request() -> None:
     assert _step(engine).preempted == [c.internal_id]
     ids = (a.internal_id, b.internal_id, c.internal_id)
     assert engine.preemption_log == [(c.internal_id, ids)]
+
+
+# ------------------------------------------------------------------ pinned by mutation
+# Fable's #267 final gate (P3-2): each vLLM rule below survived a mutation.
+
+
+def test_a_step_that_preempts_admits_no_waiting_request() -> None:
+    # scheduler.py:855: only a step with no preemption of its own admits.
+    # Four blocks of 4: a (8 tokens) and b (the 4-token template, the block
+    # a's prompt starts with) are admitted, and c (9 tokens) waits. When a
+    # needs a third block, b is preempted; b could be admitted again at once
+    # from its cached block, but not in the step that preempted it.
+    engine = _stepped_engine(num_gpu_blocks=4)
+    a = _request(engine, "a", words(4, "a"), max_tokens=8)
+    b = _request(engine, "b", "", max_tokens=8)
+    _request(engine, "c", words(5, "c"), max_tokens=8)
+    assert [member.request for member in _step(engine).members] == [a, b]
+    step = _step(engine)
+    assert [member.request for member in step.members] == [a]
+    assert step.preempted == [b.internal_id]
+    assert [request.external_id for request in engine.waiting] == ["b", "c"]
+
+
+def test_stopping_aborts_every_pending_request() -> None:
+    # A stream still waiting when the engine stops ends, aborted, instead of
+    # hanging past the stop.
+    engine = _stepped_engine()
+    running = _request(engine, "r", words(4, "r"), max_tokens=8)
+    _step(engine)
+    waiting = _request(engine, "w", words(4, "w"), max_tokens=8)
+    engine.stop()
+    assert running.finished and waiting.finished
+
+
+def test_a_reset_preempts_newest_first_and_clears_its_victims_once_listed() -> None:
+    # scheduler.py:2703-2707 preempts the newest running request first, so
+    # the waiting queue keeps arrival order; :1568 clears the reset's victims
+    # once a SchedulerOutput has carried them.
+    engine = _stepped_engine()
+    for name in "abc":
+        _request(engine, name, words(4, name), max_tokens=8)
+    _step(engine)
+    victims = [request.internal_id for request in engine.running]
+    assert engine.reset_prefix_cache(True) is True
+    assert [request.external_id for request in engine.waiting] == ["a", "b", "c"]
+    assert sorted(_step(engine).preempted) == sorted(victims)
+    assert _step(engine).preempted == []
+
+
+def test_the_hook_names_cached_at_admission_on_the_first_sighting_only(
+    tmp_path: Path,
+) -> None:
+    # The real hook writes it once, at admission, and None on every later
+    # sighting (vllm_hook/engine.py).
+    from examples.qualification.fake_engine.hook_log import _scheduled_member
+
+    engine = _stepped_engine()
+    _request(engine, "r", words(4, "r"), max_tokens=4)
+    first = _scheduled_member(_step(engine).members[0])
+    later = _scheduled_member(_step(engine).members[0])
+    assert first["cached_at_admission"] == 0
+    assert later["sighting"] == "repeat" and later["cached_at_admission"] is None
+
+
+def test_a_histogram_bucket_includes_its_bound() -> None:
+    # Prometheus buckets are le: a value on a bound counts in that bucket.
+    from examples.qualification.fake_engine.stats import Histogram
+
+    histogram = Histogram(bounds=(0.1, 0.5))
+    histogram.observe(0.5)
+    assert histogram.cumulative()[:2] == [0, 1]
