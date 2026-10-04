@@ -51,11 +51,13 @@ class Watchdog:
         """Shut ``sock`` down when the clock passes ``deadline``; returns a token.
 
         ``ValueError`` for a closed or detached socket, which no shutdown
-        could reach.
+        could reach; ``RuntimeError`` once the watchdog has stopped.
         """
         if sock.fileno() == -1:
             raise ValueError("a closed or detached socket cannot be armed")
         with self._cond:
+            if self._stopped:
+                raise RuntimeError("the watchdog has stopped")
             self._next_token += 1
             token = self._next_token
             self._sockets[token] = sock

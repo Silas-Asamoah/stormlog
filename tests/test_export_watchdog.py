@@ -115,3 +115,16 @@ def test_a_closed_socket_cannot_be_armed() -> None:
             watchdog.arm(sock, time.monotonic() + 1)
     finally:
         watchdog.stop()
+
+
+def test_arming_a_stopped_watchdog_is_refused() -> None:
+    # Its thread is gone, so the deadline would never fire.
+    watchdog = Watchdog()
+    watchdog.stop()
+    near, far = socket.socketpair()
+    try:
+        with pytest.raises(RuntimeError, match="stopped"):
+            watchdog.arm(near, time.monotonic() + 0.05)
+    finally:
+        near.close()
+        far.close()
