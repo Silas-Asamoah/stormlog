@@ -24,6 +24,7 @@ from stormlog.infer.qualify.recovery import (
     effect_timing,
     held_from,
     next_episode,
+    observation_of,
     priming_check,
     realization,
 )
@@ -479,3 +480,25 @@ def test_a_queue_twin_without_baseline_waits_never_recovers() -> None:
     timing = effect_timing("T1", ctx)
     assert timing.onset_ns == 60 * S
     assert timing.end_ns is None
+
+
+def test_a_missing_reference_signal_leaves_its_check_incomplete() -> None:
+    # T3b's engine-wide hit ratio comes from scrapes. With none, the check
+    # can't be judged: it neither fails the twin nor passes it, and the
+    # observation is incomplete. The victim's own check still decides.
+    cached = every_second(0, 200, lambda s: 0.95)
+    ctx = context(
+        Signals(in_flight=None, cached_fraction=cached), Actions(first_send_ns=60 * S)
+    )
+    realized, checks = realization("T3b", ctx, effect_timing("T3b", ctx))
+    assert realized
+    assert [(c.name, c.incomplete) for c in checks] == [
+        ("cached_fraction_unchanged", False),
+        ("engine_hit_ratio_fell", True),
+    ]
+    assert checks[1].to_record()["incomplete"] is True
+    assert observation_of(checks) == "incomplete"
+    # With every gating check incomplete, nothing was judged: not realized.
+    bare = context(Signals(in_flight=None), Actions(first_send_ns=60 * S))
+    realized, checks = realization("T3", bare, effect_timing("T3", bare))
+    assert not realized and observation_of(checks) == "incomplete"

@@ -703,12 +703,16 @@ _TIMED_BY_ACTIONS: dict[str, Callable[[Context], Timing]] = {
 @dataclass(frozen=True)
 class Check:
     """One realization check, as recorded in the ground truth. A check that
-    doesn't gate is recorded only, as when it adds a realized mechanism."""
+    doesn't gate is recorded only, as when it adds a realized mechanism. An
+    incomplete check had no signal to judge (the reference channel lacked
+    it): it neither passes nor fails, and the episode's observation is
+    incomplete."""
 
     name: str
     passed: bool
     value: Any = None
     gating: bool = True
+    incomplete: bool = False
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -717,7 +721,12 @@ class Check:
             "passed": self.passed,
             "value": self.value,
             "gating": self.gating,
+            "incomplete": self.incomplete,
         }
+
+
+def _absent(name: str) -> Check:
+    return Check(name, False, None, incomplete=True)
 
 
 def realization(
@@ -732,7 +741,16 @@ def realization(
             C.6's outage criteria) among them.
     """
     checks = _REALIZATION[base_type(episode_type)](context, timing)
-    return all(check.passed for check in checks if check.gating), checks
+    gating = [check for check in checks if check.gating]
+    judged = [check for check in gating if not check.incomplete]
+    if gating and not judged:
+        return False, checks  # nothing could be judged: never realized vacuously
+    return all(check.passed for check in judged), checks
+
+
+def observation_of(checks: Sequence[Check]) -> str | None:
+    """``incomplete`` when a check had no signal to judge, else None."""
+    return "incomplete" if any(check.incomplete for check in checks) else None
 
 
 def added_mechanisms(episode_type: str, checks: Sequence[Check]) -> tuple[str, ...]:
@@ -789,28 +807,25 @@ def _realized_cache_loss(context: Context, timing: Timing) -> list[Check]:
 
 
 def _hit_ratio_fell(context: Context, timing: Timing) -> list[Check]:
-    """T3b: the engine-wide hit ratio falls, though the victim's doesn't."""
+    """T3b: the engine-wide hit ratio falls, though the victim's doesn't.
+    Without the ratio in the baseline or the episode, it is incomplete."""
     start, end = _window_of(context, timing)
     values = between(context.signals.engine_hit_ratio, start, end)
-    median = statistics.median(values) if values else None
+    if not values or not context.baseline.hit_ratio_count:
+        return [_absent("engine_hit_ratio_fell")]
+    median = statistics.median(values)
     ceiling = context.baseline.hit_ratio_median - context.thresholds.hit_ratio_drop
-    return [
-        Check("engine_hit_ratio_fell", median is not None and median <= ceiling, median)
-    ]
+    return [Check("engine_hit_ratio_fell", median <= ceiling, median)]
 
 
 def _cache_unchanged(context: Context, timing: Timing) -> list[Check]:
     start, end = _window_of(context, timing)
     values = between(context.signals.cached_fraction, start, end)
-    median = statistics.median(values) if values else None
+    if not values:
+        return [_absent("cached_fraction_unchanged")]
+    median = statistics.median(values)
     threshold = context.thresholds.cached_recovered_at
-    return [
-        Check(
-            "cached_fraction_unchanged",
-            median is not None and median >= threshold,
-            median,
-        )
-    ]
+    return [Check("cached_fraction_unchanged", median >= threshold, median)]
 
 
 def _stopped(context: Context, timing: Timing) -> list[Check]:
@@ -964,6 +979,7 @@ __all__ = [
     "first_window",
     "held_from",
     "next_episode",
+    "observation_of",
     "priming_check",
     "quantile",
     "realization",

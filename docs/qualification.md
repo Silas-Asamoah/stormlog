@@ -233,7 +233,14 @@ confirmed, and pulses the injector never recorded are among the tests.
 Each check is judged over the effect and the whole action (to
 `Actions.action_end_ns`): a twin leaves the signals alone, so its effect
 window is empty, but its neighbor runs on. Each check is recorded with its
-value, and whether it gates. A type with no
+value, and whether it gates.
+
+**A missing reference signal leaves its check incomplete.** When the
+reference channel has no samples for a check (no scraped hit ratio in the
+baseline or the episode, say), the check neither passes nor fails; it is
+recorded `incomplete`, and `observation_of` makes the episode's observation
+`incomplete`. The other checks decide. An episode whose every gating check is
+incomplete is not realized: nothing was judged. A type with no
 rule, a typo such as `F4A` or the outages X1–X3 (judged by C.6's own
 criteria), raises `KeyError` rather than passing vacuously.
 
