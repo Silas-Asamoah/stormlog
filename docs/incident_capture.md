@@ -14,11 +14,18 @@ Each incident is one directory under `<watch root>/incidents/`:
 
 ```text
 inc-20261003T120000Z-0001-1f2e3d4c/
-  .lock            readers hold it shared; deletion takes it exclusively
+  .lock            readers, and the generation's writer, hold it shared;
+                   deletion takes it exclusively
   gen-0/           written when the incident is sealed
   gen-1/           written by finalization, next to gen-0 until it is published
   manifest.json    names the current generation and lists its files
 ```
+
+One process owns a store: it holds `incidents/.store.lock` exclusively for
+its lifetime, and a second one on the same root fails at once
+(`StoreInUse`). A generation is pinned while it is written, so no deletion
+can take it from under its writer, and it is published only if every file
+the writer put in it is still there.
 
 ### Publication
 
