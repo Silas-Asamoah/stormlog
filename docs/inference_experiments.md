@@ -88,9 +88,12 @@ identical times.
 
 `stormlog.infer.experiment.run_plan(plan, output_dir)` runs each block in
 the plan's order. Before a block's first run it runs the block's preludes;
-a prelude that fails marks the block's runs `prelude_failed`, and one whose
-server leaves processes (`prelude_failed:<name>:cleanup_unverified`) stops
-the experiment, as a run's cleanup does (below). Each run then:
+a prelude that fails marks the block's runs `prelude_failed`. One whose
+server or step leaves processes, or that finds the server's port taken,
+stops the experiment before any of the block's runs, as a run's cleanup
+does (below): each is indexed `not_run`, with `stopped_after: prelude
+b<block>-<name>`. A resume runs no prelude for a block none of whose arms
+will start an attempt. Each run then:
 
 1. checks nothing already accepts connections on the server's port
    (`server_port_in_use` stops the experiment: launching would measure the
