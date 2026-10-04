@@ -195,6 +195,7 @@ class InjectionRun:
         self.failure: str | None = None
         self._lock = threading.Lock()
         self._stop_polling = threading.Event()
+        self._closed = False
 
     # ------------------------------------------------------------ the run
 
@@ -232,7 +233,7 @@ class InjectionRun:
     ) -> Path:
         if victim is not None:
             self._stop_victim(victim)
-        self._stop_polling.set()
+        self._close_channel()
         poller.join(timeout=10)
         self.failure = progress.failure
         self._write_truth(progress)
@@ -520,11 +521,24 @@ class InjectionRun:
         )
 
     def _poll_loop(self) -> None:
-        """Read the hook and scrape once a second."""
+        """Read the hook and scrape once a second. A poll that fails is
+        recorded in ``probes/poll-errors.jsonl``, and polling goes on."""
         while not self._stop_polling.wait(self.poll_seconds):
             with self._lock:
+                if self._closed:
+                    return
                 assert self.channel is not None
-                self.channel.poll()
+                try:
+                    self.channel.poll()
+                except Exception as error:  # the judge must outlive one bad poll
+                    _append_error(self.directory.probes / "poll-errors.jsonl", error)
+
+    def _close_channel(self) -> None:
+        """Stop polling: the lock waits out a poll in progress, so nothing is
+        appended to the run once it is hashed."""
+        self._stop_polling.set()
+        with self._lock:
+            self._closed = True
 
     def _signals(self) -> Signals:
         """The signals so far, with the hook read up to now (scrapes stay at
@@ -623,6 +637,11 @@ def _impact(
     effect = count_outcomes(records, timing.onset_ns, timing.end_ns, slo)
     reference = count_outcomes(records, baseline[0], baseline[1], slo)
     return assess_impact(effect, reference)
+
+
+def _append_error(path: Path, error: Exception) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"at_ns": time.time_ns(), "error": repr(error)}) + "\n")
 
 
 @dataclass(frozen=True)

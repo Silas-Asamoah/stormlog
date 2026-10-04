@@ -265,3 +265,47 @@ def test_a_run_that_fails_is_published_with_its_reason(tmp_path: Path) -> None:
     assert "before measuring" in record.protocol_failure
     (skipped,) = load_injections(run / "truth" / "injections.jsonl")
     assert skipped.status in ("protocol_failure", "not_actuated")
+
+
+class _FlakyChannel:
+    """A reference channel whose first poll raises."""
+
+    def __init__(self) -> None:
+        self.polls = 0
+
+    def poll(self, *, scrape: bool = True) -> None:
+        self.polls += 1
+        if self.polls == 1:
+            raise OSError("disk full")
+
+
+def test_the_reference_poller_survives_a_failed_poll_and_stops_cleanly(
+    tmp_path: Path,
+) -> None:
+    import threading
+    import time
+
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    directory = RunDirectory(tmp_path / "runs", "q221-x").create()
+    run = InjectionRun(
+        parse_plan(record), directory, Server("http://127.0.0.1:9", "m", tmp_path),
+        poll_seconds=0.01,
+    )  # fmt: skip
+    channel = _FlakyChannel()
+    run.channel = channel  # type: ignore[assignment]
+    poller = threading.Thread(target=run._poll_loop, daemon=True)
+    poller.start()
+    assert wait_until(lambda: channel.polls >= 3)
+    errors = (directory.probes / "poll-errors.jsonl").read_text()
+    assert "disk full" in errors
+    # Closing waits out any poll in progress; none follows it.
+    run._close_channel()
+    polls = channel.polls
+    time.sleep(0.1)
+    assert channel.polls == polls
+    poller.join(timeout=5)
+    assert not poller.is_alive()

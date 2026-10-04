@@ -467,7 +467,11 @@ reader:
   never reads a record twice; a sealed segment continues from where its
   `.part` was read. It notes when each record was first seen
   (`probes/hook-firstseen.jsonl`) and when each segment was sealed
-  (`probes/seal-observations.jsonl`). The replay uses these times to cut the
+  (`probes/seal-observations.jsonl`). A damaged line (a torn write) is
+  skipped and counted, and a segment found shorter than what was read is
+  read again; both are noted in `probes/hook-problems.jsonl`. The harness's
+  poller records a poll that fails in `probes/poll-errors.jsonl` and polls
+  on; it stops, a poll in progress waited out, before the run is hashed. The replay uses these times to cut the
   hook log to what an online analyzer could have read.
 - **`VictimView`** keeps the victim's series from the engine's records. Victim
   requests are the ones whose `X-Request-Id` carries the victim's run prefix.
