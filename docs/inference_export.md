@@ -46,7 +46,7 @@ registry of Prometheus exporter ports is crowded around 9100–9999.
 | Flag | What it does |
 | --- | --- |
 | `--prometheus-listen HOST:PORT` | Serve `GET /metrics` (text format 0.0.4) while the run lasts. Loopback is the safe choice: the endpoint has no authentication, and a non-loopback address prints one warning saying so. |
-| `--prometheus-linger SECONDS` | Keep `/metrics` up this long after the run, serving the final values (default 0, at most 3600). The run says where and for how long when the linger starts, and prints its report after it. Skipped after Ctrl+C; a Ctrl+C during the linger ends only the linger. |
+| `--prometheus-linger SECONDS` | Keep `/metrics` up this long after the run, serving the final values (default 0, at most 3600). The run says where and for how long when the linger starts, and prints its report after it. Skipped when the run ends with Ctrl+C or an error; a Ctrl+C during the linger ends only the linger. |
 | `--prometheus-textfile-dir DIR` | Write `DIR/stormlog-<slot>.prom` at start, every `--prometheus-textfile-interval` seconds (default 15, from 1 to 3600), and once more at the end. |
 | `--prometheus-slot NAME` | This producer's name (default `default`), 1–64 of `A-Z a-z 0-9 _ . -`. It is the `stormlog_producer` label on every series, at the endpoint and in the textfile, and it names the textfile and its lock. |
 | `--prometheus-textfile-remove-on-exit` | Remove the textfile at the end instead of keeping its final values. |
@@ -60,7 +60,14 @@ artifact is written (see the [exit-code contract](report_contract.md)):
 - an address that is not `HOST:PORT`;
 - an export flag given without `--prometheus-listen` or `--prometheus-textfile-dir`;
 - a slot another live writer holds;
+- a textfile directory that is missing, holds the artifact, or cannot be
+  written;
 - a matrix over the budget.
+
+Both outputs may be on at once. Then let Prometheus read only one of them:
+scraping the endpoint and node_exporter's textfile collector together
+gives every series twice, and a query that joins on `stormlog_run_info`
+then matches two series per producer.
 
 ## What is exported
 
@@ -77,7 +84,7 @@ Units are base units: seconds and counts. Every series also carries
 | `stormlog_infer_e2e_from_intended_seconds` | histogram | same | Open-loop arrivals only: completed requests measured from their intended arrival, so a held arrival's wait is included | — |
 | `stormlog_infer_dispatch_lag_seconds` | histogram | case, arrival_mode | How late each request was sent against its schedule | — |
 | `stormlog_infer_tokens_total` | counter | model, server, case, phase, direction, source | Prompt and output tokens of completed requests. `source` is where each count came from: `server_usage`, `tiktoken`, `transformers`, `estimated` or `unknown` | `vllm:prompt_tokens_total` and `vllm:generation_tokens_total` (every client) |
-| `stormlog_infer_requests_held_for_slot_total` | counter | case | Open-loop arrivals that waited for a free in-flight slot | — |
+| `stormlog_infer_requests_held_for_slot_total` | counter | case | Open-loop arrivals that found every in-flight slot taken: they waited for one, or with `--overflow drop` were dropped | — |
 | `stormlog_infer_phases_total` | counter | case, phase | Completed phase windows | — |
 | `stormlog_infer_abandoned_requests_total` | counter | case, phase | Requests from an earlier drain still running when a phase was ready to start | — |
 | `stormlog_engine_scrapes_total` | counter | server, outcome | Scrapes of vLLM's `/metrics` (with `--vllm-metrics`), `ok` or `error` | — |
@@ -210,10 +217,14 @@ These series sit beside the exported metrics:
   `stormlog_metrics_records_dropped_total{reason}` with `reason` one of:
   - `queue_full`: the exporter's queue (65,536 records or 8 MiB, counted as
     the memory each queued record holds, about 2 KiB) was full;
-  - `shutdown`: still queued when the exporter closed;
+  - `shutdown`: not yet applied when the exporter's close stopped waiting
+    for it;
   - `error`: its update failed and was undone whole, which is an exporter
     bug, counted in `stormlog_exporter_internal_errors_total` too;
-  - `closed`: offered after it closed.
+  - `closed`: refused by the queue after it closed. The exporter stops
+    taking records first, so this stays 0 in a profile, and the records it
+    no longer takes (the run's own capability and session records) are
+    never mapped.
 
   While every reason is 0, and no record failed to be read
   (`stormlog_exporter_internal_errors_total{entry="observe"}`), the exported
@@ -234,9 +245,10 @@ The artifact keeps the same figures, final, in an `infer.capabilities` record
 for `export.prometheus`:
 - `supported`, `enabled` and `collected` name the endpoint and the textfile.
 - `metadata.summary` holds the record counts (and whether they are `exact`),
-  the budget, series and overflow per family, scrape outcomes, the textfile's
-  writes (with `final_stale` true if its final write could only use values
-  from before they froze), the slot, and any endpoint error.
+  the budget, series and overflow per family (only here: the overflow and
+  rejection counters above have no family label), scrape outcomes, the
+  textfile's writes (with `final_stale` true if its final write could only
+  use values from before they froze), the slot, and any endpoint error.
 
 That record is written when the capture ends, after the exporter has
 stopped and frozen its values, and before the session's last record.
