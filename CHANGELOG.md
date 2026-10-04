@@ -125,7 +125,8 @@ the flaky benchmark memory gates
   (`sanitizer.json`). The runner appends an `infer.treatments` record to
   each artifact, and observers and comparisons see each treatment as an
   observer, `treatment:<name>`. It gives each artifact its before and after
-  descriptions, and with a verified model an `infer.model_identity` record
+  descriptions, the `/server_info` probe it took before measuring (so a
+  workload need probe only the basic routes), and with a verified model an `infer.model_identity` record
   bound to the server it launched, which is what lets a comparison verify
   the weights. Each artifact also gets the run's state (`infer.run_state`),
   so `infer compare` counts a run whose server crashed against its arm
