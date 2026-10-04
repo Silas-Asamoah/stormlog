@@ -153,8 +153,11 @@ configuration's capture.
 - the range of the waiting count;
 - the maximum KV usage;
 - the busy step gaps' and the chunk gaps' count, mean, p95 and p99. A step
-  gap is busy when a victim request was in flight for all of it; a gap that
-  spans an idle period measures the traffic, not the engine. `in_flight` has
+  gap counts only its busy part: from the later of its first step and the
+  moment the victim's current in-flight interval opened, to its second step.
+  Idle time measures the traffic, not the engine, but a request that arrived
+  in idle time and waited for a step felt that wait. A gap whose second step
+  falls in idle time is dropped. `in_flight` has
   no default: a caller that doesn't know the intervals says None, and then
   no gap is busy and cadence recovery never holds;
 - the median cached fraction.

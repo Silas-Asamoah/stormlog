@@ -502,3 +502,19 @@ def test_a_missing_reference_signal_leaves_its_check_incomplete() -> None:
     bare = context(Signals(in_flight=None), Actions(first_send_ns=60 * S))
     realized, checks = realization("T3", bare, effect_timing("T3", bare))
     assert not realized and observation_of(checks) == "incomplete"
+
+
+def test_a_gap_that_begins_in_idle_time_keeps_its_busy_part() -> None:
+    # Busy 0-1 s at 20 ms; idle from 1.0 s; a request in flight from 1.2 s
+    # waits until the next step at 3.2 s. The gap from the last idle step
+    # used to be dropped whole; its busy 2 s is a stall the victim felt.
+    steps = [tick * 20 * MS for tick in range(50)] + [3200 * MS]
+    steps += [3200 * MS + tick * 20 * MS for tick in range(1, 200)]
+    signals = Signals(
+        in_flight=[(0, 1000 * MS), (1200 * MS, 10 * S)], step_starts=steps
+    )
+    gaps = dict(signals.busy_step_gaps())
+    assert gaps[3200 * MS] == pytest.approx(2.0)
+    # And a gap whose later step lies in idle time is no busy gap at all.
+    idle = Signals(in_flight=[(0, 500 * MS)], step_starts=[400 * MS, 900 * MS])
+    assert idle.busy_step_gaps() == []
