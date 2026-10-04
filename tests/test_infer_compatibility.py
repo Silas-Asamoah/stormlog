@@ -368,6 +368,25 @@ def _records(
     ]
 
 
+def test_the_before_probe_that_answered_server_info_gives_the_configuration() -> None:
+    # A runner probes /server_info once before measuring, and the workload
+    # probes only the basic routes, so no collector runs beside it: the
+    # configuration comes from whichever before probe has it.
+    records = _records()
+    full = next(r for r in records if r.get("event_type") == "infer.server_probe")
+    basic = {
+        "event_type": "infer.server_probe",
+        "phase": "before",
+        "answers": {"/version": {"body": {"version": "0.30.0"}}},
+    }
+    records.remove(full)
+    records.insert(1, basic)
+    records.append({**full, "origin": "runner"})
+    fields = run_fields(records)
+    assert fields["scope.vllm_config"].value is True
+    assert fields["vllm_config/scheduler_config/max_num_seqs"].value == 256
+
+
 def test_a_runs_fields_come_from_its_artifact() -> None:
     fields = run_fields(_records())
 

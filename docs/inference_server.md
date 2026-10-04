@@ -134,9 +134,10 @@ With both descriptions, it compares them:
 `stormlog.infer.compatibility.compatible(a, b)` says whether two runs
 measured the same thing. Each run's fields come from its artifact
 (`run_fields(records)`): the `before` description, what the server reported
-to the probe, the workload record, the observers the session configured,
-and the declarations. Each field keeps its value, its source and its
-provenance:
+to the probe (the `before` probe that answered `/server_info`, such as an
+experiment runner's, ahead of a workload's basic one), the workload record,
+the observers the session configured, and the declarations. Each field
+keeps its value, its source and its provenance:
 
 | Provenance | Meaning |
 | --- | --- |

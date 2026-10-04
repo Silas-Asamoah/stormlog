@@ -552,16 +552,7 @@ def _agrees(model: Mapping[str, Any], described: Mapping[str, Any]) -> bool:
 
 
 def _probe_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, RunField]:
-    probe = next(
-        (
-            r
-            for r in records
-            if r.get("event_type") == "infer.server_probe"
-            and r.get("phase") == "before"
-        ),
-        None,
-    )
-    answers = _section(probe or {}, "answers")
+    answers = _section(_before_probe(records) or {}, "answers")
     values: dict[str, Any] = {}
     version = _section(answers, VERSION).get("body")
     if isinstance(version, Mapping):
@@ -574,6 +565,25 @@ def _probe_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, RunField]:
     if isinstance(info, Mapping):
         fields.update(_server_info_fields(info))
     return fields
+
+
+def _before_probe(records: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    """The before probe that answered ``/server_info``, else the first.
+
+    A runner probes ``/server_info`` once before measuring, and the
+    workload's own probe asks only the basic routes, so that no collector
+    runs beside it; the configuration comes from the runner's.
+    """
+    before = [
+        r
+        for r in records
+        if r.get("event_type") == "infer.server_probe" and r.get("phase") == "before"
+    ]
+    answered = [
+        r for r in before if _section(_section(r, "answers"), SERVER_INFO).get("body")
+    ]
+    found = answered or before
+    return found[0] if found else None
 
 
 def _server_info_fields(info: Mapping[str, Any]) -> dict[str, RunField]:
