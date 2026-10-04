@@ -630,6 +630,24 @@ def test_a_continue_then_stop_by_someone_else_is_flagged(
     assert _running_within(loop.pid, 1.0)
 
 
+def test_a_failed_status_read_in_a_hold_flags_nothing(
+    loop: subprocess.Popen[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A hold reads the target's state every 10 ms, and a pulse flagged as
+    # continued by someone else voids its episode, so a read that fails
+    # (a transient psutil error) must say nothing; a read that succeeds
+    # still sees a running target.
+    from examples.qualification import pulser as module
+
+    assert module.seen_running(loop.pid) is True
+
+    def denied(self: psutil.Process) -> str:
+        raise psutil.AccessDenied(self.pid)
+
+    monkeypatch.setattr(psutil.Process, "status", denied)
+    assert module.seen_running(loop.pid) is False
+
+
 def test_a_pulser_never_holds_past_the_design_cap(
     loop: subprocess.Popen[bytes],
 ) -> None:
