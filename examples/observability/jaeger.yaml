@@ -1,0 +1,34 @@
+# Jaeger v2, in memory, taking OTLP over gRPC on 4317 only, so it does not
+# compete with the collector for 4318. The UI is on http://127.0.0.1:16686.
+# Unvalidated until checked against the Jaeger release you run.
+
+service:
+  extensions: [jaeger_storage, jaeger_query]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+
+extensions:
+  jaeger_query:
+    storage:
+      traces: memstore
+  jaeger_storage:
+    backends:
+      memstore:
+        memory:
+          max_traces: 100000
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+
+processors:
+  batch: {}
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: memstore

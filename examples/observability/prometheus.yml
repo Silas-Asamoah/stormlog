@@ -1,0 +1,21 @@
+# Prometheus scraping vLLM and Stormlog as separate jobs.
+#
+# Stormlog's /metrics carries only what Stormlog measured; vLLM's carries
+# the engine's own series. Never add one job's series to the other's: the
+# table in docs/inference_export.md lists the pairs that overlap in meaning.
+#
+#   stormlog infer profile ... --prometheus-listen 127.0.0.1:9900 \
+#       --prometheus-linger 30
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  - job_name: vllm
+    static_configs:
+      - targets: ["127.0.0.1:8000"]
+
+  - job_name: stormlog
+    static_configs:
+      - targets: ["127.0.0.1:9900"]

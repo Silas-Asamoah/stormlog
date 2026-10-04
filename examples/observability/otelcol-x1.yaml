@@ -1,0 +1,28 @@
+# The collector for #221's X1 outage episode: killed and restarted mid-run.
+#
+# Nothing sits between the receiver and the file: no batch processor and no
+# sending queue, so a span is in the file once the collector has answered
+# for it, and a span lost with the process was never acknowledged. Count
+# unique and raw spans in the file afterwards to check Stormlog's
+# collector-side bounds. Run Stormlog with --otlp-probe-interval 1.
+#
+# The file path comes from X1_OUT (default ./x1-traces.jsonl).
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+
+exporters:
+  file:
+    path: ${env:X1_OUT:-./x1-traces.jsonl}
+    sending_queue:
+      enabled: false
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: []
+      exporters: [file]

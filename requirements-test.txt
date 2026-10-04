@@ -10,6 +10,7 @@ pexpect>=4.9.0
 pytest-textual-snapshot>=1.1.0
 jsonschema>=4.0.0
 prometheus_client>=0.18
+pyyaml>=6.0
 # The infer-otlp extra: the vLLM span receiver's protobuf tests and the fake
 # vLLM engine's span exporter, which sends protobuf as vLLM does.
 opentelemetry-proto>=1.20
