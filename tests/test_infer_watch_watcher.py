@@ -7,7 +7,7 @@ import errno
 import json
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -46,11 +46,18 @@ from tests.watch_test_helpers import (
 
 
 class _Observer:
-    def __init__(self) -> None:
+    def __init__(
+        self, stop_when: Callable[[Mapping[str, Any]], bool] | None = None
+    ) -> None:
         self.records: list[Mapping[str, Any]] = []
+        self.stop_when = stop_when
+        self.stop: Callable[[], object] = lambda: None  # set by _watch
 
     def observe(self, record: Mapping[str, Any]) -> None:
         self.records.append(record)
+        if self.stop_when is not None and self.stop_when(record):
+            self.stop_when = None  # once
+            self.stop()
 
 
 def _watch(
@@ -70,8 +77,11 @@ def _watch(
 
     async def main() -> WatchOutcome:
         stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
         if stop_after is not None:
-            asyncio.get_running_loop().call_later(stop_after, stop.set)
+            loop.call_later(stop_after, stop.set)
+        if observer is not None:
+            observer.stop = lambda: loop.call_soon_threadsafe(stop.set)
         return await watcher.run(stop)
 
     return asyncio.run(main())
@@ -92,16 +102,25 @@ class Run:
 
 @pytest.fixture(scope="module")
 def violation(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Run]:
-    """One watch of a server whose queue stays over the trigger's threshold."""
+    """One watch of a server whose queue stays over the trigger's threshold,
+    stopped once an incident is sealed and ten scrapes are recorded: a 2 s
+    watch at a load of 20 sometimes ended before its incident opened. The
+    30 s duration only bounds a failure."""
     root = tmp_path_factory.mktemp("violation")
     metrics = FakeMetrics()
     metrics.waiting = 20
     observer = _Observer()
+
+    def enough(_record: Mapping[str, Any]) -> bool:
+        types = [r["event_type"] for r in observer.records]
+        return INCIDENT in types and types.count(WATCH_HEALTH) >= 10
+
+    observer.stop_when = enough
     with serve_metrics(metrics) as base_url:
         outcome = _watch(
             root,
             watch_config(base_url),
-            options=WatchOptions(duration_seconds=2.0, ready_file=root / "ready"),
+            options=WatchOptions(duration_seconds=30.0, ready_file=root / "ready"),
             observer=observer,
         )
     yield Run(root, outcome, observer)
@@ -289,16 +308,23 @@ def test_an_unwritable_report_exits_one(tmp_path: Path) -> None:
 
 
 def test_the_stop_event_seals_open_incidents_as_interrupted(tmp_path: Path) -> None:
+    """Stopped 1.2 s in, the watch at a load of 20 sometimes had not yet
+    opened the incident; it now stops once the incident opens. The 30 s
+    duration only bounds a failure: the post-window would end at 20 s and
+    seal the incident completed."""
     metrics = FakeMetrics()
     metrics.waiting = 20
     payload = watch_config("", incident={"pre_seconds": 5, "post_seconds": 20})
+    opened = _Observer(
+        stop_when=lambda r: r["event_type"] == INCIDENT_EVENT and r["event"] == "opened"
+    )
     with serve_metrics(metrics) as base_url:
         payload["server"]["base_url"] = base_url
         outcome = _watch(
             tmp_path,
             payload,
-            options=WatchOptions(duration_seconds=None),
-            stop_after=1.2,
+            options=WatchOptions(duration_seconds=30.0),
+            observer=opened,
         )
     assert outcome.exit_code == 3
     (incident,) = of_type(read_ledger(tmp_path), INCIDENT)
