@@ -163,3 +163,22 @@ def test_the_sums_are_complete_before_the_run_is_renamed_into_place(
     monkeypatch.setattr(run_dir.os, "replace", replace)
     _run(tmp_path)
     assert seen == [(True, True)]
+
+
+def test_the_count_line_catches_a_dropped_file_without_the_sidecar(
+    tmp_path: Path,
+) -> None:
+    # Fable's A2 delta N2: the count line was never the only detector, yet
+    # it is exactly when the run travels without its <label>.sha256
+    # sidecar. A truth file deleted along with its line in SHA256SUMS then
+    # leaves every listed file present and nothing unlisted.
+    run = _run(tmp_path)
+    (tmp_path / "q221-00000000000000aa.sha256").unlink()
+    (run / "truth" / "injections.jsonl").unlink()
+    _drop(run / "SHA256SUMS", "truth/injections.jsonl")
+    problems = verify(run)
+    assert any("count line doesn't match" in problem for problem in problems)
+    assert problems == [
+        "no digest of SHA256SUMS beside the run (q221-00000000000000aa.sha256)",
+        "SHA256SUMS is truncated or edited: its count line doesn't match",
+    ]
