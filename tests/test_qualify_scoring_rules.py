@@ -417,3 +417,12 @@ def test_an_episode_scored_in_two_runs_is_refused() -> None:
     twice = replace(second, episodes=first.episodes)
     with pytest.raises(ValueError, match="an episode is scored twice"):
         summarize([first, twice], CONFIG)
+
+
+def test_a_claim_window_from_before_the_run_is_clipped_to_it() -> None:
+    # A window from 400 s before the run to 100 s into it: clipped to the
+    # run, 70 of its 100 s lie in the exposure, so it counts.
+    from tests.test_qualify_scoring import null_run
+
+    early = finding("s", "host_stall", 1, component="engine_core", window=(-400, 100))
+    assert run_of([null_run()], diagnosis(early)).false_claims == (early["id"],)

@@ -645,3 +645,49 @@ def test_a_queue_hold_cannot_begin_with_an_outside_sample() -> None:
     rule = MostlyWithin(waits, Thresholds(), min_samples=20, high=0.1, ceiling=1.0)
     assert not rule.holds(0, 2 * S)
     assert rule.holds(1, 2 * S)
+
+
+def test_the_open_gap_counts_by_itself_and_in_the_mean() -> None:
+    # Baseline mean 20 ms (ceiling 25 ms), p95 26 ms, p99 30 ms (longest
+    # 60 ms). 10 s of 20 ms gaps then a 100 ms open gap: the mean stays
+    # low, but the open gap is long. 20 gaps of 24 ms then a 50 ms open
+    # gap: no gap is long, but the open one tips the mean over.
+    baseline = GapStats(count=250, mean=0.020, p95=0.026, p99=0.030)
+
+    def cadence(spacing_ms: int, count: int) -> CadenceWithin:
+        steps = [tick * spacing_ms * MS for tick in range(count + 1)]
+        gaps = Signals(in_flight=ALWAYS, step_starts=steps).busy_step_gaps()
+        return CadenceWithin(gaps, baseline, Thresholds(), ALWAYS)
+
+    steady = cadence(20, 500)
+    assert steady.holds(0, 10 * S)
+    assert not steady.holds(0, 10 * S + 100 * MS)
+    tight = cadence(24, 20)
+    assert tight.holds(0, 480 * MS)
+    assert not tight.holds(0, 530 * MS)
+
+
+def test_a_queue_twin_without_a_baseline_gauge_never_recovers() -> None:
+    # Plenty of baseline waits, but no waiting count was scraped in the
+    # baseline: the gauge's band would be [0, 0] by default, and a quiet
+    # gauge afterwards would "recover" against it.
+    waits = [(tenth * S // 10, 0.08) for tenth in range(0, 2000)]
+    waiting = every_second(60, 200, lambda s: 0.0)
+    ctx = context(
+        Signals(in_flight=None, waits=waits, waiting=waiting),
+        Actions(first_send_ns=60 * S),
+    )
+    assert ctx.baseline.waiting_count == 0
+    assert effect_timing("T1", ctx).end_ns is None
+
+
+def test_a_hit_ratio_without_a_baseline_is_incomplete_not_failed() -> None:
+    # The episode has ratios but the baseline has none to compare them with.
+    cached = every_second(0, 200, lambda s: 0.95)
+    ratios = every_second(60, 200, lambda s: 0.4)
+    ctx = context(
+        Signals(in_flight=None, cached_fraction=cached, engine_hit_ratio=ratios),
+        Actions(first_send_ns=60 * S),
+    )
+    realized, checks = realization("T3b", ctx, effect_timing("T3b", ctx))
+    assert realized and checks[1].incomplete
