@@ -3,6 +3,7 @@
 import socket
 import threading
 import time
+import tracemalloc
 
 import pytest
 
@@ -128,3 +129,22 @@ def test_arming_a_stopped_watchdog_is_refused() -> None:
     finally:
         near.close()
         far.close()
+
+
+def test_disarmed_deadlines_do_not_pile_up() -> None:
+    # The review's measurement: 200,000 arm and disarm pairs with a 10 s
+    # deadline kept every entry, 22 MiB, until its deadline passed.
+    watchdog = Watchdog()
+    near, far = socket.socketpair()
+    tracemalloc.start()
+    try:
+        baseline = tracemalloc.get_traced_memory()[0]
+        for _ in range(50_000):
+            watchdog.disarm(watchdog.arm(near, time.monotonic() + 10))
+        retained = tracemalloc.get_traced_memory()[0] - baseline
+    finally:
+        tracemalloc.stop()
+        near.close()
+        far.close()
+        watchdog.stop()
+    assert retained < 256 * 1024
