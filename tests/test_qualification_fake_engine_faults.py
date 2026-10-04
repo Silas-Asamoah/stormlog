@@ -350,3 +350,20 @@ def test_a_loop_killed_by_an_observer_says_so_and_ends_its_requests() -> None:
         state = json.loads(get(f"{engine.base_url}/_fault/state")[1])
     assert state["loop_alive"] is False
     assert "OSError: the observer's disk is gone" in state["loop_error"]
+
+
+def test_resuming_a_timed_pause_ends_its_timer() -> None:
+    # A timed pause arms a timer; resume() used to leave it running, one
+    # daemon thread per abandoned pause until its deadline.
+    from examples.qualification.fake_engine.hold import Hold
+
+    def timers() -> int:
+        return sum(1 for t in threading.enumerate() if isinstance(t, threading.Timer))
+
+    before = timers()
+    hold = Hold()
+    for _ in range(5):
+        hold.pause(30)
+    hold.resume()
+    assert not hold.held
+    assert wait_until(lambda: timers() == before, timeout=2)
