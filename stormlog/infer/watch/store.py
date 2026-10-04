@@ -421,6 +421,9 @@ class IncidentStore:
             raise
         try:
             (bundle / LOCK_FILENAME).touch(mode=0o600)
+            # The bundle's own entry must survive a power loss as well as
+            # what is published inside it.
+            _fsync_dir(self.root)
             return GenerationWriter(self, bundle, 0, allowance)
         except BaseException:
             allowance.release(keep=0)
