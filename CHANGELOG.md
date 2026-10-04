@@ -95,6 +95,10 @@ the flaky benchmark memory gates
   comparison: its report, labels, comparable fields, and protocol failures
   (unfinished session, identity change, incomplete probe, invalid cohort,
   unacknowledged cold-cache reset). (#213)
+- `python -m examples.cli.infer_repeated_baseline --plan PLAN --output DIR`
+  runs an experiment plan from the command line, with `--resume` and
+  `--retry-incomplete`; it exits 3 when a run ended in a protocol
+  failure. (#213)
 - Launch-bound model identity for the runner (`server.model`): a
   `pinned_hub` snapshot is resolved to a commit and every blob checked
   against its name, then served with `--revision <commit>` and

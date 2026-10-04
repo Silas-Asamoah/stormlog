@@ -158,6 +158,25 @@ earlier attempt stays on disk and in the index, and the new one records
 `order_broken: true`, since it runs later than planned. A leftover
 `.partial` directory is kept, renamed `.abandoned`.
 
+## Running from the command line
+
+```bash
+python -m examples.cli.infer_repeated_baseline --plan plan.json --output exp213
+python -m examples.cli.infer_repeated_baseline --plan plan.json --output exp213 --resume
+```
+
+It prints one line per run, with its state and reasons. It exits `0` when
+every planned run finished (completed, or an outcome failure, which is
+data), `3` when some run ended in a protocol failure (retry it with
+`--resume --retry-incomplete`), `5` for a plan or output directory it
+cannot use, and `2` for a secret the plan names that is not set. Then
+compare the arms:
+
+```bash
+stormlog infer compare --baseline exp213/runs/*-off-a*/c1.jsonl \
+  --candidate exp213/runs/*-watch-a*/c1.jsonl --gate 'client.e2e.p95=non-inferiority:0.05'
+```
+
 ## Model identity
 
 A digest of a model path taken after a server started says nothing about

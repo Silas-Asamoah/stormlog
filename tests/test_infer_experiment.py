@@ -338,3 +338,26 @@ def test_the_bundle_is_scanned_for_the_plans_secrets(
     report = json.loads((tmp_path / "exp" / "sanitizer.json").read_text())
     assert report["publishable"] is False
     assert any(hit["file"].endswith("leak.txt") for hit in report["hits"])
+
+
+def test_the_example_cli_runs_a_plan_and_says_how_it_ended(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from examples.cli.infer_repeated_baseline import main
+
+    document = _plan(_port(), blocks=1)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(document))
+    assert main(["--plan", str(plan_path), "--output", str(tmp_path / "exp")]) == 0
+    printed = capsys.readouterr().out
+    assert "t213-b00-p0-off-a1: completed" in printed
+    document["server"]["command"] = ["{python}", "-c", "raise SystemExit(1)"]
+    plan_path.write_text(json.dumps(document))
+    code = main(["--plan", str(plan_path), "--output", str(tmp_path / "broken")])
+    assert code == 3
+    assert (
+        main(
+            ["--plan", str(tmp_path / "nothing.json"), "--output", str(tmp_path / "x")]
+        )
+        == 5
+    )
