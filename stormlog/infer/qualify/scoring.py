@@ -579,8 +579,9 @@ def score_run(
     """Score a run's episodes against its diagnosis, and, when the run holds
     exactly one valid negative episode, count its false claims over the
     run's whole negative exposure (C.2, C.5). A finding on another clock
-    than the run's can't be placed: it is a problem, and the run is then
-    no FPR unit, so a clock spelled differently can't make a run look clean.
+    than the run's can't be placed: it is a problem, and a fault claim
+    among them counts as false, so a clock spelled differently can't make
+    a run look clean, nor take a flagged run out of the count.
 
     Raises:
         GroundTruthError: for a run record or an episode that is malformed.
@@ -600,8 +601,6 @@ def score_run(
     off_clock = _off_clock(run, findings)
     if off_clock:
         problems += (off_clock,)
-        if unit is not None:
-            unit, excluded = None, "findings_off_clock"
     if unit is None:
         return RunScore(
             run.run_id, episodes, problems=problems, excluded_negative=excluded
@@ -621,6 +620,7 @@ def score_run(
     placement = _Placement(
         exposure,
         run.measured,
+        run.clock_domain,
         unplaceable_counts=not any(
             i.cause_class in INJECTED_CLASSES for i in injections
         ),
@@ -819,16 +819,20 @@ class _Placement:
     lies in the exposure, wherever it starts: a claim over the whole run,
     from its priming on, is the plainest false positive there is. A claim
     with no window is placed only when the run injected nothing it could be
-    about; otherwise it is reported as unplaced. (A run with a finding on
-    another clock is no unit at all, so every window here is on its clock.)"""
+    about; otherwise it is reported as unplaced. A window on another clock
+    than the run's can't be compared with the exposure, so it is placed:
+    failing closed, it counts."""
 
     exposure: Sequence[Interval]
     measured: Interval
+    clock_domain: str | None
     unplaceable_counts: bool = False
 
     def placed(self, window: Window | None) -> bool:
         if window is None:
             return self.unplaceable_counts
+        if not window.on_clock(self.clock_domain):
+            return True
         if not self.exposure:
             return False
         if window.end_ns < window.start_ns:

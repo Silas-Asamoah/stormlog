@@ -491,9 +491,11 @@ def test_a_window_on_another_clock_never_qualifies() -> None:
     same = finding("a", KV, 1)
     same["window"]["clock_domain"] = "node/boot/unix_epoch_ns"
     assert score_episode(episode(), diagnosis(same), CONFIG).correct(TOP1, 2)
+    # In a negative run it can't be placed either, so it counts (fails
+    # closed) rather than vanishing.
     claim = finding("h", "host_stall", 1, component="engine_core", window=(250, 280))
     claim["window"]["clock_domain"] = "other-node/boot/unix_epoch_ns"
-    assert run_of([null_run()], diagnosis(claim)).false_claims == ()
+    assert run_of([null_run()], diagnosis(claim)).false_claims == (claim["id"],)
 
 
 def test_a_fault_claim_in_a_negative_run_is_a_false_positive() -> None:
