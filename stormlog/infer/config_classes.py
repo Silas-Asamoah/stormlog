@@ -137,6 +137,8 @@ FIELD_CLASSES_V1: Mapping[str, str] = {
     "environ.TRITON_CACHE_DIR": LAUNCH,
     "environ.OTEL_": OBSERVATION,
     "environ.STORMLOG_": OBSERVATION,
+    # The experiment runner's per-launch mark, which finds what it started.
+    "environ.STORMLOG_RUN_MARK": LABEL,
     "workload.": IDENTITY,
     "workload.realization_digest": LAUNCH,
     "observer.": OBSERVATION,
