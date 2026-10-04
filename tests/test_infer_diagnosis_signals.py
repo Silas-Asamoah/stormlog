@@ -10,12 +10,14 @@ from stormlog.infer.diagnosis_signals import (
     REASON_REQUIRES_HOOK,
     REASON_REQUIRES_REFERENCE,
     REASON_REQUIRES_TRACE,
+    REASON_TOO_FEW_QUERIES,
     SignalConfig,
     evaluate_signal,
 )
 from stormlog.infer.diagnosis_thresholds import (
     DEFAULT_THRESHOLDS,
     KV_PREEMPTIONS,
+    PREFIX_MIN_QUERIED,
     QUEUE_MEDIAN_WAITING,
     THRESHOLDS_VERSION,
     resolve_threshold,
@@ -176,7 +178,7 @@ def _prefix_window(hits: float, queries: float) -> list[VllmScrapeRecord]:
 
 
 def test_prefix_signal_needs_the_callers_reference() -> None:
-    signal = evaluate_signal("prefix_cache_loss", _prefix_window(50.0, 100.0))
+    signal = evaluate_signal("prefix_cache_loss", _prefix_window(5000.0, 10000.0))
     # The ratio is measured; with no reference there is no verdict.
     assert signal.value == 0.5
     assert (signal.sufficient, signal.exceeds) == (False, None)
@@ -186,18 +188,39 @@ def test_prefix_signal_needs_the_callers_reference() -> None:
 
 def test_prefix_signal_compares_the_ratio_with_the_reference() -> None:
     fell = evaluate_signal(
-        "prefix_cache_loss", _prefix_window(50.0, 100.0), SignalConfig(reference=0.8)
+        "prefix_cache_loss",
+        _prefix_window(5000.0, 10000.0),
+        SignalConfig(reference=0.8),
     )
     assert (fell.value, fell.exceeds) == (0.5, True)
     assert fell.detail["drop"] == pytest.approx(0.3)
     held = evaluate_signal(
-        "prefix_cache_loss", _prefix_window(75.0, 100.0), SignalConfig(reference=0.8)
+        "prefix_cache_loss",
+        _prefix_window(7500.0, 10000.0),
+        SignalConfig(reference=0.8),
     )
     assert held.exceeds is False
     idle = evaluate_signal(
         "prefix_cache_loss", _prefix_window(0.0, 0.0), SignalConfig(reference=0.8)
     )
     assert (idle.value, idle.reason) == (None, REASON_NO_OBSERVATIONS)
+
+
+def test_a_few_queried_tokens_decide_no_prefix_signal() -> None:
+    """vLLM counts every prompt token of a new request as a query: one
+    short, unseen prompt alone has a ratio of 0, which says nothing."""
+    one_prompt = evaluate_signal(
+        "prefix_cache_loss", _prefix_window(0.0, 16.0), SignalConfig(reference=0.5)
+    )
+    assert one_prompt.value == 0.0
+    assert (one_prompt.sufficient, one_prompt.exceeds) == (False, None)
+    assert one_prompt.reason == REASON_TOO_FEW_QUERIES
+    enough = evaluate_signal(
+        "prefix_cache_loss",
+        _prefix_window(0.0, 16.0),
+        SignalConfig(reference=0.5, thresholds={PREFIX_MIN_QUERIED: 16.0}),
+    )
+    assert enough.exceeds is True
 
 
 # ---------------------------------------------------------- other kinds

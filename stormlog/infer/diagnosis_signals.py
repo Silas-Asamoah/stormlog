@@ -24,6 +24,7 @@ from .diagnosis_thresholds import (
     DEFAULT_THRESHOLDS,
     KV_PREEMPTIONS,
     PREFIX_HIT_RATIO_DROP,
+    PREFIX_MIN_QUERIED,
     QUEUE_MEDIAN_WAITING,
     THRESHOLDS_VERSION,
     resolve_threshold,
@@ -51,6 +52,7 @@ REASON_REQUIRES_HOOK = "requires_hook"
 REASON_REQUIRES_TRACE = "requires_trace"
 REASON_REQUIRES_CLIENT = "requires_client"
 REASON_REQUIRES_REFERENCE = "requires_reference"
+REASON_TOO_FEW_QUERIES = "too_few_queried_tokens"
 # Metrics describe the engine's whole traffic; a value is never one client's.
 SCOPE = "engine_global"
 
@@ -193,12 +195,13 @@ def _prefix(
     scrapes: Sequence[VllmScrapeRecord], config: SignalConfig, check: WindowCheck
 ) -> SignalValue:
     threshold, overridden = resolve_threshold(PREFIX_HIT_RATIO_DROP, config.thresholds)
+    least, _ = resolve_threshold(PREFIX_MIN_QUERIED, config.thresholds)
     hits = counter_window(scrapes, PREFIX_HITS, engine=config.engine)
     queries = counter_window(scrapes, PREFIX_QUERIES, engine=config.engine)
     reasons = [*check.reasons, *hits.reasons, *queries.reasons]
     ratio = _hit_ratio(hits.delta, queries.delta) if not reasons else None
-    if not reasons and ratio is None:
-        reasons.append(REASON_NO_OBSERVATIONS)
+    if not reasons:
+        reasons.extend(_volume_reasons(ratio, queries.delta, least))
     detail = {
         **_window_detail(check),
         "hits": hits.delta,
@@ -215,6 +218,15 @@ def _prefix(
     return replace(
         _decided(reference - ratio, threshold, overridden, detail), value=ratio
     )
+
+
+def _volume_reasons(
+    ratio: float | None, queried: float | None, least: float
+) -> list[str]:
+    """Why a window's hit ratio decides nothing: no tokens queried, or too few."""
+    if ratio is None:
+        return [REASON_NO_OBSERVATIONS]
+    return [REASON_TOO_FEW_QUERIES] if (queried or 0.0) < least else []
 
 
 def _hit_ratio(hits: float | None, queries: float | None) -> float | None:
@@ -287,6 +299,7 @@ __all__ = [
     "REASON_REQUIRES_HOOK",
     "REASON_REQUIRES_REFERENCE",
     "REASON_REQUIRES_TRACE",
+    "REASON_TOO_FEW_QUERIES",
     "SignalConfig",
     "SignalValue",
     "evaluate_signal",

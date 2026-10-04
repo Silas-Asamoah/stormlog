@@ -17,6 +17,7 @@ THRESHOLDS_VERSION = "diagnosis_thresholds_v1"
 QUEUE_MEDIAN_WAITING = "queue_saturation.median_waiting_requests"
 KV_PREEMPTIONS = "kv_preemption_pressure.preemptions"
 PREFIX_HIT_RATIO_DROP = "prefix_cache_loss.hit_ratio_drop"
+PREFIX_MIN_QUERIED = "prefix_cache_loss.min_queried_tokens"
 
 DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
     {
@@ -26,6 +27,10 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         KV_PREEMPTIONS: 1.0,
         # Fall of the prefix-cache hit ratio below the caller's reference.
         PREFIX_HIT_RATIO_DROP: 0.2,
+        # Tokens the window must have queried the cache for before its ratio
+        # decides: vLLM counts every prompt token of a new request as a
+        # query, so one short, unseen prompt alone has a ratio of 0.
+        PREFIX_MIN_QUERIED: 2048.0,
     }
 )
 
@@ -47,6 +52,7 @@ __all__ = [
     "DEFAULT_THRESHOLDS",
     "KV_PREEMPTIONS",
     "PREFIX_HIT_RATIO_DROP",
+    "PREFIX_MIN_QUERIED",
     "QUEUE_MEDIAN_WAITING",
     "THRESHOLDS_VERSION",
     "resolve_threshold",

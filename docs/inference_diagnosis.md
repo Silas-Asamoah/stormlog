@@ -46,6 +46,7 @@ refused. The values are provisional until they are read from real runs.
 | `queue_saturation.median_waiting_requests` | 1 | requests waiting in the window's median scrape |
 | `kv_preemption_pressure.preemptions` | 1 | preemptions counted in the window |
 | `prefix_cache_loss.hit_ratio_drop` | 0.2 | fall of the prefix-cache hit ratio below the caller's reference |
+| `prefix_cache_loss.min_queried_tokens` | 2048 | tokens the window must have queried the prefix cache for before its ratio decides |
 
 ## Online signals
 
@@ -74,8 +75,12 @@ signal over its threshold means a mechanism is *suspected* in the engine's
 traffic; it does not say whose requests it hurt. A prefix-cache signal in
 particular cannot tell another client's prompts lowering the ratio from the
 cache losing a victim's prefixes, and it gives no verdict without a reference
-ratio (`requires_reference`); a reference outside 0-1 is refused. Every
-figure of one signal comes from one engine: behind an exporter with several,
-`config.engine` names it, and without it the window is `engine_required`.
+ratio (`requires_reference`); a reference outside 0-1 is refused. Nor does it
+decide over fewer than `min_queried_tokens` queried tokens
+(`too_few_queried_tokens`): vLLM counts every prompt token of a new request
+as a query, so a quiet second with one short, unseen prompt has a ratio of
+0 by construction. Every figure of one signal comes from one engine: behind an
+exporter with several, `config.engine` names it, and without it the window is
+`engine_required`.
 Kinds that metrics alone cannot decide answer `requires_hook`,
 `requires_trace` or `requires_client`.
