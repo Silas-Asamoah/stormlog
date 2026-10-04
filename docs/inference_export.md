@@ -89,7 +89,7 @@ Units are base units: seconds and counts. Every series also carries
 | `stormlog_infer_abandoned_requests_total` | counter | case, phase | Requests from an earlier drain still running when a phase was ready to start | — |
 | `stormlog_engine_scrapes_total` | counter | server, outcome | Scrapes of vLLM's `/metrics` (with `--vllm-metrics`), `ok` or `error` | — |
 | `stormlog_engine_scrape_duration_seconds` | histogram | server | How long each of those scrapes took | — |
-| `stormlog_engine_last_scrape_timestamp_seconds` | gauge | server, outcome | When the engine was last scraped, by outcome, in Unix seconds | — |
+| `stormlog_engine_last_scrape_timestamp_seconds` | gauge | server, outcome | When the engine was last scraped, by outcome, in Unix seconds; absent until a scrape has that outcome | — |
 | `stormlog_engine_metrics_source_changes_total` | counter | server | Times the process answering `/metrics` changed: an engine restart, or a load balancer reaching another process | — |
 | `stormlog_engine_span_receiver_requests_total` | counter | outcome | Span exports the receiver refused or could not read (with `--vllm-spans-listen`). These count HTTP requests, not spans | — |
 | `stormlog_engine_span_receiver_spans_total` | counter | — | Spans the receiver decoded and kept for the artifact. Never forwarded | — |
