@@ -93,7 +93,8 @@ DESCRIPTORS: tuple[MetricDescriptor, ...] = (
         "history_evictions_total",
         COUNTER,
         "",
-        "Scrapes evicted from history, by cause.",
+        "Scrapes evicted from history, by cause; one too large for the "
+        "whole history is counted in scrapes_total as oversized.",
         labels=("cause",),
         enums={"cause": EVICTION_CAUSES},
     ),

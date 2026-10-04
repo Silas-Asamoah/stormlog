@@ -638,3 +638,23 @@ def test_an_incident_whose_bundle_cannot_be_created_is_reported(
     report = _report(tmp_path)
     (finding,) = report["findings"]
     assert finding["message"].startswith("the bundle could not be written: Permission")
+
+
+def test_history_evictions_are_counted_by_cause(tmp_path: Path) -> None:
+    """stormlog_watch_history_evictions_total never moved, while the ring
+    evicted by age every tick; and a health record's evictions lacked the
+    causes that had not happened yet."""
+    with serve_metrics(FakeMetrics()) as base_url:
+        payload = watch_config(
+            base_url,
+            history={"seconds": 0.5},
+            incident={"pre_seconds": 0.5, "post_seconds": 0.5},
+        )
+        _watch(tmp_path, payload, options=WatchOptions(duration_seconds=1.5))
+    stats = _report(tmp_path)["payload"]["stats"]
+    assert stats["history_evictions_total"]["age"] > 0
+    health = of_type(read_ledger(tmp_path), WATCH_HEALTH)
+    assert set(health[0]["history"]["evictions"]) == {"age", "bytes", "oversized"}
+    assert health[-1]["history"]["evictions"]["age"] == (
+        stats["history_evictions_total"]["age"]
+    )

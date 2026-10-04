@@ -53,7 +53,13 @@ from ..vllm_scraper import VllmMetricsScraper
 from ..vllm_telemetry import MARKER_INTERVAL, SCRAPE_OK, VllmScrapeRecord
 from .config import DEFAULTS_VERSION, WatchConfig
 from .evaluate import HistoryPredicate, TickResult, TriggerEngine
-from .history import ScrapeHistory, Stamped
+from .history import (
+    EVICT_AGE,
+    EVICT_BYTES,
+    EVICT_OVERSIZED,
+    ScrapeHistory,
+    Stamped,
+)
 from .incidents import Identity, IncidentManager, WatchClock
 from .io import SerialWorker
 from .ledger import Ledger, RecordObserver
@@ -66,7 +72,7 @@ from .records import (
     envelope,
     finite,
 )
-from .stats import WatchStats, counter_value
+from .stats import EVICTION_CAUSES, WatchStats, counter_value
 from .store import IncidentStore, PrunedBundle, StoreInUse
 from .triggers import EVENT_FIRED, VIOLATING
 
@@ -176,6 +182,8 @@ class Watcher:
         self._engine_required: set[str] = set()
         self._lag_max = 0.0
         self._next_test: int | None = None
+        # The ring's evictions already added to history_evictions_total.
+        self._evictions_counted: dict[str, int] = dict.fromkeys(EVICTION_CAUSES, 0)
 
     # ----------------------------------------------------------------- run
 
@@ -413,6 +421,11 @@ class Watcher:
         self.stats.set("history_seconds", ring.held_seconds())
         self.stats.set("history_capacity_seconds", self.config.history_seconds)
         self.stats.set("retention_bytes", self.store.budget.used_bytes)
+        for cause in EVICTION_CAUSES:
+            evicted = ring.evictions[cause] - self._evictions_counted[cause]
+            if evicted:
+                self.stats.add("history_evictions_total", evicted, (cause,))
+                self._evictions_counted[cause] = ring.evictions[cause]
         self._lag_max = max(self._lag_max, lag)
         self.stats.set("loop_lag_seconds_max", self._lag_max)
         health = envelope(
@@ -439,7 +452,11 @@ class Watcher:
             history={
                 "bytes": ring.bytes,
                 "seconds": ring.held_seconds(),
-                "evictions": dict(ring.evictions),
+                # Every cause, at 0 before its first eviction.
+                "evictions": {
+                    cause: ring.evictions[cause]
+                    for cause in (EVICT_AGE, EVICT_BYTES, EVICT_OVERSIZED)
+                },
             },
             open_incidents=sorted(self.incidents.open),
         )
