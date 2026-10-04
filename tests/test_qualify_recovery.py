@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Callable
 
 import pytest
@@ -18,12 +19,21 @@ from stormlog.infer.qualify.recovery import (
     Criterion,
     NoEvents,
     Signals,
+    Timing,
+    added_mechanisms,
     effect_timing,
     held_from,
     next_episode,
     priming_check,
     realization,
 )
+
+# Every episode type A.4's catalog injects, a short twin among them; X1–X3
+# are judged by C.6's outage criteria instead.
+CATALOG_TYPES = (
+    "F1", "T1", "F2", "T2", "F3", "T3", "T3b", "F4a", "F4b", "H0", "W1",
+    "I1", "P", "N", "F5", "R0", "S-F1",
+)  # fmt: skip
 
 S = 1_000_000_000
 MS = 1_000_000
@@ -151,7 +161,12 @@ def test_an_engine_stall_is_timed_from_the_first_stop_and_recovers_after_the_las
 
 
 def test_a_capture_pause_runs_from_the_stop_request_through_the_drain() -> None:
-    actions = Actions(stop_requested_ns=60 * S, stop_returned_ns=61 * S, drain_ns=2 * S)
+    actions = Actions(
+        capture_started_ns=50 * S,
+        stop_requested_ns=60 * S,
+        stop_returned_ns=61 * S,
+        drain_ns=2 * S,
+    )
     timing = effect_timing("I1", context(Signals(), actions))
     assert (timing.onset_ns, timing.end_ns) == (60 * S, 63 * S)
     assert realization("I1", context(Signals(), actions), timing)[0]
@@ -293,3 +308,99 @@ def test_queue_saturation_lasts_while_most_waits_stay_long() -> None:
     for seed in range(20):
         end, back = queue_run(seed, elevated_after=0.8)
         assert end is not None and end >= back + 55 * S, seed
+
+
+@pytest.mark.parametrize("episode_type", ["F4A", "F9", "X1"])
+def test_a_type_without_a_rule_is_refused_not_realized(episode_type: str) -> None:
+    ctx = context(Signals())
+    with pytest.raises(KeyError):
+        realization(episode_type, ctx, Timing(None, "none"))
+
+
+def test_every_catalog_type_has_a_timing_and_a_realization_rule() -> None:
+    actions = Actions(
+        first_send_ns=61 * S,
+        first_admission_ns=61 * S,
+        first_stop_confirmed_ns=61 * S,
+        last_continue_ns=62 * S,
+        pulses=[(61 * S, 62 * S)],
+        stop_requested_ns=61 * S,
+        stop_returned_ns=62 * S,
+        capture_started_ns=55 * S,
+        slot_ns=(61 * S, 101 * S),
+    )
+    ctx = context(Signals(), actions)
+    for episode_type in CATALOG_TYPES:
+        timing = effect_timing(episode_type, ctx)
+        realization(episode_type, ctx, timing)
+
+
+def test_a_null_run_is_scored_over_its_scheduled_slot() -> None:
+    ctx = context(Signals(), Actions(slot_ns=(61 * S, 101 * S)))
+    timing = effect_timing("N", ctx)
+    assert (timing.onset_ns, timing.end_ns) == (61 * S, 101 * S)
+    assert timing.recovery_held_at_ns == 101 * S
+    assert realization("N", ctx, timing) == (True, [])
+    with pytest.raises(ValueError, match="slot"):
+        effect_timing("N", context(Signals()))
+
+
+def test_a_short_twin_follows_its_faults_rules() -> None:
+    signals = kv_signals([63 * S])
+    assert effect_timing("S-F2", context(signals)) == effect_timing(
+        "F2", context(signals)
+    )
+
+
+def test_a_rank_pulse_needs_the_peers_wait_to_lengthen() -> None:
+    pulses = [(61 * S, 61 * S + 100 * MS)]
+    stalled = Actions(
+        first_stop_confirmed_ns=61 * S, last_continue_ns=pulses[0][1], pulses=pulses
+    )
+    signals = Signals(step_starts=stalled_steps(pulses, keep_stepping=False))
+    timing = effect_timing("F5", context(signals, stalled))
+    assert not realization("F5", context(signals, stalled), timing)[0]
+    waited = replace(stalled, peer_wait_extended=True)
+    assert realization("F5", context(signals, waited), timing)[0]
+    assert realization("R0", context(signals, stalled), timing)[0]
+
+
+def test_a_cache_twin_needs_the_engine_wide_hit_ratio_to_fall() -> None:
+    cached = every_second(0, 200, lambda s: 0.95)
+    falling = every_second(0, 200, lambda s: 0.4 if 60 <= s < 90 else 0.7)
+    steady = every_second(0, 200, lambda s: 0.7)
+    actions = Actions(first_send_ns=60 * S)
+    fell = context(Signals(cached_fraction=cached, engine_hit_ratio=falling), actions)
+    held = context(Signals(cached_fraction=cached, engine_hit_ratio=steady), actions)
+    assert realization("T3b", fell, effect_timing("T3b", fell))[0]
+    realized, checks = realization("T3b", held, effect_timing("T3b", held))
+    assert not realized
+    assert [check.name for check in checks] == [
+        "cached_fraction_unchanged",
+        "engine_hit_ratio_fell",
+    ]
+
+
+def test_a_capture_must_have_started_as_well_as_stopped() -> None:
+    stopped_only = Actions(stop_requested_ns=60 * S, stop_returned_ns=61 * S)
+    ctx = context(Signals(), stopped_only)
+    assert not realization("I1", ctx, effect_timing("I1", ctx))[0]
+    both = context(Signals(), replace(stopped_only, capture_started_ns=50 * S))
+    assert realization("I1", both, effect_timing("I1", both))[0]
+
+
+def test_an_api_server_pulse_that_also_stalled_the_engine_adds_that_mechanism() -> None:
+    # A.4: F4b stays realized, and its realized set adds host_stall at the
+    # engine core, when the engine stopped stepping with requests in flight.
+    actions = Actions(
+        first_stop_confirmed_ns=60 * S,
+        last_continue_ns=62 * S + 100 * MS,
+        pulses=PULSES,
+    )
+    stalled = context(Signals(step_starts=stalled_steps(PULSES, False)), actions)
+    realized, checks = realization("F4b", stalled, effect_timing("F4b", stalled))
+    assert realized
+    assert added_mechanisms("F4b", checks) == ("host_stall@engine_core",)
+    busy = context(Signals(step_starts=stalled_steps(PULSES, True)), actions)
+    realized, checks = realization("F4b", busy, effect_timing("F4b", busy))
+    assert realized and added_mechanisms("F4b", checks) == ()

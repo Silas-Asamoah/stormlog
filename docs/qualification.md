@@ -137,7 +137,11 @@ such start is tried.
 | F3 / T3 / T3b | the first 5 s window whose median victim cached fraction is below 0.5 (F3); the neighbor's first send (T3, T3b) | the median cached fraction is at least 0.9 |
 | F4a / F4b / H0 / P | the first stop confirmed (state `T`) | from the last `SIGCONT`, for 5 s, the busy step gaps look like the baseline's (below); for F4b, the victim's chunk gaps too |
 | W1 | the neighbor's first send | the queue and KV criteria |
+| F5 / R0 | the first stop confirmed | as F4a |
 | I1 | the stop request | at the stop's return plus #219's drain |
+| N | its scheduled slot's start (`Actions.slot_ns`) | at the slot's end |
+
+A short twin (`S-<x>`) follows its fault's rules.
 
 **Cadence** (`CadenceWithin`) is judged like with like, over at least 20
 busy gaps in the hold:
@@ -161,14 +165,19 @@ engines that must recover in every seed.
 | F2 | at least one victim request was preempted |
 | F3 | the victim's cached fraction fell below 0.5 |
 | F4a | no hook step started during a pulse |
-| F4b | the engine kept stepping during the pulses |
+| F4b | the stopped state was confirmed. Whether the engine kept stepping in every pulse with a victim request in flight is recorded but doesn't gate: if it didn't, `added_mechanisms` adds `host_stall@engine_core` to the realized set, as A.4 says |
+| F5 | the stopped state was confirmed, and the peer rank's NCCL wait lengthened (`Actions.peer_wait_extended`, from Nsight) |
 | T1 | the waits stayed within the baseline |
 | T2 | nothing was preempted |
-| T3, T3b | the cached fraction stayed at 0.9 or more |
-| H0 | the stopped state was confirmed |
+| T3 | the cached fraction stayed at 0.9 or more |
+| T3b | as T3, and the engine-wide prefix hit ratio fell at least 0.05 below the baseline's median |
+| H0, R0 | the stopped state was confirmed |
 | I1 | the capture started and stopped |
+| W1, P, N | A.4's column is empty: realized when the action took place |
 
-Each check is recorded with its value.
+Each check is recorded with its value, and whether it gates. A type with no
+rule, a typo such as `F4A` or the outages X1–X3 (judged by C.6's own
+criteria), raises `KeyError` rather than passing vacuously.
 
 Two functions drive a run:
 - `priming_check` is the run's precondition: the victim's median cached
