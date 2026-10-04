@@ -618,7 +618,16 @@ def score_run(
         if injection.cause_class in INJECTED_CLASSES
         for finding in assigned[injection.episode_id]
     }
-    claims = _negative_claims(findings, elsewhere, exposure, unit, config)
+    placement = _Placement(
+        exposure,
+        run.measured,
+        unit.clock_domain,
+        unplaceable_counts=not any(
+            i.cause_class in INJECTED_CLASSES for i in injections
+        ),
+    )
+    claims = _negative_claims(findings, elsewhere, placement, unit, config)
+    problems += placement.unplaced_problem(run.run_id, findings, elsewhere)
     return RunScore(run.run_id, episodes, unit.episode_id, exposure, claims, problems)
 
 
@@ -783,7 +792,7 @@ def _cut(piece: Interval, cut: Interval) -> list[Interval]:
 def _negative_claims(
     findings: Sequence[FindingView],
     elsewhere: set[str],
-    exposure: Sequence[Interval],
+    placement: _Placement,
     unit: Injection,
     config: ScoreConfig,
 ) -> tuple[str, ...]:
@@ -796,7 +805,7 @@ def _negative_claims(
         for finding in findings
         if finding.scored_fault_claim
         and finding.id not in elsewhere
-        and _placed_in(finding.window, exposure, unit.clock_domain)
+        and placement.placed(finding.window)
         and not _allowed(finding, unit)
         and not (
             finding.id in qualifying and is_neutral(finding, qualifying, unit, config)
@@ -804,25 +813,52 @@ def _negative_claims(
     )
 
 
-def _placed_in(
-    window: Window | None, exposure: Sequence[Interval], clock_domain: str | None
-) -> bool:
-    """The temporal rule over the exposure: the window is on the victim's
-    clock, starts in the exposure, and lies at least half in it."""
-    if window is None or not exposure or not window.on_clock(clock_domain):
-        return False
-    if window.end_ns < window.start_ns:
-        return False
-    if not any(i.start_ns <= window.start_ns <= i.end_ns for i in exposure):
-        return False
-    length = window.end_ns - window.start_ns
-    if length <= 0:
-        return True
-    inside = sum(
-        max(0, min(window.end_ns, i.end_ns) - max(window.start_ns, i.start_ns))
-        for i in exposure
-    )
-    return 2 * inside >= length
+@dataclass
+class _Placement:
+    """Where a negative run's fault claim lies. A window is clipped to the
+    run's measured window and placed when at least half of what is left
+    lies in the exposure, wherever it starts: a claim over the whole run,
+    from its priming on, is the plainest false positive there is. A claim
+    with no window is placed only when the run injected nothing it could be
+    about; otherwise it is reported as unplaced."""
+
+    exposure: Sequence[Interval]
+    measured: Interval
+    clock_domain: str | None
+    unplaceable_counts: bool = False
+
+    def placed(self, window: Window | None) -> bool:
+        if window is None:
+            return self.unplaceable_counts
+        if not self.exposure or not window.on_clock(self.clock_domain):
+            return False
+        if window.end_ns < window.start_ns:
+            return False
+        start = max(window.start_ns, self.measured.start_ns)
+        end = min(window.end_ns, self.measured.end_ns)
+        if end < start:
+            return False
+        if end == start:
+            return any(i.start_ns <= start <= i.end_ns for i in self.exposure)
+        inside = sum(
+            max(0, min(end, i.end_ns) - max(start, i.start_ns)) for i in self.exposure
+        )
+        return 2 * inside >= end - start
+
+    def unplaced_problem(
+        self, run_id: str, findings: Sequence[FindingView], elsewhere: set[str]
+    ) -> tuple[str, ...]:
+        """How many fault claims with no window this run can't place."""
+        if self.unplaceable_counts:
+            return ()
+        count = sum(
+            1
+            for f in findings
+            if f.scored_fault_claim and f.window is None and f.id not in elsewhere
+        )
+        return (
+            (f"run {run_id}: {count} fault claims without a window",) if count else ()
+        )
 
 
 # ------------------------------------------------------------------ a campaign
