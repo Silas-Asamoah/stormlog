@@ -102,8 +102,12 @@ a prelude that fails marks the block's runs `prelude_failed`. Each run then:
 6. describes the server again (`describe-after.json`), and gives each
    `infer` artifact the run made both descriptions: the `before` one, unless
    its workload step passed it already with `--describe-server`, then the
-   `after` one; and, with a verified model, the `infer.model_identity`
-   record (see Model identity);
+   `after` one; the probe taken in step 1, unless the artifact already has
+   a `before` probe that answered `/server_info` (a workload should probe
+   only the basic routes, `--server-probe basic`, so that no collector runs
+   beside it; the comparison reads the configuration from this probe); and,
+   with a verified model, the `infer.model_identity` record (see Model
+   identity);
 7. stops the server's whole process group and checks nothing is left;
 8. checks the promised artifacts exist and are labelled with this run's
    experiment, arm and block, writes `commands.sh`, `run.json` and, last,

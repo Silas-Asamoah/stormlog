@@ -149,6 +149,12 @@ def test_a_plan_runs_every_arm_of_every_block_into_comparable_runs(
         arm("off"), arm("watch"), ComparisonSpec(allow_not_evaluable=True)
     )
     assert comparison.design == "paired_blocks"
+    # The workload probes only the basic routes; the configuration comes
+    # from the probe the runner took before measuring, on every run.
+    for summary in [*arm("off"), *arm("watch")]:
+        assert summary.fields["scope.vllm_config"].value is True
+    unverified = {item.name for item in comparison.comparability.unverified}
+    assert "vllm_config" not in unverified
 
 
 def test_a_candidate_whose_server_crashes_fails_its_gate_end_to_end(
