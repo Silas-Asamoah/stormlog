@@ -816,6 +816,17 @@ def test_a_record_counts_its_exact_json_and_is_written_unchanged(
         {f"field_{index}": _random_value(rng) for index in range(rng.randrange(6))}
         for _ in range(400)
     ]
+    records += [  # step-shaped: what the floor reads before serializing
+        {
+            "iteration": _random_text(rng),
+            "preempted": [_random_text(rng) for _ in range(rng.randrange(3))],
+            "members": [
+                {"internal": _random_text(rng), "other": _random_value(rng)}
+                for _ in range(rng.randrange(6))
+            ],
+        }
+        for _ in range(100)
+    ]
     limits = WriterLimits(heartbeat_seconds=3600, queue_bytes=1 << 30)
     writer = EpochWriter(tmp_path, "engine", limits=limits)
     with writer._condition:  # the writer thread cannot take any yet
@@ -824,6 +835,7 @@ def test_a_record_counts_its_exact_json_and_is_written_unchanged(
             writer.emit("alias", fields)
             json_bytes = len(json.dumps(fields, separators=(",", ":")).encode())
             assert writer._queued_bytes - before == json_bytes
+            assert writer_module._floor(fields) <= json_bytes
     writer.close()
 
     lines = [
@@ -976,6 +988,44 @@ def test_a_record_the_queue_cannot_take_is_never_serialized(
     # Only the two records that fit were serialized; the rest cost nothing.
     assert serialized == [{"internal": "r0"}, {"internal": "r1"}]
     assert writer._status()["dropped"] == {"alias": 4}
+
+
+def test_a_record_oversized_by_its_ids_alone_is_never_serialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serialized = _counting_bodies(monkeypatch)
+    writer = EpochWriter(
+        tmp_path, "engine", limits=WriterLimits(heartbeat_seconds=3600)
+    )
+
+    def step(members: int, id_length: int) -> dict[str, Any]:
+        internal = f"chatcmpl-{'x' * id_length}"
+        return {
+            "iteration": "1",
+            "members": [{"internal": f"{internal}-{n}"} for n in range(members)],
+        }
+
+    # Clients choose request IDs: 4 and 16 MiB of them in one step.
+    writer.emit("scheduled", step(256, 16384))
+    writer.emit("completed", step(1024, 16384))
+    writer.emit("scheduled", {"iteration": "2", "preempted": ["y" * (5 << 20)]})
+    writer.emit("alias", {"internal": "z" * (5 << 20)})
+    kept = step(256, 4096)  # 1 MiB: it fits, so it is serialized and written
+    writer.emit("scheduled", kept)
+    writer.close()
+
+    assert serialized == [kept]
+    records = _epoch_records(writer.directory)
+    assert [(r["kind"], len(r.get("members", ()))) for r in records] == [
+        ("scheduled", 256),
+        ("goodbye", 0),
+    ]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert status["dropped"] == {
+        "scheduled_oversized": 2,
+        "completed_oversized": 1,
+        "alias_oversized": 1,
+    }
 
 
 def test_a_record_after_the_disk_cap_is_never_serialized(

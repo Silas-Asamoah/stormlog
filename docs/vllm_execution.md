@@ -67,11 +67,13 @@ The hook never makes vLLM wait on a disk. Records go into a queue that a
 background thread writes out. Each record's fields are serialized once, when
 the record is queued, and the queue holds at most 20,000 records and 32 MiB of
 that JSON, counted at its exact size until the record is written; a record that
-does not fit is dropped and counted, and so is a single record over 4 MiB. When
-the queue already holds 20,000 records, or the disk cap has stopped record
-writing, a record is dropped before it is serialized, so a backlog costs vLLM
-no encoding. The thread checks its heartbeat, flush and sealing deadlines after
-every record, so a backlog delays them by one write at most.
+does not fit is dropped and counted, and so is a single record over 4 MiB. Two
+kinds of record are dropped before they are serialized, so they cost vLLM no
+encoding: any record while the queue already holds 20,000 records or the disk
+cap has stopped record writing, and a record whose request IDs alone, which
+clients choose, already pass 4 MiB. The thread checks its heartbeat, flush and
+sealing deadlines after every record, so a backlog delays them by one write at
+most.
 
 ## Raw log format, version 1
 
@@ -226,9 +228,9 @@ exception passes through, and the step's fate was not seen.
 ```
 
 `dropped` counts dropped records by kind, and `<kind>_oversized` counts single
-records over 4 MiB. A record dropped before it was serialized counts under its
-kind, whatever its size. `queued` is the number of records waiting to be
-written.
+records over 4 MiB. A record dropped unserialized because the queue was full or
+record writing had stopped counts under its kind, whatever its size. `queued`
+is the number of records waiting to be written.
 
 A worker's heartbeat adds `range_misses` (serving calls that ran without an
 iteration range), `startup_unranged` (warm-up, dummy and CUDA-graph capture

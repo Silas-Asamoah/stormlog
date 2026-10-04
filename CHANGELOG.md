@@ -204,7 +204,8 @@ the flaky benchmark memory gates
     dropped some that fit.
 
   A record the queue cannot take at any size, because it is full or the disk
-  cap has stopped record writing, is now dropped before it is serialized.
+  cap has stopped record writing, is now dropped before it is serialized, and
+  so is a record whose request IDs, which clients choose, alone pass 4 MiB.
   (#217)
 
 ### Fixed

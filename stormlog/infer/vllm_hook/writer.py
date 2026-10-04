@@ -17,6 +17,7 @@ from __future__ import annotations
 import atexit
 import json
 import multiprocessing.util
+import operator
 import os
 import re
 import shutil
@@ -37,6 +38,7 @@ EPOCH_NAME = re.compile(r"^(engine|worker)-\d+-\d+$")
 # every character beyond ASCII, so the text's length is its size in bytes.
 _Queued = tuple[str, str]
 _dumps = json.JSONEncoder(separators=(",", ":")).encode
+_internal = operator.itemgetter("internal")
 
 
 @dataclass(frozen=True)
@@ -105,12 +107,13 @@ class EpochWriter:
     def emit(self, kind: str, fields: dict[str, Any]) -> None:
         """Queue one record; drop and count it when it does not fit.
 
-        A record the queue cannot take at any size is dropped unserialized, so
-        a backlog costs the caller no encoding. The rest are serialized now.
-        ``fields`` must not reuse the common fields' names, which the writer
-        thread adds with the record's sequence number.
+        A record the queue cannot take at any size, or whose long strings
+        alone pass ``record_bytes``, is dropped unserialized, so neither a
+        backlog nor a client's long request IDs cost the caller an encoding.
+        The rest are serialized now. ``fields`` must not reuse the common
+        fields' names, which the writer thread adds with the sequence number.
         """
-        if self._refused(kind):
+        if self._dropped_unserialized(kind, _floor(fields)):
             return
         body = self._body(fields)
         if body is None:
@@ -191,9 +194,13 @@ class EpochWriter:
             closing = self._closing and not self._queue
             return batch, closing
 
-    def _refused(self, kind: str) -> bool:
-        """Drop and count a record that no size would let into the queue."""
+    def _dropped_unserialized(self, kind: str, floor: int) -> bool:
+        """Drop and count a record whose ``floor`` is already oversized, or
+        that no size would let into the queue."""
         with self._condition:
+            if floor > self.limits.record_bytes:
+                self._counters.dropped[f"{kind}_oversized"] += 1
+                return True
             refused = (
                 self._closing
                 or self._counters.capped
@@ -369,6 +376,22 @@ def remove_old_epochs(
         except OSError:
             continue
     return removed
+
+
+def _floor(fields: dict[str, Any]) -> int:
+    """Bytes the fields' JSON takes at least, read without serializing them.
+
+    Clients choose request IDs (vLLM builds them from ``X-Request-Id``), so
+    IDs are what can make a record huge. This counts the lengths of the
+    record's own strings, its ``preempted`` IDs and its members' ``internal``
+    IDs: a string's JSON is never shorter than the string.
+    """
+    try:
+        total = sum(len(value) for value in fields.values() if type(value) is str)
+        total += sum(map(len, fields.get("preempted") or ()))
+        return total + sum(map(len, map(_internal, fields.get("members") or ())))
+    except Exception:  # an unexpected shape: serializing it decides
+        return 0
 
 
 def _join(first: str, second: str) -> bytes:
