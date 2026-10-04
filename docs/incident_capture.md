@@ -99,7 +99,9 @@ bounds both: about 4 MiB of blocks and 200 KiB of manifest per generation.
 
 Retention removes the oldest seal first, never a bundle that is still open
 or being finalized. A bundle a reader holds is skipped, and removed once the
-reader lets go.
+reader lets go. A bundle whose manifest cannot be read (corrupt, or written
+by a newer Stormlog) is charged like any other and removed once its
+directory is older than `max_age_hours`.
 
 These limits apply only to what the watcher keeps under its root. vLLM
 writes each profiler trace into its own trace directory before the watcher
