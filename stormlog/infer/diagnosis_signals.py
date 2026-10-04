@@ -75,8 +75,9 @@ class SignalConfig:
 
     ``thresholds`` overrides entries of the shared table by key; a result
     says when it did. A key the table lacks, or a value that is not a finite
-    number, is refused: a NaN would never be exceeded and a misspelt key
-    never read, both silently. ``reference`` is the prefix-cache hit ratio a
+    number (a NaN, a string, a bool), is refused: a NaN would never be
+    exceeded and a misspelt key never read, both silently. ``min_scrapes``
+    must be at least 2. ``reference`` is the prefix-cache hit ratio a
     window is compared with, which only the caller can know.
     """
 
@@ -88,11 +89,26 @@ class SignalConfig:
     def __post_init__(self) -> None:
         if self.reference is not None and not 0.0 <= self.reference <= 1.0:
             raise ValueError("reference must be a hit ratio between 0 and 1")
+        if isinstance(self.min_scrapes, bool) or not isinstance(self.min_scrapes, int):
+            raise ValueError("min_scrapes must be an integer")
+        if self.min_scrapes < 2:
+            # A window of one scrape has no length: a gauge would decide on
+            # one sample and a counter could not decide at all.
+            raise ValueError("min_scrapes must be at least 2")
         unknown = sorted(set(self.thresholds) - set(DEFAULT_THRESHOLDS))
         if unknown:
             raise ValueError(f"unknown threshold keys: {', '.join(unknown)}")
-        if not all(math.isfinite(value) for value in self.thresholds.values()):
+        if not all(_finite_number(value) for value in self.thresholds.values()):
             raise ValueError("threshold overrides must be finite numbers")
+
+
+def _finite_number(value: Any) -> bool:
+    """A real, finite number: not a bool, a string or a NaN."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 @dataclass(frozen=True)

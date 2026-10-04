@@ -230,6 +230,8 @@ def test_a_consistent_step_still_resolves_and_a_falling_bucket_is_a_reset() -> N
         ({"queue_saturation.median_waiting_requests": float("nan")}, "finite"),
         ({"kv_preemption_pressure.preemptions": float("inf")}, "finite"),
         ({"queue_saturation.median_waiting_requestz": 3.0}, "unknown"),
+        ({"queue_saturation.median_waiting_requests": "3"}, "finite"),
+        ({"queue_saturation.median_waiting_requests": True}, "finite"),
     ],
 )
 def test_a_threshold_override_that_could_never_decide_is_refused(
@@ -237,6 +239,12 @@ def test_a_threshold_override_that_could_never_decide_is_refused(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         SignalConfig(thresholds=thresholds)
+
+
+@pytest.mark.parametrize("min_scrapes", [1, 0, -3, 2.0, True])
+def test_a_window_floor_below_two_scrapes_is_refused(min_scrapes: object) -> None:
+    with pytest.raises(ValueError, match="min_scrapes"):
+        SignalConfig(min_scrapes=min_scrapes)  # type: ignore[arg-type]
 
 
 def test_a_known_finite_override_is_used_and_said() -> None:
