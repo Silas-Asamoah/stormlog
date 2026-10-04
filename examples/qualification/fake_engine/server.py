@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 import traceback
+import typing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
@@ -331,16 +332,43 @@ def _fault_resume(handler: _Handler) -> None:
 
 
 def _fault_controls(handler: _Handler) -> None:
+    """Set switches by name, each to a value of its field's type: a string
+    for a bool would be truthy, and one for a pause would raise on the loop
+    thread. A float takes an integer too."""
     changes = handler.read_json()
     controls = handler.fake.controls
-    names = {field.name for field in dataclasses.fields(controls)}
-    unknown = sorted(set(changes) - names)
+    kinds = typing.get_type_hints(type(controls))
+    unknown = sorted(set(changes) - set(kinds))
     if unknown:
         handler.send_json(400, {"error": f"unknown controls: {', '.join(unknown)}"})
         return
+    wrong = sorted(
+        name for name, value in changes.items() if not _fits(kinds[name], value)
+    )
+    if wrong:
+        handler.send_json(
+            400, {"error": f"controls of the wrong type: {', '.join(wrong)}"}
+        )
+        return
     for name, value in changes.items():
-        setattr(controls, name, value)
+        setattr(controls, name, float(value) if kinds[name] is float else value)
     handler.send_json(200, dataclasses.asdict(controls))
+
+
+def _fits(kind: Any, value: object) -> bool:
+    """Whether ``value`` is of a field's type: bools only for a bool, and an
+    int or a float for a float."""
+    return any(_is_a(option, value) for option in typing.get_args(kind) or (kind,))
+
+
+def _is_a(option: Any, value: object) -> bool:
+    if option is type(None):
+        return value is None
+    if isinstance(value, bool) or option is bool:
+        return option is bool and isinstance(value, bool)
+    if option is float:
+        return isinstance(value, (int, float))
+    return isinstance(value, option)
 
 
 def _fault_state(handler: _Handler) -> None:

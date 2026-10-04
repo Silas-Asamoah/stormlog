@@ -101,6 +101,28 @@ def test_the_controls_route_flips_switches_and_refuses_unknown_ones() -> None:
     assert (failing, unknown, bad_target) == (500, 400, 400)
 
 
+def test_the_controls_route_refuses_a_value_of_the_wrong_type() -> None:
+    # Fable's #267 gate, P3-6: "false" for a bool was the truthy string
+    # "false", and a string pause raised on the loop thread. Each switch now
+    # takes its field's type; a float takes an integer too.
+    with FakeEngine(FAST) as engine:
+        url = f"{engine.base_url}/_fault/controls"
+        for wrong in (
+            {"stop_writes_trace": "false"},
+            {"stop_pause_seconds": "0.1"},
+            {"profiler_status": True},
+            {"profiler_max_iterations": 2.5},
+        ):
+            assert post(url, json.dumps(wrong).encode())[0] == 400, wrong
+        assert engine.controls.stop_writes_trace is True
+        right = {"stop_writes_trace": False, "stop_pause_seconds": 1,
+                 "profiler_max_iterations": None}  # fmt: skip
+        status, body = post(url, json.dumps(right).encode())
+    assert status == 200
+    assert json.loads(body)["stop_pause_seconds"] == 1.0
+    assert engine.controls.stop_writes_trace is False
+
+
 def test_trace_and_span_switches_are_reachable_over_http(tmp_path: Path) -> None:
     config = FakeEngineConfig(step_seconds=0.001, trace_dir=tmp_path / "traces")
     with FakeEngine(config) as engine:
