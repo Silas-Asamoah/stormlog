@@ -58,6 +58,19 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `stormlog.infer.comparison_stats`: one metric compared between a
+  baseline and a candidate arm of runs. Paired t on block log ratios (or
+  differences) when runs carry block labels, Welch t with df = min(nA, nB) − 1
+  otherwise, and a one-sample t for `absolute` metrics; Fieller and a
+  bootstrap (from 10 pairs) as unguarded cross-checks. Effects carry their
+  scale and unit (`relative` for log ratios). Per-run values may be
+  `(lower, upper)` bounds: non-inferiority gates use the worst case,
+  `significant` and `demonstrated` the best. Zero rules (`candidate_zero`,
+  `undefined_in_arm`, pre-registered fallback budgets), degenerate constant
+  metrics, a skew screen against a pinned normal table, leave-one-out
+  decision flips, at least 3 pairs per gate and pre-registered
+  `min_complete_blocks`. Also `clopper_pearson` with its model,
+  `run_pass_gate`, `blocks_for_precision` and `holm`. (#213)
 - `stormlog infer analyze` gains an `observers` block: for the system
   sampler, metrics scraper, span receiver, profiler traces and execution
   hook, whether each was requested, configured, active and healthy, judged
