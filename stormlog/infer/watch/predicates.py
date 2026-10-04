@@ -39,6 +39,7 @@ REASON_END_STALE = "end_scrape_stale"
 REASON_END_FAILED = "end_scrape_failed"
 REASON_START_MISSING = "start_scrape_missing"
 REASON_TOO_FEW_SAMPLES = "too_few_samples"
+REASON_NO_RECENT_SCRAPE = "no_recent_scrape"
 # Counters whose standstill, while requests run or wait, means no progress.
 PROGRESS_COUNTERS = ("vllm:generation_tokens_total", "vllm:prompt_tokens_total")
 RUNNING = "vllm:num_requests_running"
@@ -276,6 +277,10 @@ class ScrapeFailures:
     def tail_scrapes(self) -> int:
         return self.consecutive
 
+    @property
+    def when_stale(self) -> str:
+        return VIOLATING  # no scrape finishing is the failure itself
+
     def evaluate_history(self, history: Sequence[Entry]) -> Evaluation:
         tail = history[-self.consecutive :]
         if len(tail) < self.consecutive:
@@ -312,6 +317,10 @@ class ScrapeFailureShare:
     def tail_scrapes(self) -> int:
         return self.scrapes
 
+    @property
+    def when_stale(self) -> str:
+        return VIOLATING
+
     def evaluate_history(self, history: Sequence[Entry]) -> Evaluation:
         tail = history[-self.scrapes :]
         if len(tail) < self.scrapes:
@@ -343,6 +352,10 @@ class FrozenExporter:
     @property
     def tail_scrapes(self) -> int:
         return self.ticks + 1
+
+    @property
+    def when_stale(self) -> str:
+        return DATA_GAP  # old scrapes say nothing about progress now
 
     def evaluate_history(self, history: Sequence[Entry]) -> Evaluation:
         tail = self._tail(history)
@@ -412,6 +425,7 @@ __all__ = [
     "REASON_END_FAILED",
     "REASON_END_STALE",
     "REASON_START_MISSING",
+    "REASON_NO_RECENT_SCRAPE",
     "REASON_TOO_FEW_SAMPLES",
     "CounterRateAtLeast",
     "Evaluation",

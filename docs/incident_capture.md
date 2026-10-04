@@ -201,6 +201,11 @@ reason `engine_required`.
 | failed-scrape share | at least a chosen share of the last `n` scrapes failed, consecutive or not | the scrapes |
 | a frozen exporter | over the last `k + 1` scrapes, requests run or wait and no progress counter moves | the gauges and the generation and prompt token counters |
 
+A health trigger reads the last scrapes, whenever they finished. When none
+has finished for a tick plus the scrape timeout (a wedged scraper), its last
+verdict is not today's: the scrape-failure triggers count that as
+violating, and the frozen exporter as a data gap (`no_recent_scrape`).
+
 A trigger on a histogram vLLM records when a request completes (e2e, TPOT,
 the `request_*` families) has its masked window widened by the completion
 horizon. Requests delayed by a capture's pause finish up to one request
