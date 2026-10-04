@@ -39,9 +39,15 @@ def test_an_open_loop_neighbor_reaches_its_planned_rate(tmp_path: Path) -> None:
     assert all(e.startswith(neighbor.external_prefix) for e in externals)
 
 
+# Requests of about 0.2 s: the client's own turnaround between a worker's
+# requests is then a small share of its time, even on a loaded host, as it
+# is for real F2 doses. Millisecond requests made the 90% busy rule trip.
+STEADY = FakeEngineConfig(step_seconds=0.01, decode_token_seconds=0.002)
+
+
 def test_a_closed_loop_neighbor_keeps_its_workers_busy(tmp_path: Path) -> None:
-    with FakeEngine(FAST) as engine:
-        neighbor = _neighbor(engine, tmp_path, NeighborShape(8, 4, concurrency=3))
+    with FakeEngine(STEADY) as engine:
+        neighbor = _neighbor(engine, tmp_path, NeighborShape(8, 16, concurrency=3))
         neighbor.start()
         assert neighbor.join(timeout=30)
     actuation = neighbor.actuation()
