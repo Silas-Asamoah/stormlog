@@ -59,6 +59,10 @@ class Dispatch:
 
     started_at_ns: int
     tasks: list[asyncio.Task[None]]
+    # Set when ``until`` ended the schedule early: when, and how many
+    # arrivals were due by then.
+    ended_at_ns: int | None = None
+    scheduled: int | None = None
 
 
 async def dispatch_schedule(
@@ -70,6 +74,7 @@ async def dispatch_schedule(
     send: Callable[[Arrival], Awaitable[None]],
     drop: Callable[[Arrival, str], None],
     deadline: float | None = None,
+    until: asyncio.Event | None = None,
 ) -> Dispatch:
     """Start each request at its offset from now, in seconds.
 
@@ -78,14 +83,18 @@ async def dispatch_schedule(
     too, which their dispatch lag shows. With ``"drop"`` it is handed to
     ``drop`` and never sent, with the reason. ``deadline`` is when the
     phase's drain ends, in seconds from now: an arrival still unsent then is
-    dropped rather than held any longer. Returns once every arrival has been
-    sent or dropped; the requests themselves may still be running.
+    dropped rather than held any longer. ``until`` ends the schedule early
+    once set: no later arrival is sent. Returns once every arrival has been
+    sent or dropped, or ``until`` was set; the requests themselves may still
+    be running.
     """
     started = time.perf_counter()
     started_ns = time.time_ns()
     deadline_at = None if deadline is None else started + deadline
     # In creation order, so the first failure is the one raised.
     tasks: dict[asyncio.Task[None], None] = {}
+    ended_at_ns: int | None = None
+    scheduled: int | None = None
 
     def forget(task: asyncio.Task[None]) -> None:
         if not _still_matters(task):
@@ -94,8 +103,9 @@ async def dispatch_schedule(
     try:
         for index, offset in enumerate(offsets):
             delay = started + offset - time.perf_counter()
-            if delay > 0:
-                await asyncio.sleep(delay)
+            if await _ended(until, delay):
+                ended_at_ns, scheduled = time.time_ns(), index
+                break
             arrival = Arrival(
                 index,
                 mode,
@@ -119,8 +129,27 @@ async def dispatch_schedule(
         raise
     # Callbacks for the last requests to finish may not have run yet.
     return Dispatch(
-        started_at_ns=started_ns, tasks=[task for task in tasks if _still_matters(task)]
+        started_at_ns=started_ns,
+        tasks=[task for task in tasks if _still_matters(task)],
+        ended_at_ns=ended_at_ns,
+        scheduled=scheduled,
     )
+
+
+async def _ended(until: asyncio.Event | None, delay: float) -> bool:
+    """Wait ``delay`` seconds for the next arrival; whether ``until`` was set
+    first."""
+    if until is None:
+        if delay > 0:
+            await asyncio.sleep(delay)
+        return False
+    if until.is_set():
+        return True
+    try:
+        await asyncio.wait_for(until.wait(), timeout=max(delay, 0.0))
+    except asyncio.TimeoutError:
+        return False
+    return True
 
 
 def _still_matters(task: asyncio.Task[None]) -> bool:

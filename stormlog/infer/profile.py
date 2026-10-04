@@ -33,7 +33,13 @@ from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .host_clock import host_boot_id, wall_clock_domain
-from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
+from .open_loop import (
+    Arrival,
+    Dispatch,
+    InFlightLimiter,
+    cancel_all,
+    dispatch_schedule,
+)
 from .openai_client import (
     ChatCompletionResult,
     ConnectError,
@@ -95,6 +101,9 @@ class InferenceProfiler:
         self.config = config
         self.on_warning = on_warning
         self.on_phase = on_phase
+        # Set while the measured phase runs with a stop file, once it appears.
+        self._ending: asyncio.Event | None = None
+        self._ended_at_ns: int | None = None
         self.session = create_session_summary(source="stormlog.infer.profile")
         self.run_id = run_id or config.run_id or new_session_id()
         self.token_counter = build_token_counter(
@@ -619,12 +628,16 @@ class InferenceProfiler:
         prompts.warm()
         if abandoned is None:
             abandoned = await self._wait_for_abandoned()
+        watcher = self._watch_stop_file() if phase == "measured" else None
         try:
             async with self._trace_window(case.case_id, phase):
                 window = await self._run_scraped_phase(
                     request, total_requests, duration_seconds
                 )
         finally:
+            if watcher is not None:
+                watcher.cancel()
+            self._ending, self._ended_at_ns = None, None
             # Written on cancellation too, even one that lands while the
             # profiler start is in flight, so the artifact names the trace files.
             for record in self._trace_records():
@@ -810,6 +823,22 @@ class InferenceProfiler:
             still_running=sum(1 for future in running if not future.done()),
         )
 
+    def _watch_stop_file(self) -> asyncio.Task[None] | None:
+        """Watch for ``config.stop_file``; once it appears, ``_ending`` is set
+        and the measured window ends as if its duration had run out."""
+        if self.config.stop_file is None:
+            return None
+        path = Path(self.config.stop_file)
+        ending = self._ending = asyncio.Event()
+
+        async def watch() -> None:
+            while not path.exists():
+                await asyncio.sleep(STOP_FILE_POLL_SECONDS)
+            self._ended_at_ns = time.time_ns()
+            ending.set()
+
+        return asyncio.create_task(watch())
+
     async def _run_closed_phase(
         self,
         request: "_PhaseRequest",
@@ -846,6 +875,10 @@ class InferenceProfiler:
         else:
             await _drain(tasks, timeout=duration_seconds + self._drain_timeout())
             window_ended_at_ns = started_at_ns + round(duration_seconds * 1e9)
+        if self._ended_at_ns is not None:
+            return _PhaseWindow(
+                started_at_ns, self._ended_at_ns, time.time_ns(), stopped_early=True
+            )
         return _PhaseWindow(started_at_ns, window_ended_at_ns, time.time_ns())
 
     async def _worker(
@@ -860,6 +893,8 @@ class InferenceProfiler:
         case, phase = request.case, request.phase
         while True:
             if end_time is not None and time.monotonic() >= end_time:
+                return
+            if self._ending is not None and self._ending.is_set():
                 return
             request_index = await counter.next()
             if request_index is None:
@@ -922,7 +957,10 @@ class InferenceProfiler:
                 if duration_seconds is not None
                 else None
             ),
+            until=self._ending,
         )
+        if dispatch.ended_at_ns is not None:
+            return await self._stopped_early(dispatch, drain_timeout)
         if duration_seconds is None:
             # Counted arrivals are all sent, held ones included, so the
             # window closes with the last send and the whole drain follows.
@@ -947,6 +985,21 @@ class InferenceProfiler:
             scheduled_endpoint_offset_ns=(
                 None if endpoint is None else round(endpoint * 1e9)
             ),
+        )
+
+    async def _stopped_early(
+        self, dispatch: Dispatch, drain_timeout: float
+    ) -> "_PhaseWindow":
+        """An open phase the stop file ended: its window closes then, and the
+        drain follows from there, as at the end of its duration."""
+        assert dispatch.ended_at_ns is not None
+        await _drain(dispatch.tasks, timeout=drain_timeout)
+        return _PhaseWindow(
+            dispatch.started_at_ns,
+            dispatch.ended_at_ns,
+            time.time_ns(),
+            scheduled_arrivals=dispatch.scheduled,
+            stopped_early=True,
         )
 
     async def _send(
@@ -1290,6 +1343,8 @@ class _PhaseWindow:
     # Where the schedule's observation window ends, from the phase start: the
     # duration, or one whole slot after the last counted arrival.
     scheduled_endpoint_offset_ns: int | None = None
+    # The stop file ended the window before its duration ran out.
+    stopped_early: bool = False
 
     def times(self) -> dict[str, int]:
         return {
@@ -1319,6 +1374,7 @@ class _PhaseWindow:
             "drain_timeout_seconds": drain_timeout_seconds,
             "scheduled_arrivals": self.scheduled_arrivals,
             "scheduled_endpoint_offset_ns": self.scheduled_endpoint_offset_ns,
+            "stopped_early": self.stopped_early,
             "prompts_digest": request.prompts.digest(),
             "abandoned_requests": abandoned.to_record(),
         }
@@ -1380,6 +1436,7 @@ REJECTED_HTTP_STATUSES = frozenset({429, 503})
 # How long the finished run waits for the vLLM execution hook to seal its open
 # segments (a heartbeat per second confirms it) before importing the log.
 EXECUTION_FLUSH_TIMEOUT_SECONDS = 10.0
+STOP_FILE_POLL_SECONDS = 0.1
 
 
 def classify_failure(exc: BaseException) -> tuple[str, int | None]:

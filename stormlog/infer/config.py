@@ -118,6 +118,9 @@ class ProfileConfig:
     # After the measured window, how long in-flight requests may finish.
     # None means the request timeout.
     drain_timeout_seconds: float | None = None
+    # When this file appears, the measured window ends as if its duration
+    # had run out: no more arrivals, then the drain, and the run completes.
+    stop_file: str | None = None
     prompt_mode: str = REPEAT
     shared_prefix_ratio: float | None = None
     prefix_groups: int | None = None

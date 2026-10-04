@@ -92,3 +92,56 @@ def test_a_phase_is_on_record_before_its_end_is_told(tmp_path: Path) -> None:
         with pytest.raises(OSError):
             InferenceProfiler(config, on_phase=refuse_end).run()
     assert "measured" in _phase_windows(output)
+
+
+@pytest.mark.parametrize(
+    "arrivals",
+    [
+        {"arrival_mode": "poisson", "rates": (40.0,)},
+        {"concurrency": (2,)},
+    ],
+    ids=["open", "closed"],
+)
+def test_a_stop_file_ends_the_measured_window_cleanly(
+    tmp_path: Path, arrivals: dict[str, object]
+) -> None:
+    # #221's victim runs until the harness's plan is done, which isn't known
+    # in advance: the stop file ends its arrivals, and the phase drains and
+    # completes, instead of the run being interrupted.
+    import threading
+    import time
+
+    output, stop = tmp_path / "infer.jsonl", tmp_path / "stop"
+    threading.Timer(1.0, stop.touch).start()
+    with FakeEngine(FakeEngineConfig(step_seconds=0.001)) as engine:
+        config = _config(
+            engine,
+            output,
+            request_count=None,
+            duration_seconds=60.0,
+            stop_file=str(stop),
+            **arrivals,
+        )
+        began = time.monotonic()
+        InferenceProfiler(config).run()
+        lasted = time.monotonic() - began
+    assert lasted < 20
+    window = _phase_windows(output)["measured"]
+    seconds = (window["window_ended_at_ns"] - window["started_at_ns"]) / 1e9  # type: ignore[operator]
+    assert 0.5 < seconds < 5
+    assert window["stopped_early"] is True
+    records = [json.loads(line) for line in output.read_text().splitlines() if line]
+    sessions = [r for r in records if r.get("event_type") == "infer.session"]
+    assert sessions[-1]["status"] == "completed"
+
+
+def test_the_command_line_passes_the_stop_file(tmp_path: Path) -> None:
+    from stormlog.infer.cli import _profile_config, build_parser
+
+    stop = str(tmp_path / "stop")
+    args = build_parser().parse_args(
+        ["profile", "--endpoint", "http://127.0.0.1:9/v1/chat/completions",
+         "--model", "m", "--duration", "5", "--output", str(tmp_path / "o.jsonl"),
+         "--stop-file", stop]
+    )  # fmt: skip
+    assert _profile_config(args).stop_file == stop
