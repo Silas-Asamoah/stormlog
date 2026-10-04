@@ -135,10 +135,17 @@ attempts are kept.
 | `index.jsonl` | One line per attempt: state, reasons, every process with its PID, times, exit code and affinity, the server's cleanup |
 | `runs/<label>/` | The run: its artifacts, `describe-*.json`, the logs of the server, every step and treatment, `commands.sh`, `run.json`, `SHA256SUMS` |
 | `preludes/` | Each block's preludes and their logs |
+| `sanitizer.json` | Whether the bundle is publishable, and any secret found, by file and line |
 
 `commands.sh` holds each command exactly as run. A `secret_env` variable is
 passed to the commands from the runner's environment and written only as
 `NAME=${NAME}`.
+
+When the plan has run, every file of the bundle is scanned
+(`sanitizer.json`) for the plan's secret values and for the shapes
+credentials take: an `Authorization: Bearer` value, a Hugging Face `hf_`
+token, an `sk-` key. A hit names the file and line, never the value, and
+makes the bundle not `publishable`.
 
 ### Resuming
 
