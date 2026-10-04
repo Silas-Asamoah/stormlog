@@ -30,7 +30,8 @@ stormlog infer compare \
 | `--slo KEY:MS`, `--slo-file FILE` | Judge both arms by this policy instead of each run's own. Without it, a goodput or attainment gate, or `--min-attainment`, over runs that recorded different policies (`slo_digest`) is invalid input (exit 5), since a candidate judged by a looser policy would meet it however slow it was; ungated, those metrics read `slo_policy_differs` |
 | `--mode config\|overhead\|incremental` | What may differ between the arms (see Modes) |
 | `--design auto\|paired_blocks\|independent` | `auto` pairs runs by block when every run is labelled |
-| `--allow FIELD` | A field (`engine.max_num_seqs`) or `vllm_config` JSON pointer (`/scheduler_config`) that may differ |
+| `--allow FIELD` | A field (`engine.max_num_seqs`) or `vllm_config` JSON pointer (`/scheduler_config`) that may differ between the arms |
+| `--allow-within-arm FIELD` | A field or JSON pointer that may differ between the runs of one arm (and so across the arms); each such pair is named |
 | `--added-observers NAME,...` | The observers an `incremental` candidate adds |
 | `--gate METRIC=RULE:BUDGET` | Gate a metric, or every metric a pattern names (`client.*.p99`). A latency, goodput or throughput budget is relative (0.05 is 5%); an attainment or failure-fraction budget is a fraction (0.01 is one point), gated as a claim about runs (see Fractions) and only with `non-inferiority`. A budget that can never fail is a usage error: a fraction of 1 or more, or a fall of 100% or more in a rate |
 | `--fallback METRIC=BUDGET:UNIT` | A pre-registered budget on the difference, for when a zero leaves the log ratio undefined. `METRIC` is a name or pattern, and the budget applies to every gated metric it matches, whichever gate pattern named it; one that matches no gated metric is a usage error |
@@ -168,11 +169,15 @@ The same artifact given twice in an arm is invalid input.
 The kept runs must have measured one server. Every run is checked against
 its arm's first run, and every run against the other arm's first, because
 comparability is not transitive once a value is unknown. A field `--allow`
-names may differ within an arm as well as across arms. On an A30, the first
-launch of each model after the box resumed had a 4% smaller KV cache
+names may differ between the arms, the treatment difference; within an
+arm, it must still match. A field `--allow-within-arm` names may differ
+between the runs of one arm, and so across the arms too, and every pair of
+one arm's runs that differs in it is named in
+`diagnostics.within_arm_allowed` and in the text report. On an A30, the
+first launch of each model after the box resumed had a 4% smaller KV cache
 (`effective.kv_cache_size_tokens`, 855,088 against 890,960 tokens) than
 every launch after it; a warm-up launch before the first block avoids
-that, and `--allow` accepts it. A difference that
+that, and `--allow-within-arm` accepts it. A difference that
 blocks is invalid input (exit 5). If any pair is `unverified`, the
 comparison is, with every field that could not be shown equal, and
 `diagnostics.unverified_pairs` names each pair; every gate is then

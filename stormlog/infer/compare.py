@@ -93,7 +93,9 @@ class ComparisonSpec:
     confidence: float = 0.95
     design: str = "auto"
     mode: str = CONFIG
+    # What may differ between the arms, and what may differ within one.
     allow: tuple[str, ...] = ()
+    allow_within_arm: tuple[str, ...] = ()
     on_incomplete: str = EXCLUDE
     gates: tuple[tuple[str, GateRule], ...] = ()
     allow_not_evaluable: bool = False
@@ -155,6 +157,7 @@ class ComparisonSpec:
             "design": self.design,
             "mode": self.mode,
             "allow": list(self.allow),
+            "allow_within_arm": list(self.allow_within_arm),
             "on_incomplete": self.on_incomplete,
             "gates": {pattern: rule.to_record() for pattern, rule in self.gates},
             "allow_not_evaluable": self.allow_not_evaluable,
@@ -331,7 +334,7 @@ def compare_runs(
     usable = {arm: _usable(runs) for arm, runs in standing.items()}
     if not usable[BASELINE] or not usable[CANDIDATE]:
         raise InferInputError("an arm has no usable run: every run was excluded")
-    compatibility, unverified_pairs = _compatibility(usable, spec)
+    compatibility, unverified_pairs, within_arm_allowed = _compatibility(usable, spec)
     observer_issues = _observer_contract(usable, spec)
     if design == PAIRED:
         excluded += _unpaired_blocks(standing, spec, excluded)
@@ -354,6 +357,7 @@ def compare_runs(
         diagnostics={
             **_diagnostics(arms, compatibility),
             "unverified_pairs": unverified_pairs,
+            "within_arm_allowed": within_arm_allowed,
         },
     )
     return _with_family(comparison)
@@ -585,37 +589,67 @@ def _set_aside(excluded: list[dict[str, Any]], run: RunSummary, case_id: str) ->
 
 def _compatibility(
     usable: Mapping[str, list[RunSummary]], spec: ComparisonSpec
-) -> tuple[Compatibility, list[list[Any]]]:
+) -> tuple[Compatibility, list[list[Any]], list[list[Any]]]:
     """Every run within its arm (config mode), and every run across arms.
 
     Comparability is not transitive once a value is unknown, so each run is
-    checked, not only each arm's first. What ``--allow`` allows may differ
-    within an arm too. The reported result is the first runs' across the
-    arms, made unverified, with every unverified field, when any pair was;
-    the unverified pairs are returned with their fields.
+    checked, not only each arm's first. ``--allow`` names what may differ
+    between the arms, and ``--allow-within-arm`` what may differ within
+    one, and so across them as well. The reported result is the first runs'
+    across the arms, made unverified, with every unverified field, when any
+    pair was; the unverified pairs, and the pairs within an arm that differ
+    in an allowed field, are returned with their fields.
     """
-    within: list[tuple[str, str, Compatibility]] = []
-    for arm, runs in usable.items():
-        for run in runs[1:]:
-            result = compatible(runs[0].fields, run.fields, allowed=spec.allow)
-            if result.status == INCOMPATIBLE:
-                raise InferInputError(_incompatible(f"{arm} runs", result))
-            within.append((runs[0].name, run.name, result))
-    across: list[tuple[str, str, Compatibility]] = []
-    for first, second in _cross_pairs(usable):
-        result = compatible(
-            first.fields, second.fields, allowed=spec.allow, mode=spec.mode
-        )
-        if result.status == INCOMPATIBLE:
-            raise InferInputError(_incompatible("the arms", result))
-        across.append((first.name, second.name, result))
+    within = _within_arms(usable, spec)
+    across = _across_arms(usable, spec)
     results = [*within, *across]
     pairs = [
         [a, b, sorted(item.name for item in result.unverified)]
         for a, b, result in results
         if result.status == UNVERIFIED
     ]
-    return _worst(across[0][2], [result for _a, _b, result in results]), pairs
+    mixed = [
+        [a, b, sorted(item.name for item in result.allowed)]
+        for a, b, result in within
+        if result.allowed
+    ]
+    worst = _worst(across[0][2], [result for _a, _b, result in results])
+    return worst, pairs, mixed
+
+
+def _within_arms(
+    usable: Mapping[str, list[RunSummary]], spec: ComparisonSpec
+) -> list[tuple[str, str, Compatibility]]:
+    """Each run against its arm's first; only --allow-within-arm may differ."""
+    within = []
+    for arm, runs in usable.items():
+        for run in runs[1:]:
+            result = compatible(
+                runs[0].fields, run.fields, allowed=spec.allow_within_arm
+            )
+            if result.status == INCOMPATIBLE:
+                raise InferInputError(
+                    _incompatible(f"{arm} runs", result, "--allow-within-arm")
+                )
+            within.append((runs[0].name, run.name, result))
+    return within
+
+
+def _across_arms(
+    usable: Mapping[str, list[RunSummary]], spec: ComparisonSpec
+) -> list[tuple[str, str, Compatibility]]:
+    """The arms' runs against each other's first."""
+    # A field that may differ within an arm differs across the arms too.
+    anywhere = (*spec.allow, *spec.allow_within_arm)
+    across = []
+    for first, second in _cross_pairs(usable):
+        result = compatible(
+            first.fields, second.fields, allowed=anywhere, mode=spec.mode
+        )
+        if result.status == INCOMPATIBLE:
+            raise InferInputError(_incompatible("the arms", result))
+        across.append((first.name, second.name, result))
+    return across
 
 
 def _cross_pairs(
@@ -642,12 +676,13 @@ def _worst(reference: Compatibility, results: list[Compatibility]) -> Compatibil
     return replace(reference, status=UNVERIFIED, unverified=tuple(names.values()))
 
 
-def _incompatible(what: str, result: Compatibility) -> str:
+def _incompatible(what: str, result: Compatibility, flag: str = "--allow") -> str:
     fields = ", ".join(
         f"{item.name} ({item.a!r} vs {item.b!r})" for item in result.blocking[:5]
     )
     more = f" and {len(result.blocking) - 5} more" if len(result.blocking) > 5 else ""
-    return f"{what} are incompatible: {fields}{more}; allow a difference with --allow"
+    where = "within an arm " if flag == "--allow-within-arm" else ""
+    return f"{what} are incompatible: {fields}{more}; allow a difference {where}with {flag}"
 
 
 def _observer_contract(
