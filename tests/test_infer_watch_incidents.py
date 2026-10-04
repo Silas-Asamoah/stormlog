@@ -435,3 +435,31 @@ def test_bundles_removed_to_make_room_are_reported_before_the_seal(
         r["event_type"] for r in harness.records if r["event_type"] != INCIDENT_EVENT
     ]
     assert kinds == [INCIDENT, INCIDENT, "pruned", INCIDENT, "pruned", INCIDENT]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [OSError(28, "No space left on device"), RuntimeError("store bug")],
+    ids=["enospc", "unexpected"],
+)
+def test_a_bundle_that_cannot_be_created_still_records_its_incident(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    """new_bundle raised outside the write's handler: the store's worker
+    swallowed it, and the incident was never recorded, counted or reported."""
+    harness = Harness(tmp_path)
+    harness.scrapes(80, 262)
+
+    def broken(*_args: Any, **_kwargs: Any) -> Any:
+        raise failure
+
+    monkeypatch.setattr(harness.store, "new_bundle", broken)
+    harness.fire(200)
+    harness.tick(261)
+    (record,) = harness.of_type(INCIDENT)
+    validate_record(record)
+    assert record["bundle"] is None
+    assert record["bundle_error"] == f"{type(failure).__name__}: {failure}"
+    assert (harness.manager.persisted, harness.manager.persist_failures) == (0, 1)
+    (sealed,) = harness.manager.sealed
+    assert sealed["bundle_error"] == record["bundle_error"]

@@ -257,7 +257,9 @@ def test_every_incident_write_failing_exits_one(tmp_path: Path) -> None:
     assert outcome.unsound == ["incident_writes_failing"]
     assert outcome.incidents and not any(i["persisted"] for i in outcome.incidents)
     report = _report(tmp_path)
-    assert report["findings"][0]["message"] == "the bundle could not be written"
+    assert report["findings"][0]["message"].startswith(
+        "the bundle could not be written: the store cannot hold"
+    )
 
 
 def test_a_failing_ledger_exits_one(
@@ -600,3 +602,39 @@ def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
     )
     stats = _report(tmp_path)["payload"]["stats"]
     assert stats["ticks_missed_total"] >= 1
+
+
+def test_an_incident_whose_bundle_cannot_be_created_is_reported(
+    tmp_path: Path,
+) -> None:
+    """incidents/ made read-only mid-watch, a real EACCES: the watch exited 3
+    with an empty report and no incident record."""
+    import os
+    import stat
+
+    metrics = FakeMetrics()
+    metrics.waiting = 20
+    incidents = tmp_path / "incidents"
+
+    def lock_incidents() -> None:
+        os.chmod(incidents, stat.S_IRUSR | stat.S_IXUSR)
+
+    try:
+        with serve_metrics(metrics) as base_url:
+            threading.Timer(0.3, lock_incidents).start()
+            outcome = _watch(
+                tmp_path,
+                watch_config(base_url),
+                options=WatchOptions(duration_seconds=2.0),
+            )
+    finally:
+        os.chmod(incidents, stat.S_IRWXU)
+    (incident,) = of_type(read_ledger(tmp_path), INCIDENT)
+    assert incident["bundle"] is None
+    assert incident["bundle_error"].startswith("PermissionError")
+    # Every incident write failed: the watch could not keep what it saw.
+    assert outcome.exit_code == 1
+    assert outcome.unsound == ["incident_writes_failing"]
+    report = _report(tmp_path)
+    (finding,) = report["findings"]
+    assert finding["message"].startswith("the bundle could not be written: Permission")

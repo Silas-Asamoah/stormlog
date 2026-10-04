@@ -142,6 +142,7 @@ def maximal_incident() -> dict[str, Any]:
         rearm_basis="cap",
         suppressed={reason: 1 for reason in SUPPRESSION_REASONS},
         bundle=f"incidents/{FIRST}",
+        bundle_error=None,
         traces=[
             {
                 "name": "rank0.1790000101.pt.trace.json.gz",

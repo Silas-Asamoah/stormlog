@@ -169,6 +169,11 @@ that `stormlog.infer.correlation_events.load_inference_artifact` reads. Each
 window says how complete it is: `complete`, `partial` (a failed scrape, or
 history that began late) or `missing` (no successful scrape).
 
+The `infer.incident` record goes to the ledger, and into `report.json`, also
+when its bundle could not be written (a full disk, say): its `bundle` is then
+null and `bundle_error` says why. A watch whose every incident write failed
+is unsound (exit 1).
+
 At most `max_open_incidents` collect at once, and at most
 `max_incidents_per_hour` open in any trailing hour. A firing turned away is
 counted by reason in `stormlog_watch_suppressed_total`. When the watch
