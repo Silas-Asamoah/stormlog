@@ -120,3 +120,22 @@ def test_a_clock_step_does_not_make_a_service_look_reused(
         local_stack.main(["stop", "otelcol", *state])
     with pytest.raises(OSError):
         os.kill(pid, 0)
+
+
+def test_a_pid_now_running_another_command_is_never_signalled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pid reused within the start-time tolerance: the start time matches,
+    # the command line does not, so the process is not the one started.
+    state, pid = _started(tmp_path, monkeypatch, _fake_binary(tmp_path))
+    pid_file = tmp_path / "state" / "otelcol.pid.json"
+    saved = json.loads(pid_file.read_text())
+    saved["cmdline"] = ["/usr/bin/some-other-program"]
+    pid_file.write_text(json.dumps(saved))
+    process = psutil.Process(pid)
+    try:
+        local_stack.main(["stop", "otelcol", *state])
+        assert process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+    finally:
+        process.kill()
+        process.wait(5)
