@@ -122,7 +122,10 @@ the flaky benchmark memory gates
   secret values and for bearer, `hf_` and `sk-` token shapes
   (`sanitizer.json`). The runner appends an `infer.treatments` record to
   each artifact, and observers and comparisons see each treatment as an
-  observer, `treatment:<name>`. (#213)
+  observer, `treatment:<name>`. It gives each artifact its before and after
+  descriptions, and with a verified model an `infer.model_identity` record
+  bound to the server it launched, which is what lets a comparison verify
+  the weights. (#213)
 - `stormlog.infer.experiment_plan`: experiment plans
   (`stormlog.infer.experiment_plan` v1) with arms, workload steps (shared with
   `same_as:<arm>`), treatments, block preludes, a seeded `random`, `williams`
