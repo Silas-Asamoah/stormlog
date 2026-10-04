@@ -684,7 +684,10 @@ One run goes:
    actuated by neighbor traffic, pulses, a profiler window or nothing, and
    its recovery is watched live. A recovery timeout skips the remaining
    episodes; they are published as `not_actuated`.
-5. **Final recovery.** The victim is stopped, and each episode's
+5. **Final recovery.** The victim is stopped with its `--stop-file`: its
+   measured window ends, it drains, runs its post-run imports and completes,
+   so the diagnoser gets a whole artifact (it is interrupted only if that
+   takes more than 180 s). Then each episode's
    `stormlog.qualify.injection/1` record is written to
    `truth/injections.jsonl` with:
    - its effect timing and realization checks;
