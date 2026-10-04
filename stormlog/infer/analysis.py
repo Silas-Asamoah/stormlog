@@ -16,6 +16,7 @@ from .correlation_accounting import AlignedTimestamp
 from .errors import InferInputError
 from .host_clock import is_boot_qualified
 from .latency_report import latency_summary, streaming_summary
+from .manifest import manifest_lines, manifest_summary
 from .populations import (
     CasePopulation,
     MeasuredInterval,
@@ -110,6 +111,7 @@ def analyze_inference_events(
         # the span of its successful requests (the old duration_seconds).
         "analysis_version": ANALYSIS_VERSION,
         "slo": None if policy is None else policy.to_record(),
+        "manifest": manifest_summary(records),
         "summary": {
             "total_requests": len(requests),
             "successful_requests": len(ok_requests),
@@ -392,6 +394,7 @@ def format_analysis_text(report: dict[str, Any]) -> str:
     vllm_cases = vllm.get("cases", {}) if isinstance(vllm, dict) else {}
     lines.extend(workload_lines(report.get("workload")))
     lines.extend(_policy_lines(report))
+    lines.extend(manifest_lines(report.get("manifest")))
     lines.append("Memory observations: client-local")
     lines.extend(_server_status_lines(join))
     lines.extend(vllm_lines(vllm))

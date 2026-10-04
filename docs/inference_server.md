@@ -21,6 +21,7 @@ stormlog infer describe-server --pid "$(pgrep -f 'vllm serve' | head -1)" \
 | Option | Meaning |
 | --- | --- |
 | `--pid PID` | vLLM's API server process. Another process is described with an issue, and only it and its descendants are covered. |
+| `--run-id ID` | The run the description belongs to, as passed to `infer profile`. `attach-manifest` refuses a description of another run. |
 | `--output FILE` | Where to write the description. |
 | `--server-log FILE` | The server's log, for the choices it made at start-up. |
 | `--python auto\|PATH\|none` | The interpreter asked for the Python and package versions (torch, triton, flashinfer, transformers, vllm). `auto` (the default) is the interpreter on the server's command line. |
@@ -52,6 +53,57 @@ is read back.
 the PID is not a process this host can read (it needs Linux `/proc`) or NVML
 is missing without `--no-gpu`. A `--server-log` that cannot be read exits
 `5`.
+
+## The run manifest
+
+An artifact records which server it measured in `infer.manifest` records,
+which are only ever appended:
+
+| Role | Written by | Holds |
+| --- | --- | --- |
+| `before` | `infer profile --describe-server FILE` | A description taken before the run |
+| `after` | `infer attach-manifest ARTIFACT FILE` | A description taken after the run |
+| `declared` | `infer profile --declare FILE` | What the operator states; nothing observed |
+
+```bash
+# On the server host, before the run:
+stormlog infer describe-server --pid "$SERVER_PID" --run-id "$RUN_ID" --output before.json
+# On the client:
+stormlog infer profile ... --run-id "$RUN_ID" --describe-server before.json
+# On the server host, after the run, then on the client:
+stormlog infer describe-server --pid "$SERVER_PID" --run-id "$RUN_ID" --output after.json
+stormlog infer attach-manifest artifacts/infer.jsonl after.json
+```
+
+`attach-manifest` refuses (exit `5`) an `after` description when:
+- the artifact has no `before` description;
+- it names another run;
+- it was taken on another host, or after a reboot;
+- its API server process is not the `before` one, by PID and start time:
+  the server was restarted;
+- it was taken before the last measured phase ended (the two hosts' clocks
+  must agree, as with NTP);
+- it is already attached.
+
+A declarations file is `stormlog.infer.declared` version 1:
+
+```json
+{"format": "stormlog.infer.declared", "version": 1,
+ "fields": {"engine.version": "0.30.0", "host.purpose": "baseline"}}
+```
+
+The report's `manifest` block lists the `before` and `after` descriptions
+(digest, time, server process and GPUs) and the declared fields. With both
+descriptions, it compares them:
+
+- `identity_changes`: settings that identify the server and changed during
+  the run. Those are the driver and CUDA driver versions, the server's GPU
+  UUIDs and each one's settings, the model snapshot, weights and chat
+  template digests, the launch arguments, the Python and package versions,
+  and the start-up choices from the log. Any change makes
+  `protocol_failure: identity_changed`: the run did not measure one server.
+- `drift`: for each of the server's GPUs, the SM clock, temperature and
+  clock event reasons, before and after. Drift is reported, not a failure.
 
 ## The server's processes
 

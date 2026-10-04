@@ -67,6 +67,7 @@ class DescribeOptions:
     """What to read beyond the processes, and where."""
 
     pid: int
+    run_id: str | None = None
     server_log: Path | None = None
     python: str | None = "auto"
     hash_weights: bool = False
@@ -100,6 +101,7 @@ def describe_server(
         "format": DESCRIPTION_FORMAT,
         "version": DESCRIPTION_VERSION,
         "observed_at_ns": time.time_ns(),
+        "run_id": options.run_id,
         "redaction": CREDENTIAL_PATHS_VERSION,
         "host": _host(options.proc),
         "server": _server(root, tree, environ, options.proc),

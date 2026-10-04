@@ -152,6 +152,10 @@ class ProfileConfig:
     # host only when allow_remote_probe is set.
     server_probe: str = "auto"
     allow_remote_probe: bool = False
+    # A server description (describe-server) taken before the run, and the
+    # operator's declarations; each is recorded as an infer.manifest record.
+    server_description: dict[str, Any] | None = None
+    declarations: dict[str, Any] | None = None
 
     def prompt_spec(self) -> PromptSpec:
         return PromptSpec(

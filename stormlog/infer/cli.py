@@ -31,8 +31,15 @@ from .arrivals import (
 )
 from .cache_state import CACHE_STATES, COLD, RESET_RETRY_SECONDS, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
-from .describe_server import DescribeOptions, describe_server, write_description
+from .describe_server import (
+    DescribeOptions,
+    describe_server,
+    load_description,
+    write_description,
+)
 from .errors import InferInputError, InferUsageError
+from .manifest import AFTER as MANIFEST_AFTER
+from .manifest import attach_manifest, load_declarations
 from .profile import InferenceProfiler
 from .prompts import MIN_CONTROLLED_TOKENS, PROMPT_MODES, REPEAT, SHARED_PREFIX
 from .server_collector import (
@@ -93,6 +100,8 @@ def _run_command(
         return cmd_collect_server(args)
     if args.infer_command == "describe-server":
         return cmd_describe_server(args)
+    if args.infer_command == "attach-manifest":
+        return cmd_attach_manifest(args)
     if args.infer_command == "import-trace":
         return cmd_import_trace(args)
     if args.infer_command == "import-execution":
@@ -327,6 +336,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     profile_parser.add_argument(
+        "--describe-server",
+        default=None,
+        metavar="FILE",
+        help="A describe-server description taken before the run, recorded as its before manifest",
+    )
+    profile_parser.add_argument(
+        "--declare",
+        default=None,
+        metavar="FILE",
+        help="A stormlog.infer.declared file of settings the operator states",
+    )
+    profile_parser.add_argument(
         "--allow-remote-probe",
         action="store_true",
         help="Ask /server_info of a public host too; vLLM's dev routes skip its API key",
@@ -452,6 +473,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of group members; each rank 0..N-1 needs a collector",
     )
     _add_describe_server_parser(subparsers)
+    _add_attach_manifest_parser(subparsers)
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
     add_watch_parser(subparsers)
@@ -465,6 +487,11 @@ def _add_describe_server_parser(subparsers: Any) -> None:
     )
     parser.add_argument(
         "--pid", required=True, type=int, help="vLLM's API server process"
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="The run this description belongs to, as passed to `infer profile`",
     )
     parser.add_argument("--output", required=True, help="JSON path to write")
     parser.add_argument(
@@ -897,6 +924,20 @@ def _usage_errors() -> Iterator[None]:
         ) from exc
 
 
+def _manifest_inputs(args: argparse.Namespace) -> dict[str, Any]:
+    """The before description and the declarations, read and checked now."""
+    return {
+        "server_description": (
+            load_description(Path(args.describe_server))
+            if args.describe_server
+            else None
+        ),
+        "declarations": (
+            load_declarations(Path(args.declare)) if args.declare else None
+        ),
+    }
+
+
 def _profile_config(args: argparse.Namespace) -> ProfileConfig:
     endpoint = resolve_endpoint(endpoint=args.endpoint, base_url=args.base_url)
     slo, slo_source = _slo_policy(args)
@@ -965,6 +1006,7 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         slo_source=slo_source if slo is not None else None,
         server_probe=args.server_probe,
         allow_remote_probe=args.allow_remote_probe,
+        **_manifest_inputs(args),
     )
 
 
@@ -1041,10 +1083,36 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return int(ExitCode.OK)
 
 
+def _add_attach_manifest_parser(subparsers: Any) -> None:
+    parser = subparsers.add_parser(
+        "attach-manifest",
+        help="Attach a server description taken after a run to its artifact",
+    )
+    parser.add_argument("artifact", help="The run's inference JSONL artifact")
+    parser.add_argument("description", help="A describe-server description")
+    parser.add_argument(
+        "--role",
+        choices=(MANIFEST_AFTER,),
+        default=MANIFEST_AFTER,
+        help="Which manifest it is; only after descriptions are attached later",
+    )
+
+
+def cmd_attach_manifest(args: argparse.Namespace) -> int:
+    """Append an after description to an artifact, or refuse it."""
+    record = attach_manifest(Path(args.artifact), Path(args.description))
+    print(
+        f"Attached the {record['role']} description {record['sha256'][:12]} "
+        f"to: {Path(args.artifact)}"
+    )
+    return int(ExitCode.OK)
+
+
 def cmd_describe_server(args: argparse.Namespace) -> int:
     """Write one description of a running vLLM server."""
     options = DescribeOptions(
         pid=args.pid,
+        run_id=args.run_id,
         server_log=Path(args.server_log) if args.server_log else None,
         python=args.python,
         hash_weights=args.hash_weights,

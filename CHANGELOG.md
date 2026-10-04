@@ -58,6 +58,15 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- The run manifest: `infer profile --describe-server FILE` records a
+  description taken before the run and `--declare FILE` the operator's
+  declarations, as append-only `infer.manifest` records. `stormlog infer
+  attach-manifest ARTIFACT FILE` appends the description taken after the run
+  and refuses (exit 5) one from another run, host or boot, a restarted
+  server, or before the last measured phase ended. The report gains a
+  `manifest` block: identity changes between before and after are a
+  `protocol_failure: identity_changed`, and GPU clock and temperature changes
+  are drift. `describe-server --run-id` ties a description to a run. (#213)
 - `stormlog infer profile --server-probe {auto,basic,none}` (default
   `auto`) asks the server about itself before the first case and after the
   last: `/version`, `/v1/models` and, on a loopback or private host (or
