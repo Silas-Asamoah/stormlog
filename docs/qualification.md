@@ -207,7 +207,10 @@ still open: its busy part (since the last step, or since a victim request
 arrived after it) joins the hold's gaps for the long-gap and mean rules. An
 engine that resumes for a moment and then hangs has a long gap at every
 hold's end until it steps again, and a live poll during a hang finds no
-recovery.
+recovery. A hold found earlier, in an idle stretch, can still be complete
+when a request sent since is stuck, so `engine_stalled(context, now)` reads
+the present: whether the busy part of the gap still open at `now` is longer
+than twice the baseline's p99. The harness says START only while it isn't.
 
 **A baseline too thin to compare with never recovers.** A criterion whose
 baseline has fewer samples than it needs in a hold (20 busy gaps, 20 waits,

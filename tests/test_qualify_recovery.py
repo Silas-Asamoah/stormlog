@@ -512,6 +512,23 @@ def test_a_queue_twin_without_baseline_waits_never_recovers() -> None:
     assert timing.end_ns is None
 
 
+def test_an_engine_hung_now_is_seen_whatever_recovery_found_earlier() -> None:
+    # rev-220-b's delta-3 closure, G4: with an open-loop victim the live
+    # loop could say START on a hold found in an idle stretch while a
+    # request sent since was stuck. engine_stalled reads the present: the
+    # busy part of the gap still open at now.
+    from stormlog.infer.qualify.recovery import engine_stalled
+
+    steps = [tick * 20 * MS for tick in range(100 * 50)]  # to 100 s
+    sent = [(0, 45 * S), (99 * S, 300 * S)]  # a request in flight since 99 s
+    ctx = context(Signals(in_flight=sent, step_starts=steps))
+    assert not engine_stalled(ctx, 100 * S)
+    assert engine_stalled(ctx, 101 * S)
+    # Nothing in flight: idle time is no stall.
+    idle = context(Signals(in_flight=[(0, 45 * S)], step_starts=steps))
+    assert not engine_stalled(idle, 101 * S)
+
+
 def test_a_thin_baseline_says_why_recovery_can_never_hold() -> None:
     # fable-design's A2 delta 2, N0: a run whose baseline was too thin
     # timed out with nothing in its truth but recovery_timeout. The rule
