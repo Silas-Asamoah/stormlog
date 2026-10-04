@@ -684,9 +684,11 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
     forwarding it.
   - `unknown` (5xx, a timeout, a dropped connection, a malformed reply, or a
     redirect, which is never followed): Stormlog sends `/stop_profile` at
-    once, with `stop_reason` `start_unknown`, before the phase. Once that stop
-    is confirmed, the phase runs unprofiled. A trace that stop writes is still
-    listed.
+    once, with `stop_reason` `start_unknown`, and waits for that call to
+    return (bounded by the control timeout). The phase then runs whether or
+    not the stop was confirmed: unprofiled if it took effect, and if it
+    failed, Stormlog warns and the record says the profiler may still be
+    running. A trace that stop writes is still listed.
 
   vLLM 0.30.0 answers 200 to a second `/start_profile` and to `/stop_profile`
   with nothing running, so Stormlog cannot tell from HTTP whether another
