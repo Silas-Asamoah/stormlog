@@ -218,6 +218,38 @@ def test_a_new_bundle_never_replaces_an_existing_one(tmp_path: Path) -> None:
     assert store.budget.used_bytes == store._scan_bytes()
 
 
+def test_max_incident_bytes_bounds_a_bundle_across_its_generations(
+    tmp_path: Path,
+) -> None:
+    """gen-1 links gen-0's trace at no charge and could add another full
+    max_incident_bytes: a bundle settled at almost twice the limit."""
+    store = IncidentStore(tmp_path, _limits(max_incident_bytes=1000))
+    incident_id = store.new_incident_id()
+    first = store.new_bundle(incident_id, 1000)
+    assert first is not None
+    with first.file("traces/t.json") as out:
+        out.write(b"t" * 900)
+    first.publish()
+
+    second = store.next_generation(incident_id, 1000)
+    assert second is not None
+    second.link_previous("traces/t.json")
+    with pytest.raises(BudgetExceeded):
+        with second.file("diagnosis.json") as out:
+            out.write(b"d" * 900)
+    second.abandon()
+
+    third = store.next_generation(incident_id, 1000)
+    assert third is not None
+    third.link_previous("traces/t.json")
+    with third.file("diagnosis.json") as out:
+        out.write(b"d" * 100)  # 900 linked + 100 new: at the limit
+    third.publish()
+    bundle = tmp_path / "incidents" / incident_id
+    assert store_module._payload_bytes(bundle, seen=set()) == 1000
+    assert store.budget.used_bytes == store._scan_bytes()
+
+
 # ------------------------------------------------------------------ readers
 
 

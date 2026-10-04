@@ -53,24 +53,35 @@ class Allowance:
             raise ValueError("allowance limit must be >= 0")
         self.limit = limit
         self.used = 0
+        self._cap = limit
         self._budget = budget
         self._lock = threading.Lock()
         self._released = False
 
     @property
     def remaining(self) -> int:
-        return self.limit - self.used
+        return self._cap - self.used
 
     def charge(self, nbytes: int) -> None:
         """Take ``nbytes``, or raise :class:`BudgetExceeded` and take nothing."""
         with self._lock:
             if self._released:
                 raise BudgetExceeded("the allowance was already released")
-            if self.used + nbytes > self.limit:
+            if self.used + nbytes > self._cap:
                 raise BudgetExceeded(
-                    f"{nbytes} more bytes would exceed the {self.limit}-byte allowance"
+                    f"{nbytes} more bytes would exceed the {self._cap}-byte allowance"
                 )
             self.used += nbytes
+
+    def cap(self, limit: int) -> None:
+        """Lower the limit (never raise it); :class:`BudgetExceeded` if more
+        than ``limit`` is already used. The reservation stays as made."""
+        with self._lock:
+            if self.used > limit:
+                raise BudgetExceeded(
+                    f"{self.used} bytes already exceed the {limit}-byte cap"
+                )
+            self._cap = min(self._cap, limit)
 
     def release(self, *, keep: int | None = None) -> None:
         """Return what was not kept to the budget.
