@@ -26,6 +26,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 
+from .http_server import is_loopback
 from .inflate import gunzip_capped
 from .otlp_encoding import (
     JSON_MEDIA,
@@ -112,7 +113,9 @@ class Destination:
 
     @property
     def loopback(self) -> bool:
-        return self.host in ("localhost", "::1") or self.host.startswith("127.")
+        """A loopback address, or the name localhost; never a name that only
+        starts like one, such as 127.attacker.example."""
+        return is_loopback(self.host)
 
 
 def _check_url(parts: urllib.parse.SplitResult) -> None:

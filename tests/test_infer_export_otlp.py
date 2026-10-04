@@ -144,6 +144,8 @@ def test_headers_are_refused_in_clear_text_off_this_host() -> None:
     # credentials, unencrypted, to whatever --otlp-endpoint names.
     with pytest.raises(ValueError, match="clear text"):
         _with_headers("http://collector.example:4318")
+    with pytest.raises(ValueError, match="clear text"):
+        _with_headers("http://127.attacker.example:4318")  # a name, not 127/8
     _with_headers("http://collector.example:4318", otlp_allow_insecure_headers=True)
     _with_headers("https://collector.example:4318")
     _with_headers("http://127.0.0.1:4318")
