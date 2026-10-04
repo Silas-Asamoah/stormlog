@@ -213,7 +213,10 @@ recovery.
 baseline has fewer samples than it needs in a hold (20 busy gaps, 20 waits,
 5 waiting counts) never holds, so the episode times out as
 `recovery_incomplete` instead of recovering against infinite thresholds.
-`Baseline` records each count.
+`Baseline` records each count. `recovery_blocked(episode_type, context)`
+names each series that is too thin, and by how much (`baseline_too_thin: 3
+waiting counts of the 5 a hold needs`), so that a timeout's record can say
+why recovery never held.
 
 An engine back at its baseline recovers at once; one still degraded doesn't.
 The tests hold both: engines with 40–51% of steps 10× slow, every step 2× or
