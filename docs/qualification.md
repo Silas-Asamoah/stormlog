@@ -682,7 +682,12 @@ nothing about its episodes:
 
 It is written under `<root>/.<label>.partial`. Once `SHA256SUMS` is written
 last, the directory is renamed into place, so a reader never sees half a
-run. `run_dir.verify` checks a run against its sums.
+run. `SHA256SUMS` lists every file and ends with a line giving their count
+and a digest of the lines above it, and the digest of the whole file is kept
+beside the run, in `<root>/<label>.sha256`. Every file, the run's
+directories and the root are fsynced around the rename. `run_dir.verify`
+reports any file changed, missing or unlisted, a `SHA256SUMS` truncated or
+edited, and one that differs from the digest beside the run.
 
 **The victim's outcomes** for impact are a stand-in for #213's
 `evaluate_request`, used until #213 lands, and the rule is the same:
