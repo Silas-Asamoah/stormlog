@@ -148,7 +148,8 @@ cause that sets aside its block (`external:<reason>`).
 A cleanup that left processes stops the experiment, not just its block:
 no server, treatment or prelude starts beside them. Every planned run after
 it is indexed with state `not_run` and the reason `stopped_after:<label>`.
-Once the host is clean, a resume runs them. A `probe_incomplete` run is run
+Each survivor is recorded by its PID and start time, and a resume refuses
+(exit 5) while any is still running; once the host is clean, it runs them. A `probe_incomplete` run is run
 again at once on a fresh server, after its group is verified gone, and both
 attempts are kept.
 
@@ -159,7 +160,7 @@ attempts are kept.
 | `plan.json` | The plan's and the pre-registration's SHA-256 |
 | `prereg.json` | The pre-registration, when the plan has one |
 | `order.json` | Each block's arms in run order, whether positions balance, and each arm's position counts |
-| `index.jsonl` | One line per attempt: state, reasons, every process with its PID, times, exit code and affinity, the server's cleanup; and one per run a stop left unstarted (`not_run`) |
+| `index.jsonl` | One line per attempt: state, reasons, every process with its PID, times, exit code and affinity, the server's and each treatment's cleanup; and one per run a stop left unstarted (`not_run`) |
 | `runs/<label>/` | The run: its artifacts, `describe-*.json`, the logs of the server, every step and treatment, `commands.sh`, `run.json`, `SHA256SUMS` |
 | `preludes/` | Each block's preludes, their logs, and their server's cleanup (`cleanup.json`) |
 | `sanitizer.json` | Whether the bundle is publishable, and any secret found, by file and line |
