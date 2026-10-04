@@ -5,8 +5,10 @@ loaded: the path may have changed in between. The runner therefore fixes
 the weights before it launches, and points the server at exactly them:
 
 - **A pinned hub snapshot.** The revision is resolved to a commit, and every
-  file of that snapshot is hashed and checked against its blob's name
-  (SHA-256 for a file stored in LFS, git's SHA-1 for the rest). The server
+  file of that snapshot is hashed and checked against the name of its blob
+  in the repository's own ``blobs`` (SHA-256 for a file stored in LFS,
+  git's SHA-1 for the rest). The snapshot must hold what a load reads: its
+  config, weights and every shard an index names. The server
   gets ``--revision <commit> --tokenizer-revision <commit>`` and
   ``HF_HUB_OFFLINE=1``, so it cannot fetch anything else.
 - **A staged local snapshot.** Every file of a local model directory is
@@ -22,7 +24,9 @@ description taken by the runner carries it, bound to the server's process.
 
 from __future__ import annotations
 
+import json
 import os
+import posixpath
 import shutil
 import stat
 import time
@@ -45,6 +49,7 @@ STAGED = "staged"
 ROUTES = (PINNED_HUB, STAGED)
 PINNED_COMMIT_VERIFIED = "pinned_commit_verified"
 STAGED_SNAPSHOT_VERIFIED = "staged_snapshot_verified"
+WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".gguf")
 
 
 @dataclass(frozen=True)
@@ -117,6 +122,7 @@ def _pinned(spec: Mapping[str, Any]) -> VerifiedModel:
         )
     directory, commit = found
     files = tuple(_checked_blob(directory, path) for path in walk(directory))
+    _check_loadable(directory, files)
     return VerifiedModel(
         route=PINNED_HUB,
         model=repo,
@@ -139,8 +145,11 @@ def _checked_blob(directory: Path, path: Path) -> ModelFile:
     """
     relative = path.relative_to(directory).as_posix()
     blob = snapshot_blob(path)
-    if blob is None:
-        raise InferInputError(f"model file {relative}: not a link into the blobs")
+    own = directory.parent.parent / "blobs"  # <repo>/snapshots/<commit>
+    if blob is None or blob.parent.resolve() != own.resolve():
+        raise InferInputError(
+            f"model file {relative}: not a link into its repository's blobs"
+        )
     content = path.resolve()
     if not content.is_file():
         raise InferInputError(f"model file {relative}: its blob is missing")
@@ -160,6 +169,7 @@ def _staged(spec: Mapping[str, Any]) -> VerifiedModel:
     if not source.is_dir():
         raise InferInputError(f"model source {source} is not a directory")
     files = tuple(_source_file(source, path) for path in walk(source))
+    _check_loadable(source, files)
     digest = weights_digest(files)
     assert digest is not None
     target = store / digest
@@ -177,6 +187,38 @@ def _staged(spec: Mapping[str, Any]) -> VerifiedModel:
         stats=_stats(target),
         verified_at_ns=time.time_ns(),
     )
+
+
+def _check_loadable(directory: Path, files: Sequence[ModelFile]) -> None:
+    """The snapshot holds what a load reads: its config, weights, and every
+    shard an index names.
+
+    A file of the commit that no load reads cannot be told missing offline:
+    the cache keeps no list of a commit's files.
+    """
+    names = {item.path for item in files}
+    label = f"model {directory}"
+    if "config.json" not in names:
+        raise InferInputError(f"{label}: no config.json")
+    if not any(name.endswith(WEIGHT_SUFFIXES) for name in names):
+        raise InferInputError(f"{label}: no weights")
+    for index in sorted(name for name in names if name.endswith(".index.json")):
+        missing = sorted(_indexed(directory, index) - names)
+        if missing:
+            raise InferInputError(
+                f"{label}: no {', '.join(missing)}, which its index {index} names"
+            )
+
+
+def _indexed(directory: Path, index: str) -> set[str]:
+    """The shards a weights index names, as paths in the snapshot."""
+    try:
+        weight_map = json.loads((directory / index).read_text())["weight_map"]
+        shards = {str(shard) for shard in weight_map.values()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise InferInputError(f"model {directory}: {index} is not an index") from exc
+    base = posixpath.dirname(index)
+    return {posixpath.join(base, shard) for shard in shards}
 
 
 def _source_file(source: Path, path: Path) -> ModelFile:
