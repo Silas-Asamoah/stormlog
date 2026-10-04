@@ -49,8 +49,30 @@ def test_a_closed_loop_neighbor_keeps_its_workers_busy(tmp_path: Path) -> None:
     assert actuation.sent >= 3
 
 
-def _request(status: str = "ok", held: bool = False, at: int = 0) -> dict[str, Any]:
-    return {"status": status, "held_for_slot": held, "started_at_ns": at}
+S = 1_000_000_000
+
+
+def _request(
+    status: str = "ok",
+    held: bool = False,
+    at: int = 0,
+    *,
+    lag_ms: float = 1.0,
+    prompt: int = 12,
+    output: int = 4,
+    ended: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "held_for_slot": held,
+        "started_at_ns": at,
+        "ended_at_ns": at + S // 20 if ended is None else ended,
+        "dispatch_lag_ms": lag_ms,
+        "prompt_tokens": prompt,
+        "prompt_token_source": "server_usage",
+        "output_tokens": output,
+        "output_token_source": "server_usage",
+    }
 
 
 def test_actuation_names_every_shortfall() -> None:
@@ -73,3 +95,42 @@ def test_a_shape_is_open_or_closed() -> None:
         NeighborShape(8, 4)
     with pytest.raises(ValueError):
         NeighborShape(8, 4, rate_per_second=1.0, concurrency=2)
+
+
+def test_an_open_loop_neighbor_sent_late_or_short_does_not_actuate() -> None:
+    # 450 arrivals at 10/s over 45 s, 400 of them dispatched in the last 5 s
+    # (the harness stalled), and every prompt a tenth of its dose: counting
+    # the records alone called it actuated.
+    shape = NeighborShape(input_tokens=2048, output_tokens=16, rate_per_second=10.0)
+    requests = []
+    for index in range(450):
+        intended = int(index * 0.1 * S)
+        sent = int((40 + index * 0.0125) * S) if index < 400 else intended
+        requests.append(
+            _request(at=sent, lag_ms=(sent - intended) / 1e6, prompt=205, output=16)
+        )
+    actuation = judge(requests, shape, 45.0)
+    assert not actuation.ok
+    assert any("dispatch lag" in problem for problem in actuation.problems)
+    assert any("5 s window" in problem for problem in actuation.problems)
+    assert any("prompt tokens" in problem for problem in actuation.problems)
+
+
+def test_a_closed_loop_neighbor_with_idle_workers_does_not_actuate() -> None:
+    # Four workers planned, but only one request in flight at a time.
+    shape = NeighborShape(8, 4, concurrency=4)
+    serial = [_request(at=i * S // 10, ended=(i + 1) * S // 10) for i in range(10)]
+    actuation = judge(serial, shape, 1.0)
+    assert actuation.problems == ("1 of 4 workers busy on average",)
+    busy = [
+        _request(at=i * S // 10, ended=(i + 1) * S // 10)
+        for i in range(10)
+        for _worker in range(4)
+    ]
+    assert judge(busy, shape, 1.0).ok
+
+
+def test_a_short_output_does_not_actuate() -> None:
+    shape = NeighborShape(8, 64, rate_per_second=10.0)
+    short = [_request(at=i * S // 10, output=6) for i in range(10)]
+    assert judge(short, shape, 1.0).problems == ("output tokens 0.094x the dose",)

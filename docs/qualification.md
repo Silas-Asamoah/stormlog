@@ -547,10 +547,17 @@ F3, and their workload twins.
 - **Arrivals.** An open-loop neighbor arrives at a fixed rate, so its plan is
   a schedule, not a distribution. A closed-loop one runs a number of workers,
   as F2's eight concurrent long requests do.
-- **Actuation** is judged from the neighbor's own artifact:
-  - an open-loop neighbor must reach its planned rate within 5%, with no
-    arrival held for a slot;
-  - a closed-loop one must keep every worker busy;
+- **Actuation** is judged from the neighbor's own artifact, on what was
+  actually sent:
+  - an open-loop neighbor must reach its planned rate within 5% overall and
+    in every 5 s window of actual send times, with no arrival held for a
+    slot and a p95 dispatch lag under 0.25 s, so a schedule sent late in a
+    burst doesn't pass;
+  - a closed-loop one must keep its workers busy: at least 90% of them in
+    flight on average;
+  - the server's own token counts must match the dose: the median prompt
+    within a factor of 2 (the client counts words), the median output at
+    least 90% of it;
   - any failed request is a problem.
 
   Its first send is the onset of the workload twins' effect.
