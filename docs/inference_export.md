@@ -639,7 +639,7 @@ stormlog infer profile ... --vllm-spans-listen 127.0.0.1:4319 \
   answers, after `--delay-seconds`, with `--status`, in the request's
   encoding. `--partial-rejected N` keeps all but the last N spans of each
   export, as a partial success, and `--retry-after S` adds that header to
-  its 429 and 503 answers. Like a collector, it answers 404 off
+  its 429 and 503 answers, in whole seconds as RFC 9110 has it. Like a collector, it answers 404 off
   `/v1/traces` and 415 for a body that is neither protobuf nor JSON.
   `GET /counts`, or `--count FILE` after it has gone, gives the raw and
   unique spans to check Stormlog's collector-side bounds. Slower than
