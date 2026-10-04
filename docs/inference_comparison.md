@@ -101,7 +101,8 @@ failures**: faults of the measurement that exclude it, with a reason.
 | --- | --- |
 | `session_<status>` | The run did not finish: `interrupted`, `incomplete`, or no terminal record |
 | `identity_changed` | The server's identity changed between its before and after descriptions |
-| `probe_incomplete` | The server probe's `/server_info` did not answer in time |
+| `description_mismatch` | The before description disagrees with the server the probe reached: its model, vLLM version or driver |
+| `probe_incomplete` | The server probe's `/server_info` did not answer in time, or the server dropped it unanswered |
 | `cohort_invalid` (a case) | The case's requests are not one whole cohort |
 | `cache_reset_not_acknowledged` (a case) | A cold cache was asked for and no reset was acknowledged |
 

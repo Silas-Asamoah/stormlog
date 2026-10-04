@@ -25,6 +25,8 @@ def _fields(**overrides: Any) -> dict[str, RunField]:
         "gpu.name": "NVIDIA A30",
         "gpu.driver_version": "580.82.07",
         "workload.spec_digest": "s" * 64,
+        # The server answered /server_info, so its configuration was read.
+        "scope.vllm_config": True,
         "vllm_config/scheduler_config/max_num_seqs": 256,
     }
     values.update(overrides)
