@@ -8,7 +8,14 @@ from typing import Any
 
 import pytest
 
-from stormlog.infer.qualify.ground_truth import Expectation, Interval, Neutral, Times
+from stormlog.infer.qualify.ground_truth import (
+    Expectation,
+    GroundTruthError,
+    Interval,
+    Neutral,
+    Times,
+    parse_run,
+)
 from stormlog.infer.qualify.scoring import TOP1, score_episode, score_run, summarize
 from tests.test_qualify_scoring import (
     CONFIG,
@@ -291,6 +298,18 @@ def test_a_run_record_needs_an_id_and_a_measured_length() -> None:
     empty = replace(run_record("x"), measured=Interval(0, 0), priming=None)
     assert "a run needs its run_id" in nameless.problems()
     assert "measured has no length" in empty.problems()
+
+
+@pytest.mark.parametrize("clock", [None, ""])
+def test_a_run_record_needs_its_clock(clock: str | None) -> None:
+    # rev-220-b's delta 2, E8: a run with no clock domain was accepted, and
+    # every finding with a clock then looked off the run's clock.
+    from tests.test_qualify_scoring import run_record
+
+    record = replace(run_record("x"), clock_domain=clock)
+    assert "a run needs its clock_domain" in record.problems()
+    with pytest.raises(GroundTruthError, match="clock_domain"):
+        parse_run(record.to_record())
 
 
 def test_a_run_scored_twice_is_refused() -> None:
