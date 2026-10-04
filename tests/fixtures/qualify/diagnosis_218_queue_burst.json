@@ -1,224 +1,200 @@
 {
- "payload": {
-  "coverage": {
-   "capture_pause": {
-    "by_subject": {
-     "window:c1:1790000080000000000": {
-      "reasons": [
-       "no_trace_windows"
-      ],
-      "status": "assessed"
-     }
+  "payload": {
+    "coverage": {
+      "capture_pause": {
+        "by_subject": {
+          "window:c1:1790000080000000000": {
+            "status": "assessed"
+          }
+        },
+        "reasons": [
+          "no_trace_windows"
+        ],
+        "status": "assessed"
+      },
+      "client_admission": {
+        "by_subject": {
+          "window:c1:1790000080000000000": {
+            "status": "assessed"
+          }
+        },
+        "reasons": [
+          "not_observed"
+        ],
+        "status": "assessed"
+      },
+      "host_stall": {
+        "by_subject": {
+          "window:c1:1790000080000000000": {
+            "status": "assessed"
+          }
+        },
+        "components": {
+          "api_server": "assessed",
+          "engine_core": "unsupported",
+          "worker": "unsupported"
+        },
+        "reasons": [
+          "engine_core_and_worker_not_assessed_by_this_version",
+          "not_observed"
+        ],
+        "status": "partial"
+      },
+      "kv_preemption_pressure": {
+        "by_subject": {
+          "window:c1:1790000080000000000": {
+            "status": "assessed"
+          }
+        },
+        "reasons": [
+          "not_observed"
+        ],
+        "status": "assessed"
+      },
+      "load_increase": {
+        "by_subject": {
+          "window:c1:1790000080000000000": {
+            "status": "assessed"
+          }
+        },
+        "reasons": [],
+        "status": "assessed"
+      },
+      "longer_inputs": {
+        "by_subject": {
+          "window:c1:1790000080000000000": {
+            "status": "assessed"
+          }
+        },
+        "reasons": [
+          "not_observed"
+        ],
+        "status": "assessed"
+      },
+      "longer_outputs": {
+        "by_subject": {
+          "window:c1:1790000080000000000": {
+            "status": "assessed"
+          }
+        },
+        "reasons": [
+          "not_observed"
+        ],
+        "status": "assessed"
+      },
+      "mixed_prefill_interference": {
+        "by_subject": {},
+        "reasons": [
+          "not_assessed_by_this_version"
+        ],
+        "status": "unsupported"
+      },
+      "prefix_cache_loss": {
+        "by_subject": {
+          "window:c1:1790000080000000000": {
+            "status": "unsupported"
+          }
+        },
+        "reasons": [
+          "no_declared_sharing"
+        ],
+        "status": "unsupported"
+      },
+      "prefix_sharing_drop": {
+        "by_subject": {
+          "window:c1:1790000080000000000": {
+            "status": "assessed"
+          }
+        },
+        "reasons": [
+          "not_observed"
+        ],
+        "status": "assessed"
+      },
+      "queue_saturation": {
+        "by_subject": {
+          "window:c1:1790000080000000000": {
+            "status": "assessed"
+          }
+        },
+        "reasons": [],
+        "status": "assessed"
+      },
+      "rank_delay": {
+        "by_subject": {},
+        "reasons": [
+          "not_assessed_by_this_version"
+        ],
+        "status": "unsupported"
+      },
+      "transfer_degradation": {
+        "by_subject": {},
+        "reasons": [
+          "not_assessed_by_this_version"
+        ],
+        "status": "unsupported"
+      }
     },
-    "reasons": [
-     "no_trace_windows"
-    ],
-    "status": "assessed"
-   },
-   "client_admission": {
-    "by_subject": {
-     "window:c1:1790000080000000000": {
-      "reasons": [
-       "not_observed"
-      ],
-      "status": "assessed"
-     }
-    },
-    "reasons": [
-     "not_observed"
-    ],
-    "status": "assessed"
-   },
-   "host_stall": {
-    "by_subject": {
-     "window:c1:1790000080000000000": {
-      "reasons": [
-       "not_observed"
-      ],
-      "status": "assessed"
-     }
-    },
-    "reasons": [
-     "engine_core_and_worker_not_assessed_by_this_version",
-     "not_observed"
-    ],
-    "status": "partial"
-   },
-   "kv_preemption_pressure": {
-    "by_subject": {
-     "window:c1:1790000080000000000": {
-      "reasons": [
-       "not_observed"
-      ],
-      "status": "assessed"
-     }
-    },
-    "reasons": [
-     "not_observed"
-    ],
-    "status": "assessed"
-   },
-   "load_increase": {
-    "by_subject": {
-     "window:c1:1790000080000000000": {
-      "reasons": [],
-      "status": "assessed"
-     }
-    },
-    "reasons": [],
-    "status": "assessed"
-   },
-   "longer_inputs": {
-    "by_subject": {
-     "window:c1:1790000080000000000": {
-      "reasons": [
-       "not_observed"
-      ],
-      "status": "assessed"
-     }
-    },
-    "reasons": [
-     "not_observed"
-    ],
-    "status": "assessed"
-   },
-   "longer_outputs": {
-    "by_subject": {
-     "window:c1:1790000080000000000": {
-      "reasons": [
-       "not_observed"
-      ],
-      "status": "assessed"
-     }
-    },
-    "reasons": [
-     "not_observed"
-    ],
-    "status": "assessed"
-   },
-   "mixed_prefill_interference": {
-    "by_subject": {},
-    "reasons": [
-     "not_assessed_by_this_version"
-    ],
-    "status": "unsupported"
-   },
-   "prefix_cache_loss": {
-    "by_subject": {
-     "window:c1:1790000080000000000": {
-      "reasons": [
-       "no_declared_sharing"
-      ],
-      "status": "unsupported"
-     }
-    },
-    "reasons": [
-     "no_declared_sharing"
-    ],
-    "status": "unsupported"
-   },
-   "prefix_sharing_drop": {
-    "by_subject": {
-     "window:c1:1790000080000000000": {
-      "reasons": [
-       "not_observed"
-      ],
-      "status": "assessed"
-     }
-    },
-    "reasons": [
-     "not_observed"
-    ],
-    "status": "assessed"
-   },
-   "queue_saturation": {
-    "by_subject": {
-     "window:c1:1790000080000000000": {
-      "reasons": [],
-      "status": "assessed"
-     }
-    },
-    "reasons": [],
-    "status": "assessed"
-   },
-   "rank_delay": {
-    "by_subject": {},
-    "reasons": [
-     "not_assessed_by_this_version"
-    ],
-    "status": "unsupported"
-   },
-   "transfer_degradation": {
-    "by_subject": {},
-    "reasons": [
-     "not_assessed_by_this_version"
-    ],
-    "status": "unsupported"
-   }
+    "findings_detail": {
+      "diagnosis.load_increase.dc75ca0a7c84": {
+        "cause": "workload_change",
+        "claim": "condition",
+        "eligibility": {
+          "contested": [],
+          "eligible": true,
+          "failed": [],
+          "gates": {}
+        },
+        "id": "diagnosis.load_increase.dc75ca0a7c84",
+        "kind": "load_increase",
+        "location": {
+          "component": "workload"
+        },
+        "rank": 2,
+        "role": "primary",
+        "secondary_to": [],
+        "severity": "info",
+        "window": {
+          "clock_domain": "node-7/boot-aaaa/unix_epoch_ns",
+          "end_ns": 1790000092000000000,
+          "placement": "client_clock",
+          "resolution_ns": 10100000000,
+          "start_ns": 1790000090016600000,
+          "uncertainty_ns": 0
+        }
+      },
+      "diagnosis.queue_saturation.9ca3e90ec3e0": {
+        "cause": "fault",
+        "claim": "fault",
+        "eligibility": {
+          "contested": [],
+          "eligible": true,
+          "failed": [],
+          "gates": {
+            "capacity_witness": true,
+            "usable_timing": true
+          }
+        },
+        "id": "diagnosis.queue_saturation.9ca3e90ec3e0",
+        "kind": "queue_saturation",
+        "location": {
+          "component": "scheduler",
+          "engine_producer": "vllm:node-7:boot-aaaa:2600:1790000000000000000"
+        },
+        "rank": 1,
+        "role": "primary",
+        "secondary_to": [],
+        "severity": "warning",
+        "window": {
+          "clock_domain": "node-7/boot-aaaa/unix_epoch_ns",
+          "end_ns": 1790000092000000000,
+          "placement": "client_clock",
+          "resolution_ns": 10100000000,
+          "start_ns": 1790000090016600000,
+          "uncertainty_ns": 0
+        }
+      }
+    }
   },
-  "findings_detail": {
-   "diagnosis.load_increase.c4e9ec5dcbab": {
-    "cause": "workload_change",
-    "claim": "condition",
-    "eligibility": {
-     "eligible": true,
-     "failed": [],
-     "gates": {}
-    },
-    "id": "diagnosis.load_increase.c4e9ec5dcbab",
-    "kind": "load_increase",
-    "location": {
-     "component": "workload"
-    },
-    "rank": 2,
-    "role": "primary",
-    "secondary_to": [],
-    "severity": "info",
-    "window": {
-     "clock_domain": "node-7/boot-aaaa/unix_epoch_ns",
-     "end_ns": 1790000092000000000,
-     "placement": "client_clock",
-     "resolution_ns": 1000000000,
-     "start_ns": 1790000080000000000,
-     "uncertainty_ns": 0
-    }
-   },
-   "diagnosis.queue_saturation.cd2f2100128e": {
-    "cause": "fault",
-    "claim": "fault",
-    "eligibility": {
-     "eligible": true,
-     "failed": [],
-     "gates": {
-      "capacity_witness": true,
-      "usable_timing": true
-     }
-    },
-    "id": "diagnosis.queue_saturation.cd2f2100128e",
-    "kind": "queue_saturation",
-    "location": {
-     "component": "scheduler",
-     "engine_producer": "vllm:node-7:boot-aaaa:2600:1790000000000000000",
-     "iterations": {
-      "count": 296,
-      "first": "562",
-      "last": "857"
-     }
-    },
-    "rank": 1,
-    "role": "primary",
-    "secondary_to": [],
-    "severity": "warning",
-    "window": {
-     "clock_domain": "node-7/boot-aaaa/unix_epoch_ns",
-     "end_ns": 1790000092000000000,
-     "placement": "client_clock",
-     "resolution_ns": 1000000000,
-     "start_ns": 1790000080000000000,
-     "uncertainty_ns": 0
-    }
-   }
-  }
- },
- "source": "stormlog #218 PR 1b (feat/issue-218-pr1b, aa9ed30): diagnose_artifact on tests/diagnosis_scenarios.py's burst (140 calm requests, then 300 at 200/s, max_num_seqs 4). Kept: the fields of findings_detail the scorer reads, and coverage's status, reasons and per-subject status."
+  "source": "stormlog #218 PR 1b (feat/issue-218-pr1b, 90e164d1): diagnose_artifact on tests/diagnosis_scenarios.py's burst (140 calm requests, then 300 at 5 ms from 90 s, max_num_seqs 4), from opus-218's burst-report.json. Kept: the fields of findings_detail the scorer reads (location without its iteration span), and coverage's status, reasons, per-subject status and per-component status."
 }
