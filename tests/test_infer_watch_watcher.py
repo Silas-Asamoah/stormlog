@@ -441,7 +441,8 @@ def test_retention_prunes_old_bundles_and_says_so(tmp_path: Path) -> None:
     assert (pruned["incident_id"], pruned["reason"]) == (old_id, "max_age_hours")
     assert pruned["bytes"] > 0
     stats = _report(tmp_path)["payload"]["stats"]
-    assert stats["pruned_total"] == 1
+    assert stats["pruned_total"] == {"max_age_hours": 1}
+    assert stats["pruned_bytes_total"] == {"max_age_hours": pruned["bytes"]}
     assert stats["retention_incidents"] == 0
     assert not (tmp_path / "incidents" / old_id).exists()
 
@@ -545,7 +546,7 @@ def test_bundles_removed_to_make_room_for_a_seal_are_recorded(tmp_path: Path) ->
     assert incident["bundle"] is not None
     assert records.index(pruned[-1]) < records.index(incident)
     stats = _report(tmp_path)["payload"]["stats"]
-    assert stats["pruned_total"] == len(pruned)
+    assert sum(stats["pruned_total"].values()) == len(pruned)
 
 
 def test_a_scrape_larger_than_the_whole_history_is_counted_oversized(
