@@ -244,7 +244,9 @@ ranked by #218's total `rank`, and top-1 and top-3 are taken over it.
   and `grace` is frozen per finding kind (`ScoreConfig.grace_ns`). A finding
   qualifies when it starts inside `S` and at least half of its window lies
   inside. A finding with no window, or a run-wide one, never does, nor
-  does one whose window names a clock domain other than the victim's.
+  does one whose window ends before it starts or names a clock domain
+  other than the victim's. A finding with a severity or role outside #218's
+  vocabulary is refused (`ValueError`, naming it).
 - **A neutral secondary** names an upstream in `secondary_to` that passes
   four checks:
   - it is an eligible candidate;
