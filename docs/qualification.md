@@ -68,6 +68,18 @@ The harness writes one record per attempted episode into a run's
 A null location field means "not specified". Kinds, components, causes and
 severities are #218's closed vocabulary.
 
+`parse_injection` refuses a record that would be scored wrongly, listing
+every problem:
+- a fault episode expects exactly one finding, of cause `fault` at
+  `warning`; any other episode expects no fault;
+- a workload kind is expected only as `workload_change` at `info`, as #218
+  claims it;
+- times are integers or null, and an effect doesn't end before it begins;
+- a `valid` episode has actuation `ok`, realization `realized`, and both
+  its effect onset and end.
+
+`load_injections` also refuses an episode written twice.
+
 **The four validity layers:**
 
 1. **Actuation:** the action took place. Signals were delivered and the

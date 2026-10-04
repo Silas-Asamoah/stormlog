@@ -19,7 +19,16 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .bounds import fisher_greater
-from .vocabulary import CAUSES, EDGES, KIND_COMPONENTS, PRIMARY, SEVERITIES
+from .vocabulary import (
+    CAUSE_FAULT,
+    CAUSE_WORKLOAD_CHANGE,
+    CAUSES,
+    EDGES,
+    KIND_COMPONENTS,
+    PRIMARY,
+    SEVERITIES,
+    WORKLOAD_KINDS,
+)
 
 FORMAT = "stormlog.qualify.injection/1"
 
@@ -108,6 +117,12 @@ class Expectation(Location):
             found.append(f"{where}: unknown cause {self.cause!r}")
         if self.min_severity not in SEVERITIES:
             found.append(f"{where}: unknown severity {self.min_severity!r}")
+        workload = (CAUSE_WORKLOAD_CHANGE, "info")
+        if self.kind in WORKLOAD_KINDS and (self.cause, self.min_severity) != workload:
+            found.append(
+                f"{where}: {self.kind} is a workload kind, claimed as"
+                " workload_change at info"
+            )
         return found
 
     def to_record(self) -> dict[str, Any]:
@@ -165,6 +180,21 @@ class Times:
 
     def to_record(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in _TIME_FIELDS}
+
+    def problems(self) -> list[str]:
+        found = [
+            f"times.{name} must be an integer or null"
+            for name in _TIME_FIELDS[:4] + _TIME_FIELDS[5:8]
+            if not _is_time(getattr(self, name))
+        ]
+        onset, end = self.effect_onset_ns, self.effect_end_ns
+        if not found and onset is not None and end is not None and end < onset:
+            found.append("the effect ends before it begins")
+        return found
+
+
+def _is_time(value: Any) -> bool:
+    return value is None or (isinstance(value, int) and not isinstance(value, bool))
 
 
 _TIME_FIELDS = (
@@ -294,6 +324,44 @@ class Injection:
             found += entry.problems(f"secondary[{index}]")
         for index, entry in enumerate(self.allows):
             found += entry.problems(f"allows[{index}]")
+        return (
+            found
+            + self._label_problems()
+            + self.times.problems()
+            + self._valid_problems()
+        )
+
+    def _label_problems(self) -> list[str]:
+        """What a correct diagnosis can be, for this cause class: a fault
+        episode expects exactly one fault, claimed at warning; any other
+        episode expects no fault."""
+        faults = [e for e in self.expects if e.cause == CAUSE_FAULT]
+        if self.cause_class != "fault":
+            return [f"a {self.cause_class} episode expects no fault"] if faults else []
+        if len(self.expects) != 1:
+            return ["a fault episode expects exactly one finding"]
+        expectation = self.expects[0]
+        found = []
+        if expectation.cause != CAUSE_FAULT:
+            found.append("expects[0]: a fault episode expects cause 'fault'")
+        if expectation.min_severity != "warning":
+            found.append("expects[0]: a fault is claimed at warning")
+        return found
+
+    def _valid_problems(self) -> list[str]:
+        """A valid episode passed every layer and has its effect window."""
+        if self.status != VALID:
+            return []
+        found = [
+            f"status valid, but {layer} is {value!r}"
+            for layer, value, ok in (
+                ("actuation", self.validity.actuation, "ok"),
+                ("realization", self.validity.realization, "realized"),
+            )
+            if value != ok
+        ]
+        if self.times.effect_onset_ns is None or self.times.effect_end_ns is None:
+            found.append("a valid episode needs its effect onset and end")
         return found
 
     def to_record(self) -> dict[str, Any]:
@@ -396,15 +464,22 @@ def load_injections(path: Path) -> list[Injection]:
         GroundTruthError: naming the line of the first bad record.
     """
     injections: list[Injection] = []
+    seen: set[str] = set()
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         try:
-            injections.append(parse_injection(json.loads(line)))
+            injection = parse_injection(json.loads(line))
         except GroundTruthError as error:
             raise GroundTruthError(
                 [f"line {number}: {problem}" for problem in error.problems]
             ) from error
+        if injection.episode_id in seen:
+            raise GroundTruthError(
+                [f"line {number}: episode {injection.episode_id} is written twice"]
+            )
+        seen.add(injection.episode_id)
+        injections.append(injection)
     return injections
 
 
