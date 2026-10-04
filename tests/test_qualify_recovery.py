@@ -73,12 +73,14 @@ def test_kv_pressure_without_a_victim_preemption_is_not_realized() -> None:
 
 
 def queue_signals() -> Signals:
+    # Three victim admissions a second, as at the design's 3 req/s.
     waits = [
         (
-            second * S + 500 * MS,
-            0.5 if 60 <= second < 90 else 0.02 + 0.001 * (second % 5),
+            second * S + third * 333 * MS,
+            0.5 if 60 <= second < 90 else 0.02 + 0.001 * ((3 * second + third) % 5),
         )
         for second in range(0, 200)
+        for third in range(3)
     ]
     waiting = every_second(0, 200, lambda s: 10.0 if 60 <= s <= 91 else float(s % 3))
     return Signals(waits=waits, waiting=waiting)
@@ -238,3 +240,52 @@ def test_cadence_recovers_when_the_step_gaps_look_like_the_baseline_again() -> N
     timing = effect_timing("F4a", context(signals, actions))
     assert timing.end_ns is not None
     assert timing.end_ns - (62 * S + 100 * MS) < 1 * S
+
+
+def queue_run(seed: int, elevated_after: float) -> tuple[int | None, int]:
+    """F1 at 3 req/s: waits 20x the baseline from 45 s to 75 s; then a
+    share ``elevated_after`` of them stays 4x for 60 s more."""
+    import random
+
+    rng = random.Random(seed)
+    waits, at = [], 0
+    while at < 300 * S:
+        scale = 1.0
+        if 45 * S <= at < 75 * S:
+            scale = 20.0
+        elif 75 * S <= at < 135 * S and rng.random() < elevated_after:
+            scale = 4.0
+        waits.append((at, rng.lognormvariate(-4.0, 0.5) * scale))
+        at += int(rng.expovariate(3.0) * S)
+    waiting = every_second(0, 300, lambda s: float(s % 3))
+    signals = Signals(waits=waits, waiting=waiting)
+    timing = effect_timing(
+        "F1",
+        Context(
+            signals,
+            Baseline.measure(signals, 0, 45 * S),
+            Actions(),
+            start_ns=45 * S,
+            until_ns=300 * S,
+        ),
+    )
+    return timing.end_ns, 75 * S
+
+
+def test_queue_saturation_ends_when_the_waits_are_back() -> None:
+    # Every wait at or below the baseline's p95 almost never holds for 10 s
+    # (5% of normal waits are above it), so the effect ended 6 s late on
+    # median and up to 90 s late. As many as chance allows may be above it.
+    lags = []
+    for seed in range(40):
+        end, back = queue_run(seed, elevated_after=0.0)
+        assert end is not None, seed
+        lags.append((end - back) / S)
+    assert all(-3.0 <= lag <= 3.0 for lag in lags), lags
+
+
+def test_queue_saturation_lasts_while_most_waits_stay_long() -> None:
+    # 4 in 5 waits stay 4x the baseline's for 60 s after the overload ends.
+    for seed in range(20):
+        end, back = queue_run(seed, elevated_after=0.8)
+        assert end is not None and end >= back + 55 * S, seed
