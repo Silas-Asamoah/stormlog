@@ -176,6 +176,10 @@ class OtlpHttpTransport:
         }
         self._lock = threading.Lock()
         self._current: socket.socket | None = None
+        self._aborted = False
+        # Whether the latest attempt began to send its body; kept until the
+        # next attempt starts, so a late reader still sees it.
+        self._body_started = False
 
     def start(self, wait: float = 2.0) -> bool:
         """Resolve the destination, waiting at most ``wait`` seconds."""
@@ -183,6 +187,10 @@ class OtlpHttpTransport:
 
     def send(self, body: bytes, *, spans: int) -> Transmission:
         """Export ``body``, holding ``spans`` spans, in one attempt."""
+        with self._lock:
+            self._body_started = False
+            if self._aborted:
+                return Transmission(NOT_SENT, SEND_FAILED)
         deadline = time.monotonic() + self.attempt_seconds
         compressed = gzip.compress(body, compresslevel=6, mtime=0)
         sock, token, failure = self._connect(deadline)
@@ -197,15 +205,22 @@ class OtlpHttpTransport:
                 self._current = None
             _close(sock)
 
-    def abort(self) -> None:
-        """Shut down the socket of an attempt in progress, if there is one."""
+    def abort(self) -> bool:
+        """Stop for good: end any attempt in progress and refuse new ones.
+
+        Returns whether the latest attempt had begun to send its body, which
+        the collector may then have stored.
+        """
         with self._lock:
+            self._aborted = True
             sock = self._current
+            started = self._body_started
         if sock is not None:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+        return started
 
     def _connect(
         self, deadline: float
@@ -276,6 +291,10 @@ class OtlpHttpTransport:
         self, sock: socket.socket, token: int, body: bytes, spans: int
     ) -> Transmission:
         connection = _Connection(self.destination.host, self.destination.port, sock)
+        with self._lock:
+            if self._aborted:
+                return Transmission(NOT_SENT, SEND_FAILED)
+            self._body_started = True
         try:
             connection.request(
                 "POST", self.destination.target, body=body, headers=self._headers
