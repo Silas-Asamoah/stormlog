@@ -23,6 +23,7 @@ LOOP_NO_BASELINE_FLOOR_NS = "host_stall.no_baseline_floor_ns"
 LOOP_BASELINE_WINDOW_NS = "host_stall.baseline_window_ns"
 LOOP_MIN_BUSY_STEPS = "host_stall.min_busy_steps"
 LOOP_MATCHED_BIN_MIN_STEPS = "host_stall.matched_bin_min_steps"
+LOOP_HEARTBEAT_GRACE_NS = "host_stall.heartbeat_grace_ns"
 
 DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
     {
@@ -46,6 +47,9 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # or this many of the stall's own work bucket (scheduled tokens within
         # a factor of two) to compare it with steps of its size.
         LOOP_MATCHED_BIN_MIN_STEPS: 20.0,
+        # A stall still going on is judged only while the hook's writer was
+        # heard from this recently: about two of its one-second heartbeats.
+        LOOP_HEARTBEAT_GRACE_NS: 2_000_000_000.0,
     }
 )
 
@@ -67,6 +71,7 @@ __all__ = [
     "DEFAULT_THRESHOLDS",
     "KV_PREEMPTIONS",
     "LOOP_BASELINE_WINDOW_NS",
+    "LOOP_HEARTBEAT_GRACE_NS",
     "LOOP_MATCHED_BIN_MIN_STEPS",
     "LOOP_MIN_BUSY_STEPS",
     "LOOP_NO_BASELINE_FLOOR_NS",
