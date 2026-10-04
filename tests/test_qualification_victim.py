@@ -6,10 +6,11 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
 from examples.qualification.fake_engine.process import _environment
-from examples.qualification.victim import main, read_marker, run
+from examples.qualification.victim import AppendProbe, main, read_marker, run
 
 
 def _arguments(engine: FakeEngine, output: Path) -> list[str]:
@@ -67,3 +68,28 @@ def test_the_victim_runs_as_its_own_process(tmp_path: Path) -> None:
 
 def test_a_bad_command_line_is_refused() -> None:
     assert main(["--probes", "x"]) == 2
+
+
+def test_the_append_probe_passes_on_whatever_append_takes(tmp_path: Path) -> None:
+    # #220's Prometheus export adds an argument to JsonlEventWriter.append;
+    # the probe wraps it without knowing its signature.
+    from stormlog.infer import events
+
+    seen: list[tuple[Any, ...]] = []
+    real = events.JsonlEventWriter.append
+
+    def append(self: Any, record: dict[str, Any], *extra: Any, **named: Any) -> None:
+        seen.append((extra, named))
+        real(self, record)
+
+    events.JsonlEventWriter.append = append  # type: ignore[method-assign]
+    probe = AppendProbe(tmp_path / "append-times.jsonl")
+    try:
+        probe.install()
+        with events.JsonlEventWriter(tmp_path / "artifact.jsonl") as writer:
+            writer.append({"event_type": "x"}, {"extra": 1}, flag=True)  # type: ignore[call-arg]
+    finally:
+        probe.uninstall()
+        events.JsonlEventWriter.append = real  # type: ignore[method-assign]
+    assert seen == [(({"extra": 1},), {"flag": True})]
+    assert (tmp_path / "append-times.jsonl").read_text().count("\n") == 1

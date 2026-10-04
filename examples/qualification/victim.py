@@ -73,8 +73,14 @@ class AppendProbe:
         self._original = original
         probe = self
 
-        def append(self: events.JsonlEventWriter, record: dict[str, Any]) -> None:
-            original(self, record)
+        def append(
+            self: events.JsonlEventWriter,
+            record: dict[str, Any],
+            *args: Any,
+            **kwargs: Any,
+        ) -> None:
+            # Whatever else append takes (#220 adds an argument) passes on.
+            original(self, record, *args, **kwargs)
             probe.note(self.path, record)
 
         events.JsonlEventWriter.append = append  # type: ignore[method-assign]
