@@ -177,9 +177,14 @@ class AppendOnlyTelemetrySink:
             self._ensure_active_session_locked(record)
             limit = self.config.max_buffer_bytes
             if limit is not None and self._buffered_bytes + len(line) > limit:
-                self._dropped_records += 1
-                self._dropped_bytes += len(line)
-                return
+                # Make room by flushing now, unless a failed flush is backing
+                # off; drop only what still does not fit.
+                if time.monotonic() >= self._flush_retry_at:
+                    self._flush_locked(force=True)
+                if self._buffered_bytes + len(line) > limit:
+                    self._dropped_records += 1
+                    self._dropped_bytes += len(line)
+                    return
             self._buffer.append(line)
             self._buffered_event_count += 1
             self._buffered_bytes += len(line)
