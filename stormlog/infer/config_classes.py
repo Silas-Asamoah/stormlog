@@ -36,6 +36,10 @@ CONFIG_CLASSES_VERSION = "config_classes_v1"
 CONFIG_CLASSES_V1: Mapping[str, str] = {
     "/model_config": IDENTITY,
     "/model_config/served_model_name": LABEL,
+    # A credential says which account fetched the weights, not what ran.
+    "/model_config/hf_token": LABEL,
+    "/speculative_config/target_model_config/hf_token": LABEL,
+    "/speculative_config/draft_model_config/hf_token": LABEL,
     "/model_config/allowed_local_media_path": LAUNCH,
     "/cache_config": IDENTITY,
     "/parallel_config": IDENTITY,
@@ -133,6 +137,8 @@ FIELD_CLASSES_V1: Mapping[str, str] = {
     "workload.realization_digest": LAUNCH,
     "observer.": OBSERVATION,
     "experiment.": LABEL,
+    # Which sources a run read; compared through the fields they hold.
+    "scope.": LABEL,
 }
 
 

@@ -72,10 +72,12 @@ the flaky benchmark memory gates
   every field is `identity`, `launch`, `observation` or `label`, with vLLM
   0.30.0's configuration classified by JSON pointer (`config_classes_v1`)
   and an unclassified difference blocking. `compatible(a, b)` gives
-  `incompatible`, `unverified` (a required field unknown on either side;
-  redacted, inferred and declared values never verify one) or
-  `compatible`. The `infer.workload` record gains `spec_digest`, its digest
-  without the seed. (#213)
+  `incompatible`, `unverified` (a required field unknown on either side, or
+  an identity field unknown on one; redacted, inferred and declared values
+  never verify one) or `compatible`. A `null` setting is a value, and a
+  field only one run has, where both read its source, is a difference. The
+  `infer.workload` record gains `spec_digest`, its digest without the
+  seed. (#213)
 - The run manifest: `infer profile --describe-server FILE` records a
   description taken before the run and `--declare FILE` the operator's
   declarations, as append-only `infer.manifest` records. `stormlog infer

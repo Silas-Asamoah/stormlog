@@ -11,10 +11,17 @@ launch), or ``declared`` by the operator.
 
 - ``incompatible``: an identity field (or an unclassified configuration
   leaf) differs and is not allowed;
-- ``unverified``: a required field is unknown on either or both sides; a
+- ``unverified``: a required field is unknown on either or both sides, or
+  an identity field (or an unclassified leaf) is unknown on one side; a
   redacted, inferred or declared value is unknown, and two redacted values
   are never equal;
 - ``compatible``: otherwise.
+
+A ``null`` in vLLM's configuration is a setting (no quantization, no
+speculative decoding), not missing evidence. Where both runs read a source
+(``/server_info``'s configuration or environment, the server's process
+environment), a field only one of them has is a difference; where one did
+not read it, the field is unknown.
 
 Launch fields are covariates and never block. Observation fields may
 differ in ``overhead`` and ``incremental`` comparisons only. Labels are
@@ -93,20 +100,37 @@ ALIASES: Mapping[str, str] = {
     "engine.speculative": "/speculative_config",
 }
 _UNKNOWN_PROVENANCE = frozenset({INFERRED, DECLARED_PROVENANCE})
+# Marker fields naming each source a run read, so that a field it lacks is
+# known to be absent rather than unknown.
+SCOPE_VLLM_CONFIG = "scope.vllm_config"
+SCOPE_VLLM_ENV = "scope.vllm_env"
+SCOPE_ENVIRON = "scope.environ"
+_SCOPES = (
+    (VLLM_CONFIG + "/", SCOPE_VLLM_CONFIG),
+    (VLLM_ENV + "/", SCOPE_VLLM_ENV),
+    ("environ.", SCOPE_ENVIRON),
+)
+# What cannot be told apart from its counterpart is not verified.
+_MUST_BE_KNOWN = frozenset({IDENTITY, UNCLASSIFIED})
 
 
 @dataclass(frozen=True)
 class RunField:
-    """One field of a run: its value, where it came from, and how it is known."""
+    """One field of a run: its value, where it came from, and how it is known.
+
+    ``null_is_value`` marks a field whose ``None`` is a setting, as in vLLM's
+    configuration, rather than evidence that could not be read.
+    """
 
     value: Any
     source: str
     provenance: str
+    null_is_value: bool = False
 
     @property
     def known(self) -> bool:
         return (
-            self.value is not None
+            (self.value is not None or self.null_is_value)
             and not is_redacted(self.value)
             and not _unavailable(self.value)
             and self.provenance not in _UNKNOWN_PROVENANCE
@@ -203,7 +227,10 @@ def compatible(
     }
     unknown: list[str] = []
     for name in sorted(set(a) | set(b)):
-        _judge(name, a.get(name), b.get(name), mode, allowances, groups, unknown)
+        difference = _one_sided(name, a, b) or _compared(
+            name, classify(name), a.get(name), b.get(name)
+        )
+        _sort(difference, mode, allowances, groups, unknown)
     groups["unverified"].extend(
         _unknown_required(a, b, required, {d.name for d in groups["unverified"]})
     )
@@ -244,27 +271,52 @@ def classify(name: str) -> str:
     return field_class(name)
 
 
-def _judge(
-    name: str,
-    first: RunField | None,
-    second: RunField | None,
+def _sort(
+    difference: Difference | None,
     mode: str,
     allowances: list[str],
     groups: dict[str, list[Difference]],
     unknown: list[str],
 ) -> None:
-    kind = classify(name)
-    if kind == LABEL:
-        return
-    difference = _compared(name, kind, first, second)
-    if difference is None:
+    """File a difference by its reason and class; labels are ignored."""
+    if difference is None or difference.field_class == LABEL:
         return
     if difference.reason == "unknown":
-        unknown.append(name)
+        if difference.field_class in _MUST_BE_KNOWN:
+            groups["unverified"].append(difference)
+        else:
+            unknown.append(difference.name)
     elif difference.reason == "differs_unverified":
         groups["unverified"].append(difference)
     else:
+        name, kind = difference.name, difference.field_class
         groups[_group(name, kind, mode, allowances)].append(difference)
+
+
+def _one_sided(
+    name: str, a: Mapping[str, RunField], b: Mapping[str, RunField]
+) -> Difference | None:
+    """A field one run has and the other, which read its source, lacks.
+
+    When the value that is there is no evidence (redacted, inferred or
+    declared), the two differ but the difference is not verified.
+    """
+    first, second = a.get(name), b.get(name)
+    if first is None and second is not None and _read(a, name):
+        reason = "only_in_b" if second.known else "differs_unverified"
+        return Difference(name, classify(name), None, second.value, reason)
+    if second is None and first is not None and _read(b, name):
+        reason = "only_in_a" if first.known else "differs_unverified"
+        return Difference(name, classify(name), first.value, None, reason)
+    return None
+
+
+def _read(fields: Mapping[str, RunField], name: str) -> bool:
+    """Whether the run read the source a field comes from."""
+    scope = next(
+        (marker for prefix, marker in _SCOPES if name.startswith(prefix)), None
+    )
+    return scope is not None and _known(fields.get(scope))
 
 
 def _compared(
@@ -306,7 +358,8 @@ def _group(name: str, kind: str, mode: str, allowances: list[str]) -> str:
 
 def _required_known(name: str, fields: Mapping[str, RunField]) -> bool:
     if name == VLLM_CONFIG:
-        return any(key.startswith(VLLM_CONFIG + "/") for key in fields)
+        # Only the server's own answer counts; a declared leaf does not.
+        return _known(fields.get(SCOPE_VLLM_CONFIG))
     item = fields.get(name)
     return item is not None and item.known
 
@@ -351,6 +404,8 @@ def _description_fields(description: Mapping[str, Any]) -> dict[str, RunField]:
         name: RunField(value, "describe-server", OBSERVED)
         for name, value in values.items()
     }
+    if isinstance(_section(description, "server").get("environ"), Mapping):
+        fields[SCOPE_ENVIRON] = RunField(True, "describe-server", OBSERVED)
     fields.update(_model_fields(_section(description, "model")))
     return fields
 
@@ -450,27 +505,36 @@ def _probe_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, RunField]:
     version = _section(answers, VERSION).get("body")
     if isinstance(version, Mapping):
         values["engine.version"] = (version.get("version"), "/version")
-    info = _section(answers, SERVER_INFO).get("body")
-    if isinstance(info, Mapping):
-        values.update(_server_info_values(info))
-    return {
+    fields = {
         name: RunField(value, source, REPORTED)
         for name, (value, source) in values.items()
     }
+    info = _section(answers, SERVER_INFO).get("body")
+    if isinstance(info, Mapping):
+        fields.update(_server_info_fields(info))
+    return fields
 
 
-def _server_info_values(info: Mapping[str, Any]) -> dict[str, tuple[Any, str]]:
+def _server_info_fields(info: Mapping[str, Any]) -> dict[str, RunField]:
+    """Configuration and environment, where null is a setting, and versions."""
     source = "/server_info"
-    values = {
-        VLLM_CONFIG + pointer: (value, source)
-        for pointer, value in _leaves(info.get("vllm_config"), "")
-    }
-    for name, value in _section(info, "vllm_env").items():
-        values[f"{VLLM_ENV}/{name}"] = (value, source)
+    fields: dict[str, RunField] = {}
+    if isinstance(info.get("vllm_config"), Mapping):
+        fields[SCOPE_VLLM_CONFIG] = RunField(True, source, REPORTED)
+        for pointer, value in _leaves(info.get("vllm_config"), ""):
+            fields[VLLM_CONFIG + pointer] = _setting(value, source)
+    if isinstance(info.get("vllm_env"), Mapping):
+        fields[SCOPE_VLLM_ENV] = RunField(True, source, REPORTED)
+        for name, value in _section(info, "vllm_env").items():
+            fields[f"{VLLM_ENV}/{name}"] = _setting(value, source)
     packages = _section(_section(info, "system_env"), "packages")
     for package, version in packages.items():
-        values[f"runtime.{package}"] = (version, source)
-    return values
+        fields[f"runtime.{package}"] = RunField(version, source, REPORTED)
+    return fields
+
+
+def _setting(value: Any, source: str) -> RunField:
+    return RunField(value, source, REPORTED, null_is_value=True)
 
 
 def _workload_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, RunField]:
@@ -550,6 +614,9 @@ __all__ = [
     "MODES",
     "OVERHEAD",
     "REQUIRED_V1",
+    "SCOPE_ENVIRON",
+    "SCOPE_VLLM_CONFIG",
+    "SCOPE_VLLM_ENV",
     "UNVERIFIED",
     "VERIFIED_EVIDENCE",
     "Compatibility",
