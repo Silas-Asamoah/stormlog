@@ -251,3 +251,28 @@ def test_the_tailer_copies_the_epochs_it_read(tmp_path: Path) -> None:
     assert (
         tmp_path / "truth" / "hook" / "host-a" / "engine-1" / "000002.jsonl.part"
     ).read_bytes() == _hook_line(2)
+
+
+def test_the_view_says_where_a_moment_fell_in_the_step_loop() -> None:
+    # A.4 (#218 R12): where each F4a pulse landed decides what the engine
+    # was doing when it stopped: inside schedule(), in a step's execution
+    # (a GPU wait), or between steps.
+    view = VictimView(VICTIM, 4)
+    for iteration, start in ((1, 100), (2, 300)):
+        view.add(
+            {
+                "epoch": "engine-1",
+                "kind": "scheduled",
+                "iteration": str(iteration),
+                "start_wall_ns": start,
+                "end_wall_ns": start + 10,
+                "members": [],
+            }
+        )
+        view.add({"epoch": "engine-1", "kind": "completed", "iteration": str(iteration),
+                  "wall_ns": start + 80, "members": []})  # fmt: skip
+    assert view.landing(105) == "in_schedule"
+    assert view.landing(150) == "in_step"
+    assert view.landing(200) == "between_steps"
+    assert view.landing(50) == "between_steps"
+    assert view.landing(390) == "between_steps"

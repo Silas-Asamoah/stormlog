@@ -211,7 +211,22 @@ class VictimView:
     step_starts: list[int] = field(default_factory=list)
     # Every request's admission, the victim's or not: (wall ns, external ID).
     admissions: list[tuple[int, str]] = field(default_factory=list)
+    # Each step's schedule() call and its completion, by iteration.
+    schedules: dict[str, tuple[int, int]] = field(default_factory=dict)
+    completions: dict[str, int] = field(default_factory=dict)
     _admitted: dict[str, int] = field(default_factory=dict)
+
+    def landing(self, at_ns: int) -> str:
+        """Where ``at_ns`` fell in the step loop: ``in_schedule`` (inside a
+        step's schedule() call), ``in_step`` (after it, before the step
+        completed: execution or a GPU wait) or ``between_steps``."""
+        for iteration, (start, end) in self.schedules.items():
+            if start <= at_ns <= end:
+                return "in_schedule"
+            completed = self.completions.get(iteration)
+            if completed is not None and end < at_ns <= completed:
+                return "in_step"
+        return "between_steps"
 
     def first_admission(self, external_prefix: str) -> int | None:
         """When the first request whose external ID has this prefix was
@@ -233,6 +248,8 @@ class VictimView:
             self._alias(record)
         elif kind == "scheduled":
             self._scheduled(record)
+        elif kind == "completed" and record.get("wall_ns") is not None:
+            self.completions[str(record.get("iteration"))] = int(record["wall_ns"])
 
     def _alias(self, record: dict[str, Any]) -> None:
         external = str(record.get("external") or "")
@@ -243,6 +260,9 @@ class VictimView:
     def _scheduled(self, record: dict[str, Any]) -> None:
         start = int(record["start_wall_ns"])
         self.step_starts.append(start)
+        end = record.get("end_wall_ns")
+        if end is not None:
+            self.schedules[str(record.get("iteration"))] = (start, int(end))
         for member in record.get("members") or ():
             self._member(member, start)
         for internal in record.get("preempted") or ():

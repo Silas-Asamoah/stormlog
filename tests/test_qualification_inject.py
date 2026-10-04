@@ -101,6 +101,8 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     stall = injections["F4a"]
     assert stall.status == "valid", stall.validity
     assert stall.injected["pulses"]
+    landings = {"in_schedule", "in_step", "between_steps"}
+    assert all(pulse["landed"] in landings for pulse in stall.injected["pulses"])
     assert stall.times.effect_onset_ns == stall.times.action_onset_ns
     assert injections["N"].status == "valid"
     # F2 runs last: under a loaded test host its 1 s KV hold may time out,

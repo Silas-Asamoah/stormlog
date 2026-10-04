@@ -306,6 +306,8 @@ class InjectionRun:
         actions = replace(actions, action_end_ns=ended, slot_ns=(started, ended))
         onset = _action_onset(actions, started)
         decision, timing = self._recover(episode, baseline, actions, onset, ended)
+        if episode.row.method == PULSE:
+            self._mark_landings(injected)
         context = Context(
             self._signals(), baseline, actions, onset, self.clock(), self.thresholds
         )
@@ -389,6 +391,15 @@ class InjectionRun:
             "pulses": [pulse.to_record() for pulse in pulses],
         }
         return actions, len(pulses) == count, injected
+
+    def _mark_landings(self, injected: dict[str, Any]) -> None:
+        """Where each pulse landed in the step loop (A.4, #218 R12), from the
+        hook records read by the end of its recovery."""
+        with self._lock:
+            assert self.channel is not None
+            view = self.channel.view
+            for pulse in injected.get("pulses") or ():
+                pulse["landed"] = view.landing(int(pulse["stop_sent_ns"]))
 
     def _capture(self, episode: EpisodePlan) -> tuple[Actions, bool, dict[str, Any]]:
         window = capture_window(self.server.base_url, float(episode.dose["seconds"]))

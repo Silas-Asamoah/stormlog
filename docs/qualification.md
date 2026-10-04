@@ -556,7 +556,10 @@ F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
   long as the target was actually stopped, so a schedule that falls behind
   keeps the cap instead of catching up back to back.
 
-Each pulse's stop, confirmation and continue times are kept, with `held_ns`,
+Each pulse records where it landed in the step loop (A.4, #218 R12), from the
+reference hook's records: `in_schedule` (inside a step's `schedule()` call),
+`in_step` (after it, before the step completed: execution or a GPU wait) or
+`between_steps`. Each pulse's stop, confirmation and continue times are kept, with `held_ns`,
 the measured time from `SIGSTOP` to `SIGCONT`, so effect timing can start from
 the first confirmed stop.
 
