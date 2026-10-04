@@ -148,6 +148,18 @@ def test_a_new_generation_links_traces_and_frees_only_what_it_replaced(
     assert bytes_on_disk([bundle / "gen-1"], seen=set()) == 1000 + 250 + 2
 
 
+def test_a_new_bundle_never_replaces_an_existing_one(tmp_path: Path) -> None:
+    """A retried seal with a persisted id used to delete the published bundle."""
+    store = IncidentStore(tmp_path, _limits())
+    incident_id = _gen0(store, b"kept\n")
+    with pytest.raises(FileExistsError):
+        store.new_bundle(incident_id, KIB)
+    with open_incident_bundle(tmp_path / "incidents" / incident_id) as view:
+        assert view.file("incident.jsonl").read_bytes() == b"kept\n"
+    assert store.budget.reserved_bytes == 0
+    assert store.budget.used_bytes == store._scan_bytes()
+
+
 # ------------------------------------------------------------------ readers
 
 
