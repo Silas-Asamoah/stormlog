@@ -692,7 +692,14 @@ def test_skew_limits_follow_the_table_then_the_standard_error() -> None:
 
 
 @pytest.mark.parametrize(
-    ("budget", "unit"), [(-0.01, "relative"), (math.inf, "relative"), (1.5, "fraction")]
+    ("budget", "unit"),
+    [
+        (-0.01, "relative"),
+        (math.inf, "relative"),
+        (1.5, "fraction"),
+        # rev-213-a's R3-1: exactly 1, on the path #221's wrapper calls.
+        (1.0, "fraction"),
+    ],
 )
 def test_a_gate_budget_that_cannot_mean_anything_is_refused(
     budget: float, unit: str
