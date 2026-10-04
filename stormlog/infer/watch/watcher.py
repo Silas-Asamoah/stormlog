@@ -646,7 +646,11 @@ def _finding(index: int, incident: Mapping[str, Any]) -> Finding:
         kind=f"incident_{incident['kind']}",
         severity="warning" if counting else "info",
         title=f"Incident from trigger {incident['trigger_id']}",
-        message=None if incident["persisted"] else "the bundle could not be written",
+        message=(
+            None
+            if incident["persisted"]
+            else f"the bundle could not be written: {incident.get('bundle_error')}"
+        ),
         evidence=[
             Evidence(
                 kind="incident_bundle",

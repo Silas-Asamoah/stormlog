@@ -19,6 +19,7 @@ triggers join one incident.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import socket
 import time
@@ -295,15 +296,21 @@ class IncidentManager:
         protected = frozenset(self.open)
 
         def write() -> None:
-            # On the store's worker; the bookkeeping goes back to the loop.
-            record["bundle"] = self._write_bundle(
-                incident.incident_id, lines, status, sealed_at, protected
-            )
-            pruned = self.store.take_pruned()
-            self._post(lambda: self._finish(incident, record, pruned))
+            # On the store's worker; the bookkeeping goes back to the loop,
+            # whatever the write raised: the incident is always recorded.
+            try:
+                record["bundle"], record["bundle_error"] = self._write_bundle(
+                    incident.incident_id, lines, status, sealed_at, protected
+                )
+            except Exception as exc:
+                record["bundle"], record["bundle_error"] = None, _error_text(exc)
+            finally:
+                pruned = self.store.take_pruned()
+                self._post(lambda: self._finish(incident, record, pruned))
 
         if not self._submit(write):
             record["bundle"] = None
+            record["bundle_error"] = "the store's writer refused it: busy or stalled"
             self._finish(incident, record, [])
 
     def _write_bundle(
@@ -313,11 +320,15 @@ class IncidentManager:
         status: str,
         sealed_at: int,
         protected: frozenset[str],
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
+        """The bundle's path, or None and why it could not be written."""
         reserve = _RESERVE_BASE + lines.nbytes
-        writer = self.store.new_bundle(incident_id, reserve, protected=protected)
+        try:
+            writer = self.store.new_bundle(incident_id, reserve, protected=protected)
+        except OSError as exc:  # creating the bundle: ENOSPC, EACCES
+            return None, _error_text(exc)
         if writer is None:
-            return None
+            return None, f"the store cannot hold {reserve} bytes within its limits"
         try:
             with writer.file("incident.jsonl") as out:
                 for line in lines:
@@ -327,10 +338,11 @@ class IncidentManager:
                 complete=status == STATUS_COMPLETED,
                 sealed_at_ns=sealed_at,
             )
-        except (BudgetExceeded, OSError):
-            writer.abandon()
-            return None
-        return f"incidents/{incident_id}"
+        except (BudgetExceeded, OSError) as exc:
+            with contextlib.suppress(OSError):
+                writer.abandon()
+            return None, _error_text(exc)
+        return f"incidents/{incident_id}", None
 
     def _finish(
         self,
@@ -363,6 +375,7 @@ class IncidentManager:
                 "counts_toward_exit": incident.counts_toward_exit,
                 "persisted": persisted,
                 "bundle": record.get("bundle"),
+                "bundle_error": record.get("bundle_error"),
             }
         )
         self._emit(record)
@@ -434,6 +447,7 @@ class IncidentManager:
             rearm_basis=None,
             suppressed=dict(incident.suppressed),
             bundle=None,
+            bundle_error=None,
             traces=[],
             attachment_ids=[f"incident:{incident.incident_id}"],
             request_refs=[],
@@ -565,6 +579,10 @@ def _fidelity(ok: int, failed: int, covered: float, requested: float) -> str:
     if failed or covered < requested:
         return "partial"
     return "complete"
+
+
+def _error_text(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"
 
 
 def _reason(result: TickResult) -> str:
