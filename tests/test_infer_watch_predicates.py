@@ -14,6 +14,7 @@ from stormlog.infer.watch.evaluate import (
     ACTION_DEEP_CAPTURE,
     KIND_HEALTH,
     KIND_METRIC,
+    KIND_SIGNAL,
     TriggerEngine,
     TriggerSpec,
 )
@@ -28,6 +29,7 @@ from stormlog.infer.watch.predicates import (
     GaugeAtLeast,
     HistogramShareAbove,
     ScrapeFailures,
+    ScrapeFailureShare,
     SignalExceeds,
     WindowPredicate,
     exporter_restarted,
@@ -360,3 +362,58 @@ def test_health_predicates_are_asked_about_the_history_tail() -> None:
             if result.transition is not None:
                 events.append((second, result.transition.event))
     assert events == [(4, "pending"), (7, EVENT_FIRED)]
+
+
+# ------------------------------------------------------- sparse scrape failures
+
+
+def test_isolated_failed_scrapes_neither_blind_a_signal_nor_go_unseen() -> None:
+    """One failed scrape every 20 s: no three in a row, so ScrapeFailures
+    never fires. The window triggers still fire on the remaining scrapes
+    (#218 0a judges a window across an interior failure), and the share of
+    failed scrapes is a health incident of its own."""
+    sustain = Sustain.with_defaults(window=30, hold=60, clear=None, tick=1)
+    specs = [
+        TriggerSpec("queue", KIND_SIGNAL, sustain, SignalExceeds(QUEUE_SATURATION)),
+        TriggerSpec(
+            "failures",
+            KIND_HEALTH,
+            Sustain.with_defaults(window=3, hold=3, clear=None, tick=1),
+            ScrapeFailures(consecutive=3),
+        ),
+        TriggerSpec(
+            "failure_share",
+            KIND_HEALTH,
+            Sustain.with_defaults(window=60, hold=60, clear=None, tick=1),
+            ScrapeFailureShare(share=0.04, scrapes=60),
+        ),
+    ]
+    engine = TriggerEngine(specs, tick_seconds=1)
+    texts = [
+        None if second and second % 20 == 0 else _waiting(500) for second in range(300)
+    ]
+    history = _entries(texts)
+    fired: dict[str, int] = {}
+    for second in range(300):
+        at = second * S + 5_000_000
+        done = [entry for entry in history if entry[0].done_mono_ns <= at][-90:]
+        for result in engine.tick(at, done):
+            transition = result.transition
+            if transition is not None and transition.event == EVENT_FIRED:
+                fired.setdefault(result.spec.trigger_id, second)
+    assert "failures" not in fired
+    assert fired["queue"] <= 92
+    assert fired["failure_share"] <= 125  # 3 of the last 60, held for 60 s
+
+
+def test_failure_share_needs_its_scrapes() -> None:
+    share = ScrapeFailureShare(share=0.5, scrapes=4)
+    assert share.evaluate_history(_entries([None, _waiting(1)])).reasons == (
+        REASON_TOO_FEW_SAMPLES,
+    )
+    half = share.evaluate_history(_entries([None, _waiting(1), None, _waiting(1)]))
+    assert half.classification == VIOLATING and half.observed == 0.5
+    with pytest.raises(ValueError, match="share"):
+        ScrapeFailureShare(share=0.0)
+    with pytest.raises(ValueError, match="scrapes"):
+        ScrapeFailureShare(scrapes=0)

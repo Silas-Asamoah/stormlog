@@ -167,7 +167,9 @@ much longer.
   `F + W + Δ` after the onset, plus pauses.
 - **Resets restart the count.** After a reset, the bound counts again from
   the next violating tick. Data gaps longer than `G` that keep coming back
-  leave no bound at all, and a scrape-health trigger reports them.
+  leave no bound at all. A scrape-health trigger reports them: consecutive
+  failures, or a share of failed scrapes, since isolated failures leave each
+  window judged on fewer samples.
 
 Worked example, with `W` = 30, `F` = 60 and `G` = 30. The queue is saturated
 from 0 s, and every scrape fails from 89 s to 121 s:
@@ -194,6 +196,7 @@ reason `engine_required`.
 | a histogram's share above a value | more than the chosen share of the window's observations are above the value | the lower bucket bound: a value between two bucket bounds gives an interval `[lo, hi]`, and only `lo` can fire |
 | a #218 signal (`queue_saturation`, `kv_preemption_pressure`, `prefix_cache_loss`) | the signal exceeds its threshold in #218's shared table | the signal's own window rule; the incident says the mechanism is *suspected* |
 | scrape failures | the last `k` scrapes all failed; a failed scrape is evidence here, not a gap | the scrapes |
+| failed-scrape share | at least a chosen share of the last `n` scrapes failed, consecutive or not | the scrapes |
 | a frozen exporter | over the last `k + 1` scrapes, requests run or wait and no progress counter moves | the gauges and the generation and prompt token counters |
 
 A trigger on a histogram vLLM records when a request completes (e2e, TPOT,

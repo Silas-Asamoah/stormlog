@@ -257,6 +257,40 @@ class ScrapeFailures:
 
 
 @dataclass(frozen=True)
+class ScrapeFailureShare:
+    """At least ``share`` of the last ``scrapes`` scrapes failed.
+
+    Isolated failures never make :class:`ScrapeFailures` fire, and every
+    window trigger is judged on fewer samples across them, so a scraper
+    failing now and then would otherwise degrade with nothing said. Here a
+    failed scrape is evidence, as it is for ScrapeFailures.
+    """
+
+    share: float = 0.05
+    scrapes: int = 60
+
+    def __post_init__(self) -> None:
+        if not 0.0 < self.share <= 1.0:
+            raise ValueError("failed-scrape share must be in (0, 1]")
+        if self.scrapes < 1:
+            raise ValueError("failed-scrape share needs scrapes >= 1")
+
+    def evaluate_history(self, history: Sequence[Entry]) -> Evaluation:
+        tail = history[-self.scrapes :]
+        if len(tail) < self.scrapes:
+            return Evaluation(DATA_GAP, reasons=(REASON_TOO_FEW_SAMPLES,))
+        failed = sum(record.status != SCRAPE_OK for _stamp, record in tail)
+        fraction = failed / len(tail)
+        return Evaluation(
+            VIOLATING if fraction >= self.share else CLEAR,
+            observed=fraction,
+            threshold=self.share,
+            samples=float(len(tail)),
+            detail={"failed": failed},
+        )
+
+
+@dataclass(frozen=True)
 class FrozenExporter:
     """The server answers, but nothing progresses while requests run or wait.
 
@@ -343,6 +377,7 @@ __all__ = [
     "FrozenExporter",
     "GaugeAtLeast",
     "HistogramShareAbove",
+    "ScrapeFailureShare",
     "ScrapeFailures",
     "Selection",
     "SignalExceeds",
