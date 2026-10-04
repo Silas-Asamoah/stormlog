@@ -157,8 +157,8 @@ arrivals, and a Poisson count gives the usual N/T_N rate. A replay without
 A Python caller can follow the phases as they run:
 `InferenceProfiler(config, on_phase=callback)` calls `callback` with a
 `PhaseEvent`. The event is `started` just before a phase's first arrival is
-dispatched, and `ended` once the phase has drained, carrying the times its
-`infer.phase_window` record holds. The callback runs on the profiler's event
+dispatched, and `ended` once the phase has drained and its
+`infer.phase_window` record is written, carrying the times that record holds. The callback runs on the profiler's event
 loop, so it should be quick, and an exception it raises stops the profile.
 #221's qualification harness uses it to time its episodes against the victim's
 measured window.
