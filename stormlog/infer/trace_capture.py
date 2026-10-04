@@ -10,10 +10,10 @@ is always followed by one stop: the engine runs ``/start_profile`` before the
 HTTP reply goes out, so a lost or failed reply can leave it profiling. A stop
 that fails is not retried; the window's record says the profiler may still be
 running. Only a 401, 403, 404, 405 or 407, which come before vLLM's handler
-runs, is not stopped. vLLM 0.30.0 answers 200 to a second ``/start_profile`` and to ``/stop_profile``
-with nothing running, so a client cannot tell from HTTP whether another
-profile was already active; do not run two profilers against one server. The
-traces are imported after the run.
+runs, is not stopped. vLLM 0.30.0 answers 200 to a second ``/start_profile``
+and to ``/stop_profile`` with nothing running, so a client cannot tell from
+HTTP whether another profile was already active; do not run two profilers
+against one server. The traces are imported after the run.
 
 The profiler adds no synchronization per request; the server writes the trace
 while handling ``/stop_profile``, so that call can take tens of seconds.
