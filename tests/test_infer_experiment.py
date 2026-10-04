@@ -637,8 +637,82 @@ def test_a_probe_retry_never_starts_beside_an_unverified_cleanup(
     _survivor_on_calls(monkeypatch, 1)
     document = _plan(_port(), blocks=1)
     document["order"] = {"kind": "explicit", "blocks": [["off", "watch"]]}
-    (only,) = _run(tmp_path, document)
+    only, skipped = _run(tmp_path, document)
     assert only["reasons"] == ["probe_incomplete", "collector_cleanup_unverified"]
+    assert (skipped["arm"], skipped["state"]) == ("watch", "not_run")
+
+
+def _index(tmp_path: Path) -> list[tuple[str, int, str, str]]:
+    lines = (tmp_path / "exp" / "index.jsonl").read_text().splitlines()
+    return [
+        (r["type"], r["block"], r["arm"], r["state"]) for r in map(json.loads, lines)
+    ]
+
+
+TWO_BLOCKS = {"kind": "explicit", "blocks": [["off", "watch"], ["watch", "off"]]}
+
+
+def test_a_server_left_running_stops_the_experiment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rev-213-a's E1: the next block's servers started beside the survivor.
+    _survivor_on_calls(monkeypatch, 1)
+    document = _plan(_port(), order=TWO_BLOCKS)
+    records = _run(tmp_path, document)
+    first, *rest = records
+    assert first["reasons"] == ["collector_cleanup_unverified"]
+    stopped = f"stopped_after:{first['label']}"
+    assert [(r["block"], r["arm"], r["reasons"]) for r in rest] == [
+        (0, "watch", [stopped]),
+        (1, "watch", [stopped]),
+        (1, "off", [stopped]),
+    ]
+    assert {r["state"] for r in rest} == {"not_run"}
+    assert _index(tmp_path) == [
+        ("run", 0, "off", "protocol_failure"),
+        ("not_run", 0, "watch", "not_run"),
+        ("not_run", 1, "watch", "not_run"),
+        ("not_run", 1, "off", "not_run"),
+    ]
+    # No server started after it.
+    assert len(list((tmp_path / "exp" / "runs").iterdir())) == 1
+
+    # Once the host is clean, a resume runs what the stop left.
+    monkeypatch.undo()
+    resumed = _run(tmp_path, document, resume=True)
+    assert [(r["block"], r["arm"], r["state"]) for r in resumed] == [
+        (0, "watch", "completed"),
+        (1, "watch", "completed"),
+        (1, "off", "completed"),
+    ]
+
+
+def test_a_treatment_left_running_stops_the_experiment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # fable-213: treatment_cleanup_unverified did not even stop the block.
+    _survivor_on_calls(monkeypatch, 1)
+    document = _plan(_port(), blocks=1)
+    document["order"] = {"kind": "explicit", "blocks": [["watch", "off"]]}
+    watch, off = _run(tmp_path, document)
+    assert watch["reasons"] == ["treatment_cleanup_unverified:watcher"]
+    assert (off["arm"], off["state"]) == ("off", "not_run")
+
+
+def test_a_prelude_server_left_running_stops_the_experiment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _survivor_on_calls(monkeypatch, 1)
+    document = _plan(_port(), order=TWO_BLOCKS)
+    document["block_prelude"] = [
+        {"name": "warm", "server_arm": "off", "command": ["{python}", "-c", "pass"]}
+    ]
+    first, *rest = _run(tmp_path, document)
+    assert first["reasons"] == ["prelude_failed:warm:cleanup_unverified"]
+    assert first["processes"] == []
+    assert len(rest) == 3 and {r["state"] for r in rest} == {"not_run"}
+    cleanup = tmp_path / "exp" / "preludes" / "b00-warm" / "cleanup.json"
+    assert json.loads(cleanup.read_text())["verified"] is False
 
 
 def test_the_bundle_is_scanned_for_the_plans_secrets(
