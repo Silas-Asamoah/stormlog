@@ -230,6 +230,24 @@ def test_without_the_pause_capability_a_stall_gives_no_verdict() -> None:
     assert engine_loop_gap(steady).exceeds is False
 
 
+def test_a_tail_window_carries_its_epoch_s_hello() -> None:
+    """An online trigger evaluates the tail of a long log. Its hello says
+    whether pauses are recorded; passed with the tail, or prepended to it,
+    it is neither a sequence gap nor a zero point for the tail's coverage."""
+    # 4 s of steps; the tail holds the last 2 s, the stall 3.5 s in.
+    records = _loop(800, stall_after=700, stall_ns=300 * MS)
+    first, tail = records[0], records[-800:]
+
+    alone = engine_loop_gap(tail)
+    given = engine_loop_gap(tail, LoopGapConfig(hello=first))
+    prepended = engine_loop_gap([first, *tail])
+
+    assert (alone.exceeds, alone.reason) == (None, REASON_PAUSE_UNKNOWN)
+    for signal in (given, prepended):
+        assert signal.sufficient and signal.exceeds is True
+        assert signal.detail["pause_capability"] is True
+
+
 def test_pause_intervals_follow_paused_all_only() -> None:
     records = [
         {"kind": "pause", "from": "UNPAUSED", "to": "PAUSED_NEW", "wall_ns": 10},

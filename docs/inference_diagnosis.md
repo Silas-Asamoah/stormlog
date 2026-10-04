@@ -97,7 +97,11 @@ stretch in which the engine made no progress while it had work it could run.
 It needs no import, so an online trigger can run it on the records it tails;
 the diagnoser runs the same rules on imported steps. `LoopGapConfig` refuses
 a threshold override with a key the table lacks, a value that is not a
-finite number, or a loop threshold that is not positive.
+finite number, or a loop threshold that is not positive. A trigger that
+evaluates a later window of a long log, such as its tail, passes the epoch's
+hello as `config.hello`, or prepends it: the hello says whether pauses are
+recorded, and is neither a sequence gap nor a zero point for that window's
+coverage.
 
 Work is *ready* during a stretch when a request ran in the step before it
 and in the step after it. The step before a gap between steps is the one

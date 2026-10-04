@@ -82,13 +82,16 @@ class LoopGapConfig:
     caller's knowledge, such as its own profiler stop. ``thresholds``
     overrides entries of the shared table by key. ``status`` is the epoch's
     ``status.json``, when the caller has it: a capped writer stops writing
-    records and heartbeats alike, and only the status says so.
+    records and heartbeats alike, and only the status says so. ``hello`` is
+    the epoch's hello for a window that starts later, as a tail does: it
+    says whether the hook records pauses.
     """
 
     now_wall_ns: int | None = None
     exclude_wall: Sequence[Interval] = ()
     thresholds: Mapping[str, float] = field(default_factory=dict)
     status: Mapping[str, Any] | None = None
+    hello: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """Refuse overrides that could never decide: a key the table lacks
@@ -222,7 +225,12 @@ def record_reasons(records: Sequence[Mapping[str, Any]]) -> list[str]:
     reasons: list[str] = []
     if len({record.get("epoch") for record in records} - {None}) > 1:
         reasons.append(REASON_EPOCH_CHANGED)
-    seqs = [record["seq"] for record in records if isinstance(record.get("seq"), int)]
+    # A hello prepended to a later window is no gap in it.
+    seqs = [
+        record["seq"]
+        for record in records
+        if isinstance(record.get("seq"), int) and record.get("kind") != "hello"
+    ]
     if any(b != a + 1 for a, b in zip(seqs, seqs[1:])):
         reasons.append(REASON_RECORDS_DROPPED)
     reasons.extend(_heartbeat_reasons(records))
@@ -241,7 +249,7 @@ class Coverage:
 
     @classmethod
     def of(cls, records: Sequence[Mapping[str, Any]]) -> Coverage:
-        beats = [beat for beat in map(_beat, records) if beat is not None]
+        beats = _beats(records)
         spans: list[Interval] = []
         for (start, lost), (end, later) in zip(beats, beats[1:]):
             if lost is None or lost != later:
@@ -267,7 +275,34 @@ class Coverage:
         )
 
 
-def _beat(record: Mapping[str, Any]) -> tuple[int, tuple[int, int] | None] | None:
+Beat = tuple[int, tuple[int, int] | None]
+
+
+def _beats(records: Sequence[Mapping[str, Any]]) -> list[Beat]:
+    """The window's heartbeats, and its hello when it bounds the window."""
+    found = []
+    for index, record in enumerate(records):
+        beat = _beat(record) if _zero_point(records, index) else None
+        if beat is not None:
+            found.append(beat)
+    return found
+
+
+def _zero_point(records: Sequence[Mapping[str, Any]], index: int) -> bool:
+    """Whether a record may bound coverage: any heartbeat, and a hello only
+    when the window's next record follows it, so nothing between them is
+    unread. A hello prepended to a tail window says nothing of the gap."""
+    record = records[index]
+    if record.get("kind") != "hello":
+        return True
+    following = records[index + 1] if index + 1 < len(records) else None
+    seq = record.get("seq")
+    return (
+        following is None or not isinstance(seq, int) or following.get("seq") == seq + 1
+    )
+
+
+def _beat(record: Mapping[str, Any]) -> Beat | None:
     """A heartbeat's wall stamp and what it says was lost so far; the hello
     is the zero point, with nothing lost. A capped heartbeat says nothing."""
     if record.get("kind") == "hello":
@@ -332,6 +367,14 @@ def observes_pauses(records: Sequence[Mapping[str, Any]]) -> bool:
     """Whether the hook that wrote these records records scheduler pauses."""
     hello = next((r for r in records if r.get("kind") == "hello"), None)
     return hello is not None and OBSERVES_PAUSE in (hello.get("observes") or ())
+
+
+def _observes_pauses(
+    records: Sequence[Mapping[str, Any]], config: LoopGapConfig
+) -> bool:
+    if config.hello is not None:
+        return observes_pauses([config.hello])
+    return observes_pauses(records)
 
 
 # ------------------------------------------------------------------- stalls
@@ -588,10 +631,10 @@ def _verdict(
     overridden = any(key in config.thresholds for key in _LOOP_KEYS)
     worst, covered = _judged(stalls, steps, records, config)
     if worst is not None and worst[0].duration_ns >= worst[1]:
-        reasons = [*reasons, *_doubts(covered, observes_pauses(records))]
+        reasons = [*reasons, *_doubts(covered, _observes_pauses(records, config))]
     detail: dict[str, Any] = {
         "steps": len(steps),
-        "pause_capability": observes_pauses(records),
+        "pause_capability": _observes_pauses(records, config),
         "reasons": list(reasons),
     }
     if worst is None:
