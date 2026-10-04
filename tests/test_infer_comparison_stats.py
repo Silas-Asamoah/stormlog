@@ -73,7 +73,7 @@ def test_paired_log_ratios_give_a_relative_effect() -> None:
 
 
 def test_independent_runs_use_welch_with_the_smaller_arms_df() -> None:
-    # Astra's adversarial shape: 20 baseline runs against 3 candidate runs.
+    # An adversarial shape: 20 baseline runs against 3 candidate runs.
     rng = np.random.default_rng(20)
     baseline = list(np.exp(np.log(100) + 0.1 * rng.standard_normal(20)))
     candidate = [1.21, 0.95, 1.07]

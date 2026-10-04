@@ -78,6 +78,16 @@ the flaky benchmark memory gates
   comparison: its report, labels, comparable fields, and protocol failures
   (unfinished session, identity change, incomplete probe, invalid cohort,
   unacknowledged cold-cache reset). (#213)
+- `examples/analysis/simulation_study.py` validates the comparison's rules
+  with 20,000 replications per cell (results in
+  `examples/analysis/simulation_results.json`, tables in
+  `docs/inference_comparison.md`): non-inferiority's false-safe rate at a true
+  change equal to the budget stays at or below 2.83% for normal and t3 noise,
+  missing outcomes only make it more careful, the independent design covers
+  at least 0.958, the run-level attainment gate holds under correlated
+  failures where pooled requests do not, and the skew screen flags 5% of
+  normal noise. Strong right skew (8–12%) and pooled requests are published
+  as limits. (#213)
 - `tests/fixtures/infer/comparison_contract_v1.json`: the comparison's
   units contract, 19 cases whose expected effects, intervals and gate
   outcomes are computed from the formulas by
