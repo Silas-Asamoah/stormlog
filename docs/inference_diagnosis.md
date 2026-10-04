@@ -54,6 +54,7 @@ The values are provisional until they are read from real runs.
 | `host_stall.baseline_window_ns` | 30 s | the window of earlier busy steps the cadence is taken from |
 | `host_stall.min_busy_steps` | 20 | busy steps that window needs |
 | `host_stall.matched_bin_min_steps` | 20 | steps of the stall's own work bucket (scheduled tokens within a factor of two) needed to compare it with steps of its size |
+| `host_stall.heartbeat_grace_ns` | 2 s | how recently the hook's writer must have been heard from to judge a stall still going on |
 
 ## Online signals
 
@@ -133,10 +134,25 @@ replaced by `no_baseline_floor_ns` (`floor`). Only earlier steps count, so
 the decision never depends on what happened after the stall. With `config.now_wall_ns`, a stall still going on
 counts from the last completion (`detail["ongoing"]`).
 
-The records give no verdict (`sufficient` is False) when they come from two
-epochs (`epoch_changed`), skip a `seq` or show drop counts (of any kind,
+A stall is judged only where the records are known to be whole: between
+two heartbeats (the hello counting as one with nothing lost) whose drop
+counts and errors did not change, one at or before the stall's start and one
+at or after its end. A stall still going on also needs a heartbeat since it
+began, the last within `heartbeat_grace_ns` (2 s, about two of the writer's
+one-second beats) of the evaluation time. A capped or killed writer stops
+writing records and heartbeats alike, so the engine running on unrecorded
+looks like a stall with no heartbeat around it. A stall over its limit
+outside that coverage gives no verdict (`hook_coverage_unknown`) instead of
+exceeding; `detail["covered"]` says which the reported stall was.
+
+The records also give no verdict (`sufficient` is False) when they come from
+two epochs (`epoch_changed`), skip a `seq` or show drop counts (of any kind,
 oversized records included) rising between heartbeats
 (`hook_records_dropped`), show write errors rising between heartbeats
-(`hook_writer_errors`), come from a capped writer (`hook_capped`), hold no completed step (`too_few_steps`) or are absent
-(`requires_hook`). `detail["pause_capability"]` says whether the hook records
-pauses; without it a pause looks like a stall with ready work.
+(`hook_writer_errors`), hold no completed step (`too_few_steps`) or are
+absent (`requires_hook`). Write errors also count failed seals and
+`status.json` writes, which lose nothing, so this abstains more than it
+must. Only the epoch's `status.json`, passed as `config.status`, says the
+writer is capped (`hook_capped`): no heartbeat ever does.
+`detail["pause_capability"]` says whether the hook records pauses; without it
+a pause looks like a stall with ready work.

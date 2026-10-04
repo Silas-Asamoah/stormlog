@@ -36,6 +36,7 @@ from typing import Any
 from .diagnosis_signals import SignalValue
 from .diagnosis_thresholds import (
     LOOP_BASELINE_WINDOW_NS,
+    LOOP_HEARTBEAT_GRACE_NS,
     LOOP_MATCHED_BIN_MIN_STEPS,
     LOOP_MIN_BUSY_STEPS,
     LOOP_NO_BASELINE_FLOOR_NS,
@@ -60,6 +61,7 @@ REASON_RECORDS_DROPPED = "hook_records_dropped"
 REASON_CAPPED = "hook_capped"
 REASON_WRITER_ERRORS = "hook_writer_errors"
 REASON_EPOCH_CHANGED = "epoch_changed"
+REASON_COVERAGE_UNKNOWN = "hook_coverage_unknown"
 OBSERVES_PAUSE = "pause"
 # vLLM's pause states: only PAUSED_ALL stops steps; PAUSED_NEW stops admissions
 # and keeps running requests stepping.
@@ -75,12 +77,15 @@ class LoopGapConfig:
     ``now_wall_ns`` is the evaluation time, for a stall still going on.
     ``exclude_wall`` lists wall-clock intervals with no ready work by the
     caller's knowledge, such as its own profiler stop. ``thresholds``
-    overrides entries of the shared table by key.
+    overrides entries of the shared table by key. ``status`` is the epoch's
+    ``status.json``, when the caller has it: a capped writer stops writing
+    records and heartbeats alike, and only the status says so.
     """
 
     now_wall_ns: int | None = None
     exclude_wall: Sequence[Interval] = ()
     thresholds: Mapping[str, float] = field(default_factory=dict)
+    status: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -185,6 +190,8 @@ def engine_loop_gap(
     """The longest stall with ready work in one epoch's records, in seq order."""
     config = config or LoopGapConfig()
     reasons = record_reasons(records)
+    if (config.status or {}).get("capped"):
+        reasons.append(REASON_CAPPED)
     steps = steps_from_raw(records)
     if not any(step.completed_mono_ns is not None for step in steps):
         reasons.append(REASON_TOO_FEW_STEPS if steps else REASON_REQUIRES_HOOK)
@@ -206,18 +213,72 @@ def record_reasons(records: Sequence[Mapping[str, Any]]) -> list[str]:
     return list(dict.fromkeys(reasons))
 
 
+@dataclass(frozen=True)
+class Coverage:
+    """Where the records are known to be whole, on the wall clock: spans
+    between two heartbeats (the hello counting as one with nothing lost)
+    whose drop counts and errors did not change, and when the writer was
+    last heard from. Only inside a span can no record be missing."""
+
+    spans: tuple[Interval, ...]
+    last_beat_wall_ns: int | None
+
+    @classmethod
+    def of(cls, records: Sequence[Mapping[str, Any]]) -> Coverage:
+        beats = [beat for beat in map(_beat, records) if beat is not None]
+        spans: list[Interval] = []
+        for (start, lost), (end, later) in zip(beats, beats[1:]):
+            if lost is None or lost != later:
+                continue
+            if spans and spans[-1][1] == start:
+                spans[-1] = (spans[-1][0], end)
+            else:
+                spans.append((start, end))
+        last = beats[-1][0] if beats else None
+        return cls(tuple(spans), last)
+
+    def covers(self, stall: Stall, now_wall_ns: int | None, grace_ns: float) -> bool:
+        """A stall lies inside one span. One still going on needs the writer
+        heard from since it began, and within the grace before now."""
+        end = stall.end_wall_ns
+        if stall.ongoing:
+            last = self.last_beat_wall_ns
+            if last is None or now_wall_ns is None or now_wall_ns - last > grace_ns:
+                return False
+            end = last
+        return end >= stall.start_wall_ns and any(
+            low <= stall.start_wall_ns and end <= high for low, high in self.spans
+        )
+
+
+def _beat(record: Mapping[str, Any]) -> tuple[int, tuple[int, int] | None] | None:
+    """A heartbeat's wall stamp and what it says was lost so far; the hello
+    is the zero point, with nothing lost. A capped heartbeat says nothing."""
+    if record.get("kind") == "hello":
+        wall = (record.get("clock") or {}).get("wall_ns")
+        return (wall, (0, 0)) if isinstance(wall, int) else None
+    if record.get("kind") != "heartbeat" or not isinstance(record.get("wall_ns"), int):
+        return None
+    lost = (
+        None
+        if record.get("capped")
+        else (_dropped(record), _count(record.get("errors")))
+    )
+    return int(record["wall_ns"]), lost
+
+
 def _heartbeat_reasons(records: Sequence[Mapping[str, Any]]) -> list[str]:
     """Drop counts (every kind, oversized records included) or write errors
-    that rose between heartbeats, and a capped writer: any of them means a
-    record may be missing that no sequence gap shows."""
+    that rose between heartbeats: either means a record may be missing that
+    no sequence gap shows. Errors also count failed seals and status writes,
+    which lose nothing, so this abstains more than it must. A capped writer
+    writes no more heartbeats at all; only its ``status.json`` says so."""
     beats = [record for record in records if record.get("kind") == "heartbeat"]
     reasons = []
     if len({_dropped(beat) for beat in beats}) > 1:
         reasons.append(REASON_RECORDS_DROPPED)
     if len({_count(beat.get("errors")) for beat in beats}) > 1:
         reasons.append(REASON_WRITER_ERRORS)
-    if any(beat.get("capped") for beat in beats):
-        reasons.append(REASON_CAPPED)
     return reasons
 
 
@@ -477,12 +538,15 @@ def _verdict(
     config: LoopGapConfig,
 ) -> SignalValue:
     overridden = any(key in config.thresholds for key in _LOOP_KEYS)
+    worst, covered = _judged(stalls, steps, records, config)
+    if worst is not None and not covered and worst[0].duration_ns >= worst[1]:
+        # Over its limit, but where a record may be missing: no verdict.
+        reasons = [*reasons, REASON_COVERAGE_UNKNOWN]
     detail: dict[str, Any] = {
         "steps": len(steps),
         "pause_capability": observes_pauses(records),
         "reasons": list(reasons),
     }
-    worst = _worst(stalls, steps, config)
     if worst is None:
         return _result(None, None, None, reasons, overridden, detail)
     stall, limit, kind, baseline = worst
@@ -494,11 +558,36 @@ def _verdict(
         end_wall_ns=stall.end_wall_ns,
         baseline_ns=baseline,
         baseline=kind,
+        covered=covered,
     )
     exceeds = stall.duration_ns >= limit
     return _result(
         float(stall.duration_ns), limit, exceeds, reasons, overridden, detail
     )
+
+
+Judged = tuple[Stall, float, str, float | None]
+
+
+def _judged(
+    stalls: Sequence[Stall],
+    steps: Sequence[Step],
+    records: Sequence[Mapping[str, Any]],
+    config: LoopGapConfig,
+) -> tuple[Judged | None, bool]:
+    """The stall the verdict rests on, and whether the records are whole
+    around it: the worst covered stall when it is over its limit, else the
+    worst of all, which over its limit can only mean no verdict."""
+    coverage = Coverage.of(records)
+    grace, _ = resolve_threshold(LOOP_HEARTBEAT_GRACE_NS, config.thresholds)
+    covered = [s for s in stalls if coverage.covers(s, config.now_wall_ns, grace)]
+    best = _worst(covered, steps, config)
+    if best is not None and best[0].duration_ns >= best[1]:
+        return best, True
+    worst = _worst(stalls, steps, config)
+    if worst is None:
+        return None, True
+    return worst, worst[0] in covered
 
 
 def _worst(
@@ -553,6 +642,7 @@ _LOOP_KEYS = (
     LOOP_BASELINE_WINDOW_NS,
     LOOP_MIN_BUSY_STEPS,
     LOOP_MATCHED_BIN_MIN_STEPS,
+    LOOP_HEARTBEAT_GRACE_NS,
 )
 
 
@@ -563,11 +653,13 @@ __all__ = [
     "LOCUS_IN_SCHEDULE",
     "LOCUS_WITHIN_STEP",
     "REASON_CAPPED",
+    "REASON_COVERAGE_UNKNOWN",
     "REASON_EPOCH_CHANGED",
     "REASON_RECORDS_DROPPED",
     "REASON_REQUIRES_HOOK",
     "REASON_TOO_FEW_STEPS",
     "REASON_WRITER_ERRORS",
+    "Coverage",
     "LoopGapConfig",
     "Stall",
     "Step",

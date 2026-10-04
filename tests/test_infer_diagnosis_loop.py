@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -15,6 +17,7 @@ from stormlog.infer.diagnosis_loop import (
     LOCUS_IN_SCHEDULE,
     LOCUS_WITHIN_STEP,
     REASON_CAPPED,
+    REASON_COVERAGE_UNKNOWN,
     REASON_EPOCH_CHANGED,
     REASON_RECORDS_DROPPED,
     REASON_REQUIRES_HOOK,
@@ -25,7 +28,9 @@ from stormlog.infer.diagnosis_loop import (
     pause_intervals,
 )
 from stormlog.infer.diagnosis_thresholds import LOOP_STALL_FACTOR
+from stormlog.infer.vllm_hook.writer import EpochWriter, WriterLimits
 from tests.vllm_execution_helpers import (
+    SECOND,
     WALL_OFFSET,
     completed,
     done,
@@ -52,6 +57,7 @@ def _decode(*internals: str) -> list[dict[str, Any]]:
 def _loop(
     steps: int,
     *,
+    beats: bool = True,
     stall_after: int | None = None,
     stall_ns: int = 0,
     locus: str = LOCUS_BETWEEN_STEPS,
@@ -86,14 +92,46 @@ def _loop(
         records.append(
             completed(first_iteration + index, clock, [done(n) for n in members])
         )
-    return _sequenced(records)
+    return _sequenced(records, beats=beats)
 
 
-def _sequenced(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _sequenced(
+    records: list[dict[str, Any]], *, beats: bool = True
+) -> list[dict[str, Any]]:
+    if beats:
+        records = _with_heartbeats(records)
     for seq, record in enumerate(records):
         record.setdefault("epoch", EPOCH)
         record["seq"] = seq
     return records
+
+
+def _mono(record: dict[str, Any]) -> int | None:
+    for key in ("start_mono_ns", "mono_ns"):
+        if isinstance(record.get(key), int):
+            return int(record[key])
+    clock = record.get("clock") or {}
+    return clock.get("mono_ns")
+
+
+def _with_heartbeats(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The writer beats once a second whatever the engine does: heartbeats
+    each second after the first record, and one just after the last, so a
+    loop is whole from its hello to its end. Records keep their order; a
+    window that already has heartbeats is left as it is."""
+    times = [t for t in map(_mono, records) if t is not None]
+    if not times or any(r.get("kind") == "heartbeat" for r in records):
+        return records
+    beaten: list[dict[str, Any]] = []
+    due = min(times) + SECOND
+    for record in records:
+        at = _mono(record)
+        while at is not None and at > due:
+            beaten.append(heartbeat(due, 0))
+            due += SECOND
+        beaten.append(record)
+    beaten.append(heartbeat(max(times) + MS, 0))
+    return beaten
 
 
 def _end(records: list[dict[str, Any]]) -> int:
@@ -217,7 +255,7 @@ def test_an_ongoing_stall_with_a_step_in_flight_may_be_the_gpu() -> None:
 
 def test_no_ongoing_stall_once_every_request_finished() -> None:
     records = _loop(60)
-    last = records[-1]
+    last = [r for r in records if r["kind"] == "completed"][-1]
     last["members"] = [done(name, finish_reason="stop") for name in ("a", "b")]
     signal = engine_loop_gap(
         records, LoopGapConfig(now_wall_ns=_end(records) + 900 * MS)
@@ -245,7 +283,7 @@ def test_a_threshold_override_is_reported() -> None:
 
 
 # ---------------------------------------------------------- sufficiency
-def test_records_with_gaps_drops_caps_or_two_epochs_give_no_verdict() -> None:
+def test_records_with_gaps_drops_or_two_epochs_give_no_verdict() -> None:
     gap = _loop(60, stall_after=40, stall_ns=200 * MS)
     del gap[10]
     assert engine_loop_gap(gap).reason == REASON_RECORDS_DROPPED
@@ -256,11 +294,118 @@ def test_records_with_gaps_drops_caps_or_two_epochs_give_no_verdict() -> None:
         heartbeat(T + 20 * MS, 6, dropped={"scheduled": 1}),
     ]
     assert engine_loop_gap(_sequenced(dropped)).reason == REASON_RECORDS_DROPPED
-    capped = _loop(20) + [heartbeat(T + 10 * MS, 5, capped=True)]
-    assert engine_loop_gap(_sequenced(capped)).reason == REASON_CAPPED
     two = _loop(20)
     two[-1]["epoch"] = "engine-2600-2"
     assert engine_loop_gap(two).reason == REASON_EPOCH_CHANGED
+
+
+def _fields(record: dict[str, Any]) -> dict[str, Any]:
+    """A record as the hook hands it to the writer, which adds its own kind,
+    epoch and sequence."""
+    return {k: v for k, v in record.items() if k not in ("kind", "epoch", "seq")}
+
+
+def _capped_writer_log(tmp_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """A loop written by the real writer until its disk cap: from then on it
+    drops every record and writes no heartbeat, and only status.json says
+    it is capped."""
+    writer = EpochWriter(
+        tmp_path,
+        "engine",
+        limits=WriterLimits(max_bytes=25_000, heartbeat_seconds=0.02),
+    )
+    writer.emit("hello", _fields(hello("engine", 2600, 1)))
+    for index, record in enumerate(_loop(60)[1:]):
+        if record["kind"] == "heartbeat":
+            continue
+        writer.emit(record["kind"], _fields(record))
+        if index % 10 == 0:
+            time.sleep(0.03)  # heartbeats are written while the writer is live
+    time.sleep(0.1)
+    writer.close(goodbye=True)
+    directory = next(tmp_path.glob("*/*"))
+    records = [
+        json.loads(line)
+        for segment in sorted(directory.glob("0*.jsonl*"))
+        for line in segment.read_text().splitlines()
+    ]
+    return records, json.loads((directory / "status.json").read_text())
+
+
+def test_a_capped_writer_gives_no_verdict(tmp_path: Path) -> None:
+    records, status = _capped_writer_log(tmp_path)
+    beats = [r for r in records if r["kind"] == "heartbeat"]
+    # Capped, it drops every record and writes no heartbeat; no heartbeat
+    # ever says capped, only the status.
+    assert status["capped"] and sum(status["dropped"].values()) > 0
+    assert beats and not any(beat.get("capped") for beat in beats)
+
+    signal = engine_loop_gap(records, LoopGapConfig(status=status))
+
+    assert (signal.reason, signal.exceeds) == (REASON_CAPPED, None)
+
+
+def _dropped_completions() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """A 60-step loop whose completed records of steps 41 to 59 were dropped,
+    and the heartbeat that counts them."""
+    body = [r for r in _loop(60, beats=False)[1:]]
+    kept = [
+        r for r in body if not (r["kind"] == "completed" and int(r["iteration"]) > 40)
+    ]
+    end = max(int(r.get("mono_ns", 0)) for r in body)
+    return kept, heartbeat(end, 0, dropped={"completed": 19})
+
+
+@pytest.mark.parametrize("shape", ["one_beat", "drops_before_both", "killed_tail"])
+def test_drops_no_heartbeats_bracket_give_no_verdict(shape: str) -> None:
+    """Missing completions make a false 90 ms gap; unless heartbeats on both
+    sides show nothing lost across it, there is no verdict."""
+    kept, counted = _dropped_completions()
+    first = hello("engine", 2600, 1)
+    windows = {
+        # The hello (nothing lost) and one heartbeat counting the drops.
+        "one_beat": [first, *kept, counted],
+        # Both heartbeats came after the drops.
+        "drops_before_both": [
+            first,
+            *kept,
+            counted,
+            {
+                **counted,
+                "mono_ns": counted["mono_ns"] + MS,
+                "wall_ns": counted["wall_ns"] + MS,
+            },
+        ],
+        # A SIGKILLed epoch: heartbeats before the drops, none after.
+        "killed_tail": [
+            first,
+            heartbeat(T, 0),
+            *kept[:60],
+            heartbeat(T + 150 * MS, 0),
+            *kept[60:],
+        ],
+    }
+    signal = engine_loop_gap(_sequenced(windows[shape], beats=False))
+    assert signal.exceeds is None
+    assert not signal.sufficient
+
+
+def test_drops_heartbeats_bracket_are_a_counted_loss() -> None:
+    kept, counted = _dropped_completions()
+    records = [hello("engine", 2600, 1), heartbeat(T, 0), *kept, counted]
+    signal = engine_loop_gap(_sequenced(records, beats=False))
+    assert signal.reason == REASON_RECORDS_DROPPED
+
+
+def test_an_ongoing_stall_needs_the_writer_heard_from_lately() -> None:
+    """A capped or killed writer stops records and heartbeats together, so
+    the engine running on unrecorded looks like a stall still going on."""
+    records = _loop(60)
+    end = _end(records)
+    late = LoopGapConfig(now_wall_ns=end + 5 * SECOND)
+    signal = engine_loop_gap(records, late)
+    # The last heartbeat came just after the last completion, 5 s ago.
+    assert (signal.exceeds, signal.reason) == (None, REASON_COVERAGE_UNKNOWN)
 
 
 def test_no_steps_or_no_completed_step() -> None:
