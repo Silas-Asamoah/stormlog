@@ -4,6 +4,7 @@ process: priming, baseline, three episodes with recovery, and the truth."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import signal
 import subprocess
@@ -456,3 +457,61 @@ def test_a_twin_without_its_scraped_ratio_is_published_incomplete(
     assert twin.validity.observation == "incomplete"
     (ratio,) = [c for c in twin.validity.checks if c["name"] == "engine_hit_ratio_fell"]
     assert ratio["incomplete"] is True
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP])
+def test_a_run_without_pulses_signalled_mid_run_is_published(
+    tmp_path: Path, signum: int
+) -> None:
+    # A job's SIGTERM or an ssh disconnect's SIGHUP during [N, N], before
+    # any pulser exists: the run is still published, interrupted, with the
+    # episode it attempted. The handlers used to come only with a pulser.
+    hook = tmp_path / "hook"
+    plan = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan["timeline"]["episode"] = 6
+    plan["episodes"] = [{"type": "N"}, {"type": "N"}]
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    label = "q221-00000000000000cc"
+    with FakeEngineProcess(
+        ["--step-seconds", "0.002", "--hook-dir", str(hook)]
+    ) as server:
+        harness = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "examples.qualification",
+                "inject",
+                "--plan",
+                str(tmp_path / "plan.json"),
+                "--out",
+                str(tmp_path / "runs"),
+                "--label",
+                label,
+                "--base-url",
+                server.base_url,
+                "--model",
+                "fake/qwen-0.5b",
+                "--reference-channel",
+                str(hook),
+                "--",
+                "--tokenizer",
+                "none",
+                "--system-sampler",
+                "none",
+            ],  # fmt: skip
+            env=_environment(),
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        markers = tmp_path / "runs" / f".{label}.partial" / "probes" / "markers"
+        assert wait_until(lambda: any(markers.glob("*measured_started*")), timeout=60)
+        # Past priming and the baseline (5 s): inside the first N.
+        wait_until(lambda: False, timeout=7)
+        os.killpg(harness.pid, signum)
+        assert harness.wait(timeout=120) == 128 + signum
+    run = tmp_path / "runs" / label
+    assert verify(run) == []
+    assert load_run(run / "truth" / "run.json").protocol_failure == "interrupted"
+    attempted = load_injections(run / "truth" / "injections.jsonl")
+    assert [injection.episode_type for injection in attempted] == ["N", "N"]
