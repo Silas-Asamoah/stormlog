@@ -596,6 +596,22 @@ def test_a_failed_write_is_cut_back_so_no_partial_line_remains(
     assert [r["seq"] for r in _segment_records(segment)] == [1, 2, 3]
 
 
+def test_a_failed_write_is_cut_back_to_the_file_s_own_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not to the size the sink counted: bytes it did not write, another
+    writer's say, stay."""
+    sink = _bounded_sink(tmp_path)
+    sink.append({"seq": 1})
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    with segment.open("ab") as handle:
+        handle.write(b'{"other": true}\n')
+    _FailingDisk(monkeypatch, partial=True)
+    sink.append({"seq": 2, "pad": "x" * 200})
+    assert segment.read_bytes().splitlines() == [b'{"seq": 1}', b'{"other": true}']
+    sink._stop_flush_thread()
+
+
 def test_a_default_sink_still_raises_but_cuts_the_partial_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
