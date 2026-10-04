@@ -25,6 +25,7 @@ from stormlog.infer.vllm_analysis import (
     REASON_SERIES_MISSING,
     STATE_RESOLVED,
     STATE_UNRESOLVED,
+    joined_span_attributes,
 )
 from stormlog.infer.vllm_metrics import compact_scrape, discover, parse_prometheus_text
 from stormlog.infer.vllm_telemetry import (
@@ -162,6 +163,10 @@ def _span(
         attributes=values,
         request_id=request_id,
     ).to_record()
+
+
+def _records(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text().splitlines() if line]
 
 
 def _artifact(
@@ -725,10 +730,46 @@ class TestDuplicateSpans:
             _artifact(tmp_path, _standard_scrapes(), spans=[*spans, conflicting])
         )["telemetry"]["vllm"]
         key = "time_in_model_inference"
-        # The first delivery is kept; the conflict is counted, not averaged in.
-        assert block["cases"][CASE]["spans"]["latency"][key]["mean_ms"] == 505.0
+        # Neither delivery can be trusted, so the request is quarantined:
+        # only the other request's 1,000 ms remains, and nothing is averaged.
+        case_spans = block["cases"][CASE]["spans"]
+        assert case_spans["latency"][key]["mean_ms"] == 1000.0
+        assert case_spans["latency"][key]["n"] == 1
+        assert (
+            case_spans["requests_with_span"],
+            case_spans["quarantined_requests"],
+        ) == (
+            1,
+            1,
+        )
         assert block["spans"]["duplicates"] == 1
         assert block["spans"]["conflicting_duplicates"] == 1
+        assert block["spans"]["quarantined_requests"] == {"conflicting_spans": 1}
+
+    def test_a_request_with_two_different_spans_is_quarantined(
+        self, tmp_path: Path
+    ) -> None:
+        spans = self._spans()
+        second = dict(spans[0])
+        second["span_id"] = "f" * 16
+        records = _records(
+            _artifact(tmp_path, _standard_scrapes(), spans=[*spans, second])
+        )
+        joined = joined_span_attributes(records)
+        first_id = _request(0)["x_request_id"]
+        assert joined.quarantined == {first_id: "multiple_spans"}
+        assert set(joined.by_request) == {_request(1)["x_request_id"]}
+
+    def test_joined_span_attributes_give_each_trusted_request_its_span(
+        self, tmp_path: Path
+    ) -> None:
+        records = _records(
+            _artifact(tmp_path, _standard_scrapes(), spans=self._spans())
+        )
+        joined = joined_span_attributes(records)
+        attributes = joined.by_request[_request(1)["x_request_id"]]
+        assert attributes["gen_ai.latency.time_in_model_inference"] == 1.0
+        assert joined.quarantined == {}
 
 
 class TestNamesAndEngines:
@@ -897,3 +938,38 @@ class TestReportShape:
         assert report["telemetry"]["vllm"]["capabilities"]["vllm.metrics"][
             "collected"
         ] == ["queue_depth"]
+
+
+def test_joined_spans_count_requests_the_server_admitted(tmp_path: Path) -> None:
+    requests = [_request(i) for i in range(2)]
+    spans = [_span(str(requests[0]["x_request_id"]))]
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    with_spans = analyze_inference_events(
+        _artifact(tmp_path / "a", [], requests, spans)
+    )
+    population = with_spans["cases"][CASE]["population"]
+    assert (population["server_admitted"], population["server_evidence_coverage"]) == (
+        1,
+        0.5,
+    )
+
+    # Without any server source the count is unknown, never 0.
+    without = analyze_inference_events(_artifact(tmp_path / "b", [], requests))
+    population = without["cases"][CASE]["population"]
+    assert (population["server_admitted"], population["server_evidence_coverage"]) == (
+        None,
+        None,
+    )
+
+
+def test_a_receiver_that_got_no_span_admits_nothing(tmp_path: Path) -> None:
+    path = _artifact(tmp_path, [], [_request(i) for i in range(2)])
+    records = _records(path)
+    records[0]["config"]["vllm_spans"] = {"listen": "127.0.0.1:4318"}
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    population = analyze_inference_events(path)["cases"][CASE]["population"]
+    assert (population["server_admitted"], population["server_evidence_coverage"]) == (
+        0,
+        0.0,
+    )

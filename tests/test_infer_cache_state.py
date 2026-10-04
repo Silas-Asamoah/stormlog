@@ -3,8 +3,10 @@
 import contextlib
 import io
 import json
+import socket
 import threading
 import time
+import urllib.request
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,7 +16,13 @@ import pytest
 
 from stormlog.exit_codes import ExitCode
 from stormlog.infer.analysis import format_analysis_text
-from stormlog.infer.cache_state import CacheReset, cache_summary, reset_cache, run_kind
+from stormlog.infer.cache_state import (
+    CacheReset,
+    cache_state_record,
+    cache_summary,
+    reset_cache,
+    run_kind,
+)
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
 from stormlog.infer.profile import InferenceProfiler
@@ -277,3 +285,211 @@ def test_a_reset_waits_for_calls_the_last_case_gave_up_on(tmp_path: Path) -> Non
     # The first case's only call was abandoned; the second reset follows it.
     assert len(resets) == 2
     assert resets[1] >= client.finished_at[0]
+
+
+class _AnsweringResetHandler(BaseHTTPRequestHandler):
+    """Answers each reset with the next body in ``answers``, then the last."""
+
+    answers: list[bytes] = []
+    calls = 0
+    started: list[float] = []
+
+    def do_POST(self) -> None:  # noqa: N802
+        cls = type(self)
+        cls.started.append(time.monotonic())
+        body = cls.answers[min(cls.calls, len(cls.answers) - 1)]
+        cls.calls += 1
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return None
+
+
+@contextlib.contextmanager
+def _answering_server(*answers: bytes) -> Iterator[str]:
+    _AnsweringResetHandler.answers = list(answers)
+    _AnsweringResetHandler.calls = 0
+    _AnsweringResetHandler.started = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _AnsweringResetHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/reset_prefix_cache"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_a_reset_vllm_acknowledges_is_acknowledged() -> None:
+    with _answering_server(b'{"success": true}') as url:
+        reset = reset_cache(url, timeout_seconds=5)
+    assert (reset.status, reset.success, reset.answer) == (200, True, "acknowledged")
+    assert reset.succeeded and reset.acknowledged
+    assert reset.attempts == 1
+
+
+def test_a_held_reset_is_retried_until_vllm_acknowledges_it() -> None:
+    held = b'{"success": false}'
+    with _answering_server(held, held, b'{"success": true}') as url:
+        reset = reset_cache(url, timeout_seconds=5, retry_seconds=5)
+    assert reset.acknowledged
+    assert reset.attempts == 3
+    assert reset.error is None
+
+
+def test_a_reset_vllm_keeps_refusing_is_a_failed_reset() -> None:
+    # vLLM answers HTTP 200 with success false while blocks are held; a 2xx
+    # alone is not a reset.
+    with _answering_server(b'{"success": false}') as url:
+        reset = reset_cache(url, timeout_seconds=5, retry_seconds=0.6)
+    assert reset.status == 200
+    assert reset.answer == "refused"
+    assert not reset.succeeded and not reset.acknowledged
+    assert reset.attempts >= 2
+    assert reset.error == f"refused: success false on {reset.attempts} attempts"
+    assert run_kind("cold", 0, reset) == "unspecified"
+    record = cache_state_record(
+        session_id="s", case_id="c1", requested="cold", reset=reset, warmup_requests=0
+    )
+    assert record["acknowledged"] is False
+    assert record["reason"].startswith("the cache reset failed (refused")
+
+
+def test_the_record_says_when_the_acknowledged_reset_ran() -> None:
+    held = b'{"success": false}'
+    with _answering_server(held, held, b'{"success": true}') as url:
+        reset = reset_cache(url, timeout_seconds=5, retry_seconds=5)
+    assert reset.acknowledged
+    # Two refusals half a second apart came before the reset that ran.
+    assert reset.answered_at_ns is not None
+    assert reset.answered_at_ns - reset.at_ns >= 900_000_000
+    assert reset.to_record()["answered_at_ns"] == reset.answered_at_ns
+
+
+@pytest.mark.parametrize(("budget", "attempts"), [(0.2, 1), (1.0, 2)])
+def test_no_retry_starts_after_the_reset_timeout(budget: float, attempts: int) -> None:
+    with _answering_server(b'{"success": false}') as url:
+        began = time.monotonic()
+        reset = reset_cache(url, timeout_seconds=5, retry_seconds=budget)
+    assert reset.attempts == attempts
+    assert all(start - began <= budget for start in _AnsweringResetHandler.started)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"success": "false"}',
+        b'{"success": 0}',
+        b'{"success": null}',
+        b'{"success": "true"}',
+    ],
+)
+def test_a_success_field_that_is_not_true_is_a_refusal(body: bytes) -> None:
+    # It answered the question, and not with true: no cold start.
+    with _answering_server(body) as url:
+        reset = reset_cache(url, timeout_seconds=5, retry_seconds=0)
+    assert reset.answer == "refused"
+    assert not reset.succeeded
+    assert run_kind("cold", 0, reset) == "unspecified"
+
+
+def test_a_reset_does_not_go_through_an_environment_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # urlopen keeps the opener it first built; a fresh one reads the proxies.
+    monkeypatch.setattr(urllib.request, "_opener", None)
+    with _answering_server(b'{"success": true}') as proxy:
+        for name in ("http_proxy", "HTTP_PROXY"):
+            monkeypatch.setenv(name, proxy.rsplit("/", 1)[0])
+        for name in ("no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            closed = probe.getsockname()[1]
+        reset = reset_cache(
+            f"http://127.0.0.1:{closed}/reset_prefix_cache", timeout_seconds=5
+        )
+    assert _AnsweringResetHandler.calls == 0
+    assert not reset.succeeded and reset.status is None
+
+
+def test_the_report_says_whether_a_reset_was_attempted() -> None:
+    reset = CacheReset("http://host/reset", at_ns=1, status=200, success=True)
+    record = cache_state_record(
+        session_id="s", case_id="c1", requested="cold", reset=reset, warmup_requests=0
+    )
+    assert cache_summary(record)["attempted"] is True
+    assert cache_summary({"requested": "cold"})["attempted"] is None  # older
+    assert cache_summary(None)["attempted"] is None
+
+
+@pytest.mark.parametrize("body", [b"", b"Cache flushed.", b'{"ok": true}', b"[]"])
+def test_a_2xx_without_a_success_field_is_accepted_but_unconfirmed(
+    body: bytes,
+) -> None:
+    with _answering_server(body) as url:
+        reset = reset_cache(url, timeout_seconds=5)
+    assert reset.answer == "accepted_unverified"
+    assert reset.succeeded and not reset.acknowledged
+    record = cache_state_record(
+        session_id="s", case_id="c1", requested="cold", reset=reset, warmup_requests=0
+    )
+    assert record["attempted"] is True and record["acknowledged"] is False
+    assert "without saying whether it succeeded" in record["reason"]
+    assert record["run_kind"] == "cold_start"
+
+
+def test_an_acknowledged_reset_says_so_in_the_record() -> None:
+    reset = CacheReset("http://host/reset", at_ns=1, status=200, success=True)
+    record = cache_state_record(
+        session_id="s", case_id="c1", requested="cold", reset=reset, warmup_requests=0
+    )
+    assert record["reset"]["answer"] == "acknowledged"
+    assert record["acknowledged"] is True
+    assert record["reason"] == (
+        "the server acknowledged the cache reset, but no engine adapter can "
+        "confirm it"
+    )
+
+
+def test_a_case_without_a_reset_was_not_attempted() -> None:
+    record = cache_state_record(
+        session_id="s", case_id="c1", requested="cold", reset=None, warmup_requests=0
+    )
+    assert (record["attempted"], record["acknowledged"]) == (False, False)
+
+
+def test_the_profile_retries_a_held_reset_for_the_configured_time(
+    tmp_path: Path,
+) -> None:
+    with _answering_server(b'{"success": false}') as url:
+        run_profile_with_fake_client(
+            tmp_path,
+            latency_seconds=0.0,
+            request_count=1,
+            cache_state="cold",
+            cache_reset_url=url,
+            cache_reset_timeout_seconds=0.0,
+        )
+    (record,) = _cache_records(tmp_path)
+    # No time to retry: the one refusal is the answer.
+    assert record["reset"]["answer"] == "refused"
+    assert record["reset"]["attempts"] == 1
+    assert _AnsweringResetHandler.calls == 1
+    lines = (tmp_path / "infer.jsonl").read_text().splitlines()
+    records = [json.loads(line) for line in lines]
+    session = next(r for r in records if r.get("event_type") == "infer.session")
+    assert session["config"]["cache_reset_timeout_seconds"] == 0.0
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf"])
+def test_cli_rejects_a_reset_timeout_it_cannot_wait(tmp_path: Path, value: str) -> None:
+    code, stderr = _cli(tmp_path, "--cache-reset-timeout", value)
+    assert code == ExitCode.USAGE
+    assert "--cache-reset-timeout must be a finite number >= 0" in stderr
+    assert not (tmp_path / "infer.jsonl").exists()

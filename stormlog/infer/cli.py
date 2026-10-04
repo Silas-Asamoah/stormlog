@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 from ..exit_codes import ExitCode
-from .analysis import analyze_inference_events, format_analysis_text
+from .analysis import (
+    analyze_inference_events,
+    format_analysis_text,
+    replaced_policies,
+)
 from .arrivals import (
     ARRIVAL_MODES,
     BURST,
@@ -25,7 +29,7 @@ from .arrivals import (
     ArrivalTrace,
     load_arrival_trace,
 )
-from .cache_state import CACHE_STATES, COLD, UNSPECIFIED
+from .cache_state import CACHE_STATES, COLD, RESET_RETRY_SECONDS, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
 from .errors import InferInputError, InferUsageError
 from .profile import InferenceProfiler
@@ -36,6 +40,14 @@ from .server_collector import (
     CollectionResult,
     NvmlUnavailableError,
     collect_server_telemetry,
+)
+from .slo import (
+    CLIENT,
+    SERVER,
+    SloSpec,
+    load_slo,
+    parse_slo_flags,
+    require_measured_window,
 )
 from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
 from .trace_import import import_traces_into_artifact, parse_device_uuids
@@ -290,6 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
             "for the exporter's final batch (default: 6; vLLM flushes every 5 s)"
         ),
     )
+    _add_slo_arguments(profile_parser, "record in the artifact and judge the run by")
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
     _add_cache_arguments(profile_parser)
@@ -351,6 +364,10 @@ def build_parser() -> argparse.ArgumentParser:
             "it may be given alone"
         ),
     )
+    _add_slo_arguments(
+        analyze_parser,
+        "judge the cases by, instead of the policy the artifact recorded",
+    )
     collector_parser = subparsers.add_parser(
         "collect-server",
         help="Collect scoped process and NVML memory on the inference host",
@@ -409,6 +426,38 @@ def build_parser() -> argparse.ArgumentParser:
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
     return parser
+
+
+def _add_slo_arguments(parser: argparse.ArgumentParser, purpose: str) -> None:
+    parser.add_argument(
+        "--slo",
+        action="append",
+        default=[],
+        metavar="KEY:MS",
+        help=(
+            f"An SLO criterion to {purpose}, such as ttft:500 or "
+            "server.ttft:400 (milliseconds; a key without a boundary is a "
+            "client criterion); repeatable"
+        ),
+    )
+    parser.add_argument(
+        "--slo-file",
+        default=None,
+        metavar="FILE",
+        help=f"A stormlog.infer.slo policy file to {purpose}",
+    )
+
+
+def _slo_policy(args: argparse.Namespace) -> tuple[SloSpec | None, str]:
+    """The policy from --slo or --slo-file, and which one gave it."""
+    if args.slo and args.slo_file:
+        raise InferUsageError("use --slo or --slo-file, not both")
+    if args.slo_file:
+        spec = load_slo(args.slo_file)
+        return require_measured_window(spec, f"SLO policy {args.slo_file}"), "file"
+    if args.slo:
+        return parse_slo_flags(args.slo), "flags"
+    return None, "flags"
 
 
 def _add_import_trace_parser(subparsers: Any) -> None:
@@ -613,6 +662,17 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
             "vLLM /reset_prefix_cache or SGLang /flush_cache"
         ),
     )
+    parser.add_argument(
+        "--cache-reset-timeout",
+        type=float,
+        default=RESET_RETRY_SECONDS,
+        metavar="SECONDS",
+        help=(
+            "How long to retry a reset the server refuses, as vLLM does while "
+            "blocks are held. No attempt starts later, though the last can take "
+            f"up to --timeout (default: {RESET_RETRY_SECONDS:g}; 0 tries once)"
+        ),
+    )
 
 
 def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
@@ -727,6 +787,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         )
     with _usage_errors():
         profiler = InferenceProfiler(_profile_config(args), on_warning=_print_warning)
+    _warn_about_unjudgeable_criteria(profiler.config)
     report = profiler.run()
     print(format_analysis_text(report))
     print(f"Artifact saved to: {Path(args.output)}")
@@ -768,6 +829,7 @@ def _usage_errors() -> Iterator[None]:
 
 def _profile_config(args: argparse.Namespace) -> ProfileConfig:
     endpoint = resolve_endpoint(endpoint=args.endpoint, base_url=args.base_url)
+    slo, slo_source = _slo_policy(args)
     return ProfileConfig(
         endpoint=endpoint,
         model=args.model,
@@ -815,6 +877,7 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         prefix_groups=args.prefix_groups,
         cache_state=args.cache_state,
         cache_reset_url=args.cache_reset_url,
+        cache_reset_timeout_seconds=args.cache_reset_timeout,
         extra_body=_extra_body(args.extra_body),
         vllm_metrics_url=resolve_metrics_url(endpoint, args.vllm_metrics),
         vllm_metrics_interval_seconds=(
@@ -828,6 +891,8 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         vllm_execution_dir=(
             Path(args.vllm_execution_dir) if args.vllm_execution_dir else None
         ),
+        slo=slo,
+        slo_source=slo_source if slo is not None else None,
     )
 
 
@@ -873,6 +938,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if not input_path.exists():
         print(f"Error: Input file '{args.input_file}' not found", file=sys.stderr)
         return int(ExitCode.INVALID_INPUT)
+    slo, slo_source = _slo_policy(args)
     report = analyze_inference_events(
         input_path,
         server_telemetry_paths=args.server_telemetry,
@@ -880,7 +946,15 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         clock_offset_ns=args.clock_offset_ns,
         clock_uncertainty_ns=args.clock_uncertainty_ns,
         vllm_span_paths=args.vllm_spans,
+        slo=slo,
+        slo_source=slo_source,
     )
+    for replaced in replaced_policies(report):
+        _print_warning(
+            f"--{'slo-file' if slo_source == 'file' else 'slo'} replaces the "
+            f"policy the artifact recorded ({replaced.get('name')}, digest "
+            f"{str(replaced.get('digest'))[:12]})"
+        )
     if args.format == "json":
         payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
     else:
@@ -978,7 +1052,7 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
         raise ValueError("Use either --duration or --requests, not both")
     _validate_arrival_arguments(args)
     _validate_prompt_arguments(args)
-    _validate_http_url(args.cache_reset_url, "--cache-reset-url")
+    _validate_cache_arguments(args)
     _validate_trace_arguments(args)
     if args.timeout <= 0:
         raise ValueError("--timeout must be > 0")
@@ -1011,6 +1085,12 @@ def _validate_vllm_metrics_arguments(args: argparse.Namespace) -> None:
         raise ValueError("--vllm-metrics-interval only applies with --vllm-metrics")
     if not math.isfinite(interval) or interval < 0.1:
         raise ValueError("--vllm-metrics-interval must be a number of seconds >= 0.1")
+
+
+def _validate_cache_arguments(args: argparse.Namespace) -> None:
+    _validate_http_url(args.cache_reset_url, "--cache-reset-url")
+    if not math.isfinite(args.cache_reset_timeout) or args.cache_reset_timeout < 0:
+        raise ValueError("--cache-reset-timeout must be a finite number >= 0")
 
 
 def _validate_vllm_span_arguments(args: argparse.Namespace) -> None:
@@ -1081,6 +1161,34 @@ def _validate_loop_flags(args: argparse.Namespace) -> None:
             "--concurrency applies to --arrival closed; open-loop arrivals "
             "use --max-in-flight"
         )
+
+
+def _warn_about_unjudgeable_criteria(config: ProfileConfig) -> None:
+    """Say before sending which criteria no request of this run can be judged on."""
+    if config.slo is None:
+        return
+    for criterion in config.slo.criteria:
+        if criterion.definition.per_request is None:
+            reason = f"{criterion.key} is aggregate-only"
+        elif criterion.boundary == SERVER and config.vllm_spans_listen is None:
+            reason = (
+                f"{criterion.key} needs vLLM spans (--vllm-spans-listen here, or "
+                "--vllm-spans when analyzing)"
+            )
+        elif criterion.boundary == CLIENT and criterion.metric in _STREAMED_METRICS:
+            if config.stream:
+                continue
+            reason = f"{criterion.key} needs streamed responses (drop --no-stream)"
+        else:
+            continue
+        _print_warning(
+            f"SLO criterion {reason}; it cannot be judged per request, so each "
+            "case's SLO evaluation will be unmeasurable"
+        )
+
+
+# Client criteria measured from the first streamed chunk.
+_STREAMED_METRICS = frozenset({"ttft", "ttft_from_intended"})
 
 
 def _warn_about_short_prompts(args: argparse.Namespace) -> None:

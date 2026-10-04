@@ -114,7 +114,10 @@ Each case's `arrivals` block in the report counts what was offered, sent,
 completed, dropped and held. It also gives failures by status, peak
 in-flight, the offered rate and dispatch-lag percentiles. The offered rate is
 measured from the arrivals actually scheduled, so a Poisson case shows the
-rate it drew rather than `--rate`. It is null for a closed loop, and for a
+rate it drew rather than `--rate`: the gaps between the first and last
+intended arrivals, `(N − 1)` over that span. It is not the rate throughput
+divides by; see the realized offered rate in
+[Inference SLOs and goodput](inference_slo.md). It is null for a closed loop, and for a
 case whose arrivals all came at one instant, such as a single request or a
 single burst. When requests were held, latency measured from the send leaves
 out the time they waited.
@@ -138,6 +141,19 @@ in it is measured, so each one finishes or times out. Every phase writes an
 `infer.phase_window` record, and each case's `arrivals` block reports
 `window_seconds` and `drain_seconds`.
 
+An open-loop phase's record also gives `scheduled_endpoint_offset_ns`: where
+the schedule itself ends, measured from the phase start. It does not depend on
+when requests were actually sent.
+
+| Phase | Ends at |
+| --- | --- |
+| Limited by `--duration` | The duration |
+| Counted with `--requests` | One whole slot after the last scheduled arrival: the next offset the schedule would have produced |
+
+With a count, two requests at 10/s span 0.2 s, not the 0.1 s between their
+arrivals, and a Poisson count gives the usual N/T_N rate. A replay without
+`--duration`, and a closed loop, have no scheduled endpoint (`null`).
+
 `cancelled` means Stormlog stopped waiting, not that the request stopped. The
 HTTP call keeps running, on the server and on a client thread, until it
 finishes or reaches `--timeout`. So the next phase waits for those calls
@@ -150,7 +166,10 @@ Ctrl+C stops a profile with exit code 130. Requests still running are
 recorded as `cancelled`, and the artifact ends with an `infer.session` record
 whose status is `interrupted`. A run that fails for another reason ends with
 status `incomplete`. Either way, the requests recorded before the stop can
-still be analyzed.
+still be analyzed. The report's `summary.session_status` gives that status,
+and a case whose phase never recorded its window is marked
+`phase_window_missing`, with an invalid cohort and no rates, instead of
+reading as a complete case.
 
 `infer profile` returns codes from the
 [exit-code contract](report_contract.md):
@@ -166,11 +185,20 @@ Request outcomes:
 | `status` | Meaning |
 | --- | --- |
 | `ok` | The request completed |
-| `timeout` | The client gave up after `--timeout` |
+| `timeout` | The client gave up after `--timeout` while waiting for the response |
 | `rejected` | The server answered HTTP 429 or 503; `http_status` says which |
-| `error` | Any other failure, with `http_status` when there was one |
+| `unreachable` | The connection failed before any byte of the request was sent: refused, DNS, a connect timeout or a TLS handshake. The server never saw the request |
+| `delivery_unknown` | The connection completed, but sending the request failed, or the server reset or closed the connection before the response's status line. A small request is handed to the operating system before the server reads it, so the server may or may not have received it |
+| `error` | Any other failure, with `http_status` when there was one. Redirects are not followed, so a 3xx is an `error` with its status. A reset after the status line is the answer the server gave: an `error` (or `rejected`) with that status |
 | `dropped` | Never sent: `--overflow drop` turned the arrival away, or the drain deadline passed while `--overflow wait` held it; `error_message` says which |
 | `cancelled` | Still running when the drain deadline passed; the call itself runs on until it finishes or times out |
+
+Inference requests, and cache resets, ignore proxies set in the environment
+(`HTTP_PROXY`, `HTTPS_PROXY`). Through a proxy, the connection reaches the
+proxy, and a server that cannot be reached reads as the proxy's HTTP 502, an
+`error`, rather than as `unreachable`. The session record says so
+(`config.environment_proxies`: `ignored`, and the schemes the environment
+set, never their URLs). To go through a proxy, point the endpoint at it.
 
 ### Prompts and prefix sharing
 
@@ -233,20 +261,38 @@ stormlog infer profile \
   --output artifacts/infer_cold.jsonl
 ```
 
-Asking for a cold cache is not proof that the cache was empty. No engine
-adapter can read the cache yet, so each case's `infer.cache_state` record and
-the report's `cache` block say `unverified`, with the reason. The reason is
-one of:
+Asking for a cold cache is not proof that the cache was empty, and neither is
+an HTTP 200 from the reset route. vLLM answers 200 with `{"success": false}`
+while blocks are still held, for example by requests still running. Stormlog
+reads the answer, and records it as one of:
 
-- the reset succeeded but cannot be confirmed;
-- the reset failed, with its HTTP status or error;
+| Answer | Meaning |
+| --- | --- |
+| `acknowledged` | The server answered `success: true`. |
+| `refused` | The server kept answering `success: false`, or a `success` field with any value other than `true`. A refused reset is retried every half second for up to `--cache-reset-timeout` seconds (default 10; 0 tries once); the record keeps the number of attempts. No attempt starts after the timeout, though the last one can take up to `--timeout` to answer. It counts as a failed reset. |
+| `accepted_unverified` | A 2xx answer without a `success` field, such as SGLang's text reply. |
+
+The `infer.cache_state` record and the report's `cache` block record:
+- whether a reset was `attempted`;
+- whether it was `acknowledged`;
+- the reset's status, `success` field, answer and attempts;
+- when the first attempt was sent (`at_ns`) and when the recorded answer,
+  the last attempt's, came back (`answered_at_ns`). After refusals, the cache
+  was cleared near the second, not the first.
+
+No engine adapter can read the cache yet, so the state is still `unverified`,
+with the reason. The reason is one of:
+
+- the server acknowledged the reset, but it cannot be confirmed;
+- the reset returned a 2xx without saying whether it succeeded;
+- the reset failed or was refused, with its HTTP status, error or attempts;
 - nothing reset the cache.
 
-A failed reset is recorded and the run continues. Each case also has a
+A failed or refused reset is recorded and the run continues. Each case also has a
 `run_kind`, which names how the run was designed:
 
 - `cold_start`: a cold cache was requested, no warmup ran, and no reset
-  failed;
+  failed or was refused;
 - `steady_state`: warmup ran;
 - `unspecified`: anything else, including a cold start whose reset failed.
 
@@ -295,17 +341,72 @@ stormlog infer analyze artifacts/infer_qwen.jsonl --format json --output report.
 
 The report includes:
 
+- `analysis_version` (2), which says how the figures below are computed
+- per case, a `population` block that counts every measured request by
+  outcome, and an `intervals` block naming the interval rates divide by (see
+  [Inference SLOs and goodput](inference_slo.md))
 - end-to-end latency percentiles
 - TTFT percentiles for streaming responses
 - first streamed chunk latency
-- requests/sec
-- output tokens/sec and total tokens/sec
+- requests/sec, output tokens/sec and total tokens/sec of the successful
+  requests, per second of the case's rate interval
+- a `latency` block for each latency metric (`client.ttft`, `client.e2e`,
+  `client.tpot`, the `*_from_intended` variants, and `server.ttft`,
+  `server.e2e` and `server.queue` when vLLM spans are joined), with p50, p90,
+  p95 and p99:
+  - each over the successful requests and with failures ranked worst;
+  - each with its sample count, whether the case has enough requests for it,
+    and its order-statistic confidence interval (see
+    [Inference SLOs and goodput](inference_slo.md));
+  - and, for each status other than `ok`, how many requests ended with it and
+    how long they ran before they did;
+- a `streaming` block of chunk-level figures: content chunks per response,
+  chunk gaps, and mean tokens per chunk when the server reports usage. A
+  chunk can carry several tokens, so chunk gaps are never reported as
+  inter-token latency
+- with an SLO policy (`--slo`, `--slo-file`, or the `infer.slo` record
+  `infer profile` wrote), a top-level `slo` block naming the policy and, per
+  case, SLO attainment and goodput as lower and upper bounds (see
+  [Inference SLOs and goodput](inference_slo.md))
 - failure rate
 - highest recorded client-local device memory when system telemetry is available
 - scoped server memory observations when a matching on-host collector artifact is supplied
 
-`infer analyze` exits `5` when the artifact, a `--server-telemetry` file or a
-`--vllm-spans` file is missing, unparsable, or invalid, which includes an
+Throughput divides by the case's **rate interval**, named in
+`throughput.interval_kind` and `throughput.interval_seconds`:
+- for an open loop, the schedule's own window (`scheduled_window`), counting
+  the requests scheduled in it however late they finished;
+- for a closed loop, the phase start to the end of its drain
+  (`measured_span`);
+- for an artifact older than phase windows, the span of every measured
+  request that has both times, failed ones included (`request_span`).
+
+A case whose phase was cut short has no rate interval: the run recorded its
+workload, so it would have recorded the phase's window once the phase
+drained (`intervals.rate_reason: phase_window_missing`).
+
+A rate is `null` when its interval has no length, and for an open loop with
+no known endpoint, such as a replay without `--duration`: the span to the
+drain's end would make its rate depend on when its requests finished, so
+there is no rate interval (`intervals.rate_reason: endpoint_undeclared`).
+
+Before `analysis_version` 2, throughput divided by
+`throughput.duration_seconds`: the span of the case's **successful**
+requests. That span shrank when the last requests failed or timed out, which
+flattered a failing run. The old key is gone, so a consumer that reads it
+fails rather than misreading the new figures. The rate keys kept their names
+and changed their meaning, so a consumer must check `analysis_version` before
+reading any rate:
+
+| Version 1 | Version 2 | How to tell |
+| --- | --- | --- |
+| `throughput.duration_seconds`: first successful start to last successful end | `throughput.interval_seconds`, with `interval_kind` (`scheduled_window`, `measured_span`, `request_span`) and `numerator_cohort` | `duration_seconds` is absent in version 2 |
+| `requests_per_second`, `output_tokens_per_second`, `total_tokens_per_second` over `duration_seconds` | The same keys over `interval_seconds` | `analysis_version` is 2 |
+| A rate over an empty span was `0.0` | `null`, and `null` for an open loop with no known endpoint or a phase cut short (`intervals.rate_reason`) | `analysis_version` is 2 |
+| No populations | `population` and `intervals` blocks per case | The blocks are present |
+
+`infer analyze` exits `5` when the artifact, a `--server-telemetry` file, a
+`--vllm-spans` file or the `--slo-file` policy is missing, unparsable, or invalid, which includes an
 artifact with no `infer.session` or `infer.request` records. Otherwise it exits `0`, even when
 every request in the artifact failed: analysis reports findings without
 failing.
@@ -374,6 +475,9 @@ Stormlog reports client-observed metrics in v1:
   token-level ITL unless a future engine adapter can prove token-level events.
 - Token throughput uses server usage when available; otherwise the configured
   tokenizer or estimate is clearly recorded.
+
+SLO policies use the same boundaries; see
+[Inference SLOs and goodput](inference_slo.md).
 
 ## Client-local telemetry
 

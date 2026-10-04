@@ -27,7 +27,7 @@ from ..session import (
     update_session_summary,
 )
 from .analysis import analyze_inference_events
-from .arrivals import CLOSED, arrival_offsets
+from .arrivals import CLOSED, arrival_offsets, scheduled_endpoint
 from .cache_state import cache_state_record, reset_cache
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
@@ -36,11 +36,16 @@ from .host_clock import host_boot_id, wall_clock_domain
 from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
 from .openai_client import (
     ChatCompletionResult,
+    ConnectError,
+    CutResponseError,
     EndpointHTTPError,
+    NoResponseError,
     OpenAIChatCompletionsClient,
+    ignored_proxies,
 )
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
+from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
 from .trace_capture import TraceWindows
 from .vllm_execution_devices import WorkerIndex
@@ -279,6 +284,9 @@ class InferenceProfiler:
                         "prompts": self.prompt_spec.to_record(),
                         "cache_state": self.config.cache_state,
                         "cache_reset_url": redact_url(self.config.cache_reset_url),
+                        "cache_reset_timeout_seconds": (
+                            self.config.cache_reset_timeout_seconds
+                        ),
                         "vllm_metrics": (
                             self.vllm_scraper.config_record()
                             if self.vllm_scraper is not None
@@ -297,6 +305,7 @@ class InferenceProfiler:
                             if self.execution_dir is not None
                             else None
                         ),
+                        "environment_proxies": ignored_proxies(),
                     },
                 }
             )
@@ -309,6 +318,14 @@ class InferenceProfiler:
                     prompt_spec=self.prompt_spec,
                 )
             )
+            if self.config.slo is not None:
+                writer.append(
+                    slo_record(
+                        self.config.slo,
+                        session_id=self.session.session_id,
+                        source=self.config.slo_source or "flags",
+                    )
+                )
             stop_sampling = asyncio.Event()
             sample_task = asyncio.create_task(
                 self._sample_system_loop(
@@ -523,6 +540,7 @@ class InferenceProfiler:
                 self.config.cache_reset_url,
                 timeout_seconds=self.config.timeout_seconds,
                 api_key=self.config.api_key,
+                retry_seconds=self.config.cache_reset_timeout_seconds,
             )
             if not reset.succeeded and self.on_warning is not None:
                 self.on_warning(
@@ -886,11 +904,20 @@ class InferenceProfiler:
             window_ended_at_ns = dispatch.started_at_ns + round(duration_seconds * 1e9)
             drain_timeout += (window_ended_at_ns - time.time_ns()) / 1e9
         await _drain(dispatch.tasks, timeout=max(drain_timeout, 0.0))
+        endpoint = scheduled_endpoint(
+            case.arrival,
+            count=total_requests,
+            duration_seconds=duration_seconds,
+            seed=self.config.seed,
+        )
         return _PhaseWindow(
             dispatch.started_at_ns,
             window_ended_at_ns,
             time.time_ns(),
             scheduled_arrivals=len(offsets),
+            scheduled_endpoint_offset_ns=(
+                None if endpoint is None else round(endpoint * 1e9)
+            ),
         )
 
     async def _send(
@@ -1231,6 +1258,9 @@ class _PhaseWindow:
     window_ended_at_ns: int
     drained_at_ns: int
     scheduled_arrivals: int | None = None
+    # Where the schedule's observation window ends, from the phase start: the
+    # duration, or one whole slot after the last counted arrival.
+    scheduled_endpoint_offset_ns: int | None = None
 
     def to_record(
         self,
@@ -1252,6 +1282,7 @@ class _PhaseWindow:
             "drained_at_ns": self.drained_at_ns,
             "drain_timeout_seconds": drain_timeout_seconds,
             "scheduled_arrivals": self.scheduled_arrivals,
+            "scheduled_endpoint_offset_ns": self.scheduled_endpoint_offset_ns,
             "prompts_digest": request.prompts.digest(),
             "abandoned_requests": abandoned.to_record(),
         }
@@ -1316,22 +1347,34 @@ EXECUTION_FLUSH_TIMEOUT_SECONDS = 10.0
 
 
 def classify_failure(exc: BaseException) -> tuple[str, int | None]:
-    """Return the request status for a failure and its HTTP status, if any."""
-    http_status = exc.status if isinstance(exc, EndpointHTTPError) else None
+    """Return the request status for a failure and its HTTP status, if any.
+
+    urllib wraps every error from connecting and sending in ``URLError``.
+    A failure inside ``connect()``, before any byte of the request was sent,
+    is ``unreachable``: the server never saw the request. A failure while
+    sending, or a reset or close before the response's status line, is
+    ``delivery_unknown``: the server may have received it. After the status
+    line the server has answered, so a reset is the answer it gave: an
+    ``error`` (or ``rejected``) with that status. A timeout while waiting
+    for the response, or a read that stalls, is ``timeout``. Redirects are
+    not followed, so a 3xx is an ``error``.
+    """
+    http_status = (
+        exc.status if isinstance(exc, (EndpointHTTPError, CutResponseError)) else None
+    )
     if http_status in REJECTED_HTTP_STATUSES:
         return "rejected", http_status
-    if _is_timeout(exc):
+    if isinstance(exc, NoResponseError):
+        return "delivery_unknown", None
+    if isinstance(exc, urllib.error.URLError) and not isinstance(
+        exc, urllib.error.HTTPError
+    ):
+        if isinstance(exc.reason, ConnectError):
+            return "unreachable", None
+        return "delivery_unknown", None
+    if isinstance(exc, TimeoutError):
         return "timeout", http_status
     return "error", http_status
-
-
-def _is_timeout(exc: BaseException) -> bool:
-    if isinstance(exc, TimeoutError):
-        return True
-    # urllib wraps a connect timeout in URLError.
-    return isinstance(exc, urllib.error.URLError) and isinstance(
-        exc.reason, TimeoutError
-    )
 
 
 class _RequestCounter:

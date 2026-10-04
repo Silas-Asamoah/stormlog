@@ -9,11 +9,20 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ..session import SESSION_STATUS_COMPLETED
 from .arrival_report import arrival_lines, arrival_summary, latency_from_intended_ms
 from .cache_state import cache_lines, cache_summary
 from .correlation_accounting import AlignedTimestamp
 from .errors import InferInputError
 from .host_clock import is_boot_qualified
+from .latency_report import latency_summary, streaming_summary
+from .populations import (
+    CasePopulation,
+    MeasuredInterval,
+    case_populations,
+    goodput,
+    rate,
+)
 from .report_stats import int_value as _int_value
 from .report_stats import is_number as _is_number
 from .report_stats import number_values as _number_values
@@ -30,14 +39,18 @@ from .server_clock import (
 )
 from .server_group import members as group_members
 from .server_group import membership_issue
+from .slo import SloSpec, require_measured_window, slo_from_artifact
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
 from .vllm_analysis import (
+    JoinedSpans,
+    joined_span_attributes,
     load_external_spans,
     vllm_case_lines,
     vllm_lines,
     vllm_report,
 )
 from .vllm_execution_report import execution_lines, execution_report
+from .vllm_spans import VllmSpanRecord
 from .workload_report import (
     length_summary,
     prompt_lines,
@@ -55,12 +68,20 @@ def analyze_inference_events(
     clock_offset_ns: int | None = None,
     clock_uncertainty_ns: int | None = None,
     vllm_span_paths: Iterable[str | Path] = (),
+    slo: SloSpec | None = None,
+    slo_source: str = "flags",
 ) -> dict[str, Any]:
-    """Analyze an inference profiling JSONL artifact."""
+    """Analyze an inference profiling JSONL artifact.
+
+    ``slo`` overrides the policy the artifact recorded, if it recorded one.
+    """
     records = _load_jsonl(path)
+    policy = _policy(records, slo, slo_source)
     requests, samples = _partition_inference_records(records)
     server_samples = _load_server_samples(server_telemetry_paths)
-    vllm = _vllm_telemetry(records, vllm_span_paths)
+    external_spans = _external_spans(records, vllm_span_paths)
+    vllm = _vllm_telemetry(records, external_spans)
+    spans = _joined_spans(records, external_spans)
     join, members = _server_join(
         records,
         server_samples,
@@ -70,11 +91,25 @@ def analyze_inference_events(
     )
     timelines = [(member, _member_timeline(member)) for member in members]
     ok_requests = [record for record in requests if record.get("status") == "ok"]
-    cases = _case_reports(records, requests, samples, timelines, "group" in join)
+    cases = _case_reports(
+        records,
+        requests,
+        samples,
+        timelines,
+        "group" in join,
+        spans,
+        policy,
+        _server_admitted_ids(records, spans, external_spans),
+    )
     if timelines:
         join["case_coverage"] = _coverage_counts(cases)
     failed = [record for record in requests if record.get("status") != "ok"]
     return {
+        # 2: per-case populations and intervals; throughput divides by the
+        # case's declared interval (throughput.interval_seconds) instead of
+        # the span of its successful requests (the old duration_seconds).
+        "analysis_version": ANALYSIS_VERSION,
+        "slo": None if policy is None else policy.to_record(),
         "summary": {
             "total_requests": len(requests),
             "successful_requests": len(ok_requests),
@@ -82,6 +117,7 @@ def analyze_inference_events(
             "failure_rate": (len(failed) / len(requests)) if requests else 0.0,
             "failures_by_status": _failures_by_status(failed),
             "case_count": len(cases),
+            "session_status": _session_status(records),
         },
         "cases": cases,
         "workload": workload_summary(records),
@@ -95,14 +131,140 @@ def analyze_inference_events(
     }
 
 
-def _vllm_telemetry(
+ANALYSIS_VERSION = 2
+
+
+@dataclass(frozen=True)
+class _Policy:
+    """The SLO policy a report judges cases against, and where it came from."""
+
+    spec: SloSpec
+    source: str
+    # The policies the artifact recorded that this one replaces.
+    overrides: tuple[dict[str, Any], ...] = ()
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "name": self.spec.name,
+            "digest": self.spec.digest(),
+            "source": self.source,
+            "policy": self.spec.to_record(),
+            "overrides": [dict(item) for item in self.overrides],
+        }
+
+
+def _policy(
+    records: list[dict[str, Any]], slo: SloSpec | None, source: str
+) -> _Policy | None:
+    """The given policy, which replaces any the artifact recorded, or that one."""
+    if slo is not None:
+        return _Policy(slo, source, overrides=_recorded_policies(records))
+    recorded = slo_from_artifact(records)
+    if recorded is None:
+        return None
+    return _Policy(
+        require_measured_window(recorded, "the artifact's infer.slo record"),
+        "artifact",
+    )
+
+
+def _recorded_policies(records: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    """Each ``infer.slo`` record's name and digest, as the run recorded them."""
+    found = []
+    for record in records:
+        if record.get("event_type") != "infer.slo":
+            continue
+        policy = record.get("slo")
+        name = policy.get("name") if isinstance(policy, dict) else None
+        found.append({"name": name, "digest": record.get("digest")})
+    return tuple(found)
+
+
+def replaced_policies(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """The recorded policies a report's own policy replaced, if it differs."""
+    slo = report.get("slo")
+    if not isinstance(slo, dict):
+        return []
+    return [
+        item
+        for item in slo.get("overrides") or []
+        if item.get("digest") != slo.get("digest")
+    ]
+
+
+def _external_spans(
     records: list[dict[str, Any]], span_paths: Iterable[str | Path]
-) -> dict[str, Any]:
-    """The vLLM block; a span file or record that cannot be read is an input error."""
+) -> list[VllmSpanRecord]:
+    """Span files given on the command line; one that cannot be read is invalid."""
     try:
-        return vllm_report(records, load_external_spans(records, span_paths))
+        return load_external_spans(records, span_paths)
     except (OSError, ValueError) as exc:
         raise InferInputError(f"vLLM telemetry: {_reason(exc)}") from exc
+
+
+def _vllm_telemetry(
+    records: list[dict[str, Any]], external_spans: list[VllmSpanRecord]
+) -> dict[str, Any]:
+    """The vLLM block; a span record that cannot be read is an input error."""
+    try:
+        return vllm_report(records, external_spans)
+    except (OSError, ValueError) as exc:
+        raise InferInputError(f"vLLM telemetry: {_reason(exc)}") from exc
+
+
+def _joined_spans(
+    records: list[dict[str, Any]], external_spans: list[VllmSpanRecord]
+) -> JoinedSpans:
+    try:
+        return joined_span_attributes(records, external_spans)
+    except ValueError as exc:
+        raise InferInputError(f"vLLM telemetry: {_reason(exc)}") from exc
+
+
+def _server_admitted_ids(
+    records: list[dict[str, Any]],
+    spans: JoinedSpans,
+    external_spans: list[VllmSpanRecord],
+) -> set[str] | None:
+    """The requests the server confirmed it saw, or None with no server source.
+
+    A request with a joined span reached the engine, and so did one whose
+    spans conflict: the conflict is in what they say, not in whether they
+    exist. The execution hook's records confirm a request by its
+    ``X-Request-Id`` too. A span receiver that got nothing is a source that
+    confirms nothing; no source at all leaves the count unknown, never 0.
+    """
+    hook_ids = _hook_request_ids(records)
+    if not (hook_ids or external_spans or _span_source(records)):
+        return None
+    return set(spans.by_request) | set(spans.quarantined) | hook_ids
+
+
+def _hook_request_ids(records: list[dict[str, Any]]) -> set[str]:
+    """The run's requests the execution hook saw, by ``X-Request-Id``."""
+    ids = set()
+    for record in records:
+        if (
+            record.get("event_type") != "infer.request"
+            or record.get("schema_version") != 2
+        ):
+            continue
+        x_request_id = (record.get("metadata") or {}).get("x_request_id")
+        if x_request_id:
+            ids.add(str(x_request_id))
+    return ids
+
+
+def _span_source(records: list[dict[str, Any]]) -> bool:
+    """Whether the run received spans, or ran a receiver for them."""
+    for record in records:
+        if record.get("event_type") == "infer.vllm_span":
+            return True
+        config = record.get("config")
+        if record.get("event_type") == "infer.session" and isinstance(config, dict):
+            if config.get("vllm_spans") is not None:
+                return True
+    return False
 
 
 def _case_reports(
@@ -111,18 +273,38 @@ def _case_reports(
     samples: list[dict[str, Any]],
     timelines: list[tuple[_Member, _ServerTimeline]],
     grouped: bool,
+    spans: JoinedSpans,
+    policy: _Policy | None,
+    server_ids: set[str] | None,
 ) -> dict[str, dict[str, Any]]:
     by_case: dict[str, list[dict[str, Any]]] = {}
     for record in requests:
         by_case.setdefault(str(record.get("case_id", "unknown")), []).append(record)
     windows = _measured_windows(records)
     cache_states = _case_records(records, "infer.cache_state")
+    populations = case_populations(records, server_admitted_ids=server_ids)
     cases = {}
     for case_id, case_requests in sorted(by_case.items()):
         cases[case_id] = _case_report(
-            case_requests, samples, timelines, grouped, windows.get(case_id)
+            case_requests,
+            samples,
+            timelines,
+            grouped,
+            windows.get(case_id),
+            populations[case_id],
         )
         cases[case_id]["cache"] = cache_summary(cache_states.get(case_id))
+        cases[case_id]["latency"] = latency_summary(case_requests, spans=spans)
+        cases[case_id]["streaming"] = streaming_summary(case_requests)
+        if policy is not None:
+            cases[case_id]["slo"] = goodput(
+                case_requests,
+                policy.spec,
+                populations[case_id].intervals.rate,
+                spans=spans,
+                slo_source=policy.source,
+                cohort=populations[case_id].population,
+            ).to_record()
     return cases
 
 
@@ -132,10 +314,21 @@ def _case_report(
     timelines: list[tuple[_Member, _ServerTimeline]],
     grouped: bool,
     window: dict[str, Any] | None,
+    population: CasePopulation,
 ) -> dict[str, Any]:
-    """Summarize one case: latency from its completed requests, arrivals from all."""
+    """Summarize one case: latency from its completed requests, arrivals from all.
+
+    Rates divide by the case's rate interval; its populations count every
+    measured request.
+    """
     ok = [record for record in case_requests if record.get("status") == "ok"]
-    report = _summarize_requests(ok, samples=_samples_for_request_window(samples, ok))
+    report = _summarize_requests(
+        ok,
+        samples=_samples_for_request_window(samples, ok),
+        interval=population.intervals.rate,
+    )
+    report["population"] = population.population.to_record()
+    report["intervals"] = population.intervals.to_record()
     report["arrivals"] = arrival_summary(case_requests, window)
     report["prompts"] = prompt_summary(case_requests, window)
     report["lengths"] = length_summary(ok)
@@ -162,6 +355,16 @@ def _measured_windows(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]
     }
 
 
+def _session_status(records: list[dict[str, Any]]) -> str | None:
+    """How the run ended: the last status its session records."""
+    statuses = [
+        str(record["status"])
+        for record in records
+        if record.get("event_type") == "infer.session" and record.get("status")
+    ]
+    return statuses[-1] if statuses else None
+
+
 def _failures_by_status(failed: list[dict[str, Any]]) -> dict[str, int]:
     counts = Counter(str(record.get("status")) for record in failed)
     return dict(sorted(counts.items()))
@@ -179,12 +382,16 @@ def format_analysis_text(report: dict[str, Any]) -> str:
         + _failure_breakdown(summary.get("failures_by_status")),
         f"Failure rate: {float(summary.get('failure_rate', 0.0)):.2%}",
     ]
+    status = summary.get("session_status")
+    if status not in (None, SESSION_STATUS_COMPLETED):
+        lines.insert(2, f"Session status: {status}")
     cases = report.get("cases", {})
     telemetry = report.get("telemetry", {})
     join = telemetry.get("server_join", {})
     vllm = telemetry.get("vllm")
     vllm_cases = vllm.get("cases", {}) if isinstance(vllm, dict) else {}
     lines.extend(workload_lines(report.get("workload")))
+    lines.extend(_policy_lines(report))
     lines.append("Memory observations: client-local")
     lines.extend(_server_status_lines(join))
     lines.extend(vllm_lines(vllm))
@@ -262,12 +469,74 @@ def _case_lines(case_id: str, case: Any) -> list[str]:
         f"requests={_fmt(throughput.get('requests_per_second'))} req/s"
     ]
     if isinstance(case, dict):
+        lines.extend(
+            _interval_lines(throughput, case.get("population"), case.get("intervals"))
+        )
+        lines.extend(_slo_lines(case.get("slo")))
         lines.extend(arrival_lines(case.get("arrivals"), case.get("latency_ms")))
         lines.extend(prompt_lines(case.get("prompts")))
         lines.extend(cache_lines(case.get("cache")))
     memory = case.get("memory", {}) if isinstance(case, dict) else {}
     lines.extend(_server_case_lines(memory))
     return lines
+
+
+def _interval_lines(throughput: Any, population: Any, intervals: Any) -> list[str]:
+    """What the rates divide by, and whether the request cohort is whole."""
+    lines = []
+    if isinstance(throughput, dict) and throughput.get("interval_kind"):
+        cohort = str(throughput.get("numerator_cohort", "")).replace("_", " ")
+        lines.append(
+            f"  rates per {throughput['interval_kind'].replace('_', ' ')} of "
+            f"{_fmt(throughput.get('interval_seconds'))} s ({cohort})"
+        )
+    elif isinstance(intervals, dict) and intervals.get("rate_reason"):
+        lines.append(f"  no rate interval ({intervals['rate_reason']})")
+    if isinstance(population, dict) and not population.get("cohort_valid", True):
+        issues = ", ".join(str(issue) for issue in population.get("issues", []))
+        lines.append(f"  cohort invalid: {issues}")
+    return lines
+
+
+def _policy_lines(report: dict[str, Any]) -> list[str]:
+    slo = report.get("slo")
+    if not isinstance(slo, dict):
+        return []
+    lines = [
+        f"SLO policy: {slo.get('name')} from {slo.get('source')}, "
+        f"digest {str(slo.get('digest'))[:12]}"
+    ]
+    lines.extend(
+        f"  replaces the recorded policy {item.get('name')} "
+        f"(digest {str(item.get('digest'))[:12]})"
+        for item in replaced_policies(report)
+    )
+    return lines
+
+
+def _slo_lines(slo: Any) -> list[str]:
+    """Attainment and goodput as bounds, or why the policy could not judge."""
+    if not isinstance(slo, dict):
+        return []
+    name = slo.get("slo_name")
+    if slo.get("status") != "evaluated":
+        return [f"  SLO {name}: unmeasurable ({slo.get('reason')})"]
+    low, high = slo.get("attainment_lower"), slo.get("attainment_upper")
+    attainment = (
+        _fmt_share(low) if low == high else f"{_fmt_share(low)}-{_fmt_share(high)}"
+    )
+    rates = (slo.get("goodput_lower_rps"), slo.get("goodput_upper_rps"))
+    goodput_text = (
+        _fmt(rates[0]) if rates[0] == rates[1] else f"{_fmt(rates[0])}-{_fmt(rates[1])}"
+    )
+    return [
+        f"  SLO {name}: attainment {attainment} of {slo.get('offered')} offered, "
+        f"goodput {goodput_text} req/s, {slo.get('unknown')} unknown"
+    ]
+
+
+def _fmt_share(value: Any) -> str:
+    return f"{float(value):.1%}" if isinstance(value, (int, float)) else "-"
 
 
 def _server_case_lines(memory: Any) -> list[str]:
@@ -360,6 +629,7 @@ def _summarize_requests(
     requests: list[dict[str, Any]],
     *,
     samples: list[dict[str, Any]],
+    interval: MeasuredInterval | None,
 ) -> dict[str, Any]:
     e2e = _number_values(requests, "e2e_latency_ms")
     from_intended = latency_from_intended_ms(requests)
@@ -367,16 +637,7 @@ def _summarize_requests(
     first_chunk = _number_values(requests, "first_chunk_latency_ms")
     output_tokens = sum(_int_value(record.get("output_tokens")) for record in requests)
     total_tokens = sum(_int_value(record.get("total_tokens")) for record in requests)
-    request_window = _request_time_window(requests)
-    duration_seconds = (
-        max(request_window[1] - request_window[0], 0) / 1_000_000_000
-        if request_window is not None
-        else 0.0
-    )
     request_count = len(requests)
-    output_tps = output_tokens / duration_seconds if duration_seconds > 0 else 0.0
-    total_tps = total_tokens / duration_seconds if duration_seconds > 0 else 0.0
-    request_rate = request_count / duration_seconds if duration_seconds > 0 else 0.0
     peak_device_used = _peak_sample_value(samples, "device_used_bytes")
     peak_process_rss = _peak_sample_value(samples, "process_rss_bytes")
     return {
@@ -394,12 +655,7 @@ def _summarize_requests(
             "first_chunk_p50": _percentile(first_chunk, 50),
             "first_chunk_p95": _percentile(first_chunk, 95),
         },
-        "throughput": {
-            "duration_seconds": duration_seconds,
-            "requests_per_second": request_rate,
-            "output_tokens_per_second": output_tps,
-            "total_tokens_per_second": total_tps,
-        },
+        "throughput": _throughput(request_count, output_tokens, total_tokens, interval),
         "tokens": {
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,
@@ -415,6 +671,28 @@ def _summarize_requests(
             "peak_device_used_bytes": peak_device_used,
             "peak_process_rss_bytes": peak_process_rss,
         },
+    }
+
+
+def _throughput(
+    requests: int,
+    output_tokens: int,
+    total_tokens: int,
+    interval: MeasuredInterval | None,
+) -> dict[str, Any]:
+    """Successful requests and their tokens per second of the rate interval.
+
+    The rates are null when the interval has no length, instead of zero.
+    """
+    return {
+        "interval_seconds": interval.seconds if interval is not None else None,
+        "interval_kind": interval.kind if interval is not None else None,
+        "numerator_cohort": (
+            interval.numerator_cohort if interval is not None else None
+        ),
+        "requests_per_second": rate(requests, interval),
+        "output_tokens_per_second": rate(output_tokens, interval),
+        "total_tokens_per_second": rate(total_tokens, interval),
     }
 
 

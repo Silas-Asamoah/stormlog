@@ -11,8 +11,9 @@ never a zero.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections import Counter
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -121,8 +122,7 @@ def vllm_report(
     )
     join = _join_spans(spans, requests, _warmup_request_ids(records))
     cases = {
-        case_id: _case_block(case_id, scrapes, requests, join.by_request)
-        for case_id in case_ids
+        case_id: _case_block(case_id, scrapes, requests, join) for case_id in case_ids
     }
     return {
         "status": "collected",
@@ -265,7 +265,7 @@ def _case_block(
     case_id: str,
     scrapes: list[VllmScrapeRecord],
     requests: list[dict[str, Any]],
-    spans_by_request: dict[str, list[VllmSpanRecord]],
+    join: _SpanJoin,
 ) -> dict[str, Any]:
     boundary = _boundary(case_id, scrapes)
     case_requests = [r for r in requests if str(r.get("case_id")) == case_id]
@@ -274,7 +274,7 @@ def _case_block(
         "reasons": list(boundary.reasons),
         "window": None,
         "engines": {},
-        "spans": _case_spans(case_requests, spans_by_request),
+        "spans": _case_spans(case_requests, join),
     }
     start, end = boundary.start, boundary.end
     if start is None or end is None or start.scrape is None or end.scrape is None:
@@ -698,6 +698,13 @@ def _mfu_resolved(
 # ----------------------------------------------------------------- spans
 @dataclass
 class _SpanJoin:
+    """Spans joined to measured requests, one per request.
+
+    A request whose span arrived again with different content, or that has
+    more than one span, is quarantined: none of its spans is used, because
+    there is no way to tell which one is right.
+    """
+
     by_request: dict[str, list[VllmSpanRecord]]
     total: int
     joined: int
@@ -706,8 +713,10 @@ class _SpanJoin:
     deliveries: int = 0
     duplicates: int = 0
     conflicting: int = 0
+    quarantined: dict[str, str] = field(default_factory=dict)
 
     def summary(self) -> dict[str, Any]:
+        reasons = Counter(self.quarantined.values())
         return {
             "total": self.total,
             "joined": self.joined,
@@ -716,6 +725,7 @@ class _SpanJoin:
             "deliveries": self.deliveries,
             "duplicates": self.duplicates,
             "conflicting_duplicates": self.conflicting,
+            "quarantined_requests": dict(sorted(reasons.items())),
             "note": RESIDENCY_NOTE,
         }
 
@@ -742,7 +752,7 @@ def _join_spans(
         if isinstance(r.get("x_request_id"), str)
     }
     deliveries = len(spans)
-    spans, duplicates, conflicting = _unique_spans(spans)
+    spans, duplicates, conflicted = _unique_spans(spans)
     by_request: dict[str, list[VllmSpanRecord]] = {}
     unjoined: dict[str, int] = {}
     sources: dict[str, int] = {}
@@ -753,6 +763,7 @@ def _join_spans(
             by_request.setdefault(span.request_id, []).append(span)
         else:
             unjoined[reason or "unknown"] = unjoined.get(reason or "unknown", 0) + 1
+    quarantined = _quarantine(by_request, conflicted)
     joined = sum(len(items) for items in by_request.values())
     return _SpanJoin(
         by_request,
@@ -762,24 +773,43 @@ def _join_spans(
         sources,
         deliveries,
         duplicates,
-        conflicting,
+        len(conflicted),
+        quarantined,
     )
+
+
+def _quarantine(
+    by_request: dict[str, list[VllmSpanRecord]], conflicted: set[tuple[str, str]]
+) -> dict[str, str]:
+    """Take out requests whose server values cannot be trusted; say why."""
+    quarantined: dict[str, str] = {}
+    for request_id, items in by_request.items():
+        keys = {(span.trace_id, span.span_id) for span in items}
+        if keys & conflicted:
+            quarantined[request_id] = "conflicting_spans"
+        elif len(items) > 1:
+            quarantined[request_id] = "multiple_spans"
+    for request_id in quarantined:
+        del by_request[request_id]
+    return quarantined
 
 
 def _unique_spans(
     spans: list[VllmSpanRecord],
-) -> tuple[list[VllmSpanRecord], int, int]:
-    """Each span once, by (trace_id, span_id); the first delivery is kept.
+) -> tuple[list[VllmSpanRecord], int, set[tuple[str, str]]]:
+    """Each span once, by (trace_id, span_id), and the ids that conflicted.
 
     An OTLP retry after a lost response, or two overlapping files, deliver
-    a span again. The repeat is counted as a duplicate, and as conflicting
-    when it differs from the first in anything but its delivery, so it
-    never weighs twice in the statistics. A span with no ids cannot be
-    matched and is kept as it is.
+    a span again. An identical repeat is counted as a duplicate and weighs
+    once. A repeat that differs from the first in anything but its delivery
+    is conflicting: its ids are returned, so the request is quarantined
+    rather than judged on whichever delivery came first. A span with no ids
+    cannot be matched and is kept as it is.
     """
     seen: dict[tuple[str, str], VllmSpanRecord] = {}
     unique: list[VllmSpanRecord] = []
-    duplicates = conflicting = 0
+    duplicates = 0
+    conflicted: set[tuple[str, str]] = set()
     for span in spans:
         if span.trace_id is None or span.span_id is None:
             unique.append(span)
@@ -791,8 +821,8 @@ def _unique_spans(
             continue
         duplicates += 1
         if _span_content(first) != _span_content(span):
-            conflicting += 1
-    return unique, duplicates, conflicting
+            conflicted.add((span.trace_id, span.span_id))
+    return unique, duplicates, conflicted
 
 
 def _span_content(span: VllmSpanRecord) -> tuple[Any, ...]:
@@ -821,19 +851,27 @@ def _unjoined_reason(
     return None
 
 
-def _case_spans(
-    requests: list[dict[str, Any]], by_request: dict[str, list[VllmSpanRecord]]
-) -> dict[str, Any]:
+def _case_spans(requests: list[dict[str, Any]], join: _SpanJoin) -> dict[str, Any]:
+    ids = [str(r.get("x_request_id")) for r in requests]
     joined = [
-        span
-        for r in requests
-        for span in by_request.get(str(r.get("x_request_id")), [])
+        span for request_id in ids for span in join.by_request.get(request_id, [])
     ]
+    return {
+        "requests": len(requests),
+        "requests_with_span": sum(1 for i in ids if join.by_request.get(i)),
+        "spans": len(joined),
+        "quarantined_requests": sum(1 for i in ids if i in join.quarantined),
+        "latency": _span_latency(joined),
+        "note": RESIDENCY_NOTE,
+    }
+
+
+def _span_latency(spans: list[VllmSpanRecord]) -> dict[str, Any]:
     latency: dict[str, Any] = {}
     for short, attribute in SPAN_LATENCY_ATTRIBUTES:
         values = [
             float(span.attributes[attribute]) * 1000.0
-            for span in joined
+            for span in spans
             if isinstance(span.attributes.get(attribute), (int, float))
             and not isinstance(span.attributes.get(attribute), bool)
         ]
@@ -844,15 +882,38 @@ def _case_spans(
                 "mean_ms": sum(values) / len(values),
                 "n": len(values),
             }
-    return {
-        "requests": len(requests),
-        "requests_with_span": sum(
-            1 for r in requests if by_request.get(str(r.get("x_request_id")))
-        ),
-        "spans": len(joined),
-        "latency": latency,
-        "note": RESIDENCY_NOTE,
-    }
+    return latency
+
+
+@dataclass(frozen=True)
+class JoinedSpans:
+    """Each measured request's single trusted span, by ``x_request_id``.
+
+    ``quarantined`` maps the requests left out to why: ``conflicting_spans``
+    when a span arrived again with different content, ``multiple_spans``
+    when a request has more than one span.
+    """
+
+    by_request: Mapping[str, Mapping[str, Any]]
+    quarantined: Mapping[str, str]
+
+
+def joined_span_attributes(
+    records: list[dict[str, Any]], external_spans: Iterable[VllmSpanRecord] = ()
+) -> JoinedSpans:
+    """The attributes of each measured request's span, conflicts quarantined."""
+    _scrapes, spans = load_vllm_records(records)
+    requests = _measured(records, "infer.request")
+    join = _join_spans(
+        [*spans, *external_spans], requests, _warmup_request_ids(records)
+    )
+    return JoinedSpans(
+        by_request={
+            request_id: items[0].attributes
+            for request_id, items in join.by_request.items()
+        },
+        quarantined=dict(join.quarantined),
+    )
 
 
 # ----------------------------------------------------------------- text

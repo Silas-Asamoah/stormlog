@@ -33,6 +33,46 @@ the flaky benchmark memory gates
   an exporter has consent to send; `truncate_utf8`; and
   `is_forbidden_key_name`. Documented in `docs/scrubbing.md`; the wider
   artifact policy stays with #111. (#220)
+- `stormlog infer analyze` gives each case:
+  - a `latency` block: p50/p90/p95/p99 of each client latency metric, and of
+    vLLM's own TTFT, end-to-end and queue time when spans are joined;
+  - for each quantile, its value over the successful requests and with
+    failures ranked worst, its sample count, whether the case has enough
+    requests, and its order-statistic confidence interval. The second has
+    no value, with a reason, when a successful request lacks the metric. The
+    block's `rule` states what the intervals assume;
+  - for each status other than `ok`, the count and the elapsed time observed
+    before the request ended (for a cancelled request, its send to its
+    cancellation), kept apart from the latency quantiles;
+  - a `streaming` block of chunk-level figures, never called inter-token
+    latency. (#213)
+- `stormlog.infer.slo`: SLO policies whose criteria name their boundary
+  (`client.ttft`, `server.ttft`, ...), so client and server latency are never
+  mixed. Policies come from a versioned JSON file (`stormlog.infer.slo` v1),
+  `KEY:MS` flags, or an artifact's `infer.slo` record.
+  - `evaluate_request` judges an `infer.request` record as met, missed or
+    unknown, with a reason per criterion.
+  - `evaluate_span` judges a vLLM span on server criteria only, with success
+    unverified, since vLLM emits spans for failed requests too.
+  - A negative or non-finite value is unknown, never a pass, and the latency
+    quantiles leave it out.
+  - There is no client inter-token latency; `docs/inference_slo.md` explains
+    why. (#213)
+- `--slo KEY:MS` (repeatable) and `--slo-file FILE` on `stormlog infer
+  profile` and `stormlog infer analyze`. `profile` records the policy in the
+  artifact as `infer.slo`; `analyze` judges by the flags, or else by the
+  policy the artifact recorded. The report gains a top-level `slo` block
+  (name, digest, source, policy; the digest does not depend on the order of
+  the criteria) and, per case, SLO attainment and SLO goodput at the offered
+  load as lower and upper bounds with evidence coverage, `null` with a reason
+  when the policy cannot be judged, and whether the case's cohort is valid. A
+  malformed flag, or both options at once, exits 2; a missing or invalid
+  policy file, including one with a key given twice or a number too large for
+  a float, exits 5, as does a policy with a sliding interval, which an online
+  watcher judges. `profile` warns before sending when a criterion cannot be
+  judged per request in the run. When `analyze` options replace the policy
+  the artifact recorded, `slo.overrides` keeps its name and digest, and a
+  warning says so. (#213)
 - `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
   hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,
   `infer.membership`, `infer.request` and `infer.clock_alignment` records:
@@ -145,6 +185,45 @@ the flaky benchmark memory gates
 
 ### Changed
 
+- **Breaking:** `stormlog infer analyze` JSON is `analysis_version: 2`.
+  - Each case's throughput divides by its rate interval. For an open loop
+    that is the schedule's own window; for a closed loop, the phase start to
+    the drain end. It used to be the span of the case's successful requests,
+    which shrank when the last requests failed.
+  - `throughput.duration_seconds` is replaced by `interval_seconds`,
+    `interval_kind` and `numerator_cohort`. The rate keys keep their names
+    with the new denominator, so a consumer must check `analysis_version`
+    before reading any rate:
+
+    | Version 1 | Version 2 |
+    | --- | --- |
+    | `throughput.duration_seconds`: first successful start to last successful end | `interval_seconds`, `interval_kind`, `numerator_cohort` |
+    | `requests_per_second`, `output_tokens_per_second`, `total_tokens_per_second` over `duration_seconds` | The same keys over `interval_seconds` |
+    | A rate over an empty span: `0.0` | `null`, with `intervals.rate_reason` |
+  - A rate over an empty interval is `null`, not `0.0`, and so is every rate
+    of an open loop with no known endpoint, such as a replay without
+    `--duration` (`rate_reason: endpoint_undeclared`).
+  - Each case gains a `population` block (offered, sent, accepted,
+    successful, failed, timed out, cancelled and the rest, with cohort checks)
+    and an `intervals` block. A case whose phase was cut short, such as by
+    Ctrl+C, has an invalid cohort (`phase_window_missing`, with its missing
+    scheduled arrivals) and no rates, and `summary.session_status` says how
+    the run ended. (#213)
+- `stormlog infer profile` tells apart where a failed request stopped. Two
+  new request statuses:
+  - `unreachable`: the connection failed before any byte was sent. A connect
+    timeout used to be `timeout`, and a refused connection `error`.
+  - `delivery_unknown`: sending failed after the connection completed, or
+    the connection closed before the response's status line, so the server
+    may have received the request. A reset after the status line is the
+    answer the server gave: an `error` (or `rejected`) with its status.
+
+  Inference requests and cache resets no longer follow HTTP redirects.
+  urllib re-sent a redirected POST as a GET to another address, so a 3xx is
+  now recorded as `error` with its status. They also ignore proxies set in
+  the environment, through which an unreachable server read as the proxy's
+  HTTP 502, and the session config records that they did
+  (`environment_proxies`). (#213)
 - **Breaking:** `gpumemprof`, `tfmemprof` and `jaxmemprof diagnose` exit 3
   for memory risk. They used to exit 2, which could not be told apart from
   an `argparse` usage error from the same command. The bundle manifest's
@@ -222,6 +301,21 @@ the flaky benchmark memory gates
 
 ### Fixed
 
+- `stormlog infer analyze` no longer keeps the first of two different
+  deliveries of a request's vLLM span. That request, and any request with more
+  than one span, is quarantined: its spans are left out of the case's span
+  statistics and counted under `quarantined_requests`. (#213)
+- `stormlog infer profile --cache-reset-url` no longer counts an HTTP 200 as a
+  reset. vLLM's `/reset_prefix_cache` answers 200 with `{"success": false}`
+  while blocks are still held. The answer is now read and recorded as
+  `acknowledged`, `refused` or `accepted_unverified`. A refused reset is
+  retried for up to `--cache-reset-timeout` seconds (default 10), then
+  counts as a failed reset, so the case is not labelled a cold start. A
+  `success` field with any value other than `true` is a refusal too, and no
+  retry starts after the timeout. `infer.cache_state` records and the
+  report's `cache` block gain `attempted` and `acknowledged`, and the reset's
+  `success`, `answer`, `attempts` and `answered_at_ns`, when the recorded
+  answer came back. (#213)
 - The benchmark harness's memory gates no longer fail on runner noise:
   - The soak's RSS checks (`max_rss_delta_bytes`, `rss_growth_per_24h_equiv`)
     now read memory inside the sample loop, after a warmup. Before, they

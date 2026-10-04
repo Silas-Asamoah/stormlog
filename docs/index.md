@@ -34,6 +34,7 @@ cli
 report_contract
 scrubbing
 inference
+inference_slo
 inference_correlation
 vllm_telemetry
 vllm_execution
@@ -82,11 +83,12 @@ examples/test_guides/README
 
 1. [CLI](cli.md)
 2. [Inference Profiling](inference.md)
-3. [Inference execution correlation](inference_correlation.md)
-4. [vLLM native telemetry](vllm_telemetry.md)
-5. [TUI](tui.md)
-6. [Production Cookbook](cookbook/index.md)
-7. [Troubleshooting](troubleshooting.md)
+3. [Inference SLOs and goodput](inference_slo.md)
+4. [Inference execution correlation](inference_correlation.md)
+5. [vLLM native telemetry](vllm_telemetry.md)
+6. [TUI](tui.md)
+7. [Production Cookbook](cookbook/index.md)
+8. [Troubleshooting](troubleshooting.md)
 
 ### Release or CI validation
 
