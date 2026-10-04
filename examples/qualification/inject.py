@@ -21,6 +21,7 @@ pid of each role it may pulse, and the hook directory the server writes.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import signal
 import socket
@@ -80,6 +81,13 @@ MARKER_TIMEOUT_SECONDS = 120.0
 # After its stop file appears the victim drains (its --timeout at most) and
 # runs its post-run imports; past this it is interrupted instead.
 VICTIM_STOP_SECONDS = 180.0
+
+
+def neighbor_name(run_id: str, index: int) -> str:
+    """An opaque name for a run's ``index``-th neighbor: its request IDs reach
+    the hook log a diagnosed configuration may import, so they must not give
+    away the episode order (C.4)."""
+    return hashlib.sha256(f"{run_id}:{index}".encode()).hexdigest()[:12]
 
 
 def victim_prefix(run_id: str) -> str:
@@ -323,7 +331,7 @@ class InjectionRun:
         self, index: int, episode: EpisodePlan
     ) -> tuple[Actions, bool, dict[str, Any]]:
         neighbor = Neighbor(
-            name=str(index),
+            name=neighbor_name(self.directory.label, index),
             shape=episode.neighbor_shape(),
             endpoint=self.server.endpoint,
             model=self.server.model,
@@ -714,4 +722,4 @@ def _skipped(truth: _Truth, index: int, episode: EpisodePlan) -> Injection:
     )
 
 
-__all__ = ["InjectionRun", "Server", "victim_prefix"]
+__all__ = ["InjectionRun", "Server", "neighbor_name", "victim_prefix"]
