@@ -68,7 +68,7 @@ the flaky benchmark memory gates
   `infer.run_state`; only a protocol failure, such as an external cause a
   runner records there (listed with its evidence), sets aside a block, both
   arms, and a gate's pre-registered `min_complete_blocks` says how many may
-  go. A baseline outcome failure leaves the case's contrasts
+  go. A field `--allow` names may differ within an arm too. A baseline outcome failure leaves the case's contrasts
   `not_evaluable: control_failed`, so a broken baseline never passes the
   candidate. A retried block keeps its last attempt, but a retry never
   replaces an outcome failure. An SLO gate over runs judged by
