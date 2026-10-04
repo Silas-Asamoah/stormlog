@@ -268,13 +268,18 @@ and pooling requests as if independent passes it up to 55% (78% in a burst
 model); more requests per run do not help.
 
 - **The claim.** Each candidate run is within the budget `b` when its value
-  is no worse than its block's baseline run by more than `b` (without
-  blocks, than the baseline arm's mean), on its worst case when outcomes
-  are unknown. A run with no value, or no baseline to judge it by, is a
-  miss. With k of n runs within, the gate passes iff the one-sided 97.5%
-  Clopper–Pearson lower bound of k/n is at least 0.5. That is exact when
-  runs are independent (a fresh server each), however failures cluster
-  inside a run.
+  is no worse than its block's baseline run by more than `b`, on its worst
+  case when outcomes are unknown. A run with no value, or no baseline to
+  judge it by, is a miss. With k of n runs within, the gate passes iff the
+  one-sided 97.5% Clopper–Pearson lower bound of k/n is at least 0.5. That
+  is exact when blocks are independent (a fresh server each run), however
+  failures cluster inside a run.
+- **Blocks are required.** Without them the gate is
+  `not_evaluable: fraction_needs_blocks`. Judging every candidate run
+  against one estimated baseline mean correlates the judgements, so the
+  bound is no longer exact: where the nominal false-pass rate is at most
+  1.3%, rev-213-a measured 9.4% with one baseline run, 3.7% with three, and
+  1.5% with twelve (paired blocks: 0.9%).
 - **The thresholds.** 6 runs need 6 of 6 (lower bound 0.541; 5 of 6 gives
   0.359), 8 need 8 of 8 (0.631; 7 of 8 gives 0.474), 10 need 9 of 10
   (0.555). Fewer than 6 runs can never make the claim: the gate is
@@ -534,7 +539,7 @@ Fewer than 17 runs cannot show a share of 0.8 at all:
 so that every pass of an interval is false. With failures independent, the
 descriptive interval (the paired t, its standard error floored at the
 pooled binomial one) must be false-safe at most 2.83%; the run-level claim,
-the gate, is exact under independent runs, and passes here only as often
+the gate, is exact under independent blocks, and passes here only as often
 as most runs really are within the budget (about 65% of runs are):
 
 | Blocks × requests | Floored paired t | Pooled requests | Run-level claim passes |
