@@ -13,7 +13,7 @@ import pytest
 from stormlog._export import textfile
 from stormlog._export.envelope import Envelope, EnvelopeLimits, Value, make_envelope
 from stormlog._export.queue import BoundedQueue
-from stormlog._export.registry import FamilySpec, Registry, render
+from stormlog._export.registry import FamilySpec, Registry, _Series, render
 from stormlog._export.renders import MAX_GENERATIONS, Generation, RenderCache
 from stormlog._export.textfile import TextfileWriter
 
@@ -94,9 +94,10 @@ def test_renders_with_a_stuck_textfile_writer_stay_within_three_renders(
     assert cache.alive() <= MAX_GENERATIONS
     # Three renders of exactly their size; at the peak, the snapshot of the
     # one being built too, which holds references to the rendered prefixes
-    # and one float per value: well under a fifth of a render.
-    assert (current - baseline) <= MAX_GENERATIONS * size * 1.03
-    assert (peak - baseline) <= MAX_GENERATIONS * size + 0.25 * size
+    # and one float per value: about a sixth of a render. The margins allow
+    # for other Pythons and allocators; the unfixed code held 5-7.3 renders.
+    assert (current - baseline) <= MAX_GENERATIONS * size * 1.15
+    assert (peak - baseline) <= MAX_GENERATIONS * size + 0.5 * size
 
 
 _RANDOM = random.Random(1)
@@ -137,15 +138,17 @@ def _float_tuples() -> Value:
 def test_a_queue_of_envelopes_holds_what_it_charges(
     fields: int, value: Callable[[], Value]
 ) -> None:
+    # sys.getsizeof and the allocator differ between Pythons and platforms,
+    # hence the margins; the unfixed charges were 3-58 times too low.
     retained, charged = _fill_queue(fields, value)
-    assert retained <= charged * 1.1
+    assert retained <= charged * 1.25
     assert charged <= retained * 1.5
 
 
 def test_ints_past_64_bits_are_clamped_so_they_hold_what_they_charge() -> None:
     # A 4000-digit int was charged 8 bytes and held 1.8 KB.
     retained, charged = _fill_queue(32, _ints_past_int64)
-    assert retained <= charged * 1.1
+    assert retained <= charged * 1.25
     envelope = make_envelope(
         "request", [("a", 2**70), ("b", -(2**70)), ("c", 5)], EnvelopeLimits()
     )
@@ -180,8 +183,9 @@ def _fill_queue(fields: int, value: Callable[[], Value]) -> tuple[int, int]:
 
 def test_a_registry_holds_its_render_and_a_few_hundred_bytes_a_series() -> None:
     # The capacity row: M for the rendered prefixes, and per series its key,
-    # its record and its values. Without __slots__ on the series it was
-    # about 400 bytes a series.
+    # its record and its values, about 330 bytes on CPython 3.10 here. The
+    # bound leaves room for other Pythons and allocators; the __slots__ that
+    # keep it there are checked on their own below.
     known = [{"case": f"case-{index:06d}-" + "x" * 50} for index in range(10_000)]
     tracemalloc.start()
     try:
@@ -195,4 +199,12 @@ def test_a_registry_holds_its_render_and_a_few_hundred_bytes_a_series() -> None:
     finally:
         tracemalloc.stop()
     size = len(render(registry.snapshot()))
-    assert retained <= size + 350 * registry.budget().samples
+    assert retained <= size + 450 * registry.budget().samples
+
+
+@pytest.mark.parametrize("cls", [Envelope, Generation, _Series])
+def test_the_records_held_per_item_have_no_instance_dict(cls: type) -> None:
+    # A dict per instance adds about 70 bytes to each queued record, render
+    # or series: within the byte bounds' margins, so it is checked here.
+    assert "__slots__" in vars(cls)
+    assert "__dict__" not in vars(cls)
