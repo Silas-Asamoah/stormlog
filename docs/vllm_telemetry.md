@@ -138,18 +138,23 @@ An export is charged, step by step and before each step runs:
    the schema of the installed `opentelemetry-proto`, so a message field a
    newer version adds (`Resource.entity_refs` in 1.45) is counted too. A
    body with more spans than the limit is refused there, before it is parsed.
-   The parse is then charged 384 bytes a message with protobuf's upb
-   backend, or 1,536 with any other, plus 2 bytes a content byte; then the
-   spans it yields, 2 KiB a span, 256 bytes an attribute value and 4 bytes
-   a content byte.
+   The parse is then charged, with protobuf's upb backend (with any other
+   in brackets): 384 bytes a message (1,536); 192 bytes (640) for each
+   field the parser keeps one by one, an unknown field or an element of a
+   repeated string or number; 2 bytes a content byte; and 2 more a byte of
+   unknown fields. Then the spans it yields are charged, 2 KiB a span, 256
+   bytes an attribute value and 4 bytes a content byte.
 
 The rates are measured and rounded up: json.loads at 90 bytes a token, a
 span and its record at 2 KB and an attribute value at 190 bytes on CPython
-3.10; a parsed protobuf message, by RSS in a fresh process, at most 275
+3.10; a parsed protobuf message, by RSS in a fresh process, at most 277
 bytes with upb and 1,239 with the pure-Python backend, over every OTLP
 message type with protobuf 4.24 and 7.36 (a parse costs per message far
 more than per byte: 100,000 empty spans are 200 KB on the wire and about
-19 MB parsed). A vLLM batch of 512 request spans, about 266 KB of protobuf,
+19 MB parsed). An unknown field took about 120 bytes with upb and 470
+with pure Python (the first in a message; 170 to 320 each after it with
+pure Python), and its bytes up to 3.9 a byte with upb 4.24 and 4.3 with
+pure Python. A vLLM batch of 512 request spans, about 266 KB of protobuf,
 is charged about 8.5 MiB with upb (21 MiB with the pure-Python backend), or
 14 MiB as JSON. The largest export of such spans one receiver takes alone
 is about 3.8 MiB with upb, 7,700 spans, and 1.5 MiB with the pure-Python

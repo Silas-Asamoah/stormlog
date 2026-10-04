@@ -51,7 +51,12 @@ from stormlog.infer.vllm_spans import (
     spans_to_correlation_events,
 )
 from stormlog.infer.vllm_telemetry import SPAN_SOURCE_JSONL, SPAN_SOURCE_OTLP_JSON
-from tests.otlp_test_helpers import export_with, message_fields, repeated
+from tests.otlp_test_helpers import (
+    export_with,
+    message_fields,
+    repeated,
+    repeated_scalar_fields,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "vllm"
@@ -345,10 +350,43 @@ def _small_message_export(shape: str, count: int) -> bytes:
     return bytes(request.SerializeToString())
 
 
-# Every repeated message field of the installed schema, by name.
+def _length_delimited(number: int, payload: bytes) -> bytes:
+    def varint(value: int) -> bytes:
+        out = bytearray()
+        while value >= 0x80:
+            out.append(value & 0x7F | 0x80)
+            value >>= 7
+        return bytes(out) + bytes([value])
+
+    return varint(number << 3 | 2) + varint(len(payload)) + payload
+
+
+def _in_one_span(span: bytes) -> bytes:
+    """An export of one span with these encoded fields."""
+    return _length_delimited(1, _length_delimited(2, _length_delimited(2, span)))
+
+
+_UNKNOWN_VARINT = bytes([0x98, 0x06, 0x01])  # field 99, which no span has
+# Exports the parser keeps field by field outside any message, by name.
+_UNKNOWN_EXPORTS = {
+    "unknown_varints": lambda: _in_one_span(_UNKNOWN_VARINT * 100_000),
+    "unknown_strings": lambda: _in_one_span(
+        _length_delimited(99, b"x" * 1000) * 10_000
+    ),
+    "an_unknown_field_in_each_span": lambda: _length_delimited(
+        1,
+        _length_delimited(2, _length_delimited(2, _UNKNOWN_VARINT) * 100_000),
+    ),
+    # Span.start_time_unix_nano is a fixed64; as a varint it is unknown.
+    "a_known_field_in_another_wire_type": lambda: _in_one_span(
+        bytes([0x38, 0x01]) * 100_000
+    ),
+}
+# Every repeated field of the installed schema, by name.
 _REPEATED_MESSAGE_FIELDS = {
     target.name: target for target in message_fields() if repeated(target.field)
 }
+_REPEATED_SCALAR_FIELDS = {target.name: target for target in repeated_scalar_fields()}
 # Parse an export in a fresh process, as parse_otlp_protobuf does, from a
 # bytearray as the receiver reads it; print how far its peak RSS grew and
 # what the receiver charges for the parse. Anything held for a while and
@@ -370,7 +408,9 @@ message = request_class.FromString(bytes(body))
 grew = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) * scale
 from stormlog.infer import vllm_spans
 from stormlog.infer.otlp_wire import count_trace_request
-counts = count_trace_request(body, max_messages=10**12, max_spans=10**12)
+counts = count_trace_request(
+    body, max_messages=10**12, max_spans=10**12, max_elements=10**12
+)
 print(grew, vllm_spans.protobuf_parse_estimate(counts, len(body)))
 """
 
@@ -968,7 +1008,15 @@ class TestReceiverAdmission:
         assert built == []
 
     @pytest.mark.parametrize("backend", ["installed", "python"])
-    @pytest.mark.parametrize("shape", ["named_spans", *_REPEATED_MESSAGE_FIELDS])
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            "named_spans",
+            *_REPEATED_MESSAGE_FIELDS,
+            *_REPEATED_SCALAR_FIELDS,
+            *_UNKNOWN_EXPORTS,
+        ],
+    )
     def test_a_protobuf_parse_holds_no_more_than_it_is_charged(
         self, tmp_path: Path, shape: str, backend: str
     ) -> None:
@@ -978,7 +1026,8 @@ class TestReceiverAdmission:
         are 200 KB on the wire and about 19 MB in upb's arena, against the
         4.8 MB a charge of 24 bytes a body byte allowed. Every repeated
         message field the installed descriptors define is measured, those
-        a newer opentelemetry-proto adds included.
+        a newer opentelemetry-proto adds included, and so are fields the
+        parser keeps one by one: unknown ones, and repeated strings.
         """
         import os
         import subprocess
@@ -986,9 +1035,11 @@ class TestReceiverAdmission:
 
         pytest.importorskip("resource")
         body = tmp_path / "export.pb"
-        if shape in _REPEATED_MESSAGE_FIELDS:
-            request = export_with(_REPEATED_MESSAGE_FIELDS[shape], 100_000)
-            body.write_bytes(request.SerializeToString())
+        fields = {**_REPEATED_MESSAGE_FIELDS, **_REPEATED_SCALAR_FIELDS}
+        if shape in fields:
+            body.write_bytes(export_with(fields[shape], 100_000).SerializeToString())
+        elif shape in _UNKNOWN_EXPORTS:
+            body.write_bytes(_UNKNOWN_EXPORTS[shape]())
         else:
             body.write_bytes(_small_message_export(shape, 100_000))
         env = dict(os.environ)

@@ -136,22 +136,23 @@ def otlp_protobuf_available() -> bool:
     return _otlp_request_class() is not None
 
 
-def protobuf_message_bytes() -> int:
-    """What one parsed message costs with the installed protobuf backend."""
+def protobuf_rates() -> ProtobufRates:
+    """What a parse costs with the installed protobuf backend."""
     try:
         from google.protobuf.internal import api_implementation
     except ImportError:
-        return PROTOBUF_MESSAGE_BYTES_OTHER
-    return PROTOBUF_MESSAGE_BYTES.get(
-        api_implementation.Type(), PROTOBUF_MESSAGE_BYTES_OTHER
-    )
+        return PROTOBUF_RATES_OTHER
+    return PROTOBUF_RATES.get(api_implementation.Type(), PROTOBUF_RATES_OTHER)
 
 
 def protobuf_parse_estimate(counts: WireCounts, content_bytes: int) -> int:
     """An upper bound on what parsing an export holds, from its wire counts."""
+    rates = protobuf_rates()
     return (
-        counts.messages * protobuf_message_bytes()
-        + PROTOBUF_PARSE_BYTES * content_bytes
+        counts.messages * rates.message
+        + counts.elements * rates.element
+        + content_bytes * rates.byte
+        + counts.unknown_bytes * rates.unknown_byte
     )
 
 
@@ -521,16 +522,34 @@ MAX_BODY_BYTES = 32 * 1024 * 1024
 # character outside the Basic Multilingual Plane stores every character in
 # 4 bytes), and JSON is decoded to text whole before it is parsed.
 JSON_TOKEN_BYTES = 128
-# A protobuf parse is charged per message, counted on the wire first, and
-# per body byte for the strings it copies. By RSS in a fresh process, over
-# every OTLP message type, empty and with every field set, a message took
-# at most 275 bytes with the upb backend (a span with a short name, under
-# protobuf 7.36; 198 under 4.24) and 1,239 with the pure-Python one, and a
-# long string one byte a byte with either. Any other backend is charged as
-# the pure-Python one.
-PROTOBUF_MESSAGE_BYTES = {"upb": 384}
-PROTOBUF_MESSAGE_BYTES_OTHER = 1536
-PROTOBUF_PARSE_BYTES = 2
+
+
+@dataclass(frozen=True)
+class ProtobufRates:
+    """What a protobuf parse holds, in bytes, for each thing the wire scan
+    counts (:class:`~stormlog.infer.otlp_wire.WireCounts`)."""
+
+    message: int
+    element: int  # an unknown field, or an element of a repeated field
+    byte: int  # a body byte: the parse's copy of the body, and its strings
+    unknown_byte: int  # a byte of an unknown field, on top of ``byte``
+
+
+# By RSS in a fresh process, with protobuf 4.24 and 7.36, parsing from a
+# bytearray as the receiver does: over every OTLP message type, empty and
+# with every field set, a message took at most 277 bytes with the upb
+# backend (a span with a short name, under 7.36) and 1,239 with the
+# pure-Python one. The first unknown field in a message took about 120
+# bytes more with upb 4.24 and 470 with pure Python 4.24, and each one up
+# to 3.9 bytes a byte with upb 4.24, which copies them into a buffer it
+# grows by doubling (2.5 with 7.36), and 170 to 320 bytes plus up to 4.3 a
+# byte with pure Python. An element of a repeated string of up to 20
+# characters took 35 to 91 bytes with upb and 10 to 111 with pure Python.
+# Any other backend is charged as the pure-Python one.
+PROTOBUF_RATES = {
+    "upb": ProtobufRates(message=384, element=192, byte=2, unknown_byte=2)
+}
+PROTOBUF_RATES_OTHER = ProtobufRates(message=1536, element=640, byte=2, unknown_byte=2)
 SPAN_BYTES = 2048
 VALUE_BYTES = 256
 TEXT_BYTES = 4
@@ -747,7 +766,7 @@ class OtlpSpanReceiver:
         self.run_id = run_id
         self.limits = limits or ReceiverLimits()
         self.protobuf_available = otlp_protobuf_available()
-        self._message_bytes = protobuf_message_bytes()
+        self._rates = protobuf_rates()
         self.stats = ReceiverStats()
         # Each queued span with the bytes it is charged; guarded by _lock.
         self._queue: deque[tuple[VllmSpanRecord, int]] = deque()
@@ -1028,13 +1047,16 @@ class OtlpSpanReceiver:
         body: bytes | bytearray,
         reservation: _Reservation,
     ) -> list[RawSpan] | None:
-        # Counted on the wire, so the parse is charged per message and a
-        # body with too many spans is refused before anything is parsed.
-        # Past max_messages the charge could never fit: the scan stops.
+        # Counted on the wire, so the parse is charged for what it builds
+        # and a body with too many spans is refused before anything is
+        # parsed. Past max_messages or max_elements the charge could never
+        # fit: the scan stops.
+        budget = self.limits.max_inflight_bytes
         counts = count_trace_request(
             body,
-            max_messages=self.limits.max_inflight_bytes // self._message_bytes,
+            max_messages=budget // self._rates.message,
             max_spans=self.limits.max_spans_per_body,
+            max_elements=budget // self._rates.element,
         )
         if counts.spans > self.limits.max_spans_per_body:
             self._refuse_too_many(handler)

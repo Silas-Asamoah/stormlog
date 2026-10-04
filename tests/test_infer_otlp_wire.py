@@ -6,16 +6,18 @@ from typing import Any
 
 import pytest
 
-from stormlog.infer.otlp_wire import MAX_DEPTH, count_trace_request
+from stormlog.infer.otlp_wire import MAX_DEPTH, count_message, count_trace_request
 from tests.otlp_test_helpers import (
-    MessageField,
+    SchemaField,
+    elements_in,
     export_with,
     message_fields,
     messages_in,
+    repeated_scalar_fields,
     spans_in,
 )
 
-UNBOUNDED = {"max_messages": 10**9, "max_spans": 10**9}
+UNBOUNDED = {"max_messages": 10**9, "max_spans": 10**9, "max_elements": 10**9}
 
 
 def _modules() -> tuple[Any, Any]:
@@ -67,7 +69,7 @@ def test_the_counts_are_what_the_parse_builds() -> None:
     "target", [pytest.param(f, id=f.name) for f in message_fields()]
 )
 def test_every_message_field_the_installed_schema_defines_is_counted(
-    target: MessageField,
+    target: SchemaField,
 ) -> None:
     """Built field by field from the installed descriptors: a field a newer
     opentelemetry-proto adds, such as Resource.entity_refs, is counted as
@@ -78,6 +80,89 @@ def test_every_message_field_the_installed_schema_defines_is_counted(
     counts = count_trace_request(body, **UNBOUNDED)
     assert counts.messages == messages_in(parsed)
     assert counts.spans == spans_in(parsed)
+    assert (counts.elements, counts.unknown_bytes) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    "target", [pytest.param(f, id=f.name) for f in repeated_scalar_fields()]
+)
+def test_every_repeated_scalar_field_counts_its_elements(
+    target: SchemaField,
+) -> None:
+    """Each element of a repeated string is kept apart, like an unknown
+    field: EntityRef.id_keys and description_keys from 1.45."""
+    _service, request_class = _modules()
+    body = export_with(target, 5).SerializeToString()
+    parsed = request_class.FromString(body)
+    counts = count_trace_request(body, **UNBOUNDED)
+    assert counts.elements == elements_in(parsed) == 5
+    assert counts.messages == messages_in(parsed)
+
+
+def _probe_class() -> Any:
+    """A message with repeated numbers, packed and not, beside strings and
+    itself: shapes no OTLP trace message has yet."""
+    pytest.importorskip("google.protobuf")
+    from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+
+    kinds = descriptor_pb2.FieldDescriptorProto
+    file = descriptor_pb2.FileDescriptorProto(
+        name="stormlog_probe.proto", package="stormlog.probe", syntax="proto3"
+    )
+    probe = file.message_type.add(name="Probe")
+    for number, name, kind in [
+        (1, "varints", kinds.TYPE_SINT64),
+        (2, "doubles", kinds.TYPE_DOUBLE),
+        (3, "floats", kinds.TYPE_FLOAT),
+        (4, "texts", kinds.TYPE_STRING),
+    ]:
+        probe.field.add(name=name, number=number, type=kind, label=3)
+    probe.field.add(
+        name="children",
+        number=5,
+        type=kinds.TYPE_MESSAGE,
+        label=3,
+        type_name=".stormlog.probe.Probe",
+    )
+    probe.field.add(name="single", number=6, type=kinds.TYPE_INT64, label=1)
+    pool = descriptor_pool.DescriptorPool()
+    pool.AddSerializedFile(file.SerializeToString())
+    return message_factory.GetMessageClass(
+        pool.FindMessageTypeByName("stormlog.probe.Probe")
+    )
+
+
+def test_repeated_numbers_are_counted_element_by_element_packed_or_not() -> None:
+    probe_class = _probe_class()
+    probe = probe_class(
+        varints=[0, -1, 2**40], doubles=[0.5, 1.5], floats=[1.0], texts=["a", ""]
+    )
+    probe.children.add(varints=[5], single=7)
+    probe.children.add(texts=["x"])
+    # The same numbers again, one field each: protobuf reads both forms.
+    unpacked = bytes([0x08, 0x02, 0x11]) + bytes(8) + bytes([0x1D]) + bytes(4)
+    body = probe.SerializeToString() + unpacked
+    parsed = probe_class.FromString(body)
+    counts = count_message(body, probe_class.DESCRIPTOR, **UNBOUNDED)
+    assert counts.elements == elements_in(parsed) == 13
+    assert counts.messages == messages_in(parsed) == 3
+    assert counts.unknown_bytes == 0
+
+
+def test_a_field_in_a_wire_type_it_does_not_take_is_unknown() -> None:
+    """The parser keeps a known field number sent in another wire type as
+    an unknown field; so does the scan count it."""
+    probe_class = _probe_class()
+    wrong = (
+        bytes([0x20, 0x01])  # texts (strings) as a varint
+        + bytes([0x2D])
+        + bytes(4)  # children (messages) as a fixed32
+        + bytes([0x32, 0x01, 0x07])  # single (a number) length-delimited
+    )
+    counts = count_message(wrong, probe_class.DESCRIPTOR, **UNBOUNDED)
+    assert (counts.messages, counts.elements, counts.unknown_bytes) == (1, 3, 10)
+    parsed = probe_class.FromString(wrong)
+    assert (elements_in(parsed), messages_in(parsed)) == (0, 1)
 
 
 @pytest.mark.parametrize("count", [0, 1, 1000])
@@ -106,7 +191,9 @@ def test_unknown_fields_are_skipped_whatever_their_wire_type() -> None:
     span = bytes([0x12, len(unknown)]) + unknown
     scope_spans = bytes([0x12, len(span)]) + span
     body = bytes([0x0A, len(scope_spans)]) + scope_spans
-    assert count_trace_request(body, **UNBOUNDED).messages == 4
+    counts = count_trace_request(body, **UNBOUNDED)
+    assert counts.messages == 4
+    assert (counts.elements, counts.unknown_bytes) == (4, len(unknown))
 
 
 def test_the_scan_stops_once_a_count_passes_its_cap() -> None:
@@ -116,10 +203,16 @@ def test_the_scan_stops_once_a_count_passes_its_cap() -> None:
     for _ in range(1000):
         spans.add()
     body = request.SerializeToString()
-    by_spans = count_trace_request(body, max_messages=10**9, max_spans=10)
+    by_spans = count_trace_request(body, **{**UNBOUNDED, "max_spans": 10})
     assert by_spans.spans == 11
-    by_messages = count_trace_request(body, max_messages=50, max_spans=10**9)
+    by_messages = count_trace_request(body, **{**UNBOUNDED, "max_messages": 50})
     assert by_messages.messages == 51
+    unknown = bytes([0x98, 0x06, 0x01]) * 1000  # field 99, a varint
+    by_elements = count_trace_request(
+        _field(1, _field(2, _field(2, unknown))),
+        **{**UNBOUNDED, "max_elements": 20},
+    )
+    assert (by_elements.elements, by_elements.unknown_bytes) == (21, 63)
 
 
 @pytest.mark.parametrize(
