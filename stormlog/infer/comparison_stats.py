@@ -872,8 +872,11 @@ def _check_fraction_gate(request: _Request) -> None:
         return
     if gate.rule != NON_INFERIORITY:
         raise InferUsageError(
-            f"{request.name}: a fraction is gated on the share of runs within "
-            f"its budget, with non-inferiority; {gate.rule} is not defined for it"
+            f"{request.name}: {gate.rule} is not supported for a fraction. A "
+            "fraction supports only a run-level claim, gated with "
+            "non-inferiority: k of n runs within the budget, which stays exact "
+            "however failures cluster within a run, where no interval on the "
+            "fraction does; it has no regression form in v1"
         )
 
 

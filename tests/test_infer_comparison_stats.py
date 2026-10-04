@@ -257,9 +257,14 @@ def test_too_few_runs_to_make_the_claim_cannot_be_evaluated() -> None:
     )
 
 
-def test_a_regression_claim_on_a_fraction_is_a_usage_error() -> None:
-    with pytest.raises(InferUsageError, match="share of runs within"):
-        _fractions([0.0] * 8, gate=GateRule("significant", 0.01, "fraction"))
+@pytest.mark.parametrize("rule", ["significant", "demonstrated"])
+def test_a_regression_claim_on_a_fraction_is_a_usage_error(rule: str) -> None:
+    # The message names the one claim v1 supports, and why.
+    with pytest.raises(InferUsageError) as raised:
+        _fractions([0.0] * 8, gate=GateRule(rule, 0.01, "fraction"))
+    message = str(raised.value)
+    assert f"{rule} is not supported" in message
+    assert "only a run-level claim" in message and "non-inferiority" in message
 
 
 def test_absolute_uses_the_candidates_runs_alone() -> None:
