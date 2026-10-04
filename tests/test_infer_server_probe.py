@@ -110,6 +110,8 @@ def test_a_dev_mode_server_answers_every_route_redacted() -> None:
     assert info["system_env_freshness"] == "first_or_cached"
     # The key goes along: every route is on the endpoint's own origin.
     assert {auth for _path, auth in _Handler.seen} == {"Bearer sk-local"}
+    # The server's own clock, which a manifest's timing checks anchor on.
+    assert probe.answers[VERSION].to_record()["date"].endswith(" GMT")
 
 
 def test_urls_in_the_basic_answers_lose_their_credentials() -> None:

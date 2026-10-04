@@ -91,6 +91,8 @@ class ProbeAnswer:
     size_bytes: int | None = None
     body: Any = None
     detail: str | None = None
+    # The answer's HTTP Date header: the server's own clock, to the second.
+    date: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -100,6 +102,7 @@ class ProbeAnswer:
             "size_bytes": self.size_bytes,
             "body": self.body,
             "detail": self.detail,
+            "date": self.date,
         }
 
 
@@ -250,19 +253,23 @@ def _ask(
     request = urllib.request.Request(origin + route, headers=headers, method="GET")
     started = time.monotonic()
     try:
-        raw, status = _exchange(send, request, deadline)
+        raw, status, date = _exchange(send, request, deadline)
     except (OSError, _TooLarge) as exc:
         return _failure(route, exc, started)
     try:
         body = json.loads(raw)
     except (ValueError, RecursionError):
-        return _answer(route, INVALID_JSON, started, http_status=status, size=len(raw))
-    return _answer(route, OK, started, http_status=status, size=len(raw), body=body)
+        answer = _answer(
+            route, INVALID_JSON, started, http_status=status, size=len(raw)
+        )
+        return replace(answer, date=date)
+    answer = _answer(route, OK, started, http_status=status, size=len(raw), body=body)
+    return replace(answer, date=date)
 
 
 def _exchange(
     send: Opener, request: urllib.request.Request, deadline: float
-) -> tuple[bytes, int]:
+) -> tuple[bytes, int, str | None]:
     """The whole request and answer within ``deadline`` seconds.
 
     The socket timeout applies to each operation, so a server that trickles
@@ -277,6 +284,7 @@ def _exchange(
             with send(request, deadline) as response:
                 outcome["raw"] = _read_capped(response)
                 outcome["status"] = int(getattr(response, "status", 200))
+                outcome["date"] = response.headers.get("Date")
         except BaseException as exc:  # handed to the caller below
             outcome["error"] = exc
 
@@ -287,7 +295,7 @@ def _exchange(
         raise TimeoutError(f"no complete answer within {deadline:g} s")
     if "error" in outcome:
         raise outcome["error"]
-    return outcome["raw"], outcome["status"]
+    return outcome["raw"], outcome["status"], outcome.get("date")
 
 
 def _failure(route: str, exc: Exception, started: float) -> ProbeAnswer:

@@ -90,6 +90,10 @@ before the run started.
 - it is the `before` description itself, or is already attached;
 - it was taken before the last measured phase ended (the two hosts' clocks
   must agree, as with NTP);
+- it was taken more than a second before the server answered the after
+  probe, by the server's own clock: the HTTP `Date` header the probe records
+  on each answer (`date`, to the second). The probe is asked once the run
+  has ended, so this holds whatever the client's clock says;
 - it was taken no later than the `before` one, or sooner after it than the
   measured phases took. Each interval is read on its own clock, the
   descriptions' on the server's and the phases' on the client's, so this

@@ -28,6 +28,7 @@ a protocol failure.
 
 from __future__ import annotations
 
+import email.utils
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -52,6 +53,8 @@ DESCRIPTION_MISMATCH = "description_mismatch"
 _MEASURED = "measured"
 # Clocks tick at slightly different rates; this much shortfall is allowed.
 _ELAPSED_TOLERANCE_NS = 1_000_000_000
+# An HTTP Date header's resolution: whole seconds.
+_DATE_RESOLUTION_NS = 1_000_000_000
 
 
 def description_record(
@@ -183,10 +186,13 @@ def _timing_refusals(
     description: Mapping[str, Any],
     before: Mapping[str, Any],
 ) -> list[str]:
-    """Taken after the run: by the client's end, and by each clock's interval.
+    """Taken after the run: by the client's end, by the server's own clock,
+    and by each clock's interval.
 
-    The second check needs no agreement between the two clocks: the server's
-    interval between the descriptions must cover the client's measured run.
+    The last two need no agreement between the clocks: the server stamped
+    the after probe, asked once the run had ended, with its own Date; and
+    the server's interval between the descriptions must cover the client's
+    measured run.
     """
     observed = description.get("observed_at_ns")
     if not isinstance(observed, int):
@@ -194,6 +200,12 @@ def _timing_refusals(
     ended = last_measured_end_ns(records)
     if ended is not None and observed < ended:
         return ["it was taken before the last measured phase ended"]
+    answered = _after_probe_answered_ns(records)
+    if answered is not None and observed < answered - _DATE_RESOLUTION_NS:
+        return [
+            "it was taken before the server answered the after probe, by the "
+            "server's own clock"
+        ]
     began = before.get("observed_at_ns")
     if not isinstance(began, int):
         return []
@@ -206,6 +218,29 @@ def _timing_refusals(
             f"description, but the run's measured phases took {span / 1e9:.1f} s"
         ]
     return []
+
+
+def _after_probe_answered_ns(records: Iterable[Mapping[str, Any]]) -> int | None:
+    """The earliest Date the server stamped on the after probe's answers."""
+    stamps = [
+        _http_date_ns(answer.get("date"))
+        for record in records
+        if record.get("event_type") == "infer.server_probe"
+        and record.get("phase") == "after"
+        for answer in (record.get("answers") or {}).values()
+        if isinstance(answer, Mapping)
+    ]
+    known = [stamp for stamp in stamps if stamp is not None]
+    return min(known) if known else None
+
+
+def _http_date_ns(value: Any) -> int | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return int(email.utils.parsedate_to_datetime(value).timestamp()) * 10**9
+    except (TypeError, ValueError):
+        return None
 
 
 def run_span_ns(records: Iterable[Mapping[str, Any]]) -> int | None:
