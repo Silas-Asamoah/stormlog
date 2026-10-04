@@ -215,7 +215,7 @@ class Pulser:
         self._watched = watchdog
         self._watchdog: subprocess.Popen[bytes] | None = None
         if watchdog:
-            self._watchdog = _start_watchdog(target, max_pulse_seconds)
+            self._watchdog = _start_watchdog(target, self.max_pulse_seconds)
         atexit.register(self.close)
         _LIVE.add(self)
         handle_termination()
