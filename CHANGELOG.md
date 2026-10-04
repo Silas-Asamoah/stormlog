@@ -78,7 +78,7 @@ the flaky benchmark memory gates
   bounded history and evaluates metric, #218 signal and scrape-health
   triggers; a trigger fires only once its condition has held for the hold
   time, with data gaps and outages handled as documented, so a violation
-  shorter than `F - W` never fires. A firing opens an incident whose pre-
+  shorter than `F - W - Δ` never fires. A firing opens an incident whose pre-
   and post-windows of scrapes are sealed into a bundle under
   `DIR/incidents`, published in generations under disk limits and
   retention. Its records follow the frozen `stormlog.infer.watch/1` schema
