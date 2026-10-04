@@ -28,33 +28,44 @@ FIXTURE = Path(__file__).parent / "fixtures" / "export" / "contract_v1.json"
 CONTRACT: dict[str, Any] = json.loads(FIXTURE.read_text())
 
 
-def _profile_actions() -> dict[str, argparse.Action]:
+def _actions(command: str = "profile") -> dict[str, argparse.Action]:
     parser = build_parser()
     subparsers = next(
         a for a in parser._actions if isinstance(a, argparse._SubParsersAction)
     )
-    profile = subparsers.choices["profile"]
     return {
         option: action
-        for action in profile._actions
+        for action in subparsers.choices[command]._actions
         for option in action.option_strings
     }
 
 
-def test_every_profile_flag_is_declared_and_parses_to_its_key() -> None:
-    actions = _profile_actions()
-    declared = {
-        flag: spec
-        for flag, spec in CONTRACT["flags"].items()
-        if "profile" in spec["commands"]
-    }
-    exported = {
+def _export_flags(actions: dict[str, argparse.Action]) -> set[str]:
+    return {
         option
         for option in actions
         if option.startswith(("--prometheus-", "--otlp-"))
         or option in ("--trace-context", "--server-trace-sampler", "--export-content")
     }
-    assert exported == set(declared)
+
+
+def test_collect_server_has_exactly_its_declared_flags() -> None:
+    declared = {
+        flag
+        for flag, spec in CONTRACT["flags"].items()
+        if "collect-server" in spec["commands"]
+    }
+    assert _export_flags(_actions("collect-server")) == declared
+
+
+def test_every_profile_flag_is_declared_and_parses_to_its_key() -> None:
+    actions = _actions()
+    declared = {
+        flag: spec
+        for flag, spec in CONTRACT["flags"].items()
+        if "profile" in spec["commands"]
+    }
+    assert _export_flags(actions) == set(declared)
     defaults = ExportConfig()
     for flag, spec in declared.items():
         action = actions[flag]
@@ -75,6 +86,12 @@ def test_the_export_keys_are_the_config_fields() -> None:
     with pytest.raises(ValueError):
         ExportConfig.from_mapping({"trace_context": "preserve-engine"}, "watch")
     assert CONTRACT["watch_refuses"] == ["trace_context"]
+
+
+def test_headroom_defaults_by_command() -> None:
+    spec = CONTRACT["flags"]["--prometheus-series-headroom"]
+    for command, headroom in spec["defaults_by_command"].items():
+        assert ExportConfig().headroom(command) == headroom
 
 
 def test_choices_match_the_code() -> None:

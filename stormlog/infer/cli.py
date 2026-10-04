@@ -9,11 +9,13 @@ import os
 import signal
 import sys
 import threading
+import time
 import urllib.parse
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
+from .. import __version__
 from ..exit_codes import ExitCode
 from .analysis import (
     analyze_inference_events,
@@ -32,8 +34,10 @@ from .arrivals import (
 from .cache_state import CACHE_STATES, COLD, RESET_RETRY_SECONDS, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
 from .errors import InferInputError, InferUsageError
+from .export_collector import CollectorExport
 from .export_config import (
     add_export_arguments,
+    add_prometheus_arguments,
     add_trace_context_arguments,
     export_config_from_args,
 )
@@ -439,6 +443,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Number of group members; each rank 0..N-1 needs a collector",
     )
+    add_prometheus_arguments(collector_parser)
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
     add_watch_parser(subparsers)
@@ -992,6 +997,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 def cmd_collect_server(args: argparse.Namespace) -> int:
     """Collect telemetry on the server while a profile uses the same run ID."""
+    export = _collector_export(args)
     stop_event = threading.Event()
     previous_handlers = _stop_on_signals(stop_event)
     try:
@@ -1010,6 +1016,7 @@ def cmd_collect_server(args: argparse.Namespace) -> int:
             world_size=args.world_size,
             stop_event=stop_event,
             on_warning=_print_warning,
+            observer=export,
         )
     except NvmlUnavailableError as exc:
         raise InferUsageError(
@@ -1021,7 +1028,42 @@ def cmd_collect_server(args: argparse.Namespace) -> int:
         f"Collected {result.polls} server polls to: {Path(args.output)} "
         f"(stopped: {result.stop_reason})"
     )
+    if export is not None:
+        _linger(export, args)
     return _collection_exit_code(result)
+
+
+def _collector_export(args: argparse.Namespace) -> CollectorExport | None:
+    """The health export, checked and with its slot taken before collecting."""
+    try:
+        config = export_config_from_args(args, command="collect-server")
+    except ValueError as exc:
+        raise InferUsageError(str(exc)) from exc
+    if not config.prometheus_enabled:
+        return None
+    export = CollectorExport(
+        config,
+        run_id=args.run_id,
+        version=__version__,
+        forbidden_paths=[Path(args.output)],
+        on_warning=_print_warning,
+    )
+    try:
+        export.prepare()
+    except ValueError as exc:
+        raise InferUsageError(str(exc)) from exc
+    return export
+
+
+def _linger(export: CollectorExport, args: argparse.Namespace) -> None:
+    """Serve the final values for --prometheus-linger; Ctrl+C ends only that."""
+    try:
+        if args.prometheus_linger and export.server is not None:
+            time.sleep(args.prometheus_linger)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        export.stop_serving()
 
 
 def _collection_exit_code(result: CollectionResult) -> int:
