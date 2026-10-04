@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import http.client
 import json
 import signal
@@ -27,16 +28,19 @@ from unittest import mock
 import pytest
 from jsonschema import Draft202012Validator
 
-from stormlog.infer import vllm_spans
+from stormlog.infer import otlp_wire, vllm_spans
 from stormlog.infer.config import ProfileConfig
 from stormlog.infer.correlation_events import RequestEvent, StageEvent
 from stormlog.infer.profile import InferenceProfiler
 from stormlog.infer.vllm_spans import (
+    MAX_BODY_BYTES,
     OTLP_EXTRA_HINT,
+    SPAN_BYTES,
     OtlpProtobufUnavailable,
     OtlpSpanReceiver,
     ProtobufDecodeError,
     RawSpan,
+    ReceiverLimits,
     decode_otlp_json,
     decode_otlp_protobuf,
     gunzip_capped,
@@ -47,6 +51,12 @@ from stormlog.infer.vllm_spans import (
     spans_to_correlation_events,
 )
 from stormlog.infer.vllm_telemetry import SPAN_SOURCE_JSONL, SPAN_SOURCE_OTLP_JSON
+from tests.otlp_test_helpers import (
+    export_with,
+    message_fields,
+    repeated,
+    repeated_scalar_fields,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "vllm"
@@ -319,12 +329,129 @@ class TestJsonReaders:
             read_span_file(empty)
 
 
-def _post(url: str, body: bytes, media: str) -> int:
+def _small_message_export(shape: str, count: int) -> bytes:
+    """An export of ``count`` small messages of one kind."""
+    trace_service, _common, _trace = _otlp()
+    request = trace_service.ExportTraceServiceRequest()
+    if shape == "empty_resource_spans":
+        for _ in range(count):
+            request.resource_spans.add()
+        return bytes(request.SerializeToString())
+    spans = request.resource_spans.add().scope_spans.add().spans
+    if shape == "empty_links":
+        links = spans.add(name="s").links
+        for _ in range(count):
+            links.add()
+        return bytes(request.SerializeToString())
+    for _ in range(count):
+        span = spans.add()
+        if shape == "named_spans":
+            span.name = "s"
+    return bytes(request.SerializeToString())
+
+
+def _length_delimited(number: int, payload: bytes) -> bytes:
+    def varint(value: int) -> bytes:
+        out = bytearray()
+        while value >= 0x80:
+            out.append(value & 0x7F | 0x80)
+            value >>= 7
+        return bytes(out) + bytes([value])
+
+    return varint(number << 3 | 2) + varint(len(payload)) + payload
+
+
+def _in_one_span(span: bytes) -> bytes:
+    """An export of one span with these encoded fields."""
+    return _length_delimited(1, _length_delimited(2, _length_delimited(2, span)))
+
+
+_UNKNOWN_VARINT = bytes([0x98, 0x06, 0x01])  # field 99, which no span has
+# Exports encoded by hand, by name: fields the parser keeps one by one
+# outside any message, and text it decodes.
+_ENCODED_EXPORTS = {
+    "unknown_varints": lambda: _in_one_span(_UNKNOWN_VARINT * 100_000),
+    "unknown_strings": lambda: _in_one_span(
+        _length_delimited(99, b"x" * 1000) * 10_000
+    ),
+    "an_unknown_field_in_each_span": lambda: _length_delimited(
+        1,
+        _length_delimited(2, _length_delimited(2, _UNKNOWN_VARINT) * 100_000),
+    ),
+    # Span.start_time_unix_nano is a fixed64; as a varint it is unknown.
+    "a_known_field_in_another_wire_type": lambda: _in_one_span(
+        bytes([0x38, 0x01]) * 100_000
+    ),
+    # Span.name: pure Python stores all 4 million characters in 4 bytes each.
+    "a_name_outside_the_basic_multilingual_plane": lambda: _in_one_span(
+        _length_delimited(5, "\U0001f600".encode() + b"a" * 4_000_000)
+    ),
+}
+# Every repeated field of the installed schema, by name.
+_REPEATED_MESSAGE_FIELDS = {
+    target.name: target for target in message_fields() if repeated(target.field)
+}
+_REPEATED_SCALAR_FIELDS = {target.name: target for target in repeated_scalar_fields()}
+# Parse an export in a fresh process, as parse_otlp_protobuf does, from a
+# bytearray as the receiver reads it; print how far its peak RSS grew and
+# what the receiver charges for the parse. Anything held for a while and
+# let go before the parse raises the peak first and hides as much of the
+# parse's growth: so the body is read straight into its bytearray, without
+# a copy, and stormlog is imported after the parse, since compiling its
+# modules, when their bytecode is not cached, takes memory too.
+_PARSE_RSS = """
+import os, resource, sys
+from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
+
+
+def peak_rss():
+    # Linux keeps ru_maxrss across exec, so a child's starts at the peak of
+    # the pytest process it was forked from; VmHWM is this process's own.
+    try:
+        with open("/proc/self/status") as status:
+            for line in status:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    scale = 1 if sys.platform == "darwin" else 1024
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale
+
+
+body = bytearray(os.path.getsize(sys.argv[1]))
+with open(sys.argv[1], "rb", buffering=0) as file:
+    file.readinto(body)
+request_class = trace_service_pb2.ExportTraceServiceRequest
+request_class.FromString(b"")
+before = peak_rss()
+message = request_class.FromString(bytes(body))
+grew = peak_rss() - before
+from stormlog.infer import vllm_spans
+from stormlog.infer.otlp_wire import count_trace_request
+counts = count_trace_request(
+    body, max_messages=10**12, max_spans=10**12, max_elements=10**12
+)
+print(grew, vllm_spans.protobuf_parse_estimate(counts, len(body)))
+"""
+
+
+# A client's patience with an export decoded under tracemalloc, which slows
+# the receiver several times over (about 2 s of CPU with pure Python), or
+# alongside seven others, and more on a loaded machine. The receiver's own
+# deadlines are unchanged.
+TRACED_POST_TIMEOUT_S = 30.0
+# The request deadline also bounds the protobuf wire scan, which tracemalloc
+# and a loaded machine slow down too; tests that measure memory, or scan a
+# body to its message cap, give it as long as their client waits.
+UNHURRIED = ReceiverLimits(request_deadline_seconds=TRACED_POST_TIMEOUT_S)
+
+
+def _post(url: str, body: bytes, media: str, *, timeout: float = 5.0) -> int:
     request = urllib.request.Request(
         url, data=body, headers={"Content-Type": media}, method="POST"
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return int(response.status)
     except urllib.error.HTTPError as exc:
         return exc.code
@@ -414,8 +541,12 @@ class TestReceiver:
 
 
 @contextlib.contextmanager
-def _receiver(listen: str = "127.0.0.1:0") -> Iterator[OtlpSpanReceiver]:
-    receiver = OtlpSpanReceiver(listen=listen, session_id="s", run_id="run-1")
+def _receiver(
+    listen: str = "127.0.0.1:0", limits: ReceiverLimits | None = None
+) -> Iterator[OtlpSpanReceiver]:
+    receiver = OtlpSpanReceiver(
+        listen=listen, session_id="s", run_id="run-1", limits=limits
+    )
     receiver.start()
     try:
         yield receiver
@@ -593,10 +724,10 @@ class TestReceiverRobustness:
     def test_a_handler_bug_is_counted_not_fatal(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def explode(body: bytes, media: str) -> list[RawSpan]:
+        def explode(document: Any) -> list[RawSpan]:
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(vllm_spans, "_decode_export", explode)
+        monkeypatch.setattr(vllm_spans, "decode_otlp_json", explode)
         with _receiver() as receiver:
             url = f"http://{receiver.listen}/v1/traces"
             assert _post(url, JSON_EXPORT, "application/json") == 400
@@ -624,6 +755,706 @@ class TestReceiverRobustness:
                 == 200
             )
             assert receiver.drain()[0].clock_domain == "::1/unix_epoch_ns"
+
+
+def _json_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, int):
+        return {"intValue": str(value)}
+    if isinstance(value, list):
+        return {"arrayValue": {"values": [{"stringValue": v} for v in value]}}
+    return {"stringValue": value}
+
+
+def _json_export(count: int) -> bytes:
+    spans = [{"name": f"s{i}"} for i in range(count)]
+    return json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}).encode()
+
+
+def _connect(listen: str) -> socket.socket:
+    host, port = parse_listen_address(listen)
+    return socket.create_connection((host, port), timeout=5)
+
+
+class TestReceiverAdmission:
+    def test_limits_are_validated(self) -> None:
+        with pytest.raises(ValueError, match="max_connections"):
+            ReceiverLimits(max_connections=0)
+        # One full gzip body: its own bytes and its inflation.
+        with pytest.raises(ValueError, match="hold one full gzip body"):
+            ReceiverLimits(max_inflight_bytes=2 * MAX_BODY_BYTES - 1)
+        ReceiverLimits(max_inflight_bytes=2 * MAX_BODY_BYTES)
+
+    def test_connections_over_the_cap_get_503_without_a_handler(self) -> None:
+        with _receiver(limits=ReceiverLimits(max_connections=2)) as receiver:
+            held = [_connect(receiver.listen) for _ in range(2)]
+            try:
+                time.sleep(0.2)  # both accepted and held by handler threads
+                with _connect(receiver.listen) as extra:
+                    reply = extra.recv(4096)
+                metadata = receiver.capability_metadata()
+            finally:
+                for sock in held:
+                    sock.close()
+            time.sleep(0.2)
+            url = f"http://{receiver.listen}/v1/traces"
+            assert _post(url, JSON_EXPORT, "application/json") == 200
+        assert reply.startswith(b"HTTP/1.1 503")
+        assert b"Retry-After: 1" in reply
+        assert metadata["refused_connections"] == 1
+        assert metadata["requests"] == 0
+
+    def test_a_body_that_trickles_past_the_deadline_is_dropped(self) -> None:
+        limits = ReceiverLimits(request_deadline_seconds=0.5)
+        with _receiver(limits=limits) as receiver:
+            with _connect(receiver.listen) as sock:
+                sock.sendall(
+                    b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n"
+                    b"Content-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"
+                )
+                started = time.monotonic()
+                # One byte every 0.2 s keeps every single read under its timeout.
+                with contextlib.suppress(OSError):
+                    for _ in range(10):
+                        time.sleep(0.2)
+                        sock.sendall(b" ")
+                reply = b""
+                with contextlib.suppress(OSError):
+                    reply = sock.recv(4096)
+                elapsed = time.monotonic() - started
+            metadata = receiver.capability_metadata()
+        assert metadata["body_timeouts"] == 1
+        assert metadata["spans"] == 0
+        assert reply == b"" or reply.startswith(b"HTTP/1.1 408")
+        assert elapsed < 1.9  # cut off at the deadline, not at the end of the body
+
+    @pytest.mark.parametrize(
+        "opening",
+        [
+            b"POST /v1/tra",  # the request line itself
+            b"POST /v1/traces HTTP/1.1\r\nHost: x\r\nX-Slow: ",  # a header
+        ],
+    )
+    def test_a_request_head_that_trickles_cannot_hold_the_slots(
+        self, opening: bytes
+    ) -> None:
+        """The deadline covers the request line and headers, not only the body."""
+        limits = ReceiverLimits(max_connections=2, request_deadline_seconds=0.5)
+        with _receiver(limits=limits) as receiver:
+            tricklers = [_connect(receiver.listen) for _ in range(2)]
+            for sock in tricklers:
+                sock.sendall(opening)
+            started = time.monotonic()
+            closed_at: list[float] = []
+            # One byte every 0.1 s keeps every single read under its timeout.
+            for _ in range(20):
+                time.sleep(0.1)
+                for sock in list(tricklers):
+                    try:
+                        sock.sendall(b"x")
+                    except OSError:
+                        closed_at.append(time.monotonic() - started)
+                        tricklers.remove(sock)
+                        sock.close()
+                if not tricklers:
+                    break
+            url = f"http://{receiver.listen}/v1/traces"
+            status = _post(url, JSON_EXPORT, "application/json")
+            for sock in tricklers:
+                sock.close()
+            metadata = receiver.capability_metadata()
+        assert status == 200
+        assert len(closed_at) == 2 and max(closed_at) < 1.5
+        assert metadata["header_timeouts"] == 2
+        assert metadata["body_timeouts"] == 0
+
+    def test_an_idle_kept_alive_connection_is_closed_without_a_count(self) -> None:
+        limits = ReceiverLimits(request_deadline_seconds=0.3)
+        with _receiver(limits=limits) as receiver:
+            with _connect(receiver.listen) as sock:
+                sock.settimeout(3)
+                started = time.monotonic()
+                assert sock.recv(4096) == b""  # closed by the receiver
+                elapsed = time.monotonic() - started
+            metadata = receiver.capability_metadata()
+        assert 0.2 < elapsed < 1.5
+        assert metadata["header_timeouts"] == 0
+
+    @pytest.mark.parametrize(
+        "framing",
+        [
+            b"Transfer-Encoding: chunked\r\n\r\n4\r\n{}  \r\n0\r\n\r\n",
+            b"\r\n",  # no length at all
+        ],
+    )
+    def test_a_body_without_a_content_length_gets_411(self, framing: bytes) -> None:
+        """Before, it read as an empty body: 200 with no span, or a decode
+        failure, for an export that was never read."""
+        with _receiver() as receiver:
+            reply = _raw_post(
+                receiver.listen,
+                b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n"
+                b"Content-Type: application/json\r\n" + framing,
+            )
+            metadata = receiver.capability_metadata()
+        assert reply.startswith(b"HTTP/1.1 411")
+        assert metadata["bad_requests"] == 1
+        assert metadata["decode_failures"] == 0
+
+    def test_bodies_over_the_in_flight_budget_get_503(self) -> None:
+        """Bodies still arriving hold their reservations; an export that does
+        not fit beside them is answered 503 until one finishes."""
+        head = (
+            b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {MAX_BODY_BYTES}\r\n\r\n{{".encode()
+        )
+        limits = ReceiverLimits(max_inflight_bytes=2 * MAX_BODY_BYTES)
+        with _receiver(limits=limits) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            held = [_connect(receiver.listen) for _ in range(2)]
+            for sock in held:
+                sock.sendall(head)
+            time.sleep(0.2)  # both admitted, their bodies unfinished
+            refused = _post(url, JSON_EXPORT, "application/json")
+            held.pop().close()  # its handler reads EOF and lets go
+            time.sleep(0.2)
+            fits = _post(url, JSON_EXPORT, "application/json")
+            held.pop().close()
+            metadata = receiver.capability_metadata()
+        assert refused == 503
+        assert fits == 200
+        assert metadata["busy"] == 1
+        assert metadata["spans"] == 1
+
+    def test_gzip_exports_are_charged_their_possible_inflation(self) -> None:
+        """At most 1,032 times their length (DEFLATE's limit), so small gzip
+        exports fit side by side: six held at once and a seventh, where a
+        charge of the 32 MiB cap would let only three into 128 MiB."""
+        import gzip
+
+        compressed = gzip.compress(JSON_EXPORT)
+        head = (
+            b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n"
+            b"Content-Type: application/json\r\nContent-Encoding: gzip\r\n"
+            + f"Content-Length: {len(compressed)}\r\n\r\n".encode()
+        )
+        with _receiver() as receiver, contextlib.ExitStack() as stack:
+            for _ in range(6):
+                held = stack.enter_context(_connect(receiver.listen))
+                held.sendall(head + compressed[:10])
+            time.sleep(0.2)  # admitted, their bodies not yet whole
+            request = urllib.request.Request(
+                f"http://{receiver.listen}/v1/traces",
+                data=compressed,
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                status = response.status
+            metadata = receiver.capability_metadata()
+        assert status == 200
+        assert metadata["busy"] == 0
+
+    @pytest.mark.parametrize("media", ["application/json", "application/x-protobuf"])
+    def test_an_export_too_large_to_decode_is_refused_before_it_is(
+        self, media: str
+    ) -> None:
+        """150,000 minimal spans in under 2 MB: decoding them whole peaked
+        near 100 MB before the span limit was checked."""
+        import tracemalloc
+
+        if media == "application/json":
+            body = _json_export(150_000)
+        else:
+            _otlp()
+            body = _export_request(
+                [_span_message("s", attributes={}, start=1, end=2)] * 150_000
+            )
+        with _receiver(limits=UNHURRIED) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            tracemalloc.start()
+            try:
+                status = _post(url, body, media, timeout=TRACED_POST_TIMEOUT_S)
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            metadata = receiver.capability_metadata()
+        assert status == 413
+        assert peak < 4 * len(body) + 4 * 1024 * 1024
+        assert metadata["spans"] == 0
+        assert metadata["too_large"] + metadata["too_many_spans"] == 1
+
+    def test_json_keys_written_with_escapes_are_still_charged(self) -> None:
+        """ "na\\u006de" is the key "name": counted on the bytes, such spans
+        and values went uncharged, and their decoding overran the charge."""
+        import tracemalloc
+
+        spans = ['{"na\\u006de":"s"}'] * 9000
+        spans[0] = (
+            '{"na\\u006de":"s","attributes":[{"key":"k","value":{"intV\\u0061lue":"7"}}]}'
+        )
+        body = (
+            '{"resourceSpans":[{"scopeSpans":[{"spans":[' + ",".join(spans) + "]}]}]}"
+        ).encode()
+        charged: list[int] = []
+        with _receiver(limits=UNHURRIED) as receiver:
+            real_reserve = receiver._reserve
+
+            def spy(handler: Any, reservation: Any, amount: int) -> bool:
+                taken = real_reserve(handler, reservation, amount)
+                charged.append(reservation.bytes)
+                return taken
+
+            receiver._reserve = spy  # type: ignore[method-assign]
+            url = f"http://{receiver.listen}/v1/traces"
+            tracemalloc.start()
+            try:
+                status = _post(
+                    url, body, "application/json", timeout=TRACED_POST_TIMEOUT_S
+                )
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            records = receiver.drain()
+        assert status == 200
+        assert len(records) == 9000
+        assert records[0].attributes == {"k": 7}
+        assert peak <= max(charged)
+
+    def test_a_json_export_with_too_many_spans_is_refused_before_they_are_built(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        built: list[int] = []
+        monkeypatch.setattr(
+            vllm_spans, "decode_otlp_json", lambda document: built.append(1)
+        )
+        limits = ReceiverLimits(max_spans_per_body=3)
+        with _receiver(limits=limits) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            escaped = _json_export(4).replace(b'"name"', b'"na\\u006de"')
+            assert _post(url, escaped, "application/json") == 413
+            metadata = receiver.capability_metadata()
+        assert metadata["too_many_spans"] == 1
+        assert built == []
+
+    @pytest.mark.parametrize("backend", ["installed", "python"])
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            "named_spans",
+            *_REPEATED_MESSAGE_FIELDS,
+            *_REPEATED_SCALAR_FIELDS,
+            *_ENCODED_EXPORTS,
+        ],
+    )
+    def test_a_protobuf_parse_holds_no_more_than_it_is_charged(
+        self, tmp_path: Path, shape: str, backend: str
+    ) -> None:
+        """Measured where upb's arena shows: the RSS of a fresh process.
+
+        Small messages cost far more than their bytes: 100,000 empty spans
+        are 200 KB on the wire and about 19 MB in upb's arena, against the
+        4.8 MB a charge of 24 bytes a body byte allowed. Every repeated
+        message field the installed descriptors define is measured, those
+        a newer opentelemetry-proto adds included, and so are fields the
+        parser keeps one by one: unknown ones, and repeated strings.
+        """
+        import os
+        import subprocess
+        import sys
+
+        pytest.importorskip("resource")
+        body = tmp_path / "export.pb"
+        fields = {**_REPEATED_MESSAGE_FIELDS, **_REPEATED_SCALAR_FIELDS}
+        if shape in fields:
+            body.write_bytes(export_with(fields[shape], 100_000).SerializeToString())
+        elif shape in _ENCODED_EXPORTS:
+            body.write_bytes(_ENCODED_EXPORTS[shape]())
+        else:
+            body.write_bytes(_small_message_export(shape, 100_000))
+        env = dict(os.environ)
+        if backend == "python":
+            env["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+        repo = Path(__file__).resolve().parents[1]
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(repo), *filter(None, [env.get("PYTHONPATH")])]
+        )
+        # Under memory pressure the system can page out the interpreter's
+        # own memory, so a small parse may not lift the process past its
+        # earlier peak and reads as no growth at all: that is no
+        # measurement, and it is taken again.
+        for _attempt in range(3):
+            result = subprocess.run(
+                [sys.executable, "-c", _PARSE_RSS, str(body)],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=120,
+                check=True,
+            )
+            grew, charged = (int(n) for n in result.stdout.split())
+            if grew > 0:
+                break
+        assert grew > 0
+        assert grew <= charged
+
+    @pytest.mark.parametrize(
+        ("shape", "count", "reason"),
+        [
+            ("empty_spans", 200_000, "too_many_spans"),
+            ("empty_resource_spans", 1_000_000, "too_large"),
+        ],
+    )
+    def test_a_protobuf_export_is_refused_on_its_wire_counts_before_parsing(
+        self, shape: str, count: int, reason: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2,684,322 empty spans in 5.4 MB grew the receiver by 301 MB before
+        their 413: now nothing is parsed. A million empty resource_spans hold
+        no span at all, and their messages alone could never fit."""
+        body = _small_message_export(shape, count)
+        parsed: list[int] = []
+        monkeypatch.setattr(
+            vllm_spans, "parse_otlp_protobuf", lambda data: parsed.append(len(data))
+        )
+        with _receiver(limits=UNHURRIED) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            status = _post(
+                url, body, "application/x-protobuf", timeout=TRACED_POST_TIMEOUT_S
+            )
+            metadata = receiver.capability_metadata()
+        assert status == 413
+        assert metadata[reason] == 1
+        assert parsed == []
+
+    def test_a_protobuf_export_is_charged_the_parse_estimate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The receiver charges what protobuf_parse_estimate says, the
+        function the RSS measurement checks, not a copy of its formula."""
+        body = _small_message_export("named_spans", 10)
+        estimates: list[int] = []
+        parsed: list[int] = []
+
+        def estimate(counts: Any, content_bytes: int) -> int:
+            estimates.append(counts.spans)
+            return ReceiverLimits().max_inflight_bytes
+
+        monkeypatch.setattr(vllm_spans, "protobuf_parse_estimate", estimate)
+        monkeypatch.setattr(
+            vllm_spans, "parse_otlp_protobuf", lambda data: parsed.append(len(data))
+        )
+        with _receiver() as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            status = _post(url, body, "application/x-protobuf")
+            metadata = receiver.capability_metadata()
+        assert status == 413
+        assert metadata["too_large"] == 1
+        assert estimates == [10]
+        assert parsed == []
+
+    @pytest.mark.parametrize("media", ["application/json", "application/x-protobuf"])
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            {"spans": 2_000, "attributes": {}},
+            {"spans": 512, "attributes": {"k" + str(i): i for i in range(13)}},
+            {"spans": 1, "attributes": {f"a{i}": i for i in range(20_000)}},
+            {"spans": 1, "attributes": {"arr": ["a"] * 50_000}},
+            {"spans": 32, "attributes": {"big": "x" * 100_000}},
+        ],
+        ids=["minimal", "realistic", "attributes", "array", "text"],
+    )
+    def test_decoding_stays_within_what_the_export_was_charged(
+        self, media: str, shape: dict[str, Any]
+    ) -> None:
+        """The in-flight charge covers the decoded spans, not only the bytes.
+
+        tracemalloc sees Python's allocations; upb's own parse arena, which it
+        does not, is charged from its measured cost on top.
+        """
+        import tracemalloc
+
+        attributes, count = shape["attributes"], shape["spans"]
+        if media == "application/json":
+            spans = [
+                {
+                    "name": "llm_request",
+                    "traceId": TRACE_ID.hex(),
+                    "spanId": SPAN_ID.hex(),
+                    "attributes": [
+                        {"key": k, "value": _json_value(v)}
+                        for k, v in attributes.items()
+                    ],
+                }
+                for _ in range(count)
+            ]
+            body = json.dumps(
+                {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
+            ).encode()
+        else:
+            _otlp()
+            span = _span_message(
+                "llm_request", attributes=attributes, start=START_NS, end=END_NS
+            )
+            body = _export_request([span] * count)
+        charged: list[int] = []
+        with _receiver(limits=UNHURRIED) as receiver:
+            real_reserve = receiver._reserve
+
+            def spy(handler: Any, reservation: Any, amount: int) -> bool:
+                taken = real_reserve(handler, reservation, amount)
+                charged.append(reservation.bytes)
+                return taken
+
+            receiver._reserve = spy  # type: ignore[method-assign]
+            url = f"http://{receiver.listen}/v1/traces"
+            tracemalloc.start()
+            try:
+                status = _post(url, body, media, timeout=TRACED_POST_TIMEOUT_S)
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            queued = len(receiver.drain())
+        assert status == 200
+        assert queued == count
+        assert peak <= max(charged)
+
+    def test_concurrent_exports_never_hold_more_than_the_budget(self) -> None:
+        """Eight exporters at once, each resending on 503 as OTLP asks."""
+        import concurrent.futures
+
+        _otlp()
+        span = _span_message(
+            "llm_request", attributes=REQUEST_ATTRIBUTES, start=START_NS, end=END_NS
+        )
+        bodies = [(_export_request([span] * 512), "application/x-protobuf")] * 4
+        bodies += [(_json_export(512), "application/json")] * 4
+        # Eight exports decoding at once share the GIL: on a two-core CI
+        # runner one waited past the client's default 5 s.
+        limits = ReceiverLimits(
+            max_inflight_bytes=2 * MAX_BODY_BYTES,
+            request_deadline_seconds=TRACED_POST_TIMEOUT_S,
+        )
+        held: list[int] = []
+        with _receiver(limits=limits) as receiver:
+            real_reserve = receiver._reserve
+
+            def spy(handler: Any, reservation: Any, amount: int) -> bool:
+                taken = real_reserve(handler, reservation, amount)
+                held.append(receiver._inflight_bytes)
+                return taken
+
+            receiver._reserve = spy  # type: ignore[method-assign]
+            url = f"http://{receiver.listen}/v1/traces"
+
+            def export(body: bytes, media: str) -> int:
+                # A connection over max_connections is refused before its
+                # request is read, which can surface as a reset: retried too.
+                for _ in range(200):
+                    try:
+                        status = _post(url, body, media, timeout=TRACED_POST_TIMEOUT_S)
+                    except (urllib.error.URLError, ConnectionError):
+                        status = 503
+                    if status != 503:
+                        return status
+                    time.sleep(0.01)
+                return 503
+
+            with concurrent.futures.ThreadPoolExecutor(8) as pool:
+                statuses = list(pool.map(lambda job: export(*job), bodies))
+            queued = len(receiver.drain())
+        # A handler releases its bytes after it answers, so they are all
+        # back only once stop() has waited for every handler to finish.
+        left = receiver._inflight_bytes
+        assert statuses == [200] * 8
+        assert queued == 8 * 512
+        assert max(held) <= limits.max_inflight_bytes
+        assert left == 0
+
+    def test_a_body_read_in_tiny_pieces_is_held_once(self) -> None:
+        """Each read lands in one buffer of the announced length; a list of
+        one-byte chunks joined at the end held over 90 MB for 1 MiB."""
+        import io as std_io
+        import tracemalloc
+
+        length = 256 * 1024
+
+        class _Trickle(std_io.RawIOBase):
+            def readable(self) -> bool:
+                return True
+
+            def readinto(self, buffer: Any) -> int:
+                buffer[:1] = b"x"
+                return 1
+
+        class _Handler:
+            rfile = std_io.BufferedReader(_Trickle(), buffer_size=1)
+
+        with _receiver() as receiver:
+            tracemalloc.start()
+            try:
+                body = receiver._read_within_deadline(_Handler(), length)  # type: ignore[arg-type]
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+        assert len(body) == length
+        assert peak < 2 * length + 64 * 1024
+
+    def test_a_protobuf_scan_past_the_request_deadline_is_answered_408(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The wire scan runs in Python, seconds for a body of millions of
+        tiny fields; it stops at the request's own deadline."""
+        deadlines: list[float | None] = []
+        parsed: list[int] = []
+        count = vllm_spans.count_trace_request
+
+        def spy(data: Any, **caps: Any) -> Any:
+            deadlines.append(caps["deadline"])
+            # The scan finds its deadline passed at its first look at the
+            # clock.
+            monkeypatch.setattr(
+                otlp_wire, "time", mock.Mock(monotonic=lambda: float("inf"))
+            )
+            return count(data, **caps)
+
+        monkeypatch.setattr(vllm_spans, "count_trace_request", spy)
+        monkeypatch.setattr(
+            vllm_spans, "parse_otlp_protobuf", lambda data: parsed.append(len(data))
+        )
+        limits = ReceiverLimits(request_deadline_seconds=30.0)
+        body = _small_message_export("empty_spans", 5_000)
+        with _receiver(limits=limits) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            posted = time.monotonic()
+            status = _post(url, body, "application/x-protobuf")
+            metadata = receiver.capability_metadata()
+        assert status == 408
+        assert metadata["scan_timeouts"] == 1
+        assert parsed == []
+        (deadline,) = deadlines
+        assert deadline is not None
+        assert posted < deadline <= time.monotonic() + 30.0
+
+    def test_too_many_spans_in_one_body_is_refused(self) -> None:
+        with _receiver(limits=ReceiverLimits(max_spans_per_body=3)) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            assert _post(url, _json_export(4), "application/json") == 413
+            assert _post(url, _json_export(3), "application/json") == 200
+            metadata = receiver.capability_metadata()
+        assert metadata["too_many_spans"] == 1
+        assert metadata["spans"] == 3
+
+    def test_a_body_that_does_not_fit_the_queue_is_refused_whole(self) -> None:
+        with _receiver(limits=ReceiverLimits(max_queued_spans=5)) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            assert _post(url, _json_export(4), "application/json") == 200
+            # Four more would make eight: none of them is queued.
+            assert _post(url, _json_export(4), "application/json") == 503
+            before_drain = receiver.capability_metadata()
+            assert len(receiver.drain()) == 4
+            # Draining frees the queue; the resent body now fits.
+            assert _post(url, _json_export(4), "application/json") == 200
+            after = receiver.capability_metadata()
+        assert before_drain["dropped_queue_full"] == 4
+        assert before_drain["queued"] == 4
+        assert after["queued"] == 4
+        assert after["spans"] == 8
+
+    def test_the_queue_is_also_bounded_by_bytes(self) -> None:
+        """Charged what the spans hold, at least 2 KiB each, never a share
+        of the body rounded down."""
+        body = _json_export(2)
+        limits = ReceiverLimits(max_queued_bytes=3 * SPAN_BYTES)
+        with _receiver(limits=limits) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            assert _post(url, body, "application/json") == 200
+            assert _post(url, body, "application/json") == 503
+            metadata = receiver.capability_metadata()
+        assert metadata["dropped_queue_full"] == 2
+        assert metadata["queued"] == 2
+
+    def test_spans_share_their_resource_scope_and_clock_domain(self) -> None:
+        """600 spans under one 128 KiB host.name held 79 MB, each with its own
+        clock-domain string, while the queue was charged their 139 KB body."""
+        import tracemalloc
+
+        host = "h" * (128 * 1024)
+        spans = [{"name": "s", "spanId": f"{i:016x}"} for i in range(600)]
+        body = json.dumps(
+            {
+                "resourceSpans": [
+                    {
+                        "resource": {
+                            "attributes": [
+                                {"key": "host.name", "value": {"stringValue": host}}
+                            ]
+                        },
+                        "scopeSpans": [{"scope": {"name": "vllm"}, "spans": spans}],
+                    }
+                ]
+            }
+        ).encode()
+        with _receiver(limits=UNHURRIED) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            tracemalloc.start()
+            try:
+                assert (
+                    _post(url, body, "application/json", timeout=TRACED_POST_TIMEOUT_S)
+                    == 200
+                )
+                retained, _peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            charged = receiver._queued_bytes
+            records = receiver.drain()
+        assert len(records) == 600
+        assert len({id(record.clock_domain) for record in records}) == 1
+        assert len({id(record.resource) for record in records}) == 1
+        assert retained < 4 * 1024 * 1024
+        assert retained <= charged
+
+    def test_a_span_s_request_id_and_status_are_charged_too(self) -> None:
+        """A record keeps its request ID apart from the attribute it came
+        from, and its status: 200 spans with 50 KB IDs held 1.92 times
+        their queue charge."""
+        import tracemalloc
+
+        spans = [
+            {
+                "name": "s",
+                "attributes": [
+                    {
+                        "key": "gen_ai.request.id",
+                        "value": {"stringValue": f"chatcmpl-{i}-" + "x" * 50_000},
+                    }
+                ],
+                "status": {"code": 2, "message": "m" * 20_000},
+            }
+            for i in range(200)
+        ]
+        body = json.dumps(
+            {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
+        ).encode()
+        with _receiver(limits=UNHURRIED) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            tracemalloc.start()
+            try:
+                assert (
+                    _post(url, body, "application/json", timeout=TRACED_POST_TIMEOUT_S)
+                    == 200
+                )
+                retained, _peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            charged = receiver._queued_bytes
+            records = receiver.drain()
+        assert len(records) == 200
+        assert records[0].request_id is not None
+        assert retained <= charged
 
 
 def _raw_request_span(attributes: dict[str, Any]) -> RawSpan:
@@ -880,6 +1711,7 @@ class TestProfileReceiver:
             "listen": f"127.0.0.1:{port}",
             "path": "/v1/traces",
             "protobuf": True,
+            "limits": dataclasses.asdict(ReceiverLimits()),
             "drain_seconds": 0.0,
         }
         capability = _span_capability(records)

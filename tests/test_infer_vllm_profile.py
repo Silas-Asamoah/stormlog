@@ -19,6 +19,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from stormlog.exit_codes import ExitCode
+from stormlog.infer import vllm_scraper
 from stormlog.infer.cli import build_parser
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
@@ -26,6 +27,8 @@ from stormlog.infer.profile import InferenceProfiler
 from stormlog.infer.trace_capture import TraceCaptureConfig
 from stormlog.infer.vllm_scraper import (
     INTERRUPT_SCRAPE_TIMEOUT_SECONDS,
+    MAX_SCRAPE_BYTES,
+    MAX_SCRAPE_SERIES,
     VllmMetricsScraper,
     fetch_metrics,
     metrics_api_key,
@@ -230,6 +233,83 @@ class _TruncatingHandler(BaseHTTPRequestHandler):
         return None
 
 
+class _EndlessHandler(BaseHTTPRequestHandler):
+    """Streams metrics with no Content-Length until the client hangs up.
+
+    It gives up after ``limit`` bytes, a thousand times the scrape's cap in
+    the test, so a client that reads to the end fails the test instead of
+    holding the machine; ``sent`` counts what it wrote.
+    """
+
+    protocol_version = "HTTP/1.1"
+    limit = 64 * 1024 * 1024
+    sent = 0
+    hung_up = threading.Event()
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        line = b"# TYPE vllm:x gauge\n" + b"vllm:x 1\n" * 1000
+        try:
+            while type(self).sent < self.limit:
+                self.wfile.write(line)
+                type(self).sent += len(line)
+        except OSError:
+            type(self).hung_up.set()  # the client stopped reading
+        self.close_connection = True
+
+
+class _EndlessBody:
+    """A response body that never ends, counting what the client takes."""
+
+    status = 200
+    length = None
+
+    def __init__(self, give_up_after: int) -> None:
+        self.taken = 0
+        self.give_up_after = give_up_after
+
+    def read(self, amount: int | None = -1) -> bytes:
+        if amount is None or amount < 0:
+            # An unbounded read would never return; fail instead of hanging.
+            raise AssertionError("the whole body was asked for")
+        if self.taken > self.give_up_after:
+            raise AssertionError(f"{self.taken} bytes read and still reading")
+        self.taken += amount
+        return b"x" * amount
+
+    def __enter__(self) -> _EndlessBody:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return None
+
+
+class _ManySeriesHandler(BaseHTTPRequestHandler):
+    """A small response that names more series than the scraper's cap."""
+
+    protocol_version = "HTTP/1.1"
+    series = 50
+
+    def do_GET(self) -> None:  # noqa: N802
+        body = "# TYPE vllm:x gauge\n" + "".join(
+            f'vllm:x{{i="{i}"}} 1\n' for i in range(self.series)
+        )
+        payload = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return None
+
+
 def _run(
     tmp_path: Path,
     origin: str,
@@ -366,6 +446,8 @@ class TestProfileScrapes:
             "interval_seconds": 0.1,
             "timeout_seconds": 60.0,
             "authorization": None,
+            "max_scrape_bytes": MAX_SCRAPE_BYTES,
+            "max_scrape_series": MAX_SCRAPE_SERIES,
         }
         capability = _of_type(records, "infer.capabilities")[0]
         assert capability["component"] == "vllm.metrics"
@@ -674,6 +756,60 @@ class TestScraperUnits:
         assert result.http_status == 200
         assert result.error is not None and "IncompleteRead" in result.error
         assert "972 more expected" in result.error
+
+    def test_a_response_over_the_byte_cap_is_read_no_further(self) -> None:
+        body = _EndlessBody(give_up_after=10 * 64 * 1024)
+        with mock.patch.object(vllm_scraper._OPENER, "open", return_value=body):
+            result = fetch_metrics(
+                "http://server/metrics", timeout_seconds=5, max_bytes=64 * 1024
+            )
+        assert body.taken == 64 * 1024 + 1
+        assert result.text is None
+        assert result.http_status == 200
+        assert result.error == "oversized: the response is over 65536 bytes"
+
+    def test_an_endless_response_ends_the_scrape_and_the_connection(self) -> None:
+        _EndlessHandler.sent = 0
+        _EndlessHandler.hung_up.clear()
+        outcome: list[Any] = []
+        with _serving(_EndlessHandler) as origin:
+            fetching = threading.Thread(
+                target=lambda: outcome.append(
+                    fetch_metrics(
+                        f"{origin}/metrics", timeout_seconds=5, max_bytes=64 * 1024
+                    )
+                ),
+                daemon=True,
+            )
+            fetching.start()
+            fetching.join(timeout=30)
+            assert not fetching.is_alive(), "the scrape kept reading"
+            assert _EndlessHandler.hung_up.wait(5), "the server reached its end"
+        (result,) = outcome
+        assert result.error == "oversized: the response is over 65536 bytes"
+        # What the socket buffers took, far below what an unbounded read takes.
+        assert _EndlessHandler.sent < _EndlessHandler.limit // 4
+
+    def test_a_response_over_the_series_cap_is_a_failed_scrape(self) -> None:
+        with _serving(_ManySeriesHandler) as origin:
+            scraper = VllmMetricsScraper(
+                url=f"{origin}/metrics",
+                interval_seconds=1.0,
+                timeout_seconds=5,
+                session_id="s",
+                run_id="r",
+                clock_domain="host/boot/unix_epoch_ns",
+                max_scrape_series=49,
+            )
+            capped = scraper.scrape(marker=MARKER_PHASE_START)
+            scraper.max_scrape_series = 50
+            within = scraper.scrape(marker=MARKER_PHASE_END)
+        assert capped.status == "error"
+        assert capped.error == "oversized: over the 49-series cap"
+        assert within.status == "ok"
+        assert (scraper.ok_scrapes, scraper.failed_scrapes) == (1, 1)
+        VALIDATOR.validate(capped.to_record())
+        assert scraper.config_record()["max_scrape_series"] == 50
 
     def test_scraper_warns_once_and_counts(self) -> None:
         warnings: list[str] = []

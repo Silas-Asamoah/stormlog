@@ -95,6 +95,84 @@ so batches leave every second, and keep
 `--vllm-spans-drain` at or above that delay. The report's `spans` block
 counts requests without a span, so a late batch is visible, never silent.
 
+### Ingestion limits
+
+Neither collector lets an endpoint grow the client's memory. Each limit is
+applied before the data is held whole, and each refusal is counted:
+
+| Collector | Limit | Default | When it is exceeded |
+| --- | --- | --- | --- |
+| `/metrics` scrape | response bytes read | 8 MiB | the scrape fails with `oversized`, and the rest of the response is never read |
+| `/metrics` scrape | series in one response, and families declared | 20,000 | the scrape fails with `oversized` as soon as the parse passes the cap |
+| `/metrics` scrape | characters in one line | 65,536 | the scrape fails with `oversized` before the line is parsed |
+| span receiver | open connections | 8 | the next connection gets a bare 503 with `Retry-After: 1` and is closed, without a handler thread (`refused_connections`) |
+| span receiver | time to receive a whole request: request line, headers and body, from when the receiver starts waiting for it, and to scan a protobuf body's fields (below) | 10 s | the connection is closed: with 408 when the body is late (`body_timeouts`) or its scan is (`scan_timeouts`), without an answer when the request line or headers are (`header_timeouts`); a kept-alive connection idle this long is closed, uncounted |
+| span receiver | memory charged to the exports being read and decoded at once | 128 MiB, each step charged before it runs (below) | 503 with `Retry-After: 1` when an export does not fit now (`busy`); 413 when it could never fit (`too_large`) |
+| span receiver | spans in one body | 10,000 | 413 (`too_many_spans`); a protobuf export is refused on its wire counts, before it is parsed |
+| span receiver | spans waiting in the queue | 100,000 spans and 64 MiB, each span charged what its record holds: 2 KiB, 256 bytes an attribute value and the size of its text, its status and its request ID included, with the resource, scope and clock domain its export's spans share charged once | 503 with `Retry-After: 1`, and none of the body's spans is kept (`dropped_queue_full`, which counts spans the exporter may resend) |
+
+The scrape's parser reads one line at a time, and its label pattern needs
+memory only for escaped characters, so what a scrape holds is bounded by
+these caps. Each label it keeps costs about a hundred bytes of Python
+objects, however short it is on the wire, so the bound is about
+twenty-five times the 8 MiB it may read, about 200 MB. Measured on CPython 3.10: 34 MB for
+20,000 series with 400-byte labels filling the 8 MiB; 168 MB for the worst
+case found, lines of thousands of distinct empty labels with one- and
+two-character keys (20 times what was read); and 193 MB when the response
+also holds a character outside the Basic Multilingual Plane, which makes
+Python store every character of a string at 4 bytes (23 times). A vLLM
+response is about 90 KB.
+
+An export is charged, step by step and before each step runs:
+1. its body (at most 32 MiB) and, for gzip, the most it can inflate to: 1,032
+   times its length (DEFLATE's limit), at most 32 MiB;
+2. once its content is in hand (the charge drops to what that holds), an
+   estimate of decoding it. For JSON it is counted on the bytes before
+   anything is parsed: 128 bytes a structural token, 2 KiB a span (each has
+   a `"name"`), 256 bytes an attribute value and 8 bytes a content byte for
+   the text. Once parsed, the spans and values are counted again on the
+   document, where a key written with an escape (`"na\u006de"`) is
+   decoded: a body with too many spans is refused, and anything the bytes
+   missed is charged, before any span is built. For protobuf, the body's messages, spans and attribute values
+   are first counted on the wire, by a scan that builds nothing and follows
+   the schema of the installed `opentelemetry-proto`, so a message field a
+   newer version adds (`Resource.entity_refs` in 1.45) is counted too. A
+   body with more spans than the limit is refused there, before it is parsed.
+   The parse is then charged, with protobuf's upb backend (with any other
+   in brackets): 384 bytes a message (1,536); 192 bytes (640) for each
+   field the parser keeps one by one, an unknown field or an element of a
+   repeated string or number; 3 bytes a content byte (8); and 2 more a byte
+   of unknown fields (none). Then the spans it yields are charged, 2 KiB a
+   span, 256 bytes an attribute value and 4 bytes a content byte.
+
+The rates are measured and rounded up: json.loads at 90 bytes a token, a
+span and its record at 2 KB and an attribute value at 190 bytes on CPython
+3.10; a parsed protobuf message, by RSS in a fresh process, at most 277
+bytes with upb and 1,239 with the pure-Python backend, over every OTLP
+message type with protobuf 4.24 and 7.36 (a parse costs per message far
+more than per byte: 100,000 empty spans are 200 KB on the wire and about
+19 MB parsed). An unknown field took about 120 bytes with upb and 470
+with pure Python (the first in a message; 170 to 320 each after it with
+pure Python), and its bytes up to 3.9 a byte with upb 4.24 and 4.3 with
+pure Python. A byte of text took 2 with upb, the parse's copy of the body
+and its own, and up to 6 with pure Python, which decodes strings as it
+parses (3 for ASCII; 6 when one character outside the Basic Multilingual
+Plane makes Python store every character at 4 bytes). A vLLM batch of 512
+request spans, about 266 KB of protobuf, is charged about 8.7 MiB with upb
+(23 MiB with the pure-Python backend), or 14 MiB as JSON. The largest
+export of such spans one receiver takes alone is about 3.7 MiB with upb,
+7,500 spans, and 1.4 MiB with the pure-Python backend.
+
+An export must say how long it is: a chunked body, or one with no
+`Content-Length`, is answered 411 and counted in `bad_requests` (OTLP/HTTP
+exporters, vLLM's included, send the length).
+
+A vLLM 0.30.0 response for one model is about 90 KB and 360 series, and a
+profile drains the queue every 0.25 s, so these limits bind only on a
+misbehaving or hostile endpoint. The receiver's limits are in its config
+record (`limits`), and its counters, with the spans still `queued`, are in
+the `vllm.spans` capability record.
+
 Every request is sent with `X-Request-Id: stormlog-<run_id>-<request_id>`,
 recorded on its `infer.request` event as `x_request_id`. vLLM embeds that
 header in its own request id and in the span's `gen_ai.request.id`, so a span
@@ -116,7 +194,8 @@ joins to a request by the recorded value and never by a rebuilt string.
   receiver collects are named by the peer address the export came from,
   such as `127.0.0.1/unix_epoch_ns`, which never counts as the client's
   clock. Bodies may be gzip-encoded; a body over 32 MiB, as sent or once
-  inflated, is refused with 413 before it is held whole in memory.
+  inflated, is refused with 413 before it is held whole in memory (see
+  [Ingestion limits](#ingestion-limits) for the rest).
 - `infer.capabilities` for `vllm.metrics` and `vllm.spans`: what was
   supported, enabled and collected, with the engine's unknown, retired and
   removed series, scrape and span counts, and the receiver's decode failures.

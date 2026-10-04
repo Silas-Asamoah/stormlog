@@ -267,9 +267,12 @@ module = [
     "torchvision",
     "torchvision.*",
     # The infer-otlp extra: generated protobuf classes without a py.typed
-    # marker, absent from the lint job's environment.
+    # marker, absent from the lint job's environment, and the protobuf
+    # runtime they need.
     "opentelemetry",
     "opentelemetry.*",
+    "google.protobuf",
+    "google.protobuf.*",
     # The vLLM execution hook runs inside a vLLM server; vLLM is never a
     # Stormlog dependency.
     "vllm",
