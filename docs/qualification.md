@@ -168,7 +168,7 @@ such start is tried.
 | F1 / T1 | the first 5 s window whose median victim wait exceeds the baseline p95 (F1); the neighbor's first send (T1) | over at least 20 waits and 5 waiting counts, the first of each back in band, no more waits above the baseline p95, and no more counts outside the baseline's range, than chance allows (`MostlyWithin`, the same Binomial allowance as cadence) |
 | F2 / T2 | the first victim preemption (F2); the neighbor's first admission (T2) | no victim preemption, and KV usage at most the baseline maximum + 0.05 |
 | F3 / T3 / T3b | the first 5 s window whose median victim cached fraction is below 0.5 (F3); the neighbor's first send (T3, T3b) | the median cached fraction is at least 0.9 |
-| F4a / F4b / H0 / P | the first stop confirmed (state `T`) | from the last `SIGCONT`, for 5 s, the busy step gaps look like the baseline's (below); for F4b, the victim's chunk gaps too |
+| F4a / F4b / H0 / P | the first stop confirmed (state `T`) | from the last `SIGCONT`, for 10 s, the busy step gaps look like the baseline's (below); for F4b, the victim's chunk gaps too |
 | W1 | the neighbor's first send | the queue and KV criteria |
 | F5 / R0 | the first stop confirmed | as F4a |
 | I1 | the stop request | at the stop's return plus #219's drain |
@@ -195,6 +195,22 @@ The tests hold both: engines with 40–51% of steps 10× slow, every step 2× or
 3× slow, bimodal stalls, slow steps among idle gaps, pulses the injector
 never recorded, a slow resume, and a minority 1.6× slow, against jittered
 engines that must recover in every seed.
+
+**The rule's resolution.** The search tries every start, so a stretch of a
+degraded engine that looks normal for a whole hold is found. Over the 10 s
+cadence hold, of 20 seeded engines degraded for 60 s, a uniform 1.15× slow
+engine never recovers more than 10 s early; one with 1% of gaps 20× slow
+(a 400 ms stall every 2 s or so) does in 1, and one with 5% of gaps 3× slow
+in 4. A 5 s hold let 11–13 of 20 through. Milder or rarer degradation than
+that can end an effect early, and the thresholds are refrozen from
+`dev_v1` with this in view. A healthy jittered engine recovers at the last
+`SIGCONT` in 39 of 40 seeds, and within 15 s in all of them.
+
+**Cadence is blind while the victim is idle.** Only busy gaps count, so a
+stall that falls wholly in victim idle time (about a fifth of the time at
+3 requests per second) is not seen by recovery. That recovery after a pulse
+train is real rests on actuation: every pulse's stop and continue are
+confirmed, and pulses the injector never recorded are among the tests.
 
 `realization(episode_type, context, timing)` applies the catalog's checks:
 
