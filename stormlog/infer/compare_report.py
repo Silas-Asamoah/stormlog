@@ -230,6 +230,12 @@ def comparison_lines(comparison: Comparison) -> list[str]:
     ]
     lines += [f"Observer: {issue}" for issue in comparison.observer_issues]
     lines += [
+        f"Within an arm: {first} and {second} differ in {', '.join(fields)} (allowed)"
+        for first, second, fields in comparison.diagnostics.get(
+            "within_arm_allowed", []
+        )
+    ]
+    lines += [
         f"Warning: {warning}" for warning in comparison.diagnostics.get("warnings", [])
     ]
     for case_id, case in comparison.cases.items():
