@@ -135,7 +135,11 @@ engine, give each its own trigger.
 
 The session record in the ledger holds the resolved configuration, its
 SHA-256 digest, and for each trigger the shortest violation that can fire it
-and its detection bound in seconds.
+and its detection bound in seconds. The watcher evaluates its triggers as
+each scrape returns, so an evaluation can run up to `scrape_timeout_seconds`
+after its tick: the bound counts that lateness (`j` in "A lasting violation
+fires on time" below), and a window's end scrape, or a health trigger's
+newest, may be a tick plus that timeout old.
 
 ### Incidents
 

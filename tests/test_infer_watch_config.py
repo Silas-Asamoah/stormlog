@@ -79,7 +79,15 @@ def test_guarantees_state_each_triggers_bounds() -> None:
     )
     guarantee = config.resolved()["guarantees"]["queue"]
     assert guarantee["shortest_firing_violation_seconds"] == 30.0
-    assert guarantee["detection_bound_seconds"] >= 90.0
+    # W + Δ + ceil((F + j) / Δ)·Δ + j, with j the 1 s scrape timeout.
+    assert guarantee["detection_bound_seconds"] == 30 + 1 + 61 + 1
+    slow = resolve_watch_config(
+        _payload(
+            scrape_timeout_seconds=0.5,
+            triggers=[_trigger(window_seconds=30, hold_seconds=60)],
+        )
+    )
+    assert slow.resolved()["guarantees"]["queue"]["detection_bound_seconds"] == 92.5
 
 
 def test_load_reads_a_file_and_applies_overrides(tmp_path: Path) -> None:

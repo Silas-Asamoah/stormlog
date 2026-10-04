@@ -140,8 +140,9 @@ class WatchConfig:
                     "shortest_firing_violation_seconds": (
                         spec.sustain.shortest_firing_violation()
                     ),
+                    # Each evaluation can run up to a scrape timeout late.
                     "detection_bound_seconds": spec.sustain.detection_bound(
-                        self.tick_seconds
+                        self.tick_seconds, late=self.scrape_timeout_seconds
                     ),
                 }
                 for spec in self.triggers

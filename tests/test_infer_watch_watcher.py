@@ -470,3 +470,14 @@ def test_a_finished_watch_lets_the_next_one_own_the_root(tmp_path: Path) -> None
         first = _watch(tmp_path, payload, options=WatchOptions(duration_seconds=0.3))
         second = _watch(tmp_path, payload, options=WatchOptions(duration_seconds=0.3))
     assert (first.exit_code, second.exit_code) == (0, 0)
+
+
+def test_triggers_allow_their_scrapes_the_scrape_timeout(tmp_path: Path) -> None:
+    """A tick runs when its scrape returns, so the newest scrape can be a
+    tick plus the scrape timeout old: windows and health tails allow it."""
+    payload = watch_config("http://127.0.0.1:9", scrape_timeout_seconds=0.25)
+    watcher = Watcher(resolve_watch_config(payload), tmp_path)
+    try:
+        assert watcher.engine.scrape_timeout_seconds == 0.25
+    finally:
+        watcher.close()
