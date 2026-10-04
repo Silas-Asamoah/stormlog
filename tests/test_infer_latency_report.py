@@ -12,6 +12,7 @@ import pytest
 
 from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.latency_report import latency_summary, streaming_summary
+from stormlog.infer.quantiles import quantile
 from stormlog.infer.vllm_analysis import JoinedSpans
 
 SECOND = 1_000_000_000
@@ -172,6 +173,33 @@ def test_missing_values_do_not_change_the_share_that_failed() -> None:
     assert server["value_ms"] is None
     assert server["n"] == 100
     assert server["reason"] == "successful_values_missing"
+
+
+@pytest.mark.parametrize("position", [0, 150, 299])
+def test_a_value_that_is_not_a_number_is_missing_wherever_it_falls(
+    position: int,
+) -> None:
+    # sorted() with a NaN depends on where the NaN is; it must not get there.
+    requests = [_streamed(i, e2e_latency_ms=float(100 + i)) for i in range(300)]
+    requests[position]["e2e_latency_ms"] = float("nan")
+    e2e = latency_summary(requests)["metrics"]["client.e2e"]
+    assert e2e["successful_missing"] == 1
+    values = [float(100 + i) for i in range(300) if i != position]
+    assert e2e["successful"]["p50"]["value_ms"] == quantile(values, 0.5)
+
+
+def test_an_artifact_with_a_time_that_is_not_a_number_still_analyzes(
+    tmp_path: Path,
+) -> None:
+    records: list[dict[str, Any]] = [
+        {"event_type": "infer.session", "session_id": "s1"},
+        _streamed(0),
+        _streamed(1, started_at_ns=float("nan")),
+    ]
+    path = tmp_path / "infer.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    report = analyze_inference_events(path)
+    assert report["summary"]["total_requests"] == 2
 
 
 def test_server_latency_comes_only_from_each_requests_own_span() -> None:

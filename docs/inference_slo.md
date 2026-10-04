@@ -158,14 +158,19 @@ attributes of the request's joined vLLM span. A missing span leaves the server
 criteria unknown; they are never filled from client values.
 
 Each criterion is `pass`, `fail`, `not_applicable` or `unknown`:
-- `not_applicable` is TPOT on a response with at most one output token. It
-  counts as passing, as in vLLM's benchmark.
+- `not_applicable` is TPOT on a response with at most one output token
+  (reason `at_most_one_output_token`). It counts as passing, as in vLLM's
+  benchmark.
 - `unknown` comes with a reason, for example:
   - `no_client_ttft` for a non-streaming response;
   - `no_joined_span`;
   - `output_tokens_not_server_reported`: a local tokenizer's count is
     deterministic but is not the count the server generated;
-  - `aggregate_only`, for `server.itl` and `server.tpot`.
+  - `aggregate_only`, for `server.itl` and `server.tpot`;
+  - `negative_value` or `non_finite_value`, for a value no latency can have,
+    such as an end before the intended arrival after the wall clock stepped
+    back. Passing it would count it as fast. The latency quantiles leave
+    such values out too, and count them as missing.
 
 The request's outcome is decided by the first rule that applies:
 

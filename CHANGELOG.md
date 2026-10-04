@@ -52,6 +52,8 @@ the flaky benchmark memory gates
     unknown, with a reason per criterion.
   - `evaluate_span` judges a vLLM span on server criteria only, with success
     unverified, since vLLM emits spans for failed requests too.
+  - A negative or non-finite value is unknown, never a pass, and the latency
+    quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
 - `--slo KEY:MS` (repeatable) and `--slo-file FILE` on `stormlog infer

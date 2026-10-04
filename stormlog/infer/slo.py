@@ -639,13 +639,15 @@ def client_values(record: Mapping[str, Any]) -> dict[str, CriterionValue]:
     """The client criteria's values for one ``infer.request`` record."""
     ttft = _number(record.get("ttft_ms"))
     e2e = _number(record.get("e2e_latency_ms"))
-    return {
-        "client.ttft": _value(ttft, "no_client_ttft"),
-        "client.ttft_from_intended": _from_intended_ttft(ttft, record),
-        "client.e2e": _value(e2e, "no_client_e2e"),
-        "client.e2e_from_intended": _from_intended_e2e(record),
-        "client.tpot": _client_tpot(record, ttft, e2e),
-    }
+    return _plausible(
+        {
+            "client.ttft": _value(ttft, "no_client_ttft"),
+            "client.ttft_from_intended": _from_intended_ttft(ttft, record),
+            "client.e2e": _value(e2e, "no_client_e2e"),
+            "client.e2e_from_intended": _from_intended_e2e(record),
+            "client.tpot": _client_tpot(record, ttft, e2e),
+        }
+    )
 
 
 def server_values(
@@ -666,7 +668,29 @@ def server_values(
             None if seconds is None else seconds * 1000.0,
             f"span_attribute_missing:{attribute}",
         )
-    return values
+    return _plausible(values)
+
+
+def _plausible(values: dict[str, CriterionValue]) -> dict[str, CriterionValue]:
+    """A value no latency can have is unknown, with the reason.
+
+    A negative latency comes from a wall clock stepped back or a corrupt
+    record, and passing it would count it as fast; a NaN would sort
+    differently wherever it fell.
+    """
+    checked = {}
+    for key, value in values.items():
+        reason = _impossible(value.value_ms)
+        checked[key] = value if reason is None else CriterionValue(None, reason)
+    return checked
+
+
+def _impossible(value_ms: float | None) -> str | None:
+    if value_ms is None:
+        return None
+    if not math.isfinite(value_ms):
+        return "non_finite_value"
+    return "negative_value" if value_ms < 0 else None
 
 
 def _judge(
@@ -691,8 +715,9 @@ def _judge_value(value: CriterionValue, limit: float) -> CriterionOutcome:
         return CriterionOutcome("not_applicable", None, limit, value.reason)
     if value.value_ms is None:
         return CriterionOutcome("unknown", None, limit, value.reason or "no_value")
-    if not math.isfinite(value.value_ms):
-        return CriterionOutcome("unknown", value.value_ms, limit, "non_finite_value")
+    impossible = _impossible(value.value_ms)
+    if impossible is not None:
+        return CriterionOutcome("unknown", value.value_ms, limit, impossible)
     outcome: Outcome = "pass" if value.value_ms <= limit else "fail"
     return CriterionOutcome(outcome, value.value_ms, limit)
 
@@ -739,7 +764,9 @@ def _client_tpot(
     if not isinstance(tokens, int) or isinstance(tokens, bool):
         return CriterionValue(None, reason="no_output_tokens")
     if tokens <= 1:
-        return CriterionValue(None, reason="single_output_token", not_applicable=True)
+        return CriterionValue(
+            None, reason="at_most_one_output_token", not_applicable=True
+        )
     if ttft is None or e2e is None:
         return CriterionValue(None, reason="no_client_ttft_or_e2e")
     return CriterionValue((e2e - ttft) / (tokens - 1))

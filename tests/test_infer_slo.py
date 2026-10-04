@@ -429,12 +429,49 @@ def test_tpot_needs_server_reported_output_tokens() -> None:
     assert outcome.criteria["client.tpot"].reason == "output_tokens_not_server_reported"
 
 
-def test_tpot_with_one_output_token_is_not_applicable_and_passes() -> None:
+@pytest.mark.parametrize("tokens", [0, 1])
+def test_tpot_with_one_output_token_is_not_applicable_and_passes(tokens: int) -> None:
     spec = parse_slo_flags(["tpot:1"])
-    outcome = evaluate_request(_request(output_tokens=1), spec)
+    outcome = evaluate_request(_request(output_tokens=tokens), spec)
 
     assert outcome.criteria["client.tpot"].outcome == "not_applicable"
+    assert outcome.criteria["client.tpot"].reason == "at_most_one_output_token"
     assert outcome.outcome == "met"
+
+
+@pytest.mark.parametrize(
+    ("change", "key", "reason"),
+    [
+        ({"e2e_latency_ms": -5.0}, "client.e2e", "negative_value"),
+        # The wall clock stepped back between the arrival and the end.
+        ({"ended_at_ns": 900_000_000}, "client.e2e_from_intended", "negative_value"),
+        ({"e2e_latency_ms": float("nan")}, "client.e2e", "non_finite_value"),
+        ({"ttft_ms": float("inf")}, "client.ttft", "non_finite_value"),
+        ({"ttft_ms": float("nan")}, "client.tpot", "non_finite_value"),
+    ],
+)
+def test_impossible_values_are_unknown_never_a_pass(
+    change: dict[str, Any], key: str, reason: str
+) -> None:
+    value = client_values(_request(**change))[key]
+    assert value == CriterionValue(None, reason=reason)
+    spec = parse_slo_flags([f"{key.split('.', 1)[1]}:5000"])
+    outcome = evaluate_request(_request(**change), spec)
+    assert outcome.criteria[key].outcome == "unknown"
+    assert outcome.outcome == "unknown"
+
+
+def test_impossible_span_values_are_unknown() -> None:
+    values = server_values(_span(ttft=-0.1, e2e=float("nan")))
+    assert values["server.ttft"] == CriterionValue(None, reason="negative_value")
+    assert values["server.e2e"] == CriterionValue(None, reason="non_finite_value")
+
+
+def test_a_negative_value_supplied_directly_is_unknown() -> None:
+    spec = parse_slo_flags(["e2e:100"])
+    outcome = evaluate_criteria({"client.e2e": -1.0}, spec)
+    assert outcome.criteria["client.e2e"].outcome == "unknown"
+    assert outcome.criteria["client.e2e"].reason == "negative_value"
 
 
 def test_aggregate_only_criteria_are_unknown_per_request() -> None:
