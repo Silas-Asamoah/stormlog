@@ -234,7 +234,8 @@ with its resolved configuration.
 The watcher's own health is held in memory as `stormlog_watch_*` gauges and
 counters (`tests/fixtures/watch/watch_stats_v1.json`): history bytes and
 age, scrapes by outcome, missed and frozen ticks, incidents by trigger kind
-and capture status, windows by fidelity, suppressions, retention, and
+and capture status, windows by fidelity, suppressions, bundles removed by
+reason (the `infer.incident_pruned` reasons, `disk_full` included), and
 records each sink dropped. `report.json` carries a copy at the end of the
 watch. The families grow with the commands that fill them (deep capture,
 the span ring, finalization), so a newer fixture has more; none is renamed

@@ -421,8 +421,8 @@ class Watcher:
         if held is not None:
             self.stats.set("retention_incidents", held)
         for bundle in pruned:
-            self.stats.add("pruned_total")
-            self.stats.add("pruned_bytes_total", bundle.bytes)
+            self.stats.add("pruned_total", labels=(bundle.reason,))
+            self.stats.add("pruned_bytes_total", bundle.bytes, labels=(bundle.reason,))
             record = envelope(
                 INCIDENT_PRUNED,
                 session_id=self.identity.session_id,

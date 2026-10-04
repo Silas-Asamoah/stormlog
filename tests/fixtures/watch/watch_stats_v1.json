@@ -252,21 +252,39 @@
       "unit": ""
     },
     {
-      "enums": {},
-      "help": "Bundles retention removed.",
+      "enums": {
+        "reason": [
+          "max_age_hours",
+          "max_incidents",
+          "max_total_bytes",
+          "disk_full"
+        ]
+      },
+      "help": "Bundles removed, by reason: retention, or room for a new incident.",
       "key": "pruned_total",
       "kind": "counter",
-      "labels": [],
+      "labels": [
+        "reason"
+      ],
       "name": "stormlog_watch_pruned_total",
       "states": [],
       "unit": ""
     },
     {
-      "enums": {},
-      "help": "Bytes retention removed.",
+      "enums": {
+        "reason": [
+          "max_age_hours",
+          "max_incidents",
+          "max_total_bytes",
+          "disk_full"
+        ]
+      },
+      "help": "Bytes of the bundles removed, by reason.",
       "key": "pruned_bytes_total",
       "kind": "counter",
-      "labels": [],
+      "labels": [
+        "reason"
+      ],
       "name": "stormlog_watch_pruned_bytes_total",
       "states": [],
       "unit": "bytes"
@@ -322,8 +340,18 @@
       ]
     ],
     "loop_lag_seconds_max": 0.004,
-    "pruned_bytes_total": 41783,
-    "pruned_total": 1,
+    "pruned_bytes_total": [
+      [
+        "max_total_bytes",
+        41783
+      ]
+    ],
+    "pruned_total": [
+      [
+        "max_total_bytes",
+        1
+      ]
+    ],
     "retention_bytes": 41783,
     "retention_incidents": 1,
     "scrapes_total": [

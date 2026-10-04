@@ -31,7 +31,7 @@ def test_health_is_a_copy_that_resets_nothing() -> None:
     assert stats.health() == second
     assert counter_value(second, "scrapes_total", ("ok",)) == 3
     assert counter_value(second, "ticks_missed_total") == 1
-    assert counter_value(second, "pruned_total") == 0
+    assert counter_value(second, "pruned_total", ("max_age_hours",)) == 0
     assert second["trigger_state"] == {("queue",): "pending"}
 
 
@@ -62,6 +62,8 @@ def test_labels_must_match_the_family() -> None:
         stats.add("history_bytes")
     with pytest.raises(KeyError):
         stats.set("pruned_total", 1)
+    with pytest.raises(ValueError, match="label values"):
+        stats.add("pruned_total")  # by reason, so every series is closed
     with pytest.raises(ValueError, match="trigger state"):
         stats.set_trigger_state("queue", "exploded")
 
