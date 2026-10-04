@@ -33,6 +33,15 @@ def test_every_catalog_label_is_valid_ground_truth(name: str) -> None:
     )
 
 
+def test_t2_names_no_mixed_prefill() -> None:
+    # The lead's ruling: an allowed mixed-prefill finding would only mask a
+    # real mixed-prefill fault in a longer-inputs run, and no edge makes it
+    # a secondary.
+    row = CATALOG["T2"]
+    kinds = {label.kind for label in (*row.expects, *row.secondary, *row.allows)}
+    assert "mixed_prefill_interference" not in kinds
+
+
 def test_types_this_harness_does_not_run_are_named() -> None:
     with pytest.raises(ValueError, match="not run by this harness yet"):
         episode_type("F5")

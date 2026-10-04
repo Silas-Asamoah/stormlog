@@ -96,15 +96,16 @@ CATALOG: dict[str, EpisodeType] = {
             _allowed(LOAD_INCREASE, LONGER_INPUTS, LONGER_OUTPUTS),
             default_dose={"concurrency": 8, **_LONG},
         ),
-        # No #218 edge leads from a workload change to mixed prefill, so T2
-        # allows it rather than declaring it secondary.
+        # Mixed prefill is neither secondary nor allowed (the lead's ruling,
+        # 2026-10-04): no #218 edge leads to it from a workload change, and
+        # an info workload_change finding is never a false claim anyway, so
+        # allowing it would only mask a real mixed-prefill fault.
         EpisodeType(
             "T2",
             "workload_change",
             NEIGHBOR,
             _workload(LONGER_INPUTS),
-            allows=(Neutral(MIXED_PREFILL_INTERFERENCE, "scheduler"),)
-            + _allowed(LOAD_INCREASE),
+            allows=_allowed(LOAD_INCREASE),
             default_dose={"concurrency": 2, **_LONG},
         ),
         EpisodeType(
