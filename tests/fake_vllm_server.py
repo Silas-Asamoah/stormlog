@@ -68,7 +68,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--die-after", type=int, default=None)
     parser.add_argument("--latency", type=float, default=0.0)
-    args = parser.parse_args()
+    # vLLM's own flags (--model, --revision, ...) are accepted and ignored.
+    args, _ = parser.parse_known_args()
     Handler.die_after = args.die_after
     Handler.latency = args.latency
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

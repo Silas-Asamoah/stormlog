@@ -95,6 +95,14 @@ the flaky benchmark memory gates
   comparison: its report, labels, comparable fields, and protocol failures
   (unfinished session, identity change, incomplete probe, invalid cohort,
   unacknowledged cold-cache reset). (#213)
+- Launch-bound model identity for the runner (`server.model`): a
+  `pinned_hub` snapshot is resolved to a commit and every blob checked
+  against its name, then served with `--revision <commit>` and
+  `HF_HUB_OFFLINE=1`; a `staged` directory is hashed into a read-only,
+  content-addressed copy. Files are rechecked after each run
+  (`model_changed`), and the runner's server descriptions carry
+  `pinned_commit_verified` or `staged_snapshot_verified`, the only evidence
+  that verifies a model's identity in a comparison. (#213)
 - `stormlog.infer.experiment.run_plan`: the experiment runner. Each run
   starts the arm's server in a process group of its own, checks it holds
   only vLLM's processes, describes it before and after, runs the treatments
