@@ -69,6 +69,12 @@ def _text(registry: Registry) -> str:
         ({"labels": ("a",), "enums": {"b": ("x",)}}, "not a label"),
         ({"labels": ("a",), "enums": {"a": ()}}, "distinct"),
         ({"buckets": (1.0,)}, "only a histogram"),
+        # The textfile writer adds these two itself.
+        ({"name": "stormlog_run_active", "kind": "gauge"}, "textfile"),
+        (
+            {"name": "stormlog_textfile_updated_timestamp_seconds", "kind": "gauge"},
+            "textfile",
+        ),
     ],
 )
 def test_family_declarations_are_checked(kwargs: dict, message: str) -> None:

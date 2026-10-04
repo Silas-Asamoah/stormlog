@@ -35,7 +35,7 @@ from pathlib import Path
 
 import psutil
 
-from .registry import escape_label_value
+from .registry import TEXTFILE_RUN_ACTIVE, TEXTFILE_UPDATED, escape_label_value
 from .renders import RenderCache
 
 _flock: Callable[[int, int], None] | None
@@ -247,14 +247,14 @@ class TextfileWriter:
     def _own_lines(self) -> bytes:
         label = f'{{{PRODUCER_LABEL}="{escape_label_value(self.slot)}"}}'
         return (
-            "# HELP stormlog_textfile_updated_timestamp_seconds "
+            f"# HELP {TEXTFILE_UPDATED} "
             "When this file was last written, in Unix seconds.\n"
-            "# TYPE stormlog_textfile_updated_timestamp_seconds gauge\n"
-            f"stormlog_textfile_updated_timestamp_seconds{label} {self._clock():.3f}\n"
-            "# HELP stormlog_run_active "
+            f"# TYPE {TEXTFILE_UPDATED} gauge\n"
+            f"{TEXTFILE_UPDATED}{label} {self._clock():.3f}\n"
+            f"# HELP {TEXTFILE_RUN_ACTIVE} "
             "1 while the run writing this file is running, 0 after it ended.\n"
-            "# TYPE stormlog_run_active gauge\n"
-            f"stormlog_run_active{label} {1 if self._active else 0}\n"
+            f"# TYPE {TEXTFILE_RUN_ACTIVE} gauge\n"
+            f"{TEXTFILE_RUN_ACTIVE}{label} {1 if self._active else 0}\n"
         ).encode()
 
 

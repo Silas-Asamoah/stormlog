@@ -40,6 +40,11 @@ OVERFLOW = "__overflow__"
 # Configuration-bounded label values longer than this keep a prefix and a
 # digest, so two long values never collapse into one series.
 MAX_LABEL_VALUE = 64
+# The families the textfile writer appends to each render it writes; no
+# registry may declare them, or the file would hold each twice.
+TEXTFILE_UPDATED = "stormlog_textfile_updated_timestamp_seconds"
+TEXTFILE_RUN_ACTIVE = "stormlog_run_active"
+TEXTFILE_FAMILIES = (TEXTFILE_UPDATED, TEXTFILE_RUN_ACTIVE)
 _DIGEST_CHARS = 8
 # An upper bound on one rendered sample value, such as -1.2345678901234567e-308.
 VALUE_BYTES = 24
@@ -521,6 +526,8 @@ def escape_label_value(value: str) -> str:
 def _check_name(name: str, kind: Kind, unit: str) -> None:
     if not name.startswith(METRIC_PREFIX) or not _NAME.match(name):
         raise ValueError(f"metric names must be valid and start with stormlog_: {name}")
+    if name in TEXTFILE_FAMILIES:
+        raise ValueError(f"{name} is written by the textfile writer itself")
     stem = name
     if kind == "counter":
         if not name.endswith("_total"):
