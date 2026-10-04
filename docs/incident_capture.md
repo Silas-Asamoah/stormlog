@@ -114,6 +114,19 @@ writes each profiler trace into its own trace directory before the watcher
 can measure it, so nothing here bounds that write; see the watcher's
 trace-volume settings.
 
+### The recent past in memory
+
+Between incidents the watcher holds its recent scrapes in memory, each
+serialized and compressed: a vLLM 0.30.0 scrape takes about 5.7 KB this way.
+The memory bound counts each one's compressed bytes plus 320 bytes for the
+Python objects that hold it, so it bounds what is retained even when the
+items are tiny. A scrape larger than the whole bound is refused and counted
+(`oversized`). Only the last few scrapes, as many as the widest trigger
+window needs, are also held parsed (about 130 KB each), and only scrapes the
+memory holds, so a trigger never judges a scrape its incident's bundle
+cannot contain. Scrapes are parsed back one at a time when a bundle is
+written.
+
 ## Triggers and what "sustained" means
 
 A trigger asks a question of the server's recent `/metrics` scrapes once per

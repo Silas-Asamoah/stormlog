@@ -1,11 +1,14 @@
 """The watcher's bounded memory of the recent past.
 
-Items are held serialized and compressed (zlib level 1), so the byte bound
-counts exactly what is held: a vLLM 0.30.0 scrape is about 5.7 KB this way
-against about 130 KB as parsed Python objects. Each item carries the
-watcher's own stamps (:class:`Stamped`), so windows are cut on its monotonic
-clock, which wall-clock steps cannot move. Only the last few scrapes, as many
-as the widest trigger window needs, are also kept parsed.
+Items are held serialized and compressed (zlib level 1): a vLLM 0.30.0
+scrape is about 5.7 KB this way against about 130 KB as parsed Python objects.
+The byte bound counts each item's compressed bytes plus
+:data:`ITEM_OVERHEAD_BYTES` for the objects that hold it, so it bounds what
+the ring retains even for tiny items. Each item carries the watcher's own
+stamps (:class:`Stamped`), so windows are cut on its monotonic clock, which
+wall-clock steps cannot move. Only the last few scrapes, as many as the
+widest trigger window needs, are also kept parsed, and only those the ring
+holds, so a trigger never judges a scrape an incident cannot contain.
 """
 
 from __future__ import annotations
@@ -23,8 +26,14 @@ EVICT_AGE = "age"
 EVICT_BYTES = "bytes"
 EVICT_OVERSIZED = "oversized"
 
+# What holding one item costs beyond its compressed bytes: the stamp, its
+# three integers, the bytes object's header, the pair and the deque slot.
+# tracemalloc measures 265 B on CPython 3.10-3.13 and 273 B on 3.14; the
+# margin covers the allocator rounding each object up to 16 bytes.
+ITEM_OVERHEAD_BYTES = 320
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class Stamped:
     """When the watcher saw an item, on its own clocks.
 
@@ -43,7 +52,10 @@ class Stamped:
 
 
 class BoundedRing:
-    """Serialized items held for ``max_seconds`` and in at most ``max_bytes``."""
+    """Serialized items held for ``max_seconds`` and in at most ``max_bytes``.
+
+    An item is charged its compressed size plus :data:`ITEM_OVERHEAD_BYTES`.
+    """
 
     def __init__(self, *, max_seconds: float, max_bytes: int) -> None:
         if max_seconds <= 0 or max_bytes <= 0:
@@ -59,6 +71,7 @@ class BoundedRing:
 
     @property
     def bytes(self) -> int:
+        """What the held items are charged, overhead included."""
         return self._bytes
 
     def held_seconds(self) -> float:
@@ -72,11 +85,11 @@ class BoundedRing:
         blob = zlib.compress(
             json.dumps(record, separators=(",", ":"), sort_keys=True).encode(), 1
         )
-        if len(blob) > self.max_bytes:
+        if _charge(blob) > self.max_bytes:
             self.evictions[EVICT_OVERSIZED] += 1
             return False
         self._items.append((stamp, blob))
-        self._bytes += len(blob)
+        self._bytes += _charge(blob)
         while self._bytes > self.max_bytes:
             self._evict(EVICT_BYTES)
         self.expire(stamp.mono_ns)
@@ -101,8 +114,12 @@ class BoundedRing:
 
     def _evict(self, cause: str) -> None:
         _stamp, blob = self._items.popleft()
-        self._bytes -= len(blob)
+        self._bytes -= _charge(blob)
         self.evictions[cause] += 1
+
+
+def _charge(blob: bytes) -> int:
+    return len(blob) + ITEM_OVERHEAD_BYTES
 
 
 class ScrapeHistory:
@@ -116,9 +133,15 @@ class ScrapeHistory:
             maxlen=parsed_count
         )
 
-    def add(self, stamp: Stamped, record: VllmScrapeRecord) -> None:
-        self.ring.append(stamp, record.to_record())
+    def add(self, stamp: Stamped, record: VllmScrapeRecord) -> bool:
+        """Hold a scrape; False when the ring refused it as oversized.
+
+        A refused scrape stays out of the parsed tail as well.
+        """
+        if not self.ring.append(stamp, record.to_record()):
+            return False
         self._parsed.append((stamp, record))
+        return True
 
     def parsed(self) -> list[tuple[Stamped, VllmScrapeRecord]]:
         """The parsed tail, oldest first."""
@@ -126,18 +149,21 @@ class ScrapeHistory:
 
     def records(
         self, start_mono_ns: int | None = None, end_mono_ns: int | None = None
-    ) -> list[tuple[Stamped, VllmScrapeRecord]]:
-        """Scrapes held between two monotonic instants, parsed back."""
-        return [
-            (stamp, VllmScrapeRecord.from_record(record))
-            for stamp, record in self.ring.items(start_mono_ns, end_mono_ns)
-        ]
+    ) -> Iterator[tuple[Stamped, VllmScrapeRecord]]:
+        """Scrapes held between two monotonic instants, parsed back one at a time.
+
+        A parsed scrape is about 20 times its compressed size, so a caller
+        should consume them as they come rather than hold them all.
+        """
+        for stamp, record in self.ring.items(start_mono_ns, end_mono_ns):
+            yield stamp, VllmScrapeRecord.from_record(record)
 
 
 __all__ = [
     "EVICT_AGE",
     "EVICT_BYTES",
     "EVICT_OVERSIZED",
+    "ITEM_OVERHEAD_BYTES",
     "BoundedRing",
     "ScrapeHistory",
     "Stamped",
