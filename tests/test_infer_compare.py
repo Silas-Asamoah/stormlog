@@ -560,6 +560,25 @@ def test_an_external_cause_sets_aside_its_block_and_the_preregistered_count_deci
     assert (gate.status, gate.reason) == ("not_evaluable", "blocks_below_preregistered")
 
 
+def test_a_comparison_says_whether_its_block_count_was_preregistered() -> None:
+    # Without a pre-registered min_complete_blocks only the 3-pair floor
+    # stops attrition; a reader of the verdict must see which held.
+    baseline, candidate = _arms(SAME)
+    bare = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    statement = "not pre-registered (floor of 3 pairs)"
+    assert bare.to_payload()["spec"]["min_complete_blocks"] == {
+        "preregistered": None,
+        "floor": 3,
+        "statement": statement,
+    }
+    assert f"min_complete_blocks: {statement}" in comparison_lines(bare)
+    planned = GateRule("non-inferiority", 0.05, "relative", min_complete_blocks=6)
+    spec = ComparisonSpec(gates=(("client.e2e.p95", planned),))
+    record = compare_runs(baseline, candidate, spec).to_payload()["spec"]
+    assert record["min_complete_blocks"]["preregistered"] == 6
+    assert record["min_complete_blocks"]["statement"] == "6 (pre-registered)"
+
+
 def test_a_block_given_for_one_arm_only_counts_as_lost() -> None:
     # Its other run is gone with no cause recorded: it is listed, and the
     # pre-registered block count keeps the contrast from shrinking quietly.

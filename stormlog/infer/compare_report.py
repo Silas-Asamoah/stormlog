@@ -221,6 +221,9 @@ def comparison_lines(comparison: Comparison) -> list[str]:
         f"Design: {comparison.design}; mode {comparison.spec.mode}; "
         f"comparability {comparison.comparability.status}",
     ]
+    if comparison.spec.gates:
+        floor = comparison.spec.block_floor()["statement"]
+        lines.append(f"min_complete_blocks: {floor}")
     lines += [
         f"Set aside: {item['run']} for {item['case']} ({_set_aside_reasons(item)})"
         for item in comparison.excluded
