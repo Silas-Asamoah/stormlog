@@ -462,6 +462,9 @@ class SloEvaluation:
     computes it, not the highest rate that meets a target. An unmeasurable
     evaluation (a criterion no successful request could be judged on, or one
     that is aggregate-only) has no attainment or goodput, never zero.
+    ``cohort_valid`` and ``cohort_issues`` repeat the case's cohort checks
+    (None when the caller gave no cohort): the figures are over the records
+    the run holds, which an invalid cohort does not vouch for.
     """
 
     slo_name: str
@@ -483,6 +486,8 @@ class SloEvaluation:
     goodput_lower_rps: float | None
     goodput_upper_rps: float | None
     goodput_lower_output_tps: float | None
+    cohort_valid: bool | None = None
+    cohort_issues: tuple[str, ...] = ()
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -509,6 +514,8 @@ class SloEvaluation:
             "goodput_lower_rps": self.goodput_lower_rps,
             "goodput_upper_rps": self.goodput_upper_rps,
             "goodput_lower_output_tps": self.goodput_lower_output_tps,
+            "cohort_valid": self.cohort_valid,
+            "cohort_issues": list(self.cohort_issues),
         }
 
 

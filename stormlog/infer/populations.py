@@ -60,6 +60,7 @@ _COUNTED = {
     DELIVERY_UNKNOWN: DELIVERY_UNKNOWN,
     REJECTED: REJECTED,
 }
+_NOT_ACCEPTED = frozenset({DROPPED, UNREACHABLE, DELIVERY_UNKNOWN, REJECTED})
 # A request may end up to this long after the drain was recorded: the window
 # record is written after the drain returns.
 _END_SLACK_NS = 1_000_000_000
@@ -679,14 +680,21 @@ def _server_admission(
     accepted: int,
     server_ids: Collection[str] | None,
 ) -> tuple[int | None, float | None]:
+    """Requests the server confirmed, and the share of accepted ones it did.
+
+    A request whose delivery the client could not confirm counts as
+    admitted when the server saw it, but it is not among the accepted, so
+    the coverage counts only accepted requests.
+    """
     if server_ids is None:
         return None, None
-    admitted = sum(
-        1
+    seen = [
+        r
         for r in requests
         if r.get("status") != DROPPED and r.get("x_request_id") in server_ids
-    )
-    return admitted, (admitted / accepted if accepted else None)
+    ]
+    seen_accepted = sum(1 for r in seen if r.get("status") not in _NOT_ACCEPTED)
+    return len(seen), (seen_accepted / accepted if accepted else None)
 
 
 def _scheduled(window: Mapping[str, Any] | None) -> int | None:
@@ -726,11 +734,13 @@ def goodput(
     *,
     spans: JoinedSpans | None = None,
     slo_source: str = "flags",
+    cohort: Population | None = None,
 ) -> SloEvaluation:
     """Judge a case's offered requests against ``spec``; rates per ``interval``.
 
     ``requests`` are the case's measured requests, dropped ones included;
-    ``spans`` are their joined vLLM spans, for server criteria.
+    ``spans`` are their joined vLLM spans, for server criteria; ``cohort``
+    is their population, whose validity the evaluation carries.
     """
     outcomes = [_judged(record, spec, spans) for record in requests]
     met = sum(1 for outcome in outcomes if outcome.outcome == "met")
@@ -742,6 +752,7 @@ def goodput(
     )
     reason = _unmeasurable(spec, outcomes)
     figures = _figures(met, unknown, len(outcomes), good_tokens, interval)
+    valid, issues = _cohort_fields(cohort)
     return SloEvaluation(
         slo_name=spec.name,
         slo_digest=spec.digest(),
@@ -758,7 +769,13 @@ def goodput(
         per_criterion=_per_criterion(spec, outcomes, len(outcomes)),
         interval=interval,
         **(figures if reason is None else dict.fromkeys(figures)),
+        cohort_valid=valid,
+        cohort_issues=issues,
     )
+
+
+def _cohort_fields(cohort: Population | None) -> tuple[bool | None, tuple[str, ...]]:
+    return (None, ()) if cohort is None else (cohort.cohort_valid, cohort.issues)
 
 
 def _figures(
@@ -825,6 +842,11 @@ def _evidence_coverage(outcomes: Sequence[RequestSloOutcome]) -> float | None:
 def _per_criterion(
     spec: SloSpec, outcomes: Sequence[RequestSloOutcome], offered: int
 ) -> dict[str, CriterionCounts]:
+    """Each criterion's outcomes among successful requests, and its bounds.
+
+    A criterion no successful request could be judged on has no bounds,
+    as the evaluation has none: ``[0, 1]`` would read as a figure.
+    """
     counts = {}
     for criterion in spec.criteria:
         judged = Counter(
@@ -833,13 +855,19 @@ def _per_criterion(
             if outcome.status == OK
         )
         good = judged["pass"] + judged["not_applicable"]
+        unjudgeable = judged["unknown"] > 0 and judged["unknown"] == judged.total()
+        bounds = (
+            (None, None)
+            if criterion.definition.per_request is None or unjudgeable
+            else (_share(good, offered), _share(good + judged["unknown"], offered))
+        )
         counts[criterion.key] = CriterionCounts(
             passed=judged["pass"],
             failed=judged["fail"],
             not_applicable=judged["not_applicable"],
             unknown=judged["unknown"],
-            attainment_lower=_share(good, offered),
-            attainment_upper=_share(good + judged["unknown"], offered),
+            attainment_lower=bounds[0],
+            attainment_upper=bounds[1],
         )
     return counts
 

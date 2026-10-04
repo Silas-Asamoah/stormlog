@@ -210,7 +210,7 @@ Every measured request lands in exactly one count, by status:
 | `other` | Any other status, by name; never dropped |
 | `censored` | `timed_out + cancelled`: latency known only to exceed what was observed |
 | `server_admitted` | Requests the server confirmed it saw: a joined span (conflicting spans included), or an execution hook record with the request's `X-Request-Id`. `null` when the run has no server source; `0` when it ran a span receiver that received nothing |
-| `server_evidence_coverage` | `server_admitted / accepted`; `null` without a server source |
+| `server_evidence_coverage` | The share of `accepted` requests the server confirmed; `null` without a server source. A `delivery_unknown` request the server saw counts in `server_admitted` but not here, since it is not among the accepted. |
 
 ### Cohort checks
 
@@ -287,8 +287,9 @@ returns a `stormlog.infer.slo_evaluation` v1 result:
 | `evidence_coverage` | The share of successful requests whose every criterion could be judged |
 | `goodput_lower_rps`, `goodput_upper_rps` | Met (and met plus unknown) requests per second of the case's rate interval |
 | `goodput_lower_output_tps` | Output tokens of met requests per second |
-| `per_criterion` | For each criterion: pass, fail, not-applicable and unknown counts among successful requests, and its own marginal attainment bounds over offered requests |
+| `per_criterion` | For each criterion: pass, fail, not-applicable and unknown counts among successful requests, and its own marginal attainment bounds over offered requests (`null` for a criterion no successful request could be judged on) |
 | `population_declared`, `population_evaluated` | The policy's population and the one judged; both `offered` here. An online watcher that sees only engine-finished spans says so. |
+| `cohort_valid`, `cohort_issues` | The case's cohort checks, repeated so a reader of the evaluation alone sees them; `null` when the caller passed no cohort. The figures are over the records the run holds, which an invalid cohort does not vouch for. |
 
 Missing evidence widens the bounds instead of moving a single figure. A lost
 span therefore cannot look like an SLO violation, and cannot hide one either.

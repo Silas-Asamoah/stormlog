@@ -346,7 +346,18 @@ def test_server_admission_is_separate_from_the_clients_view() -> None:
     assert population.accepted == 4
     # The server saw the request whose delivery the client could not confirm.
     assert population.server_admitted == 2
-    assert population.server_evidence_coverage == pytest.approx(0.5)
+    # Coverage is over the accepted requests: one of the four was seen.
+    assert population.server_evidence_coverage == pytest.approx(0.25)
+
+
+def test_evidence_coverage_never_exceeds_the_accepted_requests() -> None:
+    records = [_request(0)] + [_request(i, "delivery_unknown") for i in range(1, 5)]
+    seen = {f"stormlog-run-c1_measured_{i}" for i in range(5)}
+    population = _case(
+        [*records, _window(scheduled_arrivals=5)], server_admitted_ids=seen
+    ).population
+    assert (population.accepted, population.server_admitted) == (1, 5)
+    assert population.server_evidence_coverage == 1.0
 
 
 def test_rates_need_an_interval_with_length() -> None:
@@ -434,6 +445,10 @@ def test_a_criterion_no_successful_request_can_be_judged_is_unmeasurable() -> No
     assert evaluation.reason == "client.ttft: no_client_ttft"
     assert evaluation.attainment_lower is None
     assert evaluation.goodput_lower_rps is None
+    # Nor does the criterion get marginal bounds of [0, 1]: none, not 0.
+    counts = evaluation.per_criterion["client.ttft"]
+    assert (counts.attainment_lower, counts.attainment_upper) == (None, None)
+    assert counts.unknown == 3
 
 
 def test_an_aggregate_only_criterion_is_unmeasurable_per_request() -> None:
@@ -442,6 +457,25 @@ def test_an_aggregate_only_criterion_is_unmeasurable_per_request() -> None:
     )
     assert evaluation.status == "unmeasurable"
     assert evaluation.reason == "server.itl: aggregate_only"
+    counts = evaluation.per_criterion["server.itl"]
+    assert (counts.attainment_lower, counts.attainment_upper) == (None, None)
+
+
+def test_an_evaluation_carries_whether_its_cohort_is_valid() -> None:
+    # Ten copies of one record: the figures are over what was recorded, and
+    # a consumer reading only the evaluation must see that it is not sound.
+    requests = [_ok(0, 100.0) for _ in range(10)]
+    population = count_population(
+        requests, issues=["duplicate_request_id: 9"], cohort_valid=False
+    )
+    spec = parse_slo_flags(["ttft:200"])
+    evaluation = goodput(requests, spec, ONE_SECOND, cohort=population)
+    assert evaluation.cohort_valid is False
+    assert evaluation.cohort_issues == ("duplicate_request_id: 9",)
+    record = evaluation.to_record()
+    assert record["cohort_valid"] is False
+    assert record["cohort_issues"] == ["duplicate_request_id: 9"]
+    assert goodput(requests, spec, ONE_SECOND).to_record()["cohort_valid"] is None
 
 
 def test_marginal_attainment_is_judged_per_criterion() -> None:
@@ -530,6 +564,21 @@ def test_an_invalid_cohort_is_shown_in_the_text_report(tmp_path: Path) -> None:
     assert "cohort invalid:" in text
     assert "request_index_repeated" in text
     assert "records_missing: 1 of 10" in text
+
+
+def test_a_cases_slo_says_whether_its_cohort_is_valid(tmp_path: Path) -> None:
+    records = [_request(i, e2e_latency_ms=100.0) for i in range(9)]
+    records.append(_request(3, request_id="again", e2e_latency_ms=100.0))
+    path = tmp_path / "infer.jsonl"
+    session = {"event_type": "infer.session", "session_id": "s1"}
+    path.write_text(
+        "\n".join(json.dumps(r) for r in [session, *records, _window()]) + "\n",
+        encoding="utf-8",
+    )
+    report = analyze_inference_events(path, slo=parse_slo_flags(["e2e:200"]))
+    slo = report["cases"]["c1"]["slo"]
+    assert slo["cohort_valid"] is False
+    assert "records_missing: 1 of 10" in slo["cohort_issues"]
 
 
 def test_the_report_says_how_the_session_ended(tmp_path: Path) -> None:

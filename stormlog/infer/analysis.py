@@ -270,6 +270,7 @@ def _case_reports(
                 populations[case_id].intervals.rate,
                 spans=spans,
                 slo_source=policy.source,
+                cohort=populations[case_id].population,
             ).to_record()
     return cases
 

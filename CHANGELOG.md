@@ -60,7 +60,8 @@ the flaky benchmark memory gates
   policy the artifact recorded. The report gains a top-level `slo` block
   (name, digest, source, policy) and, per case, SLO attainment and SLO
   goodput at the offered load as lower and upper bounds with evidence
-  coverage, `null` with a reason when the policy cannot be judged. A
+  coverage, `null` with a reason when the policy cannot be judged, and
+  whether the case's cohort is valid. A
   malformed flag, or both options at once, exits 2; a missing or invalid
   policy file exits 5. (#213)
 - `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
