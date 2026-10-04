@@ -412,11 +412,17 @@ def find_stalls(
 
 
 class _Completions:
-    """The completed steps in completion order, for "the latest completion
-    before" lookups in logarithmic time."""
+    """The completed steps that ran something, in completion order, for "the
+    latest completion before" lookups in logarithmic time. A memberless step
+    (vLLM's zero-token step sending finished IDs) runs nothing, so a gap is
+    measured from the step before it."""
 
     def __init__(self, steps: Sequence[Step]) -> None:
-        done = [step for step in steps if step.completed_mono_ns is not None]
+        done = [
+            step
+            for step in steps
+            if step.completed_mono_ns is not None and step.members
+        ]
         self.steps = sorted(done, key=lambda step: step.completed_mono_ns or 0)
         self.ends = [step.completed_mono_ns or 0 for step in self.steps]
 
