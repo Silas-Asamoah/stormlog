@@ -84,6 +84,7 @@ def _run(
     status: str = "completed",
     started: int = 0,
     protocol: tuple[str, ...] = (),
+    evidence: dict[str, str] | None = None,
     **case: Any,
 ) -> RunSummary:
     labels = (
@@ -104,6 +105,7 @@ def _run(
         protocol_failures=protocol,
         started_at_ns=started,
         outcome_failures=() if status == "completed" else (f"session_{status}",),
+        external_evidence=evidence or {},
     )
 
 
@@ -205,7 +207,12 @@ def test_a_retried_block_keeps_the_last_attempt_and_marks_the_first() -> None:
     # attempt is listed, not a second run of the arm in that block.
     baseline, candidate = _arms(SAME)
     preempted = _run(
-        "candidate", 2, 100.0, status="interrupted", protocol=("external:preempted",)
+        "candidate",
+        2,
+        100.0,
+        status="interrupted",
+        protocol=("external:preempted",),
+        evidence={"external:preempted": "paused"},
     )
     comparison = compare_runs(baseline, [preempted, *candidate], ComparisonSpec())
     assert comparison.excluded == [
@@ -214,13 +221,36 @@ def test_a_retried_block_keeps_the_last_attempt_and_marks_the_first() -> None:
             "run": preempted.name,
             "case": CASE,
             "reasons": ["superseded", "external:preempted"],
+            "evidence": {"external:preempted": "paused"},
             "attempt_kept": candidate[2].name,
         }
     ]
     assert comparison.cases[CASE]["metrics"]["client.e2e.p95"].n_pairs == 6
     assert (
         f"Set aside: {preempted.name} for c1 (superseded, external:preempted; "
-        f"kept {candidate[2].name})"
+        f"evidence: paused; kept {candidate[2].name})"
+    ) in comparison_lines(comparison)
+
+
+def test_a_set_aside_lists_the_evidence_for_its_external_cause() -> None:
+    baseline, candidate = _arms(SAME)
+    candidate[2] = _run(
+        "candidate",
+        2,
+        100.0,
+        status="interrupted",
+        started=5,
+        protocol=("external:spot_preemption",),
+        evidence={"external:spot_preemption": "box paused without a release"},
+    )
+    comparison = compare_runs(baseline, candidate, ComparisonSpec())
+    item = next(i for i in comparison.excluded if i["run"] == candidate[2].name)
+    assert item["evidence"] == {
+        "external:spot_preemption": "box paused without a release"
+    }
+    assert (
+        f"Set aside: {candidate[2].name} for c1 (external:spot_preemption; "
+        "evidence: box paused without a release)"
     ) in comparison_lines(comparison)
 
 

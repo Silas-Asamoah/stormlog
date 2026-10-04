@@ -109,7 +109,7 @@ its **outcome failures**, which never do.
 
 | Protocol failure | When |
 | --- | --- |
-| `external:<reason>` | An experiment runner recorded an external cause in an `infer.run_state` record with state `protocol_failure`: a preemption, an operator abort, a server that never became healthy, a failed prelude |
+| `external:<reason>` | An experiment runner recorded an external cause in an `infer.run_state` record with state `protocol_failure`: a server that never became healthy, a failed prelude, or a preemption, an operator abort or an infrastructure fault given on resume with its evidence, which the set-aside lists (`evidence`) |
 | `identity_changed` | The server's identity changed between its before and after descriptions |
 | `description_mismatch` | The before description disagrees with the server the probe reached: its model, vLLM version or driver |
 | `probe_incomplete` | The server probe's `/server_info` did not answer in time, or the server dropped it unanswered |

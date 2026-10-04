@@ -376,12 +376,22 @@ def _excluded(
     have stopped the run before it.
     """
     return [
-        _item(arm, run, case_id, list(run.failures_for(case_id)))
+        _with_evidence(_item(arm, run, case_id, list(run.failures_for(case_id))), run)
         for arm, runs in arms.items()
         for run in runs
         for case_id in _case_ids(arms, spec)
         if run.failures_for(case_id)
     ]
+
+
+def _with_evidence(item: dict[str, Any], run: RunSummary) -> dict[str, Any]:
+    """An external cause's set-aside lists the evidence given for it."""
+    evidence = {
+        reason: text
+        for reason, text in run.external_evidence.items()
+        if reason in item["reasons"]
+    }
+    return {**item, "evidence": evidence} if evidence else item
 
 
 def _superseded(
@@ -406,6 +416,7 @@ def _superseded(
             reason = "retry_of_outcome_failure" if after else "superseded"
             for case_id in _case_ids(arms, spec):
                 item = _item(arm, run, case_id, [reason, *run.failures_for(case_id)])
+                item = _with_evidence(item, run)
                 item["attempt_kept"] = kept.name
                 found.append(item)
     return found
