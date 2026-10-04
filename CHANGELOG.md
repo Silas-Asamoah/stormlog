@@ -60,7 +60,8 @@ the flaky benchmark memory gates
     why. (#213)
 - `stormlog infer compare --baseline ... --candidate ...`: compares two arms
   of runs case by case (goodput, attainment, throughput, failure fraction and
-  latency quantiles), paired by block when runs are labelled. Gates are
+  latency quantiles), paired by block when runs are labelled; goodput and
+  attainment only when one SLO policy judged every run. Gates are
   `--gate METRIC=RULE:BUDGET` with `non-inferiority`, `significant` or
   `demonstrated`, and a budget that can never fail is a usage error;
   `--min-attainment` judges the share of runs that meet a target, a run
