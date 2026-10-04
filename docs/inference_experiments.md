@@ -284,8 +284,10 @@ exactly them. The plan's `server.model` says how:
   server loads that directory: its name is its content. `{model}` is its
   path.
 
-After each run the files are checked again, by size, modification time and
-inode; a change makes the run `protocol_failure: model_changed`. Each run's
+After each run every file is hashed again, and its size, modification time
+and inode compared; a file changed, added or gone makes the run
+`protocol_failure: model_changed`. The hashing reads the whole model once
+per run. Each run's
 `model_identity.json` records the files and their digests, and the runner
 appends an `infer.model_identity` record to each artifact: the verified
 model, with its evidence (`pinned_commit_verified` or
