@@ -402,3 +402,25 @@ def test_retry_after_reads_seconds_and_dates() -> None:
     for unreadable in (None, "", "-5", "soon", "1.5"):
         assert retry_after(unreadable, now=now) is None
     assert json.dumps(retry_after("3")) == "3.0"
+
+
+@pytest.mark.parametrize(
+    ("url", "loopback"),
+    [
+        ("http://127.0.0.1:4318", True),
+        ("http://127.3.4.5:4318", True),
+        ("http://[::1]:4318", True),
+        ("http://localhost:4318", True),
+        ("http://LOCALHOST:4318", True),
+        # Names that only start like a loopback address are other hosts:
+        # they get no credentials in clear text.
+        ("http://127.attacker.example:4318", False),
+        ("http://127.0.0.1.nip.io:4318", False),
+        ("http://collector.example:4318", False),
+        ("http://10.0.0.1:4318", False),
+    ],
+)
+def test_only_a_loopback_address_or_localhost_is_this_host(
+    url: str, loopback: bool
+) -> None:
+    assert Destination.parse(url).loopback is loopback
