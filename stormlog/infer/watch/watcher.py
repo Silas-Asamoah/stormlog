@@ -22,9 +22,9 @@ documented way to stop it. It seals open incidents as interrupted, waits for
 its writers within one shutdown deadline (the store's writer gets two thirds
 of it, the ledger the rest), writes ``report.json`` and returns the exit
 code. A second signal (:meth:`Watcher.hurry`) cuts what is left of the
-shutdown to ``FAST_EXIT_SECONDS``. A writer that misses its time is left
-behind on a daemon thread, and the root and store stay locked, since it may
-still write there. The exit code is 1 when the watch could not judge or keep what it saw (no
+shutdown to ``FAST_EXIT_SECONDS``, shared the same way. A writer that
+misses its time is left behind on a daemon thread, and the root and store
+stay locked, since it may still write there. The exit code is 1 when the watch could not judge or keep what it saw (no
 successful scrape, a failing ledger, every incident write failing) or could
 not write its report; else 3 when a counting incident was detected; else 0.
 """
@@ -86,6 +86,10 @@ from .triggers import EVENT_FIRED, EVENT_RESOLVED, VIOLATING
 REPORT_KIND = "inference_watch"
 # After a second stop signal, at most this long more before the report.
 FAST_EXIT_SECONDS = 5.0
+# The store's writer gets this share of what is left of a shutdown, before
+# and after a hurry alike, and the ledger the rest: a stalled store must not
+# leave the ledger, which closes in milliseconds, no time at all.
+STORE_SHARE = 2 / 3
 LOCK_FILENAME = ".watch.lock"
 TEST_TRIGGER_FILE = "test-trigger"
 CONTROL_POLL_SECONDS = 0.1
@@ -523,14 +527,14 @@ class Watcher:
         ends = loop.time() + self.options.shutdown_deadline_seconds
         self.incidents.close(self.clock.mono_ns())
         drained = await self._wait_closed(
-            self._store_worker.close, (ends - loop.time()) * 2 / 3
+            self._store_worker.close, (ends - loop.time()) * STORE_SHARE, STORE_SHARE
         )
         await asyncio.sleep(0)  # run the seals' bookkeeping posted to the loop
         unsound = self._unsound(drained)
         exit_code = self._exit_code(unsound)
         self._session("ended", {"exit_code": exit_code, "unsound": list(unsound)})
         closed = await self._wait_closed(
-            self.ledger.close, max(0.5, ends - loop.time() - 0.5)
+            self.ledger.close, max(0.5, ends - loop.time() - 0.5), 1.0
         )
         # Known only once the ledger is closed, so not in its "ended" record.
         late = self._ledger_unsound(closed)
@@ -552,10 +556,10 @@ class Watcher:
         return WatchOutcome(exit_code, path, unsound, self.incidents.sealed)
 
     async def _wait_closed(
-        self, close: Callable[[float], bool], timeout: float
+        self, close: Callable[[float], bool], timeout: float, share: float
     ) -> bool:
         """``close(timeout)`` on a daemon thread; after a second stop signal,
-        waited for only until FAST_EXIT_SECONDS after it."""
+        waited for only until ``share`` of FAST_EXIT_SECONDS after it."""
         assert self._loop is not None and self._hurried is not None
         result = asyncio.ensure_future(_on_daemon(partial(close, max(0.0, timeout))))
         hurried = asyncio.ensure_future(self._hurried.wait())
@@ -563,7 +567,8 @@ class Watcher:
             await asyncio.wait({result, hurried}, return_when=asyncio.FIRST_COMPLETED)
             if not result.done():
                 assert self._hurried_at is not None
-                left = self._hurried_at + FAST_EXIT_SECONDS - self._loop.time()
+                cut = self._hurried_at + FAST_EXIT_SECONDS * share
+                left = cut - self._loop.time()
                 await asyncio.wait({result}, timeout=max(0.0, left))
         finally:
             hurried.cancel()
