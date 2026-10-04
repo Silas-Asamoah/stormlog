@@ -2,8 +2,9 @@
 
 :func:`select_window` cuts a window ``[t - W, t]`` from the scrape history on
 the watcher's monotonic clock: the end scrape is the latest that finished at
-or before ``t``, and must have finished within one tick of it and succeeded;
-the start scrape is the latest successful one that finished within one tick
+or before ``t``, and must have succeeded and finished within one tick plus
+the scrape timeout of it, since a tick can land while a slow scrape is
+still in flight; the start scrape is the latest successful one that finished within one tick
 of ``t - W``. When either is missing the evaluation is a data gap. A scrape
 that failed between them only leaves the window fewer samples; the
 evaluation counts it in its ``failed_scrapes`` detail.
@@ -82,11 +83,16 @@ class Evaluation:
 
 
 def select_window(
-    history: Sequence[Entry], *, at_ns: int, window_ns: int, tick_ns: int
+    history: Sequence[Entry],
+    *,
+    at_ns: int,
+    window_ns: int,
+    tick_ns: int,
+    scrape_timeout_ns: int = 0,
 ) -> Selection:
     """The scrapes of the window ending at ``at_ns``, or a data-gap reason."""
     done = [entry for entry in history if entry[0].done_mono_ns <= at_ns]
-    if not done or done[-1][0].done_mono_ns < at_ns - tick_ns:
+    if not done or done[-1][0].done_mono_ns < at_ns - tick_ns - scrape_timeout_ns:
         return Selection(reason=REASON_END_STALE)
     end = done[-1]
     if end[1].status != SCRAPE_OK:

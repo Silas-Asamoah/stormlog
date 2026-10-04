@@ -123,8 +123,9 @@ class TriggerEngine:
 
     specs: Sequence[TriggerSpec]
     tick_seconds: float
-    # A health predicate's tail is stale once no scrape has finished for a
-    # tick plus this long; a scrape can take up to its timeout.
+    # A window's end scrape, and a health predicate's tail, are stale once no
+    # scrape has finished for a tick plus this long; a scrape can take up to
+    # its timeout.
     scrape_timeout_seconds: float = 0.0
     states: dict[str, TriggerState] = field(init=False)
 
@@ -185,6 +186,7 @@ class TriggerEngine:
             at_ns=at_ns,
             window_ns=int(spec.sustain.window * _NS),
             tick_ns=int(self.tick_seconds * _NS),
+            scrape_timeout_ns=int(self.scrape_timeout_seconds * _NS),
         )
         if selection.reason is not None:
             return Evaluation(DATA_GAP, reasons=(selection.reason,)), at_ns

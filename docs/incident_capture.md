@@ -149,8 +149,9 @@ of:
   first scrape, which can start up to a tick before `t - W`, and for a
   health trigger the scrapes it reads.
 
-The window's end scrape must have finished within one tick of the
-evaluation, and its start scrape within one tick of `t - W`. An outage is
+The window's end scrape must have finished within one tick plus the scrape
+timeout of the evaluation, since a tick can land while a slow scrape is
+still in flight, and its start scrape within one tick of `t - W`. An outage is
 therefore a data gap while it covers the window's end, and again, `W`
 later, while it covers `t - W` (less a tick at either side). In between,
 while the outage lies inside the window, the window is judged on the
