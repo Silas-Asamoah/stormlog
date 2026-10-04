@@ -187,3 +187,15 @@ def test_a_preregistration_is_part_of_the_plan_and_has_its_own_digest() -> None:
     other = plan_from_document(_plan(prereg={"budgets": {"client.e2e.p95": 0.10}}))
     assert plan.prereg_digest is not None and plan.prereg_digest != other.prereg_digest
     assert plan.digest != other.digest
+
+
+def test_the_control_arm_is_named_or_the_one_with_the_plans_own_launch() -> None:
+    plan = plan_from_document(_plan(control_arm="off"))
+    assert plan.control_arm == "off"
+    with pytest.raises(ValueError, match="control_arm 'nope' is not an arm"):
+        plan_from_document(_plan(control_arm="nope"))
+    # Both arms launch the plan's server as it is: no control can be told.
+    assert plan_from_document(_plan()).control_arm is None
+    document = _plan()
+    document["arms"]["watch"]["server"] = {"args": ["--enforce-eager"]}
+    assert plan_from_document(document).control_arm == "off"
