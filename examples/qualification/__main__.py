@@ -98,8 +98,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.base_url.rstrip("/"), args.model, args.reference_channel, targets
     )
     directory = RunDirectory(args.out, args.label or new_label())
-    published = InjectionRun(plan, directory, server, argv[split + 1 :]).execute()
+    run = InjectionRun(plan, directory, server, argv[split + 1 :])
+    try:
+        published = run.execute()
+    except KeyboardInterrupt:
+        print(f"Interrupted; the run so far is published as {directory.final}")
+        return 130
     print(published)
+    if run.failure is not None:
+        print(f"Error: the run failed: {run.failure}", file=sys.stderr)
+        return 1
     return 0
 
 

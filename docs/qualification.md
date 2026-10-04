@@ -660,7 +660,12 @@ One run goes:
    run's label as its `--run-id`, so its artifact names the run its truth
    belongs to.
 
-The run is published atomically (see below).
+The run is published atomically (see below), whatever ends it. An episode
+whose actuation raised (a stop that never took, a target gone) is published
+as `not_actuated` with the error. A run that fails part way (the victim
+exiting before it measures, say) or is interrupted publishes every episode it
+attempted, the rest as skipped, with the reason as the run record's protocol
+failure. `inject` then exits 1, or 130 when interrupted.
 
 **The run directory** is named by an opaque label, `q221-<16 hex>`, that says
 nothing about its episodes:
