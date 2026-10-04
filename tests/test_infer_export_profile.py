@@ -105,6 +105,21 @@ def test_a_run_writes_final_metrics_to_its_textfile(tmp_path: Path) -> None:
     assert records.index(capability) < len(records) - 1
 
 
+def test_a_profiler_that_never_runs_holds_no_slot(tmp_path: Path) -> None:
+    # In a notebook or a test, a profiler built and dropped must not keep
+    # every later one in the process from taking the slot.
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    export = ExportConfig(prometheus_textfile_dir=metrics_dir)
+    with _fake_server() as endpoint:
+        InferenceProfiler(_config(endpoint, tmp_path / "unrun.jsonl", export))
+        assert not (metrics_dir / "stormlog-default.lock").exists()
+        output = tmp_path / "infer.jsonl"
+        InferenceProfiler(_config(endpoint, output, export)).run()
+    exposition = check_exposition((metrics_dir / "stormlog-default.prom").read_text())
+    assert exposition.value("stormlog_run_active") == 0
+
+
 def test_the_endpoint_serves_during_the_run_and_lingers_after(tmp_path: Path) -> None:
     output = tmp_path / "infer.jsonl"
     port = _free_port()
