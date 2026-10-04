@@ -876,6 +876,54 @@ def test_a_bounded_buffer_holds_what_it_counts(
     sink.close()
 
 
+def test_short_writes_are_continued_and_a_stalled_one_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from stormlog import telemetry_sink
+
+    real_write = os.write
+
+    def seven_bytes(fd: int, data: bytes | memoryview) -> int:
+        return real_write(fd, bytes(data[:7]))
+
+    monkeypatch.setattr(telemetry_sink.os, "write", seven_bytes)
+    sink = _bounded_sink(tmp_path, max_buffer_bytes=1 << 20)
+    for seq in range(20):
+        sink.append({"seq": seq, "pad": "w" * 40})
+    sink.close()
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    assert [r["seq"] for r in _segment_records(segment)] == list(range(20))
+
+    monkeypatch.setattr(telemetry_sink.os, "write", lambda fd, data: 0)
+    with pytest.raises(OSError, match="no progress"):
+        telemetry_sink._write_all(0, b"x")
+
+
+def test_each_flush_is_fsynced_before_the_buffer_is_let_go(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from stormlog import telemetry_sink
+
+    real_fsync = os.fsync
+    synced: list[int] = []
+
+    def fsync(fd: int) -> None:
+        synced.append(sink._buffered_event_count)  # the sink's lock is held
+        real_fsync(fd)
+
+    monkeypatch.setattr(telemetry_sink.os, "fsync", fsync)
+    sink = _bounded_sink(tmp_path)
+    sink.append({"seq": 1})
+    sink.append({"seq": 2})
+    # One fsync per flush, while the flushed record is still held.
+    assert synced == [1, 1]
+    sink.close()
+
+
 def test_bounded_mode_settings_are_validated(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_buffer_bytes"):
         TelemetrySinkConfig(root_dir=tmp_path, max_buffer_bytes=0)
