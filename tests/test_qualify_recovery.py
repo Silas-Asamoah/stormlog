@@ -102,8 +102,9 @@ def test_prefix_loss_follows_the_victims_cached_fraction() -> None:
     signals = Signals(cached_fraction=cached)
     timing = effect_timing("F3", context(signals))
     assert timing.onset_ns == 60 * S
-    # The median over each 10 s from 80 s still holds the dip until 85 s.
-    assert timing.end_ns is not None and 80 * S < timing.end_ns <= 85 * S
+    # The 10 s from 80 s to 90 s already hold more recovered samples than
+    # dipped ones, so their median is back.
+    assert timing.end_ns == 80 * S
     assert realization("F3", context(signals), timing)[0]
     twin = Signals(cached_fraction=every_second(0, 200, lambda s: 0.95))
     twin_timing = effect_timing("T3", context(twin, Actions(first_send_ns=60 * S)))
@@ -175,6 +176,15 @@ def test_recovery_must_be_seen_whole_before_it_counts() -> None:
         held_from([AllWithin([], require_samples=False)], 60 * S, 80 * S, 10 * S)
         == 60 * S
     )
+
+
+def test_a_hold_can_begin_a_hold_before_its_first_sample() -> None:
+    # A violation at 0 s, the next sample at 12 s: [2 s, 12 s] holds, though
+    # no sample or violation marks 2 s. A window's samples change where one
+    # enters it (a hold before the sample) as well as where one leaves it.
+    sparse = AllWithin([(0, 9.0), (12 * S, 1.0), (40 * S, 1.0)], high=5.0)
+    assert sparse.holds(2 * S, 12 * S)
+    assert held_from([sparse], 0, 40 * S, 10 * S) == 2 * S
 
 
 def test_the_priming_check_needs_a_warm_cache() -> None:
