@@ -35,6 +35,18 @@ def test_an_unusable_config_exits_two(tmp_path: Path) -> None:
     assert _watch(tmp_path, "--config", str(path)) == 2
 
 
+def test_a_second_watcher_on_a_root_exits_two(tmp_path: Path) -> None:
+    from stormlog.infer.watch.config import resolve_watch_config
+    from stormlog.infer.watch.watcher import Watcher
+
+    config = resolve_watch_config(watch_config("http://127.0.0.1:9"))
+    first = Watcher(config, tmp_path / "watch")
+    try:
+        assert _watch(tmp_path, "--base-url", "http://127.0.0.1:9") == 2
+    finally:
+        first.close()
+
+
 @pytest.mark.parametrize(
     "extra",
     [

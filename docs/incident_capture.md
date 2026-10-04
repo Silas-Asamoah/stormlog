@@ -37,11 +37,16 @@ Under the root:
 
 ```text
 watch/
+  .watch.lock    held by the watcher that owns the root, for its lifetime
   ledger/        every record the watcher wrote, as an append-only sink
   incidents/     one bundle per incident (see "Incident bundles")
   report.json    the stormlog.report written when the watch ends
   test-trigger   with --test-trigger file: create it to fire a test incident
 ```
+
+One watcher owns a root at a time. A second one on the same root, which
+would interleave its ledger and bundles with the first's, exits 2 before it
+writes anything; so does a watcher whose `incidents/` another process holds.
 
 ### Each tick
 
@@ -175,7 +180,7 @@ watch.
 | 0 | The watch ended and no incident counted toward the exit code. |
 | 3 | At least one incident from a counting trigger (`metric` or `signal` by default) was detected. |
 | 1 | The watch was unsound: no scrape ever succeeded, a trigger needed an engine named, the ledger lost records, every incident write failed, the store or ledger did not finish within the shutdown deadline, or the report could not be written. `report.json`, when written, lists the reasons under `payload.unsound`. |
-| 2 | A setting it cannot use. |
+| 2 | A setting it cannot use, or a root another watcher is using. |
 | 5 | A config file it cannot read. |
 
 Ctrl+C and SIGTERM are the documented way to end a watch: the exit code is

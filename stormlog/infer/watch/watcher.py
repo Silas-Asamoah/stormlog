@@ -8,6 +8,11 @@ joins or seals incidents. Between ticks it polls its control files every
 writes on the store's. Nothing it does can block vLLM, which only sees
 ``GET /metrics``.
 
+One watcher owns a root for its lifetime: it holds ``<root>/.watch.lock``
+exclusively, and its store holds ``incidents/.store.lock``, so a second
+watcher on the same root, which would interleave its ledger and bundles with
+the first's, is refused before it writes anything.
+
 The watch ends when its duration elapses or on SIGINT or SIGTERM, the
 documented way to stop it. It seals open incidents as interrupted, waits for
 its writers within one shutdown deadline, writes ``report.json`` and returns
@@ -19,6 +24,7 @@ not write its report; else 3 when a counting incident was detected; else 0.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import os
 import uuid
 from collections.abc import Mapping
@@ -36,6 +42,7 @@ from ...report import (
     build_report,
     write_report,
 )
+from ..errors import InferUsageError
 from ..scrape_window import REASON_ENGINE_REQUIRED
 from ..trace_capture import server_root
 from ..vllm_scraper import VllmMetricsScraper
@@ -56,10 +63,11 @@ from .records import (
     finite,
 )
 from .stats import WatchStats, counter_value
-from .store import IncidentStore, PrunedBundle
+from .store import IncidentStore, PrunedBundle, StoreInUse
 from .triggers import EVENT_FIRED, VIOLATING
 
 REPORT_KIND = "inference_watch"
+LOCK_FILENAME = ".watch.lock"
 TEST_TRIGGER_FILE = "test-trigger"
 CONTROL_POLL_SECONDS = 0.1
 PRUNE_EVERY_TICKS = 60
@@ -115,8 +123,13 @@ class Watcher:
             owner=f"{os.uname().nodename}:{os.getpid()}:{self.clock.wall_origin_ns}",
         )
         self.stats = WatchStats()
+        self._lock: int | None = _own_root(self.root)
+        try:
+            self.store = IncidentStore(self.root, config.store)
+        except StoreInUse as exc:
+            self._release_root()
+            raise InferUsageError(str(exc)) from None
         self.ledger = Ledger(self.root, observer=observer, stats=self.stats)
-        self.store = IncidentStore(self.root, config.store)
         self.history = ScrapeHistory(
             max_seconds=config.history_seconds,
             max_bytes=config.history_bytes,
@@ -400,7 +413,19 @@ class Watcher:
             return WatchOutcome(
                 int(ExitCode.ERROR), None, unsound, self.incidents.sealed
             )
+        finally:
+            self.close()
         return WatchOutcome(exit_code, path, unsound, self.incidents.sealed)
+
+    def close(self) -> None:
+        """Let another watcher own the root; the watch is over."""
+        self.store.close()
+        self._release_root()
+
+    def _release_root(self) -> None:
+        fd, self._lock = self._lock, None
+        if fd is not None:
+            os.close(fd)
 
     def _unsound(self, drained: bool) -> list[str]:
         reasons = []
@@ -578,6 +603,17 @@ async def _sleep_until(stop: asyncio.Event, seconds: float) -> None:
         pass
 
 
+def _own_root(root: Path) -> int:
+    """Hold the root's lock exclusively, or refuse: another watcher has it."""
+    fd = os.open(root / LOCK_FILENAME, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise InferUsageError(f"another watcher is using {root}") from None
+    return fd
+
+
 def _write_ready(path: Path, session_id: str) -> None:
     try:
         path.write_text(session_id + "\n", encoding="utf-8")
@@ -585,4 +621,4 @@ def _write_ready(path: Path, session_id: str) -> None:
         pass
 
 
-__all__ = ["REPORT_KIND", "WatchOptions", "WatchOutcome", "Watcher"]
+__all__ = ["LOCK_FILENAME", "REPORT_KIND", "WatchOptions", "WatchOutcome", "Watcher"]
