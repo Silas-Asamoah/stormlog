@@ -27,6 +27,7 @@ from stormlog.infer.export_config import (
     ExportConfig,
     add_export_arguments,
     export_config_from_args,
+    sampler_warnings,
 )
 from stormlog.infer.export_metrics import ProfileLabels
 from stormlog.infer.export_spans import SpanIdentity
@@ -880,3 +881,33 @@ def test_observe_takes_no_registry_lock_and_does_no_io(
     assert pipeline.otlp.exporter.queue.stats().accepted == 10
     assert pipeline.summary()["internal_errors"]["observe"] == 0
     pipeline.close(1.0)
+
+
+@pytest.mark.parametrize(
+    ("policy", "ratio", "sampler", "says"),
+    [
+        (
+            "preserve-engine",
+            1.0,
+            "parentbased_traceidratio:0.1",
+            "marks every request sampled",
+        ),
+        (
+            "follow-sampling",
+            0.5,
+            "parentbased_jaeger_remote",
+            "marks 50% of requests sampled",
+        ),
+    ],
+)
+def test_the_volume_warning_names_the_share_it_marks(
+    policy: str, ratio: float, sampler: str, says: str
+) -> None:
+    config = ExportConfig(
+        otlp_file=Path("spans.jsonl"),
+        trace_context=policy,
+        sample_ratio=ratio,
+        server_trace_sampler=sampler,
+    )
+    (warning,) = sampler_warnings(config)
+    assert says in warning
