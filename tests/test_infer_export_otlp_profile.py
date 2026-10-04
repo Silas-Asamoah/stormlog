@@ -214,3 +214,52 @@ def test_unusable_span_settings_exit_2_before_sending(
     )
     assert code == ExitCode.USAGE
     assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        "the artifact",
+        "the textfile directory",
+        "the vLLM execution directory",
+    ],
+)
+def test_a_span_file_where_another_writer_owns_the_path_exits_2(
+    tmp_path: Path, where: str
+) -> None:
+    # The span file opened for append, then the artifact opened over it:
+    # the two writers interleaved and the run failed at analysis, exit 5.
+    output = tmp_path / "infer.jsonl"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    flags = {
+        "the artifact": ["--otlp-file", str(output)],
+        "the textfile directory": [
+            "--otlp-file",
+            str(elsewhere / "spans.jsonl"),
+            "--prometheus-textfile-dir",
+            str(elsewhere),
+        ],
+        "the vLLM execution directory": [
+            "--otlp-file",
+            str(elsewhere / "spans.jsonl"),
+            "--vllm-execution-dir",
+            str(elsewhere),
+        ],
+    }[where]
+    code = infer_main(
+        [
+            "profile",
+            "--base-url",
+            "http://127.0.0.1:9/v1",
+            "--model",
+            "m",
+            "--requests",
+            "1",
+            "--output",
+            str(output),
+            *flags,
+        ]
+    )
+    assert code == ExitCode.USAGE
+    assert not output.exists() and not (elsewhere / "spans.jsonl").exists()
