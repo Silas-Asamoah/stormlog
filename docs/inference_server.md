@@ -54,6 +54,42 @@ plus the host's driver version and the CUDA version the driver supports.
 A field NVML cannot read records why (`{"unavailable": "NVML code 3"}`) and
 is never filled in.
 
+## The model's weights
+
+The server's command line names the model and its revision
+(`vllm serve MODEL --revision R`, or `--model`). Where the files are depends
+on the model:
+
+- **A Hugging Face repository.** The server's hub cache (`--download-dir`,
+  else its `HF_HUB_CACHE`, `HF_HOME` or home directory) links each file of a
+  snapshot to a blob named by a digest of the file: SHA-256 for a file stored
+  in LFS, such as the weights, and git's SHA-1 for a small one, such as
+  `config.json`. The description records each file's algorithm, digest and
+  size. With blob verification, it hashes each blob to check its name.
+- **A local directory.** Files have no digest of their own. With weight
+  hashing, each file's SHA-256 is computed, and cached by path, size,
+  `mtime_ns` and inode so the next description does not read the weights
+  again. Without it, only sizes are known.
+
+`weights_digest` is a SHA-256 over the sorted list of files, each with its
+algorithm, digest and size. The description also keeps the digest of the
+chat template (`--chat-template`, else the snapshot's `chat_template.jinja`
+or its `tokenizer_config.json`) and the snapshot's `generation_config.json`.
+
+None of this shows what the server loaded: the cache or the directory may
+have changed since it started. So the description only names its evidence:
+
+| `identity_evidence` | When |
+| --- | --- |
+| `pinned_commit` | `--revision` is a 40-character commit, found in the cache |
+| `inferred` | A branch or tag (`main` when none is given), resolved through the cache afterwards |
+| `post_launch_digest` | A local directory, hashed after the server started |
+| `size_only` | A local directory, not hashed |
+| `unresolved` | The revision or the cache could not be found |
+
+None of these verifies the model's identity on its own; only a launch the
+experiment runner controls can do that.
+
 ## What a description keeps
 
 Redaction follows vLLM's configuration schema, never a substring. A field
@@ -120,6 +156,15 @@ from stormlog.infer.server_gpu import NvmlGpuReader, describe_gpus, read_series
 | --- | --- |
 | `describe_gpus(reader, server_pids)` | Every device with its settings, one drift reading, and the server processes on it |
 | `read_series(reader, uuids)` | A fresh drift reading of those devices |
+
+```python
+from stormlog.infer.server_model import describe_model, launch_arguments
+```
+
+| Function | Returns |
+| --- | --- |
+| `launch_arguments(cmdline)` | The model, revision, tokenizer, chat template and download directory the command line names |
+| `describe_model(launch, hub_cache=..., cwd=..., hash_weights=False, verify_blobs=False)` | The files, digests and `identity_evidence` above |
 
 ## Related pages
 

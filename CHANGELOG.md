@@ -58,6 +58,12 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `stormlog.infer.server_model`: the model files a vLLM server was started
+  with, from its command line and its Hugging Face cache (each file's
+  algorithm, digest and size: SHA-256 for LFS blobs, git SHA-1 for the
+  rest) or, for a local directory, cached SHA-256 digests. It names its
+  evidence (`pinned_commit`, `inferred`, `post_launch_digest`, `size_only`)
+  and never claims the weights were the ones loaded. (#213)
 - `stormlog.infer.server_gpu`: the GPUs a vLLM server uses, found by NVML's
   compute processes rather than an index, with each device's settings
   (power limits, application clocks, persistence, ECC, MIG, compute mode)
