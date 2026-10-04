@@ -3,15 +3,18 @@
 A plan names the victim's workload, the run's timeline (#221 design A.4:
 priming, baseline, episodes each after the previous one recovered, final
 recovery), its episodes in order with their doses, and a seed. ``load_plan``
-checks it before anything is sent: every episode type is in the catalog and
-run by this harness, every dose has what its method needs, and pulses keep
-the pulser's caps.
+checks it before anything is sent, and lists every problem: every episode
+type is in the catalog and run by this harness, every dose has what its
+method needs, pulses keep the pulser's caps, the timeline's and the
+victim's values are numbers in range, and every threshold override is a
+known one.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -142,32 +145,149 @@ def parse_plan(record: Mapping[str, Any]) -> Plan:
     """
     if record.get("format") != FORMAT:
         raise PlanError([f"format is not {FORMAT}"])
-    try:
-        plan = Plan(
-            profile=str(record["profile"]),
-            seed=int(record.get("seed", 0)),
-            binding=str(record.get("binding", "vllm-0.30")),
-            victim=Victim(**record.get("victim", {})),
-            timeline=Timeline(**record.get("timeline", {})),
-            episodes=tuple(_episode(entry) for entry in record["episodes"]),
-            thresholds=dict(record.get("thresholds") or {}),
-        )
-        plan.recovery_thresholds()
-    except (KeyError, TypeError, ValueError) as error:
-        raise PlanError([f"malformed plan: {error}"]) from error
-    problems = [
-        problem
-        for index, episode in enumerate(plan.episodes)
-        for problem in _dose_problems(index, episode)
-    ]
-    if plan.binding != "vllm-0.30":
-        problems.append(f"no binding {plan.binding!r}")
+    entries = record.get("episodes")
+    if not isinstance(entries, list):
+        raise PlanError(["episodes must be a list"])
+    episodes, problems = _episodes(entries)
+    problems += _section_problems("timeline", record.get("timeline", {}), _TIMELINE)
+    problems += _section_problems("victim", record.get("victim", {}), _VICTIM)
+    problems += _threshold_problems(record.get("thresholds") or {})
+    problems += _order_problems(record.get("timeline", {}))
+    if record.get("binding", "vllm-0.30") != "vllm-0.30":
+        problems.append(f"no binding {record.get('binding')!r}")
     if problems:
         raise PlanError(problems)
-    return plan
+    try:
+        return Plan(
+            profile=str(record["profile"]),
+            seed=int(record.get("seed", 0)),
+            victim=Victim(**record.get("victim", {})),
+            timeline=Timeline(**record.get("timeline", {})),
+            episodes=tuple(episodes),
+            thresholds=dict(record.get("thresholds") or {}),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise PlanError([f"malformed plan: {error}"]) from error
+
+
+def _episodes(entries: list[Any]) -> tuple[list[EpisodePlan], list[str]]:
+    episodes: list[EpisodePlan] = []
+    problems = [] if entries else ["a plan has at least one episode"]
+    for index, entry in enumerate(entries):
+        try:
+            episode = _episode(entry)
+        except (KeyError, TypeError, ValueError) as error:
+            problems.append(f"episodes[{index}]: {error}")
+            continue
+        episodes.append(episode)
+        problems += _dose_problems(index, episode)
+    return episodes, problems
+
+
+# Each section's fields: their kind, and whether 0 is allowed.
+_POSITIVE, _NON_NEGATIVE, _COUNT, _RATIO, _OPTIONAL = (
+    "positive", "non_negative", "count", "ratio", "optional",
+)  # fmt: skip
+_TIMELINE = {
+    "priming": _POSITIVE,
+    "baseline": _POSITIVE,
+    "episode": _POSITIVE,
+    "min_recovery": _NON_NEGATIVE,
+    "recovery_timeout": _POSITIVE,
+    "final_recovery": _NON_NEGATIVE,
+    "min_clean": _NON_NEGATIVE,
+}
+_VICTIM = {
+    "rate_per_second": _POSITIVE,
+    "input_tokens": _COUNT,
+    "output_tokens": _COUNT,
+    "prefix_groups": _COUNT,
+    "shared_prefix_ratio": _RATIO,
+    "slo_ttft_ms": _OPTIONAL,
+    "slo_e2e_ms": _OPTIONAL,
+}
+
+
+def _section_problems(name: str, values: Any, kinds: Mapping[str, str]) -> list[str]:
+    if not isinstance(values, Mapping):
+        return [f"{name} must be an object"]
+    problems = [f"{name}.{key} is not a field" for key in values if key not in kinds]
+    for key, value in values.items():
+        kind = kinds.get(key)
+        if kind is not None and not _fits(value, kind):
+            problems.append(f"{name}.{key} must be {_DESCRIBED[kind]}")
+    return problems
+
+
+_DESCRIBED = {
+    _POSITIVE: "a positive number",
+    _NON_NEGATIVE: "a number, 0 or more",
+    _COUNT: "a positive integer",
+    _RATIO: "a number in (0, 1]",
+    _OPTIONAL: "null or a positive number",
+}
+
+
+def _fits(value: Any, kind: str) -> bool:
+    if kind == _OPTIONAL and value is None:
+        return True
+    if kind == _COUNT:
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
+    if not _is_number(value):
+        return False
+    if kind == _NON_NEGATIVE:
+        return bool(value >= 0)
+    if kind == _RATIO:
+        return bool(0 < value <= 1)
+    return bool(value > 0)
+
+
+def _is_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _order_problems(timeline: Any) -> list[str]:
+    if not isinstance(timeline, Mapping):
+        return []
+    defaults = {f.name: f.default for f in fields(Timeline)}
+    least = timeline.get("min_recovery", defaults["min_recovery"])
+    most = timeline.get("recovery_timeout", defaults["recovery_timeout"])
+    if _is_number(least) and _is_number(most) and least > most:
+        return ["timeline.min_recovery is longer than timeline.recovery_timeout"]
+    return []
+
+
+def _threshold_problems(thresholds: Any) -> list[str]:
+    if not isinstance(thresholds, Mapping):
+        return ["thresholds must be an object"]
+    known = _SECONDS | _FRACTIONS
+    problems = []
+    for name, value in thresholds.items():
+        if name not in known:
+            problems.append(f"thresholds.{name} is not a threshold")
+        elif not _is_number(value):
+            problems.append(f"thresholds.{name} must be a number")
+    return problems
 
 
 _SECONDS = frozenset({"window", "hold", "cadence_hold", "priming_window"})
+_FRACTIONS = frozenset(
+    {
+        "cached_loss_below",
+        "cached_recovered_at",
+        "kv_margin",
+        "priming_cached_at_least",
+        "rate_tolerance",
+        "long_gap_factor",
+        "exceedance_share",
+        "exceedance_quantile",
+        "hit_ratio_drop",
+    }
+)
 
 
 def load_plan(path: Path) -> Plan:
