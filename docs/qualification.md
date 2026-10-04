@@ -669,8 +669,10 @@ inside the stop call while its step loop waits, so the stop's interval, plus
 | One profiler window | I1 |
 | Nothing | N |
 
-T2's mixed prefill is `allowed` rather than secondary, because no #218 edge
-leads from a workload change to it. The short twins (S-x), the TP=2 types
+T2 names no mixed prefill. It isn't secondary, because no #218 edge leads
+from a workload change to it. It isn't allowed either: an info
+workload-change finding is never a false claim, so allowing the kind would
+only mask a real mixed-prefill fault. The short twins (S-x), the TP=2 types
 (F5, R0, F6) and the outages (X1–X3) are refused for now: they need #219's
 predicates, a second GPU and #220's tools.
 
