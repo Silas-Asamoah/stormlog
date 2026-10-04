@@ -150,6 +150,31 @@ def test_repeated_numbers_are_counted_element_by_element_packed_or_not() -> None
     assert counts.unknown_bytes == 0
 
 
+def test_a_long_packed_field_is_counted_a_chunk_at_a_time() -> None:
+    """Counting a packed field's numbers copied the whole field twice, held
+    and uncharged; no OTLP trace field is one yet."""
+    import tracemalloc
+
+    probe_class = _probe_class()
+    varints = b"\x01" * 4_000_000 + b"\x80\x01"  # four million ones, then 128
+    body = bytes([0x0A]) + _varint_bytes(len(varints)) + varints
+    tracemalloc.start()
+    baseline = tracemalloc.get_traced_memory()[0]
+    counts = count_message(body, probe_class.DESCRIPTOR, **UNBOUNDED)
+    peak = tracemalloc.get_traced_memory()[1] - baseline
+    tracemalloc.stop()
+    assert counts.elements == 4_000_001
+    assert peak < 512 * 1024
+
+
+def _varint_bytes(value: int) -> bytes:
+    out = bytearray()
+    while value >= 0x80:
+        out.append(value & 0x7F | 0x80)
+        value >>= 7
+    return bytes(out) + bytes([value])
+
+
 def test_a_field_in_a_wire_type_it_does_not_take_is_unknown() -> None:
     """The parser keeps a known field number sent in another wire type as
     an unknown field; so does the scan count it."""

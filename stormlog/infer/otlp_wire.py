@@ -61,6 +61,9 @@ _WIRE_OF_TYPE = {
 }
 # Every byte of a varint but its last has the high bit set.
 _CONTINUATION_BYTES = bytes(range(0x80, 0x100))
+# How much of a packed field is copied at a time to count its numbers, so
+# the scan holds a bounded copy whatever the field's size.
+_PACKED_CHUNK_BYTES = 64 * 1024
 # How many fields the scan reads between looks at the clock.
 _CLOCK_EVERY = 4096
 
@@ -307,7 +310,11 @@ def _elements(data: bytes | bytearray, start: int, end: int, element: int) -> in
         return (end - start) // 8
     if element == _FIXED32:
         return (end - start) // 4
-    return len(data[start:end].translate(None, _CONTINUATION_BYTES))
+    count = 0
+    for chunk in range(start, end, _PACKED_CHUNK_BYTES):
+        part = data[chunk : min(chunk + _PACKED_CHUNK_BYTES, end)]
+        count += len(part.translate(None, _CONTINUATION_BYTES))
+    return count
 
 
 def _varint(data: bytes | bytearray, pos: int) -> tuple[int, int]:
