@@ -223,6 +223,33 @@ def test_a_few_queried_tokens_decide_no_prefix_signal() -> None:
     assert enough.exceeds is True
 
 
+def test_a_ratio_above_the_reference_is_no_loss() -> None:
+    risen = evaluate_signal(
+        "prefix_cache_loss",
+        _prefix_window(10000.0, 10000.0),
+        SignalConfig(reference=0.3),
+    )
+    assert (risen.value, risen.exceeds) == (1.0, False)
+    assert risen.detail["drop"] == pytest.approx(-0.7)
+
+
+# ------------------------------------------------------- at the threshold
+def test_a_value_equal_to_its_threshold_exceeds_it() -> None:
+    """Every threshold is reached at its value: one preemption is evidence."""
+    queue = evaluate_signal("queue_saturation", _queue_window(0, 1, 1))
+    assert (queue.value, queue.exceeds) == (1.0, True)
+    preempted = series([exposition(counters={PREEMPTIONS: v}) for v in (0.0, 1.0)])
+    kv = evaluate_signal("kv_preemption_pressure", preempted)
+    assert (kv.value, kv.exceeds) == (1.0, True)
+    # 0.5 - 0.3 is exactly 0.2 in floating point (0.8 - 0.6 is not).
+    prefix = evaluate_signal(
+        "prefix_cache_loss",
+        _prefix_window(1500.0, 5000.0),
+        SignalConfig(reference=0.5),
+    )
+    assert (prefix.detail["drop"], prefix.exceeds) == (0.2, True)
+
+
 # ---------------------------------------------------------- other kinds
 @pytest.mark.parametrize(
     ("kind", "reason"),
