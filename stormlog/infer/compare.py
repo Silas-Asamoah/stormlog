@@ -491,7 +491,8 @@ def _case(
         "attrition": attrition,
     }
     if spec.min_attainment is not None:
-        case.update(_attainment_gate(case_id, kept[CANDIDATE], spec, blocked))
+        slo_blocked = blocked or _slo_blocker(case_id, kept)
+        case.update(_attainment_gate(case_id, kept[CANDIDATE], spec, slo_blocked))
     return case
 
 
@@ -619,6 +620,9 @@ def _metric_blocker(
     if reasons:
         return sorted(set(reasons))[0]
     if metric.slo:
+        differs = _slo_blocker(case_id, kept)
+        if differs is not None:
+            return differs
         coverages = [
             evidence_coverage(run.comparable_cases[case_id])
             for runs in kept.values()
@@ -627,6 +631,20 @@ def _metric_blocker(
         if any(c is None or c < spec.evidence_floor for c in coverages):
             return "evidence_coverage_below_floor"
     return None
+
+
+def _slo_blocker(case_id: str, kept: Mapping[str, list[RunSummary]]) -> str | None:
+    """SLO metrics are comparable only when one policy judged every run.
+
+    Without ``--slo``, each run is judged by the policy it recorded; a
+    candidate judged by a looser one would meet it however slow it was.
+    """
+    digests = {
+        (run.comparable_cases[case_id].get("slo") or {}).get("slo_digest")
+        for runs in kept.values()
+        for run in runs
+    }
+    return "slo_policy_differs" if len(digests - {None}) > 1 else None
 
 
 def _blocks(

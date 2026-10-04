@@ -27,7 +27,7 @@ stormlog infer compare \
 | --- | --- |
 | `--baseline`, `--candidate` | Each arm's artifacts |
 | `--case ID` | Only this case; repeatable |
-| `--slo KEY:MS`, `--slo-file FILE` | Judge both arms by this policy instead of each run's own |
+| `--slo KEY:MS`, `--slo-file FILE` | Judge both arms by this policy instead of each run's own. Without it, goodput and attainment are gated only when one policy (one `slo_digest`) judged every run of the case; otherwise their gates are `not_evaluable: slo_policy_differs`, since a candidate judged by a looser policy would meet it however slow it was |
 | `--mode config\|overhead\|incremental` | What may differ between the arms (see Modes) |
 | `--design auto\|paired_blocks\|independent` | `auto` pairs runs by block when every run is labelled |
 | `--allow FIELD` | A field (`engine.max_num_seqs`) or `vllm_config` JSON pointer (`/scheduler_config`) that may differ |
