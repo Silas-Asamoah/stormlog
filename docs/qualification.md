@@ -554,9 +554,13 @@ the measured time from `SIGSTOP` to `SIGCONT`, so effect timing can start from
 the first confirmed stop.
 
 `discover_roles(api_server_pid)` names the processes under a vLLM API server by
-the titles vLLM 0.30 gives them: `EngineCore`, `Worker_TP0`, `Worker_TP1`.
-Each is returned as a target with its start time, so a later signal reaches
-the same process.
+the titles vLLM 0.30 gives them, matched exactly on `argv[0]` (which vLLM's
+retitling replaces; the 15-character `comm` would truncate it):
+`VLLM::EngineCore` among the server's children, and `VLLM::Worker_TP<rank>`
+among EngineCore's, with the rank parsed, so `Worker_TP10` is rank 10. A
+helper whose arguments merely mention EngineCore is not it. A missing or
+ambiguous EngineCore is refused. Each role is returned as a target with its
+start time.
 
 ### Neighbor traffic
 
@@ -645,13 +649,17 @@ adds three probes in its own process:
 ```bash
 python -m examples.qualification inject --plan PLAN.json --out ROOT \
   --base-url URL --model M --reference-channel HOOK_DIR \
-  [--label q221-...] [--target engine_core=PID --target api_server=PID ...] \
+  [--api-server-pid PID] [--target sidecar=PID ...] [--label q221-...] \
   -- [extra infer profile arguments for the victim]
 ```
 
 The harness never launches the server; #213's `run_plan` does. It is given
-the server's URL, the pid of each role a plan may pulse, and the hook
-directory the server writes (`STORMLOG_VLLM_HOOK_DIR`, as this host sees it).
+the server's URL, the processes a plan may pulse, and the hook directory the
+server writes (`STORMLOG_VLLM_HOOK_DIR`, as this host sees it).
+`--api-server-pid` finds the server's roles with `discover_roles`;
+`--target ROLE=PID` names any other process. Every target is bound to its
+start time at startup: an episode whose target has since exited, or whose
+pid now names another process, is not actuated, and nothing is signalled.
 One run goes:
 
 1. **Start.** The victim starts, at the plan's rate with its shared-prefix

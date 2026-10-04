@@ -10,7 +10,7 @@ import sys
 import textwrap
 import time
 import urllib.error
-from typing import Iterator
+from typing import Callable, Iterator
 
 import psutil
 import pytest
@@ -137,34 +137,82 @@ def test_the_watchdog_continues_a_target_whose_harness_was_killed(
     assert _answers(server, timeout=2)
 
 
-def test_roles_are_found_under_the_api_server_by_title() -> None:
-    # A stand-in tree: an API server whose children carry vLLM's titles.
-    script = textwrap.dedent(
-        """
-        import subprocess, sys, time
-        children = [
-            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", title])
-            for title in ("VLLM::EngineCore", "VLLM::Worker_TP0")
-        ]
-        print("ready", flush=True)
-        time.sleep(30)
-        """
-    )
-    server = subprocess.Popen(
-        [sys.executable, "-c", script], stdout=subprocess.PIPE, text=True
-    )
-    try:
+TITLED = textwrap.dedent(
+    """
+    import subprocess, sys, time
+    # argv[1:]: titles of children to start, as "title" or "title/child-title".
+    for spec in sys.argv[1:]:
+        title, _, child = spec.partition("/")
+        script = (
+            "import subprocess, sys, time\\n"
+            + (f"subprocess.Popen([{child!r}, '-c', 'import time; time.sleep(30)'], executable=sys.executable)\\n" if child else "")
+            + "time.sleep(30)"
+        )
+        subprocess.Popen([title, "-c", script], executable=sys.executable)
+    print("ready", flush=True)
+    time.sleep(30)
+    """
+)
+
+
+@pytest.fixture
+def api_server() -> Iterator[Callable[..., int]]:
+    """A stand-in API server whose children carry the titles it's given."""
+    servers: list[subprocess.Popen[str]] = []
+
+    def start(*specs: str) -> int:
+        server = subprocess.Popen(
+            [sys.executable, "-c", TITLED, *specs], stdout=subprocess.PIPE, text=True
+        )
+        servers.append(server)
         assert server.stdout is not None
         assert server.stdout.readline().strip() == "ready"
-        roles = discover_roles(server.pid)
-        assert sorted(roles) == ["api_server", "engine_core", "worker_tp0"]
-        assert all(target.is_alive() for target in roles.values())
-        assert roles["api_server"].pid == server.pid
-    finally:
+        time.sleep(0.5)  # grandchildren
+        return server.pid
+
+    yield start
+    for server in servers:
         for child in psutil.Process(server.pid).children(recursive=True):
             child.kill()
         server.kill()
         server.wait()
+
+
+def test_roles_are_found_by_their_exact_titles(api_server: Callable[..., int]) -> None:
+    # vLLM 0.30 retitles EngineCore under the API server, and its TP workers
+    # under EngineCore. A helper that merely mentions EngineCore in its
+    # arguments is not it, and Worker_TP1 is not Worker_TP10.
+    pid = api_server(
+        "python --about VLLM::EngineCore",
+        "VLLM::EngineCore/VLLM::Worker_TP1",
+    )
+    engine = psutil.Process(pid).children()[1]
+    tp1 = engine.children()[0]
+    roles = discover_roles(pid)
+    assert sorted(roles) == ["api_server", "engine_core", "worker_tp1"]
+    assert roles["api_server"].pid == pid
+    assert roles["engine_core"].pid == engine.pid
+    assert roles["worker_tp1"].pid == tp1.pid
+    assert all(target.is_alive() for target in roles.values())
+
+
+def test_a_worker_rank_is_parsed_not_matched_by_prefix(
+    api_server: Callable[..., int],
+) -> None:
+    pid = api_server("VLLM::EngineCore/VLLM::Worker_TP10")
+    assert sorted(discover_roles(pid)) == ["api_server", "engine_core", "worker_tp10"]
+
+
+@pytest.mark.parametrize(
+    "specs",
+    [("python -c VLLM::EngineCore",), ("VLLM::EngineCore", "VLLM::EngineCore")],
+    ids=["missing", "ambiguous"],
+)
+def test_a_missing_or_ambiguous_engine_is_refused(
+    api_server: Callable[..., int], specs: tuple[str, ...]
+) -> None:
+    with pytest.raises(ValueError, match="VLLM::EngineCore"):
+        discover_roles(api_server(*specs))
 
 
 # ------------------------------------------------------------------ the harness dies

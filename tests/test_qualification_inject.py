@@ -123,3 +123,45 @@ def test_a_bad_plan_is_refused_before_anything_runs(tmp_path: Path) -> None:
     )
     assert finished.returncode == 2
     assert "format is not" in finished.stderr
+
+
+def test_a_target_replaced_since_the_run_began_is_never_pulsed(
+    tmp_path: Path,
+) -> None:
+    # The CLI binds each target to its start time at startup; an episode
+    # whose target exited, or whose pid now names another process, is not
+    # actuated, and nothing is signalled.
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.pulser import Target
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "F4a"}]})
+    stand_in = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        replaced = Target(
+            stand_in.pid, Target.of(stand_in.pid).start_time - 10, "engine_core"
+        )
+        server = Server("http://127.0.0.1:9", "m", tmp_path, {"engine_core": replaced})
+        run = InjectionRun(plan, RunDirectory(tmp_path / "runs", "q221-x"), server)
+        _actions, actuated, injected = run._pulse(plan.episodes[0])
+        assert not actuated
+        assert "exited or was replaced" in injected["error"]
+    finally:
+        stand_in.kill()
+        stand_in.wait()
+
+
+def test_targets_are_bound_at_startup(tmp_path: Path) -> None:
+    from examples.qualification.__main__ import _targets
+
+    stand_in = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        bound = _targets(None, [f"sidecar={stand_in.pid}"])
+        assert bound["sidecar"].is_alive()
+    finally:
+        stand_in.kill()
+        stand_in.wait()
+    with pytest.raises(ValueError, match="sidecar="):
+        _targets(None, [f"sidecar={stand_in.pid}"])

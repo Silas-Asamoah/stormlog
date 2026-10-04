@@ -82,8 +82,9 @@ class Server:
     base_url: str
     model: str
     hook_root: Path
-    # Role (engine_core, api_server, sidecar, ...) -> pid it may pulse.
-    targets: dict[str, int] = field(default_factory=dict)
+    # Role (engine_core, api_server, sidecar, ...) -> the process it may
+    # pulse, named by pid and start time when the run began.
+    targets: dict[str, Target] = field(default_factory=dict)
 
     @property
     def endpoint(self) -> str:
@@ -250,13 +251,20 @@ class InjectionRun:
 
     def _pulse(self, episode: EpisodePlan) -> tuple[Actions, bool, dict[str, Any]]:
         role = episode.row.pulse_role or ""
-        pid = self.server.targets.get(role)
-        if pid is None:
-            return Actions(), False, {"method": PULSE, "error": f"no pid for {role}"}
+        target = self.server.targets.get(role)
+        if target is None:
+            return (
+                Actions(),
+                False,
+                {"method": PULSE, "error": f"no process for {role}"},
+            )
+        if not target.is_alive():
+            # Named when the run began; a pid since reused is never signalled.
+            error = f"the {role} process (pid {target.pid}) exited or was replaced"
+            return Actions(), False, {"method": PULSE, "error": error}
         pulse_s = episode.dose["pulse_ms"] / 1000
         period_s = episode.dose["period_ms"] / 1000
         count = max(1, int(self.plan.timeline.episode / period_s))
-        target = Target.of(pid, role)
         with Pulser(target, max_pulse_seconds=pulse_s) as pulser:
             pulses = pulser.run(pulse_s, period_s, count)
         actions = Actions(
