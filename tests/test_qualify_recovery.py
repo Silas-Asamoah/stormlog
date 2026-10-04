@@ -692,6 +692,39 @@ def signals_baseline(signals: Signals) -> Baseline:
     return Baseline.measure(signals, 0, 45 * S)
 
 
+def test_the_gauges_mean_slack_is_relative_on_a_wide_band() -> None:
+    # rev-220-b's delta-3 closure, G3: a "+1" slack on the mean waiting
+    # count swamped the 1.25x on a 0-6 band (ceiling 4 for a mean of 3), so
+    # one saturated scrape of 11 in ten (mean 3.8) passed. The ceiling is
+    # now 1.25x, with a floor of 1 for a near-empty queue.
+    waits = [(tenth * S // 10, 0.08) for tenth in range(600)]
+    waiting = every_second(0, 45, lambda s: float(s % 7))
+    burst = every_second(50, 60, lambda s: 11.0 if s == 55 else 3.0)
+    signals = Signals(in_flight=None, waits=waits, waiting=waiting + burst)
+    _waits, gauge = _queue_criteria_of(context(signals, Actions(first_send_ns=48 * S)))
+    assert not gauge.holds(50 * S, 60 * S)
+    calm = Signals(
+        in_flight=None,
+        waits=waits,
+        waiting=waiting + every_second(50, 60, lambda s: 3.0),
+    )
+    _waits, calm_gauge = _queue_criteria_of(
+        context(calm, Actions(first_send_ns=48 * S))
+    )
+    assert calm_gauge.holds(50 * S, 60 * S)
+    # A near-empty queue keeps a floor of 1 waiting request on the mean.
+    empty = Signals(
+        in_flight=None,
+        waits=waits,
+        waiting=every_second(0, 45, lambda s: 0.0)
+        + every_second(50, 60, lambda s: 1.0 if s % 2 else 0.0),
+    )
+    _waits, empty_gauge = _queue_criteria_of(
+        context(empty, Actions(first_send_ns=48 * S))
+    )
+    assert isinstance(empty_gauge, MostlyWithin) and empty_gauge.mean_ceiling == 1.0
+
+
 def _queue_criteria_of(ctx: Context) -> list[Criterion]:
     from stormlog.infer.qualify.recovery import _queue_criteria
 
