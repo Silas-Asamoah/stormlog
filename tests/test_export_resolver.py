@@ -72,6 +72,27 @@ def test_a_failed_resolution_is_counted_and_keeps_earlier_addresses() -> None:
     assert "not known" in (resolver.stats.last_error or "")
 
 
+def test_a_host_the_codec_refuses_is_a_counted_failure_not_a_stall() -> None:
+    # A label over 63 characters: the idna codec raises UnicodeError, which
+    # is a ValueError, not an OSError.
+    resolver = Resolver("a" * 64 + ".example.com", 4318, stall_seconds=0.2)
+    errors: list[BaseException | None] = []
+    previous_hook = threading.excepthook
+    threading.excepthook = lambda args: errors.append(args.exc_value)
+    try:
+        assert not resolver.resolve(wait=5)
+        time.sleep(0.3)
+        started = time.monotonic()
+        assert not resolver.resolve(wait=5)  # fails at once, not after the wait
+        waited = time.monotonic() - started
+    finally:
+        threading.excepthook = previous_hook
+    assert errors == []
+    assert resolver.stats.failures == 2
+    assert "UnicodeError" in (resolver.stats.last_error or "")
+    assert not resolver.stalled and waited < 2
+
+
 def test_localhost_resolves_for_real() -> None:
     resolver = Resolver("localhost", 4318)
     assert resolver.resolve(wait=5)

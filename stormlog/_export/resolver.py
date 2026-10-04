@@ -106,19 +106,26 @@ class Resolver:
 
     def _run(self, done: threading.Event) -> None:
         try:
+            self._resolve_once()
+        finally:
+            # Whatever happened, the resolution is over: the next one may run.
+            with self._lock:
+                self._done = None
+                self._started_at = None
+            done.set()
+
+    def _resolve_once(self) -> None:
+        try:
             found = self._getaddrinfo(self.host, self.port, type=socket.SOCK_STREAM)
-        except OSError as exc:
+            candidates = _first_unique(found, self.max_candidates)
+        except Exception as exc:  # OSError, or the codec refusing the host
             with self._lock:
                 self.stats.failures += 1
                 self.stats.last_error = f"{type(exc).__name__}: {exc}"
-            found = None
+            return
         with self._lock:
-            if found is not None:
-                self._candidates = _first_unique(found, self.max_candidates)
-                self.stats.resolutions += 1
-            self._done = None
-            self._started_at = None
-        done.set()
+            self._candidates = candidates
+            self.stats.resolutions += 1
 
 
 def _first_unique(found: list[Any], limit: int) -> list[Candidate]:
