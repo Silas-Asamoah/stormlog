@@ -85,6 +85,10 @@ def _summary(comparison: Comparison, exit_code: int) -> str:
     if not gates and comparison.spec.min_attainment is None:
         return f"{_metric_count(comparison)} metrics compared; no gate configured"
     failed, unknown = len(comparison.failed), len(comparison.not_evaluable)
+    if exit_code == 0 and unknown:
+        return (
+            f"{unknown} of {gates} gates could not be evaluated (allowed); none failed"
+        )
     if exit_code == 0:
         return f"every gate passed ({gates} gates)"
     return f"{failed} gate(s) failed and {unknown} could not be evaluated, of {gates}"

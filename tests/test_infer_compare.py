@@ -196,6 +196,24 @@ def test_unlabelled_runs_are_independent_samples() -> None:
     assert metric.worst is not None and metric.worst.df == 5
 
 
+def test_a_retried_block_keeps_the_attempt_that_finished() -> None:
+    # The runner retries a run its protocol set aside; the first attempt is
+    # listed, not a second run of the arm in that block.
+    baseline, candidate = _arms(SAME)
+    failed = _run("candidate", 2, 100.0, status="interrupted")
+    comparison = compare_runs(baseline, [*candidate, failed], ComparisonSpec())
+    assert [item["run"] for item in comparison.excluded] == [failed.name]
+
+
+def test_an_empty_segment_cannot_be_gated() -> None:
+    baseline, candidate = _arms(SLOWER)
+    for run in [*baseline, *candidate]:
+        run.report["cases"][CASE]["population"]["offered"] = 0
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None and gate.reason == "empty_case"
+
+
 def test_a_block_with_two_runs_of_an_arm_is_refused() -> None:
     baseline, candidate = _arms(SAME)
     candidate[1] = _run("candidate", 0, 100.0)

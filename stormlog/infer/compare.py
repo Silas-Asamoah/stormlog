@@ -480,10 +480,13 @@ def _design(arms: Mapping[str, list[RunSummary]], spec: ComparisonSpec) -> str:
 
 
 def _check_one_run_per_block(arms: Mapping[str, list[RunSummary]]) -> None:
-    """A block holds one run of each arm: a second one is an input error."""
+    """A block holds one usable run of each arm: a second one is an input error.
+
+    A run its protocol set aside (a retried attempt) is listed, not counted.
+    """
     seen: set[tuple[Any, Any, str]] = set()
     for arm, group in arms.items():
-        for run in group:
+        for run in _usable(group):
             key = (run.label("experiment"), run.label("block"), arm)
             if key in seen:
                 raise InferInputError(
@@ -524,6 +527,8 @@ def _case(
     }
     attrition = [item for item in excluded if item["case"] == case_id]
     blocked = _case_blocker(compatibility, observer_issues, attrition, spec)
+    if blocked is None and _empty(case_id, kept):
+        blocked = "empty_case"
     metrics = _case_metrics(case_id, kept, design, spec, blocked)
     case: dict[str, Any] = {
         "metrics": metrics,
@@ -583,6 +588,16 @@ def _case_metrics(
         metric.name: _metric(metric, case_id, kept, design, spec, blocked)
         for metric in default_metrics(reference)
     }
+
+
+def _empty(case_id: str, kept: Mapping[str, list[RunSummary]]) -> bool:
+    """No kept run offered the case a request: a segment outside every phase."""
+    offered = [
+        (run.comparable_cases[case_id].get("population") or {}).get("offered")
+        for runs in kept.values()
+        for run in runs
+    ]
+    return bool(offered) and all(value == 0 for value in offered)
 
 
 def _case_blocker(
