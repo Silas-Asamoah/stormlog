@@ -974,6 +974,47 @@ def test_the_tail_repair_reads_a_long_segment_backwards_a_chunk_at_a_time(
     assert (state.size_bytes, state.event_count) == (len(lines), 4000)
 
 
+def test_a_pending_cut_back_never_extends_a_segment_cut_shorter_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cutting back to the size before the failed write would pad a file
+    something else had cut shorter with zeros; it is read instead."""
+    import errno
+    import os
+
+    from stormlog import telemetry_sink
+
+    sink = _bounded_sink(tmp_path, max_buffer_bytes=1 << 20)
+    sink.append({"seq": 1})
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    real_write, real_ftruncate = os.write, os.ftruncate
+    state = {"fail": True}
+
+    def write(fd: int, data: bytes | memoryview) -> int:
+        if not state["fail"]:
+            return real_write(fd, data)
+        real_write(fd, bytes(data[: len(data) // 2]))
+        del data
+        raise OSError(errno.EIO, "Input/output error")
+
+    def ftruncate(fd: int, length: int) -> None:
+        if state["fail"]:
+            raise OSError(errno.EIO, "Input/output error")
+        real_ftruncate(fd, length)
+
+    monkeypatch.setattr(telemetry_sink.os, "write", write)
+    monkeypatch.setattr(telemetry_sink.os, "ftruncate", ftruncate)
+    sink.append({"seq": 2, "pad": "x" * 100})  # half written, not cut back
+    os.truncate(segment, 0)  # another hand empties the segment meanwhile
+    state["fail"] = False
+    time.sleep(0.02)  # past the backoff
+    sink.append({"seq": 3})
+    sink.close()
+    content = segment.read_bytes()
+    assert b"\x00" not in content
+    assert [r["seq"] for r in _segment_records(segment)] == [2, 3]
+
+
 def test_an_interrupted_write_is_cut_back_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
