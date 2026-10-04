@@ -485,9 +485,11 @@ def _may_be_launched(
 
     It is not when another user runs it (which includes anything run under
     sudo), when it started more than ``START_SLACK_SECONDS`` before the
-    launch, or when its parent is neither the runner nor ``init``, which
-    adopts an escapee whose parent died. An orphan adopted by a subreaper
-    other than ``init`` is missed.
+    launch, or when its parent is not ``init``: a launch's process that
+    left its group and session is an orphan, adopted by ``init``, and any
+    other parent shows whose it is (a launch's own processes are found by
+    their group, session and remembered tree). An orphan adopted by a
+    subreaper other than ``init`` is missed.
     """
     seen = _view(pid, proc, method)
     if seen is None:
@@ -496,7 +498,7 @@ def _may_be_launched(
         return False
     if _older(seen.start, since, method):
         return False
-    return seen.ppid in (1, os.getpid())
+    return seen.ppid == 1
 
 
 def _older(start: float | None, since: Mapping[str, Any], method: str) -> bool:
