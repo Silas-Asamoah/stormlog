@@ -640,3 +640,22 @@ def test_the_report_says_how_the_session_ended(tmp_path: Path) -> None:
     )
     assert finished["summary"]["session_status"] == "completed"
     assert "Session status" not in format_analysis_text(finished)
+
+
+def test_each_segment_is_reported_on_its_own(tmp_path: Path) -> None:
+    records = [_request(i, total_tokens=12, output_tokens=4) for i in range(10)]
+    path = tmp_path / "infer.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(r) for r in [*records, _window(), _workload()])
+    )
+    report = analyze_inference_events(
+        path,
+        slo=parse_slo_flags(["e2e:1000"]),
+        segments=[Segment("first_half", 0, SECOND // 2)],
+    )
+    segment = report["cases"]["c1"]["segments"]["first_half"]
+    assert segment["population"]["offered"] == 5
+    assert segment["intervals"]["rate"]["seconds"] == pytest.approx(0.5)
+    assert segment["throughput"]["requests_per_second"] == pytest.approx(10.0)
+    assert segment["slo"]["offered"] == 5
+    assert "client.e2e" in segment["latency"]["metrics"]
