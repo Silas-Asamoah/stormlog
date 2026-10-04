@@ -33,7 +33,7 @@ from stormlog.infer.qualify.scoring import (
 from stormlog.infer.qualify.vocabulary import KIND_COMPONENTS
 
 S = 1_000_000_000
-CONFIG = ScoreConfig(default_grace_ns=20 * S)
+CONFIG = ScoreConfig(default_grace_ns=20 * S, supported_types=frozenset({"F2"}))
 KV = "kv_preemption_pressure"
 QUEUE = "queue_saturation"
 
@@ -329,7 +329,8 @@ def _scores(correct: int, total: int, episode_type: str = "F2") -> list[EpisodeS
 
 def test_a_stratum_passes_at_15_of_15_and_fails_at_14() -> None:
     passing = summarize(_scores(15, 15), CONFIG)
-    failing = summarize(_scores(14, 15) + _scores(15, 15, "F1"), CONFIG)
+    both = replace(CONFIG, supported_types=frozenset({"F1", "F2"}))
+    failing = summarize(_scores(14, 15) + _scores(15, 15, "F1"), both)
     assert passing.accuracy_passes
     assert passing.strata[0].lower_bound == pytest.approx(0.819, abs=5e-4)
     assert not failing.accuracy_passes
@@ -356,6 +357,26 @@ def test_the_fpr_is_bounded_over_negative_runs() -> None:
     assert none_flagged.fpr_passes
     assert none_flagged.false_claims_per_hour_upper == pytest.approx(0.611, abs=5e-4)
     assert (one_flagged.false_positive_runs, one_flagged.fpr_passes) == (1, False)
+
+
+def test_a_declared_stratum_without_valid_episodes_fails_the_gate() -> None:
+    # Every F2 episode failed realization: the stratum has no evidence, so
+    # the gate must not pass on F1 alone.
+    both = replace(CONFIG, supported_types=frozenset({"F1", "F2"}))
+    f1 = episode("F1", expects=(Expectation(QUEUE, "scheduler"),))
+    right = [score_episode(f1, diagnosis(finding("q", QUEUE, 1)), both)] * 15
+    unrealized = [score_episode(episode(status="not_realized"), diagnosis(), both)] * 15
+    summary = summarize(right + unrealized, both)
+    f1_stratum, f2_stratum = summary.strata
+    assert f1_stratum.passes
+    assert (f2_stratum.episodes, f2_stratum.lower_bound) == (0, None)
+    assert f2_stratum.excluded == {"not_realized": 15}
+    assert not f2_stratum.passes and not summary.accuracy_passes
+
+
+def test_a_gated_summary_needs_the_support_matrix() -> None:
+    with pytest.raises(ValueError, match="supported_types"):
+        summarize(_scores(15, 15), ScoreConfig(default_grace_ns=20 * S))
 
 
 def test_incident_attribution_counts_only_episodes_with_impact() -> None:
