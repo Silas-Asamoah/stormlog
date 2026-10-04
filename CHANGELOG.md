@@ -192,8 +192,8 @@ the flaky benchmark memory gates
 - `stormlog infer analyze` lists every case, including cases in which no
   request succeeded, so drops and failures stay visible.
   ([#248](https://github.com/Silas-Asamoah/stormlog/pull/248))
-- The vLLM execution hook takes 60–66% less time on vLLM's engine thread per
-  scheduler step. Each record's fields are now serialized once, when the
+- The vLLM execution hook takes about 60–65% less time on vLLM's engine thread
+  per scheduler step. Each record's fields are now serialized once, when the
   record is queued. Before, they were walked in Python to bound their size,
   then serialized again by the writer thread. The records written are
   byte-identical. The queue counts each record at its exact JSON size, so:
