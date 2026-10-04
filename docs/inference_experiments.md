@@ -276,8 +276,11 @@ exactly them. The plan's `server.model` says how:
   `--revision <commit> --tokenizer-revision <commit>` and `HF_HUB_OFFLINE=1`,
   so it cannot load anything else. `{model}` is the repository.
 - **`staged`**: every file of a local directory is hashed, and each file
-  (never a link to it, so a hub snapshot can be staged) is hard-linked, or
-  copied, into `<store>/<weights_digest>/`, read-only. The
+  (never a link to it, so a hub snapshot can be staged) is copied into
+  `<store>/<weights_digest>/`, read-only. It is never hard-linked: a link
+  shares the source's inode, so locking the store would lock the source,
+  and an edit to the source would change the store. The store needs room
+  for one more copy of the model. The
   server loads that directory: its name is its content. `{model}` is its
   path.
 
