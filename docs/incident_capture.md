@@ -144,6 +144,10 @@ Without `triggers`, the defaults (`watch_defaults/1`) watch the
 failed scrapes, a share of failed scrapes (at least 5% of the last 60, held
 for 60 s), and a frozen exporter. Failures too sparse to come three in a row
 leave every window trigger judged on fewer scrapes; the share reports them.
+A config that lists its own `triggers` keeps the three health triggers
+beside them, so the watch never loses sight of its own scraper: give a
+trigger the same id to replace one, or set `"default_health_triggers":
+false` to drop them. The share needs `history.seconds` of at least 60.
 The `export` section belongs to the exporter (#220) and is passed through.
 
 A server running several engines (vLLM's data parallelism) labels each

@@ -256,6 +256,7 @@ def test_bad_triggers_are_usage_errors(trigger: Any, message: str) -> None:
 def test_a_trigger_s_policy_defaults_to_its_kind_s() -> None:
     config = resolve_watch_config(
         _payload(
+            default_health_triggers=False,
             triggers=[
                 _trigger(),
                 _trigger(id="quiet", counts_toward_exit=False),
@@ -266,7 +267,7 @@ def test_a_trigger_s_policy_defaults_to_its_kind_s() -> None:
                     "hold_seconds": 3,
                     "scrape_failures": {},
                 },
-            ]
+            ],
         )
     )
     counts = {s.trigger_id: s.counts_toward_exit for s in config.triggers}
@@ -282,6 +283,7 @@ def test_trigger_ids_are_unique() -> None:
 def test_completion_recorded_histograms_are_marked() -> None:
     config = resolve_watch_config(
         _payload(
+            default_health_triggers=False,
             triggers=[
                 {
                     "id": "e2e",
@@ -301,7 +303,7 @@ def test_completion_recorded_histograms_are_marked() -> None:
                         "share": 0.05,
                     },
                 },
-            ]
+            ],
         )
     )
     marked = {spec.trigger_id: spec.completion_recorded for spec in config.triggers}
@@ -311,6 +313,7 @@ def test_completion_recorded_histograms_are_marked() -> None:
 def test_an_engine_is_named_for_the_server_or_per_trigger() -> None:
     config = resolve_watch_config(
         _payload(
+            default_health_triggers=False,
             server={"base_url": BASE, "engine": "0"},
             triggers=[
                 _trigger(),
@@ -349,3 +352,38 @@ def test_a_data_gap_allowance_is_never_under_two_ticks() -> None:
     config = resolve_watch_config(_payload())
     for spec in config.triggers:
         assert spec.sustain.gap >= 2 * config.tick_seconds
+
+
+def test_a_config_s_own_triggers_keep_the_default_health_triggers() -> None:
+    """A config listing its own triggers silently dropped the health ones,
+    the failed-scrape share included: the blind spot it exists to close."""
+    health = {"scrape_failures", "scrape_failure_share", "frozen_exporter"}
+    merged = resolve_watch_config(_payload(triggers=[_trigger()]))
+    assert {s.trigger_id for s in merged.triggers} == {"queue", *health}
+    replaced = resolve_watch_config(
+        _payload(
+            triggers=[
+                _trigger(),
+                {
+                    "id": "frozen_exporter",
+                    "kind": "health",
+                    "frozen_exporter": {"ticks": 9},
+                },
+            ]
+        )
+    )
+    (frozen,) = [s for s in replaced.triggers if s.trigger_id == "frozen_exporter"]
+    assert isinstance(frozen.predicate, FrozenExporter) and frozen.predicate.ticks == 9
+    alone = resolve_watch_config(
+        _payload(triggers=[_trigger()], default_health_triggers=False)
+    )
+    assert [s.trigger_id for s in alone.triggers] == ["queue"]
+    with pytest.raises(InferUsageError, match="a default health trigger"):
+        resolve_watch_config(
+            _payload(
+                triggers=[_trigger(window_seconds=5, hold_seconds=5)],
+                history={"seconds": 30},
+            )
+        )
+    with pytest.raises(InferUsageError, match="default_health_triggers"):
+        resolve_watch_config(_payload(triggers=[], default_health_triggers="no"))

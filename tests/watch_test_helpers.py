@@ -134,7 +134,7 @@ def watch_config(base_url: str, **overrides: Any) -> dict[str, Any]:
         "version": 1,
         "server": {"base_url": base_url},
         "tick_seconds": 0.1,
-        "history": {"seconds": 30},
+        "history": {"seconds": 60},
         "incident": {"pre_seconds": 5, "post_seconds": 0.5},
         "triggers": [
             {

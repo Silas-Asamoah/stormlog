@@ -103,6 +103,10 @@ DEFAULT_TRIGGERS: tuple[Mapping[str, Any], ...] = (
     },
 )
 
+_DEFAULT_HEALTH_IDS = frozenset(
+    t["id"] for t in DEFAULT_TRIGGERS if t["kind"] == "health"
+)
+
 
 @dataclass(frozen=True)
 class IncidentLimits:
@@ -205,6 +209,7 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
             "incident",
             "store",
             "triggers",
+            "default_health_triggers",
             "export",
         },
         "config",
@@ -223,13 +228,10 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
         raise InferUsageError(f"tick_seconds must be at least {MIN_TICK_SECONDS}")
     history = _section(payload, "history", {"seconds", "bytes"})
     history_seconds = _positive(history.get("seconds", 600.0), "history.seconds")
-    triggers = payload.get("triggers", DEFAULT_TRIGGERS)
-    if not isinstance(triggers, (list, tuple)):
-        raise InferUsageError("triggers must be a list")
     export = payload.get("export", {})
     if not isinstance(export, Mapping):
         raise InferUsageError("export must be an object")
-    settings = tuple(triggers)
+    settings = _trigger_settings(payload)
     specs = tuple(_trigger(t, tick, engine) for t in settings)
     _check_triggers(specs, history_seconds)
     return WatchConfig(
@@ -249,6 +251,29 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
         trigger_settings=settings,
         export=dict(export),
     )
+
+
+def _trigger_settings(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    """The config's triggers, and the default health triggers it does not
+    replace (same id) or turn off (``default_health_triggers: false``): a
+    config naming its own triggers keeps the watch on its own scraper."""
+    triggers = payload.get("triggers")
+    if triggers is None:
+        return DEFAULT_TRIGGERS
+    if not isinstance(triggers, (list, tuple)):
+        raise InferUsageError("triggers must be a list")
+    if not _keep_health_defaults(payload):
+        return tuple(triggers)
+    ids = {t.get("id") for t in triggers if isinstance(t, Mapping)}
+    health = [t for t in DEFAULT_TRIGGERS if t["kind"] == "health"]
+    return (*triggers, *(t for t in health if t["id"] not in ids))
+
+
+def _keep_health_defaults(payload: Mapping[str, Any]) -> bool:
+    keep = payload.get("default_health_triggers", True)
+    if not isinstance(keep, bool):
+        raise InferUsageError("default_health_triggers must be a JSON boolean")
+    return keep
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -510,9 +535,16 @@ def _check_triggers(specs: Sequence[TriggerSpec], history_seconds: float) -> Non
         raise InferUsageError("trigger ids must be unique")
     for spec in specs:
         if spec.sustain.window > history_seconds:
+            default = spec.trigger_id in _DEFAULT_HEALTH_IDS
             raise InferUsageError(
                 f"trigger {spec.trigger_id}: window_seconds is longer than "
                 "history.seconds"
+                + (
+                    " (a default health trigger: raise history.seconds, give a "
+                    "trigger of that id, or set default_health_triggers to false)"
+                    if default
+                    else ""
+                )
             )
         if spec.kind not in (KIND_METRIC, KIND_SIGNAL, KIND_HEALTH):
             raise InferUsageError(
