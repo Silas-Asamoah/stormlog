@@ -71,6 +71,7 @@ from .experiment_process import (
     wait_for_file,
 )
 from .manifest import attach_manifest
+from .model_identity import VerifiedModel, changed_files, prepare_model
 from .server_collector import NvmlUnavailableError
 
 COMPLETED = "completed"
@@ -132,6 +133,7 @@ class Environment:
 
     python: str = sys.executable
     secrets: Mapping[str, str] = field(default_factory=dict)
+    model: VerifiedModel | None = None
 
 
 def run_plan(
@@ -147,12 +149,21 @@ def run_plan(
     env = environment or Environment(secrets=_secrets(plan))
     order = plan_order(plan)
     _prepare(plan, order, output_dir, resume)
+    model = _verified_model(plan)
+    if model is not None:
+        env = replace(env, model=model)
     written: list[dict[str, Any]] = []
     for block, arms in enumerate(order.blocks):
         written += _run_block(
             plan, block, arms, output_dir, env, resume, retry_incomplete, on_event
         )
     return written
+
+
+def _verified_model(plan: ExperimentPlan) -> VerifiedModel | None:
+    """Fix the weights once, before any server starts, if the plan says how."""
+    spec = plan.server.model or {}
+    return prepare_model(spec) if spec.get("route") else None
 
 
 def _secrets(plan: ExperimentPlan) -> dict[str, str]:
@@ -375,7 +386,7 @@ class _Run:
             "block_seed": block_seed(plan, block),
             "base_url": plan.server.base_url,
             "python": env.python,
-            "model": str((plan.server.model or {}).get("name", "")),
+            "model": _model_name(plan, env),
         }
         self.commands: list[str] = []
         self.server: Launched | None = None
@@ -395,7 +406,21 @@ class _Run:
         finally:
             self._stop_server()
         self._check_artifacts()
+        self._check_model()
         return self.finish()
+
+    def _check_model(self) -> None:
+        """The verified weights must not have moved during the run."""
+        model = self.env.model
+        if model is None:
+            return
+        (self.dir / "model_identity.json").write_text(
+            json.dumps(model.record(), indent=2, sort_keys=True) + "\n"
+        )
+        changed = changed_files(model)
+        if changed:
+            self.record.protocol("model_changed", before_treatment=False)
+            self.record.notes.append(f"model files changed: {changed[:5]}")
 
     def finish(self) -> dict[str, Any]:
         self.record.ended_at_ns = time.time_ns()
@@ -411,17 +436,17 @@ class _Run:
     # Server -------------------------------------------------------------
 
     def _start_server(self) -> bool:
-        server = self.plan.server
+        server, model = self.plan.server, self.env.model
         command = [
             expand(part, self.values)
             for part in (*server.command, *self.arm.server_args)
         ]
-        self.server = self._launch(
-            "server",
-            command,
-            {**server.env, **self.arm.server_env},
-            server.cpu_affinity,
-        )
+        env = {**server.env, **self.arm.server_env}
+        if model is not None:
+            # The weights verified before launch, and nothing else.
+            command += list(model.server_args)
+            env.update(model.env)
+        self.server = self._launch("server", command, env, server.cpu_affinity)
         self.values["server_pid"] = self.server.pid
         if self.server.affinity_applied is False:
             self.record.protocol("affinity_not_applied:server", before_treatment=True)
@@ -467,8 +492,12 @@ class _Run:
         log = (
             self.server.log_path if self.plan.describe.get("server_log", True) else None
         )
+        model = self.env.model
         options = DescribeOptions(
-            pid=self.server.pid, run_id=self.label, server_log=log
+            pid=self.server.pid,
+            run_id=self.label,
+            server_log=log,
+            model_identity=model.record() if model is not None else None,
         )
         try:
             try:
@@ -624,7 +653,7 @@ def _prelude(
         "block_seed": block_seed(plan, block),
         "base_url": plan.server.base_url,
         "python": env.python,
-        "model": str((plan.server.model or {}).get("name", "")),
+        "model": _model_name(plan, env),
     }
     server = None
     if prelude.server_arm is not None:
@@ -659,6 +688,12 @@ def _prelude(
     if timed_out or launched.exit_code not in prelude.step.expect_exit:
         return [prelude.step.name]
     return []
+
+
+def _model_name(plan: ExperimentPlan, env: Environment) -> str:
+    if env.model is not None:
+        return env.model.model
+    return str((plan.server.model or {}).get("name", ""))
 
 
 def _without_gpu(options: DescribeOptions) -> DescribeOptions:

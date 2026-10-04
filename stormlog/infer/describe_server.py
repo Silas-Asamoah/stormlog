@@ -78,6 +78,9 @@ class DescribeOptions:
     digest_cache: Path | None = None
     no_gpu: bool = False
     proc: Path = PROC
+    # The weights the runner verified before it launched this server; they
+    # replace what the description could infer afterwards.
+    model_identity: Mapping[str, Any] | None = None
 
 
 def describe_server(
@@ -227,6 +230,9 @@ def _gpus(
 def _model(
     root: ProcessInfo, environ: Mapping[str, str], options: DescribeOptions
 ) -> dict[str, Any]:
+    if options.model_identity is not None:
+        bound = {"pid": root.pid, "start_ticks": root.start_ticks}
+        return {**options.model_identity, "bound_to": bound}
     launch = launch_arguments(root.cmdline)
     cwd = _cwd(root.pid, options.proc)
     return describe_model(
