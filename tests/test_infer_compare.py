@@ -499,6 +499,10 @@ def test_an_external_cause_sets_aside_its_block_and_the_preregistered_count_deci
         "unit": "block" if paired else "run",
         "items": ["e/2" if paired else candidate[2].name],
     }
+    # What a gate wrapper reads: the payload, not the object.
+    payload = one.to_payload()["cases"][CASE]
+    assert payload["set_aside"] == one.cases[CASE]["set_aside"]
+    assert (payload["membership"], payload["gated"]) == (None, True)
 
     # Not a fixed count: the gate's pre-registered min_complete_blocks.
     baseline[4] = _run(
