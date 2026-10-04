@@ -326,7 +326,7 @@ def compare_runs(
         )
         for case_id in _case_ids(arms, spec)
     }
-    _check_something_gated(cases, spec)
+    _unjudged_overlap(cases, spec)
     comparison = Comparison(
         spec=spec,
         design=design,
@@ -758,16 +758,31 @@ def _case(
     return case
 
 
-def _check_something_gated(
-    cases: Mapping[str, Mapping[str, Any]], spec: ComparisonSpec
+OVERLAP_NOT_GATED = "overlap_not_gated"
+
+
+def _unjudged_overlap(
+    cases: Mapping[str, dict[str, Any]], spec: ComparisonSpec
 ) -> None:
-    """Gates asked only of overlap segments would pass by gating nothing."""
-    asked = bool(spec.gates) or spec.min_attainment is not None
-    if asked and cases and not any(case.get("gated", True) for case in cases.values()):
-        raise InferUsageError(
-            "every case compared is a segment by overlap, which is diagnostics "
-            "only and never gated; gate whole cases or segments by arrival"
-        )
+    """Gates asked when only overlap segments are compared cannot be evaluated.
+
+    No other case carries them, so gating nothing would read as a pass; each
+    requested gate is recorded ``not_evaluable`` on each overlap segment. With
+    a whole case or a segment by arrival to carry them, the overlap segments
+    add none.
+    """
+    if any(case.get("gated", True) for case in cases.values()):
+        return
+    for case in cases.values():
+        case["absent_gates"] = {
+            pattern: GateOutcome(NOT_EVALUABLE, OVERLAP_NOT_GATED, rule)
+            for pattern, rule in spec.gates
+        }
+        if spec.min_attainment is not None:
+            case["attainment_gate"] = {
+                "status": NOT_EVALUABLE,
+                "reason": OVERLAP_NOT_GATED,
+            }
 
 
 def _membership(case_id: str, kept: Mapping[str, list[RunSummary]]) -> str | None:
