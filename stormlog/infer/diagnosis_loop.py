@@ -98,6 +98,9 @@ class Step:
     total_tokens: int
     # Members whose request finished in this step (from its completion).
     finished: frozenset[str] = frozenset()
+    # Streaming-input members: between steps they may be waiting for their
+    # client's next input, so they never make a gap ready.
+    streaming: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -149,7 +152,16 @@ def _step(scheduled: Mapping[str, Any], completed: Mapping[str, Any] | None) -> 
         members=frozenset(str(m.get("internal")) for m in members),
         total_tokens=int(scheduled.get("total_tokens") or 0),
         finished=_finished(completed),
+        streaming=frozenset(
+            str(m.get("internal")) for m in members if m.get("resumable") is True
+        ),
     )
+
+
+def ready(step: Step) -> frozenset[str]:
+    """The members still ready to run after ``step``: not finished in it,
+    and not a streaming-input request, which may wait for its client."""
+    return step.members - step.finished - step.streaming
 
 
 def _finished(completed: Mapping[str, Any] | None) -> frozenset[str]:
@@ -253,7 +265,7 @@ def find_stalls(
     completions = _Completions(steps)
     stalls: list[Stall] = []
     for before, after in zip(steps, steps[1:]):
-        if before.members & after.members:
+        if ready(before) & after.members:
             stalls.append(_in_schedule(after))
         between = _between(after, completions)
         if between is not None:
@@ -303,7 +315,7 @@ def _between(after: Step, completions: _Completions) -> Stall | None:
     last = completions.latest_before(after.start_mono_ns)
     if last is None or last.completed_mono_ns is None:
         return None
-    if not (last.members - last.finished) & after.members:
+    if not ready(last) & after.members:
         return None
     return Stall(
         LOCUS_BETWEEN_STEPS,
@@ -393,7 +405,7 @@ def _work_continues(last: Step, pending: Sequence[Step]) -> bool:
     in a step scheduled since, or it did not finish in that step."""
     if any(last.members & step.members for step in pending):
         return True
-    return bool(last.members - last.finished)
+    return bool(ready(last))
 
 
 def _overlaps(stall: Stall, blocked: Sequence[Interval]) -> bool:
@@ -414,7 +426,7 @@ def cadence_table(steps: Sequence[Step]) -> list[Cadence]:
     completed = [step for step in steps if step.completed_mono_ns is not None]
     table = []
     for before, after in zip(completed, completed[1:]):
-        if before.members & after.members:
+        if ready(before) & after.members:
             end = after.completed_mono_ns or 0
             cadence = end - (before.completed_mono_ns or 0)
             table.append((end, work_bucket(after.total_tokens), cadence))
@@ -561,6 +573,7 @@ __all__ = [
     "Step",
     "cadence_baseline",
     "cadence_table",
+    "ready",
     "work_bucket",
     "engine_loop_gap",
     "find_stalls",

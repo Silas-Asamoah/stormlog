@@ -101,7 +101,10 @@ and in the step after it. The step before a gap between steps is the one
 whose completion starts it, without the request finishing there: under
 async scheduling a request's second step is scheduled before its first
 completes, so the step scheduled just before it may come after an idle
-stretch in which nothing was ready. A stretch the scheduler spent paused with
+stretch in which nothing was ready. A request prefilled in chunks is ready
+between them; a streaming-input request (`resumable`) never makes a gap
+ready, since between steps it may be waiting for its client's next input. A
+stretch the scheduler spent paused with
 `PAUSED_ALL` (from the hook's `pause` records), or one the caller excludes
 with `exclude_wall` (for example its own profiler stop), has no ready work.
 Where a stall sits decides what it can be blamed on:

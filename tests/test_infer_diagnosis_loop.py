@@ -335,6 +335,47 @@ def test_an_idle_engine_before_an_async_request_is_not_a_stall() -> None:
     assert signal.value is not None and signal.value < 50 * MS
 
 
+def _two_runs_of(
+    member_of: Any, gap_ns: int, *, steps: int = 30
+) -> list[dict[str, Any]]:
+    """One request runs ``steps`` steps, nothing runs for ``gap_ns``, then it
+    runs ``steps`` more: synchronous steps of ``member_of(index)``."""
+    records: list[dict[str, Any]] = [hello("engine", 2600, 1)]
+    clock = T
+    for index in range(2 * steps):
+        if index == steps:
+            clock += gap_ns
+        records.append(scheduled(index, clock, [member_of(index)]))
+        clock += CADENCE
+        records.append(completed(index, clock, [done("s")]))
+    return _sequenced(records)
+
+
+def test_a_streaming_request_waiting_for_input_is_not_ready() -> None:
+    """A streaming-input request that ran out of input waits for more without
+    being scheduled: its gap is the client's, not a stall."""
+    records = _two_runs_of(
+        lambda index: member("s", scheduled=1, sighting="repeat", resumable=True),
+        2_000 * MS,
+    )
+    signal = engine_loop_gap(records)
+    assert signal.exceeds is False
+
+
+def test_a_prefill_split_across_steps_is_ready_between_them() -> None:
+    """A long prompt prefilled in chunks runs in every step until its first
+    token, so a host gap between two chunks is a stall."""
+    records = _two_runs_of(
+        lambda index: member(
+            "s", scheduled=64, computed_before=64 * index, prompt_tokens=8192
+        ),
+        2_000 * MS,
+    )
+    signal = engine_loop_gap(records)
+    assert signal.exceeds is True
+    assert signal.detail["locus"] == LOCUS_BETWEEN_STEPS
+
+
 def test_async_late_schedule_call_is_a_host_stall() -> None:
     signal = engine_loop_gap(_async_loop(60, late_after=40))
     assert signal.exceeds is True
