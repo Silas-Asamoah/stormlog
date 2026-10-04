@@ -139,7 +139,9 @@ The classes of vLLM's configuration are a versioned table,
 `config_classes_v1`, keyed by JSON pointer into `/server_info`'s
 `vllm_config`; the longest pointer that covers a leaf decides. A leaf no
 pointer covers is `unclassified`, and a difference in it blocks. The
-table's launch entries come from vLLM 0.30.0's source.
+table's launch entries come from vLLM 0.30.0's source. Two identical
+launches of vLLM 0.30.0 with Qwen2.5-0.5B on an A30 had 406 configuration
+leaves, every one classified, and only `/instance_id` differed.
 
 The result is one of:
 
@@ -303,6 +305,9 @@ Each route's answer is recorded with its status (`ok`, `http_error`,
 `/server_info`'s answer is kept redacted, by the rules below: its
 `vllm_config`, its `vllm_env`, and a summary of `system_env`. vLLM caches
 `system_env`, so after the run it is labelled `cached` and says nothing new.
+Its package listing comes from `pip` in vLLM's environment and is empty
+when that environment has none; `describe-server --python` asks the
+interpreter instead.
 
 ## What a description keeps
 
