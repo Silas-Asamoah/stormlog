@@ -54,7 +54,7 @@ The values are provisional until they are read from real runs.
 | `host_stall.baseline_window_ns` | 30 s | the window of earlier busy steps the cadence is taken from |
 | `host_stall.min_busy_steps` | 20 | busy steps at least as large as the stall's that window needs |
 | `host_stall.matched_bin_min_steps` | 20 | steps of the stall's own work bucket (scheduled tokens within a factor of two) needed to compare it with steps of its size |
-| `host_stall.heartbeat_grace_ns` | 2 s | how recently the hook's writer must have been heard from to judge a stall still going on |
+| `host_stall.heartbeat_grace_ns` | 3 s | how recently the hook's writer must have been heard from to judge a stall still going on |
 
 ## Online signals
 
@@ -164,10 +164,13 @@ A stall is judged only where the records are known to be whole: between
 two heartbeats (the hello counting as one with nothing lost) whose drop
 counts and errors did not change, one at or before the stall's start and one
 at or after its end. A stall still going on also needs a heartbeat since it
-began, the last within `heartbeat_grace_ns` (2 s, about two of the writer's
-one-second beats) of the evaluation time. A capped or killed writer stops
-writing records and heartbeats alike, so the engine running on unrecorded
-looks like a stall with no heartbeat around it. A stall over its limit
+began, the last within `heartbeat_grace_ns` (3 s: the writer beats once a
+second, but under load its beats slip, 2.3 s apart on a real vLLM 0.30.0
+run) of the evaluation time. A capped or killed writer stops writing records
+and heartbeats alike, so the engine running on unrecorded looks like a stall
+with no heartbeat around it. A host stall that holds Python's GIL stops the
+writer's thread too, so while it lasts it is no verdict, and it is judged
+once it ends and the heartbeats resume. A stall over its limit
 outside that coverage gives no verdict (`hook_coverage_unknown`) instead of
 exceeding; `detail["covered"]` says which the reported stall was.
 
