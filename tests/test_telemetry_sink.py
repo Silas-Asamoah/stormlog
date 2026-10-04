@@ -923,6 +923,41 @@ def test_a_failed_cut_back_is_finished_before_the_segment_is_written_again(
     assert read == []
 
 
+@pytest.mark.parametrize(
+    "tail",
+    [b'{"seq": 4000, "pad": "cut', b"", b"x" * 200_000],
+    ids=["a-cut-record", "none", "a-cut-record-longer-than-a-chunk"],
+)
+def test_the_tail_repair_reads_a_long_segment_backwards_a_chunk_at_a_time(
+    tmp_path: Path, tail: bytes
+) -> None:
+    """Opening a segment already on disk repairs its last line; the repair
+    read the whole segment, up to 64 MiB, into memory to do it."""
+    import tracemalloc
+
+    from stormlog.telemetry_sink import TelemetrySinkSegment
+
+    sink = _bounded_sink(tmp_path)
+    segment = tmp_path / "segment-000009.jsonl"
+    lines = b"".join(
+        json.dumps({"seq": seq, "pad": "p" * 1000}).encode() + b"\n"
+        for seq in range(4000)
+    )
+    segment.write_bytes(lines + tail)
+    state = TelemetrySinkSegment(
+        filename=segment.name, event_count=0, size_bytes=0, closed=False
+    )
+    tracemalloc.start()
+    baseline = tracemalloc.get_traced_memory()[0]
+    with sink._lock:
+        sink._recover_segment_tail_locked(segment, state)
+    peak = tracemalloc.get_traced_memory()[1] - baseline
+    tracemalloc.stop()
+    assert peak < 512 * 1024
+    assert segment.stat().st_size == len(lines)
+    assert (state.size_bytes, state.event_count) == (len(lines), 4000)
+
+
 def test_an_interrupted_write_is_cut_back_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
