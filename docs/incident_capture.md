@@ -83,8 +83,12 @@ before it is written:
 
 A write that would go over its allowance abandons the generation before
 anything is published, and frees what it had charged. A file hard-linked
-between generations is counted once. The manifest and lock file, a few KiB
-per bundle, are not charged.
+between generations is counted once.
+
+The budget charges the bytes of files, not the disk they take. A file can
+take up to one filesystem block more than its bytes, and has an entry in the
+manifest; neither is charged. A generation holds at most 1,024 files, which
+bounds both: about 4 MiB of blocks and 200 KiB of manifest per generation.
 
 | Limit | Default | When it is reached |
 | --- | --- | --- |
