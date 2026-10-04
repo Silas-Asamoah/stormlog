@@ -482,6 +482,13 @@ def test_an_aggregate_only_criterion_is_unmeasurable_per_request() -> None:
     assert evaluation.reason == "server.itl: aggregate_only"
     counts = evaluation.per_criterion["server.itl"]
     assert (counts.attainment_lower, counts.attainment_upper) == (None, None)
+    # With no successful request nothing is judged at all, and the bounds
+    # must still be none, not [0, 0].
+    failed = goodput(
+        [_ok(0, None, status="error")], parse_slo_flags(["server.itl:50"]), ONE_SECOND
+    )
+    counts = failed.per_criterion["server.itl"]
+    assert (counts.attainment_lower, counts.attainment_upper) == (None, None)
 
 
 def test_an_evaluation_carries_whether_its_cohort_is_valid() -> None:
