@@ -43,7 +43,6 @@ from stormlog.infer.qualify.ground_truth import (
     write_injections,
 )
 from stormlog.infer.qualify.recovery import (
-    MECHANISMS,
     SECOND,
     START,
     TIMEOUT,
@@ -192,16 +191,15 @@ class InjectionRun:
         started = self.clock()
         actions, actuated, injected = self._actuate(index, episode)
         ended = self.clock()
+        # The action's own span: a twin's realization is judged over all of
+        # it, and a null run's slot is it.
+        actions = replace(actions, action_end_ns=ended, slot_ns=(started, ended))
         onset = _action_onset(actions, started)
         decision, timing = self._recover(episode, baseline, actions, onset, ended)
         context = Context(
             self._signals(), baseline, actions, onset, self.clock(), self.thresholds
         )
-        realized, checks = (
-            realization(episode.type, context, timing)
-            if episode.type in _REALIZED
-            else (True, [])
-        )
+        realized, checks = realization(episode.type, context, timing)
         return _Attempt(
             index, episode, actions, onset, ended, actuated, injected, timing,
             decision, realized, [check.to_record() for check in checks], clean_since,
@@ -313,9 +311,6 @@ class InjectionRun:
         action_end: int,
         now: int,
     ) -> Timing:
-        if episode.type not in MECHANISMS and episode.type != "I1":
-            # N and the like: the effect window is the action's.
-            return Timing(onset, "scheduled_window", action_end, action_end)
         context = Context(
             self._signals(), baseline, actions, onset, now, self.thresholds
         )
@@ -341,7 +336,7 @@ class InjectionRun:
             for attempt in attempts
         ]
         injections += [
-            _skipped(f"{self.directory.label}-e{index}", episode, priming)
+            _skipped(self.directory.label, index, episode, priming)
             for index, episode in enumerate(self.plan.episodes)
             if index >= len(attempts)
         ]
@@ -400,6 +395,7 @@ class InjectionRun:
         )
         return Injection(
             episode_id=f"{self.directory.label}-e{attempt.index}",
+            run_id=self.directory.label,
             episode_type=row.id,
             cause_class=row.cause_class,
             injected=attempt.injected,
@@ -508,12 +504,6 @@ class InjectionRun:
         time.sleep(max(0.0, seconds))
 
 
-# The types whose realization the catalog checks (A.4's realization column).
-_REALIZED = frozenset(
-    {"F1", "T1", "F2", "T2", "F3", "T3", "T3b", "F4a", "F4b", "H0", "I1"}
-)
-
-
 def _action_onset(actions: Actions, started: int) -> int:
     for value in (
         actions.first_stop_confirmed_ns,
@@ -539,12 +529,13 @@ def _impact(
 
 
 def _skipped(
-    episode_id: str, episode: EpisodePlan, priming: tuple[bool, float | None]
+    run_id: str, index: int, episode: EpisodePlan, priming: tuple[bool, float | None]
 ) -> Injection:
     """An episode skipped after a recovery timeout: published, never run."""
     row = episode.row
     return Injection(
-        episode_id=episode_id,
+        episode_id=f"{run_id}-e{index}",
+        run_id=run_id,
         episode_type=row.id,
         cause_class=row.cause_class,
         injected={"method": row.method, "skipped": "recovery_timeout"},

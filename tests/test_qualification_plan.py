@@ -16,13 +16,14 @@ def test_every_catalog_label_is_valid_ground_truth(name: str) -> None:
     row = CATALOG[name]
     injection = Injection(
         episode_id=f"q221-{name}",
+        run_id="q221-run",
         episode_type=row.id,
         cause_class=row.cause_class,
         injected={"method": row.method},
         expects=row.expects,
         secondary=row.secondary,
         allows=row.allows,
-        times=Times(),
+        times=Times(effect_onset_ns=1, effect_end_ns=2),
         clock_domain=None,
         status="valid",
     )
