@@ -108,8 +108,10 @@ config, exits 5.
 
 A trigger has an `id`, a `kind` (`metric`, `signal` or `health`), optional
 `window_seconds` (`W`), `hold_seconds` (`F`), `clear_seconds` (`C`),
-`counts_toward_exit` (true except for health triggers) and `engine`, and
-exactly one predicate:
+`counts_toward_exit` and `engine`, and exactly one predicate.
+`counts_toward_exit` is a JSON boolean, true by default for metric and
+signal triggers; a health trigger never counts toward the exit code, and
+setting it true is refused.
 
 | Key | Settings |
 | --- | --- |
