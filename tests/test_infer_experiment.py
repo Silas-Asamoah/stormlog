@@ -7,6 +7,7 @@ import platform
 import socket
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,39 @@ PROFILE = [
     "{run_dir}/c1.jsonl",
 ]
 READY = "import pathlib, sys, time; pathlib.Path(sys.argv[1]).touch(); time.sleep(60)"
+
+
+@pytest.fixture(autouse=True)
+def _set_aside_macos_services() -> Iterator[None]:
+    """On macOS, launchd keeps starting its own services (Spotlight workers,
+    Metal compilers) as the user, with environments psutil cannot read and
+    init as their parent. The runner rightly cannot clear them, so a run
+    beside one stops at random. These end-to-end tests set aside system
+    executables; the rule itself is tested unchanged in
+    test_infer_experiment_process, and on Linux these tests run it as is.
+    Its own MonkeyPatch, so a test's monkeypatch.undo() keeps it."""
+    if platform.system() == "Linux":
+        yield
+        return
+    import psutil
+
+    from stormlog.infer import experiment_process
+
+    real = experiment_process._may_be_launched
+
+    def may_be(pid: int, since: Any, proc: Path, method: str, **kwargs: Any) -> bool:
+        if not real(pid, since, proc, method, **kwargs):
+            return False
+        try:
+            exe = psutil.Process(pid).exe()
+        except (psutil.Error, OSError):
+            return True
+        return not exe.startswith(("/System/", "/usr/libexec/", "/usr/sbin/"))
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(experiment_process, "_may_be_launched", may_be)
+    yield
+    patch.undo()
 
 
 def _port() -> int:
