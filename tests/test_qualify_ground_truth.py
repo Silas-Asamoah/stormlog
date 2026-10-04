@@ -264,11 +264,6 @@ def test_the_vocabulary_matches_218s_when_present() -> None:
     assert vocabulary.WORKLOAD_KINDS == theirs.WORKLOAD_KINDS
 
 
-def test_the_component_exclusions_match_218s_when_present() -> None:
-    theirs = pytest.importorskip("stormlog.infer.diagnosis")
-    assert set(vocabulary.NOT_ASSESSED_COMPONENTS) == set(theirs.NOT_YET.values())
-
-
 @pytest.mark.parametrize(
     ("change", "problem"),
     [

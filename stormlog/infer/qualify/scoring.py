@@ -60,7 +60,6 @@ from .vocabulary import (
     EDGE_TABLE_VERSION,
     EDGES,
     KINDS,
-    NOT_ASSESSED_COMPONENTS,
     PRIMARY,
     SECONDARY,
     SEVERITIES,
@@ -502,27 +501,13 @@ def _miss(
 
 
 def assessed_at(entry: Mapping[str, Any], component: str) -> bool:
-    """Whether #218 assessed a kind at ``component``: fully, or partly only
-    for reasons that exclude other components, with every subject assessed."""
-    status = entry.get("status")
-    if status == "assessed":
-        return True
-    if status != "partial" or not _subjects_assessed(entry):
-        return False
-    return _excluded_elsewhere(entry.get("reasons") or (), component)
-
-
-def _subjects_assessed(entry: Mapping[str, Any]) -> bool:
-    subjects = (entry.get("by_subject") or {}).values()
-    return all(subject.get("status") == "assessed" for subject in subjects)
-
-
-def _excluded_elsewhere(reasons: Sequence[str], component: str) -> bool:
-    """Some reason excludes components, and none excludes ``component``."""
-    known = [
-        NOT_ASSESSED_COMPONENTS[r] for r in reasons if r in NOT_ASSESSED_COMPONENTS
-    ]
-    return bool(known) and not any(component in excluded for excluded in known)
+    """Whether #218 assessed a kind at ``component``. A kind that spans
+    components says so for each in ``components``; any other kind's own
+    status applies."""
+    components = entry.get("components")
+    if isinstance(components, Mapping):
+        return components.get(component) == "assessed"
+    return entry.get("status") == "assessed"
 
 
 def _wrong_finding(same: Sequence[FindingView]) -> str:
