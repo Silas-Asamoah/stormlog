@@ -6,6 +6,7 @@ import stat
 import sys
 from pathlib import Path
 
+import psutil
 import pytest
 
 from examples.observability import local_stack
@@ -51,3 +52,71 @@ def test_the_stack_script_never_signals_a_reused_pid(tmp_path: Path) -> None:
     )
     assert local_stack.main(["stop", "--state-dir", str(state)]) == 0
     assert not (state / "otelcol.pid.json").exists()
+
+
+def _started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binary: Path
+) -> tuple[list[str], int]:
+    monkeypatch.setenv("STORMLOG_OTELCOL", str(binary))
+    monkeypatch.setenv("STORMLOG_PROMETHEUS", str(tmp_path / "missing"))
+    monkeypatch.setenv("STORMLOG_JAEGER", str(tmp_path / "missing"))
+    state = ["--state-dir", str(tmp_path / "state")]
+    assert local_stack.main(["start", *state]) == 0
+    saved = json.loads((tmp_path / "state" / "otelcol.pid.json").read_text())
+    return state, int(saved["pid"])
+
+
+def test_a_service_that_ignores_sigterm_is_killed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stubborn = tmp_path / "fake-otelcol"
+    stubborn.write_text(
+        f"#!{sys.executable}\nimport signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "while True: time.sleep(1)\n"
+    )
+    stubborn.chmod(stubborn.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setattr(local_stack, "STOP_SECONDS", 0.5)
+    state, pid = _started(tmp_path, monkeypatch, stubborn)
+    assert local_stack.main(["stop", "otelcol", *state]) == 0
+    with pytest.raises(OSError):
+        os.kill(pid, 0)
+
+
+def test_a_zombie_service_is_not_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state, pid = _started(tmp_path, monkeypatch, _fake_binary(tmp_path))
+    try:
+        monkeypatch.setattr(
+            psutil.Process, "status", lambda _self: psutil.STATUS_ZOMBIE
+        )
+        local_stack.main(["status", *state])
+        assert "otelcol: not running" in capsys.readouterr().out
+    finally:
+        monkeypatch.undo()
+        os.kill(pid, 9)
+
+
+def test_a_clock_step_does_not_make_a_service_look_reused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # On Linux a process's start time is derived from the boot time, which
+    # moves when the wall clock is stepped.
+    state, pid = _started(tmp_path, monkeypatch, _fake_binary(tmp_path))
+    real = psutil.Process.create_time
+    try:
+        monkeypatch.setattr(
+            psutil.Process, "create_time", lambda self: real(self) + 0.5
+        )
+        local_stack.main(["status", *state])
+        assert "otelcol: running" in capsys.readouterr().out
+    finally:
+        monkeypatch.undo()
+        local_stack.main(["stop", "otelcol", *state])
+    with pytest.raises(OSError):
+        os.kill(pid, 0)

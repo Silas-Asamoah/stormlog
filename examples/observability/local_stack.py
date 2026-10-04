@@ -7,10 +7,13 @@ Each service runs from its binary with the config beside this script:
 ``STORMLOG_OTELCOL``, ``STORMLOG_PROMETHEUS`` or ``STORMLOG_JAEGER``; a
 missing one is skipped with a message.
 
-Each started service's pid and process start time are kept in the state
-directory, and ``stop`` and ``kill`` signal only that process, and only
-while its start time still matches: a pid the system has since reused is
-never signalled. ``kill`` is ``SIGKILL``, for outage episodes::
+Each started service's pid, process start time and command line are kept
+in the state directory, and ``stop`` and ``kill`` signal only that process,
+and only while its command line matches and its start time is within a
+second, which a stepped wall clock can move on Linux: a pid the system has
+since reused is never signalled. ``stop`` sends ``SIGTERM``, then
+``SIGKILL`` if the service is still running after 10 s. ``kill`` is
+``SIGKILL``, for outage episodes::
 
     python -m examples.observability.local_stack start --x1
     python -m examples.observability.local_stack kill otelcol    # the outage
@@ -37,6 +40,10 @@ import psutil
 HERE = Path(__file__).resolve().parent
 DEFAULT_STATE = Path("artifacts") / "observability-stack"
 STOP_SECONDS = 10.0
+# How far a process's start time may move and still be the same process:
+# on Linux it is derived from the boot time, which moves when the wall
+# clock is stepped. The command line must match exactly as well.
+START_TOLERANCE_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -83,7 +90,8 @@ def _running(state: Path, name: str) -> psutil.Process | None:
     try:
         saved = json.loads(path.read_text())
         process = psutil.Process(int(saved["pid"]))
-        if abs(process.create_time() - float(saved["started"])) > 0.01:
+        moved = abs(process.create_time() - float(saved["started"]))
+        if moved > START_TOLERANCE_SECONDS or process.cmdline() != saved["cmdline"]:
             return None  # the pid now belongs to another process
         if process.status() == psutil.STATUS_ZOMBIE:
             return None
@@ -113,9 +121,16 @@ def start(state: Path, *, x1: bool, only: set[str]) -> int:
                 cwd=state,
                 start_new_session=True,
             )
-        started = psutil.Process(process.pid).create_time()
+        started = psutil.Process(process.pid)
         _pid_file(state, service.name).write_text(
-            json.dumps({"pid": process.pid, "started": started, "x1": x1})
+            json.dumps(
+                {
+                    "pid": process.pid,
+                    "started": started.create_time(),
+                    "cmdline": started.cmdline(),
+                    "x1": x1,
+                }
+            )
         )
         time.sleep(0.5)
         if process.poll() is not None:
