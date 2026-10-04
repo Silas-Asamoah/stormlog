@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import socket
 import threading
 import time
 import urllib.error
@@ -35,7 +36,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .openai_client import ConnectError, NoResponseError, inference_opener
+from .openai_client import (
+    ConnectError,
+    NoResponseError,
+    _NoRedirect,
+    _TrackedHTTPConnection,
+    _TrackedHTTPSConnection,
+    _TrackedHTTPSHandler,
+)
 from .server_privacy import redact_vllm_config, redact_vllm_env, system_env_summary
 
 AUTO = "auto"
@@ -278,8 +286,10 @@ def _exchange(
     when the deadline passes.
     """
     outcome: dict[str, Any] = {}
+    sockets: list[socket.socket] = []
 
     def run() -> None:
+        _EXCHANGE.sockets = sockets
         try:
             with send(request, deadline) as response:
                 outcome["raw"] = _read_capped(response)
@@ -292,6 +302,8 @@ def _exchange(
     worker.start()
     worker.join(deadline)
     if worker.is_alive():
+        # Close it, or the abandoned thread reads on through the run.
+        _shut(sockets)
         raise TimeoutError(f"no complete answer within {deadline:g} s")
     if "error" in outcome:
         raise outcome["error"]
@@ -357,8 +369,60 @@ def _answer(
     )
 
 
+# The sockets the current exchange's thread opened, so a deadline can shut them.
+_EXCHANGE = threading.local()
+
+
+def _remember(sock: Any) -> None:
+    sockets = getattr(_EXCHANGE, "sockets", None)
+    if sockets is not None and sock is not None:
+        sockets.append(sock)
+
+
+def _shut(sockets: list[socket.socket]) -> None:
+    """End an abandoned exchange: its thread's read fails with its socket."""
+    for sock in sockets:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+
+class _ProbeHTTPConnection(_TrackedHTTPConnection):
+    def connect(self) -> None:
+        super().connect()
+        _remember(self.sock)
+
+
+class _ProbeHTTPSConnection(_TrackedHTTPSConnection):
+    def connect(self) -> None:
+        super().connect()
+        _remember(self.sock)
+
+
+class _ProbeHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(_ProbeHTTPConnection, req)
+
+
+class _ProbeHTTPSHandler(_TrackedHTTPSHandler):
+    def https_open(self, req: urllib.request.Request) -> Any:
+        options: dict[str, Any] = {"context": getattr(self, "_context", None)}
+        check_hostname = getattr(self, "_check_hostname", None)
+        if check_hostname is not None:
+            options["check_hostname"] = check_hostname
+        return self.do_open(_ProbeHTTPSConnection, req, **options)
+
+
 def _default_opener() -> Opener:
-    opener = inference_opener()
+    """The inference opener's rules (no proxies, no redirects, failures
+    marked by where they happened), with each socket kept for the deadline."""
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _NoRedirect(),
+        _ProbeHTTPHandler(),
+        _ProbeHTTPSHandler(),
+    )
 
     def send(request: urllib.request.Request, timeout: float) -> Any:
         return opener.open(request, timeout=timeout)

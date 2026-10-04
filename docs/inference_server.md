@@ -366,7 +366,7 @@ Each route's answer is recorded with its status (`ok`, `http_error`,
 
 - every answer is capped at 4 MiB, and redirects are never followed;
 - the API key goes only to the endpoint's own origin;
-- `/version` and `/v1/models` get 60 seconds each, `/server_info` one 120-second deadline. A deadline bounds the whole exchange, from connecting to the last byte, however slowly the server sends;
+- `/version` and `/v1/models` get 60 seconds each, `/server_info` one 120-second deadline. A deadline bounds the whole exchange, from connecting to the last byte, however slowly the server sends, and at the deadline the probe shuts its connection, so nothing reads on during the run;
 - when the server cannot be reached, or a route gets no answer in time, the other routes are skipped instead of each waiting out its deadline.
 
 `/server_info` is never retried. When it times out, or the server takes the
