@@ -24,7 +24,10 @@ times are sums of such intervals on the monotonic clock.
 
 So a predicate whose observations stay violating for less than ``F`` never
 fires, and one that turns violating at ``a`` and stays so fires by
-``a + Δ + F`` plus any paused time. For a predicate over a window of ``W``,
+``a + Δ + ceil((F + j) / Δ)·Δ + j`` plus any paused time, for ticks
+scheduled every ``Δ`` and each at most ``j`` late: ``a + Δ + F`` only when
+``F`` is a multiple of ``Δ`` and the ticks run on time. For a predicate over
+a window of ``W``,
 an observable violation of length ``d`` keeps it true for at most ``d + W``,
 so ``d < F - W`` never fires. These statements are about what the watcher
 observes, not about the fault that caused it; ``docs/incident_capture.md``
@@ -33,6 +36,7 @@ has the derivation.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 VIOLATING = "violating"
@@ -103,10 +107,24 @@ class Sustain:
         """Observable violations shorter than this never fire: ``F - W``."""
         return self.hold - self.window
 
-    def detection_bound(self, tick: float) -> float:
-        """A persistent change fires within ``F + W + Δ`` of onset, plus any
-        paused time, for a window predicate that needs a full window."""
-        return self.hold + self.window + tick
+    def fire_bound(self, tick: float, late: float = 0.0) -> float:
+        """How long after a predicate turns violating, and stays so, the
+        trigger has fired, plus any paused time: ``Δ + ceil((F + j)/Δ)·Δ + j``
+        for ticks every ``Δ``, each at most ``j`` late.
+
+        The first violating evaluation comes within ``Δ + j``; accumulation
+        is measured between evaluations, so a late first tick shortens it by
+        up to ``j``, and the firing tick can itself run ``j`` late.
+        """
+        ticks = math.ceil((self.hold + late) / tick - 1e-9)
+        return tick + ticks * tick + late
+
+    def detection_bound(self, tick: float, late: float = 0.0) -> float:
+        """A persistent change fires within ``W`` plus :meth:`fire_bound` of
+        its onset, plus any paused time, for a window predicate that needs a
+        full window: ``F + W + Δ`` when the ticks run on time and ``F`` is a
+        multiple of ``Δ``."""
+        return self.window + self.fire_bound(tick, late)
 
 
 @dataclass(frozen=True)
