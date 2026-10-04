@@ -307,7 +307,7 @@ def _check_nothing_left(output: Path) -> None:
         running = [s["pid"] for s in cleanup.get("survivors", []) if still_there(s)]
         if running:
             pids = ", ".join(str(pid) for pid in running)
-            raise InferInputError(
+            raise InferUsageError(
                 f"{where}: its cleanup left {pids} running; stop it, then resume"
             )
 
@@ -439,7 +439,8 @@ def _not_run(
             "block": block,
             "position_planned": position,
             "state": NOT_RUN,
-            "reasons": [f"stopped_after:{stopped['label']}"],
+            "reasons": ["cleanup_unverified"],
+            "stopped_after": stopped["label"],
         }
         for block, arms in enumerate(order.blocks)
         for position, arm in enumerate(arms)

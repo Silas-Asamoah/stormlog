@@ -724,12 +724,13 @@ def test_a_server_left_running_stops_the_experiment(
     records = _run(tmp_path, document)
     first, *rest = records
     assert first["reasons"] == ["collector_cleanup_unverified"]
-    stopped = f"stopped_after:{first['label']}"
+    # The lead's ruling: each run left is not_run: cleanup_unverified.
     assert [(r["block"], r["arm"], r["reasons"]) for r in rest] == [
-        (0, "watch", [stopped]),
-        (1, "watch", [stopped]),
-        (1, "off", [stopped]),
+        (0, "watch", ["cleanup_unverified"]),
+        (1, "watch", ["cleanup_unverified"]),
+        (1, "off", ["cleanup_unverified"]),
     ]
+    assert {r["stopped_after"] for r in rest} == {first["label"]}
     assert {r["state"] for r in rest} == {"not_run"}
     assert _index(tmp_path) == [
         ("run", 0, "off", "protocol_failure"),
@@ -770,7 +771,8 @@ def test_a_resume_waits_until_what_a_cleanup_left_is_gone(
         document = _plan(_port(), order=TWO_BLOCKS)
         _run(tmp_path, document)
         monkeypatch.undo()
-        with pytest.raises(InferInputError, match=f"left {left.pid} running"):
+        # A usage error (exit 2) until the survivor is gone.
+        with pytest.raises(InferUsageError, match=f"left {left.pid} running"):
             _run(tmp_path, document, resume=True)
     finally:
         left.kill()
