@@ -14,13 +14,15 @@ A protocol failure is a fault of the measurement, not of the server under
 test: a case's cohort is invalid, the server's identity changed during the
 run, the before description is of another server, a required cache reset
 was not acknowledged, the server probe did not complete, or an experiment
-runner recorded an external cause (``infer.run_state``: a server that never
-became healthy, a failed prelude, a preemption). A run that did not finish
-is an outcome, like failed requests or a server that served nothing: the
-treatment may have caused it, so it is compared, never set aside, unless
-an external cause is recorded. Outcome beats protocol: without an external
-cause, such a run's other run-level faults, and a cohort it cut short, are
-outcomes too.
+runner recorded an external cause (``infer.run_state`` with state
+``protocol_failure``: a server that never became healthy, a failed
+prelude, a preemption). A run that did not finish is an outcome, like
+failed requests, a server that served nothing, or an outcome the runner
+recorded (state ``outcome_failure``: a server that exited, a step that
+failed): the treatment may have caused it, so it is compared, never set
+aside, unless an external cause is recorded. Outcome beats protocol:
+without an external cause, such a run's other run-level faults, and a
+cohort an unfinished run cut short, are outcomes too.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ SEGMENT_SEPARATOR = "/"
 # Written by an experiment runner: how the run ended, and why.
 RUN_STATE_EVENT = "infer.run_state"
 PROTOCOL_FAILURE = "protocol_failure"
+OUTCOME_FAILURE = "outcome_failure"
 # Cohort issues an unfinished run leaves behind: outcomes, not faults.
 _CUT_SHORT = ("phase_window_missing", "records_missing")
 
@@ -208,10 +211,11 @@ def _run_failures(
 ) -> tuple[list[str], list[str]]:
     """The run's protocol failures, which set it aside, and its outcomes.
 
-    Outcome beats protocol: in a run that did not finish, with no external
-    cause recorded, the run's faults are outcomes too, since the treatment
-    that stopped the server may also have cut its probe short or restarted
-    it with a new identity.
+    Outcome beats protocol: in a run that did not finish, or that a runner
+    recorded as an outcome failure, with no external cause recorded, the
+    run's faults are outcomes too, since the treatment that stopped the
+    server may also have cut its probe short or restarted it with a new
+    identity.
     """
     protocol: list[str] = []
     manifest = report.get("manifest") or {}
@@ -222,24 +226,29 @@ def _run_failures(
         for r in records
     ):
         protocol.append("probe_incomplete")
-    external = _external_causes(records)
-    if status == COMPLETED:
-        return protocol + external, []
-    unfinished = [f"session_{status or 'unknown'}"]
-    if not external:
-        return [], unfinished + protocol
-    return protocol + external, unfinished
+    external, runner_outcomes = _runner_state(records)
+    outcomes = [] if status == COMPLETED else [f"session_{status or 'unknown'}"]
+    outcomes += runner_outcomes
+    if not outcomes or external:
+        return protocol + external, outcomes
+    return [], outcomes + protocol
 
 
-def _external_causes(records: Sequence[Mapping[str, Any]]) -> list[str]:
-    """A runner's protocol failure: the external cause a set-aside needs."""
+def _runner_state(records: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[str]]:
+    """How a runner says the run ended: an external cause, which a set-aside
+    needs, or an outcome it recorded, such as a server that exited."""
     state = next(
         (r for r in reversed(records) if r.get("event_type") == RUN_STATE_EVENT),
         None,
     )
-    if state is None or state.get("state") != PROTOCOL_FAILURE:
-        return []
-    return [f"external:{reason}" for reason in state.get("reasons") or ["unstated"]]
+    if state is None:
+        return [], []
+    reasons = [str(reason) for reason in state.get("reasons") or ["unstated"]]
+    if state.get("state") == PROTOCOL_FAILURE:
+        return [f"external:{reason}" for reason in reasons], []
+    if state.get("state") == OUTCOME_FAILURE:
+        return [], [f"runner:{reason}" for reason in reasons]
+    return [], []
 
 
 def _case_failures(
