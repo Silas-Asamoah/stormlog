@@ -406,7 +406,7 @@ def test_the_engine_resets_on_an_outage_and_fires_after_it_from_scrapes() -> Non
 
     The worked example in the docs, on real window selection: a start scrape
     may finish up to one tick after ``t - W``, so the first full window is in
-    at 29 s, one tick earlier than the docs' idealized 30 s.
+    at 29 s. The triggers' test feeds the same times as classifications.
     """
     texts: list[str | None] = []
     for second in range(262):
