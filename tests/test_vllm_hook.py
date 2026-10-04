@@ -6,24 +6,27 @@ import enum
 import errno
 import json
 import os
+import random
 import stat
 import subprocess
 import sys
 import threading
 import time
+import timeit
+import tracemalloc
 import types
 from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 import stormlog.infer.vllm_hook as hook
 from stormlog.infer.vllm_hook import gate
 from stormlog.infer.vllm_hook import writer as writer_module
-from stormlog.infer.vllm_hook.engine import ITERATION_ATTRIBUTE
+from stormlog.infer.vllm_hook.engine import ITERATION_ATTRIBUTE, EngineRecorder
 from stormlog.infer.vllm_hook.worker import RunnerRecorder
 from stormlog.infer.vllm_hook.writer import EpochWriter, WriterLimits
 
@@ -283,13 +286,26 @@ def vllm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, 
         writer.close()
 
 
+def _loads(line: str) -> dict[str, Any]:
+    """One log line. A key written twice fails: a record's own fields follow
+    the common ones on its line, so a field reusing a common name would."""
+
+    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        names = [name for name, _ in pairs]
+        assert len(names) == len(set(names)), f"a key written twice: {names}"
+        return dict(pairs)
+
+    record: dict[str, Any] = json.loads(line, object_pairs_hook=unique)
+    return record
+
+
 def _records(root: Path, role: str) -> list[dict[str, Any]]:
     for writer in hook._WRITERS.values():
         if writer.role == role:
             writer.close()
     records = []
     for path in sorted(root.glob(f"*/{role}-*/*.jsonl")):
-        records += [json.loads(line) for line in path.read_text().splitlines()]
+        records += [_loads(line) for line in path.read_text().splitlines()]
     return records
 
 
@@ -552,6 +568,38 @@ def test_vllm_errors_pass_through_and_telemetry_errors_do_not(
     assert status["errors"] >= 1
 
 
+def test_no_record_reuses_a_common_field_name(vllm: dict[str, Any]) -> None:
+    scheduler = vllm["Scheduler"](vllm_config())
+    vllm["EngineCore"](scheduler).preprocess_add_request(FakeRequest("a-1", 2))
+    scheduler.requests = {"a-1": FakeRequest("a-1", 2, max_tokens=1)}
+    output = SchedulerOutput([_new("a-1", 2)], CachedRequestData(), {"a-1": 2}, 2)
+    scheduler.next_output = output
+    scheduler.schedule()
+    scheduler.update_from_output(output, ModelRunnerOutput({"a-1": 0}, [[1]]))
+    scheduler.schedule()
+    scheduler.update_error = ValueError("vLLM's own error")
+    with pytest.raises(ValueError):
+        scheduler.update_from_output(output, ModelRunnerOutput({}, []))
+    vllm["Worker"](vllm_config()).init_device()
+    # A heartbeat's own fields are the status, the worker's included.
+    statuses = [writer._status() for writer in hook._WRITERS.values()]
+
+    # _loads fails on a key written twice, in every record of every kind.
+    records = _records(vllm["root"], "engine") + _records(vllm["root"], "worker")
+    assert {record["kind"] for record in records} >= {
+        "hello",
+        "alias",
+        "scheduled",
+        "completed",
+        "terminal",
+        "goodbye",
+    }
+    assert any(record.get("update_failed") for record in records)
+    assert {"range_misses", "pending_samples"} <= set(statuses[-1])
+    for status in statuses:
+        assert not {"format", "kind", "epoch", "seq"} & set(status)
+
+
 # ---------------------------------------------------------------- worker side
 
 
@@ -654,7 +702,7 @@ def test_the_writer_seals_segments_and_keeps_status(tmp_path: Path) -> None:
     assert not (writer.directory / "flush").exists()
     assert list(writer.directory.glob("*.part")) == []
     records = [
-        json.loads(line)
+        _loads(line)
         for path in sorted(writer.directory.glob("*.jsonl"))
         for line in path.read_text().splitlines()
     ]
@@ -724,15 +772,343 @@ def test_the_queue_counts_bytes_by_content(
     assert status["dropped"]["alias"] == 60 - sum(written.values())
 
 
-@pytest.mark.parametrize(
-    "text",
-    ["chatcmpl-abc-123", 'a"b\\c', "\u00e9" * 50, "\x01" * 50, "\U0001f600" * 50],
-)
-def test_a_record_is_never_sized_below_its_json(text: str) -> None:
-    fields = {"internal": text, "members": [{"external": text}]}
-    encoded = json.dumps(fields, separators=(",", ":")).encode()
+# Escapes, control characters, a lone surrogate, and text beyond the BMP.
+_TEXT = ["a", "Z", "0", " ", '"', "\\", "/", "\x00", "\x1f", "\x7f", "\u00e9"]
+_TEXT += ["\u4e2d", "\u2028", "\ud800", "\ufeff", "\U0001f600"]
 
-    assert writer_module._estimate(fields, 1 << 30) >= len(encoded)
+
+def _random_text(rng: random.Random) -> str:
+    return "".join(rng.choices(_TEXT, k=rng.randrange(40)))
+
+
+def _random_value(rng: random.Random, depth: int = 0) -> Any:
+    kind = rng.randrange(6 if depth < 4 else 4)
+    if kind == 0:
+        return _random_text(rng)
+    if kind == 1:
+        return rng.choice([0, -1, 2**63, -(10**30), rng.randrange(-(10**6), 10**6)])
+    if kind == 2:
+        return rng.choice([0.1, -1e300, 5e-324, float("nan"), float("inf")])
+    if kind == 3:
+        return rng.choice([True, False, None, "chatcmpl-abc-123"])
+    if kind == 4:
+        return [_random_value(rng, depth + 1) for _ in range(rng.randrange(5))]
+    # json writes int, float, bool and None keys as text.
+    keys = [_random_text(rng), rng.randrange(-9, 9), 1.5, True, None]
+    return {
+        rng.choice(keys): _random_value(rng, depth + 1) for _ in range(rng.randrange(5))
+    }
+
+
+def _line_as_before(epoch: str, kind: str, seq: int, fields: dict[str, Any]) -> bytes:
+    """The line the writer wrote when its own thread serialized each record."""
+    record = {"format": writer_module.FORMAT, "kind": kind, "epoch": epoch, "seq": seq}
+    record.update(fields)
+    return json.dumps(record, separators=(",", ":")).encode()
+
+
+def test_a_record_counts_its_exact_json_and_is_written_unchanged(
+    tmp_path: Path,
+) -> None:
+    rng = random.Random(217)
+    # Top-level names never reuse the common fields' names.
+    records = [
+        {f"field_{index}": _random_value(rng) for index in range(rng.randrange(6))}
+        for _ in range(400)
+    ]
+    records += [  # step-shaped: what the floor reads before serializing
+        {
+            "iteration": _random_text(rng),
+            "preempted": [_random_text(rng) for _ in range(rng.randrange(3))],
+            "members": [
+                {"internal": _random_text(rng), "other": _random_value(rng)}
+                for _ in range(rng.randrange(6))
+            ],
+        }
+        for _ in range(100)
+    ]
+    limits = WriterLimits(heartbeat_seconds=3600, queue_bytes=1 << 30)
+    writer = EpochWriter(tmp_path, "engine", limits=limits)
+    with writer._condition:  # the writer thread cannot take any yet
+        for fields in records:
+            before = writer._queued_bytes
+            writer.emit("alias", fields)
+            json_bytes = len(json.dumps(fields, separators=(",", ":")).encode())
+            assert writer._queued_bytes - before == json_bytes
+            assert writer_module._floor(fields) <= json_bytes
+    writer.close()
+
+    lines = [
+        line
+        for path in sorted(writer.directory.glob("*.jsonl"))
+        for line in path.read_bytes().splitlines()
+    ]
+    assert lines[:-1] == [
+        _line_as_before(writer.epoch, "alias", seq, fields)
+        for seq, fields in enumerate(records)
+    ]
+    assert json.loads(lines[-1])["kind"] == "goodbye"
+    assert _queued_bytes(writer) == 0
+
+
+def test_a_record_is_oversized_by_its_exact_json(tmp_path: Path) -> None:
+    writer = EpochWriter(tmp_path, "engine", limits=WriterLimits(record_bytes=4096))
+    # {"internal":""} is 15 bytes, and each escaped "\u00e9" 6: 4,096 in all.
+    writer.emit("alias", {"internal": "\u00e9" * 680 + "x"})
+    writer.emit("alias", {"internal": "\u00e9" * 680 + "xy"})  # one byte over
+    writer.close()
+
+    records = _epoch_records(writer.directory)
+    assert [len(r["internal"]) for r in records if r["kind"] == "alias"] == [681]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert status["dropped"] == {"alias_oversized": 1}
+
+
+def test_a_record_json_cannot_serialize_is_an_error_and_takes_no_number(
+    tmp_path: Path,
+) -> None:
+    circular: list[Any] = []
+    circular.append(circular)
+    deep: list[Any] = []
+    for _ in range(100_000):
+        deep = [deep]
+
+    class Changing(dict[str, Any]):
+        """A value another thread changes while json reads it."""
+
+        def items(self) -> Any:
+            raise RuntimeError("dictionary changed size during iteration")
+
+    writer = EpochWriter(tmp_path, "engine")
+    for value in (object(), circular, deep, Changing(a=1)):
+        writer.emit("alias", {"internal": value})  # never raises
+    writer.emit("alias", {"internal": "x"})
+    writer.close()
+
+    records = _epoch_records(writer.directory)
+    assert [(r["kind"], r["seq"]) for r in records] == [("alias", 0), ("goodbye", 1)]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert (status["errors"], status["dropped"]) == (4, {})
+
+
+def test_fields_that_are_not_one_object_are_an_error(tmp_path: Path) -> None:
+    writer = EpochWriter(tmp_path, "engine")
+    for fields in (["a", "list"], "text", None):
+        writer.emit("alias", cast(Any, fields))  # never a malformed line
+    writer.emit("alias", {"internal": "x"})
+    writer.close()
+
+    records = _epoch_records(writer.directory)
+    assert [(r["kind"], r["seq"]) for r in records] == [("alias", 0), ("goodbye", 1)]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert (status["errors"], status["dropped"]) == (3, {})
+
+
+def _scheduled(iteration: int, members: int) -> dict[str, Any]:
+    member = {
+        "sighting": "repeat",
+        "phase": "generation",
+        "scheduled": 1,
+        "computed_before": 600,
+        "prompt_tokens": 512,
+        "prefill_scheduled": 0,
+        "past_prompt_scheduled": 1,
+        "drafts_scheduled": 0,
+        "cached_at_admission": None,
+        "recompute": False,
+        "output_before": 88,
+        "resumable": False,
+    }
+    return {
+        "iteration": str(iteration),
+        "members": [
+            {"internal": f"chatcmpl-stormlog-{iteration}-{n}-0f3a9c1d", **member}
+            for n in range(members)
+        ],
+    }
+
+
+def _queue_memory(root: str) -> str:
+    """Fill a held writer's queue; what tracemalloc saw it keep, as JSON."""
+    limits = WriterLimits(queue_records=100_000, queue_bytes=1 << 20)
+    writer = EpochWriter(Path(root), "engine", limits=limits)
+    tracemalloc.start()
+    with writer._condition:  # the writer thread cannot take any
+        before = tracemalloc.get_traced_memory()[0]
+        for iteration in range(1000):
+            writer.emit("scheduled", _scheduled(iteration, 32))
+        held = tracemalloc.get_traced_memory()[0] - before
+        queued = len(writer._queue)
+    tracemalloc.stop()
+    writer.close()
+    dropped = writer._counters.dropped["scheduled"]
+    limit = limits.queue_bytes
+    return json.dumps(
+        {"held": held, "queued": queued, "dropped": dropped, "limit": limit}
+    )
+
+
+def test_the_queue_bytes_bound_its_memory(tmp_path: Path) -> None:
+    # In a fresh process: tracemalloc counts every thread's allocations, and
+    # other tests leave threads behind.
+    code = f"from tests.test_vllm_hook import _queue_memory as m; print(m({str(tmp_path)!r}))"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    memory = json.loads(result.stdout.splitlines()[-1])
+
+    assert memory["dropped"] > 0  # more was offered than fits
+    # A queued record holds its JSON text and a small fixed overhead, no more.
+    assert memory["held"] <= memory["limit"] + 200 * memory["queued"]
+
+
+def _counting_bodies(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Record every set of fields the writer serializes."""
+    serialized: list[object] = []
+    body = EpochWriter._body
+
+    def counting(writer: EpochWriter, fields: dict[str, Any]) -> str | None:
+        serialized.append(fields)
+        return body(writer, fields)
+
+    monkeypatch.setattr(EpochWriter, "_body", counting)
+    return serialized
+
+
+def test_a_record_the_queue_cannot_take_is_never_serialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serialized = _counting_bodies(monkeypatch)
+    limits = WriterLimits(queue_records=2, heartbeat_seconds=3600)
+    writer = EpochWriter(tmp_path, "engine", limits=limits)
+    with writer._condition:  # the writer thread cannot take any
+        for index in range(5):
+            writer.emit("alias", {"internal": f"r{index}"})
+    writer.close()
+    writer.emit("alias", {"internal": "after close"})
+
+    # Only the two records that fit were serialized; the rest cost nothing.
+    assert serialized == [{"internal": "r0"}, {"internal": "r1"}]
+    assert writer._status()["dropped"] == {"alias": 4}
+
+
+def test_a_record_oversized_by_its_ids_alone_is_never_serialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serialized = _counting_bodies(monkeypatch)
+    writer = EpochWriter(
+        tmp_path, "engine", limits=WriterLimits(heartbeat_seconds=3600)
+    )
+
+    def step(members: int, id_length: int) -> dict[str, Any]:
+        internal = f"chatcmpl-{'x' * id_length}"
+        return {
+            "iteration": "1",
+            "members": [{"internal": f"{internal}-{n}"} for n in range(members)],
+        }
+
+    # Clients choose request IDs: 4 and 16 MiB of them in one step.
+    writer.emit("scheduled", step(256, 16384))
+    writer.emit("completed", step(1024, 16384))
+    writer.emit("scheduled", {"iteration": "2", "preempted": ["y" * (5 << 20)]})
+    writer.emit("alias", {"internal": "z" * (5 << 20)})
+    kept = step(256, 4096)  # 1 MiB: it fits, so it is serialized and written
+    writer.emit("scheduled", kept)
+    writer.close()
+
+    assert serialized == [kept]
+    records = _epoch_records(writer.directory)
+    assert [(r["kind"], len(r.get("members", ()))) for r in records] == [
+        ("scheduled", 256),
+        ("goodbye", 0),
+    ]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert status["dropped"] == {
+        "scheduled_oversized": 2,
+        "completed_oversized": 1,
+        "alias_oversized": 1,
+    }
+
+
+def test_a_record_after_the_disk_cap_is_never_serialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serialized = _counting_bodies(monkeypatch)
+    writer = EpochWriter(tmp_path, "engine", limits=WriterLimits(max_bytes=100))
+    writer.emit("alias", {"internal": "x" * 200})  # its line passes the cap
+    _wait(lambda: writer._status()["capped"])
+    writer.emit("alias", {"internal": "y"})
+    writer.close()
+
+    assert serialized == [{"internal": "x" * 200}]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert status["dropped"]["alias"] == 2
+
+
+def _engine_step(writer: EpochWriter, members: int) -> Callable[[], None]:
+    """One scheduler step of ``members`` decoding requests, through the recorder."""
+    ids = [
+        f"chatcmpl-stormlog-run-1-c1_measured_0_{n}-0f3a9c1d" for n in range(members)
+    ]
+    scheduler = types.SimpleNamespace(
+        requests={internal: FakeRequest(internal, 512) for internal in ids},
+        num_sampled_tokens_per_step=1,
+    )
+    output = SchedulerOutput(
+        [], CachedRequestData(ids, [600] * members), dict.fromkeys(ids, 1), members
+    )
+    sampled = ModelRunnerOutput(
+        {internal: index for index, internal in enumerate(ids)}, [[7] for _ in ids]
+    )
+    result = {0: EngineCoreOutputs([EngineCoreOutput(i, [7]) for i in ids])}
+    recorder = EngineRecorder(writer, "vllm:h:b:1:1")
+
+    def step() -> None:
+        recorder.on_schedule(scheduler, output, (time.time_ns(), time.monotonic_ns()))
+        before = recorder.before_update(scheduler, output, sampled)
+        recorder.after_update(scheduler, output, before, result=result)
+
+    return step
+
+
+@pytest.mark.benchmark
+def test_the_engine_step_cost_is_reported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Callable[[str, object], None],
+) -> None:
+    """Report the engine thread's cost per scheduler step; never assert it.
+
+    CI timing is too noisy for a bound, so it runs only when selected:
+    ``pytest -m benchmark -rP`` prints the figures, and the JUnit XML keeps
+    them as properties. ``emit`` is the time spent in ``EpochWriter.emit``,
+    queueing the step's two records.
+    """
+    writer = EpochWriter(tmp_path, "engine")
+    silent = EpochWriter(tmp_path, "worker")
+    monkeypatch.setattr(silent, "emit", lambda kind, fields: None)
+    report = []
+    for members in (8, 64, 256):
+        step = _best_seconds(_engine_step(writer, members))
+        emit = step - _best_seconds(_engine_step(silent, members))
+        record_property(f"step_us_{members}_members", round(step * 1e6, 1))
+        record_property(f"emit_us_{members}_members", round(emit * 1e6, 1))
+        report.append(f"{members} members {step * 1e6:.0f} us (emit {emit * 1e6:.0f})")
+    writer.close()
+    silent.close()
+    print("engine thread per step:", "; ".join(report))
+
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert (status["dropped"], status["errors"]) == ({}, 0)
+
+
+def _best_seconds(step: Callable[[], None]) -> float:
+    return min(timeit.repeat(step, number=3, repeat=10)) / 3
 
 
 def test_an_escaped_record_over_the_limit_is_dropped(tmp_path: Path) -> None:
@@ -745,6 +1121,24 @@ def test_an_escaped_record_over_the_limit_is_dropped(tmp_path: Path) -> None:
     assert status["dropped"] == {"alias_oversized": 1}
 
 
+def test_a_status_field_json_cannot_write_is_an_error(tmp_path: Path) -> None:
+    writer = EpochWriter(
+        tmp_path,
+        "worker",
+        limits=WriterLimits(heartbeat_seconds=0.02),
+        status_fields=lambda: {"bad": object()},
+    )
+    # Each heartbeat counts two errors: its record and its status file.
+    _wait(lambda: writer._status()["errors"] >= 4)
+    writer.emit("alias", {"internal": "x"})
+    writer.close()
+
+    # The writer thread lived on: the record after those heartbeats is written.
+    kinds = [record["kind"] for record in _epoch_records(writer.directory)]
+    assert kinds == ["alias", "goodbye"]
+    assert not (writer.directory / "status.json").exists()
+
+
 def test_goodbye_is_the_last_record(tmp_path: Path) -> None:
     # Every pass of the writer is past a zero heartbeat interval.
     writer = EpochWriter(tmp_path, "engine", limits=WriterLimits(heartbeat_seconds=0))
@@ -752,8 +1146,11 @@ def test_goodbye_is_the_last_record(tmp_path: Path) -> None:
         writer.emit("alias", {"internal": f"r{index}"})
     writer.close()
 
-    kinds = [record["kind"] for record in _epoch_records(writer.directory)]
+    records = _epoch_records(writer.directory)
+    kinds = [record["kind"] for record in records]
     assert kinds.count("goodbye") == 1 and kinds[-1] == "goodbye"
+    # goodbye names its own number, the epoch's last.
+    assert records[-1]["last_seq"] == records[-1]["seq"] == len(records) - 1
 
 
 def test_a_backlog_does_not_hold_up_the_status_or_sealing(
@@ -885,7 +1282,7 @@ def test_a_forked_worker_finalizes_its_log_on_a_normal_exit(tmp_path: Path) -> N
 
 def _epoch_records(directory: Path) -> list[dict[str, Any]]:
     return [
-        json.loads(line)
+        _loads(line)
         for path in sorted(directory.glob("*.jsonl"))
         for line in path.read_text().splitlines()
     ]

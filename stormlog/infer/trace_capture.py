@@ -5,11 +5,15 @@ vLLM's torch profiler is configured when the server starts
 then start and stop it over HTTP (``/start_profile`` and ``/stop_profile``).
 This module opens one window per profiled phase, closes it at the phase's end,
 at a time bound, or on cancellation, and finds the worker traces vLLM wrote.
-It stops the profiler only after its own start succeeded. vLLM 0.30.0 answers
-200 to a second ``/start_profile`` and to ``/stop_profile`` with nothing
-running, so a client cannot tell from HTTP whether another profile was already
-active; do not run two profilers against one server. The traces are imported
-after the run.
+A start the server may have received, whether it answered 2xx or not at all,
+is always followed by one stop: the engine runs ``/start_profile`` before the
+HTTP reply goes out, so a lost or failed reply can leave it profiling. A stop
+that fails is not retried; the window's record says the profiler may still be
+running. Only a 401, 403, 404, 405 or 407, which come before vLLM's handler
+runs, is not stopped. vLLM 0.30.0 answers 200 to a second ``/start_profile``
+and to ``/stop_profile`` with nothing running, so a client cannot tell from
+HTTP whether another profile was already active; do not run two profilers
+against one server. The traces are imported after the run.
 
 The profiler adds no synchronization per request; the server writes the trace
 while handling ``/stop_profile``, so that call can take tens of seconds.
@@ -27,7 +31,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from ..session import SessionSummary
 from .cache_state import redact_url
@@ -47,6 +51,16 @@ TRACE_PHASES = ("measured", "warmup")
 # when every parallel group exists (MoE models); the API server's own trace is
 # named *.async_llm.* and is not GPU work.
 TRACE_GLOB = "*.pt.trace.json*"
+# What a /start_profile call established about the server's profiler.
+START_ACKNOWLEDGED = "acknowledged"
+START_REJECTED = "rejected"
+START_UNKNOWN = "unknown"
+# Answers that come before vLLM 0.30.0's /start_profile handler runs: 404 and
+# 405 from routing (the profile routes exist only with --profiler-config),
+# and 401, 403 and 407 from something in front of vLLM, whose own API-key
+# check does not cover these routes.
+REJECTING_STATUSES = frozenset({401, 403, 404, 405, 407})
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -97,8 +111,42 @@ class ControlResult:
         return self.status is not None and 200 <= self.status < 300
 
 
+def start_outcome(result: ControlResult) -> str:
+    """``acknowledged`` (2xx), ``rejected`` (``REJECTING_STATUSES``), else
+    ``unknown``.
+
+    Any other answer can follow a start that reached the engine. vLLM 0.30.0's
+    handler awaits the engine's start, and its own profiler's, before it
+    replies, and maps an exception raised meanwhile to 400 (ValueError,
+    TypeError, OverflowError), 422, 501 or 500
+    (``vllm/entrypoints/serve/profile/api_router.py`` and
+    ``serve/exception_handling/error_response.py``). An intermediary can
+    answer 408 or 499 after forwarding the call, and a timeout, a reset or a
+    malformed reply says nothing either.
+    """
+    if result.ok:
+        return START_ACKNOWLEDGED
+    if result.status in REJECTING_STATUSES:
+        return START_REJECTED
+    return START_UNKNOWN
+
+
 class ProfilerControl(Protocol):
     def post(self, route: str) -> ControlResult: ...
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect, so the 3xx is the call's answer.
+
+    urllib would follow it as a GET to wherever it points, with the API key,
+    and that page's 200 would read as an acknowledged start.
+    """
+
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
 
 
 class HttpProfilerControl:
@@ -115,12 +163,13 @@ class HttpProfilerControl:
             f"{self.root}{route}", data=b"", headers=headers, method="POST"
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with _OPENER.open(request, timeout=self.timeout) as response:
                 return ControlResult(int(response.status))
         except urllib.error.HTTPError as exc:
             return ControlResult(exc.code, f"HTTP {exc.code}")
-        except (OSError, http.client.HTTPException) as exc:
-            # HTTPException covers a malformed reply (BadStatusLine and the like).
+        except (OSError, http.client.HTTPException, ValueError) as exc:
+            # HTTPException covers a malformed reply (BadStatusLine and the
+            # like); ValueError an API key a header cannot carry (not latin-1).
             return ControlResult(None, f"{type(exc).__name__}: {exc}")
 
 
@@ -135,6 +184,10 @@ class TraceWindow:
     started: bool = False
     started_at_ns: int | None = None
     start: ControlResult | None = None
+    start_outcome: str | None = None
+    # Wall times taken immediately around the /start_profile request itself.
+    start_requested_at_ns: int | None = None
+    start_returned_at_ns: int | None = None
     stop: ControlResult | None = None
     stop_reason: str | None = None
     stopped_at_ns: int | None = None
@@ -158,6 +211,9 @@ class TraceWindow:
             "requested_at_ns": self.requested_at_ns,
             "started": self.started,
             "started_at_ns": self.started_at_ns,
+            "start_outcome": self.start_outcome,
+            "start_requested_at_ns": self.start_requested_at_ns,
+            "start_returned_at_ns": self.start_returned_at_ns,
             "start_status": self.start.status if self.start else None,
             "start_error": self.start.error if self.start else None,
             "stop_status": self.stop.status if self.stop else None,
@@ -206,7 +262,7 @@ class TraceWindows:
         # every remaining task (Python 3.10 included), and the start's answer
         # is needed to know whether to stop the profiler.
         start = asyncio.get_running_loop().run_in_executor(
-            None, self.control.post, "/start_profile"
+            None, self._send_start, window
         )
         try:
             window.start = await asyncio.shield(start)
@@ -215,10 +271,18 @@ class TraceWindows:
             # stop and record the window before letting the cancellation through.
             await self._abandon(window, start, before)
             raise
-        self._mark_started(window)
-        timer = self._bound(window)
+        _mark_started(window)
+        timer: asyncio.Task[None] | None = None
         reason = "phase_end"
         try:
+            # Inside the cleanup: a warning that fails (a closed stderr, a
+            # Ctrl+C while it prints) must not skip the stop or the record.
+            self._warn_start(window)
+            timer = self._bound(window)
+            if window.start_outcome == START_UNKNOWN:
+                # The server may be profiling with nobody to stop it: stop it
+                # now, and let the phase run unprofiled.
+                await self._stop(window, "start_unknown")
             yield window
         except BaseException:
             reason = "cancelled"
@@ -229,13 +293,25 @@ class TraceWindows:
             finally:
                 await self._close(window, reason, before)
 
-    def _mark_started(self, window: TraceWindow) -> None:
-        assert window.start is not None
-        window.started = window.start.ok
-        window.started_at_ns = time.time_ns() if window.started else None
-        if not window.started:
-            window.note = "the profiler did not start; see start_status and start_error"
+    def _send_start(self, window: TraceWindow) -> ControlResult:
+        window.start_requested_at_ns = time.time_ns()
+        try:
+            return self._post("/start_profile")
+        finally:
+            window.start_returned_at_ns = time.time_ns()
+
+    def _post(self, route: str) -> ControlResult:
+        """The control's answer; one that raises gave no answer (unknown)."""
+        try:
+            return self.control.post(route)
+        except Exception as exc:
+            return ControlResult(None, f"{type(exc).__name__}: {exc}")
+
+    def _warn_start(self, window: TraceWindow) -> None:
+        if window.start_outcome == START_REJECTED:
             self._warn(window, "could not start the profiler")
+        elif window.start_outcome == START_UNKNOWN:
+            self._warn(window, "the profiler may have started; stopping it")
 
     async def _abandon(
         self,
@@ -244,9 +320,13 @@ class TraceWindows:
         before: dict[str, int] | None,
     ) -> None:
         # Bounded by the control timeout of the start request itself.
-        window.start = await start
-        self._mark_started(window)
-        await self._close(window, "cancelled", before)
+        result, _ = await _wait_out(start)
+        window.start = result
+        _mark_started(window)
+        try:
+            self._warn_start(window)
+        finally:
+            await self._close(window, "cancelled", before)
 
     def take_records(self, *, session_id: str) -> list[dict[str, Any]]:
         """``infer.trace_window`` records for windows closed since the last call."""
@@ -266,8 +346,12 @@ class TraceWindows:
         await self._stop(window, "time_bound")
 
     async def _stop(self, window: TraceWindow, reason: str) -> None:
-        """Send the stop once; a cancellation waits for it before going through."""
-        if not window.started:
+        """Send the stop once; a cancellation waits for it before going through.
+
+        Every start the server may have received is stopped: acknowledged or
+        unknown. Only a rejected start, which never reached the engine, is not.
+        """
+        if not _may_be_profiling(window):
             return
         first = window.stopping is None
         if window.stopping is None:
@@ -275,13 +359,11 @@ class TraceWindows:
             window.stopping = asyncio.get_running_loop().run_in_executor(
                 None, self._send_stop, window
             )
-        try:
-            await asyncio.shield(window.stopping)
-        except asyncio.CancelledError:
-            # The server keeps profiling until it is told to stop: wait for the
-            # stop (bounded by the control timeout), then let Ctrl+C through.
-            await window.stopping
-            raise
+        # The server keeps profiling until it is told to stop: wait for the
+        # stop (bounded by the control timeout), then let Ctrl+C through.
+        _, interrupted = await _wait_out(window.stopping)
+        if interrupted:
+            raise asyncio.CancelledError
         if first and window.stop is not None and not window.stop.ok:
             self._warn(window, "the profiler did not confirm the stop")
 
@@ -294,7 +376,7 @@ class TraceWindows:
             window.note = (
                 f"could not read {self.config.trace_dir}: {exc.strerror or exc}"
             )
-        window.stop = self.control.post("/stop_profile")
+        window.stop = self._post("/stop_profile")
         window.stopped_at_ns = time.time_ns()
 
     async def _close(
@@ -303,11 +385,13 @@ class TraceWindows:
         """Stop, look for the traces, and record the window whatever happens."""
         try:
             await self._stop(window, reason)
-            if window.started and before is not None:
+            if _may_be_profiling(window) and before is not None:
                 window.files = await asyncio.to_thread(self._find_files, window, before)
         finally:
-            if window.started:
-                window.note = window.note or self._files_note(window)
+            # Written from what the stop returned, never ahead of it.
+            window.note = _joined(
+                window.note or self._result_note(window), _stop_note(window)
+            )
             self.windows.append(window)
             self._unwritten.append(window)
 
@@ -359,6 +443,16 @@ class TraceWindows:
             previous = current
             time.sleep(self.config.settle_seconds)
         return sorted(directory / name for name in previous or {})
+
+    def _result_note(self, window: TraceWindow) -> str | None:
+        if window.start_outcome != START_UNKNOWN:
+            return self._files_note(window) if window.started else None
+        unknown = "the start's answer does not say whether the profiler started"
+        if window.stop is None or not window.stop.ok:
+            return unknown  # the stop's own note says what is left
+        if window.stop_reason == "start_unknown":
+            return f"{unknown}; it was stopped before the phase, which ran unprofiled"
+        return f"{unknown}; it was stopped"
 
     def _files_note(self, window: TraceWindow) -> str | None:
         if self.config.trace_dir is None:
@@ -438,6 +532,56 @@ class _NothingCollected:
         )
 
 
+def _mark_started(window: TraceWindow) -> None:
+    """Classify the start's answer; no callback runs here."""
+    assert window.start is not None
+    window.start_outcome = start_outcome(window.start)
+    window.started = window.start_outcome == START_ACKNOWLEDGED
+    window.started_at_ns = window.start_returned_at_ns if window.started else None
+    if window.start_outcome == START_REJECTED:
+        window.note = "the profiler did not start; see start_status and start_error"
+
+
+def _stop_note(window: TraceWindow) -> str | None:
+    """Said when a profile may have started and no stop was confirmed."""
+    if not _may_be_profiling(window) or (window.stop is not None and window.stop.ok):
+        return None
+    if window.stop is None:
+        return "no stop could be sent; the profiler may still be running"
+    return (
+        "the stop was sent once and not confirmed (see stop_status and "
+        "stop_error); the profiler may still be running"
+    )
+
+
+def _joined(*notes: str | None) -> str | None:
+    return "; ".join(note for note in notes if note) or None
+
+
+def _may_be_profiling(window: TraceWindow) -> bool:
+    """The server may have started profiling for this window."""
+    return window.start_outcome in (START_ACKNOWLEDGED, START_UNKNOWN)
+
+
+async def _wait_out(future: asyncio.Future[_T]) -> tuple[_T, bool]:
+    """The result of a control call already running on a thread, however many
+    cancellations arrive meanwhile, and whether one did.
+
+    Every wait is shielded: cancelling the call's future would not stop its
+    thread, and the cleanup needs what it returns. A second cancellation, or
+    ``asyncio.run`` cancelling every task on its way out of a Ctrl+C, would
+    otherwise skip the stop and the record.
+    """
+    interrupted = False
+    while True:
+        try:
+            return await asyncio.shield(future), interrupted
+        except asyncio.CancelledError:
+            if future.cancelled():
+                raise
+            interrupted = True
+
+
 def _flush_over(
     started: float, seen: dict[str, int] | None, config: TraceCaptureConfig
 ) -> bool:
@@ -452,13 +596,18 @@ async def _finish_timer(timer: asyncio.Task[None] | None, window: TraceWindow) -
     """Cancel a time bound that has not fired; let one that is stopping finish.
 
     ``asyncio.wait`` does not raise the timer's own cancellation, while a
-    cancellation of the caller still goes through.
+    cancellation of the caller still goes through. What the timer raised, a
+    warning that failed say, is raised here, as it would be from the phase;
+    the window is still closed and recorded.
     """
     if timer is None:
         return
     if window.stop_reason is None:
         timer.cancel()
     await asyncio.wait({timer})
+    error = None if timer.cancelled() else timer.exception()
+    if error is not None:
+        raise error
 
 
 def _worker_traces(directory: Path) -> list[Path]:
@@ -476,6 +625,9 @@ def _is_worker_trace(name: str) -> bool:
 
 
 __all__ = [
+    "START_ACKNOWLEDGED",
+    "START_REJECTED",
+    "START_UNKNOWN",
     "TRACE_MODES",
     "TRACE_PHASES",
     "VLLM_TORCH",
@@ -486,4 +638,5 @@ __all__ = [
     "TraceWindow",
     "TraceWindows",
     "server_root",
+    "start_outcome",
 ]

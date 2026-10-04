@@ -1,12 +1,12 @@
 """The vLLM hook's raw log: one epoch directory per process and role.
 
 Records go into a bounded in-memory queue and a daemon thread writes them, so a
-patched vLLM call never waits on a disk. The queue bounds the number of records
-and their estimated size, counted from their content until written; a record
-that does not fit, or is too large on its own, is dropped and counted. The
-thread checks its deadlines after every record, so heartbeats, flush requests
-and sealing stay on time under a backlog. Each line is written whole or not at
-all. Segments are sealed by
+patched vLLM call never waits on a disk. Each record's fields are serialized
+once, as they are queued, and the queue bounds the number of records and the
+exact size of that JSON until written; a record that does not fit, or is too
+large on its own, is dropped and counted. The thread checks its deadlines after
+every record, so heartbeats, flush requests and sealing stay on time under a
+backlog. Each line is written whole or not at all. Segments are sealed by
 renaming ``.part`` to ``.jsonl``; a failed seal is counted and retried. A status
 file is rewritten every heartbeat, and keeps being rewritten after the disk cap
 stops record writing, so loss stays visible. See ``docs/vllm_execution.md``.
@@ -17,6 +17,7 @@ from __future__ import annotations
 import atexit
 import json
 import multiprocessing.util
+import operator
 import os
 import re
 import shutil
@@ -33,8 +34,11 @@ from ..host_clock import host_boot_id
 
 FORMAT = "stormlog.vllm_hook/1"
 EPOCH_NAME = re.compile(r"^(engine|worker)-\d+-\d+$")
-# A queued record: its kind, its fields, and its estimated size in bytes.
-_Queued = tuple[str, dict[str, Any], int]
+# A queued record: its kind, and its fields as one JSON object. ``json`` escapes
+# every character beyond ASCII, so the text's length is its size in bytes.
+_Queued = tuple[str, str]
+_dumps = json.JSONEncoder(separators=(",", ":")).encode
+_internal = operator.itemgetter("internal")
 
 
 @dataclass(frozen=True)
@@ -101,8 +105,20 @@ class EpochWriter:
         multiprocessing.util.Finalize(None, self.close, exitpriority=100)
 
     def emit(self, kind: str, fields: dict[str, Any]) -> None:
-        """Queue one record; drop and count it when it does not fit."""
-        size = _estimate(fields, self.limits.record_bytes)
+        """Queue one record; drop and count it when it does not fit.
+
+        A record the queue cannot take at any size, or whose long strings
+        alone pass ``record_bytes``, is dropped unserialized, so neither a
+        backlog nor a client's long request IDs cost the caller an encoding.
+        The rest are serialized now. ``fields`` must not reuse the common
+        fields' names, which the writer thread adds with the sequence number.
+        """
+        if self._dropped_unserialized(kind, _floor(fields)):
+            return
+        body = self._body(fields)
+        if body is None:
+            return
+        size = len(body)
         with self._condition:
             if size > self.limits.record_bytes:
                 self._counters.dropped[f"{kind}_oversized"] += 1
@@ -114,7 +130,7 @@ class EpochWriter:
             if full or self._closing:
                 self._counters.dropped[kind] += 1
                 return
-            self._queue.append((kind, fields, size))
+            self._queue.append((kind, body))
             self._queued_bytes += size
             self._condition.notify()
 
@@ -130,7 +146,8 @@ class EpochWriter:
             if self._closing:
                 return
             if goodbye:
-                self._queue.append(("goodbye", {}, 64))
+                self._queue.append(("goodbye", "{}"))
+                self._queued_bytes += 2
             self._closing = True
             self._condition.notify()
         self._thread.join(self.limits.close_seconds)
@@ -143,10 +160,10 @@ class EpochWriter:
         next_beat = time.monotonic() + self.limits.heartbeat_seconds
         while True:
             batch, closing = self._take(next_beat)
-            for kind, fields, size in batch:
-                self._write(kind, fields)
+            for kind, body in batch:
+                self._write(kind, body)
                 with self._condition:
-                    self._queued_bytes -= size
+                    self._queued_bytes -= len(body)
                 if self._segment.size >= self.limits.segment_bytes:
                     self._seal()
                 # Checked per record, so a slow disk delays these by one write.
@@ -177,21 +194,42 @@ class EpochWriter:
             closing = self._closing and not self._queue
             return batch, closing
 
-    def _write(self, kind: str, fields: dict[str, Any]) -> None:
+    def _dropped_unserialized(self, kind: str, floor: int) -> bool:
+        """Drop and count a record whose ``floor`` is already oversized, or
+        that no size would let into the queue."""
+        with self._condition:
+            if floor > self.limits.record_bytes:
+                self._counters.dropped[f"{kind}_oversized"] += 1
+                return True
+            refused = (
+                self._closing
+                or self._counters.capped
+                or len(self._queue) >= self.limits.queue_records
+            )
+            if refused:
+                self._counters.dropped[kind] += 1
+            return refused
+
+    def _body(self, fields: object) -> str | None:
+        """The fields as one JSON object, or None and an error counted."""
+        if isinstance(fields, dict):  # _join splices objects only
+            try:
+                return _dumps(fields)
+            except Exception:  # json's own errors, or any a value raises
+                pass
+        self.count_error()
+        return None
+
+    def _write(self, kind: str, body: str) -> None:
         with self._condition:
             if self._counters.capped:
                 self._counters.dropped[kind] += 1
                 return
             seq = self._counters.last_seq + 1
-        record = {"format": FORMAT, "kind": kind, "epoch": self.epoch, "seq": seq}
-        record.update(fields)
         if kind == "goodbye":
-            record.update(_stamp(), last_seq=seq)
-        try:
-            line = (json.dumps(record, separators=(",", ":")) + "\n").encode()
-        except (TypeError, ValueError):
-            self.count_error()
-            return
+            body = _dumps({**_stamp(), "last_seq": seq})
+        common = {"format": FORMAT, "kind": kind, "epoch": self.epoch, "seq": seq}
+        line = _join(_dumps(common), body)
         with self._condition:
             if self._counters.bytes + len(line) > self.limits.max_bytes:
                 self._counters.capped = True
@@ -210,7 +248,9 @@ class EpochWriter:
     def _heartbeat(self) -> None:
         status = self._status()
         if not self._counters.capped and not self._ended:
-            self._write("heartbeat", status)
+            body = self._body(status)
+            if body is not None:
+                self._write("heartbeat", body)
         self._write_status()
 
     def _write_status(self) -> None:
@@ -338,35 +378,27 @@ def remove_old_epochs(
     return removed
 
 
-def _estimate(value: Any, limit: int) -> int:
-    """Bytes a record will take, from its content; stops counting past ``limit``."""
-    total = 0
-    stack = [value]
-    while stack and total <= limit:
-        item = stack.pop()
-        if isinstance(item, str):
-            total += _string_bytes(item)
-        elif isinstance(item, dict):
-            total += 2 + 2 * len(item)
-            stack.extend(item.keys())
-            stack.extend(item.values())
-        elif isinstance(item, (list, tuple, set)):
-            total += 2 + len(item)
-            stack.extend(item)
-        else:
-            total += 24
-    return total
+def _floor(fields: dict[str, Any]) -> int:
+    """Bytes the fields' JSON takes at least, read without serializing them.
 
-
-def _string_bytes(text: str) -> int:
-    """Bytes ``json.dumps`` writes for a string, or a bound that is never less.
-
-    Printable ASCII is counted exactly. Anything else may be escaped: up to six
-    bytes a character, and twelve for one beyond the Basic Multilingual Plane.
+    Clients choose request IDs (vLLM builds them from ``X-Request-Id``), so
+    IDs are what can make a record huge. This counts the lengths of the
+    record's own strings, its ``preempted`` IDs and its members' ``internal``
+    IDs: a string's JSON is never shorter than the string.
     """
-    if text.isascii() and text.isprintable():
-        return len(text) + 2 + text.count('"') + text.count("\\")
-    return 12 * len(text) + 2
+    try:
+        total = sum(len(value) for value in fields.values() if type(value) is str)
+        total += sum(map(len, fields.get("preempted") or ()))
+        return total + sum(map(len, map(_internal, fields.get("members") or ())))
+    except Exception:  # an unexpected shape: serializing it decides
+        return 0
+
+
+def _join(first: str, second: str) -> bytes:
+    """Two JSON objects' text as one object's line, with ``first``'s fields first."""
+    if second == "{}":
+        return (first + "\n").encode()
+    return (first[:-1] + "," + second[1:] + "\n").encode()
 
 
 def _write_all(fd: int, data: bytes) -> bool:
@@ -398,11 +430,14 @@ def _write_key(path: Path) -> bytes:
 
 
 def _replace_json(path: Path, payload: dict[str, Any]) -> bool:
+    try:
+        data = _dumps(payload).encode()
+    except Exception:  # a status field json cannot write
+        return False
     temporary = path.with_name(path.name + ".tmp")
     try:
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            data = json.dumps(payload, separators=(",", ":")).encode()
             if not _write_all(fd, data):
                 return False
         finally:

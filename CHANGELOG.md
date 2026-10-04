@@ -192,6 +192,25 @@ the flaky benchmark memory gates
 - `stormlog infer analyze` lists every case, including cases in which no
   request succeeded, so drops and failures stay visible.
   ([#248](https://github.com/Silas-Asamoah/stormlog/pull/248))
+- The vLLM execution hook takes about 60–65% less time on vLLM's engine thread
+  per scheduler step. Each record's fields are now serialized once, when the
+  record is queued. Before, they were walked in Python to bound their size,
+  then serialized again by the writer thread. On an A30 serving
+  Qwen2.5-0.5B with vLLM 0.30.0, the hook now costs 1.3% of throughput at
+  concurrency 32 (it was 9.7%) and 7.7% at concurrency 256 (it was 12.0%).
+  The records written are byte-identical. The queue counts each record at
+  its exact JSON size, so:
+  - the memory it holds is now its 32 MiB of JSON at most, plus about 113
+    bytes a record: about 34 MiB in all at the 20,000-record cap. The live
+    records it held before could take twice the 32 MiB;
+  - fewer records are dropped as oversized: only a record whose JSON is over
+    4 MiB is, where the old estimate, about 1.65 times the JSON, also
+    dropped some that fit.
+
+  A record the queue cannot take at any size, because it is full or the disk
+  cap has stopped record writing, is now dropped before it is serialized, and
+  so is a record whose request IDs, which clients choose, alone pass 4 MiB.
+  (#217)
 
 ### Fixed
 
@@ -221,6 +240,16 @@ the flaky benchmark memory gates
   run, and a budgets file that is valid JSON but not an object no longer
   crashes with an `AttributeError` after the run.
   ([#249](https://github.com/Silas-Asamoah/stormlog/pull/249))
+- `stormlog infer profile --trace vllm-torch` now stops the profiler after a
+  `/start_profile` that answered 5xx, timed out, or lost its reply. vLLM runs
+  the start before it replies, so such a server could be left profiling, its
+  memory growing, until the next stop. Each `infer.trace_window` record now
+  carries `start_outcome` (`acknowledged`, `rejected` or `unknown`) and the
+  times the start request was sent and answered. Only a 401, 403, 404, 405
+  or 407, which come before vLLM's handler runs, is left unstopped. A stop that fails is warned about
+  and recorded, not retried, and the record says the profiler may still be
+  running.
+  ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
 
 ## [0.3.10] - 2026-10-01
 

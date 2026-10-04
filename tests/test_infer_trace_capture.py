@@ -24,11 +24,15 @@ from stormlog.infer.correlation_events import (
 )
 from stormlog.infer.profile import InferenceProfiler
 from stormlog.infer.trace_capture import (
+    START_ACKNOWLEDGED,
+    START_REJECTED,
+    START_UNKNOWN,
     ControlResult,
     HttpProfilerControl,
     TraceCaptureConfig,
     TraceWindows,
     server_root,
+    start_outcome,
 )
 
 
@@ -65,9 +69,15 @@ def _kineto(trace_id: str) -> str:
 
 
 class _FakeControl:
-    """Records calls; on stop, writes a worker trace and a frontend trace."""
+    """Records calls; on stop, writes a worker trace and a frontend trace.
 
-    def __init__(self, trace_dir: Path | None, *, start_status: int = 200) -> None:
+    ``start_status`` None answers the start like a connection reset after the
+    server received it.
+    """
+
+    def __init__(
+        self, trace_dir: Path | None, *, start_status: int | None = 200
+    ) -> None:
         self.trace_dir = trace_dir
         self.start_status = start_status
         self.calls: list[str] = []
@@ -75,8 +85,12 @@ class _FakeControl:
     def post(self, route: str) -> ControlResult:
         self.calls.append(route)
         if route == "/start_profile":
+            if self.start_status is None:
+                return ControlResult(None, "ConnectionResetError: reset by peer")
             ok = 200 <= self.start_status < 300
-            return ControlResult(self.start_status, None if ok else "HTTP 500")
+            return ControlResult(
+                self.start_status, None if ok else f"HTTP {self.start_status}"
+            )
         if self.trace_dir is not None:
             stop = self.calls.count("/stop_profile")
             (self.trace_dir / f"rank0.{stop}.pt.trace.json").write_text(
@@ -146,9 +160,10 @@ def test_other_phases_are_not_profiled(tmp_path: Path) -> None:
     assert control.calls == []
 
 
-def test_a_failed_start_is_recorded_and_never_stopped(tmp_path: Path) -> None:
+def test_a_rejected_start_is_recorded_and_never_stopped(tmp_path: Path) -> None:
+    """A 404 (a server without the profiler routes) never reached the engine."""
     warnings: list[str] = []
-    control = _FakeControl(tmp_path, start_status=500)
+    control = _FakeControl(tmp_path, start_status=404)
     windows = TraceWindows(
         _config(tmp_path), control=control, on_warning=warnings.append
     )
@@ -156,9 +171,238 @@ def test_a_failed_start_is_recorded_and_never_stopped(tmp_path: Path) -> None:
     window = _run_window(windows)
 
     assert control.calls == ["/start_profile"]
+    assert window.start_outcome == START_REJECTED
     assert not window.started and window.stop_reason is None
     assert window.files == []
-    assert warnings == ["c1 measured: could not start the profiler (HTTP 500)"]
+    assert warnings == ["c1 measured: could not start the profiler (HTTP 404)"]
+
+
+@pytest.mark.parametrize("start_status", [500, 503, None])
+def test_a_start_without_a_clear_answer_is_stopped_before_the_phase(
+    tmp_path: Path, start_status: int | None
+) -> None:
+    """A 5xx or a lost reply can follow a start the engine already ran."""
+    warnings: list[str] = []
+    control = _FakeControl(tmp_path, start_status=start_status)
+    windows = TraceWindows(
+        _config(tmp_path, max_seconds=60), control=control, on_warning=warnings.append
+    )
+    calls_during_phase: list[str] = []
+
+    async def scenario() -> Any:
+        async with windows.window("c1", "measured") as window:
+            calls_during_phase.extend(control.calls)
+        return window
+
+    window = asyncio.run(scenario())
+
+    # Stopped before the phase ran, and only once.
+    assert calls_during_phase == ["/start_profile", "/stop_profile"]
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    assert window.start_outcome == START_UNKNOWN
+    assert not window.started and window.started_at_ns is None
+    assert window.stop_reason == "start_unknown"
+    # A trace the stop wrote is still found, so the record says what exists.
+    assert [path.name for path in window.files] == ["rank0.1.pt.trace.json"]
+    record = window.to_record(session_id="s1")
+    assert (record["start_outcome"], record["stop_reason"]) == (
+        START_UNKNOWN,
+        "start_unknown",
+    )
+    assert warnings[0].startswith(
+        "c1 measured: the profiler may have started; stopping it"
+    )
+
+
+@pytest.mark.parametrize(
+    "failure", [BrokenPipeError("stderr closed"), KeyboardInterrupt()]
+)
+@pytest.mark.parametrize("cancel_during_start", [False, True])
+def test_a_failing_warning_never_skips_the_stop_or_the_record(
+    tmp_path: Path, failure: BaseException, cancel_during_start: bool
+) -> None:
+    """The CLI's warning writes to stderr, which can fail or be interrupted."""
+    import time
+
+    class _SlowLostStart(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            if route == "/start_profile" and cancel_during_start:
+                time.sleep(0.2)
+            return super().post(route)
+
+    def warn(_message: str) -> None:
+        raise failure
+
+    control = _SlowLostStart(tmp_path, start_status=None)
+    windows = TraceWindows(_config(tmp_path), control=control, on_warning=warn)
+
+    async def scenario() -> None:
+        async def body() -> None:
+            async with windows.window("c1", "measured"):
+                await asyncio.sleep(5)
+
+        task = asyncio.create_task(body())
+        if cancel_during_start:
+            await asyncio.sleep(0.05)
+            task.cancel()
+        await task
+
+    with pytest.raises((type(failure), asyncio.CancelledError)):
+        asyncio.run(scenario())
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    records = windows.take_records(session_id="s1")
+    assert [(r["start_outcome"], r["stop_status"]) for r in records] == [
+        (START_UNKNOWN, 200)
+    ]
+
+
+@pytest.mark.parametrize("start_status", [200, None])
+def test_a_failed_stop_is_recorded_as_one(
+    tmp_path: Path, start_status: int | None
+) -> None:
+    """A stop that did not reach the engine leaves the profiler running."""
+
+    class _StopFails(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            self.calls.append(route)
+            if route == "/start_profile":
+                if start_status is None:
+                    return ControlResult(None, "TimeoutError: timed out")
+                return ControlResult(start_status)
+            return ControlResult(503, "HTTP 503")
+
+    warnings: list[str] = []
+    control = _StopFails(tmp_path)
+    windows = TraceWindows(
+        _config(tmp_path), control=control, on_warning=warnings.append
+    )
+
+    window = _run_window(windows)
+
+    # Sent once, never retried, and said.
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    assert window.stop is not None and window.stop.status == 503
+    assert window.note is not None
+    assert "unprofiled" not in window.note
+    assert "may still be running" in window.note
+    assert warnings[-1] == (
+        "c1 measured: the profiler did not confirm the stop (HTTP 503)"
+    )
+
+
+def test_a_failing_warning_from_the_time_bound_is_raised_after_the_record(
+    tmp_path: Path, recwarn: pytest.WarningsRecorder
+) -> None:
+    """The time bound's stop warns from its own task. A warning that fails
+    there was never retrieved: the phase went on as if it had not."""
+
+    class _StopFails(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            self.calls.append(route)
+            if route == "/start_profile":
+                return ControlResult(200)
+            return ControlResult(503, "HTTP 503")
+
+    def warn(_message: str) -> None:
+        raise BrokenPipeError("stderr closed")
+
+    control = _StopFails(tmp_path)
+    windows = TraceWindows(
+        _config(tmp_path, max_seconds=0.05), control=control, on_warning=warn
+    )
+
+    with pytest.raises(BrokenPipeError):
+        _run_window(windows, body_seconds=0.3)
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    records = windows.take_records(session_id="s1")
+    assert [(r["stop_reason"], r["stop_status"]) for r in records] == [
+        ("time_bound", 503)
+    ]
+
+
+def test_an_unknown_start_stopped_before_the_phase_says_so(tmp_path: Path) -> None:
+    control = _FakeControl(tmp_path, start_status=None)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    window = _run_window(windows)
+
+    assert window.note == (
+        "the start's answer does not say whether the profiler started; "
+        "it was stopped before the phase, which ran unprofiled"
+    )
+
+
+def test_start_outcome_classifies_every_answer() -> None:
+    assert start_outcome(ControlResult(200)) == START_ACKNOWLEDGED
+    assert start_outcome(ControlResult(204)) == START_ACKNOWLEDGED
+    for status in (401, 403, 404, 405, 407):
+        assert start_outcome(ControlResult(status)) == START_REJECTED, status
+    # vLLM 0.30.0 answers 400 (or 422) for an exception raised while it
+    # handles the start, which may already have reached the engine; an
+    # intermediary's 408 or 499 can follow a forwarded call.
+    for status in (400, 408, 409, 422, 429, 499):
+        assert start_outcome(ControlResult(status)) == START_UNKNOWN, status
+    assert start_outcome(ControlResult(500, "HTTP 500")) == START_UNKNOWN
+    assert start_outcome(ControlResult(302, "HTTP 302")) == START_UNKNOWN
+    assert start_outcome(ControlResult(None, "TimeoutError: timed out")) == (
+        START_UNKNOWN
+    )
+
+
+def test_the_start_request_is_stamped_around_the_call_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not around the directory snapshot before it, nor the executor's wait."""
+    import itertools
+    import time
+
+    ticks = itertools.count(1)
+    lock = threading.Lock()
+
+    def clock() -> int:
+        with lock:
+            return next(ticks)
+
+    monkeypatch.setattr(time, "time_ns", clock)
+    marks: dict[str, int] = {}
+
+    class _Timed(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            if route != "/start_profile":
+                return super().post(route)
+            marks["post_entered"] = clock()
+            try:
+                return super().post(route)
+            finally:
+                marks["post_left"] = clock()
+
+    class _Windows(TraceWindows):
+        def _snapshot(self, window: Any) -> dict[str, int] | None:
+            try:
+                return super()._snapshot(window)
+            finally:
+                marks["snapshot_done"] = clock()
+
+    windows = _Windows(_config(tmp_path), control=_Timed(tmp_path))
+
+    window = _run_window(windows)
+
+    assert window.start_outcome == START_ACKNOWLEDGED
+    assert (
+        window.requested_at_ns
+        < marks["snapshot_done"]
+        < window.start_requested_at_ns
+        < marks["post_entered"]
+        < marks["post_left"]
+        < window.start_returned_at_ns
+    )
+    assert window.started_at_ns == window.start_returned_at_ns
+    record = window.to_record(session_id="s1")
+    assert record["start_requested_at_ns"] == window.start_requested_at_ns
+    assert record["start_returned_at_ns"] == window.start_returned_at_ns
+    assert record["start_outcome"] == START_ACKNOWLEDGED
 
 
 def test_the_time_bound_stops_the_profiler_while_the_phase_runs(
@@ -237,6 +481,166 @@ def test_http_control_reports_status_and_never_raises() -> None:
     unreachable = HttpProfilerControl("http://127.0.0.1:1", api_key=None, timeout=1)
     result = unreachable.post("/start_profile")
     assert result.status is None and result.error is not None
+
+
+class _Redirecting(BaseHTTPRequestHandler):
+    """Answers every POST with a redirect, and a GET with 200: a login page."""
+
+    def do_POST(self) -> None:  # noqa: N802
+        self.server.calls.append(f"POST {self.path}")  # type: ignore[attr-defined]
+        self.send_response(302)
+        self.send_header("Location", "/login")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.server.calls.append(f"GET {self.path}")  # type: ignore[attr-defined]
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return None
+
+
+def test_a_redirected_start_is_not_followed_and_is_unknown() -> None:
+    """Following it would turn the POST into a GET elsewhere, whose 200 would
+    read as an acknowledged start."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Redirecting)
+    server.calls = []  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        windows = TraceWindows(
+            _config(None, control_url=f"http://127.0.0.1:{server.server_port}"),
+            api_key="secret",
+        )
+        window = _run_window(windows)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert server.calls == [  # type: ignore[attr-defined]
+        "POST /start_profile",
+        "POST /stop_profile",
+    ]
+    assert window.start == ControlResult(302, "HTTP 302")
+    assert window.start_outcome == START_UNKNOWN
+    assert window.stop == ControlResult(302, "HTTP 302")
+
+
+def test_a_control_that_raises_is_an_unknown_answer(tmp_path: Path) -> None:
+    """ProfilerControl promises never to raise; a window survives one that does."""
+
+    class _Raising:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def post(self, route: str) -> ControlResult:
+            self.calls.append(route)
+            raise RuntimeError("boom")
+
+    control = _Raising()
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    window = _run_window(windows)
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    assert window.start == ControlResult(None, "RuntimeError: boom")
+    assert window.start_outcome == START_UNKNOWN
+    assert window.stop == ControlResult(None, "RuntimeError: boom")
+    assert len(windows.take_records(session_id="s1")) == 1
+
+
+def test_an_api_key_http_cannot_carry_is_a_failed_call() -> None:
+    """A header value outside latin-1 raises UnicodeEncodeError in http.client."""
+    with _routes() as server:
+        control = HttpProfilerControl(
+            f"http://127.0.0.1:{server.server_port}", api_key="key\u2019", timeout=5
+        )
+        result = control.post("/start_profile")
+
+    assert result.status is None
+    assert result.error is not None and result.error.startswith("UnicodeEncodeError")
+    assert server.calls == []  # type: ignore[attr-defined]
+
+
+def test_a_start_whose_reply_is_lost_is_stopped_over_http(tmp_path: Path) -> None:
+    """The engine started profiling, then the connection dropped before the reply."""
+    import socket
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    routes: list[str] = []
+    profiling = threading.Event()
+
+    def serve() -> None:
+        for _ in range(2):
+            connection, _ = listener.accept()
+            request = connection.recv(4096).decode("latin-1")
+            route = request.split(" ", 2)[1]
+            routes.append(route)
+            if route == "/start_profile":
+                profiling.set()
+                connection.close()  # no reply at all
+                continue
+            profiling.clear()
+            connection.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            connection.close()
+
+    server = threading.Thread(target=serve, daemon=True)
+    server.start()
+    windows = TraceWindows(
+        _config(None, control_url=f"http://127.0.0.1:{listener.getsockname()[1]}")
+    )
+
+    window = _run_window(windows)
+    server.join(timeout=5)
+    listener.close()
+
+    assert routes == ["/start_profile", "/stop_profile"]
+    assert not profiling.is_set()
+    assert window.start_outcome == START_UNKNOWN
+    assert window.start is not None and window.start.status is None
+    assert window.stop is not None and window.stop.ok
+
+
+def test_cancelling_while_an_unanswered_start_is_in_flight_still_stops(
+    tmp_path: Path,
+) -> None:
+    import time
+
+    class _SlowLostStart(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            if route == "/start_profile":
+                time.sleep(0.3)
+            return super().post(route)
+
+    control = _SlowLostStart(tmp_path, start_status=None)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    async def scenario() -> None:
+        async def body() -> None:
+            async with windows.window("c1", "measured"):
+                await asyncio.sleep(5)
+
+        task = asyncio.create_task(body())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    records = windows.take_records(session_id="s1")
+    assert [(r["start_outcome"], r["stop_reason"]) for r in records] == [
+        (START_UNKNOWN, "cancelled")
+    ]
 
 
 class _ChatAndProfile(BaseHTTPRequestHandler):
@@ -428,9 +832,11 @@ def test_a_cancelled_phase_still_records_its_trace_window(
 
 
 class _FailingStart(_ChatAndProfile):
+    """Refuses the start with a 404: the server has no profiler routes."""
+
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/start_profile":
-            self.send_response(500)
+            self.send_response(404)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -715,6 +1121,109 @@ def test_ctrl_c_during_the_start_still_stops_the_profiler(tmp_path: Path) -> Non
 
     assert control.calls == ["/start_profile", "/stop_profile"]
     assert [w.stop_reason for w in windows.windows] == ["cancelled"]
+
+
+class _BlockingControl(_FakeControl):
+    """Holds one route's call until released; ``entered`` is set inside it."""
+
+    def __init__(self, trace_dir: Path, route: str, **kwargs: Any) -> None:
+        super().__init__(trace_dir, **kwargs)
+        self.route = route
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def post(self, route: str) -> ControlResult:
+        if route == self.route:
+            self.entered.set()
+            assert self.release.wait(5)
+        return super().post(route)
+
+
+def _cancel_while_blocked(
+    windows: TraceWindows, control: _BlockingControl, *, first_cancel_opens: bool
+) -> None:
+    """Cancel the window's task three times inside the held call.
+
+    With ``first_cancel_opens``, a first cancellation ends the phase, which
+    sends the held stop. Three, not two: a wait that shields only the first
+    cancellation and then awaits the call plainly survives two.
+    """
+
+    async def scenario() -> None:
+        async def body() -> None:
+            async with windows.window("c1", "measured"):
+                await asyncio.sleep(5)
+
+        task = asyncio.create_task(body())
+        if first_cancel_opens:  # the held call starts only after a cancel
+            await asyncio.sleep(0.05)
+            task.cancel()
+        assert await asyncio.to_thread(control.entered.wait, 5)
+        for _ in range(3):
+            task.cancel()
+            await asyncio.sleep(0.05)
+        # Nothing ends while the call is held: the window waits for its answer.
+        assert not task.done()
+        control.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("start_status", [200, None])
+def test_repeated_cancellation_during_the_start_still_stops_and_records(
+    tmp_path: Path, start_status: int | None
+) -> None:
+    control = _BlockingControl(tmp_path, "/start_profile", start_status=start_status)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    _cancel_while_blocked(windows, control, first_cancel_opens=False)
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    (window,) = windows.windows
+    assert window.stop is not None and window.stop.ok
+    assert "may still be running" not in (window.note or "")
+
+
+def test_repeated_cancellation_during_the_stop_waits_for_it(tmp_path: Path) -> None:
+    control = _BlockingControl(tmp_path, "/stop_profile")
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    _cancel_while_blocked(windows, control, first_cancel_opens=True)
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    (window,) = windows.windows
+    # The record was written after the stop returned, not before.
+    assert window.stop is not None and window.stop.ok
+    assert "may still be running" not in (window.note or "")
+
+
+def test_ctrl_c_after_a_cancel_during_the_start_still_stops(tmp_path: Path) -> None:
+    """asyncio.run cancels the task again on its way out of the Ctrl+C."""
+    control = _BlockingControl(tmp_path, "/start_profile", start_status=None)
+    windows = TraceWindows(_config(tmp_path), control=control)
+
+    async def main() -> None:
+        async def body() -> None:
+            async with windows.window("c1", "measured"):
+                await asyncio.sleep(5)
+
+        task = asyncio.create_task(body())
+        assert await asyncio.to_thread(control.entered.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        threading.Timer(0.1, control.release.set).start()
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(main())
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    records = windows.take_records(session_id="s1")
+    assert [(r["start_outcome"], r["stop_status"]) for r in records] == [
+        (START_UNKNOWN, 200)
+    ]
 
 
 @pytest.mark.parametrize(
