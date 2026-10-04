@@ -88,7 +88,8 @@ def test_guarantees_state_each_triggers_bounds() -> None:
         _payload(triggers=[_trigger(window_seconds=30, hold_seconds=60)])
     )
     guarantee = config.resolved()["guarantees"]["queue"]
-    assert guarantee["shortest_firing_violation_seconds"] == 30.0
+    # F - W - Δ: a window's first scrape may return a tick before it opens.
+    assert guarantee["shortest_firing_violation_seconds"] == 29.0
     # W + Δ + ceil((F + j) / Δ)·Δ + j, with j the 1 s scrape timeout.
     assert guarantee["detection_bound_seconds"] == 30 + 1 + 61 + 1
     slow = resolve_watch_config(
