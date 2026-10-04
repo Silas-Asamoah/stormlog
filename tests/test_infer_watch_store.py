@@ -177,6 +177,27 @@ def test_a_trace_whose_name_cannot_be_let_go_is_copied_not_linked(
     assert store.budget.used_bytes == store._scan_bytes() == 10
 
 
+def test_a_copy_to_a_name_taken_leaves_the_file_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cleanup of a failed copy removed the file already at its name,
+    one this writer had adopted, and publication then failed."""
+    _no_cross_device_links(monkeypatch)
+    store = IncidentStore(tmp_path, _limits())
+    first, second = tmp_path / "first.gz", tmp_path / "second.gz"
+    first.write_bytes(b"1" * 100)
+    second.write_bytes(b"2" * 100)
+    writer = store.new_bundle(store.new_incident_id(), 4000)
+    assert writer is not None
+    assert writer.adopt(first, "traces/t.gz") == 100
+    with pytest.raises(FileExistsError):
+        writer.adopt(second, "traces/t.gz")
+    manifest = writer.publish()
+    assert [f.path for f in manifest.files] == ["gen-0/traces/t.gz"]
+    assert (writer.directory / "traces" / "t.gz").read_bytes() == b"1" * 100
+    assert second.exists()
+
+
 def test_an_abandoned_generation_leaves_adopted_traces_where_they_were(
     tmp_path: Path,
 ) -> None:
