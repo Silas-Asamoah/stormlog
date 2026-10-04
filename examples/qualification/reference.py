@@ -339,6 +339,8 @@ class ReferenceChannel:
         self.scrapes: list[Scrape] = []
         self.victim_artifact = victim_artifact
         self.victim_prefix = victim_prefix
+        self._victim_offset = 0
+        self._victim_gaps: list[Point] = []
 
     def poll(self, *, scrape: bool = True) -> None:
         """Read new hook records, and take one scrape unless told not to."""
@@ -362,13 +364,21 @@ class ReferenceChannel:
         )
 
     def _chunk_gaps(self) -> list[Point]:
+        """The victim's chunk gaps, reading only what was appended since the
+        last call: this runs every quarter second on the host under test."""
         path = self.victim_artifact
         if path is None or not path.exists():
-            return []
-        data = path.read_bytes()
+            return self._victim_gaps
+        with path.open("rb") as handle:
+            handle.seek(self._victim_offset)
+            data = handle.read()
         complete = data[: data.rfind(b"\n") + 1]  # a line being written waits
-        records = [json.loads(line) for line in complete.splitlines() if line.strip()]
-        return chunk_gaps(records, self.victim_prefix)
+        self._victim_offset += len(complete)
+        records = [_parse(line) for line in complete.splitlines() if line.strip()]
+        fresh = chunk_gaps((r for r in records if r is not None), self.victim_prefix)
+        if fresh:
+            self._victim_gaps = sorted(self._victim_gaps + fresh)
+        return self._victim_gaps
 
 
 __all__ = [
