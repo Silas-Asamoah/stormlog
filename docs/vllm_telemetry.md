@@ -113,10 +113,15 @@ applied before the data is held whole, and each refusal is counted:
 
 The scrape's parser reads one line at a time, and its label pattern needs
 memory only for escaped characters, so what a scrape holds is bounded by
-these caps: at most about ten times the 8 MiB it may read. Measured on
-CPython 3.10: 34 MB for 20,000 series with 400-byte labels filling the
-8 MiB, and 82 MB when every label also holds a character outside the Basic
-Multilingual Plane, which Python stores at 4 bytes a character.
+these caps. Each label it keeps costs about a hundred bytes of Python
+objects, however short it is on the wire, so the bound is about
+twenty-five times the 8 MiB it may read, about 200 MB. Measured on CPython 3.10: 34 MB for
+20,000 series with 400-byte labels filling the 8 MiB; 168 MB for the worst
+case found, lines of thousands of distinct empty labels with one- and
+two-character keys (20 times what was read); and 193 MB when the response
+also holds a character outside the Basic Multilingual Plane, which makes
+Python store every character of a string at 4 bytes (23 times). A vLLM
+response is about 90 KB.
 
 An export is charged, step by step and before each step runs:
 1. its body (at most 32 MiB) and, for gzip, the most it can inflate to: 1,032

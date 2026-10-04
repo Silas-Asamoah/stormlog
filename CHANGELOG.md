@@ -355,8 +355,8 @@ the flaky benchmark memory gates
 - `stormlog infer profile`'s vLLM collectors bound what an endpoint can make
   the client hold. A `/metrics` response is read at most 8 MiB far and
   parsed one line at a time, refused at a line over 64 Ki characters or
-  past 20,000 series, so a scrape holds at most about ten times what it
-  read. The OTLP span receiver admits at most 8 connections and 10 s for
+  past 20,000 series, so a scrape holds at most about twenty-five times
+  what it read. The OTLP span receiver admits at most 8 connections and 10 s for
   each whole request, headers included; charges the exports in flight at
   most 128 MiB, each decoding step from a measured estimate before it
   runs (a protobuf parse per message, counted on the wire first); refuses
