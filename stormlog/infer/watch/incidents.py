@@ -262,8 +262,8 @@ class IncidentManager:
         if joinable:
             incident = joinable[0]
             if len(incident.joined) >= MAX_JOINED_TRIGGERS:
-                incident.suppressed["open_limit"] += 1
-                self.stats.add("suppressed_total", labels=("open_limit",))
+                incident.suppressed["join_limit"] += 1
+                self.stats.add("suppressed_total", labels=("join_limit",))
                 return None
             incident.joined.append(trigger)
             incident.counts_toward_exit |= counts

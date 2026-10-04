@@ -203,9 +203,10 @@ def test_at_most_sixteen_triggers_join_one_incident(harness: Harness) -> None:
     assert harness.fire(230, trigger_id="t16") is None
     incident = harness.manager.open[incident_id]
     assert len(incident.joined) == 16
-    assert incident.suppressed == {"open_limit": 1}
+    # Its own reason, not open_limit: the incident is full, not the store.
+    assert incident.suppressed == {"join_limit": 1}
     snapshot = harness.stats.health()
-    assert counter_value(snapshot, "suppressed_total", ("open_limit",)) == 1
+    assert counter_value(snapshot, "suppressed_total", ("join_limit",)) == 1
 
 
 def test_a_firing_after_the_seal_opens_a_new_incident(harness: Harness) -> None:

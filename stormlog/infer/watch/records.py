@@ -63,6 +63,7 @@ SUPPRESSION_REASONS = (
     "owner",
     "unavailable",
     "open_limit",
+    "join_limit",
 )
 FINALIZED_OUTCOMES = ("ok", "failed", "timeout", "deferred")
 SESSION_PHASES = ("started", "ended")
