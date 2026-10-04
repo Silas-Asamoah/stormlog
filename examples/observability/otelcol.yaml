@@ -1,0 +1,94 @@
+# One OpenTelemetry Collector (contrib) between vLLM, Stormlog and a backend.
+#
+# vLLM and `stormlog infer profile --otlp-endpoint` both send here. Two
+# pipelines read the same receiver:
+#
+# - traces/stormlog-analysis forwards vLLM's own spans, unchanged and
+#   unsampled, to the receiver Stormlog runs for engine-side analysis
+#   (`--vllm-spans-listen 127.0.0.1:4319`). It selects them positively:
+#   vLLM's tracer always sets the resource attribute
+#   vllm.instrumenting_module_name, whatever service.name says, so Stormlog's
+#   spans and any other service's never reach the analysis, even renamed.
+#   No processor here samples or modifies a span. A retry can deliver a
+#   batch twice; Stormlog counts the duplicates and keeps one copy.
+#
+# - traces/backend sends everything, Stormlog's spans and vLLM's, to a
+#   trace store, with tail sampling if you want it (delete it to keep all).
+#
+# Start vLLM with its spans pointed here, over HTTP, naming its host:
+#
+#   OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf \
+#   OTEL_RESOURCE_ATTRIBUTES=host.name=$(hostname) \
+#   vllm serve MODEL --otlp-traces-endpoint http://127.0.0.1:4318/v1/traces
+#
+# See docs/inference_export.md, "Deployment examples".
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  # Drops every span whose resource lacks vLLM's module attribute.
+  filter/vllm-only:
+    error_mode: ignore
+    traces:
+      span:
+        - 'resource.attributes["vllm.instrumenting_module_name"] == nil'
+
+  # Keeps every failed trace and one in ten of the rest. A sampling choice
+  # for the backend only: the analysis pipeline never sees it.
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    policies:
+      - name: errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: one-in-ten
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+  batch:
+    send_batch_size: 512
+    timeout: 1s
+
+exporters:
+  otlphttp/stormlog:
+    endpoint: http://127.0.0.1:4319
+    encoding: proto
+    sending_queue:
+      enabled: true
+      queue_size: 1000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 5s
+      max_elapsed_time: 60s
+
+  otlp/jaeger:
+    endpoint: 127.0.0.1:4317
+    tls:
+      insecure: true
+
+  file:
+    path: ${env:OTELCOL_TRACES_FILE:-./otelcol-traces.jsonl}
+
+service:
+  pipelines:
+    traces/stormlog-analysis:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/vllm-only]
+      exporters: [otlphttp/stormlog]
+    traces/backend:
+      receivers: [otlp]
+      processors: [memory_limiter, tail_sampling, batch]
+      exporters: [otlp/jaeger, file]
