@@ -6,7 +6,10 @@ the effect, interval and gate outcome they must give. The expected numbers
 here are computed from the textbook formulas directly, not by calling the
 module, so the fixture checks the module rather than repeating it. The
 expected gate outcomes are derived the same way, by the rules of the plan's
-§0.4 (``derived_gate``), never assigned by hand.
+§0.4 (``derived_gate``), never assigned by hand. A fraction's gate is the
+run-level claim of the lead's final ruling (``derived_run_claim``), and its
+interval the paired t with the standard error floored at the pooled
+binomial one (``floored_difference``).
 
     python -m examples.analysis.comparison_contract
 """
@@ -23,6 +26,8 @@ from scipy import stats
 
 OUTPUT = Path("tests/fixtures/infer/comparison_contract_v1.json")
 BLOCKS6 = [f"b{i}" for i in range(1, 7)]
+BLOCKS8 = [f"b{i}" for i in range(1, 9)]
+BLOCKS10 = [f"b{i}" for i in range(1, 11)]
 NUDGE = 1e-9  # keeps a boundary budget clear of floating-point ties
 
 
@@ -48,6 +53,62 @@ def paired_difference(
     half = _t(len(d) - 1) * d.std(ddof=1) / math.sqrt(len(d))
     mean = float(d.mean())
     return {"effect": mean, "lower": mean - half, "upper": mean + half}
+
+
+def _worst_case(
+    baseline: list[Any], candidate: list[Any], direction: str
+) -> tuple[list[float], list[float]]:
+    """The baseline's good-side bound and the candidate's bad-side one."""
+    good, bad = (0, 1) if direction == "lower_is_better" else (1, 0)
+    return _bound(baseline, good), _bound(candidate, bad)
+
+
+def floored_difference(
+    baseline: list[Any], candidate: list[Any], trials: list[list[int]], direction: str
+) -> dict[str, float]:
+    """The paired t on the worst case, its standard error floored at the
+    pooled binomial one, with p = (x + 1) / (N + 2) per arm."""
+    first, second = _worst_case(baseline, candidate, direction)
+    d = np.subtract(second, first)
+    variance = 0.0
+    for values, counts in zip((first, second), trials):
+        total = sum(counts)
+        share = (sum(v * m for v, m in zip(values, counts)) + 1) / (total + 2)
+        variance += share * (1 - share) / total
+    se = max(d.std(ddof=1) / math.sqrt(len(d)), math.sqrt(variance))
+    half = _t(len(d) - 1) * se
+    mean = float(d.mean())
+    return {"effect": mean, "lower": mean - half, "upper": mean + half}
+
+
+def derived_run_claim(
+    baseline: list[Any],
+    candidate: list[Any],
+    *,
+    budget: float,
+    direction: str,
+    trials: list[list[int]],
+) -> dict[str, Any]:
+    """The fraction gate by the lead's final ruling: each candidate run within
+    b of its block's baseline on its worst case, k of n; passes iff the
+    one-sided 97.5% Clopper-Pearson lower bound of k/n is at least 0.5."""
+    counts = [m for arm in trials for m in arm]
+    if min(counts) < 3 / budget:
+        return {"gate": "not_evaluable", "reason": "too_few_requests_per_run"}
+    n = len(candidate)
+    if 0.025 < 0.5**n:
+        return {"gate": "not_evaluable", "reason": "too_few_runs_for_claim"}
+    first, second = _worst_case(baseline, candidate, direction)
+    sign = 1 if direction == "lower_is_better" else -1
+    k = sum(1 for a, b in zip(first, second) if sign * (b - a) <= budget)
+    lower = 0.0 if k == 0 else float(stats.beta.ppf(0.025, k, n - k + 1))
+    decision = "pass" if lower >= 0.5 else "fail"
+    return {
+        "gate": decision,
+        "reason": None if decision == "pass" else "too_few_runs_within_budget",
+        "case": "run_level",
+        "claim": {"runs_within_budget": k, "runs": n, "run_pass_lower": lower},
+    }
 
 
 def welch_log_min_df(baseline: list[float], candidate: list[float]) -> dict[str, float]:
@@ -197,6 +258,7 @@ def case(
     blocks: list[list[str]] | None = None,
     value_unit: str | None = None,
     unavailable: str | None = None,
+    trials: list[list[int]] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": case_id,
@@ -211,6 +273,7 @@ def case(
             "value_unit": value_unit,
             "gate": gate,
             "unavailable": unavailable,
+            "trials": trials,
         },
         "expect": expect,
     }
@@ -372,63 +435,68 @@ def build() -> list[dict[str, Any]]:
             },
         )
     )
-    # Attainment budgets are fractions: 0.01 is one percentage point.
+    # Attainment budgets are fractions: 0.01 is one percentage point. A
+    # fraction is gated on runs: each candidate run within b of its block.
     att_a = [0.990, 0.988, 0.991, 0.989, 0.992, 0.990]
     att_b = [0.984, 0.983, 0.986, 0.982, 0.987, 0.985]
+    per_run = [[1000] * 6, [1000] * 6]
     cases.append(
         case(
             "attainment_budget_in_fraction_units",
-            "a 0.6-point drop passes a 1-point (0.01) budget",
+            "a 0.6-point drop in every run passes a 1-point (0.01) budget: "
+            "6 of 6 runs within it",
             baseline=att_a,
             candidate=att_b,
             blocks=[BLOCKS6, BLOCKS6],
             direction="higher_is_better",
             scale="difference",
             unit="fraction",
+            trials=per_run,
             gate=gate("non-inferiority", 0.01, "fraction"),
             expect={
-                **paired_difference(att_a, att_b),
-                **derived_gate(
+                **floored_difference(att_a, att_b, per_run, "higher_is_better"),
+                **derived_run_claim(
                     att_a,
                     att_b,
-                    rule="non-inferiority",
                     budget=0.01,
                     direction="higher_is_better",
-                    scale="difference",
+                    trials=per_run,
                 ),
             },
         )
     )
-    # The attainment boundary, in fraction units: three blocks, so only the
-    # comparison of the lower bound with -b decides.
-    att3_a = [0.990, 0.988, 0.991]
-    att3_b = [0.984, 0.983, 0.986]
-    att3 = paired_difference(att3_a, att3_b)
+    # The attainment boundary, in fraction units: one block's drop sits at
+    # the budget, so 8 of 8 runs are within it, or 7 of 8.
+    att8_a = [0.990, 0.988, 0.991, 0.989, 0.992, 0.990, 0.987, 0.991]
+    att8_b = [0.984, 0.983, 0.986, 0.982, 0.987, 0.985, 0.981, 0.985]
+    per_run8 = [[1000] * 8, [1000] * 8]
+    widest = max(a - b for a, b in zip(att8_a, att8_b))
     for label, budget in (
-        ("just_above", -att3["lower"] + NUDGE),
-        ("just_below", -att3["lower"] - NUDGE),
+        ("just_above", widest + NUDGE),
+        ("just_below", widest - NUDGE),
     ):
         cases.append(
             case(
                 f"attainment_boundary_{label}",
-                "higher_is_better, difference in fractions: non-inferiority "
-                "compares the lower bound with -b",
-                baseline=att3_a,
-                candidate=att3_b,
-                blocks=[BLOCKS6[:3], BLOCKS6[:3]],
+                "higher_is_better, fractions: a run is within budget iff its "
+                "drop from its block's baseline is at most b; 8 of 8 pass, "
+                "7 of 8 fail at q = 0.5",
+                baseline=att8_a,
+                candidate=att8_b,
+                blocks=[BLOCKS8, BLOCKS8],
                 direction="higher_is_better",
                 scale="difference",
                 unit="fraction",
+                trials=per_run8,
                 gate=gate("non-inferiority", budget, "fraction"),
                 expect={
-                    **att3,
-                    **derived_gate(
-                        att3_a,
-                        att3_b,
-                        rule="non-inferiority",
+                    **floored_difference(att8_a, att8_b, per_run8, "higher_is_better"),
+                    **derived_run_claim(
+                        att8_a,
+                        att8_b,
                         budget=budget,
                         direction="higher_is_better",
-                        scale="difference",
+                        trials=per_run8,
                     ),
                 },
             )
@@ -562,56 +630,122 @@ def build() -> list[dict[str, Any]]:
         )
     )
     # Missing-outcome bounds: worst case for safety, best case for regressions.
-    att_bounds_a = [[0.990, 0.992]] * 6
-    att_bounds_b = [[0.975, 0.995], [0.976, 0.994], [0.974, 0.996]] * 2
-    worst = paired_difference(
-        [x[1] for x in att_bounds_a], [x[0] for x in att_bounds_b]
-    )
-    best = paired_difference([x[0] for x in att_bounds_a], [x[1] for x in att_bounds_b])
+    good_a = [[10.0, 10.2]] * 6
+    good_b = [[9.7, 10.3], [9.75, 10.25], [9.72, 10.32]] * 2
+    worst = paired_log([x[1] for x in good_a], [x[0] for x in good_b])
+    best = paired_log([x[0] for x in good_a], [x[1] for x in good_b])
     for rule in ("non-inferiority", "significant"):
         cases.append(
             case(
                 f"missing_outcomes_{rule}",
-                "unknown SLO outcomes: non-inferiority uses the worst case, "
-                "regression claims the best",
-                baseline=att_bounds_a,
-                candidate=att_bounds_b,
+                "unknown SLO outcomes widen goodput: non-inferiority uses the "
+                "worst case, regression claims the best",
+                baseline=good_a,
+                candidate=good_b,
                 blocks=[BLOCKS6, BLOCKS6],
                 direction="higher_is_better",
-                scale="difference",
-                unit="fraction",
-                gate=gate(rule, 0.005, "fraction"),
+                scale="log_ratio",
+                unit="relative",
+                gate=gate(rule, 0.01, "relative"),
                 expect={
                     **worst,
                     "best": best,
                     **derived_gate(
-                        att_bounds_a,
-                        att_bounds_b,
+                        good_a,
+                        good_b,
                         rule=rule,
-                        budget=0.005,
+                        budget=0.01,
                         direction="higher_is_better",
-                        scale="difference",
+                    ),
+                },
+            )
+        )
+    # A run with unknown outcomes is judged on its worst case.
+    unknown_a = [[0.990, 0.992]] * 8
+    unknown_b = [[0.985, 0.995]] * 7 + [[0.975, 0.995]]
+    cases.append(
+        case(
+            "attainment_unknown_outcomes_judged_per_run_worst_case",
+            "a run is within budget only if its lower bound is, against its "
+            "block baseline's upper bound: 7 of 8 fail",
+            baseline=unknown_a,
+            candidate=unknown_b,
+            blocks=[BLOCKS8, BLOCKS8],
+            direction="higher_is_better",
+            scale="difference",
+            unit="fraction",
+            trials=per_run8,
+            gate=gate("non-inferiority", 0.01, "fraction"),
+            expect={
+                **floored_difference(
+                    unknown_a, unknown_b, per_run8, "higher_is_better"
+                ),
+                **derived_run_claim(
+                    unknown_a,
+                    unknown_b,
+                    budget=0.01,
+                    direction="higher_is_better",
+                    trials=per_run8,
+                ),
+            },
+        )
+    )
+    # Failure fractions: the run-level claim at #221's sizes, 300 requests a
+    # run (3 / b at a 1% budget). An all-zero fraction is no special case.
+    for label, blocks, failed in (
+        ("all_zero_8_of_8_passes", BLOCKS8, [0] * 8),
+        ("7_of_8_fails", BLOCKS8, [0] * 7 + [6]),
+        ("6_of_6_passes", BLOCKS6, [0, 1, 0, 2, 0, 1]),
+        ("9_of_10_passes", BLOCKS10, [0, 1, 0, 2, 0, 1, 0, 0, 3, 6]),
+    ):
+        n = len(blocks)
+        zero = [0.0] * n
+        failures = [x / 300 for x in failed]
+        trials = [[300] * n, [300] * n]
+        cases.append(
+            case(
+                f"failure_fraction_{label}",
+                "lower_is_better: a run is within budget iff its failure "
+                "fraction exceeds its block baseline's by at most b",
+                baseline=zero,
+                candidate=failures,
+                blocks=[blocks, blocks],
+                direction="lower_is_better",
+                scale="difference",
+                unit="fraction",
+                trials=trials,
+                gate=gate("non-inferiority", 0.01, "fraction"),
+                expect={
+                    **floored_difference(zero, failures, trials, "lower_is_better"),
+                    **derived_run_claim(
+                        zero,
+                        failures,
+                        budget=0.01,
+                        direction="lower_is_better",
+                        trials=trials,
                     ),
                 },
             )
         )
     cases.append(
         case(
-            "all_zero_failure_rate_is_degenerate",
-            "no failures anywhere: no [0, 0] interval, a run-level bound instead",
-            baseline=[0.0] * 6,
-            candidate=[0.0] * 6,
-            blocks=[BLOCKS6, BLOCKS6],
+            "failure_fraction_needs_three_over_b_requests_per_run",
+            "200 requests a run at a 1% budget: one failure would breach it",
+            baseline=[0.0] * 8,
+            candidate=[0.0] * 8,
+            blocks=[BLOCKS8, BLOCKS8],
             direction="lower_is_better",
             scale="difference",
             unit="fraction",
+            trials=[[200] * 8, [200] * 8],
             gate=gate("non-inferiority", 0.01, "fraction"),
-            expect={
-                "effect": None,
-                "run_departs_upper": 1 - 0.025 ** (1 / 6),
-                "gate": "pass",
-                "reason": "degenerate_zero",
-            },
+            expect=derived_run_claim(
+                [0.0] * 8,
+                [0.0] * 8,
+                budget=0.01,
+                direction="lower_is_better",
+                trials=[[200] * 8, [200] * 8],
+            ),
         )
     )
     independent_a = [100.0, 103.0, 97.0, 101.0, 99.0, 102.0, 98.0, 100.5]

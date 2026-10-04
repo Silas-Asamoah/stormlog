@@ -109,10 +109,12 @@ the flaky benchmark memory gates
   fewest runs that could, never as a pass rate of 0. Strong right skew
   (8–12%) and pooled requests are published as limits. (#213)
 - `tests/fixtures/infer/comparison_contract_v1.json`: the comparison's
-  units contract, 21 cases whose expected effects, intervals and gate
+  units contract, 26 cases whose expected effects, intervals and gate
   outcomes are computed from the formulas and the gate rules by
-  `examples/analysis/comparison_contract.py`, including the attainment
-  budget boundary in fraction units and the independent design's gate. (#213)
+  `examples/analysis/comparison_contract.py`, including the run-level claim
+  on fractions (the attainment budget boundary, 6 of 6, 8 of 8, 7 of 8 and
+  9 of 10, an all-zero failure fraction, too few requests a run) and the
+  independent design's gate. (#213)
 - `stormlog.infer.comparison_stats`: one metric compared between a
   baseline and a candidate arm of runs. Paired t on block log ratios (or
   differences) when runs carry block labels, Welch t with df = min(nA, nB) − 1
@@ -120,12 +122,19 @@ the flaky benchmark memory gates
   bootstrap (from 10 pairs) as unguarded cross-checks. Effects carry their
   scale and unit (`relative` for log ratios). Per-run values may be
   `(lower, upper)` bounds: non-inferiority gates use the worst case,
-  `significant` and `demonstrated` the best. Zero rules (`candidate_zero`,
-  `undefined_in_arm`, pre-registered fallback budgets), degenerate constant
-  metrics, a skew screen against a pinned normal table, leave-one-out
-  decision flips, at least 3 pairs per gate and pre-registered
-  `min_complete_blocks`. Also `clopper_pearson` with its model,
-  `run_pass_gate`, `blocks_for_precision` and `holm`. (#213)
+  `significant` and `demonstrated` the best. A fraction (failure fraction,
+  attainment) is gated on a claim about runs, exact however failures
+  cluster within a run: k of n candidate runs within the budget of their
+  block's baseline, passing iff the one-sided 97.5% Clopper–Pearson lower
+  bound of k/n is at least 0.5 (6 of 6, 8 of 8, 9 of 10), with `3 / b`
+  requests a run; its paired t, with the standard error floored at the
+  pooled binomial one, and the pooled requests' bounds are reported,
+  labelled, never gated. Zero rules (`candidate_zero`, `undefined_in_arm`,
+  pre-registered fallback budgets), degenerate constant metrics (never
+  passed on a run-level bound alone), a skew screen against a pinned normal
+  table, leave-one-out decision flips, at least 3 pairs per gate and
+  pre-registered `min_complete_blocks`. Also `clopper_pearson` with its
+  model, `run_pass_gate`, `blocks_for_precision` and `holm`. (#213)
 - `stormlog infer analyze` gains an `observers` block: for the system
   sampler, metrics scraper, span receiver, profiler traces and execution
   hook, whether each was requested, configured, active and healthy, judged

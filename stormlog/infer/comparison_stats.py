@@ -28,6 +28,16 @@ invent one.
 The guards (skewness against normal noise, leave-one-out) are reported and
 never certify coverage. Only a leave-one-out change of the gate's decision
 makes a gate ``not_evaluable``.
+
+A ``fraction`` metric (a failure fraction, an SLO attainment) is gated on a
+claim about runs, not on an interval: k of n candidate runs stayed within
+the budget of their block's baseline, and the one-sided Clopper-Pearson
+lower bound of k/n is at least 0.5. That is exact when runs are independent,
+however failures cluster within a run, which no interval on the fraction
+is. Each run needs ``3 / budget`` requests, so that one failure cannot
+breach the budget. The paired t, with its standard error floored at the
+pooled binomial one, is the descriptive interval, and the pooled requests'
+Clopper-Pearson bounds are reported, labelled model-based.
 """
 
 from __future__ import annotations
@@ -100,6 +110,15 @@ SKEW_Q95_NORMAL = {
 
 
 FRACTION_UNIT = "fraction"
+# The fraction gate's claim: at least this share of runs within budget.
+RUN_PASS_SHARE = 0.5
+RUN_LEVEL = "run_level"
+# A run needs 3 / budget requests, so that one failure cannot breach it.
+REQUESTS_PER_BUDGET = 3
+BINOMIAL_FLOOR = (
+    "binomial_floor: se floored at the pooled binomial se; nominal under "
+    "independent requests, under-covers when failures cluster within runs"
+)
 
 
 @dataclass(frozen=True)
@@ -151,12 +170,15 @@ class GateOutcome:
     reason: str | None
     rule: GateRule
     case: str | None = None
+    # A fraction gate's run-level claim: k of n runs, and what it certifies.
+    claim: dict[str, Any] | None = None
 
     def to_record(self) -> dict[str, Any]:
         return {
             "status": self.status,
             "reason": self.reason,
             "case": self.case,
+            "claim": self.claim,
             **self.rule.to_record(),
         }
 
@@ -199,6 +221,8 @@ class MetricComparison:
     gate: GateOutcome | None = None
     reason: str | None = None
     degenerate: dict[str, Any] | None = None
+    # A fraction's requests pooled per arm: model-based, never gated.
+    pooled: dict[str, Any] | None = None
 
     @property
     def interval_valued(self) -> bool:
@@ -234,6 +258,7 @@ class MetricComparison:
             "gate": record(self.gate),
             "reason": self.reason,
             "degenerate": self.degenerate,
+            "pooled": self.pooled,
         }
 
 
@@ -274,6 +299,8 @@ class _Pairs:
     attrition: list[dict[str, Any]]
     n_baseline: int
     n_candidate: int
+    # Requests behind each kept value, when a fraction's are known.
+    trials: tuple[list[int | None], list[int | None]] = ([], [])
 
 
 def _bounds(value: RunValue) -> tuple[float, float] | None:
@@ -286,40 +313,56 @@ def _bounds(value: RunValue) -> tuple[float, float] | None:
     return float(low), float(high)
 
 
+Trials = tuple[Sequence[int | None], Sequence[int | None]]
+_Run = tuple[tuple[float, float] | None, int | None]
+
+
 def _pair(
     baseline: Sequence[RunValue],
     candidate: Sequence[RunValue],
     blocks: tuple[Sequence[Hashable], Sequence[Hashable]] | None,
+    trials: Trials | None = None,
 ) -> _Pairs:
-    first = [_bounds(value) for value in baseline]
-    second = [_bounds(value) for value in candidate]
+    counts = trials or ([None] * len(baseline), [None] * len(candidate))
+    if len(counts[0]) != len(baseline) or len(counts[1]) != len(candidate):
+        raise ValueError("every run needs its request count")
+    first = [(_bounds(v), m) for v, m in zip(baseline, counts[0])]
+    second = [(_bounds(v), m) for v, m in zip(candidate, counts[1])]
     if blocks is None:
         return _unpaired(first, second)
     return _paired(first, second, blocks)
 
 
-def _unpaired(
-    first: list[tuple[float, float] | None], second: list[tuple[float, float] | None]
-) -> _Pairs:
+def _unpaired(first: list[_Run], second: list[_Run]) -> _Pairs:
     attrition = [
         {"arm": arm, "run": index, "reason": "missing_value"}
-        for arm, values in (("baseline", first), ("candidate", second))
-        for index, value in enumerate(values)
+        for arm, runs in (("baseline", first), ("candidate", second))
+        for index, (value, _) in enumerate(runs)
         if value is None
     ]
+    (values_a, counts_a), (values_b, counts_b) = _split(first), _split(second)
     return _Pairs(
         INDEPENDENT,
-        [v for v in first if v is not None],
-        [v for v in second if v is not None],
+        values_a,
+        values_b,
         attrition,
         len(first),
         len(second),
+        (counts_a, counts_b),
     )
 
 
+def _split(
+    runs: list[_Run],
+) -> tuple[list[tuple[float, float]], list[int | None]]:
+    """The runs with a value: their values, and their request counts."""
+    kept = [(value, m) for value, m in runs if value is not None]
+    return [value for value, _ in kept], [m for _, m in kept]
+
+
 def _paired(
-    first: list[tuple[float, float] | None],
-    second: list[tuple[float, float] | None],
+    first: list[_Run],
+    second: list[_Run],
     blocks: tuple[Sequence[Hashable], Sequence[Hashable]],
 ) -> _Pairs:
     labels_a, labels_b = list(blocks[0]), list(blocks[1])
@@ -327,27 +370,38 @@ def _paired(
         raise ValueError("every run needs a block label")
     by_a = _by_block(labels_a, first, "baseline")
     by_b = _by_block(labels_b, second, "candidate")
-    pairs_a, pairs_b, attrition = [], [], []
+    kept_a: list[_Run] = []
+    kept_b: list[_Run] = []
+    attrition = []
     for block in sorted(set(by_a) | set(by_b), key=str):
         a, b = by_a.get(block), by_b.get(block)
         if a is None or b is None:
             missing = "baseline" if a is None else "candidate"
             attrition.append({"block": block, "reason": f"block_incomplete:{missing}"})
             continue
-        pairs_a.append(a)
-        pairs_b.append(b)
-    return _Pairs(PAIRED, pairs_a, pairs_b, attrition, len(first), len(second))
+        kept_a.append(a)
+        kept_b.append(b)
+    (values_a, counts_a), (values_b, counts_b) = _split(kept_a), _split(kept_b)
+    return _Pairs(
+        PAIRED,
+        values_a,
+        values_b,
+        attrition,
+        len(first),
+        len(second),
+        (counts_a, counts_b),
+    )
 
 
 def _by_block(
-    labels: list[Hashable], values: list[tuple[float, float] | None], arm: str
-) -> dict[Hashable, tuple[float, float] | None]:
-    found: dict[Hashable, tuple[float, float] | None] = {}
-    for label, value in zip(labels, values):
+    labels: list[Hashable], runs: list[_Run], arm: str
+) -> dict[Hashable, _Run]:
+    found: dict[Hashable, _Run] = {}
+    for label, run in zip(labels, runs):
         if label in found:
             raise ValueError(f"block {label!r} has two {arm} runs")
-        found[label] = value
-    return {label: value for label, value in found.items() if value is not None}
+        found[label] = run
+    return {label: run for label, run in found.items() if run[0] is not None}
 
 
 def _cases(
@@ -389,31 +443,47 @@ def _mean_sd(values: Sequence[float]) -> tuple[float, float]:
 
 
 def _one_sample(
-    values: list[float], confidence: float, method: str, estimand: str, sign: float
+    values: list[float],
+    confidence: float,
+    method: str,
+    estimand: str,
+    sign: float,
+    floor: float | None = None,
 ) -> Estimate:
-    """A t interval for the mean; ``sign`` turns the bad direction positive."""
+    """A t interval for the mean; ``sign`` turns the bad direction positive.
+
+    ``floor`` is the smallest standard error the interval may use.
+    """
     n = len(values)
     mean, sd = _mean_sd(values)
-    se = sd / math.sqrt(n)
+    se = max(sd / math.sqrt(n), floor or 0.0)
     half = _t_quantile(confidence, n - 1) * se
     p_worse = _p_positive(sign * mean, se, n - 1)
-    return Estimate(method, estimand, mean, mean - half, mean + half, n - 1, n, p_worse)
+    detail = None if floor is None else BINOMIAL_FLOOR
+    return Estimate(
+        method, estimand, mean, mean - half, mean + half, n - 1, n, p_worse, detail
+    )
 
 
 def _welch(
-    first: list[float], second: list[float], confidence: float, sign: float
+    first: list[float],
+    second: list[float],
+    confidence: float,
+    sign: float,
+    floor: float | None = None,
 ) -> Estimate:
     """Welch t for mean(second) - mean(first), df = min(nA, nB) - 1."""
     mean_a, sd_a = _mean_sd(first)
     mean_b, sd_b = _mean_sd(second)
-    se = math.sqrt(sd_a**2 / len(first) + sd_b**2 / len(second))
+    se = max(math.sqrt(sd_a**2 / len(first) + sd_b**2 / len(second)), floor or 0.0)
     df = min(len(first), len(second)) - 1
     half = _t_quantile(confidence, df) * se
     diff = mean_b - mean_a
     p_worse = _p_positive(sign * diff, se, df)
     n = len(first) + len(second)
+    detail = None if floor is None else BINOMIAL_FLOOR
     return Estimate(
-        "welch_t_min_df", "", diff, diff - half, diff + half, df, n, p_worse
+        "welch_t_min_df", "", diff, diff - half, diff + half, df, n, p_worse, detail
     )
 
 
@@ -431,17 +501,18 @@ def _primary(
     second: list[float],
     confidence: float,
     sign: float,
+    floor: float | None = None,
 ) -> Estimate:
-    """The gated interval, on the effect scale."""
+    """The gated interval, on the effect scale; a fraction's is descriptive."""
     if scale == ABSOLUTE:
         return _one_sample(second, confidence, "one_sample_t", ABSOLUTE, sign)
     a = list(_on_scale(first, scale))
     b = list(_on_scale(second, scale))
     if design == PAIRED:
         diffs = [y - x for x, y in zip(a, b)]
-        raw = _one_sample(diffs, confidence, "paired_t", "", sign)
+        raw = _one_sample(diffs, confidence, "paired_t", "", sign, floor)
     else:
-        raw = _welch(a, b, confidence, sign)
+        raw = _welch(a, b, confidence, sign, floor)
     if scale == LOG_RATIO:
         return _relative(raw, "geometric_ratio")
     return Estimate(
@@ -453,6 +524,7 @@ def _primary(
         raw.df,
         raw.n,
         raw.p_worse,
+        raw.detail,
     )
 
 
@@ -654,6 +726,7 @@ class _Request:
     bootstrap_min_n: int
     seed: int
     unavailable: str | None
+    trials: Trials | None = None
 
 
 def compare_values(
@@ -672,6 +745,7 @@ def compare_values(
     bootstrap_min_n: int = 10,
     seed: int = 0,
     unavailable: str | None = None,
+    trials: Trials | None = None,
 ) -> MetricComparison:
     """Compare one metric's per-run values between the two arms.
 
@@ -685,6 +759,9 @@ def compare_values(
     higher-is-better one. Any other value that is not finite makes the gate
     ``non_finite_value``; dropping it as missing would decide the gate on
     the runs left. A duplicate block label is a ValueError.
+
+    ``trials`` are the requests behind each run's value, for a ``fraction``
+    metric: its gate is the run-level claim, and they floor its interval.
     """
     unavailable = unavailable or _non_finite_reason(direction, baseline, candidate)
     request = _check(
@@ -700,11 +777,15 @@ def compare_values(
             bootstrap_min_n,
             seed,
             unavailable,
+            trials,
         )
     )
     # The candidate alone is measured on an absolute scale: no pairing.
-    pairs = _pair(baseline, candidate, None if scale == ABSOLUTE else blocks)
+    pairs = _pair(baseline, candidate, None if scale == ABSOLUTE else blocks, trials)
     result = _compare(request, pairs)
+    if request.unit == FRACTION_UNIT:
+        outcome = _run_level_gate(request, baseline, candidate, blocks)
+        return _with(result, gate=outcome, pooled=_pooled(request, pairs))
     if request.unavailable == CENSORED_WORST and request.gate is not None:
         outcome = _censored_gate(replace(request, unavailable=None), pairs)
         result = _with(result, gate=outcome)
@@ -772,6 +853,7 @@ def _check(request: _Request) -> _Request:
             f"{request.name}: the gate's unit {gate.unit!r} is not the metric's "
             f"{request.unit!r}"
         )
+    _check_fraction_gate(request)
     if gate is not None and gate.fallback_budget is not None:
         if gate.fallback_unit != request.value_unit:
             raise InferUsageError(
@@ -779,6 +861,17 @@ def _check(request: _Request) -> _Request:
                 f"is not the values' {request.value_unit!r}"
             )
     return request
+
+
+def _check_fraction_gate(request: _Request) -> None:
+    gate = request.gate
+    if gate is None or request.unit != FRACTION_UNIT:
+        return
+    if gate.rule != NON_INFERIORITY:
+        raise InferUsageError(
+            f"{request.name}: a fraction is gated on the share of runs within "
+            f"its budget, with non-inferiority; {gate.rule} is not defined for it"
+        )
 
 
 def _compare(request: _Request, pairs: _Pairs) -> MetricComparison:
@@ -792,13 +885,22 @@ def _compare(request: _Request, pairs: _Pairs) -> MetricComparison:
         )
         return _with(base, reason=reason, gate=_not_evaluable(request, reason))
     worst_case, best_case = _cases(pairs, request.direction)
-    if request.scale == DIFFERENCE and _constant(pairs) is not None:
+    if _degenerate_without_floor(request, pairs, worst_case):
         return _degenerate(base, request, pairs)
     if request.scale == LOG_RATIO:
         blocked = _nonpositive(request, worst_case, best_case)
         if blocked is not None:
             return _zero_rule(base, request, pairs, blocked)
     return _estimated(base, request, pairs, worst_case, best_case)
+
+
+def _degenerate_without_floor(
+    request: _Request, pairs: _Pairs, worst_case: tuple[list[float], list[float]]
+) -> bool:
+    """One value in every run, and no request counts to floor an interval with."""
+    if request.scale != DIFFERENCE or _constant(pairs) is None:
+        return False
+    return _floor(request, pairs, worst_case) is None
 
 
 def _shell(request: _Request, pairs: _Pairs) -> MetricComparison:
@@ -837,8 +939,17 @@ def _estimated(
     best_case: tuple[list[float], list[float]],
 ) -> MetricComparison:
     sign = _sign(request.direction)
-    worst = _primary(pairs.design, request.scale, *worst_case, request.confidence, sign)
-    best = _primary(pairs.design, request.scale, *best_case, request.confidence, sign)
+    worst, best = (
+        _primary(
+            pairs.design,
+            request.scale,
+            *case,
+            request.confidence,
+            sign,
+            _floor(request, pairs, case),
+        )
+        for case in (worst_case, best_case)
+    )
     guards = _guards(request, pairs, worst_case, worst, best)
     result = _with(
         base,
@@ -892,7 +1003,12 @@ def _guards(
 ) -> Guards:
     looked_at = _guard_values(pairs.design, request.scale, *case)
     g1, limit, flagged = _skew(looked_at)
-    loo, flips = _leave_one_out(request, pairs, worst, best)
+    # A fraction's gate is a claim about runs, which no single block decides.
+    loo, flips = (
+        (None, None)
+        if request.unit == FRACTION_UNIT
+        else _leave_one_out(request, pairs, worst, best)
+    )
     return Guards(
         skewness=g1,
         skew_limit=limit,
@@ -1098,9 +1214,9 @@ def _degenerate(
     }
     gate = None
     if request.gate is not None:
+        # No interval: the run-level bound alone shows nothing within budget.
         blocker = _gate_blocker(request, pairs, Guards())
-        status, reason = (NOT_EVALUABLE, blocker) if blocker else (PASS, kind)
-        gate = GateOutcome(status, reason, request.gate)
+        gate = GateOutcome(NOT_EVALUABLE, blocker or kind, request.gate)
     verdict = {"direction": "no_detectable_change", "tolerance": "undetermined"}
     return _with(base, reason=kind, degenerate=degenerate, gate=gate, verdict=verdict)
 
@@ -1182,6 +1298,190 @@ def _candidate_zero_gate(
 
 
 # ------------------------------------------------------- proportions, plans
+
+
+# --------------------------------------------------------------- fractions
+
+
+def _counted(pairs: _Pairs) -> bool:
+    """Whether every kept run's request count is known."""
+    counts = [*pairs.trials[0], *pairs.trials[1]]
+    lengths = (len(pairs.trials[0]), len(pairs.trials[1]))
+    return (
+        lengths == (len(pairs.baseline), len(pairs.candidate))
+        and bool(counts)
+        and all(isinstance(m, int) and m > 0 for m in counts)
+    )
+
+
+def _floor(
+    request: _Request, pairs: _Pairs, case: tuple[list[float], list[float]]
+) -> float | None:
+    """A fraction's pooled binomial standard error, with p = (x + 1) / (N + 2)."""
+    if request.unit != FRACTION_UNIT or not _counted(pairs):
+        return None
+    variance = 0.0
+    for values, counts in zip(case, pairs.trials):
+        total = sum(m for m in counts if m)
+        events = sum(v * (m or 0) for v, m in zip(values, counts))
+        share = (events + 1) / (total + 2)
+        variance += share * (1 - share) / total
+    return math.sqrt(variance)
+
+
+def _pooled(request: _Request, pairs: _Pairs) -> dict[str, Any] | None:
+    """Each arm's requests pooled, as if independent: reported, never gated."""
+    if not _counted(pairs):
+        return None
+    worst_case, _ = _cases(pairs, request.direction)
+    bounds = {}
+    for arm, values, counts in zip(("baseline", "candidate"), worst_case, pairs.trials):
+        total = sum(m for m in counts if m)
+        events = round(sum(v * (m or 0) for v, m in zip(values, counts)))
+        bounds[arm] = clopper_pearson(
+            events, total, request.confidence, model="independent_requests"
+        ).to_record()
+    if request.direction == LOWER_IS_BETTER:
+        bad = bounds["candidate"]["upper"] - bounds["baseline"]["lower"]
+    else:
+        bad = bounds["baseline"]["upper"] - bounds["candidate"]["lower"]
+    budget = request.tolerance
+    alpha = (1 - request.confidence) / 2
+    needed = (
+        math.ceil(math.log(alpha) / math.log(1 - budget)) if 0 < budget < 1 else None
+    )
+    return {
+        "model": "independent_requests",
+        **bounds,
+        "bad_direction_bound": bad,
+        "n_eff_for_zero_event_bound": needed,
+        "note": "exact only if requests are independent; with correlation rho "
+        "within a run the effective sample is N / (1 + (m - 1) rho)",
+    }
+
+
+def _run_level_gate(
+    request: _Request,
+    baseline: Sequence[RunValue],
+    candidate: Sequence[RunValue],
+    blocks: tuple[Sequence[Hashable], Sequence[Hashable]] | None,
+) -> GateOutcome | None:
+    """k of n candidate runs within the budget; passes iff the one-sided
+    Clopper-Pearson lower bound of k/n is at least ``RUN_PASS_SHARE``.
+
+    A run is judged on its worst case against its block's baseline (or the
+    baseline arm's mean, without blocks); a run with no value, or with no
+    baseline to judge it by, is a miss.
+    """
+    gate = request.gate
+    if gate is None:
+        return None
+    blocker = _run_level_blocker(request, baseline, candidate)
+    if blocker is not None:
+        return GateOutcome(NOT_EVALUABLE, blocker, gate, RUN_LEVEL)
+    within = _runs_within(request, gate.budget, baseline, candidate, blocks)
+    k, n = sum(1 for ok in within if ok), len(within)
+    bound = clopper_pearson(k, n, request.confidence, model="independent_runs")
+    status = PASS if bound.lower >= RUN_PASS_SHARE else FAIL
+    reference = "block_baseline" if blocks is not None else "baseline_mean"
+    sided = 0.5 + request.confidence / 2
+    claim = {
+        "model": "independent_runs",
+        "reference": reference,
+        "runs_within_budget": k,
+        "runs": n,
+        "runs_unmeasurable": sum(1 for value in candidate if _bounds(value) is None),
+        "run_pass_lower": bound.lower,
+        "required_share": RUN_PASS_SHARE,
+        "one_sided_confidence": sided,
+        "statement": f"{k} of {n} candidate runs within {gate.budget:g} of the "
+        f"{reference.replace('_', ' ')}; run-pass rate at least "
+        f"{bound.lower:.3f} with {sided:.1%} confidence",
+    }
+    reason = None if status == PASS else "too_few_runs_within_budget"
+    return GateOutcome(status, reason, gate, RUN_LEVEL, claim)
+
+
+def _run_level_blocker(
+    request: _Request, baseline: Sequence[RunValue], candidate: Sequence[RunValue]
+) -> str | None:
+    """Why the run-level claim cannot be made, before any run is judged."""
+    gate = request.gate
+    assert gate is not None
+    if request.unavailable is not None:
+        return request.unavailable
+    counts = _measured_counts(request.trials, baseline, candidate)
+    if counts is None:
+        return "requests_per_run_unrecorded"
+    if gate.budget <= 0 or min(counts, default=0) < REQUESTS_PER_BUDGET / gate.budget:
+        return "too_few_requests_per_run"
+    if (
+        gate.min_complete_blocks is not None
+        and len(candidate) < gate.min_complete_blocks
+    ):
+        return "blocks_below_preregistered"
+    # n of n runs reach the share only when (alpha / 2) ** (1 / n) >= q.
+    if (1 - request.confidence) / 2 < RUN_PASS_SHARE ** len(candidate):
+        return "too_few_runs_for_claim"
+    return None
+
+
+def _measured_counts(
+    trials: Trials | None, baseline: Sequence[RunValue], candidate: Sequence[RunValue]
+) -> list[int] | None:
+    """The request counts of every run with a value; None if any is unknown."""
+    if trials is None:
+        return None
+    counts = []
+    for values, arm in zip((baseline, candidate), trials):
+        for value, m in zip(values, arm):
+            if _bounds(value) is None:
+                continue
+            if not isinstance(m, int) or m <= 0:
+                return None
+            counts.append(m)
+    return counts
+
+
+def _runs_within(
+    request: _Request,
+    budget: float,
+    baseline: Sequence[RunValue],
+    candidate: Sequence[RunValue],
+    blocks: tuple[Sequence[Hashable], Sequence[Hashable]] | None,
+) -> list[bool]:
+    """Whether each candidate run's worst case is within the budget."""
+    sign = _sign(request.direction)
+    # The baseline's good side and the candidate's bad side: the worst case.
+    good, bad = (0, 1) if request.direction == LOWER_IS_BETTER else (1, 0)
+    references = _references(baseline, candidate, blocks, good)
+    within = []
+    for value, reference in zip(candidate, references):
+        run = _bounds(value)
+        if run is None or reference is None:
+            within.append(False)
+            continue
+        within.append(sign * (run[bad] - reference) <= budget)
+    return within
+
+
+def _references(
+    baseline: Sequence[RunValue],
+    candidate: Sequence[RunValue],
+    blocks: tuple[Sequence[Hashable], Sequence[Hashable]] | None,
+    good: int,
+) -> list[float | None]:
+    """Each candidate run's reference: its block's baseline, or the arm's mean."""
+    if blocks is None:
+        values = [b[good] for b in map(_bounds, baseline) if b is not None]
+        mean = sum(values) / len(values) if values else None
+        return [mean] * len(candidate)
+    by_block = {label: _bounds(v) for label, v in zip(blocks[0], baseline)}
+    found = []
+    for label in blocks[1]:
+        partner = by_block.get(label)
+        found.append(None if partner is None else partner[good])
+    return found
 
 
 def clopper_pearson(
