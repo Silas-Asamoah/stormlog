@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from stormlog.infer.qualify.recovery import Point, Signals
 from stormlog.infer.vllm_metrics import compact_scrape, parse_prometheus_text
@@ -286,16 +286,22 @@ class VictimView:
         self.cached_fraction.append((start, share))
 
 
+def _victim_requests(
+    records: Iterable[dict[str, Any]], victim_prefix: str
+) -> Iterator[dict[str, Any]]:
+    for record in records:
+        if record.get("event_type") != "infer.request":
+            continue
+        if f"chatcmpl-{record.get('x_request_id') or ''}".startswith(victim_prefix):
+            yield record
+
+
 def chunk_gaps(records: Iterable[dict[str, Any]], victim_prefix: str) -> list[Point]:
     """The victim's gaps between streamed chunks, in seconds, at the later
     chunk, rebuilt from its client records' first-chunk latency and
     inter-arrival times."""
     gaps: list[Point] = []
-    for record in records:
-        if record.get("event_type") != "infer.request":
-            continue
-        if not f"chatcmpl-{record.get('x_request_id') or ''}".startswith(victim_prefix):
-            continue
+    for record in _victim_requests(records, victim_prefix):
         first = record.get("first_chunk_latency_ms")
         if first is None:
             continue
@@ -304,6 +310,29 @@ def chunk_gaps(records: Iterable[dict[str, Any]], victim_prefix: str) -> list[Po
             at += round(gap_ms * 1e6)
             gaps.append((at, gap_ms / 1000.0))
     return sorted(gaps)
+
+
+def request_spans(
+    records: Iterable[dict[str, Any]], victim_prefix: str
+) -> list[tuple[int, int]]:
+    """Each finished victim request's span, from its send to its end."""
+    return [
+        (int(record["started_at_ns"]), int(record["ended_at_ns"]))
+        for record in _victim_requests(records, victim_prefix)
+        if record.get("started_at_ns") is not None
+        and record.get("ended_at_ns") is not None
+    ]
+
+
+def merge_spans(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Spans as sorted, disjoint intervals: when at least one was open."""
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 # ------------------------------------------------------------------ scrapes
@@ -382,6 +411,7 @@ class ReferenceChannel:
         self.victim_prefix = victim_prefix
         self._victim_offset = 0
         self._victim_gaps: list[Point] = []
+        self._victim_spans: list[tuple[int, int]] = []
 
     def poll(self, *, scrape: bool = True) -> None:
         """Read new hook records, and take one scrape unless told not to."""
@@ -393,7 +423,12 @@ class ReferenceChannel:
             _append_lines(self.scrape_log, [taken.to_record()])
 
     def signals(self) -> Signals:
+        """The series so far. ``in_flight`` comes from the victim's finished
+        requests, so a request still in flight counts only once it ends:
+        until then its gaps aren't busy ones, which delays recovery, never
+        hastens it."""
         ok = [taken for taken in self.scrapes if taken.error is None]
+        self._read_victim()
         return Signals(
             waits=sorted(self.view.waits),
             cached_fraction=sorted(self.view.cached_fraction),
@@ -401,25 +436,28 @@ class ReferenceChannel:
             waiting=[(s.at_ns, s.waiting) for s in ok if s.waiting is not None],
             kv_usage=[(s.at_ns, s.kv_usage) for s in ok if s.kv_usage is not None],
             step_starts=sorted(self.view.step_starts),
-            chunk_gaps=self._chunk_gaps(),
+            chunk_gaps=self._victim_gaps,
+            in_flight=merge_spans(self._victim_spans),
         )
 
-    def _chunk_gaps(self) -> list[Point]:
-        """The victim's chunk gaps, reading only what was appended since the
-        last call: this runs every quarter second on the host under test."""
+    def _read_victim(self) -> None:
+        """The victim's chunk gaps and request spans, reading only what was
+        appended since the last call: this runs every quarter second on the
+        host under test."""
         path = self.victim_artifact
         if path is None or not path.exists():
-            return self._victim_gaps
+            return
         with path.open("rb") as handle:
             handle.seek(self._victim_offset)
             data = handle.read()
         complete = data[: data.rfind(b"\n") + 1]  # a line being written waits
         self._victim_offset += len(complete)
-        records = [_parse(line) for line in complete.splitlines() if line.strip()]
-        fresh = chunk_gaps((r for r in records if r is not None), self.victim_prefix)
+        parsed = [_parse(line) for line in complete.splitlines() if line.strip()]
+        records = [record for record in parsed if record is not None]
+        fresh = chunk_gaps(records, self.victim_prefix)
         if fresh:
             self._victim_gaps = sorted(self._victim_gaps + fresh)
-        return self._victim_gaps
+        self._victim_spans += request_spans(records, self.victim_prefix)
 
 
 __all__ = [
@@ -428,5 +466,7 @@ __all__ = [
     "Scrape",
     "VictimView",
     "chunk_gaps",
+    "merge_spans",
+    "request_spans",
     "scrape_metrics",
 ]
