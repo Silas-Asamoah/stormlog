@@ -222,6 +222,21 @@ def test_a_fraction_gate_honours_its_preregistered_block_count() -> None:
     )
 
 
+def test_a_run_level_pass_with_the_mean_beyond_the_budget_carries_a_warning() -> None:
+    # rev-213-a's D3: nine runs at 0% and one at 50% failures pass the claim
+    # about runs, while the mean rose 5 points against a 1-point budget.
+    # The gate stands, as specified; the claim says the mean is beyond it.
+    result = _fractions([0.0] * 9 + [0.5])
+    gate = result.gate
+    assert gate is not None and gate.status == "pass" and gate.claim is not None
+    assert gate.claim["warning"] == "mean_exceeds_budget"
+    assert gate.claim["mean_change"] == pytest.approx(0.05)
+    assert "mean change 0.05 is beyond the budget" in gate.claim["statement"]
+    quiet = _fractions([0.0] * 10)
+    assert quiet.gate is not None and quiet.gate.claim is not None
+    assert quiet.gate.claim["warning"] is None
+
+
 def test_all_zero_fractions_pass_as_a_claim_about_runs_not_a_bound() -> None:
     # No failure anywhere: the claim is that runs stay within the budget, not
     # that the failure rate is bounded; the interval is floored, not [0, 0].

@@ -793,6 +793,7 @@ def compare_values(
     result = _compare(request, pairs)
     if request.unit == FRACTION_UNIT:
         outcome = _run_level_gate(request, baseline, candidate, blocks)
+        outcome = _with_mean_change(request, result, outcome)
         return _with(result, gate=outcome, pooled=_pooled(request, pairs))
     if request.unavailable == CENSORED_WORST and request.gate is not None:
         outcome = _censored_gate(replace(request, unavailable=None), pairs)
@@ -1419,6 +1420,27 @@ def _run_level_gate(
     }
     reason = None if status == PASS else "too_few_runs_within_budget"
     return GateOutcome(status, reason, gate, RUN_LEVEL, claim)
+
+
+def _with_mean_change(
+    request: _Request, result: MetricComparison, outcome: GateOutcome | None
+) -> GateOutcome | None:
+    """The run-level claim with the mean change beside it, in the bad
+    direction: one run's failures can move the mean beyond the budget while
+    most runs stay within it. Reported, never gated."""
+    if outcome is None or outcome.claim is None or request.gate is None:
+        return outcome
+    effect = None if result.worst is None else result.worst.effect
+    change = None if effect is None else _sign(request.direction) * effect
+    beyond = change is not None and change > request.gate.budget
+    claim = {
+        **outcome.claim,
+        "mean_change": change,
+        "warning": "mean_exceeds_budget" if beyond else None,
+    }
+    if beyond:
+        claim["statement"] += f"; the mean change {change:g} is beyond the budget"
+    return replace(outcome, claim=claim)
 
 
 def _run_level_blocker(
