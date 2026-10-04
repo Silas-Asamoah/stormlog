@@ -7,6 +7,34 @@ Stormlog describes the server a run measured: its vLLM configuration, its
 environment, its runtime and its GPUs. A description is meant to be shared
 with the run's results, so it never keeps a credential.
 
+## The server's processes
+
+A description reads the server's processes from Linux `/proc`, so it runs on
+the host that serves vLLM. Each process is identified by the host boot, its
+PID and its start time in clock ticks since boot: a PID can be reused, the
+three together cannot.
+
+vLLM 0.30.0 renames its processes, and each one gets a role from its name or
+command line:
+
+| Role | Process |
+| --- | --- |
+| `api_server` | `vllm serve ...`, or `python -m vllm.entrypoints.openai.api_server` |
+| `engine_core` | `VLLM::EngineCore`, or `VLLM::EngineCore_DP<n>` |
+| `worker` | `VLLM::Worker`, or `VLLM::Worker_TP<n>` and the like |
+| `resource_tracker` | Python multiprocessing's resource tracker |
+| `compile_worker` | torch inductor's compile workers |
+| `other` | Anything else, such as the `pip` or `nvidia-smi` that vLLM's `/server_info` starts |
+
+`VLLM` is vLLM's default `VLLM_PROCESS_NAME_PREFIX`; another prefix is
+recognized too. Each process also records its parent, process group,
+session and `Cpus_allowed_list`.
+
+A server's parent exiting does not end its children, and a child can leave
+its process group and session. So a check that a server is gone looks at the
+whole group and session, and at every process the description listed, by
+PID and start time. A zombie has exited and counts as gone.
+
 ## What a description keeps
 
 Redaction follows vLLM's configuration schema, never a substring. A field
@@ -54,6 +82,16 @@ from stormlog.infer.server_privacy import (
 | `redact_environ(environ)` | The kept part of a process environment |
 | `redact_vllm_env(vllm_env)` | `vllm_env` by the same rules |
 | `system_env_summary(system_env)` | The allowlisted scalars, and `packages` with the four runtime versions |
+
+```python
+from stormlog.infer.server_process import group_members, process_tree, still_running
+```
+
+| Function | Returns |
+| --- | --- |
+| `process_tree(pid)` | The process and its live descendants, root first, each with its role |
+| `group_members(pgid, sid=None)` | Every live process in the group, or in the session too |
+| `still_running(keys)` | The processes, given as `(pid, start_ticks)`, that are still alive |
 
 ## Related pages
 

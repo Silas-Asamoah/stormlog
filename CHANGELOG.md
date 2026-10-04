@@ -58,6 +58,12 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `stormlog.infer.server_process`: a vLLM server's processes from Linux
+  `/proc`, each identified by PID and start time and given a role from vLLM
+  0.30.0's process titles (`api_server`, `engine_core`, `worker`, helpers,
+  `other`), with group, session and CPU affinity. It lists what is left of
+  a group or session, and which remembered processes still run, including
+  one that left its session. (#213)
 - `stormlog.infer.server_privacy`: schema-aware redaction for server
   descriptions. Credential fields of vLLM 0.30.0's configuration
   (`credential_paths_v1`) and environment names with a secret word are
