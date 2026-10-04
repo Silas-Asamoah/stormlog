@@ -39,7 +39,7 @@ class Thresholds:
 
     window_ns: int = 5 * SECOND
     hold_ns: int = 10 * SECOND
-    cadence_hold_ns: int = 5 * SECOND
+    cadence_hold_ns: int = 10 * SECOND
     cached_loss_below: float = 0.5
     cached_recovered_at: float = 0.9
     kv_margin: float = 0.05

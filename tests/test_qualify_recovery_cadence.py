@@ -223,6 +223,30 @@ def test_a_slow_resume_ends_the_effect_after_the_stall(idle_share: float) -> Non
         assert 2 * S <= timing.end_ns - LAST <= 3 * S
 
 
+INTERMITTENT: dict[str, Gap] = {
+    # The mean stays within tolerance (0.89x): only the long gaps show.
+    "1% of gaps 20x, the rest 0.7x": lambda rng, _t: busy(rng)
+    * (20 if rng.random() < 0.01 else 0.7),
+    "5% of gaps 3x": slow_share(0.05, 3.0),
+    "every step 1.15x slow": lambda rng, _t: busy(rng) * 1.15,
+}
+
+
+@pytest.mark.parametrize("name", sorted(INTERMITTENT))
+def test_the_rules_resolution_for_mild_or_intermittent_degradation(name: str) -> None:
+    # The search tries every start, so a stretch of a degraded engine that
+    # happens to look normal for a whole hold is found. Over 10 s that is
+    # rare: of 20 seeds, at most a quarter recover more than 10 s before the
+    # 60 s of degradation end (1 and 4 for the intermittent engines, none
+    # for a uniform 1.15x). A 5 s hold let 11, 13 and 12 of 20 through.
+    early = 0
+    for seed in range(20):
+        timing = run(seed, INTERMITTENT[name])
+        assert timing.end_ns is not None, seed
+        early += timing.end_ns - LAST < DEGRADED_FOR - 10 * S
+    assert early <= 5
+
+
 def lognormal_steps(rng: random.Random, start: int, end: int) -> list[int]:
     steps, at = [], start
     while at < end:
@@ -235,6 +259,8 @@ def lognormal_steps(rng: random.Random, start: int, end: int) -> list[int]:
 def test_jittered_engines_recover_in_every_seed(episode_type: str) -> None:
     # The reviewers' noise probe: after ten pulses every series returns to
     # the baseline's distribution, so recovery must hold in all 40 seeds.
+    # Over a 10 s hold, 39 recover at the SIGCONT; one waits 13.5 s for a
+    # window without a chance run of exceedances.
     for seed in range(40):
         rng = random.Random(seed)
         pulses = [
@@ -263,7 +289,7 @@ def test_jittered_engines_recover_in_every_seed(episode_type: str) -> None:
         )
         timing = effect_timing(episode_type, context)
         assert timing.end_ns is not None, seed
-        assert timing.end_ns - pulses[-1][1] <= 10 * S, seed
+        assert timing.end_ns - pulses[-1][1] <= 15 * S, seed
 
 
 def test_the_front_end_waits_for_its_chunk_cadence_too() -> None:

@@ -157,7 +157,7 @@ def test_an_engine_stall_is_timed_from_the_first_stop_and_recovers_after_the_las
     # The pulse's own 100 ms gap ends at the last SIGCONT; from just after
     # it the cadence is the baseline's again.
     assert timing.end_ns == 62 * S + 100 * MS + 1
-    assert timing.recovery_held_at_ns == timing.end_ns + 5 * S
+    assert timing.recovery_held_at_ns == timing.end_ns + 10 * S
     assert realization("F4a", context(signals, actions), timing)[0]
     # An engine that kept stepping was not stalled, though the API server was.
     busy = Signals(
