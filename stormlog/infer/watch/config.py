@@ -54,6 +54,13 @@ CONFIG_VERSION = 1
 DEFAULTS_VERSION = "watch_defaults/1"
 # A shorter tick would only measure the watcher's own overhead.
 MIN_TICK_SECONDS = 0.05
+# Upper bounds, refused with exit 2: past them a setting is a mistake, and
+# its nanosecond conversions overflow (1e300 s crashed the watch with exit
+# 1). A tick or scrape timeout of an hour; seven days of history, incident
+# window or trigger time; retention of ten years.
+MAX_TICK_SECONDS = 3600.0
+MAX_SPAN_SECONDS = 7 * 24 * 3600.0
+MAX_AGE_HOURS = 10 * 365 * 24.0
 SIGNALS = (QUEUE_SATURATION, KV_PREEMPTION_PRESSURE, PREFIX_CACHE_LOSS)
 _PREDICATE_KEYS = (
     "signal",
@@ -243,11 +250,15 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
     if metrics_url not in (None, "auto"):
         _http_url(metrics_url, "server.metrics_url")
     engine = _engine(server.get("engine"), "server.engine")
-    tick = _positive(payload.get("tick_seconds", 1.0), "tick_seconds")
+    tick = _positive(
+        payload.get("tick_seconds", 1.0), "tick_seconds", most=MAX_TICK_SECONDS
+    )
     if tick < MIN_TICK_SECONDS:
         raise InferUsageError(f"tick_seconds must be at least {MIN_TICK_SECONDS}")
     history = _section(payload, "history", {"seconds", "bytes"})
-    history_seconds = _positive(history.get("seconds", 600.0), "history.seconds")
+    history_seconds = _positive(
+        history.get("seconds", 600.0), "history.seconds", most=MAX_SPAN_SECONDS
+    )
     export = payload.get("export", {})
     if not isinstance(export, Mapping):
         raise InferUsageError("export must be an object")
@@ -262,6 +273,7 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
         scrape_timeout_seconds=_positive(
             payload.get("scrape_timeout_seconds", min(2.0, tick)),
             "scrape_timeout_seconds",
+            most=MAX_TICK_SECONDS,
         ),
         history_seconds=history_seconds,
         history_bytes=_count(history.get("bytes", 32 * 1024 * 1024), "history.bytes"),
@@ -330,13 +342,15 @@ def _section(
     return section
 
 
-def _positive(value: Any, name: str) -> float:
+def _positive(value: Any, name: str, *, most: float) -> float:
     try:
         number = _finite(value, name)
     except ValueError as exc:
         raise InferUsageError(f"{name} must be a finite number > 0") from exc
     if number <= 0:
         raise InferUsageError(f"{name} must be a finite number > 0")
+    if number > most:
+        raise InferUsageError(f"{name} must be at most {most:g}")
     return number
 
 
@@ -368,8 +382,12 @@ def _incident(payload: Mapping[str, Any], history_seconds: float) -> IncidentLim
         {"pre_seconds", "post_seconds", "max_open_incidents", "max_incidents_per_hour"},
     )
     limits = IncidentLimits(
-        pre_seconds=_positive(section.get("pre_seconds", 120.0), "pre_seconds"),
-        post_seconds=_positive(section.get("post_seconds", 60.0), "post_seconds"),
+        pre_seconds=_positive(
+            section.get("pre_seconds", 120.0), "pre_seconds", most=MAX_SPAN_SECONDS
+        ),
+        post_seconds=_positive(
+            section.get("post_seconds", 60.0), "post_seconds", most=MAX_SPAN_SECONDS
+        ),
         max_open_incidents=_count(
             section.get("max_open_incidents", 2), "max_open_incidents"
         ),
@@ -398,7 +416,9 @@ def _store(payload: Mapping[str, Any]) -> StoreLimits:
         for key in ("max_total_bytes", "max_incident_bytes", "max_incidents")
     }
     age = _positive(
-        section.get("max_age_hours", defaults.max_age_hours), "store.max_age_hours"
+        section.get("max_age_hours", defaults.max_age_hours),
+        "store.max_age_hours",
+        most=MAX_AGE_HOURS,
     )
     try:
         return StoreLimits(**counts, max_age_hours=age)
@@ -463,8 +483,8 @@ def _optional(settings: Mapping[str, Any], key: str, kind: type) -> Any:
 
 def _seconds(value: Any, name: str) -> float:
     seconds = _finite(value, name)
-    if seconds <= 0:
-        raise ValueError(f"{name} must be > 0")
+    if not 0 < seconds <= MAX_SPAN_SECONDS:
+        raise ValueError(f"{name} must be > 0 and at most {MAX_SPAN_SECONDS:g}")
     return seconds
 
 
