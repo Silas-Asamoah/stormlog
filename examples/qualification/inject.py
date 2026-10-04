@@ -242,18 +242,23 @@ class InjectionRun:
         poller.start()
         progress = _Progress(self.clock())
         victim: subprocess.Popen[bytes] | None = None
+        held = _HeldSignals()
         try:
             victim = self._start_victim()
             self._episodes(victim, progress)
+            # Held from inside the try: a signal before this raises into the
+            # handler below, and one after it is noted, so none can leave
+            # the run unpublished between the episodes and the finish.
+            held.__enter__()
         except Exception as error:  # the run's own failure; publish it
             progress.failure = f"run_failed: {error!r}"
         except BaseException:
             progress.failure = "interrupted"
-            self._finish(victim, poller, progress)
+            self._finish(victim, poller, progress, held)
             raise
-        published, held = self._finish(victim, poller, progress)
-        if held is not None:
-            _act_on(held)
+        published, signum = self._finish(victim, poller, progress, held)
+        if signum is not None:
+            _act_on(signum)
         return published
 
     def _finish(
@@ -261,12 +266,13 @@ class InjectionRun:
         victim: subprocess.Popen[bytes] | None,
         poller: threading.Thread,
         progress: _Progress,
+        held: _HeldSignals,
     ) -> tuple[Path, int | None]:
         """Stop the victim, write the truth and publish the run, with
         SIGTERM, SIGHUP and SIGINT held: one that arrives meanwhile cuts the
         victim's drain short, and is returned to act on once the run is
         published, so it can't leave the run half written."""
-        with _HeldSignals() as held:
+        with held:
             if victim is not None:
                 self._stop_victim(victim, held)
             if held.received and progress.failure is None:
@@ -758,27 +764,40 @@ class InjectionRun:
 class _HeldSignals:
     """SIGTERM, SIGHUP and SIGINT noted instead of acted on, while the run
     is published. Handlers can be set only from the main thread; elsewhere
-    nothing is held."""
+    nothing is held. Entering again while held changes nothing. A third
+    signal is not held: a publish that hangs (a full disk) can still be
+    ended, by the handlers held before, as if nothing had been held."""
 
     SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    # The signal that is acted on at once rather than noted.
+    GIVE_UP_AT = 3
 
     def __init__(self) -> None:
         self.received: list[int] = []
         self._previous: dict[int, Any] = {}
 
+    @property
+    def holding(self) -> bool:
+        return bool(self._previous)
+
     def __enter__(self) -> _HeldSignals:
-        if threading.current_thread() is threading.main_thread():
-            for signum in self.SIGNALS:
-                self._previous[signum] = signal.signal(signum, self._note)
+        if self.holding or threading.current_thread() is not threading.main_thread():
+            return self
+        for signum in self.SIGNALS:
+            self._previous[signum] = signal.signal(signum, self._note)
         return self
 
     def __exit__(self, *_exc: object) -> None:
-        for signum, previous in self._previous.items():
-            if previous is not None:
-                signal.signal(signum, previous)
+        previous, self._previous = self._previous, {}
+        for signum, handler in previous.items():
+            # A handler installed from C reads as None: the default stands in.
+            signal.signal(signum, signal.SIG_DFL if handler is None else handler)
 
     def _note(self, signum: int, _frame: Any) -> None:
         self.received.append(signum)
+        if len(self.received) >= self.GIVE_UP_AT:
+            self.__exit__()
+            signal.raise_signal(signum)
 
 
 def _act_on(signum: int) -> None:

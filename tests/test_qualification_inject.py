@@ -830,6 +830,82 @@ def test_a_second_signal_while_the_run_finishes_still_publishes_it(
     assert load_run(run / "truth" / "run.json").protocol_failure == "interrupted"
 
 
+def test_a_third_signal_is_not_held() -> None:
+    # rev-220-b's delta-3 closure, G5: once the second signal had killed the
+    # victim, every further one was only noted, so a publish that hung (a
+    # full disk) could be ended only by SIGKILL. The third goes to the
+    # handler held before, as if nothing had been held.
+    from examples.qualification.inject import _HeldSignals
+
+    seen: list[int] = []
+    previous = signal.signal(signal.SIGHUP, lambda signum, _frame: seen.append(signum))
+    try:
+        with _HeldSignals() as held:
+            signal.raise_signal(signal.SIGHUP)
+            signal.raise_signal(signal.SIGHUP)
+            assert (held.received, seen) == ([signal.SIGHUP] * 2, [])
+            signal.raise_signal(signal.SIGHUP)
+            assert seen == [signal.SIGHUP]
+            assert not held.holding
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
+def test_a_handler_installed_from_c_is_restored_as_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # G5: signal.signal returns None for a handler installed from C, and
+    # __exit__ skipped it, leaving the note-taker installed for good.
+    from examples.qualification import inject as module
+
+    real = signal.signal
+    saved = {signum: signal.getsignal(signum) for signum in module._HeldSignals.SIGNALS}
+
+    def from_c(signum: int, handler: Any) -> Any:
+        before = real(signum, handler)
+        return None if signum == signal.SIGHUP and handler != signal.SIG_DFL else before
+
+    monkeypatch.setattr(module.signal, "signal", from_c)
+    try:
+        with module._HeldSignals():
+            pass
+        assert signal.getsignal(signal.SIGHUP) == signal.SIG_DFL
+    finally:
+        for signum, handler in saved.items():
+            real(signum, handler)
+
+
+def test_the_run_holds_signals_before_it_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # G5: on the normal path a signal that landed between the episodes'
+    # end and _finish holding them raised out of execute() with nothing
+    # published. Signals are now held inside the try, before _finish runs.
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "N"}]})
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-w"), Server("", "m", tmp_path, {})
+    )
+    holding: list[bool] = []
+
+    def finish(victim: Any, poller: Any, progress: Any, held: Any) -> tuple[Path, None]:
+        holding.append(held.holding)
+        held.__exit__()
+        return tmp_path, None
+
+    monkeypatch.setattr(run, "_channel", lambda: None)
+    monkeypatch.setattr(run, "_poll_loop", lambda: None)
+    monkeypatch.setattr(run, "_start_victim", lambda: None)
+    monkeypatch.setattr(run, "_episodes", lambda victim, progress: None)
+    monkeypatch.setattr(run, "_finish", finish)
+    run.execute()
+    assert holding == [True]
+
+
 def test_an_episode_interrupted_mid_pulse_records_its_pulses(tmp_path: Path) -> None:
     # SIGTERM during F4a's pulses: the engine was stopped several times, so
     # the truth says so, with each completed pulse, and that it was cut
