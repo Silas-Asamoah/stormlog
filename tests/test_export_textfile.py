@@ -230,3 +230,21 @@ def test_a_writer_stuck_in_io_is_abandoned_with_its_lock_kept(
 def test_slots_are_validated(slot: str) -> None:
     with pytest.raises(ValueError):
         validate_slot(slot)
+
+
+def test_the_lock_can_be_taken_before_the_run_starts(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    writer.acquire()
+    assert writer.lock_path.exists() and not writer.path.exists()
+    with pytest.raises(SlotInUse):
+        _writer(tmp_path).acquire()
+    writer.start()
+    writer.close()
+    assert not writer.lock_path.exists()
+
+
+def test_closing_a_writer_that_never_started_releases_its_lock(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    writer.acquire()
+    writer.close()
+    assert not writer.lock_path.exists() and not writer.path.exists()

@@ -88,12 +88,14 @@ class TextfileWriter:
         self._thread: threading.Thread | None = None
         self._lock_owned = False
 
-    def start(self) -> None:
-        """Check the directory, take the slot's lock and write the first file.
+    def acquire(self) -> None:
+        """Check the directory and take the slot's lock, before the run starts.
 
         ``ValueError`` for a directory that is missing or holds a forbidden
         file; ``SlotInUse`` when another live writer has the slot.
         """
+        if self._lock_owned:
+            return
         if not self.directory.is_dir():
             raise ValueError(f"textfile directory {self.directory} does not exist")
         directory = self.directory.resolve()
@@ -105,6 +107,10 @@ class TextfileWriter:
                 )
         _take_lock(self.lock_path)
         self._lock_owned = True
+
+    def start(self) -> None:
+        """Take the lock if not yet taken, then write now and every interval."""
+        self.acquire()
         self._thread = threading.Thread(
             target=self._run, name=f"stormlog-textfile-{self.slot}", daemon=True
         )
