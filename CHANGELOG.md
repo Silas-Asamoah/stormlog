@@ -192,6 +192,20 @@ the flaky benchmark memory gates
 - `stormlog infer analyze` lists every case, including cases in which no
   request succeeded, so drops and failures stay visible.
   ([#248](https://github.com/Silas-Asamoah/stormlog/pull/248))
+- The vLLM execution hook takes 60–66% less time on vLLM's engine thread per
+  scheduler step. Each record's fields are now serialized once, when the
+  record is queued. Before, they were walked in Python to bound their size,
+  then serialized again by the writer thread. The records written are
+  byte-identical. The queue counts each record at its exact JSON size, so:
+  - its 32 MiB bound now also bounds the memory it holds, where the live
+    records it held could take up to twice that;
+  - fewer records are dropped as oversized: only a record whose JSON is over
+    4 MiB is, where the old estimate, about 1.65 times the JSON, also
+    dropped some that fit.
+
+  A record the queue cannot take at any size, because it is full or the disk
+  cap has stopped record writing, is now dropped before it is serialized.
+  (#217)
 
 ### Fixed
 
@@ -221,13 +235,6 @@ the flaky benchmark memory gates
   run, and a budgets file that is valid JSON but not an object no longer
   crashes with an `AttributeError` after the run.
   ([#249](https://github.com/Silas-Asamoah/stormlog/pull/249))
-- The vLLM execution hook takes 60–66% less time on vLLM's engine thread per
-  scheduler step. Each record's fields are now serialized once, when the
-  record is queued. Before, they were walked in Python to bound their size,
-  then serialized again by the writer thread. The queue counts each record at
-  its exact JSON size, so its 32 MiB bound now also bounds the memory it
-  holds, where the live records it held could take up to twice that. The
-  records written are byte-identical. (#217)
 
 ## [0.3.10] - 2026-10-01
 
