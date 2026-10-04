@@ -175,6 +175,20 @@ def test_a_rate_without_an_interval_says_why() -> None:
     assert metrics["throughput_rps"].read(case) == (None, "rate_unavailable")
 
 
+def test_every_value_a_run_cannot_give_has_a_reason() -> None:
+    # A value read as plain missing was attrition: the gate went on with
+    # the runs left. Each reader now says why.
+    case = _case(100.0)
+    estimate = case["latency"]["metrics"]["client.e2e"]["failure_penalized"]["p95"]
+    estimate.update(value_ms=None, reason="successful_values_missing")
+    case["population"] = {}
+    metrics = {metric.name: metric for metric in default_metrics(case)}
+    assert metrics["client.e2e.p95"].read(case) == (None, "successful_values_missing")
+    assert metrics["failure_fraction"].read(case) == (None, "population_unrecorded")
+    del estimate["reason"]
+    assert metrics["client.e2e.p95"].read(case) == (None, "no_value")
+
+
 def test_unlabelled_runs_are_independent_samples() -> None:
     comparison = compare_runs(*_arms(SLOWER, paired=False), ComparisonSpec())
     metric = comparison.cases[CASE]["metrics"]["client.e2e.p95"]

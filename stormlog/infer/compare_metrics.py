@@ -33,6 +33,7 @@ INSUFFICIENT_TAIL = "insufficient_tail_samples"
 UNMEASURABLE = "unmeasurable"
 NO_SLO = "no_slo_policy"
 RATE_UNAVAILABLE = "rate_unavailable"
+NO_VALUE = "no_value"
 LATENCY_KEYS = (
     "client.ttft",
     "client.e2e",
@@ -202,23 +203,30 @@ def _failure_fraction(case: Mapping[str, Any]) -> Reading:
     population = case.get("population") or {}
     offered, successful = population.get("offered"), population.get("successful")
     if not (is_number(offered) and is_number(successful)) or offered <= 0:
-        return None, None
+        return None, "population_unrecorded"
     return (offered - successful) / offered, None
 
 
 def _latency(key: str, level: str) -> Callable[[Mapping[str, Any]], Reading]:
     def read(case: Mapping[str, Any]) -> Reading:
         metric = ((case.get("latency") or {}).get("metrics") or {}).get(key) or {}
-        estimate = (metric.get("failure_penalized") or {}).get(level) or {}
-        if estimate.get("penalized"):
-            return None, PENALIZED
-        if estimate.get("sufficient") is False:
-            value = estimate.get("value_ms")
-            return (float(value) if is_number(value) else None), INSUFFICIENT_TAIL
-        value = estimate.get("value_ms")
-        return (float(value) if is_number(value) else None), None
+        return _estimate((metric.get("failure_penalized") or {}).get(level) or {})
 
     return read
+
+
+def _estimate(estimate: Mapping[str, Any]) -> Reading:
+    """A quantile estimate's value, or why it cannot be gated."""
+    if estimate.get("penalized"):
+        return None, PENALIZED
+    value = estimate.get("value_ms")
+    number = float(value) if is_number(value) else None
+    if estimate.get("sufficient") is False:
+        return number, INSUFFICIENT_TAIL
+    if number is not None:
+        return number, None
+    # Such as successful_values_missing: no value is never attrition.
+    return None, str(estimate.get("reason") or NO_VALUE)
 
 
 def _bounds(lower: Any, upper: Any) -> RunValue:
