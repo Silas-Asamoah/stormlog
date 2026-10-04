@@ -120,6 +120,32 @@ class _Attempt:
     actions_record: list[dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass
+class _Progress:
+    """What a run has done so far, kept as it goes, so that a run that fails
+    part way still publishes every episode it attempted."""
+
+    started_ns: int
+    attempts: list[_Attempt] = field(default_factory=list)
+    measured_start: int | None = None
+    priming_end: int | None = None
+    baseline_end: int | None = None
+    final_start: int | None = None
+    priming: tuple[bool, float | None] = (False, None)
+    failure: str | None = None
+
+    def windows(self, now: int) -> _Windows:
+        start = self.measured_start or self.started_ns
+        priming_end = self.priming_end or start
+        baseline_end = self.baseline_end or priming_end
+        return _Windows(start, priming_end, baseline_end, self.final_start or now, now)
+
+    def protocol_failure(self) -> str | None:
+        if self.failure is not None:
+            return self.failure
+        return None if self.priming[0] else "priming_check_failed"
+
+
 @dataclass(frozen=True)
 class _Windows:
     """The run's own windows, on the victim's clock."""
@@ -165,13 +191,19 @@ class InjectionRun:
         self.clock = clock
         self.thresholds: Thresholds = plan.recovery_thresholds()
         self.channel: ReferenceChannel | None = None
+        # The run's own failure, if it had one (episodes' are in the truth).
+        self.failure: str | None = None
         self._lock = threading.Lock()
         self._stop_polling = threading.Event()
 
     # ------------------------------------------------------------ the run
 
     def execute(self) -> Path:
-        """Run the plan; return the published run directory."""
+        """Run the plan; return the published run directory. Whatever ends
+        the run, every episode it attempted is written and published: an
+        episode whose actuation raised is not actuated, and a run that fails
+        or is interrupted records why in its run record (``self.failure``).
+        An interruption is re-raised once the run is published."""
         directory = self.directory.create()
         (directory.truth / "plan.json").write_text(
             json.dumps(self.plan.to_record(), indent=2, sort_keys=True)
@@ -179,36 +211,50 @@ class InjectionRun:
         self.channel = self._channel()
         poller = threading.Thread(target=self._poll_loop, name="reference", daemon=True)
         poller.start()
-        victim = self._start_victim()
+        progress = _Progress(self.clock())
+        victim: subprocess.Popen[bytes] | None = None
         try:
-            attempts, windows, priming = self._episodes(victim)
-        finally:
-            self._stop_victim(victim)
-            self._stop_polling.set()
-            poller.join(timeout=10)
-        self._write_truth(attempts, windows, priming)
-        return directory.publish()
+            victim = self._start_victim()
+            self._episodes(victim, progress)
+        except Exception as error:  # the run's own failure; publish it
+            progress.failure = f"run_failed: {error!r}"
+        except BaseException:
+            progress.failure = "interrupted"
+            self._finish(victim, poller, progress)
+            raise
+        return self._finish(victim, poller, progress)
 
-    def _episodes(
-        self, victim: subprocess.Popen[bytes]
-    ) -> tuple[list[_Attempt], _Windows, tuple[bool, float | None]]:
-        t0 = self._wait_for_measured(victim)
+    def _finish(
+        self,
+        victim: subprocess.Popen[bytes] | None,
+        poller: threading.Thread,
+        progress: _Progress,
+    ) -> Path:
+        if victim is not None:
+            self._stop_victim(victim)
+        self._stop_polling.set()
+        poller.join(timeout=10)
+        self.failure = progress.failure
+        self._write_truth(progress)
+        return self.directory.publish()
+
+    def _episodes(self, victim: subprocess.Popen[bytes], progress: _Progress) -> None:
+        t0 = progress.measured_start = self._wait_for_measured(victim)
         t = self.plan.timeline
-        priming_end = t0 + int(t.priming * SECOND)
+        priming_end = progress.priming_end = t0 + int(t.priming * SECOND)
         self._sleep_until(priming_end)
-        priming = priming_check(self._signals(), self.clock(), self.thresholds)
-        baseline_end = priming_end + int(t.baseline * SECOND)
+        progress.priming = priming_check(self._signals(), self.clock(), self.thresholds)
+        baseline_end = progress.baseline_end = priming_end + int(t.baseline * SECOND)
         self._sleep_until(baseline_end)
         baseline = Baseline.measure(self._signals(), priming_end, baseline_end)
         # The baseline itself is the first episode's clean time.
-        attempts = self._run_episodes(baseline, clean_since=priming_end)
-        final_start = self.clock()
+        self._run_episodes(baseline, priming_end, progress.attempts)
+        progress.final_start = self.clock()
         self._sleep_for(t.final_recovery)
-        windows = _Windows(t0, priming_end, baseline_end, final_start, self.clock())
-        return attempts, windows, priming
 
-    def _run_episodes(self, baseline: Baseline, clean_since: int) -> list[_Attempt]:
-        attempts: list[_Attempt] = []
+    def _run_episodes(
+        self, baseline: Baseline, clean_since: int, attempts: list[_Attempt]
+    ) -> None:
         for index, episode in enumerate(self.plan.episodes):
             attempt = self._attempt(index, episode, baseline, clean_since)
             attempts.append(attempt)
@@ -216,7 +262,6 @@ class InjectionRun:
                 break
             # Clean from the start of the recovery hold: the effect's end.
             clean_since = attempt.timing.end_ns or self.clock()
-        return attempts
 
     def _attempt(
         self, index: int, episode: EpisodePlan, baseline: Baseline, clean_since: int
@@ -224,7 +269,11 @@ class InjectionRun:
         # An episode starts only once its clean time has passed (alignment).
         self._sleep_until(clean_since + int(self.plan.timeline.min_clean * SECOND))
         started, started_mono = self.clock(), time.monotonic_ns()
-        actions, actuated, injected = self._actuate(index, episode)
+        try:
+            actions, actuated, injected = self._actuate(index, episode)
+        except Exception as error:  # a failed actuation: not actuated, on record
+            actions, actuated = Actions(), False
+            injected = {"method": episode.row.method, "error": repr(error)}
         ended, ended_mono = self.clock(), time.monotonic_ns()
         result = "ok" if actuated else str(injected.get("error", "failed"))
         actions_record = [
@@ -368,12 +417,9 @@ class InjectionRun:
 
     # ------------------------------------------------------------ the truth
 
-    def _write_truth(
-        self,
-        attempts: list[_Attempt],
-        windows: _Windows,
-        priming: tuple[bool, float | None],
-    ) -> None:
+    def _write_truth(self, progress: _Progress) -> None:
+        attempts, priming = progress.attempts, progress.priming
+        windows = progress.windows(self.clock())
         records = self._victim_records()
         clock = _victim_clock(records)
         truth = _Truth(
@@ -386,10 +432,11 @@ class InjectionRun:
             clock_domain=clock,
             same_clock=clock is not None and clock == _harness_clock(),
         )
-        failure = None if priming[0] else "priming_check_failed"
         write_run(
             self.directory.truth / "run.json",
-            windows.run_record(self.directory.label, clock, failure),
+            windows.run_record(
+                self.directory.label, clock, progress.protocol_failure()
+            ),
         )
         injections = [self._injection(attempt, truth) for attempt in attempts]
         injections += [

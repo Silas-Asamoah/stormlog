@@ -10,12 +10,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import psutil
 import pytest
 
 from examples.qualification.__main__ import main
 from examples.qualification.fake_engine.process import FakeEngineProcess, _environment
 from examples.qualification.run_dir import verify
 from stormlog.infer.qualify.ground_truth import load_injections, load_run
+from tests.qualification_fake_engine_helpers import wait_until
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or not hasattr(signal, "SIGSTOP"),
@@ -187,3 +189,79 @@ def test_targets_are_bound_at_startup(tmp_path: Path) -> None:
         stand_in.wait()
     with pytest.raises(ValueError, match="sidecar="):
         _targets(None, [f"sidecar={stand_in.pid}"])
+
+
+def _inject(server: FakeEngineProcess, tmp_path: Path, plan: Path, *extra: str) -> int:
+    return main(
+        [
+            "inject",
+            "--plan", str(plan),
+            "--out", str(tmp_path / "runs"),
+            "--label", "q221-00000000000000bb",
+            "--base-url", server.base_url,
+            "--model", "fake/qwen-0.5b",
+            "--reference-channel", str(tmp_path / "hook"),
+            *extra,
+            "--", "--tokenizer", "none", "--system-sampler", "none",
+        ]  # fmt: skip
+    )
+
+
+def _short_plan(path: Path, *episodes: dict[str, Any]) -> Path:
+    record = json.loads(_plan(path).read_text())
+    record["episodes"] = list(episodes)
+    path.write_text(json.dumps(record))
+    return path
+
+
+def test_an_actuation_that_raises_is_published_not_actuated(tmp_path: Path) -> None:
+    # F4a's target can't be stopped (a zombie): the pulser raises, the
+    # episode is not actuated with the error kept, and the N before it and
+    # the run are still published.
+    zombie = subprocess.Popen([sys.executable, "-c", "pass"])
+    zombie_pid = zombie.pid
+    arguments = ["--step-seconds", "0.002", "--hook-dir", str(tmp_path / "hook")]
+    try:
+        assert wait_until(
+            lambda: psutil.Process(zombie_pid).status() == psutil.STATUS_ZOMBIE
+        )
+        plan = _short_plan(tmp_path / "plan.json", {"type": "N"}, {"type": "F4a"})
+        with FakeEngineProcess(arguments) as server:
+            code = _inject(
+                server, tmp_path, plan, "--target", f"engine_core={zombie_pid}"
+            )
+    finally:
+        zombie.wait()
+    assert code == 0
+    run = tmp_path / "runs" / "q221-00000000000000bb"
+    assert verify(run) == []
+    by_type = {
+        i.episode_type: i for i in load_injections(run / "truth" / "injections.jsonl")
+    }
+    assert by_type["N"].status == "valid"
+    assert by_type["F4a"].status == "not_actuated"
+    assert "did not stop" in by_type["F4a"].injected["error"]
+
+
+def test_a_run_that_fails_is_published_with_its_reason(tmp_path: Path) -> None:
+    # The victim exits before measuring (an argument infer profile refuses):
+    # nothing is attempted, and the run says why, exit code 1.
+    arguments = ["--step-seconds", "0.002", "--hook-dir", str(tmp_path / "hook")]
+    plan = _short_plan(tmp_path / "plan.json", {"type": "N"})
+    with FakeEngineProcess(arguments) as server:
+        code = main(
+            [
+                "inject", "--plan", str(plan), "--out", str(tmp_path / "runs"),
+                "--label", "q221-00000000000000cc", "--base-url", server.base_url,
+                "--model", "fake/qwen-0.5b", "--reference-channel", str(tmp_path / "hook"),
+                "--", "--no-such-flag",
+            ]  # fmt: skip
+        )
+    assert code == 1
+    run = tmp_path / "runs" / "q221-00000000000000cc"
+    assert verify(run) == []
+    record = load_run(run / "truth" / "run.json")
+    assert record.protocol_failure is not None
+    assert "before measuring" in record.protocol_failure
+    (skipped,) = load_injections(run / "truth" / "injections.jsonl")
+    assert skipped.status in ("protocol_failure", "not_actuated")
