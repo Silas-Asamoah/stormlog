@@ -828,9 +828,9 @@ class _Placement:
     run's measured window and placed when at least half of what is left
     lies in the exposure, wherever it starts: a claim over the whole run,
     from its priming on, is the plainest false positive there is. A claim
-    with no window is placed unless one of the run's injected episodes
-    names its kind (expects it, declares it secondary or allows it), when
-    it is reported as unplaced. A window on another clock than the run's
+    with no window is placed unless one of the run's injected faults
+    expects its kind, when it is reported as unplaced (and, windowless,
+    it is never credited to that fault either). A window on another clock than the run's
     can't be compared with the exposure, so it is placed: failing closed,
     it counts."""
 
@@ -875,7 +875,7 @@ class _Placement:
         return (
             (
                 f"run {run_id}: {count} fault claims without a window,"
-                " of kinds its injected episodes name",
+                " of kinds its injected faults expect",
             )
             if count
             else ()
@@ -883,13 +883,12 @@ class _Placement:
 
 
 def _injected_kinds(injections: Sequence[Injection]) -> frozenset[str]:
-    """The kinds the run's injected episodes name: what they expect, their
-    declared secondaries and what they allow."""
+    """The kinds the run's injected episodes expect: the faults it holds."""
     return frozenset(
-        label.kind
+        expectation.kind
         for injection in injections
         if injection.cause_class in INJECTED_CLASSES
-        for label in (*injection.expects, *injection.secondary, *injection.allows)
+        for expectation in injection.expects
     )
 
 
