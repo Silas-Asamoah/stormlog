@@ -1,0 +1,366 @@
+{
+  "descriptors": [
+    {
+      "enums": {},
+      "help": "Compressed scrape bytes held.",
+      "key": "history_bytes",
+      "kind": "gauge",
+      "labels": [],
+      "name": "stormlog_watch_history_bytes",
+      "states": [],
+      "unit": "bytes"
+    },
+    {
+      "enums": {},
+      "help": "Scrape history byte bound.",
+      "key": "history_capacity_bytes",
+      "kind": "gauge",
+      "labels": [],
+      "name": "stormlog_watch_history_capacity_bytes",
+      "states": [],
+      "unit": "bytes"
+    },
+    {
+      "enums": {},
+      "help": "Span of scrapes held.",
+      "key": "history_seconds",
+      "kind": "gauge",
+      "labels": [],
+      "name": "stormlog_watch_history_seconds",
+      "states": [],
+      "unit": "seconds"
+    },
+    {
+      "enums": {},
+      "help": "History age bound.",
+      "key": "history_capacity_seconds",
+      "kind": "gauge",
+      "labels": [],
+      "name": "stormlog_watch_history_capacity_seconds",
+      "states": [],
+      "unit": "seconds"
+    },
+    {
+      "enums": {},
+      "help": "Profiler windows open now (0 or 1).",
+      "key": "captures_active",
+      "kind": "gauge",
+      "labels": [],
+      "name": "stormlog_watch_captures_active",
+      "states": [],
+      "unit": ""
+    },
+    {
+      "enums": {},
+      "help": "Until deep capture.",
+      "key": "cooldown_remaining_seconds",
+      "kind": "gauge",
+      "labels": [],
+      "name": "stormlog_watch_cooldown_remaining_seconds",
+      "states": [],
+      "unit": "seconds"
+    },
+    {
+      "enums": {},
+      "help": "Bytes the incident store holds.",
+      "key": "retention_bytes",
+      "kind": "gauge",
+      "labels": [],
+      "name": "stormlog_watch_retention_bytes",
+      "states": [],
+      "unit": "bytes"
+    },
+    {
+      "enums": {},
+      "help": "Bundles the incident store holds.",
+      "key": "retention_incidents",
+      "kind": "gauge",
+      "labels": [],
+      "name": "stormlog_watch_retention_incidents",
+      "states": [],
+      "unit": ""
+    },
+    {
+      "enums": {},
+      "help": "Worst tick lateness.",
+      "key": "loop_lag_seconds_max",
+      "kind": "gauge",
+      "labels": [],
+      "name": "stormlog_watch_loop_lag_seconds_max",
+      "states": [],
+      "unit": "seconds"
+    },
+    {
+      "enums": {},
+      "help": "Each trigger's state.",
+      "key": "trigger_state",
+      "kind": "state",
+      "labels": [
+        "trigger_id"
+      ],
+      "name": "stormlog_watch_trigger_state",
+      "states": [
+        "inactive",
+        "pending",
+        "firing",
+        "resolving"
+      ],
+      "unit": ""
+    },
+    {
+      "enums": {
+        "cause": [
+          "age",
+          "bytes"
+        ]
+      },
+      "help": "Scrapes evicted from history, by cause.",
+      "key": "history_evictions_total",
+      "kind": "counter",
+      "labels": [
+        "cause"
+      ],
+      "name": "stormlog_watch_history_evictions_total",
+      "states": [],
+      "unit": ""
+    },
+    {
+      "enums": {
+        "outcome": [
+          "ok",
+          "failed",
+          "oversized"
+        ]
+      },
+      "help": "Scrapes by outcome.",
+      "key": "scrapes_total",
+      "kind": "counter",
+      "labels": [
+        "outcome"
+      ],
+      "name": "stormlog_watch_scrapes_total",
+      "states": [],
+      "unit": ""
+    },
+    {
+      "enums": {},
+      "help": "Ticks skipped behind a slow scrape.",
+      "key": "ticks_missed_total",
+      "kind": "counter",
+      "labels": [],
+      "name": "stormlog_watch_ticks_missed_total",
+      "states": [],
+      "unit": ""
+    },
+    {
+      "enums": {},
+      "help": "Ticks with a frozen exporter.",
+      "key": "frozen_ticks_total",
+      "kind": "counter",
+      "labels": [],
+      "name": "stormlog_watch_frozen_ticks_total",
+      "states": [],
+      "unit": ""
+    },
+    {
+      "enums": {
+        "capture_status": [
+          "captured",
+          "partial",
+          "failed",
+          "interrupted",
+          "disabled",
+          "skipped_cooldown",
+          "skipped_rate_limit",
+          "skipped_budget",
+          "skipped_unavailable",
+          "skipped_owner",
+          "health_only",
+          "recorded_by_policy"
+        ],
+        "trigger_kind": [
+          "metric",
+          "slo",
+          "signal",
+          "health",
+          "test"
+        ]
+      },
+      "help": "Incidents by trigger kind and capture status.",
+      "key": "incidents_total",
+      "kind": "counter",
+      "labels": [
+        "trigger_kind",
+        "capture_status"
+      ],
+      "name": "stormlog_watch_incidents_total",
+      "states": [],
+      "unit": ""
+    },
+    {
+      "enums": {
+        "detail_collected": [
+          "metrics",
+          "spans",
+          "execution",
+          "kernel_trace",
+          "none"
+        ],
+        "fidelity": [
+          "complete",
+          "partial",
+          "missing"
+        ],
+        "window": [
+          "pre",
+          "post",
+          "deep"
+        ]
+      },
+      "help": "Incident windows by fidelity and detail collected.",
+      "key": "incident_windows_total",
+      "kind": "counter",
+      "labels": [
+        "window",
+        "fidelity",
+        "detail_collected"
+      ],
+      "name": "stormlog_watch_incident_windows_total",
+      "states": [],
+      "unit": ""
+    },
+    {
+      "enums": {
+        "reason": [
+          "cooldown",
+          "rate_limit",
+          "budget",
+          "owner",
+          "unavailable",
+          "open_limit"
+        ]
+      },
+      "help": "Firings that opened no incident or capture, by reason.",
+      "key": "suppressed_total",
+      "kind": "counter",
+      "labels": [
+        "reason"
+      ],
+      "name": "stormlog_watch_suppressed_total",
+      "states": [],
+      "unit": ""
+    },
+    {
+      "enums": {},
+      "help": "Bundles retention removed.",
+      "key": "pruned_total",
+      "kind": "counter",
+      "labels": [],
+      "name": "stormlog_watch_pruned_total",
+      "states": [],
+      "unit": ""
+    },
+    {
+      "enums": {},
+      "help": "Bytes retention removed.",
+      "key": "pruned_bytes_total",
+      "kind": "counter",
+      "labels": [],
+      "name": "stormlog_watch_pruned_bytes_total",
+      "states": [],
+      "unit": "bytes"
+    },
+    {
+      "enums": {
+        "sink": [
+          "ledger",
+          "export"
+        ]
+      },
+      "help": "Records a sink could not take, by sink.",
+      "key": "sink_dropped_total",
+      "kind": "counter",
+      "labels": [
+        "sink"
+      ],
+      "name": "stormlog_watch_sink_dropped_total",
+      "states": [],
+      "unit": ""
+    }
+  ],
+  "snapshot": {
+    "history_bytes": 3400000,
+    "history_capacity_bytes": 33554432,
+    "history_capacity_seconds": 600.0,
+    "history_evictions_total": [
+      [
+        "age",
+        12
+      ]
+    ],
+    "history_seconds": 600.0,
+    "incident_windows_total": [
+      [
+        "post",
+        "partial",
+        "metrics",
+        1
+      ],
+      [
+        "pre",
+        "complete",
+        "metrics",
+        1
+      ]
+    ],
+    "incidents_total": [
+      [
+        "signal",
+        "disabled",
+        1
+      ]
+    ],
+    "loop_lag_seconds_max": 0.004,
+    "pruned_bytes_total": 41783,
+    "pruned_total": 1,
+    "retention_bytes": 41783,
+    "retention_incidents": 1,
+    "scrapes_total": [
+      [
+        "failed",
+        9
+      ],
+      [
+        "ok",
+        590
+      ],
+      [
+        "oversized",
+        1
+      ]
+    ],
+    "sink_dropped_total": [
+      [
+        "export",
+        1
+      ]
+    ],
+    "suppressed_total": [
+      [
+        "rate_limit",
+        2
+      ]
+    ],
+    "ticks_missed_total": 2,
+    "trigger_state": [
+      [
+        "kv_preemption",
+        "inactive"
+      ],
+      [
+        "queue_saturation",
+        "firing"
+      ]
+    ]
+  }
+}
