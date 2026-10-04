@@ -8,7 +8,7 @@ import math
 import os
 import signal
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -98,8 +98,7 @@ def cmd_watch(args: argparse.Namespace, *, restore_signals: bool = True) -> int:
         return outcome.exit_code
     finally:
         if restore_signals:
-            for signum, handler in previous.items():
-                signal.signal(signum, handler)
+            _restore(previous)
 
 
 _SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -154,6 +153,19 @@ def _ignore(
     finally:
         if block is not None:
             block(signal.SIG_UNBLOCK, installed)
+
+
+def _restore(previous: Mapping[signal.Signals, Any]) -> None:
+    """Put back the handlers the watch found, SIGINT last. Restored first, a
+    SIGINT before SIGTERM's turn interrupted the return, against the code
+    the report held, and left SIGTERM ignored. One that lands as SIGINT's
+    own handler comes back came at the watch's very end, and is dropped, as
+    one a moment earlier, while ignored, was."""
+    for signum in sorted(previous, key=lambda s: s == signal.SIGINT):
+        try:
+            signal.signal(signum, previous[signum])
+        except KeyboardInterrupt:
+            pass
 
 
 def _api_key(name: str | None) -> str | None:

@@ -11,6 +11,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -191,6 +192,42 @@ def test_a_watch_run_in_process_gives_the_signals_back(
         assert stormlog_main() == 0
     assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
     assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
+
+
+def test_a_signal_while_the_handlers_come_back_keeps_the_report_s_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SIGINT was put back before SIGTERM: a SIGINT in between interrupted
+    main(), which returned 130 against a report of 0, and left SIGTERM
+    ignored. Here a SIGINT lands just after each handler comes back."""
+    previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+    real_signal = signal.signal
+    armed: list[bool] = []
+
+    def restore_then_interrupt(signum: int, handler: Any) -> Any:
+        result = real_signal(signum, handler)
+        if armed and handler is previous.get(signal.Signals(signum)):
+            os.kill(os.getpid(), signal.SIGINT)
+        return result
+
+    from stormlog.infer.watch import watcher as watcher_module
+
+    real_write = watcher_module.write_report
+
+    def write(path: Path, report: Any) -> None:
+        real_write(path, report)
+        armed.append(True)  # the watch is over: arm the interrupt
+
+    monkeypatch.setattr(watcher_module, "write_report", write)
+    monkeypatch.setattr(signal, "signal", restore_then_interrupt)
+    path = tmp_path / "watch.json"
+    with serve_metrics(FakeMetrics()) as base_url:
+        path.write_text(json.dumps(watch_config(base_url)), encoding="utf-8")
+        code = _watch(tmp_path, "--config", str(path), "--duration", "0.5")
+    monkeypatch.undo()
+    report = json.loads((tmp_path / "watch" / "report.json").read_text())
+    assert code == report["verdict"]["exit_code"] == 0
+    assert {s: signal.getsignal(s) for s in previous} == previous
 
 
 def test_sigterm_ends_the_watch_with_a_report(tmp_path: Path) -> None:
