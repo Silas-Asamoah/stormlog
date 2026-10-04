@@ -281,6 +281,22 @@ Each check is judged over the effect and the whole action (to
 window is empty, but its neighbor runs on. Each check is recorded with its
 value, and whether it gates.
 
+**Two checks look only at the victim's median or the victim's requests.**
+- **The cache checks use the median.** F3 is realized when the median cached
+  fraction falls below 0.5. T3 is benign while that median stays at 0.9 or
+  more, and F3's recovery holds once it is back at 0.9. Up to half of the
+  victim's requests can therefore still miss. In rev-220-b's probe, F3
+  recovered at the neighbor's stop in 20 of 20 runs with 20–45% of requests
+  still missing. A T3 whose neighbor evicts 40% of the victim's prefixes is
+  still a valid negative, and a correct cache-loss claim there counts as
+  false. The design defines F3 and T3 this way. A share bound like the
+  queue's would be stricter.
+- **F1 counts only the victim's preemptions.** A dose that fills the KV
+  cache and preempts the neighbor's requests is still a clean
+  queue-saturation episode. G0's calibration keeps F1 below preemption,
+  since the fake engine and vLLM preempt the newest request, which may be
+  the victim's.
+
 **A missing reference signal leaves its check incomplete.** When the
 reference channel has no samples for a check (no scraped hit ratio in the
 baseline or the episode, say), the check neither passes nor fails; it is
