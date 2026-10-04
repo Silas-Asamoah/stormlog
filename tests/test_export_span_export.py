@@ -459,6 +459,30 @@ def test_a_failed_file_write_drops_its_batch(
     assert path.read_text() == ""
 
 
+def test_a_line_left_half_written_is_unknown_not_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Part of the line reached the file and could not be cut back: a reader
+    # may take those spans, or not.
+    real_write = filesink._write
+
+    def half_then_full(fd: int, data: Any) -> int:
+        real_write(fd, bytes(data[: len(data) // 2]))
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    def no_truncate(_fd: int, _length: int) -> None:
+        raise OSError(errno.EIO, "I/O error")
+
+    monkeypatch.setattr(filesink, "_write", half_then_full)
+    monkeypatch.setattr(filesink, "_truncate", no_truncate)
+    exporter = _file_exporter(tmp_path / "spans.jsonl")
+    exporter.start()
+    _offer(exporter, 4)
+    exporter.close(2.0)
+    accounting = exporter.accounting()
+    assert accounting["unknown"] == {"file_partial": 4} and _balanced(accounting)
+
+
 def test_offers_never_wait_for_the_worker() -> None:
     collector = FakeCollector()
     exporter = _exporter("http://127.0.0.1:9")
