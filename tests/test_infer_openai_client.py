@@ -6,6 +6,7 @@ import contextlib
 import json
 import socket
 import threading
+import time
 import urllib.error
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -199,6 +200,9 @@ def test_a_reset_after_the_status_line_is_the_answer_it_gave(
         connection, _address = listener.accept()
         connection.recv(65536)
         connection.sendall(status_line)
+        # A reset discards what the client has not read yet: let it read the
+        # status line and wait for headers first, or it saw no answer at all.
+        time.sleep(0.5)
         connection.setsockopt(
             socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00"
         )
