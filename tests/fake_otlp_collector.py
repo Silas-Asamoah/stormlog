@@ -46,6 +46,7 @@ class Received:
     body: bytes
     spans: list[RawSpan]
     stored: bool
+    at: float = field(default_factory=time.monotonic)
 
 
 @dataclass

@@ -243,7 +243,10 @@ class OtlpHttpTransport:
     def _try(
         self, candidate: Candidate, deadline: float
     ) -> tuple[socket.socket | None, int | None, str]:
-        sock = socket.socket(candidate.family, candidate.type, candidate.proto)
+        try:
+            sock = socket.socket(candidate.family, candidate.type, candidate.proto)
+        except OSError:
+            return None, None, CONNECT_REFUSED
         token = self._register(sock, deadline)
         try:
             # Never 0, which would make the socket non-blocking.
@@ -299,7 +302,8 @@ class OtlpHttpTransport:
             connection.request(
                 "POST", self.destination.target, body=body, headers=self._headers
             )
-        except OSError:
+        except (OSError, http.client.HTTPException):
+            # The body did not all leave, so the collector cannot have it.
             return Transmission(NOT_SENT, SEND_FAILED, retryable=True)
         sent = len(body)
         timed_out = False

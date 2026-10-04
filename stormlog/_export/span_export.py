@@ -1,0 +1,456 @@
+"""Batch spans and deliver them from one worker thread, settling every one.
+
+The producer offers items to a bounded queue and moves on. The worker turns
+each into a capped span, encodes it, and closes a batch at 512 spans, 4 MiB
+or one second after its first span. It then sends the batch to its sink,
+an OTLP/HTTP endpoint or an OTLP JSON lines file, retrying what may be
+retried, and settles it in the ledger.
+
+``close`` stops admission and lets the worker finish within the deadline,
+cutting any wait that would outlast it. At the deadline the sink is
+aborted and the ledger frozen: what is still queued or unbatched is
+dropped at shutdown, and a batch mid-transmission is unknown.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Generic, Protocol, TypeVar
+
+from .delivery import (
+    ENCODE_ERROR,
+    BatchHistory,
+    Breaker,
+    DeliveryLedger,
+    RetryPolicy,
+)
+from .filesink import (
+    FILE_DISABLED,
+    FILE_ERROR,
+    FILE_FULL,
+    FILE_PARTIAL,
+    WRITTEN,
+    LineFileSink,
+)
+from .otlp_encoding import ExportResult, SpanEncoding
+from .otlp_http import (
+    AMBIGUOUS,
+    CONFIRMED,
+    NOT_SENT,
+    SEND_FAILED,
+    OtlpHttpTransport,
+    Transmission,
+)
+from .queue import BoundedQueue
+from .spans import Attributes, Scope, Span, SpanLimits, capped
+
+T = TypeVar("T")
+
+SPAN_QUEUE_ITEMS = 2048
+SPAN_QUEUE_BYTES = 8 * 1024 * 1024
+MAX_BATCH_SPANS = 512
+MAX_BATCH_BYTES = 4 * 1024 * 1024
+SCHEDULE_DELAY_SECONDS = 1.0
+MAX_FILE_BYTES = 256 * 1024 * 1024
+
+
+class SpanSink(Protocol):
+    """Where batches go. ``abort`` is final and says whether a body had left."""
+
+    kind: str
+
+    def start(self) -> None: ...
+
+    def send(self, body: bytes, *, spans: int) -> Transmission: ...
+
+    def abort(self) -> bool: ...
+
+    def close(self) -> None: ...
+
+
+class HttpSink:
+    kind = "endpoint"
+
+    def __init__(self, transport: OtlpHttpTransport) -> None:
+        self.transport = transport
+
+    def start(self) -> None:
+        self.transport.start()
+
+    def send(self, body: bytes, *, spans: int) -> Transmission:
+        return self.transport.send(body, spans=spans)
+
+    def abort(self) -> bool:
+        return self.transport.abort()
+
+    def close(self) -> None:
+        self.transport.watchdog.stop()
+
+
+class FileSink:
+    """OTLP JSON, one export request per line; a line is written whole or not at all."""
+
+    kind = "file"
+    _OUTCOMES = {
+        FILE_FULL: Transmission(NOT_SENT, FILE_FULL),
+        FILE_ERROR: Transmission(NOT_SENT, FILE_ERROR),
+        FILE_DISABLED: Transmission(NOT_SENT, FILE_DISABLED),
+        FILE_PARTIAL: Transmission(AMBIGUOUS, FILE_PARTIAL),
+    }
+
+    def __init__(
+        self, path: Path, *, max_bytes: int = MAX_FILE_BYTES, fsync: bool = False
+    ) -> None:
+        self.lines = LineFileSink(path, max_bytes=max_bytes, fsync=fsync)
+        self._lock = threading.Lock()
+        self._aborted = False
+        self._writing = False
+
+    def start(self) -> None:
+        self.lines.open()
+
+    def send(self, body: bytes, *, spans: int) -> Transmission:
+        with self._lock:
+            if self._aborted:
+                return Transmission(NOT_SENT, SEND_FAILED)
+            self._writing = True
+        outcome = self.lines.write_line(body)
+        with self._lock:
+            self._writing = False
+        if outcome == WRITTEN:
+            return Transmission(CONFIRMED, result=ExportResult(), sent_bytes=len(body))
+        return self._OUTCOMES[outcome]
+
+    def abort(self) -> bool:
+        with self._lock:
+            self._aborted = True
+            return self._writing
+
+    def close(self) -> None:
+        self.lines.close()
+
+
+@dataclass
+class _Stats:
+    transmissions: Counter[str] = field(default_factory=Counter)
+    categories: Counter[str] = field(default_factory=Counter)
+    retries: int = 0
+    sent_bytes: int = 0
+    encoded_bytes: int = 0
+    batches: int = 0
+    first_error: dict[str, Any] | None = None
+    errors: Counter[str] = field(default_factory=Counter)
+    flush_seconds: float | None = None
+
+
+@dataclass
+class _Batch:
+    units: list[Any] = field(default_factory=list)
+    size: int = 0
+    opened_at: float = 0.0
+
+    def add(self, unit: Any, size: int) -> None:
+        if not self.units:
+            self.opened_at = time.monotonic()
+        self.units.append(unit)
+        self.size += size
+
+    def clear(self) -> None:
+        self.units = []
+        self.size = 0
+
+
+class SpanExporter(Generic[T]):
+    """Items in, through ``to_span``; batches out to one sink."""
+
+    def __init__(
+        self,
+        sink: SpanSink,
+        encoding: SpanEncoding,
+        *,
+        resource: Attributes,
+        scope: Scope,
+        to_span: Callable[[T], Span],
+        limits: SpanLimits = SpanLimits(),
+        retry: RetryPolicy = RetryPolicy(),
+        breaker: Breaker | None = None,
+        schedule_delay: float = SCHEDULE_DELAY_SECONDS,
+        max_batch_spans: int = MAX_BATCH_SPANS,
+        max_batch_bytes: int = MAX_BATCH_BYTES,
+        queue_items: int = SPAN_QUEUE_ITEMS,
+        queue_bytes: int = SPAN_QUEUE_BYTES,
+    ) -> None:
+        self.sink = sink
+        self.encoding = encoding
+        self.resource = resource
+        self.scope = scope
+        self.to_span = to_span
+        self.limits = limits
+        self.retry = retry
+        self.breaker = breaker or Breaker()
+        self.schedule_delay = schedule_delay
+        self.max_batch_spans = max_batch_spans
+        self.max_batch_bytes = max_batch_bytes
+        self.queue: BoundedQueue[T] = BoundedQueue(
+            max_items=queue_items, max_bytes=queue_bytes
+        )
+        self.ledger = DeliveryLedger()
+        self.stats = _Stats()
+        self._closing = threading.Event()
+        self._until = float("inf")
+        self._last_attempt_at: float | None = None
+        self._worker: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        """Open the sink and start the worker; a sink error reaches the caller."""
+        self.sink.start()
+        self._worker = threading.Thread(
+            target=self._run, name="stormlog-export-spans", daemon=True
+        )
+        self._worker.start()
+
+    def offer(self, item: T, size: int) -> bool:
+        """Queue ``item``; never blocks. False when full or closed (counted)."""
+        return self.queue.offer(item, size)
+
+    # ------------------------------------------------------------- the worker
+    def _run(self) -> None:
+        try:
+            self._loop()
+        except Exception:
+            # The freeze settles whatever the worker left unfinished.
+            self._error("worker")
+
+    def _loop(self) -> None:
+        batch = _Batch()
+        while True:
+            items = self.queue.take(timeout=self._take_timeout(batch))
+            for item in items:
+                if not self._add(batch, item):
+                    return
+            if batch.units and self._due(batch) and not self._flush(batch):
+                return
+            if not items and not batch.units and self.queue.stats().closed:
+                return
+
+    def _take_timeout(self, batch: _Batch) -> float:
+        if self._closing.is_set():
+            return 0.0
+        if not batch.units:
+            return 0.25
+        return max(0.0, batch.opened_at + self.schedule_delay - time.monotonic())
+
+    def _add(self, batch: _Batch, item: T) -> bool:
+        unit = self._unit(item)
+        if unit is None:
+            return not self.ledger.frozen
+        encoded, size = unit
+        full = len(batch.units) >= self.max_batch_spans
+        if batch.units and (full or batch.size + size > self.max_batch_bytes):
+            if not self._flush(batch):
+                return False
+        batch.add(encoded, size)
+        return True
+
+    def _flush(self, batch: _Batch) -> bool:
+        delivered = self._deliver(batch.units)
+        batch.clear()
+        return delivered
+
+    def _due(self, batch: _Batch) -> bool:
+        if len(batch.units) >= self.max_batch_spans:
+            return True
+        if self._closing.is_set():
+            return self.queue.stats().depth == 0
+        return time.monotonic() >= batch.opened_at + self.schedule_delay
+
+    def _unit(self, item: T) -> tuple[Any, int] | None:
+        if not self.ledger.take(1):
+            return None
+        try:
+            unit, unit_size = self.encoding.unit(
+                capped(self.to_span(item), self.limits)
+            )
+        except Exception:
+            self._error("encode")
+            self.ledger.drop_pending(ENCODE_ERROR, 1)
+            return None
+        if unit_size > self.max_batch_bytes:
+            self.ledger.drop_pending(ENCODE_ERROR, 1)
+            return None
+        return unit, unit_size
+
+    def _deliver(self, units: list[Any]) -> bool:
+        """Send one batch until it settles; False once the ledger is frozen."""
+        history = BatchHistory(len(units))
+        if not self.ledger.begin(history):
+            return False
+        try:
+            body = self.encoding.request(self.resource, self.scope, units)
+        except Exception:
+            self._error("encode")
+            failed = Transmission(NOT_SENT, ENCODE_ERROR)
+            return self.ledger.record(history, failed) and self._finish(history)
+        self.stats.encoded_bytes += len(body)
+        self.stats.batches += 1
+        return self._transmit(history, body) and self._finish(history)
+
+    def _transmit(self, history: BatchHistory, body: bytes) -> bool:
+        """Attempt until a transmission is final or no retry fits; False once frozen."""
+        while True:
+            if not self._pause(self._probe_wait()) or not self.ledger.attempting():
+                return False
+            transmission = self._send(body, history.spans)
+            self._last_attempt_at = time.monotonic()
+            if not self.ledger.record(history, transmission):
+                return False
+            self._note(transmission, retry=history.attempts > 1)
+            if transmission.kind == CONFIRMED or not transmission.retryable:
+                return True
+            delay = self._retry_delay(history, transmission)
+            if delay is None:
+                return True
+            if not self._pause(delay):
+                return False
+
+    def _send(self, body: bytes, spans: int) -> Transmission:
+        try:
+            return self.sink.send(body, spans=spans)
+        except Exception:
+            # Whether the body left is unknown, so the batch may be stored.
+            self._error("send")
+            return Transmission(AMBIGUOUS, SEND_FAILED)
+
+    def _finish(self, history: BatchHistory) -> bool:
+        if self.ledger.finish(history) is None:
+            return False
+        self.breaker.settled(history)
+        return True
+
+    def _retry_delay(
+        self, history: BatchHistory, transmission: Transmission
+    ) -> float | None:
+        """The wait before the next attempt; None when the budget cannot cover it."""
+        delay = (
+            transmission.retry_after
+            if transmission.retry_after is not None
+            else self.retry.delay(history.attempts)
+        )
+        if delay > self.retry.remaining(history, time.monotonic()):
+            return None
+        return delay
+
+    def _probe_wait(self) -> float:
+        # While the destination is down, attempts are one probe interval apart.
+        if self.breaker.up or self._last_attempt_at is None:
+            return 0.0
+        next_probe = self._last_attempt_at + self.breaker.probe_interval
+        return max(0.0, next_probe - time.monotonic())
+
+    def _pause(self, seconds: float) -> bool:
+        """Wait ``seconds``; False when that would outlast the close deadline."""
+        if seconds <= 0:
+            return not (self._closing.is_set() and time.monotonic() > self._until)
+        end = time.monotonic() + seconds
+        if not self._closing.is_set():
+            self._closing.wait(seconds)
+        if self._closing.is_set():
+            if end > self._until:
+                return False
+            time.sleep(max(0.0, end - time.monotonic()))
+        return True
+
+    def _note(self, transmission: Transmission, *, retry: bool) -> None:
+        self.breaker.attempted(transmission)
+        stats = self.stats
+        stats.transmissions[transmission.kind] += 1
+        if transmission.category is not None:
+            stats.categories[transmission.category] += 1
+            if stats.first_error is None:
+                stats.first_error = {
+                    "kind": transmission.kind,
+                    "category": transmission.category,
+                    "status": transmission.status,
+                }
+        stats.retries += retry
+        stats.sent_bytes += transmission.sent_bytes
+
+    def _error(self, entry: str) -> None:
+        self.stats.errors[entry] += 1
+
+    # ------------------------------------------------------------- the end
+    def close(self, deadline: float) -> None:
+        """Stop admission, deliver within ``deadline`` seconds, then freeze."""
+        started = time.monotonic()
+        with self._lock:
+            if self._closing.is_set():
+                return
+            self._until = started + max(0.0, deadline)
+            self._closing.set()
+        self.queue.close()
+        worker = self._worker
+        if worker is not None:
+            worker.join(max(0.0, self._until - time.monotonic()))
+        sending = (
+            self.sink.abort() if worker is not None and worker.is_alive() else False
+        )
+        drained = len(self.queue.drain())
+        self.ledger.freeze(drained=drained, sending=lambda: sending)
+        try:
+            self.sink.close()
+        except Exception:
+            self._error("close")
+        self.stats.flush_seconds = round(time.monotonic() - started, 3)
+
+    # ------------------------------------------------------------- reading
+    def accounting(self) -> dict[str, Any]:
+        """Every offered span's disposition; exact at every instant."""
+        queue = self.queue.stats()
+        ledger: dict[str, Any] = self.ledger.snapshot()
+        dropped = Counter(ledger["dropped"])
+        dropped.update(
+            {"queue_full": queue.dropped_full, "closed": queue.dropped_closed}
+        )
+        return {
+            "offered": queue.offered,
+            "exported": ledger["exported"],
+            "rejected": ledger["rejected"],
+            "refused": ledger["refused"],
+            "dropped": {k: v for k, v in dropped.items() if v},
+            "unknown": ledger["unknown"],
+            "queued": queue.depth,
+            "in_flight": ledger["in_flight"],
+            "max_extra_copies": ledger["max_extra_copies"],
+            "late_results": ledger["late_results"],
+            "frozen": ledger["frozen"],
+            "loss_accounting": "exact_local",
+        }
+
+    def summary(self) -> dict[str, Any]:
+        queue = self.queue.stats()
+        stats = self.stats
+        return {
+            "spans": self.accounting(),
+            "queue": {
+                "high_water": queue.high_water,
+                "high_water_bytes": queue.high_water_bytes,
+                "capacity_spans": queue.max_items,
+                "capacity_bytes": queue.max_bytes,
+            },
+            "transmissions": dict(stats.transmissions),
+            "categories": dict(stats.categories),
+            "retries": stats.retries,
+            "batches": stats.batches,
+            "encoded_bytes": stats.encoded_bytes,
+            "sent_bytes": stats.sent_bytes,
+            "first_error": stats.first_error,
+            "destination": self.breaker.snapshot(),
+            "flush_seconds": stats.flush_seconds,
+            "internal_errors": dict(stats.errors),
+        }
