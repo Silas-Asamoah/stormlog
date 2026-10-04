@@ -406,3 +406,14 @@ def test_a_capture_beside_a_null_run_leaves_the_null_its_unit() -> None:
     score = run_of([null_run(), capture], diagnosis())
     assert score.negative_episode is not None
     assert score.excluded_negative is None
+
+
+def test_an_episode_scored_in_two_runs_is_refused() -> None:
+    # Two runs, each with its own id, both holding the same episode.
+    from tests.test_qualify_scoring import null_run
+
+    first = run_of([null_run()], diagnosis(), run_id="a")
+    second = run_of([null_run()], diagnosis(), run_id="b")
+    twice = replace(second, episodes=first.episodes)
+    with pytest.raises(ValueError, match="an episode is scored twice"):
+        summarize([first, twice], CONFIG)

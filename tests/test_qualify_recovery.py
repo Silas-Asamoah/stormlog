@@ -619,3 +619,29 @@ def test_an_idle_gap_in_a_hold_is_not_the_engines() -> None:
     )
     timing = effect_timing("F4a", context(signals, actions))
     assert timing.end_ns is not None and timing.end_ns - last < S
+
+
+def test_a_cadence_holds_within_its_rate_tolerance() -> None:
+    # Baseline gaps of 10 and 30 ms (mean 20 ms, p95 and p99 30 ms). Gaps of
+    # 22 ms are 10% slower on average, inside the 20% tolerance, with none
+    # long or above the p95: the cadence is back.
+    baseline = GapStats(count=250, mean=0.020, p95=0.030, p99=0.030)
+    steps = [tick * 22 * MS for tick in range(40)]
+    gaps = Signals(in_flight=ALWAYS, step_starts=steps).busy_step_gaps()
+    cadence = CadenceWithin(gaps, baseline, Thresholds(), ALWAYS)
+    assert cadence.holds(0, 39 * 22 * MS)
+    slow = [tick * 26 * MS for tick in range(40)]  # 30% slower: outside it
+    gaps = Signals(in_flight=ALWAYS, step_starts=slow).busy_step_gaps()
+    assert not CadenceWithin(gaps, baseline, Thresholds(), ALWAYS).holds(
+        0, 39 * 26 * MS
+    )
+
+
+def test_a_queue_hold_cannot_begin_with_an_outside_sample() -> None:
+    # One wait above the band (but under the ceiling) then 20 in band: a
+    # hold may start after it, not with it, or the effect would end before
+    # its last sample.
+    waits = [(0, 0.3)] + [(tick * 100 * MS, 0.05) for tick in range(1, 21)]
+    rule = MostlyWithin(waits, Thresholds(), min_samples=20, high=0.1, ceiling=1.0)
+    assert not rule.holds(0, 2 * S)
+    assert rule.holds(1, 2 * S)
