@@ -1,16 +1,20 @@
 """The victim's SLO outcomes, for the impact layer (#221 design A.6, layer 4).
 
 Each victim request is counted in the interval it arrived in (arrival
-membership: its intended arrival, else its send). A request that met the SLO
-is ``met``; one that missed it, or failed (timed out, was rejected, errored,
-or was never sent), is a violation; a cancelled one is ``unknown``. This is a
-stand-in for #213's ``evaluate_request``, which PR C uses once #213 lands;
-the rule is the same: missed, unreachable included, is a violation, and
-unknown is not.
+membership: its intended arrival, else its send). This is a stand-in for
+#213's ``evaluate_request`` on the client criteria, which PR C uses once #213
+lands, and the rule is the same:
+
+- a request that did not succeed (timed out, rejected, errored, never sent,
+  cancelled) is a violation, whatever its latencies;
+- a successful one is a violation if any criterion fails (above its limit),
+  else ``unknown`` if any criterion's value is missing, not finite or
+  negative (no latency can be), else ``met``.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -34,22 +38,27 @@ class Slo:
 
 
 def outcome(record: dict[str, Any], slo: Slo) -> str:
-    status = record.get("status")
-    if status == "cancelled":
-        return UNKNOWN
-    if status != "ok":
+    if record.get("status") != "ok":
         return VIOLATION
-    return VIOLATION if _missed(record, slo) else MET
+    verdicts = {
+        _judge(value, limit)
+        for limit, value in (
+            (slo.ttft_ms, record.get("ttft_ms")),
+            (slo.e2e_ms, record.get("e2e_latency_ms")),
+        )
+        if limit is not None
+    }
+    if VIOLATION in verdicts:
+        return VIOLATION
+    return UNKNOWN if UNKNOWN in verdicts else MET
 
 
-def _missed(record: dict[str, Any], slo: Slo) -> bool:
-    for limit, value in (
-        (slo.ttft_ms, record.get("ttft_ms")),
-        (slo.e2e_ms, record.get("e2e_latency_ms")),
-    ):
-        if limit is not None and (value is None or value > limit):
-            return True
-    return False
+def _judge(value: Any, limit: float) -> str:
+    """One criterion: unknown without a value a latency can have."""
+    real = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not real or not math.isfinite(value) or value < 0:
+        return UNKNOWN
+    return MET if value <= limit else VIOLATION
 
 
 def arrived_at(record: dict[str, Any]) -> int:
