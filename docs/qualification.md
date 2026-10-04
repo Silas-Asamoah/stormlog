@@ -184,6 +184,12 @@ busy gaps in the hold:
 - no more of them lie above the baseline's p95 than chance allows: the 99%
   point of Binomial(n, 0.05).
 
+**A baseline too thin to compare with never recovers.** A criterion whose
+baseline has fewer samples than it needs in a hold (20 busy gaps, 20 waits,
+5 waiting counts) never holds, so the episode times out as
+`recovery_incomplete` instead of recovering against infinite thresholds.
+`Baseline` records each count.
+
 An engine back at its baseline recovers at once; one still degraded doesn't.
 The tests hold both: engines with 40–51% of steps 10× slow, every step 2× or
 3× slow, bimodal stalls, slow steps among idle gaps, pulses the injector

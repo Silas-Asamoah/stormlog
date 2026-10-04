@@ -229,6 +229,16 @@ class AllWithin:
         return self.violations + (self.samples if self.require_samples else [])
 
 
+class Never:
+    """Never holds: a criterion whose baseline is too thin to compare with."""
+
+    def holds(self, start_ns: int, end_ns: int) -> bool:
+        return False
+
+    def change_points(self) -> Sequence[int]:
+        return []
+
+
 class NoEvents:
     """No event in the interval."""
 
@@ -309,7 +319,9 @@ class CadenceWithin:
     ``min_cadence_samples`` gaps; their mean within ``rate_tolerance`` of
     the baseline's rate; none longer than ``long_gap_factor`` times the
     baseline's p99; and no more above the baseline's p95 than chance allows.
-    The mean weighs a long gap by its length, so a slow minority shows."""
+    The mean weighs a long gap by its length, so a slow minority shows. A
+    baseline of fewer than ``min_cadence_samples`` gaps can't be compared
+    with, so it never holds."""
 
     def __init__(
         self, points: Sequence[Point], baseline: GapStats, thresholds: Thresholds
@@ -322,12 +334,13 @@ class CadenceWithin:
         self.long = _prefix(float(value > longest) for value in values)
         self.mean_ceiling = baseline.mean / (1 - thresholds.rate_tolerance)
         self.thresholds = thresholds
+        self.comparable = baseline.count >= thresholds.min_cadence_samples
 
     def holds(self, start_ns: int, end_ns: int) -> bool:
         first = bisect.bisect_left(self.times, start_ns)
         last = bisect.bisect_right(self.times, end_ns)
         count = last - first
-        if count < self.thresholds.min_cadence_samples:
+        if not self.comparable or count < self.thresholds.min_cadence_samples:
             return False
         if self.long[last] > self.long[first]:
             return False
@@ -423,7 +436,9 @@ class GapStats:
 
 @dataclass(frozen=True)
 class Baseline:
-    """What normal looked like in the baseline segment."""
+    """What normal looked like in the baseline segment, with how many
+    samples each figure rests on: a rule whose baseline has too few never
+    holds (or, for a realization check, is incomplete)."""
 
     wait_p95: float
     waiting_low: float
@@ -433,21 +448,28 @@ class Baseline:
     chunks: GapStats
     cached_median: float
     hit_ratio_median: float = 0.0
+    wait_count: int = 0
+    waiting_count: int = 0
+    hit_ratio_count: int = 0
 
     @classmethod
     def measure(cls, signals: Signals, start_ns: int, end_ns: int) -> Baseline:
-        waiting = between(signals.waiting, start_ns, end_ns) or [0.0]
+        waits = between(signals.waits, start_ns, end_ns)
+        gauge = between(signals.waiting, start_ns, end_ns)
+        ratios = between(signals.engine_hit_ratio, start_ns, end_ns)
+        waiting = gauge or [0.0]
         return cls(
-            wait_p95=_q95(between(signals.waits, start_ns, end_ns)),
+            wait_p95=_q95(waits),
             waiting_low=min(waiting),
             waiting_high=max(waiting),
             kv_max=max(between(signals.kv_usage, start_ns, end_ns) or [0.0]),
             steps=GapStats.of(between(signals.busy_step_gaps(), start_ns, end_ns)),
             chunks=GapStats.of(between(signals.chunk_gaps, start_ns, end_ns)),
             cached_median=_median(between(signals.cached_fraction, start_ns, end_ns)),
-            hit_ratio_median=_median(
-                between(signals.engine_hit_ratio, start_ns, end_ns)
-            ),
+            hit_ratio_median=_median(ratios),
+            wait_count=len(waits),
+            waiting_count=len(gauge),
+            hit_ratio_count=len(ratios),
         )
 
 
@@ -488,23 +510,27 @@ class Context:
 def _queue_criteria(context: Context) -> list[Criterion]:
     """Waits back below the baseline's p95, and the waiting count within its
     range, but for as many exceptions as chance allows: 5% of normal waits
-    are above a p95, so "every wait" would almost never hold."""
+    are above a p95, so "every wait" would almost never hold. A baseline
+    with fewer samples than a criterion needs in its hold never holds."""
     baseline, thresholds = context.baseline, context.thresholds
-    return [
-        MostlyWithin(
+    waits: Criterion = Never()
+    if baseline.wait_count >= thresholds.min_wait_samples:
+        waits = MostlyWithin(
             context.signals.waits,
             thresholds,
             min_samples=thresholds.min_wait_samples,
             high=baseline.wait_p95,
-        ),
-        MostlyWithin(
+        )
+    waiting: Criterion = Never()
+    if baseline.waiting_count >= thresholds.min_gauge_samples:
+        waiting = MostlyWithin(
             context.signals.waiting,
             thresholds,
             min_samples=thresholds.min_gauge_samples,
             low=baseline.waiting_low,
             high=baseline.waiting_high,
-        ),
-    ]
+        )
+    return [waits, waiting]
 
 
 def _kv_criteria(context: Context) -> list[Criterion]:
