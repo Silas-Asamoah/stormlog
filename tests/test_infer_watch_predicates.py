@@ -157,6 +157,12 @@ def test_counter_rate_fires_on_its_lower_bound_and_not_across_a_reset() -> None:
     assert rising.classification == VIOLATING
     assert rising.observed_bounds is not None
     assert rising.observed == rising.observed_bounds[0] <= 2.0
+    # Slow scrapes leave the window 1.6-2.4 s long, so 10 preemptions give
+    # 4.2-6.25 per second: a threshold of 5 inside that interval is not met.
+    slow = [scrape(preempted(v), at, duration_ms=400) for at, v in ((0, 0), (2, 10))]
+    straddled = CounterRateAtLeast(PREEMPTIONS, rate_per_s=5.0).evaluate(slow)
+    assert straddled.observed_bounds == pytest.approx((10 / 2.4, 10 / 1.6))
+    assert straddled.classification == CLEAR
     # 100 -> 0 -> 150: the endpoints look consistent, the interior reset is not.
     reset = rate.evaluate(_scrapes([preempted(v) for v in (100, 0, 150)]))
     assert reset.classification == DATA_GAP
