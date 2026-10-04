@@ -150,17 +150,23 @@ class TextfileWriter:
     def _write_once(self) -> None:
         if self.remove_on_exit and not self._active:
             return
+        # The generation stays acquired for the whole write, so a writer
+        # stuck in I/O is one of the readers the publication limit counts,
+        # and the body is written as it is, never copied.
         generation = self.renders.acquire()
         try:
-            data = generation.body + self._own_lines()
             if not self._active and not self.renders.is_fresh(generation):
                 self.stats.final_stale = True
+            self._write_file(generation.body)
         finally:
             self.renders.release(generation)
+
+    def _write_file(self, body: bytes) -> None:
         temporary = self.directory / f".stormlog-{self.slot}.prom.{os.getpid()}.tmp"
         try:
             with open(temporary, "wb") as handle:
-                handle.write(data)
+                handle.write(body)
+                handle.write(self._own_lines())
                 handle.flush()
             os.replace(temporary, self.path)
         except OSError as exc:

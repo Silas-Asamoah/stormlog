@@ -24,7 +24,8 @@ import hashlib
 import math
 import re
 import threading
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from array import array
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product
 from typing import Literal
@@ -112,9 +113,10 @@ class _Series:
     count: int = 0
 
 
-Snapshot = list[
-    tuple["Family", list[tuple[tuple[bytes, ...], list[float], float, int]]]
-]
+# Per family: each series' rendered prefixes (shared, not copied) and its
+# values, flattened into one array of floats. A counter or gauge has one
+# value per series; a histogram has its bucket counts, its sum and its count.
+Snapshot = list[tuple["Family", list[tuple[bytes, ...]], array]]
 
 
 class Family:
@@ -243,11 +245,17 @@ class Family:
         self.stats.series = len(self._series)
         return series
 
-    def _copy(self) -> list[tuple[tuple[bytes, ...], list[float], float, int]]:
-        return [
-            (series.prefixes, list(series.values), series.total, series.count)
-            for series in self._series.values()
-        ]
+    def _copy(self) -> tuple[list[tuple[bytes, ...]], array]:
+        prefixes = []
+        values = array("d")
+        histogram = self.spec.kind == "histogram"
+        for series in self._series.values():
+            prefixes.append(series.prefixes)
+            values.extend(series.values)
+            if histogram:
+                values.append(series.total)
+                values.append(series.count)
+        return prefixes, values
 
 
 class Registry:
@@ -343,9 +351,13 @@ class Registry:
         return self._frozen
 
     def snapshot(self) -> Snapshot:
-        """Copy every value under the lock; render the copy outside it."""
+        """Copy every value under the lock; render the copy outside it.
+
+        Only the values are copied, into one array of floats per family; the
+        prefixes are shared, since they never change once rendered.
+        """
         with self._lock:
-            return [(family, family._copy()) for family in self.families]
+            return [(family, *family._copy()) for family in self.families]
 
     def _writable(self) -> bool:
         # Called with the lock held, through apply, or directly by a caller
@@ -358,18 +370,37 @@ class Registry:
 
 
 def render(snapshot: Snapshot) -> bytes:
-    """The text exposition (format 0.0.4) of a snapshot."""
-    out = bytearray()
-    for family, series_list in snapshot:
+    """The text exposition (format 0.0.4) of a snapshot.
+
+    A render is the largest object an exporter holds, so it is built in a
+    buffer of exactly its size: the pieces are measured in one pass and
+    copied in a second, rather than grown in place (which leaves up to an
+    eighth spare) or copied into a ``bytes`` afterwards (which doubles it).
+    """
+    size = sum(len(piece) for piece in _pieces(snapshot))
+    out = bytearray(size)
+    view = memoryview(out)
+    position = 0
+    for piece in _pieces(snapshot):
+        view[position : position + len(piece)] = piece
+        position += len(piece)
+    return out
+
+
+def _pieces(snapshot: Snapshot) -> Iterator[bytes]:
+    for family, prefixes_list, values in snapshot:
         spec = family.spec
-        out += f"# HELP {spec.name} {_escape_help(spec.help)}\n".encode()
-        out += f"# TYPE {spec.name} {spec.kind}\n".encode()
-        for prefixes, values, total, count in series_list:
-            if spec.kind == "histogram":
-                _render_histogram(out, prefixes, values, total, count)
-            else:
-                out += prefixes[0] + format_value(values[0]).encode() + b"\n"
-    return bytes(out)
+        yield f"# HELP {spec.name} {_escape_help(spec.help)}\n".encode()
+        yield f"# TYPE {spec.name} {spec.kind}\n".encode()
+        if spec.kind == "histogram":
+            stride = len(spec.buckets) + 3
+            for index, prefixes in enumerate(prefixes_list):
+                start = index * stride
+                yield from _histogram_pieces(prefixes, values[start : start + stride])
+        else:
+            for prefixes, value in zip(prefixes_list, values):
+                yield prefixes[0]
+                yield format_value(value).encode() + b"\n"
 
 
 def bounded_value(value: str) -> str:
@@ -499,19 +530,19 @@ def _prefix(name: str, pairs: Sequence[tuple[str, str]]) -> bytes:
     return f"{name}{{{labels}}} ".encode()
 
 
-def _render_histogram(
-    out: bytearray,
-    prefixes: tuple[bytes, ...],
-    counts: list[float],
-    total: float,
-    count: int,
-) -> None:
+def _histogram_pieces(
+    prefixes: tuple[bytes, ...], values: Sequence[float]
+) -> Iterator[bytes]:
+    """One histogram series: its bucket counts, then its sum and count."""
     cumulative = 0.0
-    for prefix, bucket_count in zip(prefixes, counts):
+    for prefix, bucket_count in zip(prefixes[:-2], values[:-2]):
         cumulative += bucket_count
-        out += prefix + format_value(cumulative).encode() + b"\n"
-    out += prefixes[-2] + format_value(total).encode() + b"\n"
-    out += prefixes[-1] + format_value(float(count)).encode() + b"\n"
+        yield prefix
+        yield format_value(cumulative).encode() + b"\n"
+    yield prefixes[-2]
+    yield format_value(values[-2]).encode() + b"\n"
+    yield prefixes[-1]
+    yield format_value(values[-1]).encode() + b"\n"
 
 
 def _family_budget(family: Family, const_labels: Mapping[str, str]) -> tuple[int, int]:
