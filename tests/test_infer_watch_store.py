@@ -444,6 +444,24 @@ def test_recovery_keeps_every_generation_when_the_named_one_is_missing(
     assert (bundle / "gen-7" / "incident.jsonl").exists()
 
 
+def test_a_generation_left_by_a_crash_is_forgotten_when_replaced(
+    tmp_path: Path,
+) -> None:
+    store = IncidentStore(tmp_path, _limits())
+    incident_id = _gen0(store, b"first\n")
+    left = store.next_generation(incident_id, KIB)
+    assert left is not None
+    with left.file("incident.jsonl") as out:
+        out.write(b"orphan" * 100)  # never published: the watcher died
+    restarted = IncidentStore(tmp_path, _limits())  # charges it, from disk
+    retry = restarted.next_generation(incident_id, KIB)
+    assert retry is not None
+    with retry.file("incident.jsonl") as out:
+        out.write(b"second\n")
+    retry.publish()
+    assert restarted.budget.used_bytes == restarted._scan_bytes()
+
+
 def test_recovery_removes_a_half_written_manifest(tmp_path: Path) -> None:
     store = IncidentStore(tmp_path, _limits())
     incident_id = _gen0(store, b"x\n")
