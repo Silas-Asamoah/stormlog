@@ -571,13 +571,14 @@ kept, with `held_ns`, the measured time from `SIGSTOP` to `SIGCONT`
 watchdog's limit or an operator, so it was stopped for less), so effect
 timing can start from the first confirmed stop.
 
-`continued_by_other` is one status read just before `SIGCONT`, so it sees
-only a target running at that moment. A continue by someone else followed
-by another stop (a second actor) reads as stopped, and the flag stays false
-although the target ran for part of the hold. A status read that fails
-reads as running. Nothing scores on the flag: a stall is timed to
-`continue_sent_ns` either way, and a scorer that wants to set such pulses
-aside has to read it.
+`continued_by_other` is set when the target is seen running at any of the
+hold's checks (every 10 ms) or just before `SIGCONT`. A continue by someone
+else followed by another stop (a second actor) is caught when it runs
+across a check. One shorter than the check interval can still be missed.
+A status read that fails reads as running. A target that exits during a
+pulse, or whose pid comes to name another process, raises `TargetGone`
+with a message starting `target_gone`, rather than blaming the watchdog,
+which exits once its target is gone.
 
 `discover_roles(api_server_pid)` names the processes under a vLLM API server by
 the titles vLLM 0.30 gives them, matched exactly on `argv[0]` (which vLLM's

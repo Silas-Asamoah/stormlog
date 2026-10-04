@@ -288,7 +288,7 @@ def test_the_pulse_a_failure_cut_short_is_in_what_was_done(tmp_path: Path) -> No
         server = Server("http://127.0.0.1:9", "m", tmp_path, {"engine_core": target})
         run = InjectionRun(plan, RunDirectory(tmp_path / "runs", "q221-x"), server)
         threading.Thread(target=kill_once_stopped, daemon=True).start()
-        with pytest.raises(PulseRefused, match="exited during the stop"):
+        with pytest.raises(PulseRefused, match="^target_gone: .* exited during"):
             run._pulse(plan.episodes[0])
         done = run._done_so_far(plan.episodes[0])
     finally:
