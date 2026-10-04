@@ -160,6 +160,97 @@ def test_an_interrupted_close_finishes_and_a_later_close_is_a_no_op(
     pipeline.stop_serving()
 
 
+def test_after_an_interrupt_the_later_steps_do_not_wait_and_none_runs_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline = ExportPipeline(
+        ExportConfig(prometheus_textfile_dir=tmp_path, prometheus_slot="t"), LABELS
+    )
+    pipeline.start(started_at=1_700_000_000.0)
+    deadlines: dict[str, list[float]] = {}
+
+    def recording(step: str) -> None:
+        real = getattr(pipeline, step)
+
+        def run(until: float) -> None:
+            calls = deadlines.setdefault(step, [])
+            calls.append(until)
+            if step == "_join_worker" and len(calls) == 1:
+                raise KeyboardInterrupt  # a second Ctrl+C while the close waits
+            real(until)
+
+        monkeypatch.setattr(pipeline, step, run)
+
+    for step in export_module._CLOSE_STEPS:
+        recording(step)
+    with pytest.raises(KeyboardInterrupt):
+        pipeline.close(30.0)
+    pipeline.close(30.0)  # the run's fallback close
+    # Each step ran once across both closes, the interrupted one included,
+    # and every step after the interrupt was told not to wait.
+    assert {step: len(calls) for step, calls in deadlines.items()} == {
+        step: 1 for step in export_module._CLOSE_STEPS
+    }
+    after = export_module._CLOSE_STEPS.index("_join_worker") + 1
+    assert all(deadlines[step] == [0.0] for step in export_module._CLOSE_STEPS[after:])
+    pipeline.stop_serving()
+
+
+def test_the_worker_stops_applying_once_the_close_stops_waiting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The worker is held in its first record until the close's wait has
+    # ended. Released, it must not go on to the next record: the rest are
+    # dropped at shutdown, and the freeze never queues behind them.
+    pipeline = ExportPipeline(ExportConfig(prometheus_textfile_dir=tmp_path), LABELS)
+    held, release = threading.Event(), threading.Event()
+    calls: list[int] = []
+    real_apply = pipeline._apply
+
+    def counted(envelope: Any) -> bool:
+        calls.append(1)
+        if len(calls) == 1:
+            held.set()
+            release.wait(10)
+        return real_apply(envelope)
+
+    monkeypatch.setattr(pipeline, "_apply", counted)
+    pipeline.start(started_at=0.0)
+    worker = pipeline._worker
+    assert worker is not None
+    for _ in range(10):
+        pipeline.observe(_request())
+    assert held.wait(10)
+    real_freeze = pipeline._freeze
+
+    def freeze_once_the_worker_has_moved(until: float) -> None:
+        release.set()
+        # A worker that goes on reaches its next record well within this.
+        _wait_for(lambda: not worker.is_alive() or len(calls) > 1)
+        real_freeze(until)
+
+    monkeypatch.setattr(pipeline, "_freeze", freeze_once_the_worker_has_moved)
+    pipeline.close(0.3)
+    assert len(calls) == 1
+    records = pipeline.summary()["records"]
+    assert records["applied"] == 1
+    assert records["dropped"]["shutdown"] == 9
+    pipeline.stop_serving()
+
+
+def test_a_stale_final_file_is_said_so_in_the_capability_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline = ExportPipeline(
+        ExportConfig(prometheus_textfile_dir=tmp_path, prometheus_slot="t"), LABELS
+    )
+    pipeline.start(started_at=1_700_000_000.0)
+    monkeypatch.setattr(pipeline.renders, "is_fresh", lambda _generation: False)
+    pipeline.close(5.0)
+    assert pipeline.summary()["textfile"]["final_stale"] is True
+    pipeline.stop_serving()
+
+
 def test_a_first_close_with_no_time_left_still_writes_the_final_file(
     tmp_path: Path,
 ) -> None:
