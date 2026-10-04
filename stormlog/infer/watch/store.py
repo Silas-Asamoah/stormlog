@@ -228,26 +228,37 @@ class GenerationWriter:
         published, so an abandoned generation leaves it where it was. A file
         its producer is still writing is charged its growth at publication;
         adopt only a file its producer has finished.
+
+        A link shares the file with its producer until the source's name is
+        let go. Where it could never be (a directory this process cannot
+        write), the file is copied instead, so a producer rewriting its own
+        path cannot change a published bundle.
         """
         self._count_file()
         target = self._target(relpath)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         size = source.stat().st_size
+        releasable = os.access(source.parent, os.W_OK)
+        if not (releasable and self._link_in(source, target, size)):
+            size = self._copy_in(source, target, size)
+        self._adopted.append((source, target, size))
+        self._written.append(target)
+        return size
+
+    def _link_in(self, source: Path, target: Path, size: int) -> bool:
+        """Hard-link a file in and charge it; False where no link can be made."""
         try:
             os.link(source, target)
         except OSError as exc:
             if exc.errno not in _NO_LINK_ERRNOS:
                 raise
-            size = self._copy_in(source, target, size)
-        else:
-            try:
-                self.allowance.charge(size)  # before anything else is written
-            except BudgetExceeded:
-                target.unlink()
-                raise
-        self._adopted.append((source, target, size))
-        self._written.append(target)
-        return size
+            return False
+        try:
+            self.allowance.charge(size)  # before anything else is written
+        except BudgetExceeded:
+            target.unlink()
+            raise
+        return True
 
     def _copy_in(self, source: Path, target: Path, size: int) -> int:
         try:

@@ -148,6 +148,35 @@ def test_a_copy_cut_short_leaves_nothing_in_the_generation(
     assert big.exists()
 
 
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0, reason="root writes anywhere"
+)
+def test_a_trace_whose_name_cannot_be_let_go_is_copied_not_linked(
+    tmp_path: Path,
+) -> None:
+    """Linked, it shared its file with its producer for good: rewriting its
+    own path rewrote the published bundle's trace."""
+    store = IncidentStore(tmp_path, _limits())
+    traces = tmp_path / "readonly-traces"
+    traces.mkdir()
+    trace = traces / "rank0.pt.trace.json.gz"
+    trace.write_bytes(b"incident A")
+    traces.chmod(0o500)
+    try:
+        writer = store.new_bundle(store.new_incident_id(), KIB)
+        assert writer is not None
+        assert writer.adopt(trace, "traces/rank0.pt.trace.json.gz") == 10
+        writer.publish()
+        assert trace.exists()  # its name could not be removed
+        with trace.open("r+b") as producer:
+            producer.write(b"incident B")
+    finally:
+        traces.chmod(0o700)
+    adopted = writer.directory / "traces" / "rank0.pt.trace.json.gz"
+    assert adopted.read_bytes() == b"incident A"
+    assert store.budget.used_bytes == store._scan_bytes() == 10
+
+
 def test_an_abandoned_generation_leaves_adopted_traces_where_they_were(
     tmp_path: Path,
 ) -> None:
