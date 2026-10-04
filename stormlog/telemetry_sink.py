@@ -32,6 +32,8 @@ SEGMENT_PREFIX = "segment-"
 SEGMENT_SUFFIX = ".jsonl"
 SINK_SCHEMA_VERSION = 2
 _LOGGER = logging.getLogger(__name__)
+# How much of a segment the repair of its last line reads at a time.
+_TAIL_CHUNK_BYTES = 64 * 1024
 
 
 @dataclass
@@ -648,14 +650,12 @@ class AppendOnlyTelemetrySink:
             current.size_bytes = 0
             return
 
-        payload = segment_path.read_bytes()
-        if payload and not payload.endswith(b"\n"):
-            last_newline = payload.rfind(b"\n")
-            payload = payload[: last_newline + 1] if last_newline >= 0 else b""
+        size = _whole_lines_size(segment_path)
+        if size < segment_path.stat().st_size:
             # In place: rewriting the file would risk the whole lines too.
-            os.truncate(segment_path, len(payload))
+            os.truncate(segment_path, size)
 
-        current.size_bytes = len(payload)
+        current.size_bytes = size
         current.event_count = self._count_records(segment_path)
 
     def _merge_segment_state(
@@ -695,6 +695,21 @@ class AppendOnlyTelemetrySink:
             )
 
         return merged
+
+
+def _whole_lines_size(path: Path) -> int:
+    """How long a file is up to its last newline, read backwards a chunk at
+    a time, so a long segment is never held whole."""
+    with path.open("rb") as handle:
+        position = handle.seek(0, os.SEEK_END)
+        while position > 0:
+            start = max(0, position - _TAIL_CHUNK_BYTES)
+            handle.seek(start)
+            newline = handle.read(position - start).rfind(b"\n")
+            if newline >= 0:
+                return start + newline + 1
+            position = start
+    return 0
 
 
 def _write_all(fd: int, payload: bytes | memoryview) -> None:
