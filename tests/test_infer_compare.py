@@ -400,12 +400,29 @@ def test_an_outcome_the_baseline_lost_cannot_be_evaluated() -> None:
     baseline[3] = _run("baseline", 3, 100.0, status="interrupted", started=6)
     _lose_case(baseline[3], "missing")
     comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
-    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
-    assert gate is not None
-    assert (gate.status, gate.reason) == (
+    metric = comparison.cases[CASE]["metrics"]["client.e2e.p95"]
+    assert metric.gate is not None
+    assert (metric.gate.status, metric.gate.reason) == (
         "not_evaluable",
-        "baseline_outcome_unrecoverable",
+        "control_failed",
     )
+    assert metric.reason == "control_failed"
+
+
+def test_a_broken_baseline_never_passes_the_candidate() -> None:
+    # A baseline run that crashed slow makes any candidate look better: its
+    # contrasts cannot be judged, even with every value present.
+    baseline, candidate = _arms(SLOWER)
+    baseline[3] = _run("baseline", 3, 400.0, status="interrupted", started=6)
+    spec = ComparisonSpec(gates=E2E_GATE, min_attainment=0.9)
+    comparison = compare_runs(baseline, candidate, spec)
+    case = comparison.cases[CASE]
+    gate = case["metrics"]["client.e2e.p95"].gate
+    assert gate is not None
+    assert (gate.status, gate.reason) == ("not_evaluable", "control_failed")
+    # A claim about the candidate's runs alone does not lean on the baseline.
+    assert case["attainment_gate"]["status"] == "pass"
+    assert comparison.exit_code == 4
 
 
 def test_a_bernoulli_attainment_gate_fails_on_a_lost_candidate_case() -> None:
@@ -419,7 +436,7 @@ def test_a_bernoulli_attainment_gate_fails_on_a_lost_candidate_case() -> None:
 
 
 @pytest.mark.parametrize("paired", [True, False])
-def test_an_external_cause_sets_aside_its_block_and_two_leave_gates_unjudged(
+def test_an_external_cause_sets_aside_its_block_and_the_preregistered_count_decides(
     paired: bool,
 ) -> None:
     baseline, candidate = _arms(SAME, paired=paired)
@@ -444,9 +461,9 @@ def test_an_external_cause_sets_aside_its_block_and_two_leave_gates_unjudged(
     assert one.cases[CASE]["set_aside"] == {
         "unit": "block" if paired else "run",
         "items": ["e/2" if paired else candidate[2].name],
-        "limit": 1,
     }
 
+    # Not a fixed count: the gate's pre-registered min_complete_blocks.
     baseline[4] = _run(
         "baseline",
         4 if paired else None,
@@ -455,26 +472,33 @@ def test_an_external_cause_sets_aside_its_block_and_two_leave_gates_unjudged(
         protocol=("external:operator_abort",),
     )
     two = compare_runs(baseline, candidate, spec)
-    reason = "blocks_set_aside" if paired else "runs_set_aside"
     gate = two.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None and gate.status == "pass"
+    # Six planned: four complete pairs, or five runs an arm, are too few.
+    planned = GateRule("non-inferiority", 0.05, "relative", min_complete_blocks=6)
+    strict = compare_runs(
+        baseline, candidate, ComparisonSpec(gates=(("client.e2e.p95", planned),))
+    )
+    gate = strict.cases[CASE]["metrics"]["client.e2e.p95"].gate
     assert gate is not None
-    assert (gate.status, gate.reason) == ("not_evaluable", reason)
-    attainment = two.cases[CASE]["attainment_gate"]
-    assert (attainment["status"], attainment["reason"]) == ("not_evaluable", reason)
+    assert (gate.status, gate.reason) == ("not_evaluable", "blocks_below_preregistered")
 
 
 def test_a_block_given_for_one_arm_only_counts_as_lost() -> None:
-    # Its other run is gone with no cause recorded: leaving out two such
-    # blocks must not shrink the contrast quietly.
+    # Its other run is gone with no cause recorded: it is listed, and the
+    # pre-registered block count keeps the contrast from shrinking quietly.
     baseline, candidate = _arms(SAME)
     one = compare_runs(baseline, candidate[:5], ComparisonSpec(gates=E2E_GATE))
     assert one.cases[CASE]["set_aside"]["items"] == ["e/5"]
-    gate = one.cases[CASE]["metrics"]["client.e2e.p95"].gate
-    assert gate is not None and gate.status == "pass"
-    two = compare_runs(baseline, candidate[:4], ComparisonSpec(gates=E2E_GATE))
-    gate = two.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    planned = GateRule("non-inferiority", 0.05, "relative", min_complete_blocks=6)
+    spec = ComparisonSpec(gates=(("client.e2e.p95", planned),))
+    gate = (
+        compare_runs(baseline, candidate[:5], spec)
+        .cases[CASE]["metrics"]["client.e2e.p95"]
+        .gate
+    )
     assert gate is not None
-    assert (gate.status, gate.reason) == ("not_evaluable", "blocks_set_aside")
+    assert (gate.status, gate.reason) == ("not_evaluable", "blocks_below_preregistered")
 
 
 def test_a_set_aside_run_fails_its_contrasts_when_asked() -> None:

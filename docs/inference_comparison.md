@@ -128,18 +128,25 @@ such a run's run-level faults (`identity_changed`, `probe_incomplete`,
 cut short (`phase_window_missing`, `records_missing`). A case a
 run lacks is an outcome as well. Where such a run has no value for a
 metric, the outcome cannot be recovered: a candidate's gate on it fails
-(`outcome_unrecoverable`), and a baseline's leaves it `not_evaluable`
-(`baseline_outcome_unrecoverable`). Under `--min-attainment`, such a
-candidate run counts as not reaching the target, and a `bernoulli` gate
-fails. Otherwise a treatment that crashed runs could pass on the blocks
-left.
+(`outcome_unrecoverable`). Under `--min-attainment`, such a candidate run
+counts as not reaching the target, and a `bernoulli` gate fails. Otherwise
+a treatment that crashed runs could pass on the blocks left.
+
+A **baseline** run that failed as an outcome, or lacks the case, leaves
+every contrast of the case `not_evaluable: control_failed`, whether or not
+its values survived: a baseline that served nothing, or crashed slow,
+would make any candidate look better. `--min-attainment`, a claim about the
+candidate's runs alone, is still judged. Only an external cause sets such
+a run aside.
 
 A protocol failure sets aside the whole block, both arms' runs, for the
 cases it touches; the partner is listed with `block_set_aside`. A block
 given for one arm only also counts as lost. Each case lists what it lost
-under `set_aside` (blocks, or runs in an independent design); more than one
-leaves every gate of the case `not_evaluable` (`blocks_set_aside` or
-`runs_set_aside`), so attrition cannot quietly shrink a contrast.
+under `set_aside` (blocks, or runs in an independent design). How many a
+gate may lose is its pre-registered `min_complete_blocks`: with fewer
+complete pairs it is `not_evaluable: blocks_below_preregistered`, however
+many were set aside, so attrition cannot quietly shrink a contrast. Without
+one, only the floor of 3 pairs applies.
 
 A block an arm ran more than once keeps its last attempt (by start time)
 and lists the others with `superseded` and `attempt_kept`, so a block
@@ -322,8 +329,8 @@ A gate is `not_evaluable`, never passed, when:
   interval is always undetermined;
 - fewer remain than the gate's pre-registered `min_complete_blocks`, so an
   excluded run cannot quietly turn six blocks into two;
-- more than one block (or run) of the case was set aside or lost
-  (`blocks_set_aside`, see Runs);
+- a baseline run of the case failed as an outcome (`control_failed`, see
+  Runs);
 - the log ratio is undefined (see Zeros);
 - removing any single block (or run) changes the gate's decision
   (`decision_unstable`); only samples that could still be gated count, so
@@ -374,6 +381,7 @@ give. The cases cover:
   cannot be judged;
 - the zero rules and their fallback in two units;
 - missing-outcome bounds, for goodput and per run for attainment;
+- a baseline outcome failure, `not_evaluable: control_failed`;
 - pre-registered block counts;
 - the independent design's df.
 

@@ -4,12 +4,14 @@
 
 1. sets aside each run that cannot stand for a case, with its protocol
    failure, and lists it. In a paired design the whole block goes, both
-   arms, and more than one block set aside leaves the case's gates
-   ``not_evaluable``. Outcome failures are never set aside: a run that did
-   not finish, or a case a run lacks, is compared, and a value it lost
-   fails the candidate's gate (``outcome_unrecoverable``). A retried block
-   keeps its last attempt and lists the others; a retry never replaces an
-   outcome failure;
+   arms; a gate's pre-registered ``min_complete_blocks`` says how many may
+   go. Outcome failures are never set aside: a run that did not finish,
+   or a case a run lacks, is compared, and a value it lost fails the
+   candidate's gate (``outcome_unrecoverable``). A baseline outcome
+   failure leaves the case's contrasts ``not_evaluable``
+   (``control_failed``): a broken baseline must not pass the candidate. A
+   retried block keeps its last attempt and lists the others; a retry
+   never replaces an outcome failure;
 2. checks the runs are comparable (``compatibility``): within each arm,
    and across arms in the comparison's mode. ``incompatible`` is an input
    error; ``unverified`` leaves every gate ``not_evaluable``;
@@ -73,16 +75,14 @@ ANY_REGRESSION = "any_regression"
 FAMILIES = (ALL_BUDGETS, ANY_REGRESSION)
 EXCLUDE = "exclude"
 FAIL_INCOMPLETE = "fail"
-# More blocks (or runs) set aside than this leave a case's gates unjudged.
-SET_ASIDE_LIMIT = 1
 OUTCOME_UNRECOVERABLE = "outcome_unrecoverable"
-BASELINE_OUTCOME_UNRECOVERABLE = "baseline_outcome_unrecoverable"
+CONTROL_FAILED = "control_failed"
 PROTOCOL_FAILURE = "protocol_failure"
 # Reasons that fail a gate outright rather than leave it unjudged.
 _FAILING = (PROTOCOL_FAILURE, OUTCOME_UNRECOVERABLE)
 # A lost outcome is why a metric has too few values, whatever the
 # statistics say.
-_LOST = (OUTCOME_UNRECOVERABLE, BASELINE_OUTCOME_UNRECOVERABLE)
+_LOST = (OUTCOME_UNRECOVERABLE, CONTROL_FAILED)
 
 
 @dataclass(frozen=True)
@@ -490,7 +490,8 @@ def _lost(
     """The blocks (or runs) this case lost: set aside, or missing an arm's run.
 
     A block given for one arm only lost its other run without a recorded
-    cause, so it counts like one set aside.
+    cause, so it is listed like one set aside. How many a gate may lose is
+    its pre-registered ``min_complete_blocks``.
     """
     if design != PAIRED:
         items = {
@@ -499,10 +500,10 @@ def _lost(
             for run in runs
             if _set_aside(excluded, run, case_id)
         }
-        return {"unit": "run", "items": sorted(items), "limit": SET_ASIDE_LIMIT}
+        return {"unit": "run", "items": sorted(items)}
     blocks = [{_block_key(run) for run in arms[arm]} for arm in (BASELINE, CANDIDATE)]
     items = _blocks_set_aside(arms, excluded, case_id) | (blocks[0] ^ blocks[1])
-    return {"unit": "block", "items": sorted(items), "limit": SET_ASIDE_LIMIT}
+    return {"unit": "block", "items": sorted(items)}
 
 
 def _unpaired_blocks(
@@ -728,7 +729,8 @@ def _case(
     attrition = [item for item in excluded if item["case"] == case_id]
     lost = _lost(case_id, arms, excluded, design)
     blocked = _case_blocker(compatibility, observer_issues, lost, spec)
-    metrics = _case_metrics(case_id, kept, design, spec, blocked)
+    contrast = blocked or _control_failed(case_id, kept[BASELINE])
+    metrics = _case_metrics(case_id, kept, design, spec, contrast)
     case: dict[str, Any] = {
         "metrics": metrics,
         "absent_gates": _absent_gates(metrics, spec),
@@ -827,9 +829,20 @@ def _case_blocker(
         return "observer_not_active"
     if lost["items"] and spec.on_incomplete == FAIL_INCOMPLETE:
         return PROTOCOL_FAILURE
-    if len(lost["items"]) > lost["limit"]:
-        return f"{lost['unit']}s_set_aside"
     return None
+
+
+def _control_failed(case_id: str, baseline: list[RunSummary]) -> str | None:
+    """A baseline run that failed as an outcome, or lacks the case.
+
+    A baseline that served nothing, or crashed slow, would make any
+    candidate look better, so the contrast cannot be judged. Only an
+    external cause sets such a run aside.
+    """
+    broken = any(
+        run.outcome_failures or case_id not in run.comparable_cases for run in baseline
+    )
+    return CONTROL_FAILED if broken else None
 
 
 def _metric(
@@ -873,12 +886,12 @@ def _metric(
 def _lost_outcome(lost: set[str], blocked: str | None) -> str | None:
     """A candidate outcome lost, or a set-aside run under --on-incomplete
     fail, fails the contrast outright; a lost baseline one leaves it
-    unjudged."""
+    unjudged, like any baseline outcome failure."""
     if CANDIDATE in lost:
         return OUTCOME_UNRECOVERABLE
     if blocked is not None:
         return blocked
-    return BASELINE_OUTCOME_UNRECOVERABLE if BASELINE in lost else None
+    return CONTROL_FAILED if BASELINE in lost else None
 
 
 def _readings(

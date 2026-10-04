@@ -635,6 +635,22 @@ def build() -> list[dict[str, Any]]:
             expect={**bounds, "gate": "not_evaluable", "reason": "censored"},
         )
     )
+    cases.append(
+        case(
+            "baseline_outcome_failure_is_control_failed",
+            "a baseline run that failed as an outcome must not pass the "
+            "candidate: the caller says so, and the contrast is not evaluable",
+            baseline=base,
+            candidate=slower,
+            blocks=[BLOCKS6, BLOCKS6],
+            direction="lower_is_better",
+            scale="log_ratio",
+            unit="relative",
+            unavailable="control_failed",
+            gate=gate("non-inferiority", 0.5, "relative"),
+            expect={**bounds, "gate": "not_evaluable", "reason": "control_failed"},
+        )
+    )
     # Missing-outcome bounds: worst case for safety, best case for regressions.
     good_a = [[10.0, 10.2]] * 6
     good_b = [[9.7, 10.3], [9.75, 10.25], [9.72, 10.32]] * 2
