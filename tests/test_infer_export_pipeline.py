@@ -617,6 +617,28 @@ def test_unusable_settings_are_refused(argv: tuple[str, ...]) -> None:
         export_config_from_args(_args(*argv))
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("--prometheus-slot", "default"),
+        ("--prometheus-case-label", "on"),
+        ("--prometheus-max-series", "50000"),
+        ("--prometheus-linger", "0"),
+        ("--prometheus-textfile-interval", "15"),
+    ],
+)
+def test_an_export_flag_given_its_default_still_needs_a_destination(
+    argv: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match=argv[0]):
+        export_config_from_args(_args(*argv))
+
+
+def test_a_json_setting_given_its_default_still_needs_a_destination() -> None:
+    with pytest.raises(ValueError, match="prometheus-slot"):
+        ExportConfig.from_mapping({"prometheus_slot": "default"})
+
+
 @pytest.mark.parametrize("value", ["nan", "inf", "1e300", "3601"])
 @pytest.mark.parametrize(
     "flag",
