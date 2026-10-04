@@ -339,6 +339,25 @@ def test_publication_syncs_in_order(
     ]
 
 
+def test_a_generation_holds_at_most_its_file_cap(tmp_path: Path) -> None:
+    """Each file costs a filesystem block and a manifest entry the byte
+    budget does not see: 2,000 files of 12 bytes took 354 times their
+    charge on disk. The file count is capped instead."""
+    store = IncidentStore(tmp_path, _limits())
+    writer = store.new_bundle(store.new_incident_id(), 32 * KIB)
+    assert writer is not None
+    for index in range(store_module.MAX_GENERATION_FILES):
+        with writer.file(f"f/{index}") as out:
+            out.write(b"x")
+    with pytest.raises(BudgetExceeded, match="file cap"):
+        writer.file("f/one-more")
+    trace = tmp_path / "t.json"
+    trace.write_bytes(b"t")
+    with pytest.raises(BudgetExceeded, match="file cap"):
+        writer.adopt(trace, "traces/t.json")
+    writer.abandon()
+
+
 # ------------------------------------------------------------------ readers
 
 

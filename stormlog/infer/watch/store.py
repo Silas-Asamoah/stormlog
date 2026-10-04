@@ -61,6 +61,10 @@ LOCK_FILENAME = ".lock"
 STORE_LOCK_FILENAME = ".store.lock"
 # A bundle being deleted is renamed to this prefix first.
 TRASH_PREFIX = ".trash-"
+# Each file costs up to a filesystem block beyond its charged bytes, and an
+# entry in the manifest the budget does not charge: capping the count bounds
+# both, to about 4 MiB of blocks and 200 KiB of manifest per generation.
+MAX_GENERATION_FILES = 1024
 INCIDENTS_DIRNAME = "incidents"
 BUNDLE_NAME = re.compile(r"^inc-\d{8}T\d{6}Z-\d{4}-[0-9a-f]{8}$")
 GENERATION_NAME = re.compile(r"^gen-(\d+)$")
@@ -208,6 +212,7 @@ class GenerationWriter:
 
     def file(self, relpath: str) -> CappedWriter:
         """A new file in this generation, every byte charged before it is written."""
+        self._count_file()
         target = self._target(relpath)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         writer = CappedWriter(target, self.allowance)
@@ -224,6 +229,7 @@ class GenerationWriter:
         its producer is still writing is charged its growth at publication;
         adopt only a file its producer has finished.
         """
+        self._count_file()
         target = self._target(relpath)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         size = source.stat().st_size
@@ -270,6 +276,7 @@ class GenerationWriter:
         if current is None:
             raise FileNotFoundError(f"{self.incident_id} has no published generation")
         source = self.bundle / current.current / relpath
+        self._count_file()
         self._linked += source.stat().st_size
         self.allowance.cap(self.store.limits.max_incident_bytes - self._linked)
         target = self._target(relpath)
@@ -346,6 +353,12 @@ class GenerationWriter:
         shutil.rmtree(self.directory, ignore_errors=True)
         self.allowance.release(keep=0)
         self._unpin()
+
+    def _count_file(self) -> None:
+        if len(self._written) >= MAX_GENERATION_FILES:
+            raise BudgetExceeded(
+                f"over the {MAX_GENERATION_FILES}-file cap of one generation"
+            )
 
     def _check_written(self) -> None:
         """Every file this writer put here is still here, or nothing is named."""
@@ -816,8 +829,9 @@ def _remove_temporaries(bundle: Path) -> int:
 def _payload_bytes(bundle: Path, *, seen: set[tuple[int, int]]) -> int:
     """The bytes the budget charges for a bundle: its generations' files.
 
-    The manifest and lock file are not charged; they are a few KiB per
-    bundle, and ``max_incidents`` bounds how many exist.
+    The manifest and lock file are not charged, nor the filesystem blocks
+    beyond each file's bytes; ``MAX_GENERATION_FILES`` bounds both per
+    generation, and ``max_incidents`` how many bundles exist.
     """
     return bytes_on_disk(_generation_dirs(bundle), seen=seen)
 
