@@ -314,6 +314,34 @@ def test_the_families_are_a_fixed_list_and_each_is_documented(
     assert [name for name in FAMILIES if f"`{name}" not in docs] == []
 
 
+def test_a_record_the_exporter_could_not_read_makes_the_totals_inexact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Never offered, so no drop counts it; only the internal error does.
+    pipeline = ExportPipeline(
+        ExportConfig(prometheus_textfile_dir=tmp_path, prometheus_slot="t"), LABELS
+    )
+    real_envelope = pipeline.metrics.envelope
+    calls: list[int] = []
+
+    def failing_first(record: Any, extras: Any) -> Any:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("a mapping bug")
+        return real_envelope(record, extras)
+
+    monkeypatch.setattr(pipeline.metrics, "envelope", failing_first)
+    pipeline.start(started_at=1_700_000_000.0)
+    for _ in range(3):
+        pipeline.observe(_request())
+    pipeline.close(2.0)
+    summary = pipeline.summary()
+    assert summary["records"]["offered"] == 2 and summary["records"]["applied"] == 2
+    assert summary["internal_errors"]["observe"] == 1
+    assert summary["records"]["exact"] is False
+    pipeline.stop_serving()
+
+
 def test_a_full_queue_drops_counts_and_degrades_health(tmp_path: Path) -> None:
     pipeline = ExportPipeline(ExportConfig(prometheus_textfile_dir=tmp_path), LABELS)
     pipeline.queue = BoundedQueue(max_items=2, max_bytes=10**6)  # no worker yet

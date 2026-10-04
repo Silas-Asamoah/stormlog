@@ -402,7 +402,10 @@ class ExportPipeline:
                 "offered": queue.offered,
                 "applied": self._counts.applied,
                 "dropped": self._drop_counts(queue),
-                "exact": self._dropped_total() == 0,
+                # Every record offered was applied, and none was lost before
+                # it could be offered.
+                "exact": self._dropped_total() == 0
+                and self._counts.internal_errors["observe"] == 0,
                 "queue_high_water": queue.high_water,
             },
             "budget": {
