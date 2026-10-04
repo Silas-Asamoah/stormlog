@@ -261,6 +261,12 @@ is held:
 
 New hook fields reach the fake engine in the change that adds them to the hook.
 
+The qualification harness's pulser tests
+(`tests/test_qualification_pulser.py`) stop and continue real processes and
+time their watchdogs in milliseconds. On a machine loaded far past its core
+count, a few of them can miss on timing alone; run the file on its own
+before reading such a failure as a defect.
+
 ## CI behavior in this repo
 
 The current CI workflow at `.github/workflows/ci.yml` runs:

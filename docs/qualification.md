@@ -547,23 +547,37 @@ F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
   stopped); if not, it continues the target at once and refuses the pulse.
   So a stop is left in place only if the watchdog and the harness are both
   killed within the same 10 ms or so: two independent kills, the one
-  residual risk.
+  residual risk. Measured (rev-220-a, three trials each, the watchdog
+  killed and then the harness's group): 0 or 2 ms apart, the target was
+  left stopped every time; 5 ms apart, twice; 20 or 50 ms apart, never.
+  Each check is a status read on the harness's host, about 200 in a 2 s
+  pulse, not work on the engine's; checking every 50 ms would cut that
+  fivefold but widen the window to about 50 ms, so the check stays at
+  10 ms.
 - **Caps.** A pulse lasts at most 2 s, at a duty cycle of at most 50%; a
-  `Pulser` asked for a longer cap gets 2 s. A
-  pulse ends its length after `SIGSTOP` was sent, timed on the monotonic
-  clock, however long the stop took to confirm and whatever the wall clock
-  does. The next pulse waits at least the rest of the period, and at least as
-  long as the target was actually stopped, so a schedule that falls behind
-  keeps the cap instead of catching up back to back.
+  `Pulser` asked for a longer cap gets 2 s, and its watchdog the limit for
+  2 s. A pulse ends its length after `SIGSTOP` was sent, timed on the
+  monotonic clock, however long the stop took to confirm and whatever the
+  wall clock does. The next pulse waits at least the rest of the period,
+  and at least as long as the target was actually stopped, so a schedule
+  that falls behind keeps the cap instead of catching up back to back.
 
 Each pulse records where it landed in the step loop (A.4, #218 R12), from the
 reference hook's records: `in_schedule` (inside a step's `schedule()` call),
 `in_step` (after it, before the step completed: execution or a GPU wait) or
-`between_steps`. Each pulse's stop, confirmation and continue times are kept, with `held_ns`,
-the measured time from `SIGSTOP` to `SIGCONT` (`continued_by_other` when the
-target was already running, continued by the watchdog's limit or an
-operator, so it was stopped for less), so effect timing can start from
-the first confirmed stop.
+`between_steps`. Each pulse's stop, confirmation and continue times are
+kept, with `held_ns`, the measured time from `SIGSTOP` to `SIGCONT`
+(`continued_by_other` when the target was already running, continued by the
+watchdog's limit or an operator, so it was stopped for less), so effect
+timing can start from the first confirmed stop.
+
+`continued_by_other` is one status read just before `SIGCONT`, so it sees
+only a target running at that moment. A continue by someone else followed
+by another stop (a second actor) reads as stopped, and the flag stays false
+although the target ran for part of the hold. A status read that fails
+reads as running. Nothing scores on the flag: a stall is timed to
+`continue_sent_ns` either way, and a scorer that wants to set such pulses
+aside has to read it.
 
 `discover_roles(api_server_pid)` names the processes under a vLLM API server by
 the titles vLLM 0.30 gives them, matched exactly on `argv[0]` (which vLLM's
