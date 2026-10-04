@@ -125,6 +125,11 @@ def test_a_staged_snapshot_is_named_by_its_content_and_read_only(
 
     digest = model.record()["weights_digest"]
     assert model.directory == store / digest
+    # rev-213-a's E5: a hard link shared the source's inode, so locking the
+    # store locked the user's source, and an edit to one changed the other.
+    stored = model.directory / "model.safetensors"
+    assert stored.stat().st_ino != (source / "model.safetensors").stat().st_ino
+    assert (source / "config.json").stat().st_mode & stat.S_IWUSR
     assert model.model == str(store / digest)
     assert model.record()["identity_evidence"] == "staged_snapshot_verified"
     mode = (model.directory / "config.json").stat().st_mode
@@ -145,16 +150,9 @@ def test_a_staged_snapshot_is_named_by_its_content_and_read_only(
 
 
 def test_a_staged_hub_snapshot_stores_its_files_not_its_links(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
-    # Linux's link(2), which os.link calls, links a symlink itself, so a
-    # snapshot's relative links would dangle in the store; do the same here.
-    real_link = os.link
-
-    def link(src: str, dst: str) -> None:
-        real_link(src, dst, follow_symlinks=False)
-
-    monkeypatch.setattr(os, "link", link)
+    # A snapshot's relative links would dangle in the store.
     cache = _deduplicated(_hub(tmp_path))
     snapshot = cache / ("models--" + REPO.replace("/", "--")) / "snapshots" / COMMIT
     model = prepare_model(

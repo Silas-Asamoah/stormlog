@@ -12,8 +12,8 @@ the weights before it launches, and points the server at exactly them:
   gets ``--revision <commit> --tokenizer-revision <commit>`` and
   ``HF_HUB_OFFLINE=1``, so it cannot fetch anything else.
 - **A staged local snapshot.** Every file of a local model directory is
-  hashed, and the directory is copied (hard-linked where it can be) into a
-  read-only, content-addressed directory, ``<store>/<weights_digest>/``.
+  hashed, and the directory is copied (never hard-linked) into a read-only,
+  content-addressed directory, ``<store>/<weights_digest>/``.
   The server loads that directory, whose name is its content.
 
 After each run the files are checked again, by size, modification time and
@@ -234,20 +234,20 @@ def _source_file(source: Path, path: Path) -> ModelFile:
 
 
 def _stage(source: Path, target: Path, files: Sequence[ModelFile]) -> None:
-    """Copy (or hard-link) into a temporary directory, then rename and lock it."""
+    """Copy into a temporary directory, then rename and lock it.
+
+    Never a hard link: it would share the source's inode, so locking the
+    store would lock the source, and an edit to the source would change the
+    store.
+    """
     partial = target.with_name(target.name + ".partial")
     if partial.exists():
         shutil.rmtree(partial)
     for item in files:
         destination = partial / item.path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        # The file itself: os.link on Linux would link a hub snapshot's
-        # relative link, which dangles in the store.
-        content = (source / item.path).resolve()
-        try:
-            os.link(content, destination)
-        except OSError:
-            shutil.copy2(content, destination)
+        # The file itself, not a hub snapshot's relative link to it.
+        shutil.copyfile((source / item.path).resolve(), destination)
     _check_staged(partial, files)
     partial.rename(target)
     _read_only(target)
