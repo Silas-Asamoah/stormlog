@@ -334,6 +334,14 @@ stormlog infer profile ... --extra-body '{"temperature": 0, "ignore_eos": true}'
 isn't passed is recorded as a server default. For each case, the report gives
 the prompt and output token distributions of the completed requests.
 
+### Experiment labels
+
+`--experiment ID --arm NAME --block LABEL` record which experiment, arm and
+block a run belongs to, in the session record's `labels`, with
+`--position` and `--attempt` when the run is one of several in a block.
+`infer compare` pairs the baseline and candidate runs of each block. A
+block needs an experiment and an arm.
+
 ### Server probe
 
 Before the first case and after the last, `infer profile` asks the server
