@@ -195,7 +195,9 @@ read each from whichever engine exported it. A series whose labels change
 between scrapes (another model name, say) is a different series, so it is
 never differenced across the change (`series_labels_changed`). A gauge's
 samples, like a counter's, must all come from one exporter: samples from
-both sides of a restart are not one gauge (`engine_restart`).
+both sides of a restart are not one gauge (`engine_restart`), and a family
+that is not a gauge (a histogram, say) gives no gauge samples
+(`not_a_gauge`).
 
 Scrapes must be given in strictly increasing stamp order
 (`scrapes_out_of_order`, `duplicate_scrape_time`), and nothing is differenced

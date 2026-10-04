@@ -57,6 +57,7 @@ REASON_OVERFLOW_BUCKET = "quantile_in_overflow_bucket"
 REASON_SERIES_LABELS_CHANGED = "series_labels_changed"
 REASON_DUPLICATE_TIME = "duplicate_scrape_time"
 REASON_HISTOGRAM_INCONSISTENT = "histogram_inconsistent"
+REASON_NOT_A_GAUGE = "not_a_gauge"
 
 PLACEMENT_COMPLETED = "completed_at"
 PLACEMENT_APPROXIMATE = "approximate"
@@ -320,6 +321,8 @@ def gauge_window(
         elif isinstance(value, float):
             samples.append(value)
             seen.append(found or {})
+        else:
+            reasons.append(REASON_NOT_A_GAUGE)
     if any(other != seen[0] for other in seen[1:]):
         reasons.append(REASON_SERIES_LABELS_CHANGED)
     stats = sample_stats(samples)

@@ -13,6 +13,7 @@ from stormlog.infer.scrape_window import (
     REASON_ENGINE_REQUIRED,
     REASON_ENGINE_RESTART,
     REASON_HISTOGRAM_INCONSISTENT,
+    REASON_NOT_A_GAUGE,
     REASON_OUT_OF_ORDER,
     REASON_SCRAPE_FAILED,
     REASON_SERIES_LABELS_CHANGED,
@@ -67,6 +68,16 @@ def test_a_gauge_across_a_restart_is_not_one_gauge() -> None:
         ]
     )
     assert gauge_window(restarted, WAITING).reasons == (REASON_ENGINE_RESTART,)
+
+
+def test_a_family_that_is_not_a_gauge_is_named_as_such() -> None:
+    # Without a reason the queue signal would be insufficient with none.
+    window = series(
+        [exposition(histograms={WAITING: ((("1.0", 1), ("+Inf", 1)), 0.5)})] * 2
+    )
+    assert gauge_window(window, WAITING).reasons == (REASON_NOT_A_GAUGE,)
+    signal = evaluate_signal("queue_saturation", window)
+    assert (signal.sufficient, signal.reason) == (False, REASON_NOT_A_GAUGE)
 
 
 def test_out_of_order_scrapes_are_named_as_such_by_counter_window() -> None:
