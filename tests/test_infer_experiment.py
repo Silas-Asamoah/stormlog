@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import platform
 import socket
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -263,6 +265,65 @@ def test_a_staged_model_is_fixed_before_launch_and_recorded(tmp_path: Path) -> N
     identity = json.loads((run_dir / "model_identity.json").read_text())
     assert identity["identity_evidence"] == "staged_snapshot_verified"
     assert identity["directory"] in (run_dir / "commands.sh").read_text()
+
+
+def test_the_runner_binds_the_weights_it_verified_to_the_server_it_launched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Off Linux the server's start ticks cannot be read; stand them in.
+    from stormlog.infer import experiment
+
+    monkeypatch.setattr(experiment, "process_key", lambda pid: (pid, 4242))
+    monkeypatch.setattr(experiment, "host_boot_id", lambda: "boot-test")
+    real_describe = experiment.describe_server
+
+    def describe(options: Any, **kwargs: Any) -> dict[str, Any]:
+        # Off Linux describe-server cannot read /proc: a stand-in of the
+        # launched server, as Linux would describe it.
+        from stormlog.infer.describe_server import description_digest
+
+        if platform.system() == "Linux":
+            return real_describe(options, **kwargs)
+        document = {
+            "format": "stormlog.infer.server_description",
+            "version": 1,
+            "observed_at_ns": time.time_ns(),
+            "run_id": options.run_id,
+            "host": {"hostname": "h", "boot_id": "boot-test"},
+            "server": {"pid": options.pid, "start_ticks": 4242, "environ": {}},
+            "model": dict(options.model_identity or {}),
+        }
+        document["sha256"] = description_digest(document)
+        return document
+
+    monkeypatch.setattr(experiment, "describe_server", describe)
+    source = tmp_path / "model"
+    source.mkdir()
+    (source / "config.json").write_text("{}")
+    document = _plan(_port(), blocks=1)
+    document["arms"] = {"off": document["arms"]["off"]}
+    document["order"] = {"kind": "explicit", "blocks": [["off"]]}
+    document["server"]["command"] += ["--model", "{model}"]
+    document["server"]["model"] = {
+        "route": "staged",
+        "source": str(source),
+        "store": str(tmp_path / "store"),
+    }
+    (record,) = _run(tmp_path, document)
+    assert record["state"] == "completed", record
+    artifact = next(Path(record["run_dir"]).glob("*.jsonl"))
+    lines = [json.loads(line) for line in artifact.read_text().splitlines()]
+    (bound,) = [r for r in lines if r.get("event_type") == "infer.model_identity"]
+    server = next(p for p in record["processes"] if p["name"] == "server")
+    assert bound["server"] == {"pid": server["pid"], "start_ticks": 4242}
+    assert bound["boot_id"] == "boot-test"
+    assert bound["model"]["identity_evidence"] == "staged_snapshot_verified"
+    assert bound["run_id"] == record["label"]
+    # The runner attached its before description, so the comparison binds
+    # the verified weights to the server that description shows.
+    fields = summarize_run(artifact).fields
+    assert fields["model.weights_digest"].known
+    assert fields["model.weights_digest"].source.startswith("experiment runner")
 
 
 def test_a_probe_that_does_not_finish_is_retried_once_on_a_fresh_server(
