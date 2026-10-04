@@ -1146,8 +1146,11 @@ def test_goodbye_is_the_last_record(tmp_path: Path) -> None:
         writer.emit("alias", {"internal": f"r{index}"})
     writer.close()
 
-    kinds = [record["kind"] for record in _epoch_records(writer.directory)]
+    records = _epoch_records(writer.directory)
+    kinds = [record["kind"] for record in records]
     assert kinds.count("goodbye") == 1 and kinds[-1] == "goodbye"
+    # goodbye names its own number, the epoch's last.
+    assert records[-1]["last_seq"] == records[-1]["seq"] == len(records) - 1
 
 
 def test_a_backlog_does_not_hold_up_the_status_or_sealing(
