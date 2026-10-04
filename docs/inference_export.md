@@ -221,6 +221,9 @@ These series sit beside the exported metrics:
   `stormlog_metrics_textfile_writes_total{outcome}`.
 - `stormlog_exporter_internal_errors_total{entry}`: exporter failures that
   were caught before they could reach the run.
+- `stormlog_health_snapshot_age_seconds`: how long ago the exporter last
+  read its health sources, such as the span receiver; absent until the
+  first read.
 
 The artifact keeps the same figures, final, in an `infer.capabilities` record
 for `export.prometheus`:
