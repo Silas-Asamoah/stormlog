@@ -358,6 +358,22 @@ def slo_from_artifact(records: Sequence[Mapping[str, Any]]) -> SloSpec | None:
         raise InferInputError(f"the artifact's infer.slo record: {exc}") from exc
 
 
+def require_measured_window(spec: SloSpec, label: str) -> SloSpec:
+    """Refuse a sliding policy where each case is judged over its interval.
+
+    Raises:
+        InferInputError: for a sliding interval, which an online watcher
+            judges; offline analysis would judge it over the whole case.
+    """
+    if spec.interval.kind == SLIDING:
+        raise InferInputError(
+            f"{label}: a sliding interval of {spec.interval.seconds:g} s is "
+            "judged online by a watcher; profile and analyze judge each case "
+            "over its whole rate interval"
+        )
+    return spec
+
+
 Outcome = Literal["pass", "fail", "not_applicable", "unknown"]
 CriteriaVerdict = Literal["criteria_met", "criteria_missed", "unknown"]
 
@@ -907,6 +923,7 @@ __all__ = [
     "load_slo",
     "parse_slo_flags",
     "request_span",
+    "require_measured_window",
     "span_attributes_by_request",
     "slo_from_artifact",
     "slo_from_document",

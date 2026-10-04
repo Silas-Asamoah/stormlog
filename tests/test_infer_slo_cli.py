@@ -116,10 +116,42 @@ def test_analyze_uses_the_artifacts_policy_unless_told_otherwise(
     assert (report["slo"]["name"], report["slo"]["source"]) == ("recorded", "artifact")
     assert report["cases"]["c1"]["slo"]["met"] == 1
 
-    _code, out, _err = _analyze(str(path), "--format", "json", "--slo", "e2e:400")
+    assert report["slo"]["overrides"] == []
+
+    _code, out, err = _analyze(str(path), "--format", "json", "--slo", "e2e:400")
     overridden = json.loads(out)
     assert overridden["slo"]["source"] == "flags"
     assert overridden["cases"]["c1"]["slo"]["met"] == 3
+    # The report keeps the policy the run was declared under, and says so.
+    assert overridden["slo"]["overrides"] == [
+        {"name": "recorded", "digest": spec.digest()}
+    ]
+    assert "replaces the policy the artifact recorded (recorded" in err
+    assert "replaces the recorded policy recorded" in format_analysis_text(overridden)
+
+
+def _sliding_policy(tmp_path: Path) -> Path:
+    document = parse_slo_flags(["e2e:200"], name="watch").to_record()
+    document["interval"] = {"kind": "sliding", "seconds": 1}
+    path = tmp_path / "sliding.json"
+    path.write_text(json.dumps(document))
+    return path
+
+
+def test_analyze_refuses_a_sliding_policy_it_would_judge_over_the_case(
+    tmp_path: Path,
+) -> None:
+    status, _out, err = _analyze(
+        str(_artifact(tmp_path)), "--slo-file", str(_sliding_policy(tmp_path))
+    )
+    assert status == ExitCode.INVALID_INPUT
+    assert "sliding" in err
+
+    document = json.loads(_sliding_policy(tmp_path).read_text())
+    recorded = {"event_type": "infer.slo", "session_id": "s1", "slo": document}
+    status, _out, err = _analyze(str(_artifact(tmp_path, recorded)))
+    assert status == ExitCode.INVALID_INPUT
+    assert "sliding" in err
 
 
 def test_without_a_policy_there_is_no_slo_block(tmp_path: Path) -> None:
@@ -211,6 +243,58 @@ def test_profile_refuses_a_policy_it_cannot_use_before_sending(
         )
     assert status == code
     assert not (tmp_path / "infer.jsonl").exists()
+
+
+def _profile(tmp_path: Path, *flags: str) -> tuple[int, str]:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+        status = infer_main(
+            [
+                "profile",
+                "--endpoint",
+                "http://127.0.0.1:1/v1/chat/completions",
+                "--model",
+                "fake-model",
+                "--timeout",
+                "0.5",
+                "--system-sampler",
+                "none",
+                "--tokenizer",
+                "none",
+                "--output",
+                str(tmp_path / "infer.jsonl"),
+                *flags,
+            ]
+        )
+    return status, stderr.getvalue()
+
+
+def test_profile_refuses_a_sliding_policy_before_sending(tmp_path: Path) -> None:
+    status, err = _profile(tmp_path, "--slo-file", str(_sliding_policy(tmp_path)))
+    assert status == ExitCode.INVALID_INPUT
+    assert "sliding" in err
+    assert not (tmp_path / "infer.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    ("flags", "warning"),
+    [
+        (["--slo", "server.itl:50"], "server.itl is aggregate-only"),
+        (["--slo", "server.ttft:400"], "server.ttft needs vLLM spans"),
+        (["--slo", "ttft:400", "--no-stream"], "client.ttft needs streamed responses"),
+        (["--slo", "e2e:400"], None),
+        (["--slo", "ttft:400"], None),
+    ],
+)
+def test_profile_warns_before_sending_when_a_criterion_cannot_be_judged(
+    tmp_path: Path, flags: list[str], warning: str | None
+) -> None:
+    _status, err = _profile(tmp_path, *flags)
+    lines = [line for line in err.splitlines() if "cannot be judged" in line]
+    if warning is None:
+        assert not lines
+    else:
+        assert any(warning in line for line in lines), err
 
 
 def test_an_invalid_recorded_policy_is_invalid_input_unless_overridden(

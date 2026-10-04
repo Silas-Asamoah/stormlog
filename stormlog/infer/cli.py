@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 from ..exit_codes import ExitCode
-from .analysis import analyze_inference_events, format_analysis_text
+from .analysis import (
+    analyze_inference_events,
+    format_analysis_text,
+    replaced_policies,
+)
 from .arrivals import (
     ARRIVAL_MODES,
     BURST,
@@ -37,7 +41,14 @@ from .server_collector import (
     NvmlUnavailableError,
     collect_server_telemetry,
 )
-from .slo import SloSpec, load_slo, parse_slo_flags
+from .slo import (
+    CLIENT,
+    SERVER,
+    SloSpec,
+    load_slo,
+    parse_slo_flags,
+    require_measured_window,
+)
 from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
 from .trace_import import import_traces_into_artifact, parse_device_uuids
 from .vllm_execution_import import import_execution_into_artifact
@@ -442,7 +453,8 @@ def _slo_policy(args: argparse.Namespace) -> tuple[SloSpec | None, str]:
     if args.slo and args.slo_file:
         raise InferUsageError("use --slo or --slo-file, not both")
     if args.slo_file:
-        return load_slo(args.slo_file), "file"
+        spec = load_slo(args.slo_file)
+        return require_measured_window(spec, f"SLO policy {args.slo_file}"), "file"
     if args.slo:
         return parse_slo_flags(args.slo), "flags"
     return None, "flags"
@@ -774,6 +786,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         )
     with _usage_errors():
         profiler = InferenceProfiler(_profile_config(args), on_warning=_print_warning)
+    _warn_about_unjudgeable_criteria(profiler.config)
     report = profiler.run()
     print(format_analysis_text(report))
     print(f"Artifact saved to: {Path(args.output)}")
@@ -935,6 +948,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         slo=slo,
         slo_source=slo_source,
     )
+    for replaced in replaced_policies(report):
+        _print_warning(
+            f"--{'slo-file' if slo_source == 'file' else 'slo'} replaces the "
+            f"policy the artifact recorded ({replaced.get('name')}, digest "
+            f"{str(replaced.get('digest'))[:12]})"
+        )
     if args.format == "json":
         payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
     else:
@@ -1141,6 +1160,34 @@ def _validate_loop_flags(args: argparse.Namespace) -> None:
             "--concurrency applies to --arrival closed; open-loop arrivals "
             "use --max-in-flight"
         )
+
+
+def _warn_about_unjudgeable_criteria(config: ProfileConfig) -> None:
+    """Say before sending which criteria no request of this run can be judged on."""
+    if config.slo is None:
+        return
+    for criterion in config.slo.criteria:
+        if criterion.definition.per_request is None:
+            reason = f"{criterion.key} is aggregate-only"
+        elif criterion.boundary == SERVER and config.vllm_spans_listen is None:
+            reason = (
+                f"{criterion.key} needs vLLM spans (--vllm-spans-listen here, or "
+                "--vllm-spans when analyzing)"
+            )
+        elif criterion.boundary == CLIENT and criterion.metric in _STREAMED_METRICS:
+            if config.stream:
+                continue
+            reason = f"{criterion.key} needs streamed responses (drop --no-stream)"
+        else:
+            continue
+        _print_warning(
+            f"SLO criterion {reason}; it cannot be judged per request, so each "
+            "case's SLO evaluation will be unmeasurable"
+        )
+
+
+# Client criteria measured from the first streamed chunk.
+_STREAMED_METRICS = frozenset({"ttft", "ttft_from_intended"})
 
 
 def _warn_about_short_prompts(args: argparse.Namespace) -> None:

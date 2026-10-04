@@ -64,7 +64,11 @@ the flaky benchmark memory gates
   when the policy cannot be judged, and whether the case's cohort is valid. A
   malformed flag, or both options at once, exits 2; a missing or invalid
   policy file, including one with a key given twice or a number too large for
-  a float, exits 5. (#213)
+  a float, exits 5, as does a policy with a sliding interval, which an online
+  watcher judges. `profile` warns before sending when a criterion cannot be
+  judged per request in the run. When `analyze` options replace the policy
+  the artifact recorded, `slo.overrides` keeps its name and digest, and a
+  warning says so. (#213)
 - `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
   hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,
   `infer.membership`, `infer.request` and `infer.clock_alignment` records:

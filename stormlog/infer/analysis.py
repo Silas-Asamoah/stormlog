@@ -39,7 +39,7 @@ from .server_clock import (
 )
 from .server_group import members as group_members
 from .server_group import membership_issue
-from .slo import SloSpec, slo_from_artifact
+from .slo import SloSpec, require_measured_window, slo_from_artifact
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
 from .vllm_analysis import (
     JoinedSpans,
@@ -140,6 +140,8 @@ class _Policy:
 
     spec: SloSpec
     source: str
+    # The policies the artifact recorded that this one replaces.
+    overrides: tuple[dict[str, Any], ...] = ()
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -147,16 +149,47 @@ class _Policy:
             "digest": self.spec.digest(),
             "source": self.source,
             "policy": self.spec.to_record(),
+            "overrides": [dict(item) for item in self.overrides],
         }
 
 
 def _policy(
     records: list[dict[str, Any]], slo: SloSpec | None, source: str
 ) -> _Policy | None:
+    """The given policy, which replaces any the artifact recorded, or that one."""
     if slo is not None:
-        return _Policy(slo, source)
+        return _Policy(slo, source, overrides=_recorded_policies(records))
     recorded = slo_from_artifact(records)
-    return None if recorded is None else _Policy(recorded, "artifact")
+    if recorded is None:
+        return None
+    return _Policy(
+        require_measured_window(recorded, "the artifact's infer.slo record"),
+        "artifact",
+    )
+
+
+def _recorded_policies(records: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    """Each ``infer.slo`` record's name and digest, as the run recorded them."""
+    found = []
+    for record in records:
+        if record.get("event_type") != "infer.slo":
+            continue
+        policy = record.get("slo")
+        name = policy.get("name") if isinstance(policy, dict) else None
+        found.append({"name": name, "digest": record.get("digest")})
+    return tuple(found)
+
+
+def replaced_policies(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """The recorded policies a report's own policy replaced, if it differs."""
+    slo = report.get("slo")
+    if not isinstance(slo, dict):
+        return []
+    return [
+        item
+        for item in slo.get("overrides") or []
+        if item.get("digest") != slo.get("digest")
+    ]
 
 
 def _external_spans(
@@ -358,6 +391,7 @@ def format_analysis_text(report: dict[str, Any]) -> str:
     vllm = telemetry.get("vllm")
     vllm_cases = vllm.get("cases", {}) if isinstance(vllm, dict) else {}
     lines.extend(workload_lines(report.get("workload")))
+    lines.extend(_policy_lines(report))
     lines.append("Memory observations: client-local")
     lines.extend(_server_status_lines(join))
     lines.extend(vllm_lines(vllm))
@@ -461,6 +495,22 @@ def _interval_lines(throughput: Any, population: Any, intervals: Any) -> list[st
     if isinstance(population, dict) and not population.get("cohort_valid", True):
         issues = ", ".join(str(issue) for issue in population.get("issues", []))
         lines.append(f"  cohort invalid: {issues}")
+    return lines
+
+
+def _policy_lines(report: dict[str, Any]) -> list[str]:
+    slo = report.get("slo")
+    if not isinstance(slo, dict):
+        return []
+    lines = [
+        f"SLO policy: {slo.get('name')} from {slo.get('source')}, "
+        f"digest {str(slo.get('digest'))[:12]}"
+    ]
+    lines.extend(
+        f"  replaces the recorded policy {item.get('name')} "
+        f"(digest {str(item.get('digest'))[:12]})"
+        for item in replaced_policies(report)
+    )
     return lines
 
 

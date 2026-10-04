@@ -65,7 +65,7 @@ A policy is a JSON document with `format: "stormlog.infer.slo"` and
 | `attainment_target` (criterion) | Optional. A **marginal** target for that criterion alone. MLPerf's separate p99 limits on TTFT and TPOT are marginal targets; they are not the same claim as a joint target. |
 | `population` | `offered`, the only value in version 1: attainment is a share of every request that was offered, including dropped and failed ones. |
 | `unknown_policy` | `bounds`, the only value in version 1: a request whose criteria cannot be judged widens the reported bounds and is never counted as met or missed without saying so. |
-| `interval` | `{"kind": "measured_window"}` judges a case's declared measurement interval. `{"kind": "sliding", "seconds": N}` is for an online watcher. |
+| `interval` | `{"kind": "measured_window"}` judges a case's declared measurement interval. `{"kind": "sliding", "seconds": N}` is for an online watcher; `profile` and `analyze` refuse it (exit 5), since they would judge it over the whole case. |
 
 Unknown fields are refused, so a policy written for a later version is never
 read as if it were version 1.
@@ -101,12 +101,23 @@ its options give, or, without them, by the one the artifact recorded; the
 report's `slo.source` says which (`flags`, `file` or `artifact`). With
 neither, the report's `slo` is `null` and no case has an `slo` block.
 
+When options replace a policy the artifact recorded, the run was declared
+under that one, so the report keeps it: `slo.overrides` lists the name and
+digest of each recorded policy, and `analyze` prints a warning and a text
+line when its digest differs.
+
 A malformed flag, an unknown criterion, or both options at once exits `2`.
-A policy file that is missing, unreadable or invalid exits `5`; `profile`
-refuses both before it sends anything.
+A policy file that is missing, unreadable or invalid, or that has a sliding
+interval, exits `5`; `profile` refuses both before it sends anything. It
+also warns before sending when a criterion cannot be judged per request in
+this run, so every case's evaluation would be unmeasurable: an
+aggregate-only criterion, a server criterion without `--vllm-spans-listen`
+(spans can still be given to `analyze` with `--vllm-spans`), and client TTFT
+with `--no-stream`.
 
 The report gains a top-level `slo` block, with the policy's `name`, `digest`,
-`source` and the `policy` document itself, and each case gains an `slo` block:
+`source`, the `policy` document itself and `overrides`, and each case gains an
+`slo` block:
 the evaluation described under Attainment and goodput below, over the case's
 rate interval. The text report prints one line per case:
 
