@@ -34,11 +34,32 @@ def test_the_analysis_pipeline_only_selects_and_never_samples() -> None:
     assert backend["receivers"] == analysis["receivers"] == ["otlp"]
 
 
+# The file exporter's settings, from its README; the collector refuses any
+# other key at start-up.
+FILE_EXPORTER_KEYS = {
+    "path",
+    "rotation",
+    "format",
+    "encoding",
+    "append",
+    "compression",
+    "flush_interval",
+    "create_directory",
+    "directory_permissions",
+    "group_by",
+}
+
+
 def test_the_x1_collector_writes_straight_to_its_file() -> None:
     config = _yaml("otelcol-x1.yaml")
     (pipeline,) = config["service"]["pipelines"].values()
     assert pipeline["processors"] == [] and pipeline["exporters"] == ["file"]
-    assert config["exporters"]["file"]["sending_queue"]["enabled"] is False
+    exporter = config["exporters"]["file"]
+    assert set(exporter) <= FILE_EXPORTER_KEYS
+    # With rotation set the exporter does not buffer: flush_interval (1 s by
+    # default) is ignored and each export is written as it arrives.
+    assert exporter["rotation"]["max_megabytes"] > 0
+    assert "flush_interval" not in exporter
 
 
 def test_prometheus_scrapes_vllm_and_stormlog_apart() -> None:
