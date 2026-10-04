@@ -405,7 +405,11 @@ class IncidentStore:
         generation = current.generation + 1
         stale = bundle / f"gen-{generation}"
         if stale.exists():  # an earlier attempt that never published
+            # No manifest names it, so no reader can hold it; its bytes are
+            # charged (a rescan counted them), and freed here.
+            freed = _freed_by(stale, bundle)
             shutil.rmtree(stale, ignore_errors=True)
+            self.budget.forget(freed)
         try:
             return GenerationWriter(self, bundle, generation, allowance)
         except BaseException:
