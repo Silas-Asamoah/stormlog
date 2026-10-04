@@ -250,11 +250,21 @@ class GenerationWriter:
         return size
 
     def _copy_in(self, source: Path, target: Path, size: int) -> int:
-        with source.open("rb") as handle, CappedWriter(target, self.allowance) as out:
-            while chunk := handle.read(_COPY_CHUNK):
-                out.write(chunk)
-        if target.stat().st_size != size:
-            raise OSError(errno.EIO, f"copy of {source} is incomplete")
+        try:
+            with (
+                source.open("rb") as handle,
+                CappedWriter(target, self.allowance) as out,
+            ):
+                while chunk := handle.read(_COPY_CHUNK):
+                    out.write(chunk)
+            if target.stat().st_size != size:
+                raise OSError(errno.EIO, f"copy of {source} is incomplete")
+        except BaseException:
+            # Not yet a file this writer made: a copy cut short would be
+            # published, unchecked, if the caller went on.
+            with contextlib.suppress(OSError):
+                target.unlink()
+            raise
         return size
 
     def _charge_growth(self) -> None:
