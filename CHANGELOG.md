@@ -61,9 +61,15 @@ the flaky benchmark memory gates
 - `stormlog infer compare --baseline ... --candidate ...`: compares two arms
   of runs case by case (goodput, attainment, throughput, failure fraction and
   latency quantiles), paired by block when runs are labelled (a block whose
-  runs sent different workload realizations is set aside); an SLO gate
-  over runs judged by different policies is refused unless `--slo` judges
-  them all. Gates are
+  runs sent different workload realizations is set aside). A run that did
+  not finish, or a case a run lacks, is an outcome, compared rather than
+  set aside, and a value it lost fails the candidate's gate
+  (`outcome_unrecoverable`); only a protocol failure, such as an external
+  cause a runner records in `infer.run_state`, sets aside a block, both
+  arms, and more than one block lost leaves the case's gates
+  `not_evaluable`. A retried block keeps its last attempt, but a retry
+  never replaces an outcome failure. An SLO gate over runs judged by
+  different policies is refused unless `--slo` judges them all. Gates are
   `--gate METRIC=RULE:BUDGET` with `non-inferiority`, `significant` or
   `demonstrated`, and a budget that can never fail is a usage error;
   `--min-attainment` judges the share of runs that meet a target, a run

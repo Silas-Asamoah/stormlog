@@ -10,7 +10,7 @@ file names the file in ``path``.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -161,10 +161,17 @@ def _exclusion_findings(comparison: Comparison) -> list[Finding]:
             kind="excluded_run",
             severity="warning",
             title=f"a {item['arm']} run was set aside for {item['case']}",
-            message=f"{item['run']}: {', '.join(item['reasons'])}",
+            message=f"{item['run']}: {_set_aside_reasons(item)}",
         )
         for index, item in enumerate(comparison.excluded)
     ]
+
+
+def _set_aside_reasons(item: Mapping[str, Any]) -> str:
+    """Why a run was set aside, and the attempt kept in its place."""
+    reasons = ", ".join(item["reasons"])
+    kept = item.get("attempt_kept")
+    return reasons if kept is None else f"{reasons}; kept {kept}"
 
 
 def _unverified(comparison: Comparison, path: str | None) -> Finding:
@@ -199,7 +206,7 @@ def comparison_lines(comparison: Comparison) -> list[str]:
         f"comparability {comparison.comparability.status}",
     ]
     lines += [
-        f"Set aside: {item['run']} for {item['case']} ({', '.join(item['reasons'])})"
+        f"Set aside: {item['run']} for {item['case']} ({_set_aside_reasons(item)})"
         for item in comparison.excluded
     ]
     lines += [f"Observer: {issue}" for issue in comparison.observer_issues]
