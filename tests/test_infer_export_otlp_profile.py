@@ -172,6 +172,9 @@ def test_prometheus_shows_the_span_accounting(tmp_path: Path) -> None:
     exposition = check_exposition((metrics_dir / "stormlog-default.prom").read_text())
     assert exposition.value("stormlog_export_spans_exported_total") == spans["exported"]
     assert exposition.value("stormlog_export_spans_offered_total") == spans["offered"]
+    # Named as R1 and the capability record name it.
+    copies = exposition.value("stormlog_export_spans_max_extra_copies_total")
+    assert copies == spans["max_extra_copies"]
     assert exposition.value("stormlog_export_destination_up") == 1
     assert exposition.value("stormlog_export_requests_total", outcome="confirmed") >= 1
 

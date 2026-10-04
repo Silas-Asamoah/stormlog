@@ -912,7 +912,7 @@ class OtlpHealth:
             ),
             spans("sampled_out", "Successful request spans left out by sampling."),
             spans(
-                "possibly_duplicated",
+                "max_extra_copies",
                 "The most extra copies lost answers can have made a collector store.",
             ),
             HealthMetric(
@@ -1027,7 +1027,7 @@ class OtlpHealth:
             "dropped": _by_reason(accounting["dropped"], DROPPED_REASONS),
             "unknown": _by_reason(accounting["unknown"], UNKNOWN_REASONS),
             "sampled_out": accounting["sampled_out"],
-            "possibly_duplicated": accounting["max_extra_copies"],
+            "max_extra_copies": accounting["max_extra_copies"],
             "in_flight": accounting["in_flight"],
             "queued": accounting["queued"],
             "capacity": summary["queue"]["capacity_spans"],
