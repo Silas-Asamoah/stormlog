@@ -20,11 +20,12 @@ from __future__ import annotations
 import io
 import json
 import socket
+import sys
 import threading
 import time
 import zlib
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -421,6 +422,45 @@ def _read_span_lines(lines: list[str]) -> tuple[str, list[RawSpan]]:
 
 
 # ------------------------------------------------------------------ records
+def retained_bytes(spans: Sequence[RawSpan], clocks: Mapping[int, str]) -> list[int]:
+    """What each span's record will hold, estimated as the decode budget is
+    (``SPAN_BYTES``, ``VALUE_BYTES`` and the size of its text); a resource,
+    a scope and a clock domain shared by several spans are charged once, to
+    the first."""
+    seen: set[int] = set()
+    sizes: list[int] = []
+    for raw in spans:
+        size = SPAN_BYTES + _held(raw.attributes) + _text(raw.name, raw.trace_id)
+        size += _text(raw.span_id, raw.parent_span_id, raw.kind)
+        size += _once(seen, raw.resource, _held)
+        size += _once(seen, raw.scope, _held)
+        size += _once(seen, clocks[id(raw.resource)], _text)
+        sizes.append(size)
+    return sizes
+
+
+def _once(seen: set[int], shared: Any, cost: Callable[[Any], int]) -> int:
+    """What ``shared`` holds the first time it is met, else nothing."""
+    if id(shared) in seen:
+        return 0
+    seen.add(id(shared))
+    return cost(shared)
+
+
+def _held(values: Any) -> int:
+    if isinstance(values, dict):
+        return sum(
+            VALUE_BYTES + _text(key) + _held(item) for key, item in values.items()
+        )
+    if isinstance(values, list):
+        return sum(VALUE_BYTES + _held(item) for item in values)
+    return sys.getsizeof(values)
+
+
+def _text(*values: str | None) -> int:
+    return sum(sys.getsizeof(value) for value in values if value is not None)
+
+
 def span_clock_domain(resource: dict[str, Any], fallback_host: str) -> str:
     """The exporter's wall clock, named by its host; never a shared clock.
 
@@ -456,11 +496,13 @@ def span_record(
         kind=raw.kind,
         start_unix_ns=raw.start_unix_ns,
         end_unix_ns=raw.end_unix_ns,
-        attributes=dict(raw.attributes),
-        resource=dict(raw.resource),
-        scope=dict(raw.scope),
+        # Shared, not copied: the spans of one resource hold one resource
+        # and scope, and to_record() hands out copies.
+        attributes=raw.attributes,
+        resource=raw.resource,
+        scope=raw.scope,
         status=raw.status,
-        dropped=dict(raw.dropped),
+        dropped=raw.dropped,
         request_id=request_id_from_span_id(raw.attributes.get(REQUEST_ID_ATTRIBUTE)),
     )
 
@@ -903,7 +945,7 @@ class OtlpSpanReceiver:
         if len(spans) > self.limits.max_spans_per_body:
             self._refuse_too_many(handler)
             return
-        if not self._enqueue(spans, media, handler.client_address[0], len(body)):
+        if not self._enqueue(spans, media, handler.client_address[0]):
             _respond_busy(handler)
             return
         # An empty ExportTraceServiceResponse is valid in either encoding.
@@ -1043,13 +1085,27 @@ class OtlpSpanReceiver:
         with self._lock:
             setattr(self.stats, name, getattr(self.stats, name) + 1)
 
-    def _enqueue(
-        self, spans: list[RawSpan], media: str, peer: str, body_bytes: int
-    ) -> bool:
+    def _enqueue(self, spans: list[RawSpan], media: str, peer: str) -> bool:
         """Queue every span of one body, or none; False when it does not fit.
 
-        Each span is charged an equal share of the decoded body's bytes.
+        Each span is charged what it holds (``retained_bytes``), before its
+        record is built. The spans of one resource share its resource and
+        scope and one clock-domain string, charged once.
         """
+        domains = {id(raw.resource): raw.resource for raw in spans}
+        clocks = {key: span_clock_domain(res, peer) for key, res in domains.items()}
+        sizes = retained_bytes(spans, clocks)
+        charge = sum(sizes)
+        with self._lock:
+            fits = (
+                len(self._queue) + len(spans) <= self.limits.max_queued_spans
+                and self._queued_bytes + charge <= self.limits.max_queued_bytes
+            )
+            if not fits:
+                self.stats.dropped_queue_full += len(spans)
+                return False
+            # Charged first, so a concurrent body cannot take the same room.
+            self._queued_bytes += charge
         received_at_ns = time.time_ns()
         records = [
             span_record(
@@ -1057,23 +1113,13 @@ class OtlpSpanReceiver:
                 session_id=self.session_id,
                 run_id=self.run_id,
                 source=SPAN_SOURCE_RECEIVER,
-                clock_domain=span_clock_domain(raw.resource, peer),
+                clock_domain=clocks[id(raw.resource)],
                 received_at_ns=received_at_ns,
             )
             for raw in spans
         ]
-        size = max(1, body_bytes // max(1, len(records)))
         with self._lock:
-            fits = (
-                len(self._queue) + len(records) <= self.limits.max_queued_spans
-                and self._queued_bytes + size * len(records)
-                <= self.limits.max_queued_bytes
-            )
-            if not fits:
-                self.stats.dropped_queue_full += len(records)
-                return False
-            self._queue.extend((record, size) for record in records)
-            self._queued_bytes += size * len(records)
+            self._queue.extend(zip(records, sizes))
             self.stats.spans += len(spans)
             self.stats.by_media[media] = self.stats.by_media.get(media, 0) + len(spans)
         return True

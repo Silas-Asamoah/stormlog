@@ -108,7 +108,7 @@ applied before the data is held whole, and each refusal is counted:
 | span receiver | time to receive a whole request: request line, headers and body, from when the receiver starts waiting for it | 10 s | the connection is closed: with 408 when the body is late (`body_timeouts`), without an answer when the request line or headers are (`header_timeouts`); a kept-alive connection idle this long is closed, uncounted |
 | span receiver | memory charged to the exports being read and decoded at once | 128 MiB, each step charged before it runs (below) | 503 with `Retry-After: 1` when an export does not fit now (`busy`); 413 when it could never fit (`too_large`) |
 | span receiver | spans in one body | 10,000 | 413 (`too_many_spans`); a protobuf export is refused before any span is built |
-| span receiver | spans waiting in the queue | 100,000 spans and 64 MiB | 503 with `Retry-After: 1`, and none of the body's spans is kept (`dropped_queue_full`, which counts spans the exporter may resend) |
+| span receiver | spans waiting in the queue | 100,000 spans and 64 MiB, each span charged what its record holds: 2 KiB, 256 bytes an attribute value and the size of its text, with the resource, scope and clock domain its export's spans share charged once | 503 with `Retry-After: 1`, and none of the body's spans is kept (`dropped_queue_full`, which counts spans the exporter may resend) |
 
 An export is charged, step by step and before each step runs:
 1. its body (at most 32 MiB) and, for gzip, the most it can inflate to: 1,032

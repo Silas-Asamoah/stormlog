@@ -35,6 +35,7 @@ from stormlog.infer.profile import InferenceProfiler
 from stormlog.infer.vllm_spans import (
     MAX_BODY_BYTES,
     OTLP_EXTRA_HINT,
+    SPAN_BYTES,
     OtlpProtobufUnavailable,
     OtlpSpanReceiver,
     ProtobufDecodeError,
@@ -1028,8 +1029,10 @@ class TestReceiverAdmission:
         assert after["spans"] == 8
 
     def test_the_queue_is_also_bounded_by_bytes(self) -> None:
+        """Charged what the spans hold, at least 2 KiB each, never a share
+        of the body rounded down."""
         body = _json_export(2)
-        limits = ReceiverLimits(max_queued_bytes=len(body) + len(body) // 2)
+        limits = ReceiverLimits(max_queued_bytes=3 * SPAN_BYTES)
         with _receiver(limits=limits) as receiver:
             url = f"http://{receiver.listen}/v1/traces"
             assert _post(url, body, "application/json") == 200
@@ -1037,6 +1040,43 @@ class TestReceiverAdmission:
             metadata = receiver.capability_metadata()
         assert metadata["dropped_queue_full"] == 2
         assert metadata["queued"] == 2
+
+    def test_spans_share_their_resource_scope_and_clock_domain(self) -> None:
+        """600 spans under one 128 KiB host.name held 79 MB, each with its own
+        clock-domain string, while the queue was charged their 139 KB body."""
+        import tracemalloc
+
+        host = "h" * (128 * 1024)
+        spans = [{"name": "s", "spanId": f"{i:016x}"} for i in range(600)]
+        body = json.dumps(
+            {
+                "resourceSpans": [
+                    {
+                        "resource": {
+                            "attributes": [
+                                {"key": "host.name", "value": {"stringValue": host}}
+                            ]
+                        },
+                        "scopeSpans": [{"scope": {"name": "vllm"}, "spans": spans}],
+                    }
+                ]
+            }
+        ).encode()
+        with _receiver() as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            tracemalloc.start()
+            try:
+                assert _post(url, body, "application/json") == 200
+                retained, _peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            charged = receiver._queued_bytes
+            records = receiver.drain()
+        assert len(records) == 600
+        assert len({id(record.clock_domain) for record in records}) == 1
+        assert len({id(record.resource) for record in records}) == 1
+        assert retained < 4 * 1024 * 1024
+        assert retained <= charged
 
 
 def _raw_request_span(attributes: dict[str, Any]) -> RawSpan:
