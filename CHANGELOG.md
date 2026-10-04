@@ -129,7 +129,11 @@ the flaky benchmark memory gates
   the weights. Each artifact also gets the run's state (`infer.run_state`),
   so `infer compare` counts a run whose server crashed against its arm
   rather than trusting a session that finished, and sets aside a block only
-  for a protocol failure the runner recorded. (#213)
+  for a protocol failure the runner recorded. An attempt the runner itself
+  was killed in is finished and indexed on resume: an outcome failure
+  (`runner_interrupted`), unless `external_causes` gives its cause
+  (`spot_preemption`, `operator_abort` or `infra_fault`) with evidence,
+  which makes it a protocol failure that may be retried. (#213)
 - `stormlog.infer.experiment_plan`: experiment plans
   (`stormlog.infer.experiment_plan` v1) with arms, workload steps (shared with
   `same_as:<arm>`), treatments, block preludes, a seeded `random`, `williams`
