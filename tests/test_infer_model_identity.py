@@ -222,6 +222,42 @@ def test_a_snapshot_missing_what_a_load_reads_is_refused(tmp_path: Path) -> None
         prepare_model({"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)})
 
 
+def _rewrite_in_place(path: Path, content: bytes) -> None:
+    """New bytes in the same inode, with the size and times put back."""
+    before = path.stat()
+    os.chmod(path, 0o644)
+    with path.open("r+b") as handle:
+        handle.write(content)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+
+def test_a_file_rewritten_in_place_with_its_size_and_time_kept_is_caught(
+    tmp_path: Path,
+) -> None:
+    # fable-213's P3: the post-run check was by size, time and inode only.
+    cache = _hub(tmp_path)
+    model = prepare_model(
+        {"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)}
+    )
+    blob = _repo(cache) / "blobs" / hashlib.sha256(WEIGHTS).hexdigest()
+    _rewrite_in_place(blob, WEIGHTS[::-1])
+    assert changed_files(model) == ["model.safetensors"]
+
+    source = tmp_path / "model"
+    source.mkdir()
+    (source / "model.safetensors").write_bytes(WEIGHTS)
+    (source / "config.json").write_bytes(CONFIG)
+    staged = prepare_model(
+        {"route": "staged", "source": str(source), "store": str(tmp_path / "s")}
+    )
+    _rewrite_in_place(staged.directory / "config.json", CONFIG[::-1])
+    assert changed_files(staged) == ["config.json"]
+    # A file added after verification is a change too.
+    os.chmod(staged.directory, 0o755)
+    (staged.directory / "extra.safetensors").write_bytes(b"x")
+    assert changed_files(staged) == ["config.json", "extra.safetensors"]
+
+
 def test_an_unknown_route_is_refused() -> None:
     with pytest.raises(InferInputError, match="route"):
         prepare_model({"route": "trust_me"})
