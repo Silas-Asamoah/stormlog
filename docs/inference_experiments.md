@@ -129,7 +129,7 @@ reasons:
 | --- | --- | --- |
 | `completed` | Every step exited as expected, every artifact is there and labelled, and every treatment held up | Compared |
 | `outcome_failure` | The server exited (`server_exited`); a step failed or timed out; an artifact is missing; a treatment was not ready, stopped before the workload ended (`treatment_unhealthy`, even with exit 0), or exited unexpectedly | Compared: outcomes are data, and a retry never replaces them |
-| `protocol_failure` | A server that never became healthy; a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`) | Set aside, with the reason; may be retried |
+| `protocol_failure` | A server that never became healthy; a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`, `treatment_cleanup_unverified:<name>`) | Set aside, with the reason; may be retried |
 
 When both kinds apply, the outcome wins, unless the protocol fault came
 before the first workload step started. A cleanup that left processes stops
@@ -240,12 +240,18 @@ process, and its children inherit the pin; the runner checks the pin took.
 
 Stopping a process signals its whole group, then SIGKILL after a timeout.
 The runner then checks that nothing it started is left: no process in the
-group or the session, and none of the server's processes it remembered by
-PID and start time, which finds one that left the group with `setsid`. A
-survivor is killed by PID; one that outlives that is a failed cleanup, and
+group or the session, none of the server's processes it remembered by PID
+and start time, which finds one that left the group with `setsid`, and no
+process carrying the launch's mark. Every launch puts a fresh
+`STORMLOG_RUN_MARK` in its environment, which every descendant inherits, so
+a process forked after the tree was remembered (a late collector child) and
+then moved to a session of its own is found too. A survivor is killed by
+PID; one that outlives that is a failed cleanup (`collector_cleanup_unverified`
+for the server, `treatment_cleanup_unverified:<name>` for a treatment), and
 the runner does not start the next server beside it. On Linux these checks
-read `/proc`; elsewhere they use `psutil`, and remembered processes are not
-tracked.
+read `/proc`; elsewhere they use `psutil`, which reads the mark too, and
+remembered processes are not tracked. The mark differs from run to run and
+is a label to comparisons.
 
 ## Python API
 
