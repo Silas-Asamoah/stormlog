@@ -378,11 +378,13 @@ class Registry:
     def apply(self, update: Callable[[], None]) -> bool:
         """Run ``update`` under the lock, whole, unless the registry is frozen.
 
-        A record applies all or nothing. An unusable number is rejected by
-        the update that received it and counted, and the record's other
-        updates apply. If ``update`` raises, every value it changed is put
-        back (a series it created stays, at 0), ``rolled_back`` counts it,
-        and the exception propagates.
+        If ``update`` raises, the record applies not at all: every value it
+        changed is put back, ``rolled_back`` counts it, and the exception
+        propagates. What it did besides values stays: a series it created
+        remains, at 0, still using its headroom slot, and the family's
+        counts (``rejected``, ``unnamed``) keep what it added. A number an
+        update cannot use is not a failure: that update alone is rejected
+        and counted, and the record's other updates apply.
         """
         with self._lock:
             if self._frozen:
