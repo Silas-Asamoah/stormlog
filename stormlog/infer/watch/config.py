@@ -20,7 +20,7 @@ import urllib.parse
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..diagnosis_signals import SignalConfig
 from ..diagnosis_vocabulary import (
@@ -136,7 +136,10 @@ class WatchConfig:
     export: Mapping[str, Any] = field(default_factory=dict)
 
     def resolved(self) -> dict[str, Any]:
-        """The settings as recorded in the session record."""
+        """The settings as recorded in the session record, every trigger as
+        resolved (its sustain, policy and predicate), so two configs that
+        watch the same way have the same digest. The ``export`` section is
+        #220's and may hold credentials: it is left out."""
         return {
             "format": CONFIG_FORMAT,
             "version": CONFIG_VERSION,
@@ -151,7 +154,7 @@ class WatchConfig:
             "history": {"seconds": self.history_seconds, "bytes": self.history_bytes},
             "incident": asdict(self.incident),
             "store": asdict(self.store),
-            "triggers": [dict(t) for t in self.trigger_settings],
+            "triggers": [_resolved_trigger(spec) for spec in self.triggers],
             "guarantees": {
                 spec.trigger_id: {
                     "shortest_firing_violation_seconds": (
@@ -169,6 +172,23 @@ class WatchConfig:
     def digest(self) -> str:
         canonical = json.dumps(self.resolved(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _resolved_trigger(spec: TriggerSpec) -> dict[str, Any]:
+    return {
+        "id": spec.trigger_id,
+        "kind": spec.kind,
+        "action": spec.action,
+        "counts_toward_exit": spec.counts_toward_exit,
+        "deep_capture_when": spec.deep_capture_when,
+        "completion_recorded": spec.completion_recorded,
+        "sustain": asdict(spec.sustain),
+        # Every predicate is a dataclass; the protocols it is typed by are not.
+        "predicate": {
+            "type": type(spec.predicate).__name__,
+            **asdict(cast(Any, spec.predicate)),
+        },
+    }
 
 
 def load_watch_config(

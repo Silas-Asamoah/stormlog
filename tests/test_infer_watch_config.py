@@ -387,3 +387,32 @@ def test_a_config_s_own_triggers_keep_the_default_health_triggers() -> None:
         )
     with pytest.raises(InferUsageError, match="default_health_triggers"):
         resolve_watch_config(_payload(triggers=[], default_health_triggers="no"))
+
+
+def test_the_digest_is_of_the_resolved_triggers() -> None:
+    """The digest hashed each trigger as written, so two configs that watch
+    the same way differed, while its resolved G, policy and predicate were
+    nowhere in the record."""
+    bare = _trigger()
+    spelled = {
+        **_trigger(),
+        "window_seconds": 30,
+        "hold_seconds": 60,
+        "counts_toward_exit": True,
+        "gauge": {"family": "vllm:num_requests_waiting", "at_least": 8, "share": 1},
+    }
+    first = resolve_watch_config(_payload(triggers=[bare]))
+    second = resolve_watch_config(_payload(triggers=[spelled]))
+    assert first.digest() == second.digest()
+    (queue, *_health) = first.resolved()["triggers"]
+    assert queue["sustain"]["gap"] == 30.0
+    assert queue["counts_toward_exit"] is True
+    assert queue["predicate"]["type"] == "GaugeAtLeast"
+    assert queue["predicate"]["threshold"] == 8.0
+    changed = resolve_watch_config(_payload(triggers=[_trigger(hold_seconds=90)]))
+    assert changed.digest() != first.digest()
+    exported = resolve_watch_config(
+        _payload(triggers=[bare], export={"otlp": {"headers": {"key": "secret"}}})
+    )
+    assert exported.digest() == first.digest()
+    assert "export" not in exported.resolved()
