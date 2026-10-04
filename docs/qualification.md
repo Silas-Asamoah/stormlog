@@ -227,6 +227,17 @@ that can end an effect early, and the thresholds are refrozen from
 `dev_v1` with this in view. A healthy jittered engine recovers at the last
 `SIGCONT` in 39 of 40 seeds, and within 15 s in all of them.
 
+**What the minimum assumes of the victim.** Twenty busy gaps in the 10 s
+hold need about 2 busy steps a second: a victim busy 5% of the time with
+25 ms steps falls short, and every pulse episode, H0 and P, then times out
+as `recovery_incomplete` (rev-220-b measured 2 of 20 recovering at a 5%
+busy share against a 5 s hold). #221's victims keep a request in flight
+nearly all the time, and G0 records each victim's busy share so a light one
+is caught before a campaign. Rare long steps also cost time: when fewer than
+1% of steps are prefill steps, twice the p99 can fall below one, so each
+ends a hold and recovery waits for a stretch without one (a median of up to
+9 s in the same probe).
+
 **Cadence is blind while the victim is idle.** Only busy gaps count, so a
 stall that falls wholly in victim idle time (about a fifth of the time at
 3 requests per second) is not seen by recovery. That recovery after a pulse
