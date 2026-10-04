@@ -116,14 +116,20 @@ def on_monotonic_clock(stamp: Stamped, record: VllmScrapeRecord) -> VllmScrapeRe
     ``observed_at_ns`` and ``duration_ms``, which are the client's wall
     clock: an NTP step inside a window would bend every rate. Here they
     become the fetch's monotonic start and its duration to the response,
-    which bound the server's sample instant just as well.
+    which bound the server's sample instant just as well. A record that
+    carries ``completed_at_ns`` (the response's wall-clock time, which
+    window aggregation prefers to the duration) has it moved too: a
+    monotonic start and a wall-clock end would make every window decades
+    long.
     """
-    return replace(
-        record,
-        # A record's stamp must be positive; the offset changes no duration.
-        observed_at_ns=stamp.mono_ns + 1,
-        duration_ms=max(0, stamp.done_mono_ns - stamp.mono_ns) / 1e6,
-    )
+    # A record's stamp must be positive; the offset changes no duration.
+    changes: dict[str, Any] = {
+        "observed_at_ns": stamp.mono_ns + 1,
+        "duration_ms": max(0, stamp.done_mono_ns - stamp.mono_ns) / 1e6,
+    }
+    if getattr(record, "completed_at_ns", None) is not None:
+        changes["completed_at_ns"] = max(stamp.done_mono_ns, stamp.mono_ns) + 1
+    return replace(record, **changes)
 
 
 def _start_entry(done: Sequence[Entry], target_ns: int, tick_ns: int) -> Entry | None:

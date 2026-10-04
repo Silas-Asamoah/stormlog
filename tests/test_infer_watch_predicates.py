@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass, fields
 
 import pytest
 
@@ -190,6 +191,44 @@ def test_a_rate_is_timed_on_the_monotonic_clock(wall_step_s: float) -> None:
     assert result.evaluation.observed_bounds is not None
     lower, upper = result.evaluation.observed_bounds
     assert upper is not None and lower <= 1.0 <= upper
+
+
+@dataclass(frozen=True)
+class _CompletedScrape(VllmScrapeRecord):
+    """A record as #218's PR1a writes it, with the response's wall-clock
+    time, which window aggregation prefers to the duration."""
+
+    completed_at_ns: int | None = None
+
+
+@pytest.mark.parametrize("wall_step_s", [0.0, 30.0])
+def test_a_record_s_completion_time_moves_to_the_monotonic_clock_too(
+    wall_step_s: float,
+) -> None:
+    """Left on the wall clock beside a monotonic start, it made every
+    window decades long: a true rate of 2/s read as nearly 0, under a
+    threshold of 1/s."""
+    history = []
+    for second in range(20):
+        wall = second + (wall_step_s if second >= 13 else 0.0)
+        plain = scrape(exposition(counters={PREEMPTIONS: 2.0 * second}), wall)
+        record = _CompletedScrape(
+            **{f.name: getattr(plain, f.name) for f in fields(plain)},
+            completed_at_ns=plain.observed_at_ns + 4_000_000,
+        )
+        mono = second * S
+        history.append((Stamped(mono, mono + 4_000_000, mono), record))
+    spec = TriggerSpec(
+        "preemptions",
+        KIND_METRIC,
+        Sustain.with_defaults(window=5, hold=5, clear=None, tick=1),
+        CounterRateAtLeast(PREEMPTIONS, rate_per_s=1.0),
+    )
+    (result,) = TriggerEngine([spec], tick_seconds=1).tick(15 * S + 5_000_000, history)
+    assert result.evaluation.classification == VIOLATING
+    assert result.evaluation.observed_bounds is not None
+    lower, upper = result.evaluation.observed_bounds
+    assert upper is not None and 1.0 < lower <= 2.0 <= upper
 
 
 def _ttft(cumulative: Sequence[tuple[str, float]]) -> str:
