@@ -490,48 +490,96 @@
    "runs": 6,
    "p_run": 0.5,
    "q": 0.5,
+   "min_runs_to_pass": 6,
+   "can_pass": true,
    "false_pass": 0.015625
+  },
+  {
+   "runs": 6,
+   "p_run": 0.6,
+   "q": 0.6,
+   "min_runs_to_pass": 8,
+   "can_pass": false,
+   "false_pass": null
+  },
+  {
+   "runs": 6,
+   "p_run": 0.8,
+   "q": 0.8,
+   "min_runs_to_pass": 17,
+   "can_pass": false,
+   "false_pass": null
   },
   {
    "runs": 8,
    "p_run": 0.5,
    "q": 0.5,
+   "min_runs_to_pass": 6,
+   "can_pass": true,
    "false_pass": 0.00390625
   },
   {
    "runs": 8,
    "p_run": 0.6,
    "q": 0.6,
+   "min_runs_to_pass": 8,
+   "can_pass": true,
    "false_pass": 0.016796159999999994
+  },
+  {
+   "runs": 8,
+   "p_run": 0.8,
+   "q": 0.8,
+   "min_runs_to_pass": 17,
+   "can_pass": false,
+   "false_pass": null
   },
   {
    "runs": 10,
    "p_run": 0.5,
    "q": 0.5,
+   "min_runs_to_pass": 6,
+   "can_pass": true,
    "false_pass": 0.010742187500000009
   },
   {
    "runs": 10,
    "p_run": 0.6,
    "q": 0.6,
+   "min_runs_to_pass": 8,
+   "can_pass": true,
    "false_pass": 0.006046617599999997
+  },
+  {
+   "runs": 10,
+   "p_run": 0.8,
+   "q": 0.8,
+   "min_runs_to_pass": 17,
+   "can_pass": false,
+   "false_pass": null
   },
   {
    "runs": 30,
    "p_run": 0.5,
    "q": 0.5,
+   "min_runs_to_pass": 6,
+   "can_pass": true,
    "false_pass": 0.021386972628533868
   },
   {
    "runs": 30,
    "p_run": 0.6,
    "q": 0.6,
+   "min_runs_to_pass": 8,
+   "can_pass": true,
    "false_pass": 0.01718302499644704
   },
   {
    "runs": 30,
    "p_run": 0.8,
    "q": 0.8,
+   "min_runs_to_pass": 17,
+   "can_pass": true,
    "false_pass": 0.01052249033392575
   }
  ],

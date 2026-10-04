@@ -43,11 +43,18 @@ def test_the_study_runs_and_its_rules_are_the_modules() -> None:
     }
 
 
-def test_every_run_gate_cell_can_pass_at_all() -> None:
-    # A cell where the gate can never pass measures nothing.
+def test_a_run_gate_cell_that_cannot_pass_says_so() -> None:
+    # A cell where the gate can never pass measures nothing: it is listed as
+    # one, with the fewest runs that could, never as a pass rate of 0.
     results = json.loads(RESULTS.read_text())
-    for row in results["run_gate_false_pass"]:
-        assert 0.025 ** (1 / row["runs"]) >= row["q"]
+    rows = results["run_gate_false_pass"]
+    for row in rows:
+        reachable = 0.025 ** (1 / row["runs"]) >= row["q"]
+        assert row["can_pass"] is reachable
+        assert (row["false_pass"] is None) is not reachable
+        assert (row["runs"] >= row["min_runs_to_pass"]) is reachable
+        assert 0.025 ** (1 / (row["min_runs_to_pass"] - 1)) < row["q"]
         assert row["p_run"] == row["q"]  # the supremum of a false claim
+    assert not all(row["can_pass"] for row in rows)
     for runs in results["clustered_runs"]:
         assert 0.025 ** (1 / int(runs)) >= 0.8
