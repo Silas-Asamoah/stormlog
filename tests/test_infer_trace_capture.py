@@ -291,6 +291,37 @@ def test_a_failed_stop_is_recorded_as_one(
     )
 
 
+def test_a_failing_warning_from_the_time_bound_is_raised_after_the_record(
+    tmp_path: Path, recwarn: pytest.WarningsRecorder
+) -> None:
+    """The time bound's stop warns from its own task. A warning that fails
+    there was never retrieved: the phase went on as if it had not."""
+
+    class _StopFails(_FakeControl):
+        def post(self, route: str) -> ControlResult:
+            self.calls.append(route)
+            if route == "/start_profile":
+                return ControlResult(200)
+            return ControlResult(503, "HTTP 503")
+
+    def warn(_message: str) -> None:
+        raise BrokenPipeError("stderr closed")
+
+    control = _StopFails(tmp_path)
+    windows = TraceWindows(
+        _config(tmp_path, max_seconds=0.05), control=control, on_warning=warn
+    )
+
+    with pytest.raises(BrokenPipeError):
+        _run_window(windows, body_seconds=0.3)
+
+    assert control.calls == ["/start_profile", "/stop_profile"]
+    records = windows.take_records(session_id="s1")
+    assert [(r["stop_reason"], r["stop_status"]) for r in records] == [
+        ("time_bound", 503)
+    ]
+
+
 def test_an_unknown_start_stopped_before_the_phase_says_so(tmp_path: Path) -> None:
     control = _FakeControl(tmp_path, start_status=None)
     windows = TraceWindows(_config(tmp_path), control=control)
