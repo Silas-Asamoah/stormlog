@@ -765,13 +765,19 @@ One run goes:
 The run is published atomically (see below), whatever ends it. An episode
 whose actuation raised (a stop that never took, a target gone) is published
 as `not_actuated` with the error, its dose and, for pulses, every pulse that
-completed before it. A run that fails part way (the victim
-exiting before it measures, say) or is interrupted publishes every episode it
-attempted, the rest as skipped (`run_ended`, or `recovery_timeout` after a
-recovery timeout), with the reason as the run record's protocol failure. An
-episode interrupted mid-action is published `not_actuated` with actuation
-`interrupted`, its dose and, for pulses, every pulse that completed: the
-target was stopped, and the truth says so. `inject` then exits 1, or 130
+completed before it, then the one the failure cut short. A run that fails
+part way (the victim exiting before it measures, say) or is interrupted
+publishes every episode it attempted, the rest as skipped (`run_ended`, or
+`recovery_timeout` after a recovery timeout), with the reason as the run
+record's protocol failure. An episode interrupted mid-action is published
+`not_actuated` with actuation `interrupted`, its dose and, for pulses, every
+pulse that completed, then the one in progress: the target was stopped, and
+the truth says so. A completed pulse's record says `completed: true`; one
+cut short says `completed: false`, with its stop's send time, and its
+confirmation and `SIGCONT` times, or null where it never got that far (no
+`SIGCONT` goes to a target that is gone). A target that exits mid-pulse is
+named as such, not as a watchdog that stopped watching (a watchdog exits
+once its target is gone). `inject` then exits 1, or 130
 when interrupted by Ctrl+C. SIGTERM and SIGHUP (a job's timeout, an ssh
 disconnect) interrupt it the same way from the moment the run starts,
 whether or not any pulse has run, and it exits 128 plus the signal's number.

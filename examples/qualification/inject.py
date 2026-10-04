@@ -350,14 +350,18 @@ class InjectionRun:
         )  # fmt: skip
 
     def _done_so_far(self, episode: EpisodePlan) -> dict[str, Any]:
-        """What an episode cut short did: its dose, and the pulses that
-        completed before a failure or an interruption (each continued)."""
+        """What an episode cut short did: its dose, the pulses that
+        completed before a failure or an interruption (each continued), and
+        the one it cut short, if any, marked ``completed: false``."""
         done: dict[str, Any] = {
             "method": episode.row.method,
             "dose": dict(episode.dose),
         }
-        if self._pulser is not None:
-            done["pulses"] = [pulse.to_record() for pulse in self._pulser.pulses]
+        pulser = self._pulser
+        if pulser is not None:
+            done["pulses"] = [pulse.to_record() for pulse in pulser.pulses]
+            if pulser.cut_short is not None:
+                done["pulses"].append(dict(pulser.cut_short))
         return done
 
     # ------------------------------------------------------------ actuation
