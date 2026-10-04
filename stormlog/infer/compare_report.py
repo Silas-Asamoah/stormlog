@@ -264,15 +264,32 @@ def _metric_line(name: str, metric: Any) -> str:
         if metric.unit == "fraction":
             # Its gate is a claim about runs; the interval only describes.
             shown += " (descriptive)"
-    gate = metric.gate
-    judged = (
-        ""
-        if gate is None
-        else f"; gate {gate.status}" + (f" ({gate.reason})" if gate.reason else "")
+    return (
+        f"{name}: {shown}; {metric.verdict.get('direction', '')}{_judged(name, metric)}"
     )
-    if gate is not None and gate.claim:
-        judged += f": {gate.claim['statement']}"
-    return f"{name}: {shown}; {metric.verdict.get('direction', '')}{judged}"
+
+
+def _judged(name: str, metric: Any) -> str:
+    """The gate's verdict; for a fraction, the claim about runs it rests on,
+    and a warning when the mean moved beyond the budget."""
+    gate = metric.gate
+    if gate is None:
+        return ""
+    claim = gate.claim or {}
+    kind = " (run-level claim)" if claim else ""
+    judged = f"; gate {gate.status}{kind}" + (
+        f" ({gate.reason})" if gate.reason else ""
+    )
+    if claim:
+        judged += f": {claim['statement']}"
+    if claim.get("mean_exceeds_budget"):
+        moved = "rose" if metric.direction == "lower_is_better" else "fell"
+        judged += (
+            f"; warning: mean {name.replace('_', ' ')} {moved} "
+            f"{claim['mean_change'] * 100:.1f} pp against a "
+            f"{gate.rule.budget * 100:g} pp budget"
+        )
+    return judged
 
 
 __all__ = ["REPORT_KIND", "comparison_lines", "comparison_report", "error_report"]

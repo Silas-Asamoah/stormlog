@@ -1433,13 +1433,7 @@ def _with_mean_change(
     effect = None if result.worst is None else result.worst.effect
     change = None if effect is None else _sign(request.direction) * effect
     beyond = change is not None and change > request.gate.budget
-    claim = {
-        **outcome.claim,
-        "mean_change": change,
-        "warning": "mean_exceeds_budget" if beyond else None,
-    }
-    if beyond:
-        claim["statement"] += f"; the mean change {change:g} is beyond the budget"
+    claim = {**outcome.claim, "mean_change": change, "mean_exceeds_budget": beyond}
     return replace(outcome, claim=claim)
 
 
