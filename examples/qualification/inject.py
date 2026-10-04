@@ -238,6 +238,9 @@ class InjectionRun:
             self._stop_victim(victim)
         self._close_channel()
         poller.join(timeout=10)
+        if self.channel is not None:
+            # The hook log the replay cuts by first-seen time, in the truth.
+            self.channel.tailer.copy_to(self.directory.reference / "hook")
         self.failure = progress.failure
         self._write_truth(progress)
         return self.directory.publish()

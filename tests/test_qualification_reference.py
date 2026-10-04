@@ -232,3 +232,22 @@ def test_the_victims_chunk_gaps_are_read_incrementally(tmp_path: Path) -> None:
     late = channel.signals().chunk_gaps
     records = [json.loads(line) for line in (first + rest).splitlines()]
     assert early and late == chunk_gaps(records, VICTIM)
+
+
+def test_the_tailer_copies_the_epochs_it_read(tmp_path: Path) -> None:
+    epoch = _epoch_dir(tmp_path)
+    (epoch / "000001.jsonl").write_bytes(_hook_line(1))
+    (epoch / "000002.jsonl.part").write_bytes(_hook_line(2))
+    (epoch / "key").write_text("k")
+    other = tmp_path / "hook" / "host-a" / "engine-0"
+    other.mkdir()
+    (other / "000001.jsonl").write_bytes(_hook_line(9))
+    tailer = HookTailer(tmp_path / "hook")
+    tailer.poll()
+    # Both epochs were read: every file of each, the key and a segment still
+    # being written included, is copied with its layout.
+    copied = tailer.copy_to(tmp_path / "truth" / "hook")
+    assert copied == 4
+    assert (
+        tmp_path / "truth" / "hook" / "host-a" / "engine-1" / "000002.jsonl.part"
+    ).read_bytes() == _hook_line(2)
