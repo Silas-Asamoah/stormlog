@@ -582,22 +582,71 @@ STOP_GRACE_SECONDS = 2.0
 
 
 def json_decode_estimate(content: bytes | bytearray) -> int:
-    """An upper bound on what decoding this OTLP JSON export holds at once.
+    """What decoding this OTLP JSON export holds at once, estimated on its
+    bytes before anything is parsed.
 
-    Counted on the bytes, before anything is parsed: structural tokens
-    (every value is opened by one, or follows a comma or colon), spans (each
-    has a ``"name"``), and attribute values (each has one ``*Value`` key).
-    A count can only be too high: inside a JSON string a quote is escaped.
+    Counted: structural tokens (every value is opened by one, or follows a
+    comma or colon), spans (each has a ``"name"``) and attribute values
+    (each has one ``*Value`` key). A key written with an escape, such as
+    ``"na\\u006de"``, is missed here; :func:`json_document_counts` counts
+    the spans and values exactly once the document is parsed, and the
+    receiver charges what this missed before any span is built.
     """
     tokens = 1 + sum(content.count(mark) for mark in (b"{", b"[", b",", b":"))
-    spans = content.count(b'"name"')
-    values = content.count(b'Value"')
     return (
         2 * TEXT_BYTES * len(content)
         + tokens * JSON_TOKEN_BYTES
-        + spans * SPAN_BYTES
-        + values * VALUE_BYTES
+        + _json_built_estimate(content)
     )
+
+
+def _json_built_estimate(content: bytes | bytearray) -> int:
+    """The spans and values :func:`json_decode_estimate` charges, by bytes."""
+    spans = content.count(b'"name"')
+    values = content.count(b'Value"')
+    return spans * SPAN_BYTES + values * VALUE_BYTES
+
+
+def json_document_counts(document: Any) -> tuple[int, int]:
+    """The spans and attribute values :func:`decode_otlp_json` would build
+    from a parsed document, counted without building them."""
+    spans = values = 0
+    for resource_spans in _json_list(_json_get(document, "resourceSpans")):
+        resource = _json_get(resource_spans, "resource")
+        values += _json_values_count(_json_get(resource, "attributes"))
+        for scope_spans in _json_list(_json_get(resource_spans, "scopeSpans")):
+            for span in _json_list(_json_get(scope_spans, "spans")):
+                spans += 1
+                values += _json_values_count(_json_get(span, "attributes"))
+    return spans, values
+
+
+def _json_get(node: Any, key: str) -> Any:
+    return node.get(key) if isinstance(node, dict) else None
+
+
+def _json_list(node: Any) -> list[Any]:
+    return node if isinstance(node, list) else []
+
+
+def _json_values_count(items: Any) -> int:
+    """Attribute values held for ``items``, nested ones included."""
+    if isinstance(items, dict):
+        return len(items)
+    return sum(
+        1 + _json_nested_count(_json_get(item, "value")) for item in _json_list(items)
+    )
+
+
+def _json_nested_count(value: Any) -> int:
+    array = _json_get(value, "arrayValue")
+    if array is not None:
+        elements = _json_list(_json_get(array, "values"))
+        return sum(1 + _json_nested_count(item) for item in elements)
+    kvlist = _json_get(value, "kvlistValue")
+    if kvlist is not None:
+        return _json_values_count(_json_get(kvlist, "values"))
+    return 0
 
 
 def gunzip_capped(body: bytes | bytearray, cap: int) -> bytes | None:
@@ -945,9 +994,36 @@ class OtlpSpanReceiver:
         """The export's spans, each step charged before it runs; None after
         answering an export that does not fit."""
         if media != PROTOBUF_MEDIA:
-            if not self._reserve(handler, reservation, json_decode_estimate(body)):
-                return None
-            return decode_otlp_json(json.loads(body.decode("utf-8")))
+            return self._decode_json(handler, body, reservation)
+        return self._decode_protobuf(handler, body, reservation)
+
+    def _decode_json(
+        self,
+        handler: BaseHTTPRequestHandler,
+        body: bytes | bytearray,
+        reservation: _Reservation,
+    ) -> list[RawSpan] | None:
+        if not self._reserve(handler, reservation, json_decode_estimate(body)):
+            return None
+        document = json.loads(body.decode("utf-8"))
+        # Counted again on the parsed document, where an escaped key is
+        # decoded: too many spans are refused, and what the bytes missed is
+        # charged, before any span is built.
+        spans, values = json_document_counts(document)
+        if spans > self.limits.max_spans_per_body:
+            self._refuse_too_many(handler)
+            return None
+        missed = spans * SPAN_BYTES + values * VALUE_BYTES - _json_built_estimate(body)
+        if missed > 0 and not self._reserve(handler, reservation, missed):
+            return None
+        return decode_otlp_json(document)
+
+    def _decode_protobuf(
+        self,
+        handler: BaseHTTPRequestHandler,
+        body: bytes | bytearray,
+        reservation: _Reservation,
+    ) -> list[RawSpan] | None:
         # Counted on the wire, so the parse is charged per message and a
         # body with too many spans is refused before anything is parsed.
         # Past max_messages the charge could never fit: the scan stops.

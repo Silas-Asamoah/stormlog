@@ -900,6 +900,57 @@ class TestReceiverAdmission:
         assert metadata["spans"] == 0
         assert metadata["too_large"] + metadata["too_many_spans"] == 1
 
+    def test_json_keys_written_with_escapes_are_still_charged(self) -> None:
+        """ "na\\u006de" is the key "name": counted on the bytes, such spans
+        and values went uncharged, and their decoding overran the charge."""
+        import tracemalloc
+
+        spans = ['{"na\\u006de":"s"}'] * 9000
+        spans[0] = (
+            '{"na\\u006de":"s","attributes":[{"key":"k","value":{"intV\\u0061lue":"7"}}]}'
+        )
+        body = (
+            '{"resourceSpans":[{"scopeSpans":[{"spans":[' + ",".join(spans) + "]}]}]}"
+        ).encode()
+        charged: list[int] = []
+        with _receiver() as receiver:
+            real_reserve = receiver._reserve
+
+            def spy(handler: Any, reservation: Any, amount: int) -> bool:
+                taken = real_reserve(handler, reservation, amount)
+                charged.append(reservation.bytes)
+                return taken
+
+            receiver._reserve = spy  # type: ignore[method-assign]
+            url = f"http://{receiver.listen}/v1/traces"
+            tracemalloc.start()
+            try:
+                status = _post(url, body, "application/json")
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            records = receiver.drain()
+        assert status == 200
+        assert len(records) == 9000
+        assert records[0].attributes == {"k": 7}
+        assert peak <= max(charged)
+
+    def test_a_json_export_with_too_many_spans_is_refused_before_they_are_built(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        built: list[int] = []
+        monkeypatch.setattr(
+            vllm_spans, "decode_otlp_json", lambda document: built.append(1)
+        )
+        limits = ReceiverLimits(max_spans_per_body=3)
+        with _receiver(limits=limits) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            escaped = _json_export(4).replace(b'"name"', b'"na\\u006de"')
+            assert _post(url, escaped, "application/json") == 413
+            metadata = receiver.capability_metadata()
+        assert metadata["too_many_spans"] == 1
+        assert built == []
+
     @pytest.mark.parametrize("backend", ["installed", "python"])
     @pytest.mark.parametrize(
         "shape", ["empty_spans", "named_spans", "empty_links", "empty_resource_spans"]

@@ -125,7 +125,10 @@ An export is charged, step by step and before each step runs:
    estimate of decoding it. For JSON it is counted on the bytes before
    anything is parsed: 128 bytes a structural token, 2 KiB a span (each has
    a `"name"`), 256 bytes an attribute value and 8 bytes a content byte for
-   the text. For protobuf, the body's messages, spans and attribute values
+   the text. Once parsed, the spans and values are counted again on the
+   document, where a key written with an escape (`"na\u006de"`) is
+   decoded: a body with too many spans is refused, and anything the bytes
+   missed is charged, before any span is built. For protobuf, the body's messages, spans and attribute values
    are first counted on the wire, by a scan that builds nothing, and a body
    with more spans than the limit is refused there, before it is parsed.
    The parse is then charged 384 bytes a message with protobuf's upb
