@@ -40,6 +40,7 @@ A plan is `stormlog.infer.experiment_plan` version 1, in JSON:
 | `order` | `random` (seeded shuffles), `williams`, or `explicit` with each block's arms listed |
 | `server` | The server command, its environment, CPU set, base URL, and start and stop timeouts |
 | `arms` | Each arm's server arguments and environment, its workload steps, and its treatments |
+| `control_arm` | The arm whose launch the others are judged against (below); by default the one arm that launches the plan's server as it is, if exactly one does |
 | `block_prelude` | Steps run once before each block's first run, with an arm's server (`server_arm`, launched as that arm's runs launch it, verified model included) or none |
 | `describe_server` | Whether to describe the server `before` and `after` each run, with its log (`server_log`); all on by default |
 | `secret_env` | Environment variables passed to the commands but never written down |
@@ -139,10 +140,23 @@ reasons:
 | --- | --- | --- |
 | `completed` | Every step exited as expected, every artifact is there and labelled, and every treatment held up | Compared |
 | `outcome_failure` | The server exited (`server_exited`); a step failed or timed out; an artifact is missing; a treatment was not ready, stopped before the workload ended (`treatment_unhealthy`, even with exit 0), or exited unexpectedly | Compared: outcomes are data, and a retry never replaces them |
-| `protocol_failure` | A server that never became healthy; a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`, `treatment_cleanup_unverified:<name>`) | Set aside with its block, both arms, with the reason; may be retried |
+| `protocol_failure` | A server that never became healthy, unless its arm's own launch kept it from starting (below); a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`, `treatment_cleanup_unverified:<name>`) | Set aside with its block, both arms, with the reason; may be retried |
 
 When both kinds apply, the outcome wins, unless the protocol fault came
-before the first workload step started. The runner appends the state to
+before the first workload step started.
+
+A server that never became healthy is its arm's `outcome_failure` when the
+arm's launch (its server arguments or environment) differs from the
+control arm's and the control's server became healthy in the same block:
+a Stormlog setting that keeps vLLM from starting is a result, not a
+harness fault. Otherwise it is a `protocol_failure`. The run records which
+rule decided (`decided_by`): `arm_launch_differs`, `identical_launch`,
+`control_also_unhealthy`, `control_not_launched` (the control's server was
+not launched in the block), or `no_control_arm`. It is decided once the
+block's runs are done, whatever their order, and indexed then. Such a run
+has no artifact, since no workload ran, so a comparison sees its block
+without that arm's run and sets the block aside: pre-register
+`min_complete_blocks`, or use `--on-incomplete fail`, so the loss counts. The runner appends the state to
 each of the run's artifacts as an `infer.run_state` record (`state`,
 `reasons`, `before_treatment`), and `infer compare` reads it: an outcome
 failure is compared and counted against its arm (`runner:<reason>`), even

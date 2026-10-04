@@ -114,6 +114,7 @@ OUTCOME_FAILURE = "outcome_failure"
 PROTOCOL_FAILURE = "protocol_failure"
 # A planned run the runner never started: an earlier cleanup left processes.
 NOT_RUN = "not_run"
+NEVER_HEALTHY = "server_never_healthy"
 INDEX = "index.jsonl"
 # Written when an attempt starts: the slot it runs in.
 ATTEMPT = "attempt.json"
@@ -150,6 +151,10 @@ class RunRecord:
     # The runner was killed during it; finished on resume.
     interrupted: bool = False
     external_cause: dict[str, str] | None = None
+    # Whether its server came up; None when none was launched.
+    server_healthy: bool | None = None
+    # For a server that never came up: which rule made it an outcome or not.
+    decided_by: str | None = None
 
     def outcome(self, reason: str) -> None:
         self.reasons.append(reason)
@@ -398,6 +403,7 @@ def _run_block(
         for prelude in plan.preludes
         for reason in _prelude(plan, prelude, block, output, env)
     ]
+    held: list[dict[str, Any]] = []
     for position, arm in enumerate(arms):
         records = _attempts(
             plan,
@@ -410,13 +416,84 @@ def _run_block(
             prelude_failures,
         )
         for record in records:
-            _append_index(output, record)
-            if on_event is not None:
-                on_event(record)
+            if NEVER_HEALTHY in record["reasons"]:
+                held.append(record)  # until the block's control has run
+            else:
+                _publish(output, record, on_event)
         written += records
         if any(_left_running(r) for r in records):
             break
+    for record in held:
+        _decide_unhealthy(plan, record, output)
+        _publish(output, record, on_event)
     return written
+
+
+def _publish(output: Path, record: dict[str, Any], on_event: Events | None) -> None:
+    _append_index(output, record)
+    if on_event is not None:
+        on_event(record)
+
+
+def _decide_unhealthy(
+    plan: ExperimentPlan, record: dict[str, Any], output: Path
+) -> None:
+    """A server that never became healthy is its arm's outcome when the arm's
+    own launch differs from the control's and the control's server came up
+    in the block; otherwise it stays a protocol failure. Its run.json is
+    rewritten with the decision; such a run has no artifacts."""
+    state, decided_by = _unhealthy_ruling(plan, record, output)
+    record["decided_by"] = decided_by
+    if state == OUTCOME_FAILURE:
+        record["state"] = OUTCOME_FAILURE
+        record["before_treatment"] = [
+            reason for reason in record["before_treatment"] if reason != NEVER_HEALTHY
+        ]
+    run_dir = Path(record["run_dir"])
+    (run_dir / "run.json").write_text(
+        json.dumps(record, indent=2, sort_keys=True) + "\n"
+    )
+    _write_sums(run_dir)
+
+
+def _unhealthy_ruling(
+    plan: ExperimentPlan, record: Mapping[str, Any], output: Path
+) -> tuple[str, str]:
+    control = plan.control_arm
+    if control is None:
+        return PROTOCOL_FAILURE, "no_control_arm"
+    if _same_launch(plan.arms[record["arm"]], plan.arms[control]):
+        return PROTOCOL_FAILURE, "identical_launch"
+    healthy = _control_health(plan, control, record["block"], output)
+    if True in healthy:
+        return OUTCOME_FAILURE, "arm_launch_differs"
+    if False in healthy:
+        return PROTOCOL_FAILURE, "control_also_unhealthy"
+    return PROTOCOL_FAILURE, "control_not_launched"
+
+
+def _same_launch(arm: Arm, control: Arm) -> bool:
+    return arm.server_args == control.server_args and dict(arm.server_env) == dict(
+        control.server_env
+    )
+
+
+def _control_health(
+    plan: ExperimentPlan, control: str, block: int, output: Path
+) -> list[bool | None]:
+    """Whether each attempt of the control in the block, in this invocation
+    or an earlier one, got its server up."""
+    pattern = re.compile(
+        rf"{re.escape(plan.experiment_id)}-b{block:02d}-p\d+-"
+        rf"{re.escape(control)}-a\d+$"
+    )
+    found = []
+    for path in sorted((output / "runs").iterdir()):
+        if pattern.match(path.name) and (path / "run.json").is_file():
+            found.append(
+                json.loads((path / "run.json").read_text()).get("server_healthy")
+            )
+    return found
 
 
 def _not_run(
@@ -877,8 +954,11 @@ class _Run:
         if self.server.affinity_applied is False:
             self.record.protocol("affinity_not_applied:server", before_treatment=True)
             return False
-        if not _wait_healthy(server.base_url, self.server, server.start_timeout_s):
-            self.record.protocol("server_never_healthy", before_treatment=True)
+        healthy = _wait_healthy(server.base_url, self.server, server.start_timeout_s)
+        self.record.server_healthy = healthy
+        if not healthy:
+            # Decided once the block is done (_decide_unhealthy).
+            self.record.protocol(NEVER_HEALTHY, before_treatment=True)
             return False
         if not self._probe():
             return False
