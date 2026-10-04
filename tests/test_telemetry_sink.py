@@ -792,6 +792,35 @@ def test_a_failed_cut_back_is_repaired_from_the_file_itself(
     assert [json.loads(line)["seq"] for line in lines] == [1, 2, 3, 4, 5]
 
 
+def test_an_interrupted_write_is_cut_back_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A signal handler can raise between two chunks of a short write."""
+    import os
+
+    from stormlog import telemetry_sink
+
+    sink = _bounded_sink(tmp_path, max_buffer_bytes=1 << 20)
+    sink.append({"seq": 1})
+    real_write = os.write
+    calls = {"n": 0}
+
+    def interrupted(fd: int, data: bytes | memoryview) -> int:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_write(fd, bytes(data[: len(data) // 2]))  # a short write
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(telemetry_sink.os, "write", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        sink.append({"seq": 2, "pad": "x" * 100})
+    monkeypatch.undo()
+    sink.close()  # in a finally block, say
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    lines = segment.read_bytes().splitlines()
+    assert [json.loads(line)["seq"] for line in lines] == [1, 2]
+
+
 def test_bounded_mode_settings_are_validated(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_buffer_bytes"):
         TelemetrySinkConfig(root_dir=tmp_path, max_buffer_bytes=0)
