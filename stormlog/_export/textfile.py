@@ -225,9 +225,10 @@ class TextfileWriter:
             # Checked once, before the write: a change landing between the
             # check and the write would not be flagged. The run freezes its
             # values and invalidates the render before it closes the writer,
-            # so none lands there.
-            if not self._active and not self.renders.is_fresh(generation):
-                self.stats.final_stale = True
+            # so none lands there. Each write after the run ended sets the
+            # flag afresh, so the last one, the final write, decides it.
+            if not self._active:
+                self.stats.final_stale = not self.renders.is_fresh(generation)
             self._write_file(generation.body)
         finally:
             self.renders.release(generation)

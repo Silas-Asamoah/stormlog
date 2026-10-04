@@ -505,6 +505,45 @@ def test_a_final_write_from_a_fresh_render_is_not_flagged(tmp_path: Path) -> Non
     assert "stormlog_up 0\n" in writer.path.read_text()
 
 
+def test_only_the_last_write_decides_whether_the_final_file_is_stale(
+    tmp_path: Path,
+) -> None:
+    # A periodic write whose render was in flight when the run ended writes
+    # out of date values, then the final write renders afresh: the file is
+    # not stale, whatever the write before it was.
+    values = {"up": 1}
+    entered, gate = threading.Event(), threading.Event()
+    renders = {"count": 0}
+
+    def render() -> bytes:
+        renders["count"] += 1
+        body = f"stormlog_up {values['up']}\n".encode()
+        if renders["count"] == 2:  # the writer's second, periodic render
+            entered.set()
+            gate.wait(10)
+        return body
+
+    cache = RenderCache(render, min_interval=0.0)
+    writer = TextfileWriter(
+        tmp_path,
+        "alpha",
+        cache,
+        const_labels={PRODUCER_LABEL: "alpha"},
+        interval=0.05,
+    )
+    writer.start()
+    assert entered.wait(10)
+    values["up"] = 0
+    cache.invalidate()
+    closer = threading.Thread(target=writer.close, args=(5.0,))
+    closer.start()
+    time.sleep(0.1)
+    gate.set()
+    closer.join(10)
+    assert "stormlog_up 0\n" in writer.path.read_text()
+    assert not writer.stats.final_stale
+
+
 def test_closing_leaves_a_lock_file_that_another_writer_put_there(
     tmp_path: Path,
 ) -> None:
