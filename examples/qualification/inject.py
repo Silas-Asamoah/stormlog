@@ -63,6 +63,7 @@ from stormlog.infer.qualify.recovery import (
     Timing,
     added_mechanisms,
     effect_timing,
+    engine_stalled,
     next_episode,
     observation_of,
     priming_check,
@@ -481,16 +482,27 @@ class InjectionRun:
         onset: int,
         action_end: int,
     ) -> tuple[str, Timing]:
-        """Wait until the next episode may start; the effect's timing."""
+        """Wait until the next episode may start; the effect's timing. A
+        recovery found earlier doesn't start the next episode while the
+        engine looks hung now (G4): a request sent since may be stuck."""
         while True:
             now = self.clock()
             timing = self._timing(episode, baseline, actions, onset, action_end, now)
             decision = next_episode(
                 action_end, timing.recovery_held_at_ns, now, self.thresholds
             )
+            if decision == START and self._engine_stalled(baseline, actions, now):
+                # next_episode says START past the deadline too, once the
+                # hold was found in time: a hang that outlasts it times out.
+                deadline = action_end + self.thresholds.recovery_timeout_ns
+                decision = TIMEOUT if now >= deadline else WAIT
             if decision != WAIT:
                 return decision, timing
             time.sleep(self.poll_seconds / 4)
+
+    def _engine_stalled(self, baseline: Baseline, actions: Actions, now: int) -> bool:
+        context = Context(self._signals(), baseline, actions, now, now, self.thresholds)
+        return engine_stalled(context, now)
 
     def _timing(
         self,
