@@ -25,6 +25,19 @@ the flaky benchmark memory gates
 
 ### Added
 
+- Prometheus export for `stormlog infer profile` (#220). `--prometheus-listen
+  HOST:PORT` serves Stormlog's own measurements at `/metrics` while the run
+  lasts (with `--prometheus-linger` for a final scrape), and
+  `--prometheus-textfile-dir DIR` writes `DIR/stormlog-<slot>.prom` for
+  node_exporter. The measurements are client latencies, request outcomes,
+  token counts by source, dispatch lag, phases, scrape and receiver health,
+  and the exporter's own health; engine series and spans Stormlog collected
+  are never re-exposed. Every series is created when the run starts, so a
+  matrix over `--prometheus-max-series` (50,000 samples) or
+  `--prometheus-max-bytes` (16 MiB) exits 2 before anything is sent, as does
+  a `--prometheus-slot` another live run holds. The exporter closes before
+  the capability records, so its `export.prometheus` record holds final
+  counts. See `docs/inference_export.md`.
 - `stormlog.scrub`, shared scrubbing primitives for what Stormlog records or
   sends elsewhere: `redact_url` (moved from `stormlog.infer.cache_state`,
   which still exports it) with a new `origin_only` mode; `KnownSecrets`,

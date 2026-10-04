@@ -106,6 +106,9 @@ For server memory, run `stormlog infer collect-server` on the serving host,
 pass the same `--run-id` to `infer profile`, and import the collector JSONL with
 `infer analyze --server-telemetry`. The guide explains the direct-route and
 clock evidence required before a server sample enters a case report.
+To feed Prometheus while a profile runs, add `--prometheus-listen HOST:PORT`
+or `--prometheus-textfile-dir DIR`; see
+[Exporting inference metrics](inference_export.md).
 
 ### Watch a vLLM server for incidents
 
