@@ -1,5 +1,6 @@
 """OTLP export settings: headers, resource attributes, and what a request adds."""
 
+import base64
 from typing import Any
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from stormlog.infer.export_config import ExportConfig
 from stormlog.infer.export_otlp import (
     OtlpExport,
+    header_secrets,
     parse_pairs,
     resolve_headers,
     resolve_resource,
@@ -124,6 +126,28 @@ def test_header_values_join_the_known_secrets() -> None:
     otlp = _otlp()
     assert otlp.spans.secrets.found_in("leaked secret-header-value")
     assert otlp.headers == {"x-api-key": "secret-header-value"}
+
+
+@pytest.mark.parametrize(
+    ("value", "credentials"),
+    [
+        ("Bearer otlpTOKEN0123456789", ["otlpTOKEN0123456789"]),
+        ("ApiKey otlpKEY0123456789", ["otlpKEY0123456789"]),
+        (
+            "Basic " + base64.b64encode(b"svc-user:otlpPASS0123456789").decode(),
+            ["svc-user:otlpPASS0123456789", "svc-user", "otlpPASS0123456789"],
+        ),
+    ],
+)
+def test_a_credential_after_an_auth_scheme_is_a_secret_on_its_own(
+    value: str, credentials: list[str]
+) -> None:
+    # A collector's auth error often echoes only the token.
+    secrets = KnownSecrets()
+    for part in header_secrets(value):
+        secrets.add(part)
+    for credential in credentials:
+        assert secrets.found_in(f"unknown credential {credential}"), credential
 
 
 def test_a_request_adds_only_what_was_consented() -> None:

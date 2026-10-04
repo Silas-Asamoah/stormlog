@@ -15,6 +15,7 @@ out is listed by name, without its value, in the capability record.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import re
@@ -123,6 +124,36 @@ def resolve_headers(flags: Sequence[str], environ: Mapping[str, str]) -> dict[st
     return headers
 
 
+# An HTTP auth scheme, as in "Bearer <token>".
+_AUTH_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9._-]*\Z")
+
+
+def header_secrets(value: str) -> list[str]:
+    """The parts of a header value that may be credentials, for ``KnownSecrets``.
+
+    The value; after an auth scheme (``Bearer <token>``, ``ApiKey <key>``),
+    the credential on its own, since a collector's auth error often echoes
+    only that; and for ``Basic``, the decoded ``user:password`` pair, the
+    user and the password, as ``url_secrets`` gives for a URL.
+    """
+    found = [value]
+    scheme, _, credential = value.strip().partition(" ")
+    credential = credential.strip()
+    if not (credential and _AUTH_SCHEME.match(scheme)):
+        return found
+    found.append(credential)
+    if scheme.lower() == "basic":
+        try:
+            decoded = base64.b64decode(credential, validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return found
+        user, separator, password = decoded.partition(":")
+        found.extend(part for part in (decoded, user) if part)
+        if separator and password:
+            found.append(password)
+    return found
+
+
 def resolve_resource(
     base: Attributes,
     *,
@@ -189,7 +220,8 @@ class OtlpExport:
         self.on_warning = on_warning
         self.headers = resolve_headers(config.otlp_headers, environ)
         for value in self.headers.values():
-            secrets.add(value)
+            for part in header_secrets(value):
+                secrets.add(part)
         self.spans = ProfileSpans(identity, secrets)
         base: Attributes = (
             ("service.name", "stormlog"),
