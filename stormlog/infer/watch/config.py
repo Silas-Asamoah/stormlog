@@ -36,6 +36,7 @@ from .evaluate import (
     KIND_HEALTH,
     KIND_METRIC,
     KIND_SIGNAL,
+    HistoryPredicate,
     TriggerSpec,
 )
 from .predicates import (
@@ -280,7 +281,7 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
         raise InferUsageError("export must be an object")
     settings = _trigger_settings(payload)
     specs = tuple(_trigger(t, tick, engine) for t in settings)
-    _check_triggers(specs, history_seconds)
+    _check_triggers(specs, history_seconds, tick)
     return WatchConfig(
         base_url=base_url,
         metrics_url=metrics_url,
@@ -585,23 +586,19 @@ def _completion_recorded(settings: Mapping[str, Any]) -> bool:
     return any(family.startswith(prefix) for prefix in _COMPLETION_FAMILIES)
 
 
-def _check_triggers(specs: Sequence[TriggerSpec], history_seconds: float) -> None:
+def _check_triggers(
+    specs: Sequence[TriggerSpec], history_seconds: float, tick: float
+) -> None:
     ids = [spec.trigger_id for spec in specs]
     if len(ids) != len(set(ids)):
         raise InferUsageError("trigger ids must be unique")
     for spec in specs:
         if spec.sustain.window > history_seconds:
-            default = spec.trigger_id in _DEFAULT_HEALTH_IDS
             raise InferUsageError(
                 f"trigger {spec.trigger_id}: window_seconds is longer than "
-                "history.seconds"
-                + (
-                    " (a default health trigger: raise history.seconds, give a "
-                    "trigger of that id, or set default_health_triggers to false)"
-                    if default
-                    else ""
-                )
+                "history.seconds" + _default_hint(spec)
             )
+        _check_tail(spec, history_seconds, tick)
         if spec.kind not in (KIND_METRIC, KIND_SIGNAL, KIND_HEALTH):
             raise InferUsageError(
                 f"trigger {spec.trigger_id}: kind {spec.kind!r} is not available yet"
@@ -610,6 +607,30 @@ def _check_triggers(specs: Sequence[TriggerSpec], history_seconds: float) -> Non
             raise InferUsageError(
                 f"trigger {spec.trigger_id}: deep capture is not available yet"
             )
+
+
+def _check_tail(spec: TriggerSpec, history_seconds: float, tick: float) -> None:
+    """A health trigger that reads more scrapes than the history holds could
+    never be judged; at 10**19 its count crashed the watch with exit 1."""
+    predicate = spec.predicate
+    if not isinstance(predicate, HistoryPredicate):
+        return
+    held = int(history_seconds / tick + 1e-9)
+    if predicate.tail_scrapes > held:
+        raise InferUsageError(
+            f"trigger {spec.trigger_id}: it reads {predicate.tail_scrapes} "
+            f"scrapes, more than history.seconds holds at tick_seconds ({held})"
+            + _default_hint(spec)
+        )
+
+
+def _default_hint(spec: TriggerSpec) -> str:
+    if spec.trigger_id not in _DEFAULT_HEALTH_IDS:
+        return ""
+    return (
+        " (a default health trigger: raise history.seconds, give a "
+        "trigger of that id, or set default_health_triggers to false)"
+    )
 
 
 __all__ = [

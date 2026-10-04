@@ -88,8 +88,10 @@ under 0.05 s, a tick or scrape timeout over an hour, a history, incident
 window or trigger time over seven days, a `max_age_hours` over ten years,
 a server URL that is not http or https with a host, or
 contradictory settings (a hold shorter than its window, a window longer
-than the history, or `pre_seconds` plus `post_seconds` longer than the
-history, which the seal reads both windows from) are refused with exit 2,
+than the history, a health trigger that reads more scrapes than the
+history holds at the tick, or `pre_seconds` plus `post_seconds` longer
+than the history, which the seal reads both windows from) are refused with
+exit 2,
 before anything is created under the root; a file that cannot be read, or
 is not a version-1 watch config, exits 5.
 
@@ -150,7 +152,9 @@ leave every window trigger judged on fewer scrapes; the share reports them.
 A config that lists its own `triggers` keeps the three health triggers
 beside them, so the watch never loses sight of its own scraper: give a
 trigger the same id to replace one, or set `"default_health_triggers":
-false` to drop them. The share needs `history.seconds` of at least 60.
+false` to drop them. The share needs `history.seconds` of at least 60,
+and of at least 60 ticks: with the default 600 s history, a tick over 10 s
+needs a longer history.
 The `export` section belongs to the exporter (#220) and is passed through.
 
 A server running several engines (vLLM's data parallelism) labels each
@@ -284,7 +288,8 @@ returns.
 
 ### Test triggers
 
-`--test-trigger every=SECONDS` fires a `test` incident on that period;
+`--test-trigger every=SECONDS` fires a `test` incident on that period (at
+most seven days, or the command exits 2);
 `--test-trigger file` fires one whenever `<root>/test-trigger` appears,
 records the file's mtime as `requested_at_ns`, and deletes it. Test
 incidents follow the same limits as any other and never count toward the

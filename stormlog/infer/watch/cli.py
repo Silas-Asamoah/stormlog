@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import InferUsageError
-from .config import load_watch_config
+from .config import MAX_SPAN_SECONDS, load_watch_config
 from .watcher import Watcher, WatchOptions, WatchOutcome
 
 HELP = "Watch a vLLM server and record its incidents"
@@ -188,9 +188,11 @@ def _test_trigger(value: str | None) -> tuple[float | None, bool]:
             seconds = float(value[len(prefix) :])
         except ValueError:
             seconds = 0.0
-        if math.isfinite(seconds) and seconds > 0:
+        if math.isfinite(seconds) and 0 < seconds <= MAX_SPAN_SECONDS:
             return seconds, False
-    raise InferUsageError("--test-trigger must be every=SECONDS or file")
+    raise InferUsageError(
+        f"--test-trigger must be every=SECONDS (at most {MAX_SPAN_SECONDS:g}) or file"
+    )
 
 
 __all__ = ["add_watch_parser", "cmd_watch"]

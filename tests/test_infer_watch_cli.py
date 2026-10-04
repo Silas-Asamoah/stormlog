@@ -129,6 +129,8 @@ def test_a_second_watcher_on_a_root_exits_two(tmp_path: Path) -> None:
         ("--base-url", "http://127.0.0.1:9", "--interval", "nan"),
         ("--base-url", "http://127.0.0.1:9", "--interval", "1e-12"),
         ("--base-url", "http://127.0.0.1:9", "--test-trigger", "every=inf"),
+        # Finite but absurd: it crashed with exit 1.
+        ("--base-url", "http://127.0.0.1:9", "--test-trigger", "every=1e300"),
         ("--base-url", "ftp://127.0.0.1:9"),
         ("--base-url", "not a url"),
     ],
