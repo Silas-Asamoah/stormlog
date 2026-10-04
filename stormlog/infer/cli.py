@@ -612,6 +612,15 @@ def _add_arrival_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--stop-file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "End the measured window when PATH appears, as if --duration had "
+            "run out: arrivals stop, the drain runs and the run completes"
+        ),
+    )
+    parser.add_argument(
         "--overflow",
         choices=["wait", "drop"],
         default=None,
@@ -882,6 +891,7 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         max_in_flight=128 if args.max_in_flight is None else int(args.max_in_flight),
         overflow=args.overflow or "wait",
         drain_timeout_seconds=args.drain_timeout,
+        stop_file=args.stop_file,
         prompt_mode=args.prompt_mode,
         shared_prefix_ratio=args.shared_prefix_ratio,
         prefix_groups=args.prefix_groups,

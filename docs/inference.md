@@ -149,10 +149,19 @@ when requests were actually sent.
 | --- | --- |
 | Limited by `--duration` | The duration |
 | Counted with `--requests` | One whole slot after the last scheduled arrival: the next offset the schedule would have produced |
+| Ended early by `--stop-file` | When the file was seen; its scheduled arrivals are those due by then |
 
 With a count, two requests at 10/s span 0.2 s, not the 0.1 s between their
 arrivals, and a Poisson count gives the usual N/T_N rate. A replay without
 `--duration`, and a closed loop, have no scheduled endpoint (`null`).
+
+`--stop-file PATH` ends the measured window early, cleanly, when `PATH`
+appears: no later arrival is sent, the drain runs from that moment as it
+would at the end of `--duration`, and the run completes with its post-run
+imports. The phase's record says `stopped_early: true`, and its window ends
+when the file was seen. It is for a caller that only knows at run time how
+long it needs the load, such as #221's qualification victim; a run stopped
+with Ctrl+C is instead recorded as interrupted.
 
 A Python caller can follow the phases as they run:
 `InferenceProfiler(config, on_phase=callback)` calls `callback` with a
