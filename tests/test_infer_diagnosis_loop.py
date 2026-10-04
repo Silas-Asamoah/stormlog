@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from stormlog.infer import diagnosis_loop
 from stormlog.infer.diagnosis_loop import (
     ATTRIBUTION_HOST,
     ATTRIBUTION_HOST_OR_GPU,
@@ -25,10 +26,14 @@ from stormlog.infer.diagnosis_loop import (
     REASON_TOO_FEW_STEPS,
     REASON_WRITER_ERRORS,
     LoopGapConfig,
+    Stall,
     engine_loop_gap,
     pause_intervals,
 )
-from stormlog.infer.diagnosis_thresholds import LOOP_STALL_FACTOR
+from stormlog.infer.diagnosis_thresholds import (
+    LOOP_BASELINE_WINDOW_NS,
+    LOOP_STALL_FACTOR,
+)
 from stormlog.infer.vllm_hook.writer import EpochWriter, WriterLimits
 from tests.vllm_execution_helpers import (
     SECOND,
@@ -643,24 +648,44 @@ def test_async_late_schedule_call_is_a_host_stall() -> None:
     assert signal.detail["locus"] == LOCUS_BETWEEN_STEPS
 
 
-def _fastest(records: list[dict[str, Any]], runs: int = 2) -> float:
-    times = []
-    for _ in range(runs):
-        started = time.perf_counter()
-        engine_loop_gap(records)
-        times.append(time.perf_counter() - started)
-    return min(times)
+def _baseline_work(
+    monkeypatch: pytest.MonkeyPatch, records: list[dict[str, Any]]
+) -> tuple[int, int]:
+    """How many stalls were ranked against a limit, and the most cadences
+    one baseline read."""
+    ranked: list[Stall] = []
+    read: list[int] = []
+    limit, middle = diagnosis_loop._limit, diagnosis_loop.median
+
+    def counted_limit(stall: Stall, *args: Any) -> Any:
+        ranked.append(stall)
+        return limit(stall, *args)
+
+    def counted_median(values: list[float]) -> float:
+        read.append(len(values))
+        return middle(values)
+
+    # A 5 s window holds 1,001 of the loop's 5 ms cadences, both ends included.
+    config = LoopGapConfig(thresholds={LOOP_BASELINE_WINDOW_NS: 5e9})
+    with monkeypatch.context() as patch:
+        patch.setattr(diagnosis_loop, "_limit", counted_limit)
+        patch.setattr(diagnosis_loop, "median", counted_median)
+        assert engine_loop_gap(records, config).exceeds is True
+    return len(ranked), max(read)
 
 
-def test_a_long_window_is_evaluated_in_linear_time() -> None:
-    """Four times the steps take about four times as long, never the
-    sixteen a quadratic search would: a ratio, so a loaded machine does not
-    fail it."""
+def test_a_long_window_is_evaluated_in_linear_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a stall that could reach a limit is ranked, and each baseline
+    reads only its window, so four times the steps rank as many stalls
+    and read as many cadences: the rest is one pass over the steps.
+    Counted, not timed, so a loaded machine cannot fail it."""
     short = _loop(5_000, stall_after=4_900, stall_ns=200 * MS)
     long = _loop(20_000, stall_after=19_900, stall_ns=200 * MS)
 
-    assert engine_loop_gap(long).exceeds is True
-    assert _fastest(long) < 8 * _fastest(short)
+    assert _baseline_work(monkeypatch, short) == (1, 1_001)
+    assert _baseline_work(monkeypatch, long) == (1, 1_001)
 
 
 def test_a_long_prefill_step_is_not_measured_against_decode_steps() -> None:
