@@ -206,7 +206,10 @@ engines that must recover in every seed.
 | I1 | the capture started and stopped |
 | W1, P, N | A.4's column is empty: realized when the action took place |
 
-Each check is recorded with its value, and whether it gates. A type with no
+Each check is judged over the effect and the whole action (to
+`Actions.action_end_ns`): a twin leaves the signals alone, so its effect
+window is empty, but its neighbor runs on. Each check is recorded with its
+value, and whether it gates. A type with no
 rule, a typo such as `F4A` or the outages X1–X3 (judged by C.6's own
 criteria), raises `KeyError` rather than passing vacuously.
 

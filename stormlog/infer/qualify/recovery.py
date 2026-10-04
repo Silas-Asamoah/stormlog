@@ -127,10 +127,12 @@ class Actions:
     """The injector's own times, on the victim's clock. ``slot_ns`` is a
     null run's scheduled slot (N). ``peer_wait_extended`` says whether the
     other rank's NCCL kernels lengthened during an F5 pulse, from Nsight
-    (C.6); None means it wasn't measured."""
+    (C.6); None means it wasn't measured. ``action_end_ns`` is when the
+    injector's action ended, the neighbor's last request included."""
 
     first_send_ns: int | None = None
     first_admission_ns: int | None = None
+    action_end_ns: int | None = None
     first_stop_confirmed_ns: int | None = None
     last_continue_ns: int | None = None
     capture_started_ns: int | None = None
@@ -718,8 +720,12 @@ def added_mechanisms(episode_type: str, checks: Sequence[Check]) -> tuple[str, .
 
 
 def _window_of(context: Context, timing: Timing) -> tuple[int, int]:
+    """Realization is judged over the effect and the whole action: a twin
+    leaves the signals alone, so its effect window is empty, but its action
+    runs on."""
     end = timing.end_ns if timing.end_ns is not None else context.until_ns
-    return context.start_ns, end
+    action_end = context.actions.action_end_ns
+    return context.start_ns, max(end, action_end if action_end is not None else end)
 
 
 def _victim_preemptions(context: Context, timing: Timing) -> int:
