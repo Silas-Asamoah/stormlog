@@ -507,9 +507,11 @@ reader:
   client records.
 - **`request_spans`** takes each finished victim request's send and end from
   the same records, and `merge_spans` makes them the in-flight intervals
-  that busy-time cadence needs (`Signals.in_flight`). A request still in
-  flight counts once it ends, so it can delay a recovery, never hasten one.
-  The victim artifact is read incrementally for both.
+  that busy-time cadence needs (`Signals.in_flight`). A victim request the
+  engine admitted (its `alias`) that hasn't finished yet is in flight from
+  its admission to the latest poll: a request stuck in a stall is busy
+  time, so a stall still open at the poll is seen. The victim artifact is
+  read incrementally.
 
 `ReferenceChannel.signals()` returns them as the `Signals` that
 `stormlog.infer.qualify.recovery` reads.
