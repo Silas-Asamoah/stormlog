@@ -889,6 +889,40 @@ def test_a_bundle_being_read_is_skipped_when_making_room(tmp_path: Path) -> None
     assert [m.incident_id for _p, m in store.bundles()] == [held, kept]
 
 
+def test_a_bundle_a_reader_takes_while_room_is_made_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader can take a bundle after the store chose what to remove and
+    before it removes it. Deferred then, it would be removed later too."""
+    store = IncidentStore(
+        tmp_path, _limits(max_total_bytes=10 * KIB, max_incident_bytes=4 * KIB)
+    )
+    base = time.time_ns()
+    taken, nxt, kept = (
+        _gen0_exact(store, b"x" * 3 * KIB, now_ns=base + i) for i in range(3)
+    )
+    pins: list[int] = []
+    real_removable = store._removable
+
+    def reader_arrives(protected: frozenset[str]) -> Any:
+        chosen = real_removable(protected)
+        pins.append(store_module._pin(chosen[0][0]))  # the oldest, now read
+        return chosen
+
+    monkeypatch.setattr(store, "_removable", reader_arrives)
+    try:
+        writer = store.new_bundle(store.new_incident_id(), 3 * KIB)
+        assert writer is not None
+        assert [p.incident_id for p in store.take_pruned()] == [nxt]
+        assert store.deferred == 0
+    finally:
+        for fd in pins:
+            os.close(fd)
+    writer.abandon()
+    assert store.reclaim_deferred() == 0
+    assert [m.incident_id for _p, m in store.bundles()] == [taken, kept]
+
+
 def _gen0_exact(store: IncidentStore, payload: bytes, *, now_ns: int) -> str:
     incident_id = store.new_incident_id(now_ns)
     writer = store.new_bundle(incident_id, len(payload))
