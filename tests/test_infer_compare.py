@@ -986,6 +986,60 @@ def test_more_failures_in_the_candidate_is_worse() -> None:
     assert "0 of 6 candidate runs within 0.01 of the block baseline" in line
 
 
+def _fraction_values(runs: list[RunSummary]) -> list[Any]:
+    metric = next(
+        m for m in default_metrics(_case(100.0)) if m.name == "failure_fraction"
+    )
+    return [metric.read(run.report["cases"][CASE])[0] for run in runs]
+
+
+def test_compare_values_and_compare_runs_agree_on_a_baseline_without_a_value() -> None:
+    # rev-213-a's D6, as the lead ruled: a baseline that ran but whose value
+    # is unmeasurable makes its block's candidate run a miss in both; a
+    # baseline outcome failure is control_failed in both.
+    from stormlog.infer.comparison_stats import compare_values
+
+    baseline, candidate = _arms(SAME)
+    _served(baseline, 1000, [2] * 6)
+    _served(candidate, 1000, [2] * 6)
+    del baseline[0].report["cases"][CASE]["population"]["offered"]
+    gate = FAILURE_GATE[0][1]
+    blocks = [str(i) for i in range(6)]
+
+    def direct(unavailable: str | None = None) -> Any:
+        return compare_values(
+            "failure_fraction",
+            _fraction_values(baseline),
+            _fraction_values(candidate),
+            direction="lower_is_better",
+            scale="difference",
+            unit="fraction",
+            blocks=(blocks, blocks),
+            trials=([None] + [1000] * 5, [1000] * 6),
+            gate=gate,
+            unavailable=unavailable,
+        ).gate
+
+    runs = compare_runs(baseline, candidate, ComparisonSpec(gates=FAILURE_GATE))
+    by_runs = runs.cases[CASE]["metrics"]["failure_fraction"].gate
+    by_values = direct()
+    for found in (by_runs, by_values):
+        assert found is not None and found.status == "fail"
+        assert found.claim is not None and found.claim["runs_within_budget"] == 5
+
+    failed = [
+        _run("baseline", 0, BASE_E2E[0], started=0, status="running"),
+        *baseline[1:],
+    ]
+    _served(failed, 1000, [2] * 6)
+    runs = compare_runs(failed, candidate, ComparisonSpec(gates=FAILURE_GATE))
+    by_runs = runs.cases[CASE]["metrics"]["failure_fraction"].gate
+    by_values = direct("control_failed")
+    for found in (by_runs, by_values):
+        assert found is not None
+        assert (found.status, found.reason) == ("not_evaluable", "control_failed")
+
+
 def test_a_fraction_gate_needs_enough_requests_in_every_run() -> None:
     # 100 requests per run: one failure is a whole point, past a 1% budget.
     baseline, candidate = _arms(SAME)
