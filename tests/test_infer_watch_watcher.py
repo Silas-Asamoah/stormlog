@@ -755,6 +755,62 @@ def test_a_second_signal_cuts_the_shutdown_short_and_keeps_the_root(
     watcher.close()
 
 
+def _stall_store(watcher: Watcher) -> threading.Event:
+    stall = threading.Event()
+
+    def stalled_close(timeout: float) -> bool:
+        stall.wait(timeout)
+        return False
+
+    watcher._store_worker.close = stalled_close  # type: ignore[method-assign,assignment]
+    return stall
+
+
+def _slow_ledger(watcher: Watcher, seconds: float) -> None:
+    real_close = watcher.ledger.close
+
+    def slow_close(timeout: float) -> bool:
+        time.sleep(min(seconds, timeout))
+        return seconds <= timeout and real_close(timeout)
+
+    watcher.ledger.close = slow_close  # type: ignore[method-assign]
+
+
+@pytest.mark.parametrize("hurried", [False, True])
+def test_a_stalled_store_leaves_the_ledger_its_share(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hurried: bool
+) -> None:
+    """The store's writer gets two thirds of the shutdown, and of a hurry,
+    and the ledger the rest. After a hurry a stalled store took all of it,
+    so the ledger, closing in a few hundred ms, was cut off and reported
+    as ledger_close_timeout; the even split was never tested."""
+    from stormlog.infer.watch import watcher as watcher_module
+
+    monkeypatch.setattr(watcher_module, "FAST_EXIT_SECONDS", 1.5)
+    with serve_metrics(FakeMetrics()) as base_url:
+        watcher = Watcher(
+            resolve_watch_config(watch_config(base_url)),
+            tmp_path,
+            # 1.5 s for the ledger without a hurry, 0.5 s after one.
+            options=WatchOptions(shutdown_deadline_seconds=6.0 if not hurried else 30),
+        )
+        stall = _stall_store(watcher)
+        _slow_ledger(watcher, 0.3 if hurried else 0.75)
+
+        async def main() -> WatchOutcome:
+            stop = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            loop.call_later(0.3, stop.set)
+            if hurried:
+                loop.call_later(0.5, watcher.hurry)
+            return await watcher.run(stop)
+
+        outcome = asyncio.run(main())
+        stall.set()
+    assert outcome.unsound == ["store_writer_timeout"]
+    watcher.close()
+
+
 @pytest.mark.parametrize("exporting", [False, True])
 def test_export_failures_are_null_without_an_exporter(
     tmp_path: Path, exporting: bool
