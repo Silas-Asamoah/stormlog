@@ -8,6 +8,7 @@ import math
 import os
 import signal
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,9 @@ def cmd_watch(args: argparse.Namespace) -> int:
         api_key=_api_key(args.api_key_env),
     )
     watcher = Watcher(config, Path(args.root), options=options)
+    # The watch leaves SIGINT and SIGTERM ignored: the process is about to
+    # exit with the code its report holds, and a late signal must not turn
+    # that into an interrupt.
     outcome = asyncio.run(_run(watcher))
     if outcome.report_path is not None:
         print(f"Watch report: {outcome.report_path}")
@@ -88,22 +92,55 @@ def cmd_watch(args: argparse.Namespace) -> int:
     return outcome.exit_code
 
 
+_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+
+
 async def _run(watcher: Watcher) -> WatchOutcome:
-    """Run until done; the first SIGINT or SIGTERM is the documented end."""
+    """Run until done: the first SIGINT or SIGTERM is the documented end, a
+    second cuts the shutdown short, and a third is the default interrupt.
+    Once the watch has returned, both are ignored for good, so the exit code
+    stays the one the report holds."""
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
-    installed = []
-    for signum in (signal.SIGINT, signal.SIGTERM):
+    installed: list[signal.Signals] = []
+    received: list[int] = []
+
+    def on_signal(signum: int) -> None:
+        received.append(signum)
+        if len(received) == 1:
+            stop.set()
+            return
+        watcher.hurry()
+        for installed_signum in installed:  # a third is the default interrupt
+            loop.remove_signal_handler(installed_signum)
+
+    for signum in _SIGNALS:
         try:
-            loop.add_signal_handler(signum, stop.set)
+            loop.add_signal_handler(signum, on_signal, signum)
             installed.append(signum)
         except (NotImplementedError, RuntimeError):
             pass
     try:
         return await watcher.run(stop)
     finally:
+        _ignore(loop, installed)
+
+
+def _ignore(
+    loop: asyncio.AbstractEventLoop, installed: Sequence[signal.Signals]
+) -> None:
+    """Swap the loop's handlers for SIG_IGN with the signals blocked, so none
+    can arrive in between and find the default interrupt."""
+    block = getattr(signal, "pthread_sigmask", None)
+    if block is not None:
+        block(signal.SIG_BLOCK, installed)
+    try:
         for signum in installed:
             loop.remove_signal_handler(signum)
+            signal.signal(signum, signal.SIG_IGN)
+    finally:
+        if block is not None:
+            block(signal.SIG_UNBLOCK, installed)
 
 
 def _api_key(name: str | None) -> str | None:

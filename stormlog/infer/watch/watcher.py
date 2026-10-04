@@ -19,8 +19,12 @@ the first's, is refused before it writes anything.
 
 The watch ends when its duration elapses or on SIGINT or SIGTERM, the
 documented way to stop it. It seals open incidents as interrupted, waits for
-its writers within one shutdown deadline, writes ``report.json`` and returns
-the exit code: 1 when the watch could not judge or keep what it saw (no
+its writers within one shutdown deadline (the store's writer gets two thirds
+of it, the ledger the rest), writes ``report.json`` and returns the exit
+code. A second signal (:meth:`Watcher.hurry`) cuts what is left of the
+shutdown to ``FAST_EXIT_SECONDS``. A writer that misses its time is left
+behind on a daemon thread, and the root and store stay locked, since it may
+still write there. The exit code is 1 when the watch could not judge or keep what it saw (no
 successful scrape, a failing ledger, every incident write failing) or could
 not write its report; else 3 when a counting incident was detected; else 0.
 """
@@ -30,9 +34,11 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import os
+import threading
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +83,8 @@ from .store import IncidentStore, PrunedBundle, StoreInUse
 from .triggers import EVENT_FIRED, VIOLATING
 
 REPORT_KIND = "inference_watch"
+# After a second stop signal, at most this long more before the report.
+FAST_EXIT_SECONDS = 5.0
 LOCK_FILENAME = ".watch.lock"
 TEST_TRIGGER_FILE = "test-trigger"
 CONTROL_POLL_SECONDS = 0.1
@@ -182,6 +190,9 @@ class Watcher:
         self._engine_required: set[str] = set()
         self._lag_max = 0.0
         self._next_test: int | None = None
+        # Set by a second stop signal; the loop time it came at.
+        self._hurried: asyncio.Event | None = None
+        self._hurried_at: float | None = None
         # The ring's evictions already added to history_evictions_total.
         self._evictions_counted: dict[str, int] = dict.fromkeys(EVICTION_CAUSES, 0)
 
@@ -190,6 +201,7 @@ class Watcher:
     async def run(self, stop: asyncio.Event) -> WatchOutcome:
         """Watch until the duration elapses or ``stop`` is set."""
         self._loop = asyncio.get_running_loop()
+        self._hurried = asyncio.Event()
         recovery = self.store.recover()
         self._session("started", {"recovery": recovery.__dict__})
         self._prune()
@@ -491,19 +503,25 @@ class Watcher:
 
     # ------------------------------------------------------------ shutdown
 
+    def hurry(self) -> None:
+        """A second stop signal: finish the shutdown within FAST_EXIT_SECONDS."""
+        if self._loop is None or self._hurried is None or self._hurried.is_set():
+            return
+        self._hurried_at = self._loop.time()
+        self._hurried.set()
+
     async def _shutdown(self) -> WatchOutcome:
         loop = asyncio.get_running_loop()
-        budget = self.options.shutdown_deadline_seconds
-        ends = loop.time() + budget
+        ends = loop.time() + self.options.shutdown_deadline_seconds
         self.incidents.close(self.clock.mono_ns())
-        drained = await asyncio.to_thread(
-            self._store_worker.close, max(0.0, ends - loop.time() - 5.0)
+        drained = await self._wait_closed(
+            self._store_worker.close, (ends - loop.time()) * 2 / 3
         )
         await asyncio.sleep(0)  # run the seals' bookkeeping posted to the loop
         unsound = self._unsound(drained)
         exit_code = self._exit_code(unsound)
         self._session("ended", {"exit_code": exit_code, "unsound": list(unsound)})
-        closed = await asyncio.to_thread(
+        closed = await self._wait_closed(
             self.ledger.close, max(0.5, ends - loop.time() - 0.5)
         )
         # Known only once the ledger is closed, so not in its "ended" record.
@@ -520,8 +538,28 @@ class Watcher:
                 int(ExitCode.ERROR), None, unsound, self.incidents.sealed
             )
         finally:
-            self.close()
+            # A store writer left behind may still write under the root.
+            if drained:
+                self.close()
         return WatchOutcome(exit_code, path, unsound, self.incidents.sealed)
+
+    async def _wait_closed(
+        self, close: Callable[[float], bool], timeout: float
+    ) -> bool:
+        """``close(timeout)`` on a daemon thread; after a second stop signal,
+        waited for only until FAST_EXIT_SECONDS after it."""
+        assert self._loop is not None and self._hurried is not None
+        result = asyncio.ensure_future(_on_daemon(partial(close, max(0.0, timeout))))
+        hurried = asyncio.ensure_future(self._hurried.wait())
+        try:
+            await asyncio.wait({result, hurried}, return_when=asyncio.FIRST_COMPLETED)
+            if not result.done():
+                assert self._hurried_at is not None
+                left = self._hurried_at + FAST_EXIT_SECONDS - self._loop.time()
+                await asyncio.wait({result}, timeout=max(0.0, left))
+        finally:
+            hurried.cancel()
+        return result.done() and bool(result.result())
 
     def close(self) -> None:
         """Let another watcher own the root; the watch is over."""
@@ -716,6 +754,30 @@ def _seconds(target_ns: int, clock: WatchClock) -> float:
     return max(0.0, (target_ns - clock.mono_ns()) / _NS)
 
 
+async def _on_daemon(func: Callable[[], bool]) -> bool:
+    """``func`` on a daemon thread, which a caller that stops waiting leaves
+    behind without holding the process open."""
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[bool] = loop.create_future()
+
+    def deliver(value: bool) -> None:
+        if not future.done():
+            future.set_result(value)
+
+    def run() -> None:
+        try:
+            value = func()
+        except Exception:
+            value = False  # it did not finish cleanly
+        try:
+            loop.call_soon_threadsafe(deliver, value)
+        except RuntimeError:
+            pass  # the loop is closed: nobody is waiting
+
+    threading.Thread(target=run, name="stormlog-watch-close", daemon=True).start()
+    return await future
+
+
 async def _relay(stop: asyncio.Event, ending: asyncio.Event) -> None:
     await stop.wait()
     ending.set()
@@ -746,4 +808,11 @@ def _write_ready(path: Path, session_id: str) -> None:
         pass
 
 
-__all__ = ["LOCK_FILENAME", "REPORT_KIND", "WatchOptions", "WatchOutcome", "Watcher"]
+__all__ = [
+    "FAST_EXIT_SECONDS",
+    "LOCK_FILENAME",
+    "REPORT_KIND",
+    "WatchOptions",
+    "WatchOutcome",
+    "Watcher",
+]

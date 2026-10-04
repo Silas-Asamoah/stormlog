@@ -698,3 +698,57 @@ def test_due_incidents_are_sealed_before_a_tick_s_firings_are_admitted(
     assert fired
     for at in fired:
         assert calls.index(("seal", at)) < calls.index(("fire", at))
+
+
+def test_a_short_shutdown_deadline_still_drains_a_quiet_watch(tmp_path: Path) -> None:
+    """The store's writer got the deadline less 5 s: with 5 s or less it got
+    nothing, and a quiet watch ended unsound."""
+    with serve_metrics(FakeMetrics()) as base_url:
+        outcome = _watch(
+            tmp_path,
+            watch_config(base_url),
+            options=WatchOptions(duration_seconds=0.5, shutdown_deadline_seconds=2.0),
+        )
+    assert (outcome.exit_code, outcome.unsound) == (0, [])
+
+
+def test_a_second_signal_cuts_the_shutdown_short_and_keeps_the_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second Ctrl+C was ignored: a stalled store writer held the watch
+    for the whole 30 s deadline. After a hurry it waits FAST_EXIT_SECONDS
+    at most; the root stays locked, since the writer left behind may still
+    write there."""
+    from stormlog.infer.watch import watcher as watcher_module
+
+    monkeypatch.setattr(watcher_module, "FAST_EXIT_SECONDS", 0.3)
+    with serve_metrics(FakeMetrics()) as base_url:
+        watcher = Watcher(
+            resolve_watch_config(watch_config(base_url)),
+            tmp_path,
+            options=WatchOptions(shutdown_deadline_seconds=30.0),
+        )
+        stall = threading.Event()
+
+        def stalled_close(timeout: float) -> bool:
+            stall.wait(timeout)
+            return False
+
+        watcher._store_worker.close = stalled_close  # type: ignore[method-assign,assignment]
+
+        async def main() -> WatchOutcome:
+            stop = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            loop.call_later(0.5, stop.set)
+            loop.call_later(0.8, watcher.hurry)
+            return await watcher.run(stop)
+
+        started = time.monotonic()
+        outcome = asyncio.run(main())
+        elapsed = time.monotonic() - started
+        stall.set()
+    assert elapsed < 3.0
+    assert "store_writer_timeout" in outcome.unsound
+    with pytest.raises(InferUsageError, match="another watcher"):
+        Watcher(resolve_watch_config(watch_config(base_url)), tmp_path)
+    watcher.close()
