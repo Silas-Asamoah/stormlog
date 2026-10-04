@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 
 from stormlog.infer.compatibility import (
-    REQUIRED_V1,
     RunField,
     classify,
     compatible,
@@ -29,6 +28,11 @@ def _field(value: Any, provenance: str = "observed") -> RunField:
     return RunField(value, "test", provenance)
 
 
+def _leaf(value: Any) -> RunField:
+    """A /server_info leaf: null there is a setting, not missing evidence."""
+    return RunField(value, "/server_info", "reported", null_is_value=True)
+
+
 def _run(**overrides: Any) -> dict[str, RunField]:
     fields = {
         "model.weights_digest": _field("w" * 64),
@@ -38,11 +42,13 @@ def _run(**overrides: Any) -> dict[str, RunField]:
         "gpu.uuids": _field(["GPU-aaaa"]),
         "workload.spec_digest": _field("s" * 64),
         "workload.realization_digest": _field("r1"),
-        "vllm_config/scheduler_config/max_num_seqs": _field(256, "reported"),
-        "vllm_config/parallel_config/master_port": _field(29501, "reported"),
-        "vllm_config/model_config/hf_token": _field(
-            redacted("/model_config/hf_token"), "reported"
-        ),
+        "scope.vllm_config": _field(True, "reported"),
+        "scope.environ": _field(True),
+        "vllm_config/scheduler_config/max_num_seqs": _leaf(256),
+        "vllm_config/parallel_config/master_port": _leaf(29501),
+        "vllm_config/model_config/quantization": _leaf(None),
+        "vllm_config/model_config/hf_token": _leaf(redacted("/model_config/hf_token")),
+        "environ.CUDA_VISIBLE_DEVICES": _field("0"),
         "observer.vllm_metrics": _field(None),
         "experiment.arm": _field("control"),
     }
@@ -127,10 +133,105 @@ def test_a_required_field_unknown_on_either_or_both_sides_is_unverified() -> Non
 
 
 def test_two_redacted_values_are_never_equal() -> None:
-    result = compatible(_run(), _run())
-    assert "vllm_config/model_config/hf_token" in result.unknown
-    required = (*REQUIRED_V1, "vllm_config/model_config/hf_token")
-    assert compatible(_run(), _run(), required=required).status == "unverified"
+    hidden = redacted("/load_config/model_loader_extra_config")
+    run = _run(vllm_config__load_config__model_loader_extra_config=_leaf(hidden))
+    result = compatible(run, run)
+    assert result.status == "unverified"
+    (item,) = result.unverified
+    assert (item.name, item.reason) == (
+        "vllm_config/load_config/model_loader_extra_config",
+        "unknown",
+    )
+
+
+def test_a_token_is_a_credential_not_configuration() -> None:
+    # Which account downloaded the weights says nothing about what ran.
+    assert compatible(_run(), _run()).status == "compatible"
+    other = _run(vllm_config__model_config__hf_token=_leaf(None))
+    assert compatible(_run(), other).status == "compatible"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("vllm_config/model_config/quantization", "fp8"),
+        ("vllm_config/model_config/dtype", "float16"),
+    ],
+)
+def test_null_is_a_setting_and_differs_from_a_value(name: str, value: Any) -> None:
+    first = _run(**{"vllm_config/model_config/dtype": _leaf("bfloat16")})
+    second = _run(**{"vllm_config/model_config/dtype": _leaf("bfloat16")})
+    second[name] = _leaf(value)
+    result = compatible(first, second)
+    assert result.status == "incompatible"
+    assert [item.name for item in result.blocking] == [name]
+
+
+def test_a_leaf_on_one_side_only_is_a_difference() -> None:
+    # A section null in one run and set in the other: speculative decoding on.
+    first = _run(vllm_config__speculative_config=_leaf(None))
+    second = _run(
+        vllm_config__speculative_config__method=_leaf("ngram"),
+        vllm_config__speculative_config__num_speculative_tokens=_leaf(5),
+    )
+    result = compatible(first, second)
+    assert result.status == "incompatible"
+    reasons = {item.name: item.reason for item in result.blocking}
+    assert reasons == {
+        "vllm_config/speculative_config": "only_in_a",
+        "vllm_config/speculative_config/method": "only_in_b",
+        "vllm_config/speculative_config/num_speculative_tokens": "only_in_b",
+    }
+
+
+def test_an_environment_variable_set_on_one_side_only_is_a_difference() -> None:
+    second = _run(**{"environ.CUDA_LAUNCH_BLOCKING": _field("1")})
+    result = compatible(_run(), second)
+    assert result.status == "incompatible"
+    assert [(i.name, i.reason) for i in result.blocking] == [
+        ("environ.CUDA_LAUNCH_BLOCKING", "only_in_b")
+    ]
+
+
+def test_a_leaf_missing_where_nothing_was_read_is_unknown_not_a_difference() -> None:
+    unread = {k: v for k, v in _run().items() if k != "scope.environ"}
+    second = _run(**{"environ.CUDA_LAUNCH_BLOCKING": _field("1")})
+    result = compatible(unread, second)
+    # Unknown on one side: an identity field that cannot be verified.
+    assert result.status == "unverified"
+    assert [(i.name, i.reason) for i in result.unverified] == [
+        ("environ.CUDA_LAUNCH_BLOCKING", "unknown")
+    ]
+
+
+def test_a_one_sided_value_that_is_not_evidence_leaves_the_field_unverified() -> None:
+    # Declared, not reported: the other run's configuration lacks it, but a
+    # declaration cannot show the server ran with it.
+    second = _run(**{"vllm_config/new_section/knob": _field(1, "declared")})
+    result = compatible(_run(), second)
+    assert result.status == "unverified"
+    assert [(i.name, i.reason) for i in result.unverified] == [
+        ("vllm_config/new_section/knob", "differs_unverified")
+    ]
+
+
+def test_an_unknown_launch_field_is_noted_without_blocking() -> None:
+    second = _run(**{"host.nproc": _field(32)})
+    result = compatible(_run(), second)
+    assert result.status == "compatible"
+    assert "host.nproc" in result.unknown
+
+
+def test_a_declared_configuration_name_does_not_stand_for_server_info() -> None:
+    bare = {
+        name: item
+        for name, item in _run().items()
+        if not name.startswith(("vllm_config/", "scope.vllm_config"))
+    }
+    bare["vllm_config/scheduler_config/max_num_seqs"] = _field(256, "declared")
+    result = compatible(_run(), bare)
+    assert result.status == "unverified"
+    assert "vllm_config" in [item.name for item in result.unverified]
 
 
 def test_inferred_and_declared_values_never_verify_a_required_field() -> None:
@@ -153,7 +254,7 @@ def test_without_a_vllm_config_a_run_is_unverified() -> None:
     bare = {
         name: item
         for name, item in _run().items()
-        if not name.startswith("vllm_config/")
+        if not name.startswith(("vllm_config/", "scope.vllm_config"))
     }
     result = compatible(_run(), bare)
     assert result.status == "unverified"
@@ -235,7 +336,10 @@ def _records(
             "/version": {"body": {"version": "0.30.0"}},
             "/server_info?config_format=json": {
                 "body": {
-                    "vllm_config": {"scheduler_config": {"max_num_seqs": max_num_seqs}},
+                    "vllm_config": {
+                        "scheduler_config": {"max_num_seqs": max_num_seqs},
+                        "model_config": {"quantization": None},
+                    },
                     "vllm_env": {"VLLM_PORT": 8000},
                     "system_env": {"packages": {"torch": "9.9.9"}},
                 }
@@ -277,6 +381,9 @@ def test_a_runs_fields_come_from_its_artifact() -> None:
     assert fields["model.weights_digest"].provenance == "inferred"
     assert not fields["model.weights_digest"].known
     assert fields["workload.timeout_seconds"].value == 60.0
+    # A null setting is a value, and the scopes the run read are marked.
+    assert fields["vllm_config/model_config/quantization"].known
+    assert fields["scope.vllm_config"].known and fields["scope.environ"].known
 
 
 def test_runs_from_artifacts_compare_by_their_configuration() -> None:

@@ -128,6 +128,16 @@ observed or reported. An inferred or declared value, a redacted one and an
 NVML field that could not be read are all unknown: they never verify a
 required field, and two of them are never equal.
 
+A `null` in vLLM's configuration or `vllm_env` is a setting, not missing
+evidence: `quantization: null` against `fp8` is a difference. Where both
+runs read a source (`/server_info`'s `vllm_config` or `vllm_env`, or the
+server's process environment), a field only one has is a difference too,
+named `only_in_a` or `only_in_b`: a section that is `null` in one run and
+set in the other (speculative decoding turned on), a list cut short, or
+`CUDA_LAUNCH_BLOCKING` set on one side. Where one run did not read the
+source, its fields there are unknown. Only the server's own answer makes
+`vllm_config` known; a declared configuration name does not.
+
 Every field has a class:
 
 | Class | A difference |
@@ -135,7 +145,7 @@ Every field has a class:
 | `identity` | Makes the runs incompatible, unless it is allowed |
 | `launch` | Is a covariate: ports, instance IDs, cache directories, which GPU, the workload's seed |
 | `observation` | Which observers ran: allowed in `overhead` and `incremental` comparisons only |
-| `label` | Is ignored |
+| `label` | Is ignored: names, and credentials such as `hf_token`, which say who fetched the weights, not what ran |
 
 The classes of vLLM's configuration are a versioned table,
 `config_classes_v1`, keyed by JSON pointer into `/server_info`'s
@@ -150,7 +160,7 @@ The result is one of:
 | Status | When |
 | --- | --- |
 | `incompatible` | An identity or unclassified field differs and is not allowed |
-| `unverified` | A required field is unknown on either or both sides: the model's weights digest, the vLLM version, the GPU name, the driver version, the workload's spec digest, or `vllm_config` itself |
+| `unverified` | A required field is unknown on either or both sides: the model's weights digest, the vLLM version, the GPU name, the driver version, the workload's spec digest, or `vllm_config` itself. Or an identity or unclassified field is unknown on one side or both, so a difference in it could not be seen. Unknown launch and observation fields are listed under `unknown` without blocking |
 | `compatible` | Otherwise |
 
 `allowed` takes canonical names (`engine.max_num_seqs`), or JSON pointers
