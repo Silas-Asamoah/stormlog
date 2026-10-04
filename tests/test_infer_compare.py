@@ -143,6 +143,23 @@ def test_an_unchanged_candidate_passes() -> None:
     assert comparison.failed == []
 
 
+def test_a_gate_that_matches_no_metric_cannot_be_evaluated() -> None:
+    # The runs have no server spans: a gate on them gates nothing, and that
+    # must not read as a pass while the candidate is 40% slower.
+    gates = (("server.e2e.p95", GateRule("non-inferiority", 0.05, "relative")),)
+    comparison = compare_runs(*_arms(SLOWER), ComparisonSpec(gates=gates))
+    assert (CASE, "server.e2e.p95", "metric_absent") in comparison.not_evaluable
+    assert comparison.exit_code == 4
+    payload = comparison.to_payload()
+    absent = payload["cases"][CASE]["absent_gates"]["server.e2e.p95"]
+    assert (absent["status"], absent["reason"]) == ("not_evaluable", "metric_absent")
+
+
+def test_a_case_no_run_has_is_invalid_input() -> None:
+    with pytest.raises(InferInputError, match="case typo is in no run"):
+        compare_runs(*_arms(SLOWER), ComparisonSpec(gates=E2E_GATE, cases=("typo",)))
+
+
 def test_unlabelled_runs_are_independent_samples() -> None:
     comparison = compare_runs(*_arms(SLOWER, paired=False), ComparisonSpec())
     metric = comparison.cases[CASE]["metrics"]["client.e2e.p95"]
