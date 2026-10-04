@@ -580,6 +580,11 @@ pulse, or whose pid comes to name another process, raises `TargetGone`
 with a message starting `target_gone`, rather than blaming the watchdog,
 which exits once its target is gone.
 
+A pulse episode with any pulse `continued_by_other` is not actuated: the
+target ran during a stop the dose asked for, so the stall isn't the dose.
+Its record lists those pulses under `interrupted_by_other`, its actuation
+is `interrupted_by_other`, and its status is `not_actuated`.
+
 `discover_roles(api_server_pid)` names the processes under a vLLM API server by
 the titles vLLM 0.30 gives them, matched exactly on `argv[0]` (which vLLM's
 retitling replaces; the 15-character `comm` would truncate it):

@@ -436,13 +436,18 @@ class InjectionRun:
             last_continue_ns=pulses[-1].continue_sent_ns,
             pulses=[(p.stopped_ns, p.continue_sent_ns) for p in pulses],
         )
-        injected = {
+        injected: dict[str, Any] = {
             "method": PULSE,
             "dose": dict(episode.dose),
             "target": target.to_record(),
             "pulses": [pulse.to_record() for pulse in pulses],
         }
-        return actions, len(pulses) == count, injected
+        # A pulse someone else continued (an operator, the watchdog's limit)
+        # wasn't the stop the dose asked for: the episode wasn't actuated.
+        others = [i for i, pulse in enumerate(pulses) if pulse.continued_by_other]
+        if others:
+            injected["interrupted_by_other"] = others
+        return actions, len(pulses) == count and not others, injected
 
     def _mark_landings(self, injected: dict[str, Any]) -> None:
         """Where each pulse landed in the step loop (A.4, #218 R12), from the
@@ -588,7 +593,7 @@ class InjectionRun:
         )
         labelled = [f"{e.kind}@{e.component}" for e in row.expects]
         validity = Validity(
-            actuation="ok" if attempt.actuated else "failed",
+            actuation=_actuation(attempt),
             realization="realized" if attempt.realized else "not_realized",
             # "incomplete" when the reference channel lacked a signal a check
             # needed; the diagnosed configuration's capture is PR D's.
@@ -879,6 +884,16 @@ def _measured_end(records: list[dict[str, Any]]) -> int | None:
         and record.get("window_ended_at_ns") is not None
     ]
     return ends[-1] if ends else None
+
+
+def _actuation(attempt: _Attempt) -> str:
+    """The actuation layer: ``ok``, ``interrupted_by_other`` when someone
+    else continued a pulse's target, or ``failed``."""
+    if attempt.actuated:
+        return "ok"
+    if attempt.injected.get("interrupted_by_other"):
+        return "interrupted_by_other"
+    return "failed"
 
 
 def _timeout_reason(progress: _Progress) -> str:
