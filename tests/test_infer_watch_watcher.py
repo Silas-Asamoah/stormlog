@@ -771,3 +771,23 @@ def test_export_failures_are_null_without_an_exporter(
         )
     incident = of_type(read_ledger(tmp_path), INCIDENT)[0]
     assert incident["loss"]["export_failures"] == (0 if exporting else None)
+
+
+def test_a_trigger_resolved_before_the_seal_is_recorded_so(tmp_path: Path) -> None:
+    metrics = FakeMetrics()
+    metrics.waiting = 20
+    payload = watch_config("", incident={"pre_seconds": 5, "post_seconds": 2.5})
+    with serve_metrics(metrics) as base_url:
+        payload["server"]["base_url"] = base_url
+
+        def quiet() -> None:
+            metrics.waiting = 0
+
+        threading.Timer(1.0, quiet).start()
+        _watch(tmp_path, payload, options=WatchOptions(duration_seconds=4.5))
+    records = read_ledger(tmp_path)
+    (incident,) = of_type(records, INCIDENT)
+    (resolved,) = [
+        r for r in of_type(records, TRIGGER_STATE) if r["event"] == "resolved"
+    ]
+    assert incident["trigger"]["resolved_at_ns"] == resolved["timestamp_ns"]

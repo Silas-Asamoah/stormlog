@@ -571,3 +571,19 @@ def test_a_window_with_missed_ticks_is_partial(harness: Harness) -> None:
     assert post["fidelity_detail"]["scrapes"]["expected"] == 60
     assert post["fidelity"] == "partial"
     assert record["pre_window"]["fidelity"] == "complete"
+
+
+def test_a_trigger_that_resolves_within_the_post_window_says_when(
+    harness: Harness,
+) -> None:
+    """resolved_at_ns was always null, even for a trigger that resolved
+    before its incident was sealed."""
+    harness.scrapes(80, 262)
+    harness.fire(200)
+    harness.fire(210, trigger_id="kv")
+    harness.manager.on_resolved("kv", 230 * S)
+    harness.manager.on_resolved("other", 231 * S)  # in no incident
+    harness.tick(261)
+    (record,) = harness.of_type(INCIDENT)
+    assert record["trigger"]["resolved_at_ns"] is None  # still firing
+    assert record["joined_triggers"][0]["resolved_at_ns"] == T0 + 230 * S

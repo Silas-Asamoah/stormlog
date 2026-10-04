@@ -245,6 +245,16 @@ class IncidentManager:
             trigger, counts=False, at_mono=at_mono, reach_mono=self._earliest(at_mono)
         )
 
+    def on_resolved(self, trigger_id: str, at_mono: int) -> None:
+        """A trigger resolved: its record in an incident still collecting
+        says when, so a sealed incident shows how long the condition lasted."""
+        for incident in self.open.values():
+            for trigger in (incident.trigger, *incident.joined):
+                if trigger["trigger_id"] == trigger_id and (
+                    trigger.get("resolved_at_ns") is None
+                ):
+                    trigger["resolved_at_ns"] = self.clock.to_wall(at_mono)
+
     def _earliest(self, at_mono: int) -> int:
         """How far back a pre-window from ``at_mono`` may reach."""
         return at_mono - int(self.limits.pre_seconds * _NS)
