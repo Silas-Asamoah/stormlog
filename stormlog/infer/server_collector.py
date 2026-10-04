@@ -27,6 +27,10 @@ STOP_GPU_IDENTITY_CHANGED = "gpu_identity_changed"
 GPU_MATCH_CONFIRMED = "confirmed"
 GPU_MATCH_NOT_SEEN = "not_seen"
 GPU_MATCH_UNKNOWN = "unknown"
+GPU_MATCH_STATES = (GPU_MATCH_CONFIRMED, GPU_MATCH_NOT_SEEN, GPU_MATCH_UNKNOWN)
+# Until confirmed, checked again at most this often: a server still loading
+# its model when the collector starts reaches its GPU later.
+MATCH_RECHECK_SECONDS = 1.0
 
 _PROCESS_ENDED_DETAIL = "server process ended or its PID was reused"
 _NVML_SUCCESS = 0
@@ -181,12 +185,15 @@ class CollectionObserver(Protocol):
 
     ``identify`` runs before anything is collected; its ``ValueError`` is
     a usage error. ``gpu_process_match`` says whether NVML showed the server
-    on the GPU it watches. ``poll`` and ``close`` must not raise.
+    on the GPU it watches; ``matched`` is told when a later check confirms
+    it. ``matched``, ``poll`` and ``close`` must not raise.
     """
 
     def identify(
         self, identity: ServerIdentity, gpu_process_match: str = GPU_MATCH_UNKNOWN
     ) -> None: ...
+
+    def matched(self, gpu_process_match: str) -> None: ...
 
     def poll(self, samples: Sequence[TelemetrySample]) -> None: ...
 
@@ -338,6 +345,7 @@ def collect_server_telemetry(
                 duration_seconds,
                 stop_event or threading.Event(),
                 observer,
+                _MatchWatch(process, source, match),
             )
         finally:
             if observer is not None:
@@ -486,6 +494,31 @@ def _descendant_pids(process: psutil.Process) -> set[int]:
         return set()
 
 
+class _MatchWatch:
+    """Checks the GPU match again until NVML shows the server on its GPU."""
+
+    def __init__(
+        self, process: psutil.Process, source: GpuMemorySource | None, match: str
+    ) -> None:
+        self.process = process
+        self.source = source
+        self.match = match
+        self.checked_at = time.monotonic()
+
+    def check(self, observer: CollectionObserver) -> None:
+        """Tell ``observer`` once a later check confirms the match."""
+        now = time.monotonic()
+        if self.match == GPU_MATCH_CONFIRMED or (
+            now - self.checked_at < MATCH_RECHECK_SECONDS
+        ):
+            return
+        self.checked_at = now
+        _warnings, match = _gpu_process_check(self.process, self.source)
+        if match == GPU_MATCH_CONFIRMED:
+            self.match = match
+            observer.matched(match)
+
+
 def _collect_loop(
     run_id: str,
     process: psutil.Process,
@@ -496,6 +529,7 @@ def _collect_loop(
     duration_seconds: float | None,
     stop_event: threading.Event,
     observer: CollectionObserver | None = None,
+    match_watch: _MatchWatch | None = None,
 ) -> tuple[int, str, str | None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
@@ -523,6 +557,8 @@ def _collect_loop(
                 polls += 1
                 if observer is not None:
                     observer.poll(samples)
+                    if match_watch is not None:
+                        match_watch.check(observer)
                 if stop is not None:
                     return polls, stop[0], stop[1]
                 next_poll = next_poll_time(
