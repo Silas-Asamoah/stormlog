@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -109,6 +111,11 @@ def test_the_hub_cache_follows_the_servers_own_settings() -> None:
     )
     assert hub_cache_dir({"HOME": "/root"}, "/models") == Path("/models")
     assert hub_cache_dir({}, None) is None
+    # huggingface_hub honours its older name and the XDG cache home too.
+    assert hub_cache_dir({"HUGGINGFACE_HUB_CACHE": "/old"}, None) == Path("/old")
+    assert hub_cache_dir({"XDG_CACHE_HOME": "/x", "HOME": "/root"}, None) == Path(
+        "/x/huggingface/hub"
+    )
 
 
 def test_a_mutable_revision_resolved_from_the_cache_is_inferred(tmp_path: Path) -> None:
@@ -156,6 +163,72 @@ def test_verifying_blobs_hashes_their_content(tmp_path: Path) -> None:
     assert files["model.safetensors"]["checked"] is True
     assert files["model.safetensors"]["digest"] == hashlib.sha256(WEIGHTS).hexdigest()
     assert files["config.json"]["digest"] == _git_sha1(CONFIG)
+
+
+def _copied_hub(tmp_path: Path, weights: bytes) -> Path:
+    """A hub cache where the snapshot holds copies, not links into blobs."""
+    cache = _hub(tmp_path, weights=weights)
+    snapshot = cache / ("models--" + REPO.replace("/", "--")) / "snapshots" / COMMIT
+    for link in list(snapshot.iterdir()):
+        content = link.read_bytes()
+        link.unlink()
+        link.write_bytes(content)
+    return cache
+
+
+def test_a_snapshot_of_copies_is_not_named_by_its_file_names(tmp_path: Path) -> None:
+    # huggingface_hub copies files where links are unsupported; a file's name
+    # is then no digest, and two weights of one size must not look alike.
+    first = describe_model(
+        LaunchArguments(model=REPO), hub_cache=_copied_hub(tmp_path / "1", WEIGHTS)
+    )
+    weights = first["files"]["model.safetensors"]
+    assert (weights["algorithm"], weights["digest"]) == ("none", "")
+    assert first["weights_digest"] is None
+    hashed = [
+        describe_model(
+            LaunchArguments(model=REPO),
+            hub_cache=_copied_hub(tmp_path / name, content),
+            verify_blobs=True,
+        )
+        for name, content in (("3", WEIGHTS), ("4", WEIGHTS[::-1]))
+    ]
+    assert hashed[0]["files"]["model.safetensors"]["digest"] == (
+        hashlib.sha256(WEIGHTS).hexdigest()
+    )
+    assert hashed[0]["weights_digest"] != hashed[1]["weights_digest"]
+
+
+def test_verifying_records_what_a_damaged_blob_holds(tmp_path: Path) -> None:
+    cache = _hub(tmp_path)
+    repo = cache / ("models--" + REPO.replace("/", "--"))
+    named = hashlib.sha256(WEIGHTS).hexdigest()
+    (repo / "blobs" / named).write_bytes(b"corrupt")
+    plain = describe_model(LaunchArguments(model=REPO), hub_cache=cache)
+    checked = describe_model(
+        LaunchArguments(model=REPO), hub_cache=cache, verify_blobs=True
+    )
+    assert plain["files"]["model.safetensors"]["digest"] == named
+    assert checked["files"]["model.safetensors"]["digest"] == (
+        hashlib.sha256(b"corrupt").hexdigest()
+    )
+    assert plain["weights_digest"] != checked["weights_digest"]
+
+
+@pytest.mark.parametrize("damage", ["dangling", "loop"])
+def test_a_damaged_snapshot_is_described_not_raised(
+    tmp_path: Path, damage: str
+) -> None:
+    cache = _hub(tmp_path)
+    snapshot = cache / ("models--" + REPO.replace("/", "--")) / "snapshots" / COMMIT
+    broken = snapshot / "extra.bin"
+    if damage == "dangling":
+        broken.symlink_to(Path("../../blobs") / ("f" * 64))
+    else:
+        broken.symlink_to(broken)
+    model = describe_model(LaunchArguments(model=REPO), hub_cache=cache)
+    assert model["files"]["extra.bin"]["algorithm"] == "none"
+    assert model["weights_digest"] is None
 
 
 def test_different_weights_give_different_digests(tmp_path: Path) -> None:
@@ -219,6 +292,24 @@ def test_local_digests_are_cached_by_path_size_mtime_and_inode(tmp_path: Path) -
     digests = {item.path: item.digest for item in second}
     assert digests["model.safetensors"] == "cached-marker"
     assert {item.path for item in first} == set(digests)
+
+
+def test_a_cached_digest_is_not_used_after_an_in_place_rewrite(tmp_path: Path) -> None:
+    # rsync --inplace -t or cp --preserve keep the size and the mtime; the
+    # change time still moves.
+    directory = _local(tmp_path, WEIGHTS)
+    cache = tmp_path / "digests.json"
+    local_files(directory, hash_contents=True, cache=cache)
+    weights = directory / "model.safetensors"
+    stat = weights.stat()
+    time.sleep(0.01)
+    weights.write_bytes(WEIGHTS[::-1])
+    os.utime(weights, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    digests = {
+        item.path: item.digest
+        for item in local_files(directory, hash_contents=True, cache=cache)
+    }
+    assert digests["model.safetensors"] == hashlib.sha256(WEIGHTS[::-1]).hexdigest()
 
 
 def test_the_weights_digest_needs_every_file_named() -> None:

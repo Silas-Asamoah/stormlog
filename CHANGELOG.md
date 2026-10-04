@@ -106,7 +106,8 @@ the flaky benchmark memory gates
   description of a running vLLM server from the host that serves it
   (`stormlog.infer.server_description` v1): its process tree from `/proc`,
   its GPUs from NVML, its model files, its start-up log (`--server-log`),
-  its Python and package versions (`--python`), and the kept environment,
+  its Python and package versions (`--python`, by default the server's own
+  interpreter, found on the server's `PATH`), and the kept environment,
   with no credentials and a SHA-256 of its own content. (#213)
 - `stormlog.infer.server_log`: the choices a vLLM 0.30.0 server logs at
   start-up (attention backend, KV cache size, CUDA graph captures), from the
@@ -115,7 +116,8 @@ the flaky benchmark memory gates
 - `stormlog.infer.server_model`: the model files a vLLM server was started
   with, from its command line and its Hugging Face cache (each file's
   algorithm, digest and size: SHA-256 for LFS blobs, git SHA-1 for the
-  rest) or, for a local directory, cached SHA-256 digests. It names its
+  rest, and none for a copied file a blob name does not vouch for) or, for
+  a local directory, cached SHA-256 digests. It names its
   evidence (`pinned_commit`, `inferred`, `post_launch_digest`, `size_only`)
   and never claims the weights were the ones loaded. (#213)
 - `stormlog.infer.server_gpu`: the GPUs a vLLM server uses, found by NVML's

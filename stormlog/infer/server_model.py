@@ -109,10 +109,14 @@ def hub_cache_dir(environ: Mapping[str, str], download_dir: str | None) -> Path 
     """Where the server's Hugging Face cache is, by the server's own settings."""
     if download_dir:
         return Path(download_dir)
-    if environ.get("HF_HUB_CACHE"):
-        return Path(environ["HF_HUB_CACHE"])
+    # huggingface_hub's order: its cache, its older name, its home, XDG's.
+    for name in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
+        if environ.get(name):
+            return Path(environ[name])
     if environ.get("HF_HOME"):
         return Path(environ["HF_HOME"]) / "hub"
+    if environ.get("XDG_CACHE_HOME"):
+        return Path(environ["XDG_CACHE_HOME"]) / "huggingface" / "hub"
     if environ.get("HOME"):
         return Path(environ["HOME"]) / ".cache" / "huggingface" / "hub"
     return None
@@ -171,25 +175,39 @@ def hub_snapshot(
 
 
 def snapshot_files(directory: Path, *, verify: bool = False) -> list[ModelFile]:
-    """Each file of a hub snapshot, named by the blob its link points to."""
+    """Each file of a hub snapshot, named by the blob its link points to.
+
+    Only a link into the repository's ``blobs`` whose name is a digest is
+    named by it. huggingface_hub copies files where links are unsupported,
+    and a copy's name is no digest: it has none unless ``verify`` hashes it.
+    A link that leads nowhere, or in a loop, has none either.
+    """
     files = []
     for path in _walk(directory):
-        blob = path.resolve()
-        size = blob.stat().st_size
-        name = blob.name
-        algorithm = SHA256 if _SHA256.match(name) else GIT_SHA1
+        relative = path.relative_to(directory).as_posix()
+        try:
+            blob = path.resolve(strict=True)
+            size = blob.stat().st_size
+        except (OSError, RuntimeError):
+            files.append(ModelFile(relative, "none", "", 0, checked=False))
+            continue
+        algorithm, digest = _blob_name(path, blob)
         if verify:
-            name = _sha256(blob) if algorithm == SHA256 else _git_sha1(blob)
-        files.append(
-            ModelFile(
-                path=path.relative_to(directory).as_posix(),
-                algorithm=algorithm,
-                digest=name,
-                size=size,
-                checked=verify,
-            )
-        )
+            algorithm = algorithm if algorithm != "none" else SHA256
+            digest = _sha256(blob) if algorithm == SHA256 else _git_sha1(blob)
+        files.append(ModelFile(relative, algorithm, digest, size, checked=verify))
     return files
+
+
+def _blob_name(path: Path, blob: Path) -> tuple[str, str]:
+    """The digest a blob's name gives, when the file is a link to a blob."""
+    if not path.is_symlink() or blob.parent.name != "blobs":
+        return "none", ""
+    if _SHA256.match(blob.name):
+        return SHA256, blob.name
+    if _COMMIT.match(blob.name):
+        return GIT_SHA1, blob.name
+    return "none", ""
 
 
 def local_files(
@@ -199,24 +217,35 @@ def local_files(
     known = _load_cache(cache) if hash_contents else {}
     files = []
     for path in _walk(directory):
-        stat = path.stat()
-        key = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{stat.st_ino}"
-        digest = ""
-        if hash_contents:
-            digest = known.get(key) or _sha256(path)
-            known[key] = digest
+        relative = path.relative_to(directory).as_posix()
+        try:
+            stat = path.stat()
+            digest = _cached_sha256(path, stat, known) if hash_contents else ""
+        except (OSError, RuntimeError):
+            files.append(ModelFile(relative, "none", "", 0, checked=False))
+            continue
+        algorithm = SHA256 if hash_contents else "none"
         files.append(
-            ModelFile(
-                path=path.relative_to(directory).as_posix(),
-                algorithm=SHA256 if hash_contents else "none",
-                digest=digest,
-                size=stat.st_size,
-                checked=hash_contents,
-            )
+            ModelFile(relative, algorithm, digest, stat.st_size, checked=hash_contents)
         )
     if hash_contents and cache is not None:
         _save_cache(cache, known)
     return files
+
+
+def _cached_sha256(path: Path, stat: os.stat_result, known: dict[str, str]) -> str:
+    """A file's SHA-256, reused while its path, size, times and inode hold.
+
+    The change time is part of the key: an in-place rewrite that restores
+    the size and modification time (``rsync --inplace -t``) still moves it.
+    """
+    key = (
+        f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{stat.st_ctime_ns}"
+        f"|{stat.st_ino}"
+    )
+    digest = known.get(key) or _sha256(path)
+    known[key] = digest
+    return digest
 
 
 def weights_digest(files: Sequence[ModelFile]) -> str | None:
