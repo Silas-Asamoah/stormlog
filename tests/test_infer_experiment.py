@@ -14,8 +14,8 @@ import pytest
 
 from stormlog.infer.compare import ComparisonSpec, compare_runs
 from stormlog.infer.comparison_stats import GateRule
-from stormlog.infer.errors import InferInputError
-from stormlog.infer.experiment import Environment, run_plan
+from stormlog.infer.errors import InferInputError, InferUsageError
+from stormlog.infer.experiment import Environment, ExternalCause, run_plan
 from stormlog.infer.experiment_plan import plan_from_document
 from stormlog.infer.run_summary import summarize_run
 
@@ -198,6 +198,134 @@ def test_a_resumed_experiment_skips_finished_runs_and_refuses_a_changed_plan(
         _run(tmp_path, document)
     with pytest.raises(InferInputError, match="plan changed"):
         _run(tmp_path, _plan(port, blocks=1, seed=8), resume=True)
+
+
+def _interrupt(exp: Path, label: str) -> None:
+    """Leave a finished attempt as a killed runner would: still ``.partial``,
+    with no state, no digests and no line in the index."""
+    run_dir = exp / "runs" / label
+    for name in ("run.json", "SHA256SUMS"):
+        (run_dir / name).unlink()
+    artifact = run_dir / "c1.jsonl"
+    lines = [
+        line
+        for line in artifact.read_text().splitlines()
+        if json.loads(line).get("event_type") != "infer.run_state"
+    ]
+    artifact.write_text("\n".join(lines) + "\n")
+    run_dir.rename(run_dir.with_name(label + ".partial"))
+    index = exp / "index.jsonl"
+    kept = [
+        line
+        for line in index.read_text().splitlines()
+        if json.loads(line)["label"] != label
+    ]
+    index.write_text("\n".join(kept) + "\n")
+
+
+PREEMPTED = ExternalCause("spot_preemption", "box paused without a release at 03:12")
+
+
+def test_a_preempted_attempt_is_set_aside_with_its_evidence_and_retried(
+    tmp_path: Path,
+) -> None:
+    document = _plan(_port(), blocks=1)
+    records = _run(tmp_path, document)
+    exp = tmp_path / "exp"
+    label = next(r["label"] for r in records if r["arm"] == "watch")
+    _interrupt(exp, label)
+    first, second = _run(
+        tmp_path,
+        document,
+        resume=True,
+        retry_incomplete=True,
+        external_causes={label: PREEMPTED},
+    )
+    assert (first["label"], first["state"], first["reasons"]) == (
+        label,
+        "protocol_failure",
+        ["spot_preemption"],
+    )
+    assert first["interrupted"] is True
+    assert first["external_cause"] == {
+        "reason": "spot_preemption",
+        "evidence": "box paused without a release at 03:12",
+    }
+    assert (second["attempt"], second["state"]) == (2, "completed")
+    index = [
+        json.loads(line) for line in (exp / "index.jsonl").read_text().splitlines()
+    ]
+    assert [r["label"] for r in index].count(label) == 1
+
+    preempted = summarize_run(Path(first["run_dir"]) / "c1.jsonl")
+    assert preempted.protocol_failures == ("external:spot_preemption",)
+    retried = summarize_run(Path(second["run_dir"]) / "c1.jsonl")
+    off = [
+        summarize_run(Path(r["run_dir"]) / "c1.jsonl")
+        for r in records
+        if r["arm"] == "off"
+    ]
+    comparison = compare_runs(
+        off, [preempted, retried], ComparisonSpec(allow_not_evaluable=True)
+    )
+    assert [
+        (item["run"], item["reasons"], item["evidence"], item["attempt_kept"])
+        for item in comparison.excluded
+    ] == [
+        (
+            preempted.name,
+            ["superseded", "external:spot_preemption"],
+            {"external:spot_preemption": "box paused without a release at 03:12"},
+            retried.name,
+        )
+    ]
+
+
+def test_an_attempt_interrupted_with_no_cause_given_is_an_outcome_kept(
+    tmp_path: Path,
+) -> None:
+    # The lead's C6: an interruption is an outcome unless its cause is
+    # recorded, and a retry never replaces an outcome.
+    document = _plan(_port(), blocks=1)
+    records = _run(tmp_path, document)
+    label = next(r["label"] for r in records if r["arm"] == "watch")
+    _interrupt(tmp_path / "exp", label)
+    (only,) = _run(tmp_path, document, resume=True, retry_incomplete=True)
+    assert (only["label"], only["state"], only["reasons"], only["interrupted"]) == (
+        label,
+        "outcome_failure",
+        ["runner_interrupted"],
+        True,
+    )
+    summary = summarize_run(Path(only["run_dir"]) / "c1.jsonl")
+    assert summary.protocol_failures == ()
+    assert "runner:runner_interrupted" in summary.outcome_failures
+
+
+def test_an_external_cause_is_refused_unless_it_names_an_interrupted_attempt(
+    tmp_path: Path,
+) -> None:
+    document = _plan(_port(), blocks=1)
+    records = _run(tmp_path, document)
+    finished = records[0]["label"]
+    with pytest.raises(InferUsageError, match="not an interrupted attempt"):
+        _run(tmp_path, document, resume=True, external_causes={finished: PREEMPTED})
+    with pytest.raises(InferUsageError, match="only on resume"):
+        _run(tmp_path / "fresh", document, external_causes={finished: PREEMPTED})
+
+
+@pytest.mark.parametrize(
+    ("reason", "evidence", "message"),
+    [
+        ("oom", "dmesg", "spot_preemption, operator_abort or infra_fault"),
+        ("spot_preemption", "  ", "needs evidence"),
+    ],
+)
+def test_an_external_cause_is_one_of_three_with_evidence(
+    reason: str, evidence: str, message: str
+) -> None:
+    with pytest.raises(InferUsageError, match=message):
+        ExternalCause(reason, evidence)
 
 
 def test_a_failed_step_is_an_outcome_and_kept(tmp_path: Path) -> None:
@@ -437,6 +565,8 @@ def test_the_example_cli_runs_a_plan_and_says_how_it_ended(
         )
         == 5
     )
+    cause = ["--external-cause", "t213-b00-p0-off-a1=oom:dmesg"]
+    assert main(["--plan", str(plan_path), "--output", "y", "--resume", *cause]) == 2
 
 
 def test_treatments_are_observers_a_comparison_can_see(tmp_path: Path) -> None:
