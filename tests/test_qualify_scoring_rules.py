@@ -388,3 +388,21 @@ def test_an_episode_given_twice_is_refused() -> None:
     null = replace(null_run(), run_id="r")
     with pytest.raises(ValueError, match="given twice"):
         score_run(run_record("r"), [null, null], diagnosis(), CONFIG)
+
+
+def test_a_capture_beside_a_null_run_leaves_the_null_its_unit() -> None:
+    # The FPR population is C.5's negative types, not "anything but a
+    # fault": an I1 capture in the same run is no second negative.
+    from tests.test_qualify_scoring import negative, null_run
+
+    capture = replace(
+        negative("I1"),
+        cause_class="instrumentation",
+        episode_id="cap",
+        times=Times(
+            action_onset_ns=200 * S, effect_onset_ns=200 * S, effect_end_ns=220 * S
+        ),
+    )
+    score = run_of([null_run(), capture], diagnosis())
+    assert score.negative_episode is not None
+    assert score.excluded_negative is None
