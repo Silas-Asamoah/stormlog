@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol, runtime_checkable
 
 from .predicates import (
+    REASON_NO_RECENT_SCRAPE,
     Entry,
     Evaluation,
     WindowPredicate,
@@ -46,6 +47,11 @@ class HistoryPredicate(Protocol):
 
     @property
     def tail_scrapes(self) -> int: ...
+
+    @property
+    def when_stale(self) -> str:
+        """How a tail with no recent scrape is classified."""
+        ...
 
     def evaluate_history(self, history: Sequence[Entry]) -> Evaluation: ...
 
@@ -93,6 +99,9 @@ class TriggerEngine:
 
     specs: Sequence[TriggerSpec]
     tick_seconds: float
+    # A health predicate's tail is stale once no scrape has finished for a
+    # tick plus this long; a scrape can take up to its timeout.
+    scrape_timeout_seconds: float = 0.0
     states: dict[str, TriggerState] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -141,6 +150,11 @@ class TriggerEngine:
         if isinstance(predicate, HistoryPredicate):
             tail = history[-predicate.tail_scrapes :]
             since = tail[0][0].mono_ns if tail else at_ns
+            stale_after = (self.tick_seconds + self.scrape_timeout_seconds) * _NS
+            if not tail or at_ns - tail[-1][0].done_mono_ns > stale_after:
+                # Nothing finished lately: the last verdict is not today's.
+                reasons = (REASON_NO_RECENT_SCRAPE,)
+                return Evaluation(predicate.when_stale, reasons=reasons), since
             return predicate.evaluate_history(history), since
         selection = select_window(
             history,

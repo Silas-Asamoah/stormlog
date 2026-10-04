@@ -482,3 +482,26 @@ def test_failure_share_needs_its_scrapes() -> None:
         ScrapeFailureShare(share=0.0)
     with pytest.raises(ValueError, match="scrapes"):
         ScrapeFailureShare(scrapes=0)
+
+
+def test_a_health_trigger_never_judges_a_stale_tail() -> None:
+    """With no scrape finishing for minutes (a wedged scraper), the scrape
+    health triggers said clear, and FrozenExporter kept firing on the same
+    old scrapes."""
+    sustain = Sustain.with_defaults(window=3, hold=3, clear=None, tick=1)
+    specs = [
+        TriggerSpec("failures", KIND_HEALTH, sustain, ScrapeFailures(consecutive=3)),
+        TriggerSpec("share", KIND_HEALTH, sustain, ScrapeFailureShare(0.5, 3)),
+        TriggerSpec("frozen", KIND_HEALTH, sustain, FrozenExporter(ticks=3)),
+    ]
+    engine = TriggerEngine(specs, tick_seconds=1, scrape_timeout_seconds=2)
+    history = _entries([_waiting(3, running=2, tokens=7)] * 6)  # last at 5 s
+    fresh = {r.spec.trigger_id: r.evaluation for r in engine.tick(6 * S, history)}
+    assert fresh["failures"].classification == CLEAR
+    assert fresh["frozen"].classification == VIOLATING
+    # Past a tick plus the scrape timeout with nothing new: stale.
+    stale = {r.spec.trigger_id: r.evaluation for r in engine.tick(600 * S, history)}
+    assert stale["failures"].classification == VIOLATING
+    assert stale["share"].classification == VIOLATING
+    assert stale["frozen"].classification == DATA_GAP
+    assert all(e.reasons == ("no_recent_scrape",) for e in stale.values())
