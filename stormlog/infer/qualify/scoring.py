@@ -59,6 +59,7 @@ from .vocabulary import (
     CLAIM_OBSERVATION,
     EDGE_TABLE_VERSION,
     EDGES,
+    KINDS,
     NOT_ASSESSED_COMPONENTS,
     PRIMARY,
     SECONDARY,
@@ -781,6 +782,7 @@ class Summary:
     localized: tuple[int, int]
     negative_hours: float = 0.0
     problems: tuple[str, ...] = ()
+    secondary_errors: tuple[int, int] = (0, 0)
 
     def to_record(self, config: ScoreConfig) -> dict[str, Any]:
         return {
@@ -790,6 +792,11 @@ class Summary:
             "gated_level": f"L{config.gated_level}",
             "accuracy_floor": config.accuracy_floor,
             "fpr_ceiling": config.fpr_ceiling,
+            "confidence": config.confidence,
+            "grace_ns": {kind: config.grace(kind) for kind in sorted(KINDS)},
+            "supported_types": sorted(config.supported_types or ()),
+            "negative_types": sorted(config.negative_types),
+            "secondary_errors": list(self.secondary_errors),
             "strata": [stratum.to_record() for stratum in self.strata],
             "accuracy_passes": self.accuracy_passes,
             "negative_runs": self.negative_runs,
@@ -838,7 +845,14 @@ def summarize(runs: Sequence[RunScore], config: ScoreConfig) -> Summary:
         localized=_localized_count(faults),
         negative_hours=hours,
         problems=tuple(problem for run in runs for problem in run.problems),
+        secondary_errors=_secondary_errors(faults),
     )
+
+
+def _secondary_errors(faults: Sequence[EpisodeScore]) -> tuple[int, int]:
+    """Secondaries that weren't neutral, over all secondaries (C.2)."""
+    errors = sum(score.secondary_errors for score in faults)
+    return errors, sum(score.secondaries for score in faults)
 
 
 def _episodes(runs: Sequence[RunScore]) -> list[EpisodeScore]:

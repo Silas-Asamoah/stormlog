@@ -695,3 +695,39 @@ def test_the_summary_records_what_was_frozen() -> None:
     assert (record["accuracy_floor"], record["fpr_ceiling"]) == (0.78, 0.05)
     episode_record = _scores(1, 1)[0].episodes[0].to_record()
     assert episode_record["match_rank"] == {"L1": 1, "L2": 1}
+    # Everything the score froze: grace per kind (the default shown for a
+    # kind without its own), the support matrix, the confidence and the
+    # negative types.
+    graced = replace(CONFIG, grace_ns={KV: 12 * S})
+    frozen = summarize(_scores(15, 15), graced).to_record(graced)
+    assert frozen["grace_ns"][KV] == 12 * S
+    assert frozen["grace_ns"][QUEUE] == 20 * S
+    assert frozen["supported_types"] == ["F2"]
+    assert frozen["confidence"] == 0.95
+    assert frozen["negative_types"] == sorted(CONFIG.negative_types)
+
+
+def test_the_secondary_error_rate_is_reported() -> None:
+    # C.2 reports how often a secondary failed to be neutral, over the fault
+    # episodes' secondaries.
+    kv = finding("a", KV, 1)
+    neutral = finding(
+        "q",
+        QUEUE,
+        2,
+        role="secondary",
+        window=(110, 130),
+        secondary_to=[f"{KV}.{'a':0>12}"],
+    )
+    stray = finding(
+        "h",
+        "host_stall",
+        3,
+        role="secondary",
+        component="engine_core",
+        secondary_to=[f"{KV}.{'a':0>12}"],
+    )
+    run = run_of([episode()], diagnosis(kv, neutral, stray))
+    summary = summarize([run], CONFIG)
+    assert summary.secondary_errors == (1, 2)
+    assert summary.to_record(CONFIG)["secondary_errors"] == [1, 2]

@@ -308,6 +308,10 @@ table (`vocabulary.NOT_ASSESSED_COMPONENTS`), checked against its module.
 | Incident attribution | fault episodes with victim impact | descriptive |
 | Condition localization | fault episodes. An eligible finding of the label's kind at its location counts, in any role, cause or severity | descriptive |
 
-Spurious claims, duplicate matches and the miss labels are reported
-alongside. `Summary.to_record(config)` records the score version, the edge
-table's version, the gated metric and level, and the targets.
+Spurious claims, duplicate matches, the miss labels and the secondary
+error rate (secondaries that weren't neutral, over all the fault episodes'
+secondaries) are reported alongside. `Summary.to_record(config)` records
+everything the score froze: its version, the edge table's version, the
+gated metric and level, the targets and confidence, the grace per kind
+(the default shown for a kind without its own), the support matrix and the
+negative types.
