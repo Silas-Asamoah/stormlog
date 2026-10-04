@@ -98,6 +98,38 @@ def test_the_final_textfile_has_the_identity_polls_and_why_it_stopped(
     assert sum(stops.values()) == 1
 
 
+class _GpuShowing(_FakeGpu):
+    """A GPU on which NVML lists the given compute processes."""
+
+    def __init__(self, pids: set[int] | None) -> None:
+        super().__init__()
+        self.pids = pids
+
+    def compute_pids(self) -> set[int] | None:
+        return self.pids
+
+
+@pytest.mark.parametrize(
+    ("gpu", "match"),
+    [
+        (_GpuShowing({os.getpid()}), "confirmed"),
+        (_GpuShowing({1}), "not_seen"),  # chosen by index, the server elsewhere
+        (_GpuShowing(None), "unknown"),  # NVML could not list its processes
+        (_FakeGpu(), "unknown"),
+    ],
+)
+def test_the_info_series_says_whether_the_server_was_seen_on_its_gpu(
+    tmp_path: Path, gpu: _FakeGpu, match: str
+) -> None:
+    # device_uuid is the GPU the collector watched; whether the server was
+    # on it is a separate fact, never implied.
+    export = _export(tmp_path)
+    _collect(tmp_path, export, duration_seconds=0.05, gpu_source=gpu)
+    ((labels, value),) = _series(_textfile(tmp_path), "stormlog_collector_info")
+    assert labels["device_uuid"] == "GPU-live"
+    assert labels["gpu_process_match"] == match and value == 1
+
+
 def test_a_gpu_identity_change_is_the_recorded_stop(tmp_path: Path) -> None:
     export = _export(tmp_path)
     gpu = _FakeGpu(GpuMemoryReading(None, None, "invalid", "device UUID changed"))

@@ -504,7 +504,7 @@ DCGM or node exporter already reports device and process memory.
 
 | Metric | Kind | Labels | Meaning |
 | --- | --- | --- | --- |
-| `stormlog_collector_info` | gauge | run_id, host, boot_id, pid, process_start_ns, device_uuid, gpu_instance_id, replica_id, group_id, rank, world_size, version | 1, labelled with the identity the collector confirmed. A part that is not known (no GPU, no MIG instance, no group) is empty, never guessed |
+| `stormlog_collector_info` | gauge | run_id, host, boot_id, pid, process_start_ns, device_uuid, gpu_process_match, gpu_instance_id, replica_id, group_id, rank, world_size, version | 1, labelled with the identity the collector observed. `device_uuid` is the GPU it watched; `gpu_process_match` is `confirmed` when NVML showed the server, or a child of it, on that GPU, `not_seen` when it did not (a GPU chosen by index may not be the server's), and `unknown` when NVML could not say. A part that is not known (no GPU, no MIG instance, no group) is empty, never guessed |
 | `stormlog_collector_running` | gauge | — | 1 while it polls, 0 in the final values |
 | `stormlog_collector_start_time_seconds` | gauge | — | When it started, in Unix seconds |
 | `stormlog_collector_polls_total` | counter | — | Polls written to its output |
