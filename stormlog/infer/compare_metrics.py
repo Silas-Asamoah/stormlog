@@ -14,6 +14,7 @@ p99 by failing its slow requests.
 from __future__ import annotations
 
 import fnmatch
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -157,6 +158,14 @@ def _matching(pattern: str) -> list[str]:
     return [name for name in names if fnmatch.fnmatchcase(name, pattern)]
 
 
+def metric_names(pattern: str) -> list[str]:
+    """Every known metric name a name or pattern matches."""
+    return _matching(pattern)
+
+
+RATE_METRICS = _RATE_METRICS
+
+
 def metric_unit(pattern: str) -> str | None:
     """The effect unit of the metrics a name or pattern matches, if it is one."""
     matched = _matching(pattern)
@@ -220,6 +229,9 @@ def _estimate(estimate: Mapping[str, Any]) -> Reading:
     if estimate.get("penalized"):
         return None, PENALIZED
     value = estimate.get("value_ms")
+    if value == math.inf:
+        # Worse than any value: the comparison fails it, never drops it.
+        return math.inf, None
     number = float(value) if is_number(value) else None
     if estimate.get("sufficient") is False:
         return number, INSUFFICIENT_TAIL
@@ -254,5 +266,6 @@ __all__ = [
     "MetricSpec",
     "default_metrics",
     "evidence_coverage",
+    "metric_names",
     "metric_unit",
 ]

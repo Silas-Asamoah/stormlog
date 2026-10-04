@@ -209,11 +209,10 @@ def test_allowed_gates_that_could_not_be_evaluated_are_not_called_passed(
     assert "could not be evaluated (allowed)" in summary
 
 
-def test_a_fallback_that_names_no_gate_is_a_usage_error(
+def test_a_fallback_that_no_gate_reaches_is_a_usage_error(
     arms: dict[str, list[str]]
 ) -> None:
-    # Fallbacks belong to a gate by its METRIC text; one under another
-    # name would be ignored without a word.
+    # A fallback that no gated metric matches would be ignored without a word.
     code, _out, err = _compare(
         "--baseline",
         *arms["baseline"],
@@ -222,10 +221,29 @@ def test_a_fallback_that_names_no_gate_is_a_usage_error(
         "--gate",
         "goodput*=non-inferiority:0.05",
         "--fallback",
-        "goodput_rps=0.5:requests_per_second",
+        "throughput_rps=0.5:requests_per_second",
     )
     assert code == ExitCode.USAGE
-    assert "names no --gate" in err
+    assert "matches no gated metric" in err
+
+
+def test_overlap_segments_with_a_rate_gate_are_a_usage_error(
+    arms: dict[str, list[str]]
+) -> None:
+    code, _out, err = _compare(
+        "--baseline",
+        *arms["baseline"],
+        "--candidate",
+        *arms["slower"],
+        "--gate",
+        "throughput_rps=non-inferiority:0.05",
+        "--segment",
+        "early=0:0.5",
+        "--segment-membership",
+        "overlap",
+    )
+    assert code == ExitCode.USAGE
+    assert "overlap" in err and "throughput_rps" in err
 
 
 def test_two_runs_of_one_arm_in_a_block_are_invalid_input(

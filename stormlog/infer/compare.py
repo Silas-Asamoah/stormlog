@@ -89,6 +89,8 @@ class ComparisonSpec:
     cases: tuple[str, ...] | None = None
     bootstrap_min_n: int = 10
     seed: int = 0
+    # Pre-registered fallback budgets: (metric name or pattern, budget, unit).
+    fallbacks: tuple[tuple[str, float, str], ...] = ()
 
     def __post_init__(self) -> None:
         checks = (
@@ -116,11 +118,18 @@ class ComparisonSpec:
             )
 
     def gate_for(self, metric: str) -> GateRule | None:
-        """The gate on a metric: the last pattern that matches its name."""
+        """The gate on a metric: the last pattern that matches its name.
+
+        A fallback budget whose name or pattern matches the metric applies
+        to it, whichever gate pattern named the metric.
+        """
         found = None
         for pattern, rule in self.gates:
             if fnmatch.fnmatchcase(metric, pattern):
                 found = rule
+        for pattern, budget, unit in self.fallbacks:
+            if found is not None and fnmatch.fnmatchcase(metric, pattern):
+                found = replace(found, fallback_budget=budget, fallback_unit=unit)
         return found
 
     def to_record(self) -> dict[str, Any]:
@@ -140,6 +149,7 @@ class ComparisonSpec:
             "evidence_floor": self.evidence_floor,
             "cases": None if self.cases is None else list(self.cases),
             "seed": self.seed,
+            "fallbacks": [list(item) for item in self.fallbacks],
         }
 
 
@@ -274,6 +284,8 @@ def compare_runs(
         raise InferInputError("each arm needs at least one run")
     arms = {BASELINE: list(baseline), CANDIDATE: list(candidate)}
     _check_cases_exist(arms, spec)
+    _check_cases_hold_requests(arms, spec)
+    _check_one_slo_policy(arms, spec)
     excluded = _excluded(arms, spec)
     usable = {arm: _usable(runs) for arm, runs in arms.items()}
     if not usable[BASELINE] or not usable[CANDIDATE]:
@@ -570,8 +582,6 @@ def _case(
     }
     attrition = [item for item in excluded if item["case"] == case_id]
     blocked = _case_blocker(compatibility, observer_issues, attrition, spec)
-    if blocked is None and _empty(case_id, kept):
-        blocked = "empty_case"
     metrics = _case_metrics(case_id, kept, design, spec, blocked)
     case: dict[str, Any] = {
         "metrics": metrics,
@@ -593,7 +603,7 @@ def _check_cases_exist(
     }
     missing = [case for case in spec.cases or () if case not in present]
     if missing:
-        raise InferInputError(
+        raise InferUsageError(
             f"case {', '.join(missing)} is in no run; the runs have "
             + (", ".join(sorted(present)) or "no case")
         )
@@ -633,14 +643,22 @@ def _case_metrics(
     }
 
 
-def _empty(case_id: str, kept: Mapping[str, list[RunSummary]]) -> bool:
-    """No kept run offered the case a request: a segment outside every phase."""
-    offered = [
-        (run.comparable_cases[case_id].get("population") or {}).get("offered")
-        for runs in kept.values()
-        for run in runs
-    ]
-    return bool(offered) and all(value == 0 for value in offered)
+def _check_cases_hold_requests(
+    arms: Mapping[str, list[RunSummary]], spec: ComparisonSpec
+) -> None:
+    """Refuse a case no run offered a request: a segment outside every phase."""
+    for case_id in _case_ids(arms, spec):
+        offered = [
+            (run.comparable_cases[case_id].get("population") or {}).get("offered")
+            for runs in arms.values()
+            for run in runs
+            if case_id in run.comparable_cases
+        ]
+        if offered and all(value == 0 for value in offered):
+            raise InferInputError(
+                f"{case_id} holds no request in any run: a segment outside every "
+                "run's measured phase compares nothing"
+            )
 
 
 def _case_blocker(
@@ -686,6 +704,10 @@ def _metric(
         seed=spec.seed,
         unavailable=blocked or _metric_blocker(metric, case_id, kept, reasons, spec),
     )
+    unavailable = blocked or _metric_blocker(metric, case_id, kept, reasons, spec)
+    if unavailable is not None and compared.reason is None:
+        # Why it was not compared, gated or not.
+        compared = replace(compared, reason=unavailable)
     if protocol_gate is None:
         return compared
     return replace(compared, gate=GateOutcome(FAIL, "protocol_failure", protocol_gate))
@@ -743,6 +765,36 @@ def _slo_blocker(case_id: str, kept: Mapping[str, list[RunSummary]]) -> str | No
         for run in runs
     }
     return "slo_policy_differs" if len(digests - {None}) > 1 else None
+
+
+def _check_one_slo_policy(
+    arms: Mapping[str, list[RunSummary]], spec: ComparisonSpec
+) -> None:
+    """An SLO gate needs one policy to have judged every run.
+
+    Without ``--slo``, each run is judged by the policy it recorded; a
+    candidate judged by a looser one would meet it however slow it was.
+    """
+    gated = spec.min_attainment is not None or any(
+        spec.gate_for(name) is not None for name in SLO_METRICS
+    )
+    if not gated:
+        return
+    digests = {
+        (case.get("slo") or {}).get("slo_digest")
+        for runs in arms.values()
+        for run in runs
+        for case in run.comparable_cases.values()
+    } - {None}
+    if len(digests) > 1:
+        raise InferInputError(
+            "the runs were judged by different SLO policies ("
+            + ", ".join(sorted(str(d)[:12] for d in digests))
+            + "); give --slo or --slo-file to judge them all by one"
+        )
+
+
+SLO_METRICS = ("goodput_rps", "attainment")
 
 
 def _blocks(

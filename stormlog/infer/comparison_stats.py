@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Hashable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import numpy as np
@@ -679,13 +679,14 @@ def compare_values(
     metric's own unit otherwise. ``value_unit`` is the unit of the raw
     values, for a ``log_ratio`` metric's difference and fallback budget.
     ``unavailable`` names why the caller already knows the metric cannot be
-    gated (``censored``, ``unverified``, ...). A value that is not finite
-    makes it ``non_finite_value``: an infinite latency is the worst value
-    there is, and dropping it as missing would decide the gate on the runs
-    left. A duplicate block label is a ValueError.
+    gated (``censored``, ``unverified``, ...). An infinite candidate value of
+    a lower-is-better metric is the worst value there is: the gate fails
+    (``candidate_censored_worst``), read like a zero candidate on a
+    higher-is-better one. Any other value that is not finite makes the gate
+    ``non_finite_value``; dropping it as missing would decide the gate on
+    the runs left. A duplicate block label is a ValueError.
     """
-    if unavailable is None and _non_finite([*baseline, *candidate]):
-        unavailable = "non_finite_value"
+    unavailable = unavailable or _non_finite_reason(direction, baseline, candidate)
     request = _check(
         _Request(
             name,
@@ -703,7 +704,47 @@ def compare_values(
     )
     # The candidate alone is measured on an absolute scale: no pairing.
     pairs = _pair(baseline, candidate, None if scale == ABSOLUTE else blocks)
-    return _compare(request, pairs)
+    result = _compare(request, pairs)
+    if request.unavailable == CENSORED_WORST and request.gate is not None:
+        outcome = _censored_gate(replace(request, unavailable=None), pairs)
+        result = _with(result, gate=outcome)
+    return result
+
+
+CENSORED_WORST = "candidate_censored_worst"
+
+
+def _non_finite_reason(
+    direction: str, baseline: Sequence[RunValue], candidate: Sequence[RunValue]
+) -> str | None:
+    """Why a value that is not finite keeps the gate from its interval."""
+    if not _non_finite([*baseline, *candidate]):
+        return None
+    if direction == LOWER_IS_BETTER and _positive_infinite(candidate):
+        return CENSORED_WORST
+    return "non_finite_value"
+
+
+def _positive_infinite(values: Sequence[RunValue]) -> bool:
+    for value in values:
+        bounds = value if isinstance(value, tuple) else (value,)
+        if any(bound == math.inf for bound in bounds if bound is not None):
+            return True
+    return False
+
+
+def _censored_gate(request: _Request, pairs: _Pairs) -> GateOutcome:
+    """A candidate run worse than any value: the gate fails.
+
+    A regression rule waits for the gate's blockers first, as with a zero.
+    """
+    gate = request.gate
+    assert gate is not None
+    if gate.rule != NON_INFERIORITY:
+        blocker = _gate_blocker(request, pairs, Guards())
+        if blocker is not None:
+            return GateOutcome(NOT_EVALUABLE, blocker, gate)
+    return GateOutcome(FAIL, CENSORED_WORST, gate)
 
 
 def _non_finite(values: Sequence[RunValue]) -> bool:
