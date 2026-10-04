@@ -126,7 +126,10 @@ the flaky benchmark memory gates
   observer, `treatment:<name>`. It gives each artifact its before and after
   descriptions, and with a verified model an `infer.model_identity` record
   bound to the server it launched, which is what lets a comparison verify
-  the weights. (#213)
+  the weights. Each artifact also gets the run's state (`infer.run_state`),
+  so `infer compare` counts a run whose server crashed against its arm
+  rather than trusting a session that finished, and sets aside a block only
+  for a protocol failure the runner recorded. (#213)
 - `stormlog.infer.experiment_plan`: experiment plans
   (`stormlog.infer.experiment_plan` v1) with arms, workload steps (shared with
   `same_as:<arm>`), treatments, block preludes, a seeded `random`, `williams`
