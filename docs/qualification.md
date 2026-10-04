@@ -575,7 +575,8 @@ timing can start from the first confirmed stop.
 hold's checks (every 10 ms) or just before `SIGCONT`. A continue by someone
 else followed by another stop (a second actor) is caught when it runs
 across a check. One shorter than the check interval can still be missed.
-A status read that fails reads as running. A target that exits during a
+A failed status read during the hold says nothing; the one just before
+`SIGCONT` reads as running if it fails. A target that exits during a
 pulse, or whose pid comes to name another process, raises `TargetGone`
 with a message starting `target_gone`, rather than blaming the watchdog,
 which exits once its target is gone.

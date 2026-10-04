@@ -135,6 +135,17 @@ class Pulse:
         }
 
 
+def seen_running(pid: int) -> bool:
+    """Whether a status read succeeded and showed the process not stopped: a
+    read that fails says nothing, so a hold's many checks never flag a
+    pulse on a transient error."""
+    try:
+        status = psutil.Process(pid).status()
+    except psutil.Error:
+        return False
+    return status not in (psutil.STATUS_STOPPED, psutil.STATUS_TRACING_STOP)
+
+
 def process_stopped(pid: int) -> bool:
     """Whether the process is in the stopped state now."""
     try:
@@ -342,7 +353,7 @@ class Pulser:
                 raise TargetGone(
                     f"target_gone: pid {self.target.pid} exited during the stop"
                 )
-            if not process_stopped(self.target.pid):
+            if seen_running(self.target.pid):
                 self._ran_meanwhile = True
             if not self._watchdog_watching():
                 raise PulseRefused("the watchdog stopped watching during the stop")
