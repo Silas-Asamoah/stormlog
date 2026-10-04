@@ -9,7 +9,8 @@ first run it runs the block's preludes. Each run then:
 3. starts the arm's treatments and waits for each to be ready;
 4. runs the workload steps in order;
 5. checks each treatment stayed up for the whole workload, then stops it;
-6. describes the server again (after) and attaches that to each artifact;
+6. describes the server again (after) and attaches that, and the probe it
+   took before measuring, to each artifact;
 7. stops the server's whole process group and checks nothing is left;
 8. checks the promised artifacts and their labels, appends the run's state
    to each (``infer.run_state``), writes ``SHA256SUMS`` and renames
@@ -99,7 +100,7 @@ from .observers import TREATMENTS_EVENT
 from .run_summary import RUN_STATE_EVENT
 from .sanitize import sanitize_bundle
 from .server_collector import NvmlUnavailableError
-from .server_probe import AUTO, BEFORE, probe_server
+from .server_probe import AUTO, BEFORE, SERVER_INFO, probe_server
 
 COMPLETED = "completed"
 OUTCOME_FAILURE = "outcome_failure"
@@ -783,6 +784,7 @@ class _Run:
     def _attach_after(self) -> None:
         self._record_treatments()
         self._attach_before()
+        self._attach_probe()
         self._record_model_identity()
         after = self.dir / "describe-after.json"
         if not after.exists():
@@ -820,6 +822,30 @@ class _Run:
                 session_id=_artifact_session(records),
                 run_id=self.label,
             )
+            with artifact.open("a") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+    def _attach_probe(self) -> None:
+        """Give each artifact the probe taken before measuring, unless it has one.
+
+        The workload probes only the basic routes, so that no collector runs
+        beside it; ``/server_info``, and the configuration a comparison
+        needs, come from this probe.
+        """
+        path = self.dir / "server-probe.json"
+        if not path.exists():
+            return
+        probe = json.loads(path.read_text())
+        for artifact in self._infer_artifacts():
+            records = _artifact_records(artifact)
+            if any(_answered_server_info(r) for r in records):
+                continue
+            record = {
+                **probe,
+                "session_id": _artifact_session(records),
+                "run_id": self.label,
+                "taken_by": "experiment_runner",
+            }
             with artifact.open("a") as handle:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
 
@@ -1078,6 +1104,16 @@ def _artifact_records(path: Path) -> list[dict[str, Any]]:
         if isinstance(value, dict):
             records.append(value)
     return records
+
+
+def _answered_server_info(record: Mapping[str, Any]) -> bool:
+    """A before probe whose /server_info answered with a body."""
+    if record.get("event_type") != "infer.server_probe":
+        return False
+    if record.get("phase") != BEFORE:
+        return False
+    answer = (record.get("answers") or {}).get(SERVER_INFO) or {}
+    return bool(answer.get("body"))
 
 
 def _artifact_session(records: list[dict[str, Any]]) -> str:

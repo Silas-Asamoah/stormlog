@@ -25,6 +25,11 @@ class Handler(BaseHTTPRequestHandler):
             "/health": {},
             "/version": {"version": "0.30.0"},
             "/v1/models": {"data": [{"id": "m", "max_model_len": 4096}]},
+            # As vLLM answers it in dev mode (VLLM_SERVER_DEV_MODE=1).
+            "/server_info?config_format=json": {
+                "vllm_config": {"scheduler_config": {"max_num_seqs": 256}},
+                "vllm_env": {"VLLM_SERVER_DEV_MODE": "1"},
+            },
         }
         if self.path not in answers:
             self.send_error(404)
