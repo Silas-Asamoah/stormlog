@@ -750,6 +750,14 @@ directories and the root are fsynced around the rename. `run_dir.verify`
 reports any file changed, missing or unlisted, a `SHA256SUMS` truncated or
 edited, and one that differs from the digest beside the run.
 
+Two limits. **The sidecar travels with the run:** a run copied without its
+`<label>.sha256` fails `verify` ("no digest of SHA256SUMS beside the run"),
+so every archive of a run, such as the release assets uploaded to the audit
+repository, carries the sidecar beside it. **The sums catch damage, not a
+forger:** they have no key, so whoever rewrites a file, `SHA256SUMS`, its
+count line and the sidecar together passes `verify`. Trust in a run rests
+on where it is kept, not on the sums.
+
 **The victim's outcomes** for impact are a stand-in for #213's
 `evaluate_request` on the client criteria, used until #213 lands, and the
 rule is the same:
