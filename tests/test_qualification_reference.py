@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
@@ -283,6 +284,37 @@ def test_the_engine_hit_ratio_comes_from_counter_deltas() -> None:
         scrape(10, 320, 110),  # 50 of 100
     ]
     assert hit_ratios(scrapes) == [(2, 0.75), (4, 0.4), (10, 0.5)]
+
+
+def test_a_request_admitted_but_unfinished_is_in_flight_until_now(
+    tmp_path: Path,
+) -> None:
+    # A victim request stuck in a stall has no client record yet, but the
+    # engine admitted it: it is in flight from its admission to the latest
+    # poll, so a stall still open then is busy time (rev-220-b's delta D1).
+    alias = {"epoch": "engine-1", "kind": "alias", "internal": "i7",
+             "external": "chatcmpl-stormlog-victim-7", "wall_ns": 1_000}  # fmt: skip
+    (_epoch_dir(tmp_path) / "000001.jsonl.part").write_text(json.dumps(alias) + "\n")
+    artifact = tmp_path / "victim.jsonl"
+    artifact.write_text("")
+    channel = ReferenceChannel(
+        hook_root=tmp_path / "hook",
+        metrics_url="http://127.0.0.1:9/metrics",
+        victim_prefix=VICTIM,
+        shared_prefix_tokens=4,
+        reference_dir=tmp_path / "reference",
+        probes_dir=tmp_path / "probes",
+        victim_artifact=artifact,
+    )
+    channel.poll(scrape=False)
+    before = time.time_ns()
+    ((start, end),) = channel.signals().in_flight or []
+    assert start == 1_000 and end >= before
+    # Once it finishes, its client record's span replaces the open one.
+    done = {"event_type": "infer.request", "x_request_id": "stormlog-victim-7",
+            "started_at_ns": 900, "ended_at_ns": 2_000}  # fmt: skip
+    artifact.write_text(json.dumps(done) + "\n")
+    assert channel.signals().in_flight == [(900, 2_000)]
 
 
 def test_in_flight_intervals_merge_overlapping_requests() -> None:

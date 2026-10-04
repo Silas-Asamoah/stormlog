@@ -323,6 +323,17 @@ def chunk_gaps(records: Iterable[dict[str, Any]], victim_prefix: str) -> list[Po
     return sorted(gaps)
 
 
+def finished_requests(
+    records: Iterable[dict[str, Any]], victim_prefix: str
+) -> set[str]:
+    """The external IDs, as the engine knows them, of finished victim
+    requests."""
+    return {
+        f"chatcmpl-{record.get('x_request_id')}"
+        for record in _victim_requests(records, victim_prefix)
+    }
+
+
 def request_spans(
     records: Iterable[dict[str, Any]], victim_prefix: str
 ) -> list[tuple[int, int]]:
@@ -461,6 +472,7 @@ class ReferenceChannel:
         self._victim_offset = 0
         self._victim_gaps: list[Point] = []
         self._victim_spans: list[tuple[int, int]] = []
+        self._victim_finished: set[str] = set()
         self.bad_records = 0
 
     def poll(self, *, scrape: bool = True) -> None:
@@ -484,9 +496,10 @@ class ReferenceChannel:
 
     def signals(self) -> Signals:
         """The series so far. ``in_flight`` comes from the victim's finished
-        requests, so a request still in flight counts only once it ends:
-        until then its gaps aren't busy ones, which delays recovery, never
-        hastens it."""
+        requests, from send to end, and from each victim request the engine
+        admitted that hasn't finished yet, from its admission to now: a
+        request stuck in a stall is in flight, so the stall still open at
+        the latest poll is busy time, not idle."""
         ok = [taken for taken in self.scrapes if taken.error is None]
         self._read_victim()
         return Signals(
@@ -498,8 +511,18 @@ class ReferenceChannel:
             step_starts=sorted(self.view.step_starts),
             chunk_gaps=self._victim_gaps,
             engine_hit_ratio=hit_ratios(ok),
-            in_flight=merge_spans(self._victim_spans),
+            in_flight=self._in_flight(),
         )
+
+    def _in_flight(self) -> list[tuple[int, int]]:
+        now = time.time_ns()
+        open_requests = [
+            (at, now)
+            for at, external in self.view.admissions
+            if external.startswith(self.victim_prefix)
+            and external not in self._victim_finished
+        ]
+        return merge_spans(self._victim_spans + open_requests)
 
     def _read_victim(self) -> None:
         """The victim's chunk gaps and request spans, reading only what was
@@ -519,6 +542,7 @@ class ReferenceChannel:
         if fresh:
             self._victim_gaps = sorted(self._victim_gaps + fresh)
         self._victim_spans += request_spans(records, self.victim_prefix)
+        self._victim_finished |= finished_requests(records, self.victim_prefix)
 
 
 __all__ = [
@@ -528,6 +552,7 @@ __all__ = [
     "VictimView",
     "chunk_gaps",
     "hit_ratios",
+    "finished_requests",
     "merge_spans",
     "request_spans",
     "scrape_metrics",
