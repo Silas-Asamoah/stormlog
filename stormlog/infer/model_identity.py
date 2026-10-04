@@ -162,15 +162,27 @@ def _pinned(spec: Mapping[str, Any]) -> VerifiedModel:
 def _check_listed(
     repo: str, commit: str, listed: Any, files: Sequence[ModelFile]
 ) -> None:
-    """Every file the pin lists, the commit's as recorded when it was pinned,
-    is in the snapshot."""
-    if not isinstance(listed, list) or not all(isinstance(n, str) for n in listed):
-        raise InferInputError(f"model {repo}: files must be a list of paths")
-    missing = sorted(set(listed) - {item.path for item in files})
+    """The snapshot holds exactly the files the pin names, each with the blob
+    the pin names (as recorded when the revision was pinned: the hub's
+    ``lfs.sha256`` for a file in LFS, its git ``blob_id`` otherwise), so a
+    link re-pointed at another commit's blob fails."""
+    if not isinstance(listed, Mapping) or not all(
+        isinstance(path, str) and isinstance(blob, str) for path, blob in listed.items()
+    ):
+        raise InferInputError(f"model {repo}: files must map each path to its blob id")
+    at = f"model {repo}@{commit[:12]}"
+    present = {item.path: item.digest for item in files}
+    missing = sorted(set(listed) - set(present))
     if missing:
-        raise InferInputError(
-            f"model {repo}@{commit[:12]}: no {', '.join(missing)}, which the pin lists"
-        )
+        raise InferInputError(f"{at}: no {', '.join(missing)}, which the pin names")
+    extra = sorted(set(present) - set(listed))
+    if extra:
+        raise InferInputError(f"{at}: {', '.join(extra)}, which the pin does not name")
+    for path, blob in sorted(listed.items()):
+        if present[path] != blob:
+            raise InferInputError(
+                f"{at}: {path}: blob {present[path][:12]}, the pin names {blob[:12]}"
+            )
 
 
 def _checked_blob(directory: Path, path: Path) -> ModelFile:
