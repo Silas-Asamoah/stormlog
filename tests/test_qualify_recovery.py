@@ -429,9 +429,9 @@ def test_an_api_server_pulse_that_also_stalled_the_engine_adds_that_mechanism() 
 
 
 def test_a_twin_that_leaves_the_signals_alone_is_realized() -> None:
-    # A twin's recovery already holds at its onset, so its effect window is
-    # empty; its realization is judged over its whole action instead (the
-    # neighbor ran from 60 s to 90 s).
+    # A twin's recovery already holds at its onset; its effect, the benign
+    # change, lasts as long as its action, as N's slot does (the neighbor
+    # ran from 60 s to 90 s), and its realization is judged over all of it.
     cached = every_second(0, 200, lambda s: 0.95)
     falling = every_second(0, 200, lambda s: 0.4 if 60 <= s < 90 else 0.7)
     actions = Actions(
@@ -442,7 +442,7 @@ def test_a_twin_that_leaves_the_signals_alone_is_realized() -> None:
         actions,
     )
     timing = effect_timing("T3b", t3b)
-    assert timing.end_ns == timing.onset_ns == 60 * S
+    assert (timing.onset_ns, timing.end_ns) == (60 * S, 90 * S)
     assert realization("T3b", t3b, timing)[0]
     # T2's no-preemption check covers the whole neighbor run: a preemption
     # at 85 s, late in the action, fails it.
