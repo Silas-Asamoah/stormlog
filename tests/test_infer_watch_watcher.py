@@ -804,3 +804,29 @@ def test_a_store_budget_larger_than_the_disk_is_warned_of(tmp_path: Path) -> Non
         assert "less than store.max_total_bytes" in warning
     finally:
         watcher.close()
+
+
+def test_a_ledger_that_misses_the_shutdown_deadline_is_unsound(
+    tmp_path: Path,
+) -> None:
+    """Treating ledger_close_timeout as sound survived every test."""
+    with serve_metrics(FakeMetrics()) as base_url:
+        watcher = Watcher(
+            resolve_watch_config(watch_config(base_url)),
+            tmp_path,
+            options=WatchOptions(duration_seconds=0.5),
+        )
+        real_close = watcher.ledger.close
+
+        def late_close(timeout: float) -> bool:
+            real_close(timeout)
+            return False  # as if the sink had not finished in time
+
+        watcher.ledger.close = late_close  # type: ignore[method-assign]
+
+        async def main() -> WatchOutcome:
+            return await watcher.run(asyncio.Event())
+
+        outcome = asyncio.run(main())
+    assert outcome.exit_code == 1
+    assert outcome.unsound == ["ledger_close_timeout"]
