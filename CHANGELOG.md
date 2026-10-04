@@ -58,6 +58,10 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `stormlog.infer.server_log`: the choices a vLLM 0.30.0 server logs at
+  start-up (attention backend, KV cache size, CUDA graph captures), from the
+  last start-up in its log, with disagreements between workers kept as
+  issues. (#213)
 - `stormlog.infer.server_model`: the model files a vLLM server was started
   with, from its command line and its Hugging Face cache (each file's
   algorithm, digest and size: SHA-256 for LFS blobs, git SHA-1 for the
