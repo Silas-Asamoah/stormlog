@@ -349,3 +349,24 @@ def test_neighbor_names_say_nothing_about_the_episode_order() -> None:
     assert all(re.fullmatch(r"[0-9a-f]{12}", name) for name in names)
     assert names == [neighbor_name("q221-0123456789abcdef", i) for i in range(3)]
     assert neighbor_name("q221-fedcba9876543210", 0) != names[0]
+
+
+def test_an_api_server_pulse_that_stalled_the_engine_adds_that_mechanism(
+    tmp_path: Path,
+) -> None:
+    # The fake engine is one process, so pulsing its API server stops its
+    # engine too. A.4: F4b stays realized, its realized set adds
+    # host_stall@engine_core, and the label allows it.
+    arguments = ["--step-seconds", "0.002", "--hook-dir", str(tmp_path / "hook")]
+    plan = _short_plan(
+        tmp_path / "plan.json",
+        {"type": "F4b", "dose": {"pulse_ms": 100, "period_ms": 400}},
+    )
+    with FakeEngineProcess(arguments) as server:
+        code = _inject(server, tmp_path, plan, "--target", f"api_server={server.pid}")
+    assert code == 0
+    run = tmp_path / "runs" / "q221-00000000000000bb"
+    (f4b,) = load_injections(run / "truth" / "injections.jsonl")
+    assert f4b.validity.realization == "realized", f4b.validity
+    assert "host_stall@engine_core" in f4b.validity.realized_mechanisms
+    assert ("host_stall", "engine_core") in {(a.kind, a.component) for a in f4b.allows}

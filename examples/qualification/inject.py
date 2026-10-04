@@ -38,6 +38,7 @@ from stormlog.infer.qualify.ground_truth import (
     Impact,
     Injection,
     Interval,
+    Neutral,
     PhaseWindow,
     RunRecord,
     Times,
@@ -59,6 +60,7 @@ from stormlog.infer.qualify.recovery import (
     Signals,
     Thresholds,
     Timing,
+    added_mechanisms,
     effect_timing,
     next_episode,
     priming_check,
@@ -129,6 +131,8 @@ class _Attempt:
     checks: list[dict[str, Any]]
     clean_since_ns: int
     actions_record: list[dict[str, Any]] = field(default_factory=list)
+    # Mechanisms realized beyond the label's (A.4), as "kind@component".
+    added: tuple[str, ...] = ()
 
 
 @dataclass
@@ -309,7 +313,7 @@ class InjectionRun:
         return _Attempt(
             index, episode, actions, onset, ended, actuated, injected, timing,
             decision, realized, [check.to_record() for check in checks], clean_since,
-            actions_record,
+            actions_record, added_mechanisms(episode.type, checks),
         )  # fmt: skip
 
     # ------------------------------------------------------------ actuation
@@ -498,13 +502,20 @@ class InjectionRun:
             realized=attempt.realized,
             recovered=attempt.decision == START,
         )
+        labelled = [f"{e.kind}@{e.component}" for e in row.expects]
         validity = Validity(
             actuation="ok" if attempt.actuated else "failed",
             realization="realized" if attempt.realized else "not_realized",
             observation="not_assessed",
             impact=impact,
+            realized_mechanisms=tuple(
+                (labelled if attempt.realized else []) + list(attempt.added)
+            ),
             checks=tuple(attempt.checks),
         )
+        # A mechanism the episode realized beyond its label is allowed: a
+        # diagnosis naming it is not wrong.
+        allows = row.allows + tuple(_neutral(mechanism) for mechanism in attempt.added)
         return Injection(
             episode_id=f"{truth.run_id}-e{attempt.index}",
             run_id=truth.run_id,
@@ -513,7 +524,7 @@ class InjectionRun:
             injected=attempt.injected,
             expects=row.expects,
             secondary=row.secondary,
-            allows=row.allows,
+            allows=allows,
             times=times,
             clock_domain=truth.clock_domain,
             status=status,
@@ -664,6 +675,11 @@ def _impact(
     effect = count_outcomes(records, timing.onset_ns, timing.end_ns, slo)
     reference = count_outcomes(records, baseline[0], baseline[1], slo)
     return assess_impact(effect, reference)
+
+
+def _neutral(mechanism: str) -> Neutral:
+    kind, _, component = mechanism.partition("@")
+    return Neutral(kind, component)
 
 
 def _append_error(path: Path, error: Exception) -> None:
