@@ -331,7 +331,8 @@ identifier, an ID Stormlog made, a value from a closed set, or a number:
   with `error.type` set to the status, the HTTP status code, or the
   exception's class name. `cancelled`, where Stormlog stopped waiting at its
   own drain deadline, leaves the status unset; `stormlog.request.status`
-  says what happened.
+  says what happened. A trace window whose profiler call failed is ERROR.
+  Only an ERROR span has a status message, as OpenTelemetry asks.
 - **A server's error** is reduced to its OpenAI-style `type` and `code`,
   each mapped to a known value or `other`: `stormlog.error.api_type` and
   `stormlog.error.api_code`. Its message and `param` are left out.
@@ -344,8 +345,9 @@ identifier, an ID Stormlog made, a value from a closed set, or a number:
 
 `--export-content` adds free text, each item cut to 1 KiB:
 - `digests`: the prompt's digest, from the artifact, and the output's;
-- `errors`: the server's error text, as the span's status message, and a
-  trace window's control error. A server's error can echo the request, so
+- `errors`: the server's error text, as a failed request span's status
+  message, and a failed trace window's control error. A server's error can
+  echo the request, so
   this is consent to export echoed prompt text even without `prompts`;
 - `prompts`, `outputs`: the request's text.
 

@@ -314,6 +314,41 @@ def test_trace_windows_are_children_of_the_capture() -> None:
     assert attributes["stormlog.trace_window.stop_reason"] == "phase_end"
 
 
+def _window(**changes: Any) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "event_type": "infer.trace_window",
+        "case_id": "c1",
+        "phase": "measured",
+        "requested_at_ns": 10,
+        "started_at_ns": 20,
+        "stopped_at_ns": 90,
+        "started": True,
+        "stop_reason": "phase_end",
+        "start_status": 200,
+        "stop_status": 200,
+    }
+    record.update(changes)
+    return record
+
+
+def test_a_failed_profiler_window_is_an_error_with_its_message_if_consented() -> None:
+    failed = _window(started=False, start_status=500, start_error="HTTP 500: busy")
+    plain = _span(_spans(), failed)
+    assert plain.status == STATUS_ERROR and plain.status_message is None
+    consented = _span(_spans(content=frozenset({ERRORS})), failed)
+    assert consented.status == STATUS_ERROR
+    assert consented.status_message == "HTTP 500: busy"
+    fine = _span(_spans(content=frozenset({ERRORS})), _window())
+    assert fine.status == STATUS_UNSET and fine.status_message is None
+
+
+def test_a_span_that_did_not_fail_carries_no_status_message() -> None:
+    # OpenTelemetry: a status description is only for the error status.
+    cancelled = _request(status="cancelled", error_message="still in flight")
+    span = _span(_spans(content=frozenset({ERRORS})), cancelled)
+    assert span.status == STATUS_UNSET and span.status_message is None
+
+
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
