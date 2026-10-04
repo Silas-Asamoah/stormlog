@@ -810,6 +810,109 @@ def test_a_resume_waits_until_a_process_the_cleanup_could_not_judge_is_gone(
     assert {r["state"] for r in resumed} == {"completed"}
 
 
+def test_a_resume_stops_the_server_a_killed_runner_left(tmp_path: Path) -> None:
+    # rev-213-a's N1: SIGKILL runs no finally, so the runner's server lived
+    # on in its own session; the resumed servers could not bind its port,
+    # and the workload measured it for both arms.
+    import os
+    import signal
+    import subprocess
+
+    from stormlog.infer.experiment_process import (
+        journaled,
+        still_there,
+        stop_journaled,
+    )
+
+    document = _plan(_port(), blocks=1)
+    document["order"] = {"kind": "explicit", "blocks": [["off", "watch"]]}
+    hold = {"name": "hold", "command": ["{python}", "-c", "import time; time.sleep(5)"]}
+    document["arms"]["off"]["workload"].append(hold)
+    plan_file = tmp_path / "plan.json"
+    plan_file.write_text(json.dumps(document))
+    exp = tmp_path / "exp"
+    runner = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "examples.cli.infer_repeated_baseline",
+            "--plan",
+            str(plan_file),
+            "--output",
+            str(exp),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    journal = None
+    try:
+        deadline = time.monotonic() + 90
+        while journal is None and time.monotonic() < deadline:
+            for found in exp.glob("runs/*.partial/launches.ndjson"):
+                if "step:hold" in found.read_text():
+                    journal = found
+            time.sleep(0.05)
+        assert journal is not None
+    finally:
+        os.kill(runner.pid, signal.SIGKILL)
+        runner.wait()
+    left = {entry["name"]: entry for entry in journaled(journal)}
+    try:
+        assert still_there(left["server"]["identity"])
+        label = journal.parent.name[: -len(".partial")]
+        cause = ExternalCause("operator_abort", "the test killed it")
+        records = run_plan(
+            plan_from_document(document),
+            exp,
+            resume=True,
+            retry_incomplete=True,
+            external_causes={label: cause},
+            environment=Environment(python=sys.executable),
+        )
+        assert not any(still_there(entry["identity"]) for entry in left.values())
+    finally:
+        for entry in left.values():
+            stop_journaled(entry, timeout_s=5)
+    assert [(r["arm"], r.get("attempt"), r["state"]) for r in records] == [
+        ("off", 1, "protocol_failure"),
+        ("off", 2, "completed"),
+        ("watch", 1, "completed"),
+    ]
+
+
+def test_a_port_already_taken_stops_the_experiment_before_a_launch(
+    tmp_path: Path,
+) -> None:
+    port = _port()
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", port))
+        taken.listen()
+        first, *rest = _run(tmp_path, _plan(port, blocks=1))
+    assert first["reasons"] == ["server_port_in_use"]
+    assert first["processes"] == []
+    assert {(r["state"], tuple(r["reasons"])) for r in rest} == {
+        ("not_run", ("server_port_in_use",))
+    }
+
+
+def test_a_health_answer_counts_only_from_this_launchs_server(tmp_path: Path) -> None:
+    from stormlog.infer import experiment
+    from stormlog.infer.experiment_process import launch, stop
+
+    port = _port()
+    url = f"http://127.0.0.1:{port}/v1"
+    other = launch("other", [sys.executable, FAKE, "--port", str(port)])
+    idle = launch("server", [sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert experiment._wait_healthy(url, other, 20)
+        # Another process answers on the port; this launch listens on none.
+        assert not experiment._wait_healthy(url, idle, 2)
+    finally:
+        stop(other, timeout_s=5)
+        stop(idle, timeout_s=5)
+
+
 def test_a_prelude_server_loads_the_verified_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

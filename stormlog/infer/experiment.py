@@ -53,9 +53,11 @@ import json
 import os
 import re
 import shlex
+import socket
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field, replace
@@ -82,13 +84,16 @@ from .experiment_plan import (
 )
 from .experiment_process import (
     Launched,
+    journaled,
     launch,
+    listens,
     parse_cpu_list,
     process_key,
     remembered_tree,
     run_step,
     still_there,
     stop,
+    stop_journaled,
     unexpected_roles,
     verify_cleanup,
     wait_for_file,
@@ -118,6 +123,11 @@ NEVER_HEALTHY = "server_never_healthy"
 INDEX = "index.jsonl"
 # Written when an attempt starts: the slot it runs in.
 ATTEMPT = "attempt.json"
+# One line per process an attempt or a prelude launches, as it starts.
+LAUNCHES = "launches.ndjson"
+# What stops the experiment: a process that may still run, or a server port
+# something else holds.
+STOP_REASONS = ("cleanup_unverified", "server_port_in_use")
 # What may set aside an interrupted attempt; anything else is an outcome.
 EXTERNAL_REASONS = ("spot_preemption", "operator_abort", "infra_fault")
 SUMS = "SHA256SUMS"
@@ -226,6 +236,7 @@ def run_plan(
     causes = dict(external_causes or {})
     _check_interrupted(output_dir, causes, set(interrupted_as_outcome), resume)
     if resume:
+        _stop_left_launches(output_dir)
         _check_nothing_left(output_dir)
     env = environment or Environment(secrets=_secrets(plan))
     order = plan_order(plan)
@@ -317,6 +328,28 @@ def _check_nothing_left(output: Path) -> None:
             raise InferUsageError(
                 f"{where}: its cleanup left {pids} running; stop it, then resume"
             )
+
+
+def _stop_left_launches(output: Path) -> None:
+    """Stop what a runner that was killed left running, or refuse to resume.
+
+    Every launch of an unfinished attempt or a prelude is in its journal by
+    PID, start time and mark. One whose leader is still that process has its
+    group stopped; then its group, session and mark are verified gone.
+    """
+    journals = [
+        *sorted((output / "runs").glob(f"*.partial/{LAUNCHES}")),
+        *sorted((output / "preludes").glob(f"*/{LAUNCHES}")),
+    ]
+    for journal in journals:
+        for entry in journaled(journal):
+            cleanup = stop_journaled(entry)
+            if not cleanup.verified:
+                left = [s["pid"] for s in [*cleanup.survivors, *cleanup.blind]]
+                raise InferUsageError(
+                    f"{journal.parent.name} {entry.get('name')}: the runner was "
+                    f"stopped and left {left} running; stop them, then resume"
+                )
 
 
 def _blind_of(cleanup: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -510,7 +543,7 @@ def _not_run(
     output: Path,
     on_event: Events | None,
 ) -> list[dict[str, Any]]:
-    """Index every planned run after the one whose cleanup left processes.
+    """Index every planned run after the one that stopped the experiment.
 
     A resume runs them, once the host is clean.
     """
@@ -523,7 +556,7 @@ def _not_run(
             "block": block,
             "position_planned": position,
             "state": NOT_RUN,
-            "reasons": ["cleanup_unverified"],
+            "reasons": [_stop_reason(stopped)],
             "stopped_after": stopped["label"],
         }
         for block, arms in enumerate(order.blocks)
@@ -577,9 +610,17 @@ def _attempts(
 
 
 def _left_running(record: Mapping[str, Any]) -> bool:
-    """Whether a process the attempt started may still run: a server, a
-    treatment or a prelude whose cleanup did not verify."""
-    return any("cleanup_unverified" in reason for reason in record["reasons"])
+    """Whether the experiment must stop after this attempt: a server,
+    treatment, step or prelude whose cleanup did not verify, or a server
+    port something else already held."""
+    return _stop_reason(record) is not None
+
+
+def _stop_reason(record: Mapping[str, Any]) -> str | None:
+    for kind in STOP_REASONS:
+        if any(kind in reason for reason in record["reasons"]):
+            return kind
+    return None
 
 
 def _leftovers(runs: Path, base: str) -> list[Path]:
@@ -953,6 +994,11 @@ class _Run:
 
     def _start_server(self) -> bool:
         server = self.plan.server
+        if _port_in_use(server.base_url):
+            # Another server, perhaps one a killed runner left: launching
+            # would measure it.
+            self.record.protocol("server_port_in_use", before_treatment=True)
+            return False
         command, env = _server_launch(self.plan, self.arm, self.values, self.env)
         self.server = self._launch("server", command, env, server.cpu_affinity)
         self.values["server_pid"] = self.server.pid
@@ -1248,6 +1294,7 @@ class _Run:
             cpu_affinity=step.cpu_affinity,
             timeout_s=step.timeout_s,
             log_path=self.dir / f"{step.name}.log",
+            journal=self.dir / LAUNCHES,
         )
         self.record.processes.append(launched.to_record())
         if timed_out:
@@ -1301,6 +1348,7 @@ class _Run:
             env={**expanded_env, **self.env.secrets},
             cpu_affinity=cpus,
             log_path=self.dir / f"{name.replace(':', '-')}.log",
+            journal=self.dir / LAUNCHES,
         )
 
     def _write_commands(self) -> None:
@@ -1325,6 +1373,8 @@ def _prelude(
     }
     server = None
     if prelude.server_arm is not None:
+        if _port_in_use(plan.server.base_url):
+            return [f"{prelude.step.name}:server_port_in_use"]
         arm = plan.arms[prelude.server_arm]
         command, server_env = _server_launch(plan, arm, values, env)
         server = launch(
@@ -1333,6 +1383,7 @@ def _prelude(
             env=server_env,
             cpu_affinity=plan.server.cpu_affinity,
             log_path=directory / "server.log",
+            journal=directory / LAUNCHES,
         )
     try:
         ran = _prelude_ran(plan, prelude, server, values, directory, env)
@@ -1379,6 +1430,7 @@ def _prelude_ran(
         cpu_affinity=prelude.step.cpu_affinity,
         timeout_s=prelude.step.timeout_s,
         log_path=directory / "step.log",
+        journal=directory / LAUNCHES,
     )
     return not timed_out and launched.exit_code in prelude.step.expect_exit
 
@@ -1437,22 +1489,45 @@ def _without_gpu(options: DescribeOptions) -> DescribeOptions:
 
 
 def _wait_healthy(base_url: str, server: Launched, timeout_s: float) -> bool:
-    """Whether ``/health`` answers 200 before the timeout, while the server runs."""
+    """Whether ``/health`` answers 200 before the timeout from this launch:
+    the server still runs, and listens on the port where that can be read,
+    so another server's answer never counts."""
     url = base_url.rstrip("/")
     if url.endswith("/v1"):
         url = url[: -len("/v1")]
+    port = _port_of(base_url)
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if server.poll() is not None:
             return False
         try:
             with urllib.request.urlopen(url + "/health", timeout=5) as response:
-                if response.status == 200:
-                    return True
+                answered = response.status == 200
         except (urllib.error.URLError, OSError):
-            pass
+            answered = False
+        if (
+            answered
+            and server.poll() is None
+            and listens(server.pid, port) is not False
+        ):
+            return True
         time.sleep(HEALTH_POLL_SECONDS)
     return False
+
+
+def _port_of(base_url: str) -> int:
+    parsed = urllib.parse.urlsplit(base_url)
+    return parsed.port or (443 if parsed.scheme == "https" else 80)
+
+
+def _port_in_use(base_url: str) -> bool:
+    """Whether something already accepts connections on the server's port."""
+    host = urllib.parse.urlsplit(base_url).hostname or "127.0.0.1"
+    try:
+        with socket.create_connection((host, _port_of(base_url)), timeout=1):
+            return True
+    except OSError:
+        return False
 
 
 def _labels_match(path: Path, experiment: str, arm: str, block: int) -> bool:
