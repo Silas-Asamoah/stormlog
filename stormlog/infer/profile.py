@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import signal
 import sys
 import threading
@@ -19,7 +20,7 @@ from types import FrameType
 from typing import Any
 
 from .. import __version__
-from ..scrub import redact_url
+from ..scrub import KnownSecrets, redact_url, url_secrets
 from ..session import (
     SESSION_STATUS_INCOMPLETE,
     SESSION_STATUS_INTERRUPTED,
@@ -36,7 +37,8 @@ from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .export import RECEIVER_HEALTH, ExportPipeline, ReceiverHealth
-from .export_metrics import ProfileLabels, summarize_chunk_gaps
+from .export_metrics import ProfileLabels
+from .export_spans import SpanIdentity
 from .host_clock import host_boot_id, wall_clock_domain
 from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
 from .openai_client import (
@@ -164,8 +166,35 @@ class InferenceProfiler:
             health=health,
             forbidden_paths=[Path(config.output_path)],
             on_warning=self.on_warning,
+            spans=SpanIdentity(
+                run_id=self.run_id,
+                session_id=self.session.session_id,
+                model=config.model,
+                endpoint=config.endpoint,
+                sample_ratio=config.export.sample_ratio,
+                content=config.export.export_content,
+            ),
+            secrets=self._known_secrets(),
+            environ=os.environ,
+            host=self.session.host,
         )
         return pipeline
+
+    def _known_secrets(self) -> KnownSecrets:
+        """Every credential this run was given, to redact from what it exports."""
+        config = self.config
+        secrets = KnownSecrets([config.api_key])
+        urls = [
+            config.endpoint,
+            config.vllm_metrics_url,
+            config.cache_reset_url,
+            config.export.otlp_endpoint,
+            config.trace.control_url if config.trace is not None else None,
+        ]
+        for url in urls:
+            for value in url_secrets(url):
+                secrets.add(value)
+        return secrets
 
     def _build_vllm_scraper(self) -> VllmMetricsScraper | None:
         """The ``/metrics`` scraper when native vLLM telemetry is on."""
@@ -470,6 +499,7 @@ class InferenceProfiler:
                         # counts in them are final; synchronous, so a
                         # cancellation cannot skip it, and an interrupt
                         # inside it still finishes it.
+                        self._offer_capture_span(completed)
                         self._close_export(completed)
                     finally:
                         # Written on the way out of an interrupted run too,
@@ -486,6 +516,22 @@ class InferenceProfiler:
         export.start(started_at=time.time())
         if self.span_receiver is not None:
             export.attach_health(RECEIVER_HEALTH, ReceiverHealth(self.span_receiver))
+
+    def _offer_capture_span(self, completed: bool) -> None:
+        if self.export is None:
+            return
+        error = sys.exc_info()[1]
+        if completed or error is None:
+            outcome, error_type = "completed", None
+        elif isinstance(error, (KeyboardInterrupt, asyncio.CancelledError)):
+            outcome, error_type = "interrupted", None
+        else:
+            outcome, error_type = "failed", type(error).__name__
+        self.export.offer_capture(
+            started_ns=self.session.started_at_ns,
+            outcome=outcome,
+            error_type=error_type,
+        )
 
     def _close_export(self, completed: bool) -> None:
         if self.export is not None:
@@ -1172,18 +1218,14 @@ class InferenceProfiler:
         )
         self._track(call)
         outcome = await asyncio.wrap_future(call)
-        extras = (
-            {"chunk_summary": outcome.chunk_summary}
-            if outcome.chunk_summary is not None
-            else None
-        )
         if outcome.error is None:
             try:
                 event = self._ok_event(request_id, request, arrival, prompt, outcome)
-                return event, extras
+                return event, outcome.extras
             except Exception as exc:
                 outcome = replace(outcome, error=exc)
-        return self._failure_event(request_id, request, arrival, prompt, outcome), None
+        event = self._failure_event(request_id, request, arrival, prompt, outcome)
+        return event, outcome.extras
 
     def _call_and_count(
         self, prompt: Prompt, call: Callable[[], ChatCompletionResult]
@@ -1195,12 +1237,19 @@ class InferenceProfiler:
         """
         outcome = _timed_call(call)
         result = outcome.result
-        if result is not None and self.export is not None:
-            # Here, where the gaps were measured, so the event loop only
-            # copies a fixed-size summary for the exporter.
+        if self.export is not None:
+            # Here, where the response is, so the event loop only copies a
+            # fixed-size result for the exporters.
             outcome = replace(
                 outcome,
-                chunk_summary=summarize_chunk_gaps(result.chunk_interarrival_ms),
+                extras=self.export.request_extras(
+                    prompt=prompt.text,
+                    output=result.text if result is not None else None,
+                    chunk_gaps_ms=(
+                        result.chunk_interarrival_ms if result is not None else None
+                    ),
+                    error=outcome.error,
+                ),
             )
         try:
             if result is None:
@@ -1368,8 +1417,8 @@ class _TimedCall:
     error: Exception | None = None
     prompt_count: TokenCount | None = None
     output_count: TokenCount | None = None
-    # Chunk gaps summarized for an exporter; None when nothing exports.
-    chunk_summary: tuple[tuple[int, ...], float] | None = None
+    # What the exporters need beyond the record; None when nothing exports.
+    extras: dict[str, Any] | None = None
 
 
 def _timed_call(call: Callable[[], ChatCompletionResult]) -> _TimedCall:

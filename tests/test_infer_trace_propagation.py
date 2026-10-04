@@ -205,10 +205,10 @@ def test_the_flags_set_the_policy_ratio_and_declared_sampler() -> None:
     [
         ({"sample_ratio": 1.5}, "between 0 and 1"),
         ({"sample_ratio": -0.1}, "between 0 and 1"),
-        ({"sample_ratio": 0.5}, "only applies with --trace-context follow-sampling"),
+        ({"sample_ratio": 0.5}, "only applies with --otlp-endpoint"),
         (
             {"trace_context": PRESERVE_ENGINE, "sample_ratio": 0.5},
-            "only applies with --trace-context follow-sampling",
+            "only applies with --otlp-endpoint",
         ),
         ({"trace_context": "always"}, "must be one of"),
     ],
@@ -218,6 +218,11 @@ def test_unusable_trace_settings_are_refused(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         ExportConfig(**settings).validate()
+
+
+def test_the_ratio_also_samples_exported_spans() -> None:
+    ExportConfig(sample_ratio=0.5, otlp_endpoint="http://127.0.0.1:4318").validate()
+    ExportConfig(sample_ratio=0.5, trace_context=FOLLOW_SAMPLING).validate()
 
 
 def test_a_watcher_refuses_trace_context() -> None:

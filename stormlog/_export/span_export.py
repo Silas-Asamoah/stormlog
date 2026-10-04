@@ -207,13 +207,22 @@ class SpanExporter(Generic[T]):
         self._worker: threading.Thread | None = None
         self._lock = threading.Lock()
 
-    def start(self) -> None:
-        """Open the sink and start the worker; a sink error reaches the caller."""
-        self.sink.start()
+    def start(self) -> str | None:
+        """Open the sink and start the worker; the sink's error, if it failed.
+
+        The worker starts either way, so what is offered is still settled:
+        a file that could not be opened drops every batch as disabled.
+        """
+        error = None
+        try:
+            self.sink.start()
+        except OSError as exc:
+            error = f"{type(exc).__name__}: {exc}"
         self._worker = threading.Thread(
             target=self._run, name="stormlog-export-spans", daemon=True
         )
         self._worker.start()
+        return error
 
     def offer(self, item: T, size: int) -> bool:
         """Queue ``item``; never blocks. False when full or closed (counted)."""

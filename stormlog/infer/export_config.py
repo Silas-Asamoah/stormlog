@@ -16,8 +16,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .._export.http_server import parse_listen
+from .._export.otlp_http import Destination
 from .._export.registry import DEFAULT_MAX_BYTES, DEFAULT_MAX_SAMPLES
 from .._export.textfile import validate_slot
+from ..scrub import is_forbidden_key_name
+from .export_spans import CONTENT_ITEMS
 from .trace_context import FOLLOW_SAMPLING, OFF, POLICIES
 
 Command = Literal["profile", "watch"]
@@ -27,6 +30,11 @@ DEFAULT_HEADROOM: dict[str, int] = {"profile": 0, "watch": 64}
 MIN_MAX_BYTES = 4096
 # The longest linger or textfile interval.
 MAX_SECONDS = 3600.0
+DEFAULT_FLUSH_SECONDS = 5.0
+DEFAULT_PROBE_SECONDS = 8.0
+# A probe interval longer than a batch's retry budget would let a batch
+# settle with no attempt at all.
+PROBE_SECONDS_RANGE = (0.5, 30.0)
 
 
 @dataclass(frozen=True)
@@ -51,6 +59,18 @@ class ExportConfig:
     # The server's OTEL_TRACES_SAMPLER as the operator declares it; recorded
     # as declared, never verified.
     server_trace_sampler: str | None = None
+    # Spans: to an OTLP/HTTP endpoint, or to a file of OTLP JSON lines.
+    otlp_endpoint: str | None = None
+    otlp_file: Path | None = None
+    otlp_file_fsync: bool = False
+    # NAME=VALUE pairs; the values are credentials, never recorded.
+    otlp_headers: tuple[str, ...] = ()
+    otlp_resource_attributes: tuple[str, ...] = ()
+    otlp_resource_attribute_allow: tuple[str, ...] = ()
+    otlp_flush_timeout_seconds: float = DEFAULT_FLUSH_SECONDS
+    otlp_probe_interval_seconds: float = DEFAULT_PROBE_SECONDS
+    # What free text spans may carry: digests, errors, prompts, outputs.
+    export_content: frozenset[str] = frozenset()
 
     @property
     def prometheus_enabled(self) -> bool:
@@ -60,8 +80,12 @@ class ExportConfig:
         )
 
     @property
+    def otlp_enabled(self) -> bool:
+        return self.otlp_endpoint is not None or self.otlp_file is not None
+
+    @property
     def enabled(self) -> bool:
-        return self.prometheus_enabled
+        return self.prometheus_enabled or self.otlp_enabled
 
     def headroom(self, command: Command) -> int:
         if self.prometheus_series_headroom is not None:
@@ -83,6 +107,7 @@ class ExportConfig:
         _check_dependent(self, _given(self) if given is None else set(given))
         _check_numbers(self)
         _check_trace_context(self, command)
+        _check_otlp(self)
 
     @classmethod
     def from_mapping(
@@ -100,8 +125,18 @@ class ExportConfig:
         for name, value in mapping.items():
             _check_type(name, value)
         values = dict(mapping)
-        if values.get("prometheus_textfile_dir") is not None:
-            values["prometheus_textfile_dir"] = Path(values["prometheus_textfile_dir"])
+        for name in ("prometheus_textfile_dir", "otlp_file"):
+            if values.get(name) is not None:
+                values[name] = Path(values[name])
+        for name in (
+            "otlp_headers",
+            "otlp_resource_attributes",
+            "otlp_resource_attribute_allow",
+        ):
+            if name in values:
+                values[name] = tuple(values[name])
+        if "export_content" in values:
+            values["export_content"] = frozenset(values["export_content"])
         config = cls(**values)
         config.validate(command, given=set(mapping))
         return config
@@ -109,6 +144,7 @@ class ExportConfig:
 
 # What each JSON setting must be, as the flags' parsers would make it.
 _TEXT, _FLAG, _COUNT, _SECONDS = "a string", "true or false", "an integer", "a number"
+_TEXTS = "a list of strings"
 _SETTING_TYPES = {
     "prometheus_listen": _TEXT,
     "prometheus_linger_seconds": _SECONDS,
@@ -123,6 +159,15 @@ _SETTING_TYPES = {
     "trace_context": _TEXT,
     "sample_ratio": _SECONDS,
     "server_trace_sampler": _TEXT,
+    "otlp_endpoint": _TEXT,
+    "otlp_file": _TEXT,
+    "otlp_file_fsync": _FLAG,
+    "otlp_headers": _TEXTS,
+    "otlp_resource_attributes": _TEXTS,
+    "otlp_resource_attribute_allow": _TEXTS,
+    "otlp_flush_timeout_seconds": _SECONDS,
+    "otlp_probe_interval_seconds": _SECONDS,
+    "export_content": _TEXTS,
 }
 
 
@@ -132,6 +177,8 @@ _NULLABLE = {
     "prometheus_textfile_dir",
     "prometheus_series_headroom",
     "server_trace_sampler",
+    "otlp_endpoint",
+    "otlp_file",
 }
 
 
@@ -144,6 +191,8 @@ def _check_type(name: str, value: Any) -> None:
         _FLAG: isinstance(value, bool),
         _COUNT: isinstance(value, int) and not isinstance(value, bool),
         _SECONDS: isinstance(value, (int, float)) and not isinstance(value, bool),
+        _TEXTS: isinstance(value, (list, tuple))
+        and all(isinstance(item, str) for item in value),
     }[kind]
     if not valid:
         raise ValueError(f"export setting {name} must be {kind}, not {value!r}")
@@ -198,10 +247,74 @@ def _check_trace_context(config: ExportConfig, command: Command) -> None:
         )
     if not 0.0 <= config.sample_ratio <= 1.0:
         raise ValueError("--otlp-sample-ratio must be between 0 and 1")
-    if config.sample_ratio != 1.0 and config.trace_context != FOLLOW_SAMPLING:
+    if (
+        config.sample_ratio != 1.0
+        and config.trace_context != FOLLOW_SAMPLING
+        and not config.otlp_enabled
+    ):
         raise ValueError(
-            "--otlp-sample-ratio only applies with --trace-context follow-sampling"
+            "--otlp-sample-ratio only applies with --otlp-endpoint, --otlp-file "
+            "or --trace-context follow-sampling"
         )
+
+
+def _check_otlp(config: ExportConfig) -> None:
+    if config.otlp_endpoint is not None and config.otlp_file is not None:
+        raise ValueError("use one of --otlp-endpoint and --otlp-file, not both")
+    if config.otlp_endpoint is not None:
+        Destination.parse(config.otlp_endpoint)
+    if not config.otlp_enabled:
+        _check_otlp_dependent(config)
+    elif config.otlp_file is None and config.otlp_file_fsync:
+        raise ValueError("--otlp-file-fsync only applies with --otlp-file")
+    _check_otlp_values(config)
+    _check_otlp_names(config)
+
+
+def _check_otlp_values(config: ExportConfig) -> None:
+    unknown = sorted(config.export_content - set(CONTENT_ITEMS))
+    if unknown:
+        raise ValueError(
+            f"--export-content takes {', '.join(CONTENT_ITEMS)}; not {', '.join(unknown)}"
+        )
+    low, high = PROBE_SECONDS_RANGE
+    if not low <= config.otlp_probe_interval_seconds <= high:
+        raise ValueError(f"--otlp-probe-interval must be between {low:g} and {high:g}")
+    if not 0 < config.otlp_flush_timeout_seconds <= 60:
+        raise ValueError("--otlp-flush-timeout must be between 0 and 60 seconds")
+
+
+def _check_otlp_names(config: ExportConfig) -> None:
+    for flag, pairs in (
+        ("--otlp-header", config.otlp_headers),
+        ("--otlp-resource-attribute", config.otlp_resource_attributes),
+    ):
+        for pair in pairs:
+            name, sep, _ = pair.partition("=")
+            if not sep or not name.strip():
+                # Never echoed: a header's value is a credential.
+                raise ValueError(f"{flag} takes NAME=VALUE")
+    for key in config.otlp_resource_attribute_allow:
+        if is_forbidden_key_name(key):
+            raise ValueError(
+                f"--otlp-resource-attribute-allow cannot admit {key}: its name "
+                "says its value may be a credential"
+            )
+
+
+def _check_otlp_dependent(config: ExportConfig) -> None:
+    defaults = ExportConfig()
+    for name, flag in (
+        ("otlp_file_fsync", "--otlp-file-fsync"),
+        ("otlp_headers", "--otlp-header"),
+        ("otlp_resource_attributes", "--otlp-resource-attribute"),
+        ("otlp_resource_attribute_allow", "--otlp-resource-attribute-allow"),
+        ("otlp_flush_timeout_seconds", "--otlp-flush-timeout"),
+        ("otlp_probe_interval_seconds", "--otlp-probe-interval"),
+        ("export_content", "--export-content"),
+    ):
+        if getattr(config, name) != getattr(defaults, name):
+            raise ValueError(f"{flag} only applies with --otlp-endpoint or --otlp-file")
 
 
 def _check_numbers(config: ExportConfig) -> None:
@@ -330,6 +443,75 @@ def add_export_arguments(parser: argparse.ArgumentParser) -> None:
         help='With off, every series has case="all", for matrices too big '
         "for the budget (default on).",
     )
+    _add_otlp_arguments(parser)
+
+
+def _add_otlp_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group(
+        "span export (optional)",
+        "Send Stormlog's own spans over OTLP/HTTP, or write them as OTLP "
+        "JSON lines. Off unless asked for; OTEL_* variables never turn it on.",
+    )
+    group.add_argument(
+        "--otlp-endpoint",
+        metavar="URL",
+        help="An OTLP/HTTP traces URL; a bare origin gets /v1/traces. "
+        "Credentials belong in --otlp-header, never the URL.",
+    )
+    group.add_argument(
+        "--otlp-file",
+        metavar="PATH",
+        help="Append spans to PATH as OTLP JSON lines (capped at 256 MiB).",
+    )
+    group.add_argument(
+        "--otlp-file-fsync",
+        action="store_true",
+        help="fsync the file after each line.",
+    )
+    group.add_argument(
+        "--otlp-header",
+        action="append",
+        metavar="NAME=VALUE",
+        help="A request header, such as an API key; repeatable. Its value is "
+        "never recorded, and is redacted wherever it would appear. "
+        "OTEL_EXPORTER_OTLP_HEADERS and OTEL_EXPORTER_OTLP_TRACES_HEADERS "
+        "are read too.",
+    )
+    group.add_argument(
+        "--otlp-resource-attribute",
+        action="append",
+        metavar="KEY=VALUE",
+        help="A resource attribute, such as deployment.environment.name=prod; "
+        "repeatable. Only a fixed list of keys is accepted.",
+    )
+    group.add_argument(
+        "--otlp-resource-attribute-allow",
+        action="append",
+        metavar="KEY",
+        help="Accept one more resource attribute key; refused for a name "
+        "that suggests a credential.",
+    )
+    group.add_argument(
+        "--otlp-flush-timeout",
+        type=float,
+        metavar="SECONDS",
+        help=f"How long the run waits at its end for spans to leave "
+        f"(default {DEFAULT_FLUSH_SECONDS:g}; 2 after Ctrl+C).",
+    )
+    group.add_argument(
+        "--otlp-probe-interval",
+        type=float,
+        metavar="SECONDS",
+        help=f"While the collector is down, how often it is retried "
+        f"(default {DEFAULT_PROBE_SECONDS:g}).",
+    )
+    group.add_argument(
+        "--export-content",
+        metavar="ITEMS",
+        help="Comma-separated free text spans may carry: digests, errors, "
+        "prompts, outputs (default none). errors exports server error text, "
+        "which can echo the request, prompt included.",
+    )
 
 
 def export_config_from_args(args: argparse.Namespace) -> ExportConfig:
@@ -355,6 +537,7 @@ def export_config_from_args(args: argparse.Namespace) -> ExportConfig:
         trace_context=_or(args, "trace_context", OFF),
         sample_ratio=_or(args, "otlp_sample_ratio", 1.0),
         server_trace_sampler=getattr(args, "server_trace_sampler", None),
+        **_otlp_from_args(args, defaults),
     )
     config.validate(given=_given_flags(args))
     return config
@@ -365,6 +548,10 @@ _FLAG_FIELDS = {
     "prometheus_linger": "prometheus_linger_seconds",
     "prometheus_textfile_interval": "prometheus_textfile_interval_seconds",
     "otlp_sample_ratio": "sample_ratio",
+    "otlp_header": "otlp_headers",
+    "otlp_resource_attribute": "otlp_resource_attributes",
+    "otlp_flush_timeout": "otlp_flush_timeout_seconds",
+    "otlp_probe_interval": "otlp_probe_interval_seconds",
 }
 
 
@@ -378,6 +565,32 @@ def _given_flags(args: argparse.Namespace) -> set[str]:
         if value is not None and value is not False:
             given.add(item.name)
     return given
+
+
+def _otlp_from_args(args: argparse.Namespace, defaults: ExportConfig) -> dict[str, Any]:
+    otlp_file = getattr(args, "otlp_file", None)
+    content = getattr(args, "export_content", None) or ""
+    return {
+        "otlp_endpoint": getattr(args, "otlp_endpoint", None),
+        "otlp_file": Path(otlp_file) if otlp_file else None,
+        "otlp_file_fsync": bool(getattr(args, "otlp_file_fsync", False)),
+        "otlp_headers": tuple(getattr(args, "otlp_header", None) or ()),
+        "otlp_resource_attributes": tuple(
+            getattr(args, "otlp_resource_attribute", None) or ()
+        ),
+        "otlp_resource_attribute_allow": tuple(
+            getattr(args, "otlp_resource_attribute_allow", None) or ()
+        ),
+        "otlp_flush_timeout_seconds": _or(
+            args, "otlp_flush_timeout", defaults.otlp_flush_timeout_seconds
+        ),
+        "otlp_probe_interval_seconds": _or(
+            args, "otlp_probe_interval", defaults.otlp_probe_interval_seconds
+        ),
+        "export_content": frozenset(
+            item.strip() for item in content.split(",") if item.strip()
+        ),
+    }
 
 
 def _or(args: argparse.Namespace, name: str, default: Any) -> Any:
