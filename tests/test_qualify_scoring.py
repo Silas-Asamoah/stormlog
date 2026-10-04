@@ -11,8 +11,10 @@ from stormlog.infer.qualify.ground_truth import (
     Expectation,
     Impact,
     Injection,
+    Interval,
     Neutral,
     OutcomeCounts,
+    RunRecord,
     Times,
     Validity,
 )
@@ -25,9 +27,11 @@ from stormlog.infer.qualify.scoring import (
     MISS_SECONDARY_ONLY,
     TOP1,
     TOP3,
-    EpisodeScore,
+    RunScore,
     ScoreConfig,
+    negative_exposure,
     score_episode,
+    score_run,
     summarize,
 )
 from stormlog.infer.qualify.vocabulary import KIND_COMPONENTS
@@ -107,6 +111,7 @@ def episode(
     and the workload kinds allowed."""
     return Injection(
         episode_id=f"q221-{episode_type}",
+        run_id="q221-run",
         episode_type=episode_type,
         cause_class=cause_class,
         injected={"method": "neighbor_traffic"},
@@ -352,15 +357,154 @@ def test_a_fault_claim_in_a_negative_run_is_a_false_positive() -> None:
     assert score.miss is None
 
 
+# ------------------------------------------------------------------ runs
+
+
+def run_record(run_id: str) -> RunRecord:
+    """324 s measured, the first 30 s priming: 294 s of negative time when
+    nothing else is injected, C.5's figure per run."""
+    return RunRecord(
+        run_id=run_id,
+        clock_domain="node/boot/unix_epoch_ns",
+        measured=Interval(0, 324 * S),
+        priming=Interval(0, 30 * S),
+    )
+
+
+def run_of(
+    injections: Sequence[Injection],
+    diag: dict[str, Any],
+    config: ScoreConfig = CONFIG,
+    *,
+    run_id: str = "q221-run",
+) -> RunScore:
+    """The episodes, renamed into the run ``run_id``."""
+    members = [
+        replace(injection, run_id=run_id, episode_id=f"{run_id}-{index}")
+        for index, injection in enumerate(injections)
+    ]
+    return score_run(run_record(run_id), members, diag, config)
+
+
+def null_run() -> Injection:
+    """N: nothing injected; its slot is 100–150 s."""
+    return negative("N")
+
+
+def test_a_run_wide_false_claim_in_a_null_run_is_a_false_positive() -> None:
+    # N has no effect of its own: its fault claims count over the run's
+    # whole negative exposure, so an N run is never blind.
+    claim = finding("h", "host_stall", 1, component="engine_core", window=(250, 280))
+    score = run_of([null_run()], diagnosis(claim))
+    assert score.false_claims == (claim["id"],)
+    assert score.exposure == (Interval(30 * S, 324 * S),)
+
+
+def test_a_false_claim_in_a_negative_runs_baseline_counts() -> None:
+    # A T1 run's own window is 200–230 s; a claim at 40–60 s, in its
+    # baseline, is still in the run's negative time.
+    twin = replace(
+        negative("T1"),
+        cause_class="workload_change",
+        times=Times(
+            action_onset_ns=200 * S, effect_onset_ns=200 * S, effect_end_ns=230 * S
+        ),
+    )
+    early = finding("q", QUEUE, 1, window=(40, 60))
+    final = finding("k", KV, 2, window=(300, 320))
+    score = run_of([twin], diagnosis(early, final))
+    assert score.false_claims == (early["id"], final["id"])
+
+
+def test_a_fault_episodes_span_is_not_negative_time() -> None:
+    # A run with F2 (100–150 s) and its one negative: F2's own correct
+    # finding is no false positive, and its span leaves the exposure.
+    late_null = replace(
+        null_run(),
+        times=Times(
+            action_onset_ns=240 * S, effect_onset_ns=240 * S, effect_end_ns=280 * S
+        ),
+    )
+    kv = finding("a", KV, 1, window=(101, 140))
+    # This one starts before F2's action, within its pre-grace, so most of it
+    # lies in negative time; it is F2's, not a false positive.
+    early = finding("b", KV, 2, window=(98, 101), resolution=5)
+    score = run_of([episode(), late_null], diagnosis(kv, early))
+    assert score.false_claims == ()
+    assert score.episodes[0].correct(TOP1, 2)
+    assert score.episodes[0].matched == (kv["id"], early["id"])
+    assert score.exposure == (
+        Interval(30 * S, 100 * S),
+        Interval(150 * S + CONFIG.grace(KV), 324 * S),
+    )
+    # The hours are the exposure's: 70 s and 154 s.
+    assert summarize([score], CONFIG).negative_hours == pytest.approx(224 / 3600)
+
+
+def test_an_episode_whose_effect_never_ended_takes_the_rest_of_the_run() -> None:
+    unended = replace(
+        episode(status="recovery_incomplete"),
+        times=Times(action_onset_ns=100 * S, effect_onset_ns=103 * S),
+    )
+    run = run_record("r")
+    members = [replace(unended, run_id="r")]
+    assert negative_exposure(run, members, CONFIG) == (Interval(30 * S, 100 * S),)
+
+
+def test_one_finding_is_credited_to_one_episode() -> None:
+    # Two F2 episodes 60 s apart; one late KV finding qualifies for both
+    # (its uncertainty is 40 s). It goes to the one whose effect began
+    # latest before it: the first.
+    first = replace(
+        episode(),
+        times=Times(
+            action_onset_ns=100 * S, effect_onset_ns=100 * S, effect_end_ns=130 * S
+        ),
+    )
+    second = replace(
+        episode(),
+        times=Times(
+            action_onset_ns=190 * S, effect_onset_ns=190 * S, effect_end_ns=220 * S
+        ),
+    )
+    late = finding("a", KV, 1, window=(150, 165), resolution=5)
+    late["window"]["uncertainty_ns"] = 40 * S
+    config = replace(CONFIG, default_grace_ns=30 * S)
+    score = run_of([first, second], diagnosis(late), config)
+    assert [e.correct(TOP1, 2) for e in score.episodes] == [True, False]
+
+
+def test_instrumentation_and_second_negatives_are_no_fpr_unit() -> None:
+    capture = replace(negative("I1"), cause_class="instrumentation")
+    assert run_of([capture], diagnosis()).negative_episode is None
+    two = run_of(
+        [null_run(), replace(null_run(), episode_type="P", cause_class="placebo")],
+        diagnosis(),
+    )
+    assert two.negative_episode is None
+    assert two.problems == ("run q221-run: more than one negative episode",)
+
+
+def test_an_episode_of_another_run_is_refused() -> None:
+    with pytest.raises(ValueError, match="another run"):
+        score_run(
+            run_record("r1"), [replace(null_run(), run_id="r2")], diagnosis(), CONFIG
+        )
+
+
 # ------------------------------------------------------------------ a campaign
 
 
-def _scores(correct: int, total: int, episode_type: str = "F2") -> list[EpisodeScore]:
+def _scores(correct: int, total: int, episode_type: str = "F2") -> list[RunScore]:
     right = diagnosis(finding("a", KV, 1))
     wrong = diagnosis(finding("h", "host_stall", 1, component="engine_core"))
     label = episode(episode_type)
     return [
-        score_episode(label, right if index < correct else wrong, CONFIG)
+        run_of(
+            [label],
+            right if index < correct else wrong,
+            run_id=f"{episode_type}-{index}",
+        )
         for index in range(total)
     ]
 
@@ -377,24 +521,43 @@ def test_a_stratum_passes_at_15_of_15_and_fails_at_14() -> None:
 
 
 def test_only_valid_supported_fault_episodes_count_for_accuracy() -> None:
-    invalid = score_episode(
-        episode(status="not_realized"), diagnosis(finding("h", "host_stall", 1)), CONFIG
+    invalid = run_of(
+        [episode(status="not_realized")],
+        diagnosis(finding("h", "host_stall", 1)),
+        run_id="invalid",
     )
     unsupported = _scores(0, 3, "F6")
-    config = ScoreConfig(default_grace_ns=20 * S, supported_types=frozenset({"F2"}))
-    summary = summarize(_scores(15, 15) + [invalid] + unsupported, config)
+    summary = summarize(_scores(15, 15) + [invalid] + unsupported, CONFIG)
     assert [(s.episode_type, s.episodes) for s in summary.strata] == [("F2", 15)]
+    assert summary.strata[0].excluded == {"not_realized": 1}
 
 
 def test_the_fpr_is_bounded_over_negative_runs() -> None:
-    clean = score_episode(negative(), diagnosis(), CONFIG)
-    flagged = score_episode(negative(), diagnosis(finding("q", QUEUE, 1)), CONFIG)
-    none_flagged = summarize([clean] * 60, CONFIG, negative_hours=4.9)
-    one_flagged = summarize([clean] * 59 + [flagged], CONFIG)
+    clean = [run_of([null_run()], diagnosis(), run_id=f"n{i}") for i in range(60)]
+    flagged = run_of([null_run()], diagnosis(finding("q", QUEUE, 1)), run_id="flagged")
+    none_flagged = summarize(clean, CONFIG)
+    one_flagged = summarize(clean[:59] + [flagged], CONFIG)
     assert none_flagged.fpr_upper_bound == pytest.approx(0.0487, abs=5e-5)
     assert none_flagged.fpr_passes
+    # 60 runs of 294 s: 4.9 h, so no claim bounds the rate at 0.61 per hour.
+    assert none_flagged.negative_hours == pytest.approx(4.9)
     assert none_flagged.false_claims_per_hour_upper == pytest.approx(0.611, abs=5e-4)
     assert (one_flagged.false_positive_runs, one_flagged.fpr_passes) == (1, False)
+
+
+def test_the_hourly_rate_counts_claims_over_the_hours_it_divides_by() -> None:
+    # Three claims per negative run, all outside the negative episode's own
+    # window: each counts, over the same exposure the hours measure.
+    claims = (
+        finding("h", "host_stall", 1, component="engine_core", window=(40, 70)),
+        finding("q", QUEUE, 2, window=(300, 320)),
+        finding("k", KV, 3, window=(198, 240)),
+    )
+    runs = [run_of([null_run()], diagnosis(*claims), run_id=f"n{i}") for i in range(60)]
+    summary = summarize(runs, CONFIG)
+    assert summary.false_positive_runs == 60
+    assert summary.false_claims_per_hour_upper is not None
+    assert summary.false_claims_per_hour_upper > 180 / 4.9
 
 
 def test_a_declared_stratum_without_valid_episodes_fails_the_gate() -> None:
@@ -402,8 +565,14 @@ def test_a_declared_stratum_without_valid_episodes_fails_the_gate() -> None:
     # the gate must not pass on F1 alone.
     both = replace(CONFIG, supported_types=frozenset({"F1", "F2"}))
     f1 = episode("F1", expects=(Expectation(QUEUE, "scheduler"),))
-    right = [score_episode(f1, diagnosis(finding("q", QUEUE, 1)), both)] * 15
-    unrealized = [score_episode(episode(status="not_realized"), diagnosis(), both)] * 15
+    right = [
+        run_of([f1], diagnosis(finding("q", QUEUE, 1)), both, run_id=f"f1-{i}")
+        for i in range(15)
+    ]
+    unrealized = [
+        run_of([episode(status="not_realized")], diagnosis(), both, run_id=f"f2-{i}")
+        for i in range(15)
+    ]
     summary = summarize(right + unrealized, both)
     f1_stratum, f2_stratum = summary.strata
     assert f1_stratum.passes
@@ -417,17 +586,23 @@ def test_a_gated_summary_needs_the_support_matrix() -> None:
         summarize(_scores(15, 15), ScoreConfig(default_grace_ns=20 * S))
 
 
+def test_an_episode_scored_twice_is_refused() -> None:
+    run = _scores(1, 1)[0]
+    with pytest.raises(ValueError, match="twice"):
+        summarize([run, run], CONFIG)
+
+
 def test_incident_attribution_counts_only_episodes_with_impact() -> None:
-    hurt = score_episode(episode(), diagnosis(finding("a", KV, 1)), CONFIG)
-    unhurt = score_episode(
-        episode(impact="no_impact"), diagnosis(finding("a", KV, 1)), CONFIG
+    hurt = run_of([episode()], diagnosis(finding("a", KV, 1)), run_id="hurt")
+    unhurt = run_of(
+        [episode(impact="no_impact")], diagnosis(finding("a", KV, 1)), run_id="unhurt"
     )
-    outranked = score_episode(
-        episode(),
+    outranked = run_of(
+        [episode()],
         diagnosis(
             finding("h", "host_stall", 1, component="engine_core"), finding("a", KV, 2)
         ),
-        CONFIG,
+        run_id="outranked",
     )
     summary = summarize([hurt, unhurt, outranked], CONFIG)
     assert summary.attributed == (1, 2)
@@ -442,5 +617,5 @@ def test_the_summary_records_what_was_frozen() -> None:
     assert record["edge_table"] == "diagnosis_edges_v1"
     assert (record["gated_metric"], record["gated_level"]) == ("top1", "L2")
     assert (record["accuracy_floor"], record["fpr_ceiling"]) == (0.78, 0.05)
-    episode_record = _scores(1, 1)[0].to_record()
+    episode_record = _scores(1, 1)[0].episodes[0].to_record()
     assert episode_record["match_rank"] == {"L1": 1, "L2": 1}

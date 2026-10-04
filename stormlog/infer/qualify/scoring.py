@@ -22,6 +22,13 @@ among the first k candidates.
   (L1), and the rank and engine where the label names them (L2). A
   secondary of the right kind never matches: the diagnoser said the
   mechanism followed from something else.
+- **Runs.** Findings and false positives are counted per run
+  (``score_run``). Each finding goes to at most one episode: of those whose
+  window it qualifies for, the one whose effect began latest at or before
+  its start. A run with exactly one valid negative episode of the eight
+  negative types is one false-positive unit, and its false claims are
+  counted over its whole negative exposure, not only that episode's
+  window.
 - **False claims.** A scored fault claim (eligible, cause ``fault``, at
   ``warning``) among the candidates that is not neutral, is not of the
   label's kind at its component, and is not in ``allows``. A ``secondary``
@@ -45,7 +52,7 @@ from .bounds import (
     clopper_pearson_upper,
     poisson_rate_upper,
 )
-from .ground_truth import VALID, Expectation, Injection, Location
+from .ground_truth import VALID, Expectation, Injection, Interval, Location, RunRecord
 from .vocabulary import (
     CAUSE_FAULT,
     CLAIM_OBSERVATION,
@@ -66,6 +73,12 @@ FPR_CEILING = 0.05
 
 TOP1 = "top1"
 TOP3 = "top3"
+
+# C.5's eight negative types: each negative run holds exactly one.
+NEGATIVE_TYPES = frozenset({"T1", "T2", "T3", "T3b", "H0", "W1", "P", "N"})
+# Cause classes whose episodes' windows are not negative time.
+INJECTED_CLASSES = frozenset({"fault", "instrumentation"})
+HOUR_NS = 3_600_000_000_000
 
 # Why an episode was missed; each counts against accuracy.
 MISS_INELIGIBLE = "ineligible"
@@ -92,6 +105,7 @@ class ScoreConfig:
     confidence: float = CONFIDENCE
     gated_metric: str = TOP1
     gated_level: int = 2
+    negative_types: frozenset[str] = NEGATIVE_TYPES
 
     def grace(self, kind: str) -> int:
         return self.grace_ns.get(kind, self.default_grace_ns)
@@ -345,10 +359,17 @@ class EpisodeScore:
 
 
 def score_episode(
-    injection: Injection, diagnosis: Mapping[str, Any], config: ScoreConfig
+    injection: Injection,
+    diagnosis: Mapping[str, Any],
+    config: ScoreConfig,
+    *,
+    findings: Sequence[FindingView] | None = None,
 ) -> EpisodeScore:
-    """Score one episode against the diagnosis of its run."""
-    qualifying, ranked, neutral = _candidates(injection, diagnosis, config)
+    """Score one episode against the diagnosis of its run; ``findings``
+    narrows it to the findings ``score_run`` assigned to the episode."""
+    if findings is None:
+        findings = findings_of(diagnosis)
+    qualifying, ranked, neutral = _candidates(injection, findings, config)
     expectation = injection.expects[0] if injection.expects else None
     match_rank = {level: _first_match(ranked, expectation, level) for level in (1, 2)}
     impact = injection.validity.impact
@@ -372,14 +393,12 @@ def score_episode(
 
 
 def _candidates(
-    injection: Injection, diagnosis: Mapping[str, Any], config: ScoreConfig
+    injection: Injection, findings: Sequence[FindingView], config: ScoreConfig
 ) -> tuple[list[FindingView], list[FindingView], tuple[str, ...]]:
     """The findings that pass the temporal rule, the ranked candidate set
     (those less the neutral secondaries), and the neutral ones' IDs."""
     qualifying = [
-        finding
-        for finding in findings_of(diagnosis)
-        if in_scoring_window(finding, injection, config)
+        finding for finding in findings if in_scoring_window(finding, injection, config)
     ]
     by_id = {finding.id: finding for finding in qualifying}
     neutral = {
@@ -464,6 +483,216 @@ def _wrong_finding(same: Sequence[FindingView]) -> str:
     return MISS_MISMATCH
 
 
+# ------------------------------------------------------------------ a run
+
+
+@dataclass(frozen=True)
+class RunScore:
+    """One run's episodes and, when the run is a false-positive unit, its
+    negative episode, negative exposure and false claims over it."""
+
+    run_id: str
+    episodes: tuple[EpisodeScore, ...]
+    negative_episode: str | None = None
+    exposure: tuple[Interval, ...] = ()
+    false_claims: tuple[str, ...] = ()
+    problems: tuple[str, ...] = ()
+
+    @property
+    def exposure_ns(self) -> int:
+        return sum(interval.length_ns for interval in self.exposure)
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "episodes": [episode.to_record() for episode in self.episodes],
+            "negative_episode": self.negative_episode,
+            "exposure": [interval.to_record() for interval in self.exposure],
+            "false_claims": list(self.false_claims),
+            "problems": list(self.problems),
+        }
+
+
+def score_run(
+    run: RunRecord,
+    injections: Sequence[Injection],
+    diagnosis: Mapping[str, Any],
+    config: ScoreConfig,
+) -> RunScore:
+    """Score a run's episodes against its diagnosis, and, when the run holds
+    exactly one valid negative episode, count its false claims over the
+    run's whole negative exposure (C.2, C.5).
+
+    Raises:
+        ValueError: for an episode of another run, or one given twice.
+    """
+    _check_run(run, injections)
+    findings = findings_of(diagnosis)
+    assigned = assign_findings(injections, findings, config)
+    episodes = tuple(
+        score_episode(
+            injection, diagnosis, config, findings=assigned[injection.episode_id]
+        )
+        for injection in injections
+    )
+    unit, problems = _negative_unit(run, injections, config)
+    if unit is None:
+        return RunScore(run.run_id, episodes, problems=problems)
+    exposure = negative_exposure(run, injections, config)
+    elsewhere = {
+        finding.id
+        for injection in injections
+        if injection.cause_class in INJECTED_CLASSES
+        for finding in assigned[injection.episode_id]
+    }
+    claims = _negative_claims(findings, elsewhere, exposure, unit, config)
+    return RunScore(run.run_id, episodes, unit.episode_id, exposure, claims, problems)
+
+
+def _check_run(run: RunRecord, injections: Sequence[Injection]) -> None:
+    ids = [injection.episode_id for injection in injections]
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"run {run.run_id}: an episode is given twice")
+    strays = sorted(i.episode_id for i in injections if i.run_id != run.run_id)
+    if strays:
+        raise ValueError(f"run {run.run_id}: episodes of another run: {strays}")
+
+
+def assign_findings(
+    injections: Sequence[Injection],
+    findings: Sequence[FindingView],
+    config: ScoreConfig,
+) -> dict[str, list[FindingView]]:
+    """Each finding goes to at most one episode: of those whose window it
+    qualifies for, the one whose effect began latest at or before the
+    finding's start, else the earliest. So one finding is never credited
+    to two episodes."""
+    assigned: dict[str, list[FindingView]] = {i.episode_id: [] for i in injections}
+    for finding in findings:
+        qualifying = [i for i in injections if in_scoring_window(finding, i, config)]
+        if qualifying:
+            assigned[_closest(finding, qualifying).episode_id].append(finding)
+    return assigned
+
+
+def _closest(finding: FindingView, injections: Sequence[Injection]) -> Injection:
+    start = finding.window.start_ns if finding.window else 0
+    onsets = [(_onset(injection), injection) for injection in injections]
+    before = [pair for pair in onsets if pair[0] <= start]
+    if before:
+        return max(before, key=lambda pair: pair[0])[1]
+    return min(onsets, key=lambda pair: pair[0])[1]
+
+
+def _onset(injection: Injection) -> int:
+    onset = injection.times.effect_onset_ns
+    return onset if onset is not None else 0
+
+
+def _negative_unit(
+    run: RunRecord, injections: Sequence[Injection], config: ScoreConfig
+) -> tuple[Injection | None, tuple[str, ...]]:
+    """The run's one valid negative episode, if the run is an FPR unit."""
+    if run.protocol_failure:
+        return None, (f"run {run.run_id}: protocol failure {run.protocol_failure}",)
+    negatives = [i for i in injections if i.episode_type in config.negative_types]
+    if len(negatives) > 1:
+        return None, (f"run {run.run_id}: more than one negative episode",)
+    if negatives and negatives[0].status == VALID:
+        return negatives[0], ()
+    return None, ()
+
+
+def negative_exposure(
+    run: RunRecord, injections: Sequence[Injection], config: ScoreConfig
+) -> tuple[Interval, ...]:
+    """The run's negative time (C.5): its measured window less the priming
+    and the span of every attempted fault or instrumentation episode, from
+    its action or effect onset to its effect end plus grace (to the window's
+    end when its effect never ended)."""
+    removed = [run.priming] if run.priming is not None else []
+    for injection in injections:
+        if injection.cause_class in INJECTED_CLASSES:
+            span = _episode_span(injection, run, config)
+            if span is not None:
+                removed.append(span)
+    return _subtract(run.measured, removed)
+
+
+def _episode_span(
+    injection: Injection, run: RunRecord, config: ScoreConfig
+) -> Interval | None:
+    times = injection.times
+    starts = [
+        t for t in (times.action_onset_ns, times.effect_onset_ns) if t is not None
+    ]
+    if not starts:
+        return None
+    if times.effect_end_ns is None:
+        return Interval(min(starts), run.measured.end_ns)
+    kind = injection.expects[0].kind if injection.expects else ""
+    return Interval(min(starts), times.effect_end_ns + config.grace(kind))
+
+
+def _subtract(whole: Interval, removed: Sequence[Interval]) -> tuple[Interval, ...]:
+    pieces = [whole]
+    for cut in removed:
+        pieces = [rest for piece in pieces for rest in _cut(piece, cut)]
+    return tuple(sorted(pieces, key=lambda piece: piece.start_ns))
+
+
+def _cut(piece: Interval, cut: Interval) -> list[Interval]:
+    if cut.end_ns <= piece.start_ns or cut.start_ns >= piece.end_ns:
+        return [piece]
+    rest = []
+    if cut.start_ns > piece.start_ns:
+        rest.append(Interval(piece.start_ns, cut.start_ns))
+    if cut.end_ns < piece.end_ns:
+        rest.append(Interval(cut.end_ns, piece.end_ns))
+    return rest
+
+
+def _negative_claims(
+    findings: Sequence[FindingView],
+    elsewhere: set[str],
+    exposure: Sequence[Interval],
+    unit: Injection,
+    config: ScoreConfig,
+) -> tuple[str, ...]:
+    """Scored fault claims placed in the negative exposure, less those an
+    injected episode took and those the negative episode makes neutral or
+    allows."""
+    qualifying = {f.id: f for f in findings if in_scoring_window(f, unit, config)}
+    return tuple(
+        finding.id
+        for finding in findings
+        if finding.scored_fault_claim
+        and finding.id not in elsewhere
+        and _placed_in(finding.window, exposure)
+        and not _allowed(finding, unit)
+        and not (
+            finding.id in qualifying and is_neutral(finding, qualifying, unit, config)
+        )
+    )
+
+
+def _placed_in(window: Window | None, exposure: Sequence[Interval]) -> bool:
+    """The temporal rule over the exposure: the window starts in it, and at
+    least half of the window lies in it."""
+    if window is None or not exposure:
+        return False
+    if not any(i.start_ns <= window.start_ns <= i.end_ns for i in exposure):
+        return False
+    length = window.end_ns - window.start_ns
+    if length <= 0:
+        return True
+    inside = sum(
+        max(0, min(window.end_ns, i.end_ns) - max(window.start_ns, i.start_ns))
+        for i in exposure
+    )
+    return 2 * inside >= length
+
+
 # ------------------------------------------------------------------ a campaign
 
 
@@ -508,6 +737,8 @@ class Summary:
     misses: Mapping[str, int]
     attributed: tuple[int, int]
     localized: tuple[int, int]
+    negative_hours: float = 0.0
+    problems: tuple[str, ...] = ()
 
     def to_record(self, config: ScoreConfig) -> dict[str, Any]:
         return {
@@ -523,47 +754,60 @@ class Summary:
             "false_positive_runs": self.false_positive_runs,
             "fpr_upper_bound": self.fpr_upper_bound,
             "fpr_passes": self.fpr_passes,
+            "negative_hours": self.negative_hours,
             "false_claims_per_hour_upper": self.false_claims_per_hour_upper,
             "spurious": self.spurious,
             "duplicates": self.duplicates,
             "misses": dict(self.misses),
             "incident_attribution": list(self.attributed),
             "condition_localization": list(self.localized),
+            "problems": list(self.problems),
         }
 
 
-def summarize(
-    scores: Sequence[EpisodeScore],
-    config: ScoreConfig,
-    *,
-    negative_hours: float | None = None,
-) -> Summary:
+def summarize(runs: Sequence[RunScore], config: ScoreConfig) -> Summary:
     """Gate per-stratum accuracy over valid fault episodes, a stratum for
-    every type the support matrix declares, and the false-positive rate
-    over valid negative runs.
+    every type the support matrix declares; and the false-positive rate
+    over the negative runs, with the per-hour rate over their exposure.
 
     Raises:
-        ValueError: without ``config.supported_types``: a declared stratum
-            with no valid episode must fail, not vanish.
+        ValueError: without ``config.supported_types`` (a declared stratum
+            with no valid episode must fail, not vanish), or for an episode
+            scored twice.
     """
+    scores = _episodes(runs)
     faults = [s for s in scores if _counts_for_accuracy(s, config)]
-    negatives = [s for s in scores if s.valid and s.cause_class != "fault"]
+    units = [run for run in runs if run.negative_episode is not None]
     strata = _strata(scores, config)
-    flagged, upper = _fpr(negatives, config)
+    flagged, upper = _fpr(units, config)
+    hours = sum(run.exposure_ns for run in units) / HOUR_NS
     return Summary(
         strata=strata,
         accuracy_passes=all(stratum.passes for stratum in strata),
-        negative_runs=len(negatives),
+        negative_runs=len(units),
         false_positive_runs=flagged,
         fpr_upper_bound=upper,
         fpr_passes=_within(upper, config.fpr_ceiling),
-        false_claims_per_hour_upper=_hourly(negatives, negative_hours, config),
-        spurious=sum(len(score.false_claims) for score in faults),
+        false_claims_per_hour_upper=_hourly(units, hours, config),
+        spurious=_spurious(faults),
         duplicates=sum(score.duplicates for score in faults),
         misses=_miss_counts(faults, config),
         attributed=_attributed(faults, config),
         localized=_localized_count(faults),
+        negative_hours=hours,
+        problems=tuple(problem for run in runs for problem in run.problems),
     )
+
+
+def _episodes(runs: Sequence[RunScore]) -> list[EpisodeScore]:
+    scores = [episode for run in runs for episode in run.episodes]
+    if len({score.episode_id for score in scores}) != len(scores):
+        raise ValueError("an episode is scored twice")
+    return scores
+
+
+def _spurious(faults: Sequence[EpisodeScore]) -> int:
+    return sum(len(score.false_claims) for score in faults)
 
 
 def _within(upper: float | None, ceiling: float) -> bool:
@@ -594,15 +838,13 @@ def _counts_for_accuracy(score: EpisodeScore, config: ScoreConfig) -> bool:
     )
 
 
-def _fpr(
-    negatives: Sequence[EpisodeScore], config: ScoreConfig
-) -> tuple[int, float | None]:
-    """Negative runs with any false claim (one negative episode per run),
-    and the rate's one-sided upper bound."""
-    flagged = sum(1 for score in negatives if score.false_claims)
-    if not negatives:
+def _fpr(units: Sequence[RunScore], config: ScoreConfig) -> tuple[int, float | None]:
+    """Negative runs with any false claim over their exposure, and the
+    rate's one-sided upper bound."""
+    flagged = sum(1 for run in units if run.false_claims)
+    if not units:
         return flagged, None
-    return flagged, clopper_pearson_upper(flagged, len(negatives), config.confidence)
+    return flagged, clopper_pearson_upper(flagged, len(units), config.confidence)
 
 
 def _stratum(
@@ -645,11 +887,13 @@ def _accuracy_bound(correct: int, episodes: int, config: ScoreConfig) -> float |
 
 
 def _hourly(
-    negatives: Sequence[EpisodeScore], hours: float | None, config: ScoreConfig
+    units: Sequence[RunScore], hours: float, config: ScoreConfig
 ) -> float | None:
+    """False claims per negative hour: counted over the same exposure the
+    hours measure."""
     if not hours:
         return None
-    claims = sum(len(s.false_claims) for s in negatives)
+    claims = sum(len(run.false_claims) for run in units)
     return poisson_rate_upper(claims, hours, config.confidence)
 
 
@@ -679,21 +923,26 @@ __all__ = [
     "MISS_NO_FINDING",
     "MISS_OUTRANKED",
     "MISS_SECONDARY_ONLY",
+    "NEGATIVE_TYPES",
     "SCORE_VERSION",
     "TOP1",
     "TOP3",
     "EpisodeScore",
     "FindingView",
+    "RunScore",
     "ScoreConfig",
     "Stratum",
     "Summary",
     "Window",
+    "assign_findings",
     "coverage_of",
     "findings_of",
     "in_scoring_window",
     "is_neutral",
     "location_matches",
     "matches",
+    "negative_exposure",
     "score_episode",
+    "score_run",
     "summarize",
 ]

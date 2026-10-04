@@ -1,7 +1,9 @@
-"""Ground truth for injected episodes: ``stormlog.qualify.injection/1``.
+"""Ground truth for injected episodes: ``stormlog.qualify.injection/1``, and
+for the run they belong to: ``stormlog.qualify.run/1``.
 
 One record per attempted episode, written by the injection harness into a
-run's ``truth/injections.jsonl`` and read only by the scorer. A record says
+run's ``truth/injections.jsonl`` and read only by the scorer, beside one
+run record in ``truth/run.json``. An episode record says
 what was injected, what a correct diagnosis is (``expects``), which other
 findings are neutral (``secondary`` through one of #218's edges, and
 ``allows``), when the action and its effect happened on the victim's clock,
@@ -31,6 +33,7 @@ from .vocabulary import (
 )
 
 FORMAT = "stormlog.qualify.injection/1"
+RUN_FORMAT = "stormlog.qualify.run/1"
 
 CAUSE_CLASSES = ("fault", "workload_change", "instrumentation", "placebo", "none")
 
@@ -295,9 +298,10 @@ class Validity:
 
 @dataclass(frozen=True)
 class Injection:
-    """One attempted episode's ground truth."""
+    """One attempted episode's ground truth, in the run ``run_id``."""
 
     episode_id: str
+    run_id: str
     episode_type: str
     cause_class: str
     injected: dict[str, Any]
@@ -368,6 +372,7 @@ class Injection:
         return {
             "format": FORMAT,
             "episode_id": self.episode_id,
+            "run_id": self.run_id,
             "episode_type": self.episode_type,
             "cause_class": self.cause_class,
             "injected": self.injected,
@@ -404,6 +409,7 @@ def _build(record: Mapping[str, Any]) -> Injection:
     expects, secondary, allows = _labels(record)
     return Injection(
         episode_id=str(record["episode_id"]),
+        run_id=str(record["run_id"]),
         episode_type=str(record["episode_type"]),
         cause_class=str(record["cause_class"]),
         injected=dict(record.get("injected") or {}),
@@ -483,6 +489,111 @@ def load_injections(path: Path) -> list[Injection]:
     return injections
 
 
+# ------------------------------------------------------------------ the run
+
+
+@dataclass(frozen=True)
+class Interval:
+    """[start_ns, end_ns] on the victim's clock."""
+
+    start_ns: int
+    end_ns: int
+
+    @property
+    def length_ns(self) -> int:
+        return self.end_ns - self.start_ns
+
+    def to_record(self) -> dict[str, int]:
+        return {"start_ns": self.start_ns, "end_ns": self.end_ns}
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    """One run's truth beside its episodes: the windows the harness
+    measured, on the victim's clock, and whether the run itself failed its
+    protocol (a failed priming check, say). The scorer derives the run's
+    negative exposure from these and the run's episodes."""
+
+    run_id: str
+    clock_domain: str | None
+    measured: Interval
+    priming: Interval | None = None
+    baseline: Interval | None = None
+    final_recovery: Interval | None = None
+    protocol_failure: str | None = None
+    actions: tuple[dict[str, Any], ...] = ()
+
+    def problems(self) -> list[str]:
+        found = []
+        for name in ("measured", "priming", "baseline", "final_recovery"):
+            interval = getattr(self, name)
+            if interval is None:
+                continue
+            if not (_is_time(interval.start_ns) and _is_time(interval.end_ns)):
+                found.append(f"{name}: times must be integers")
+            elif interval.end_ns < interval.start_ns:
+                found.append(f"{name} ends before it begins")
+        return found
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "format": RUN_FORMAT,
+            "run_id": self.run_id,
+            "clock_domain": self.clock_domain,
+            "measured": self.measured.to_record(),
+            "priming": _interval_record(self.priming),
+            "baseline": _interval_record(self.baseline),
+            "final_recovery": _interval_record(self.final_recovery),
+            "protocol_failure": self.protocol_failure,
+            "actions": [dict(action) for action in self.actions],
+        }
+
+
+def _interval_record(interval: Interval | None) -> dict[str, int] | None:
+    return None if interval is None else interval.to_record()
+
+
+def parse_run(record: Mapping[str, Any]) -> RunRecord:
+    """A ``truth/run.json`` record read back.
+
+    Raises:
+        GroundTruthError: listing every problem with the record.
+    """
+    if record.get("format") != RUN_FORMAT:
+        raise GroundTruthError([f"format is not {RUN_FORMAT}"])
+    try:
+        run = RunRecord(
+            run_id=str(record["run_id"]),
+            clock_domain=record.get("clock_domain"),
+            measured=Interval(**record["measured"]),
+            priming=_interval(record.get("priming")),
+            baseline=_interval(record.get("baseline")),
+            final_recovery=_interval(record.get("final_recovery")),
+            protocol_failure=record.get("protocol_failure"),
+            actions=tuple(dict(action) for action in record.get("actions") or ()),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise GroundTruthError([f"malformed run record: {error!r}"]) from error
+    problems = run.problems()
+    if problems:
+        raise GroundTruthError(problems)
+    return run
+
+
+def _interval(record: Mapping[str, Any] | None) -> Interval | None:
+    return None if record is None else Interval(**record)
+
+
+def write_run(path: Path, run: RunRecord) -> None:
+    path.write_text(
+        json.dumps(run.to_record(), sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def load_run(path: Path) -> RunRecord:
+    return parse_run(json.loads(path.read_text(encoding="utf-8")))
+
+
 # ------------------------------------------------------------------ status
 
 
@@ -554,22 +665,28 @@ __all__ = [
     "NO_IMPACT",
     "PROTOCOL_FAILURE",
     "RECOVERY_INCOMPLETE",
+    "RUN_FORMAT",
     "STATUSES",
     "VALID",
     "Expectation",
     "GroundTruthError",
     "Impact",
     "Injection",
+    "Interval",
     "Location",
     "Neutral",
     "OutcomeCounts",
     "PhaseWindow",
+    "RunRecord",
     "Times",
     "Validity",
     "assess_impact",
     "decide_status",
     "is_aligned",
     "load_injections",
+    "load_run",
     "parse_injection",
+    "parse_run",
     "write_injections",
+    "write_run",
 ]
