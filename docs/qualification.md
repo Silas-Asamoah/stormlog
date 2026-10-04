@@ -487,9 +487,14 @@ reader:
     shared prefix, at most 1.
   - **Preemption:** the request's ID in a step's `preempted`.
   - **Cadence:** every step's start is kept.
-- **`scrape_metrics`** reads `/metrics` once: the waiting count summed over engines
-  and the highest KV usage. `ReferenceChannel` takes one per poll, into
-  `truth/reference/scrapes.jsonl`.
+- **`scrape_metrics`** reads `/metrics` once: the waiting count summed over engines,
+  the highest KV usage, and vLLM's prefix-cache counters
+  (`vllm:prefix_cache_queries` and `vllm:prefix_cache_hits`, in tokens)
+  summed over engines. `ReferenceChannel` takes one per poll, into
+  `truth/reference/scrapes.jsonl`. `hit_ratios` turns consecutive scrapes
+  into the engine-wide hit ratio T3b's realization reads: hits over queries
+  added in between, skipping an interval with no queries or a counter that
+  fell.
 - **`chunk_gaps`** rebuilds the victim's gaps between streamed chunks from its
   client records.
 - **`request_spans`** takes each finished victim request's send and end from

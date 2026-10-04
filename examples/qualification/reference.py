@@ -23,14 +23,21 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Iterator, Sequence
 
 from stormlog.infer.qualify.recovery import Point, Signals
-from stormlog.infer.vllm_metrics import compact_scrape, parse_prometheus_text
+from stormlog.infer.vllm_metrics import (
+    CompactScrape,
+    compact_scrape,
+    parse_prometheus_text,
+)
 
 SEGMENT = re.compile(r"^(\d{6})\.jsonl(\.part)?$")
 WAITING = "vllm:num_requests_waiting"
 KV_USAGE = "vllm:kv_cache_usage_perc"
+# vLLM 0.30's engine-wide prefix-cache counters, in tokens.
+PREFIX_QUERIES = "vllm:prefix_cache_queries"
+PREFIX_HITS = "vllm:prefix_cache_hits"
 
 
 # ------------------------------------------------------------------ the hook
@@ -344,19 +351,46 @@ class Scrape:
     waiting: float | None
     kv_usage: float | None
     error: str | None = None
+    prefix_queries: float | None = None
+    prefix_hits: float | None = None
 
     def to_record(self) -> dict[str, Any]:
         return {
             "at_ns": self.at_ns,
             "waiting": self.waiting,
             "kv_usage": self.kv_usage,
+            "prefix_queries": self.prefix_queries,
+            "prefix_hits": self.prefix_hits,
             "error": self.error,
         }
 
 
+def hit_ratios(scrapes: Sequence[Scrape]) -> list[Point]:
+    """The engine-wide prefix-cache hit ratio between consecutive scrapes,
+    at the later one: hits over queries added in between. An interval with
+    no queries says nothing, and one where a counter fell (a restart) is
+    skipped."""
+    ratios: list[Point] = []
+    for before, after in zip(scrapes, scrapes[1:]):
+        first, last = _prefix_counters(before), _prefix_counters(after)
+        if first is None or last is None:
+            continue
+        queries, hits = last[0] - first[0], last[1] - first[1]
+        if queries > 0 and 0 <= hits <= queries:
+            ratios.append((after.at_ns, hits / queries))
+    return ratios
+
+
+def _prefix_counters(scrape: Scrape) -> tuple[float, float] | None:
+    if scrape.prefix_queries is None or scrape.prefix_hits is None:
+        return None
+    return scrape.prefix_queries, scrape.prefix_hits
+
+
 def scrape_metrics(url: str, *, timeout_seconds: float = 5.0) -> Scrape:
-    """One ``/metrics`` scrape: the waiting count summed over engines and the
-    highest KV usage, at the time the answer arrived."""
+    """One ``/metrics`` scrape: the waiting count summed over engines, the
+    highest KV usage and the prefix-cache counters summed over engines, at
+    the time the answer arrived."""
     try:
         with urllib.request.urlopen(url, timeout=timeout_seconds) as answer:
             text = answer.read().decode("utf-8")
@@ -366,15 +400,26 @@ def scrape_metrics(url: str, *, timeout_seconds: float = 5.0) -> Scrape:
     values = compact_scrape(parse_prometheus_text(text))
     waiting = _floats(values.series(WAITING).values())
     usage = _floats(values.series(KV_USAGE).values())
+    queries = _counter(values, PREFIX_QUERIES)
+    hits = _counter(values, PREFIX_HITS)
     return Scrape(
         at_ns,
         sum(waiting) if waiting else None,
         max(usage) if usage else None,
+        prefix_queries=sum(queries) if queries else None,
+        prefix_hits=sum(hits) if hits else None,
     )
 
 
 def _floats(values: Iterable[object]) -> list[float]:
     return [float(value) for value in values if isinstance(value, (int, float))]
+
+
+def _counter(values: CompactScrape, family: str) -> list[float]:
+    """A counter's samples, whether its family is exposed with the
+    ``_total`` sample name (as prometheus_client does) or as that name."""
+    found = _floats(values.series(family).values())
+    return found or _floats(values.series(f"{family}_total").values())
 
 
 # ------------------------------------------------------------------ together
@@ -437,6 +482,7 @@ class ReferenceChannel:
             kv_usage=[(s.at_ns, s.kv_usage) for s in ok if s.kv_usage is not None],
             step_starts=sorted(self.view.step_starts),
             chunk_gaps=self._victim_gaps,
+            engine_hit_ratio=hit_ratios(ok),
             in_flight=merge_spans(self._victim_spans),
         )
 
@@ -466,6 +512,7 @@ __all__ = [
     "Scrape",
     "VictimView",
     "chunk_gaps",
+    "hit_ratios",
     "merge_spans",
     "request_spans",
     "scrape_metrics",

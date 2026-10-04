@@ -59,6 +59,10 @@ def _plan(path: Path) -> Path:
         },
         "episodes": [
             {"type": "N"},
+            {
+                "type": "T3b",
+                "dose": {"rate_per_second": 2, "input_tokens": 64, "output_tokens": 4},
+            },
             {"type": "F4a", "dose": {"pulse_ms": 100, "period_ms": 400}},
             {
                 "type": "F2",
@@ -99,7 +103,7 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     injections = {
         i.episode_type: i for i in load_injections(run / "truth" / "injections.jsonl")
     }
-    assert sorted(injections) == ["F2", "F4a", "N"]
+    assert sorted(injections) == ["F2", "F4a", "N", "T3b"]
     for injection in injections.values():
         assert injection.times.priming_check == {
             "passed": True,
@@ -112,6 +116,14 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     assert all(pulse["landed"] in landings for pulse in stall.injected["pulses"])
     assert stall.times.effect_onset_ns == stall.times.action_onset_ns
     assert injections["N"].status == "valid"
+    # T3b: the neighbor's unique prompts pull the engine-wide hit ratio down,
+    # read from the scraped prefix-cache counters, while the victim's own
+    # cached fraction holds.
+    twin = injections["T3b"]
+    assert twin.status == "valid", twin.validity
+    checks = {c["name"]: c for c in twin.validity.checks}
+    assert checks["engine_hit_ratio_fell"]["passed"] is True
+    assert not checks["engine_hit_ratio_fell"]["incomplete"]
     # Every label at an engine component names the engine #218 will name:
     # the producer in the fake engine's hello, for L2.
     (hello,) = [
