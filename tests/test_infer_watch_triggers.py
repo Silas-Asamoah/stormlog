@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import random
 from collections.abc import Callable
 
 import pytest
@@ -59,7 +61,8 @@ def test_defaults_and_validation() -> None:
     assert (DEFAULT.window, DEFAULT.hold, DEFAULT.clear) == (30, 60, 60)
     assert DEFAULT.gap == 30 and DEFAULT.clear_tolerance == 2
     assert DEFAULT.shortest_firing_violation() == 30
-    assert DEFAULT.detection_bound(1) == 91
+    assert DEFAULT.detection_bound(1) == 91  # F a multiple of Δ, ticks on time
+    assert DEFAULT.detection_bound(1, late=1.0) == 30 + 1 + 61 + 1
     with pytest.raises(ValueError, match="F >= W"):
         Sustain(window=30, hold=20, clear=10, gap=10, clear_tolerance=0)
     with pytest.raises(ValueError, match="> 0"):
@@ -109,6 +112,62 @@ def test_a_persistent_violation_fires_within_f_plus_one_tick(offset: float) -> N
     fired = [at for at, t in transitions if t.event == EVENT_FIRED]
     assert len(fired) == 1
     assert onset + 60 <= fired[0] <= onset + 60 + 1
+
+
+def _fire_time(
+    sustain: Sustain, onset: float, tick: float, lateness: Callable[[int], float]
+) -> float | None:
+    """When a trigger fires on a predicate violating from ``onset``, with
+    ticks scheduled every ``tick`` and tick ``k`` running ``lateness(k)``
+    late; an evaluation sees the predicate as it is when it runs."""
+    state = TriggerState(sustain)
+    for k in range(int((onset + 3 * sustain.hold) / tick) + 10):
+        at = k * tick + lateness(k)
+        found = state.observe(round(at * S), VIOLATING if at >= onset else CLEAR)
+        if found is not None and found.event == EVENT_FIRED:
+            return at
+    return None
+
+
+@pytest.mark.parametrize(
+    ("hold", "tick", "onset", "late_ticks", "late"),
+    [
+        (60.5, 1.0, 10.001, (), 0.0),  # F not a multiple of the tick
+        (60.0, 1.0, 9.001, (9,), 0.2),  # the first violating tick runs late
+        (30.0, 5.0, 3.0, (1,), 0.1),
+        (7.0, 2.0, 0.5, (), 0.0),
+    ],
+)
+def test_a_persistent_violation_fires_within_its_stated_bound(
+    hold: float, tick: float, onset: float, late_ticks: tuple[int, ...], late: float
+) -> None:
+    """Fired by a + Δ + ceil((F + j) / Δ)·Δ + j for ticks at most j late.
+    The bound used to say a + Δ + F, which F = 60.5 or one late tick beat."""
+    sustain = Sustain.with_defaults(
+        window=min(hold, 30.0), hold=hold, clear=None, tick=tick
+    )
+    fired = _fire_time(sustain, onset, tick, lambda k: late if k in late_ticks else 0.0)
+    assert fired is not None
+    assert fired <= onset + sustain.fire_bound(tick, late) + 1e-9
+    assert sustain.fire_bound(tick, late) == pytest.approx(
+        tick + math.ceil((hold + late) / tick - 1e-9) * tick + late
+    )
+
+
+def test_the_fire_bound_holds_for_random_lateness() -> None:
+    rng = random.Random(219)
+    for _ in range(300):
+        tick = rng.choice([0.5, 1.0, 2.0])
+        hold = round(rng.uniform(5, 60), 3)
+        late = rng.uniform(0, 0.5) * tick
+        sustain = Sustain.with_defaults(
+            window=min(hold, 4.0), hold=hold, clear=None, tick=tick
+        )
+        onset = rng.uniform(0, 10)
+        lateness = {k: rng.uniform(0, late) for k in range(400)}
+        fired = _fire_time(sustain, onset, tick, lambda k: lateness.get(k, 0.0))
+        assert fired is not None
+        assert fired <= onset + sustain.fire_bound(tick, late) + 1e-9
 
 
 def test_the_worked_example_resets_on_the_outage_and_fires_after_it() -> None:

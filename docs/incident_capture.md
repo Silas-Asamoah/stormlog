@@ -163,10 +163,15 @@ much longer.
   true for at most `d + W` after an observable violation of length `d`, so
   `d < F - W` never fires: with the defaults, anything under 30 s.
 - **A lasting violation fires on time.** If the predicate turns violating at
-  `a` and stays so, the trigger fires by `a + Δ + F`, plus any time it spent
-  paused. For a persistent change that a predicate sees only once its window
-  is full, `a` is at most the onset plus `W`, so detection takes at most
-  `F + W + Δ` after the onset, plus pauses.
+  `a` and stays so, the trigger fires by `a + Δ + ⌈(F + j)/Δ⌉·Δ + j`, plus any
+  time it spent paused, where ticks are scheduled every `Δ` and each runs at
+  most `j` late. The first violating evaluation comes within `Δ + j`, a late
+  first tick shortens the accumulated time by up to `j`, and the firing tick
+  can itself be late. With ticks on time and `F` a multiple of `Δ`, that is
+  `a + Δ + F`. For a persistent change that a predicate sees only once its
+  window is full, `a` is at most the onset plus `W`, so detection takes at
+  most `W` more. The session record states each trigger's bound, with `j`
+  the scrape timeout, since the watcher evaluates as each scrape returns.
 - **Resets restart the count.** After a reset, the bound counts again from
   the next violating tick. Data gaps longer than `G` that keep coming back
   leave no bound at all. A scrape-health trigger reports them: consecutive
