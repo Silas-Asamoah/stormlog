@@ -318,3 +318,23 @@ def test_a_probe_that_does_not_finish_is_retried_once_on_a_fresh_server(
     assert first["cleanup"]["verified"] is True
     assert second["state"] == "completed" and second["attempt"] == 2
     assert second["order_broken"] is True
+
+
+def test_the_bundle_is_scanned_for_the_plans_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "hf_plantedSecret0123456789"
+    monkeypatch.setenv("PLANT_TOKEN", secret)
+    document = _plan(_port(), blocks=1, secret_env=["PLANT_TOKEN"])
+    leaks = "import os, sys; open(sys.argv[1], 'w').write(os.environ['PLANT_TOKEN'])"
+    document["arms"]["off"]["workload"][0]["command"] = [
+        "{python}",
+        "-c",
+        leaks,
+        "{run_dir}/leak.txt",
+    ]
+    document["arms"]["off"]["workload"][0]["artifacts"] = []
+    run_plan(plan_from_document(document), tmp_path / "exp")
+    report = json.loads((tmp_path / "exp" / "sanitizer.json").read_text())
+    assert report["publishable"] is False
+    assert any(hit["file"].endswith("leak.txt") for hit in report["hits"])
