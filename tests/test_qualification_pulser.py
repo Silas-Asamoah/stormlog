@@ -562,3 +562,24 @@ def test_the_watchdog_outlives_signals_sent_to_it(
     os.killpg(harness.pid, signal.SIGKILL)
     harness.wait(timeout=10)
     assert _running_within(loop.pid, 1.0)
+
+
+def test_a_stop_someone_else_ended_is_flagged(loop: subprocess.Popen[bytes]) -> None:
+    # Fable's A2 delta N7: when the watchdog's limit or an operator
+    # continues the target first, the pulse's held time overstates the
+    # stop. The pulse says so.
+    with Pulser(Target.of(loop.pid), max_pulse_seconds=0.5) as pulser:
+        plain = pulser.pulse(0.1)
+        early = pulser.pulse(0.2, during=lambda: os.kill(loop.pid, signal.SIGCONT))
+    assert plain.continued_by_other is False
+    assert early.continued_by_other is True
+    assert early.to_record()["continued_by_other"] is True
+
+
+def test_a_pulser_never_holds_past_the_design_cap(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    with Pulser(Target.of(loop.pid), watchdog=False, max_pulse_seconds=5.0) as pulser:
+        assert pulser.max_pulse_seconds == MAX_PULSE_SECONDS
+        with pytest.raises(PulseRefused, match="at most"):
+            pulser.pulse(MAX_PULSE_SECONDS + 0.5)

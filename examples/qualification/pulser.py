@@ -67,11 +67,7 @@ class Target:
         return started == self.start_time
 
     def is_stopped(self) -> bool:
-        try:
-            status = psutil.Process(self.pid).status()
-        except psutil.Error:
-            return False
-        return status in (psutil.STATUS_STOPPED, psutil.STATUS_TRACING_STOP)
+        return process_stopped(self.pid)
 
     def to_record(self) -> dict[str, Any]:
         return {"role": self.role, "pid": self.pid, "start_time": self.start_time}
@@ -82,16 +78,33 @@ class Pulse:
     """One pulse as it happened. Lengths are measured on the monotonic
     clock; the wall-clock times are one wall reading at ``SIGSTOP`` plus
     those lengths, so a clock step can't bend them. ``held_ns`` runs from
-    ``SIGSTOP`` sent to ``SIGCONT`` sent: the most the target was stopped."""
+    ``SIGSTOP`` sent to ``SIGCONT`` sent: the most the target was stopped.
+    ``continued_by_other`` says the target was already running when the
+    pulser came to continue it (the watchdog's limit, or an operator), so
+    the stop was shorter than ``held_ns`` by an unknown amount."""
 
     stop_sent_ns: int
     stopped_ns: int
     continue_sent_ns: int
+    continued_by_other: bool = False
 
     @classmethod
-    def measured(cls, wall_ns: int, sent: int, stopped: int, continued: int) -> Pulse:
+    def measured(
+        cls,
+        wall_ns: int,
+        sent: int,
+        stopped: int,
+        continued: int,
+        *,
+        continued_by_other: bool = False,
+    ) -> Pulse:
         """From the wall time at ``SIGSTOP`` and monotonic times."""
-        return cls(wall_ns, wall_ns + stopped - sent, wall_ns + continued - sent)
+        return cls(
+            wall_ns,
+            wall_ns + stopped - sent,
+            wall_ns + continued - sent,
+            continued_by_other,
+        )
 
     @property
     def confirm_latency_ns(self) -> int:
@@ -108,7 +121,17 @@ class Pulse:
             "confirm_latency_ns": self.confirm_latency_ns,
             "continue_sent_ns": self.continue_sent_ns,
             "held_ns": self.held_ns,
+            "continued_by_other": self.continued_by_other,
         }
+
+
+def process_stopped(pid: int) -> bool:
+    """Whether the process is in the stopped state now."""
+    try:
+        status = psutil.Process(pid).status()
+    except psutil.Error:
+        return False
+    return status in (psutil.STATUS_STOPPED, psutil.STATUS_TRACING_STOP)
 
 
 # vLLM 0.30 retitles its processes (setproctitle replaces argv): EngineCore
@@ -184,7 +207,8 @@ class Pulser:
         max_pulse_seconds: float = MAX_PULSE_SECONDS,
     ) -> None:
         self.target = target
-        self.max_pulse_seconds = max_pulse_seconds
+        # Never longer than the design's cap, whoever asks.
+        self.max_pulse_seconds = min(max_pulse_seconds, MAX_PULSE_SECONDS)
         self.pulses: list[Pulse] = []
         self._lock = threading.Lock()
         self._closed = False
@@ -231,9 +255,12 @@ class Pulser:
                 # in this stop nobody to continue its target.
                 self._hold_until(sent + int(seconds * 1e9))
             finally:
+                running = not process_stopped(self.target.pid)
                 self._continue()
                 continued = time.monotonic_ns()
-            pulse = Pulse.measured(wall, sent, stopped, continued)
+            pulse = Pulse.measured(
+                wall, sent, stopped, continued, continued_by_other=running
+            )
         self.pulses.append(pulse)
         return pulse
 
