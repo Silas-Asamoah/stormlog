@@ -193,7 +193,9 @@ the engine named (`engine_required`). The window is checked as a whole, not
 family by family: a signal that divides one family by another would otherwise
 read each from whichever engine exported it. A series whose labels change
 between scrapes (another model name, say) is a different series, so it is
-never differenced across the change (`series_labels_changed`).
+never differenced across the change (`series_labels_changed`). A gauge's
+samples, like a counter's, must all come from one exporter: samples from
+both sides of a restart are not one gauge (`engine_restart`).
 
 Scrapes must be given in strictly increasing stamp order
 (`scrapes_out_of_order`, `duplicate_scrape_time`), and nothing is differenced

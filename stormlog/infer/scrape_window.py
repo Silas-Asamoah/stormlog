@@ -297,15 +297,17 @@ def gauge_window(
     labels: Labels | None = None,
     engine: str | None = None,
 ) -> GaugeWindow:
-    """A gauge's samples over the window's successful scrapes.
+    """A gauge's samples over the window's successful scrapes, one
+    exporter's: samples from both sides of a restart are not one gauge.
 
     "Every sample at least ``t``" is ``gauge.min >= t`` with ``n`` checked
     against the caller's floor; :func:`share_at_least` gives the fraction.
     """
     samples: list[float] = []
-    reasons: list[str] = []
+    ok = list(_ok_scrapes(scrapes))
+    reasons: list[str] = window_identity_reasons(ok)
     seen: list[Mapping[str, str]] = []
-    for scrape in _ok_scrapes(scrapes):
+    for scrape in ok:
         value, found, reason = series_match(scrape.scrape, family, labels, engine)
         if reason is not None:
             reasons.append(reason)

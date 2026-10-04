@@ -11,6 +11,7 @@ from stormlog.infer.scrape_window import (
     REASON_COUNTER_RESET,
     REASON_DUPLICATE_TIME,
     REASON_ENGINE_REQUIRED,
+    REASON_ENGINE_RESTART,
     REASON_HISTOGRAM_INCONSISTENT,
     REASON_OUT_OF_ORDER,
     REASON_SCRAPE_FAILED,
@@ -54,6 +55,18 @@ def test_a_gauge_whose_labels_change_is_flagged() -> None:
         [exposition(gauges={WAITING: 2}), _relabelled(exposition(gauges={WAITING: 9}))]
     )
     assert REASON_SERIES_LABELS_CHANGED in gauge_window(window, WAITING).reasons
+
+
+def test_a_gauge_across_a_restart_is_not_one_gauge() -> None:
+    """The diagnoser reads gauges directly: samples from both sides of a
+    restart decide nothing."""
+    restarted = series(
+        [
+            exposition(gauges={WAITING: 0}),
+            exposition(gauges={WAITING: 9}, start=START + 900.0),
+        ]
+    )
+    assert gauge_window(restarted, WAITING).reasons == (REASON_ENGINE_RESTART,)
 
 
 def test_out_of_order_scrapes_are_named_as_such_by_counter_window() -> None:
