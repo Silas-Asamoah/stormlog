@@ -842,31 +842,33 @@ class TestReceiverAdmission:
         assert metadata["spans"] == 1
 
     def test_gzip_exports_are_charged_their_possible_inflation(self) -> None:
-        """At most 1,032 times their length (DEFLATE's limit), so two small
-        gzip exports fit side by side."""
+        """At most 1,032 times their length (DEFLATE's limit), so small gzip
+        exports fit side by side: six held at once and a seventh, where a
+        charge of the 32 MiB cap would let only three into 128 MiB."""
         import gzip
 
-        with _receiver() as receiver:
-            with _connect(receiver.listen) as held:
-                compressed = gzip.compress(JSON_EXPORT)
-                held.sendall(
-                    b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n"
-                    b"Content-Type: application/json\r\nContent-Encoding: gzip\r\n"
-                    + f"Content-Length: {len(compressed)}\r\n\r\n".encode()
-                    + compressed[:10]
-                )
-                time.sleep(0.2)  # admitted, its body not yet whole
-                request = urllib.request.Request(
-                    f"http://{receiver.listen}/v1/traces",
-                    data=compressed,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Content-Encoding": "gzip",
-                    },
-                    method="POST",
-                )
-                with urllib.request.urlopen(request, timeout=5) as response:
-                    status = response.status
+        compressed = gzip.compress(JSON_EXPORT)
+        head = (
+            b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n"
+            b"Content-Type: application/json\r\nContent-Encoding: gzip\r\n"
+            + f"Content-Length: {len(compressed)}\r\n\r\n".encode()
+        )
+        with _receiver() as receiver, contextlib.ExitStack() as stack:
+            for _ in range(6):
+                held = stack.enter_context(_connect(receiver.listen))
+                held.sendall(head + compressed[:10])
+            time.sleep(0.2)  # admitted, their bodies not yet whole
+            request = urllib.request.Request(
+                f"http://{receiver.listen}/v1/traces",
+                data=compressed,
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                status = response.status
             metadata = receiver.capability_metadata()
         assert status == 200
         assert metadata["busy"] == 0
