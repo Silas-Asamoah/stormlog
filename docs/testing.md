@@ -186,9 +186,11 @@ with FakeEngine(config) as engine:
 It listens with uvicorn's backlog of 2048, as vLLM's API server does, so a
 burst of clients is never refused. `engine.server_errors` keeps the traceback
 of any exception a request handler raised, for a test to assert there were
-none. If a part fails to start, such as the bind to a busy port, `start()`
-stops the parts already started before it raises, and `stop()` is safe to
-call again, whatever step failed. A second `start()` is refused.
+none. A client that went away before its answer is not one of them: it is
+counted in `engine.dropped_clients`, with no traceback printed. If a part
+fails to start, such as the bind to a busy port, `start()` stops the parts
+already started before it raises, and `stop()` is safe to call again,
+whatever step failed. A second `start()` is refused.
 
 Generated identities (request IDs without an `X-Request-Id`, vLLM's random
 suffixes, span and trace IDs) are random unless `seed` is set; with a seed

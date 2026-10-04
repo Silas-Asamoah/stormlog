@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
+import socket
+import struct
 import threading
 import time
 from functools import partial
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 import pytest
 
@@ -511,6 +515,32 @@ def test_a_burst_of_connections_is_never_reset() -> None:
         errors = [error for _ in range(3) for error in _calls([health] * 100)]
         server_errors = list(engine.server_errors)
     assert (errors, server_errors) == ([], [])
+
+
+def test_a_client_that_goes_away_is_counted_not_reported() -> None:
+    # Fable's #267 final gate: each client that gave up while the front end
+    # was held printed a traceback and filled server_errors, which a test
+    # reads as a fault of the fake engine.
+    with FakeEngine(FAST) as engine:
+        address = urlparse(engine.base_url).netloc
+        clients = [http.client.HTTPConnection(address) for _ in range(5)]
+        for client in clients:
+            # Answered first, so the server holds each connection open.
+            client.request("GET", "/health")
+            assert client.getresponse().read() == b""
+        assert post(f"{engine.base_url}/_fault/pause?target=frontend")[0] == 200
+        for client in clients:
+            client.request("GET", "/health")
+            # Linger 0: the close resets the connection at once.
+            client.sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+            client.close()
+        assert post(f"{engine.base_url}/_fault/resume?target=frontend")[0] == 200
+        assert wait_until(lambda: len(engine.dropped_clients) == 5)
+        assert get(f"{engine.base_url}/health")[0] == 200
+        server_errors = list(engine.server_errors)
+    assert server_errors == []
 
 
 def test_resets_while_requests_run_break_no_connection() -> None:

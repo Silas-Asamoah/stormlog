@@ -6,6 +6,7 @@ import dataclasses
 import json
 import os
 import socket
+import sys
 import threading
 import time
 import traceback
@@ -47,6 +48,8 @@ class FakeEngine:
         self.spans: SpanExporter | None = None
         # Each exception a request handler raised, with its traceback.
         self.server_errors: list[str] = []
+        # The error of each client that went away before its answer.
+        self.dropped_clients: list[str] = []
 
     # ------------------------------------------------------------ lifecycle
 
@@ -236,7 +239,15 @@ class _Server(ThreadingHTTPServer):
     fake: FakeEngine
 
     def handle_error(self, request: Any, client_address: Any) -> None:
-        """Print the handler's exception, as the stdlib does, and keep it."""
+        """Print the handler's exception, as the stdlib does, and keep it.
+
+        A client that went away is not a server error: it is counted, with
+        no traceback, so a burst of clients giving up adds no noise.
+        """
+        error = sys.exc_info()[1]
+        if isinstance(error, ConnectionError):
+            self.fake.dropped_clients.append(type(error).__name__)
+            return
         self.fake.server_errors.append(traceback.format_exc())
         super().handle_error(request, client_address)
 
