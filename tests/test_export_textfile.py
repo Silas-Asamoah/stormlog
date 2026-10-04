@@ -15,8 +15,10 @@ import psutil
 import pytest
 
 from stormlog._export import textfile
+from stormlog._export.registry import FamilySpec, Registry, render
 from stormlog._export.renders import RenderCache
 from stormlog._export.textfile import (
+    PRODUCER_LABEL,
     SlotInUse,
     TextfileWriter,
     slot_paths,
@@ -24,10 +26,8 @@ from stormlog._export.textfile import (
 )
 from tests.export_conformance import check_exposition
 
-BODY = (
-    b"# HELP stormlog_up Up.\n# TYPE stormlog_up gauge\n"
-    b'stormlog_up{stormlog_producer="alpha"} 1\n'
-)
+# No producer label: the writer cannot add one to a render it is given.
+BODY = b"# HELP stormlog_up Up.\n# TYPE stormlog_up gauge\nstormlog_up 1\n"
 
 
 def _writer(
@@ -41,6 +41,7 @@ def _writer(
         directory,
         slot,
         RenderCache(lambda: BODY),
+        const_labels={PRODUCER_LABEL: slot},
         interval=0.05,
         remove_on_exit=remove_on_exit,
         forbidden=forbidden,
@@ -57,13 +58,24 @@ def _wait_for(condition, timeout: float = 5.0) -> bool:  # type: ignore[no-untyp
 
 
 def test_the_slot_names_the_file_the_lock_and_the_label(tmp_path: Path) -> None:
-    writer = _writer(tmp_path)
+    registry = Registry(const_labels={PRODUCER_LABEL: "alpha"})
+    registry.add(FamilySpec("stormlog_up", "gauge", "Up.")).set((), 1)
+    writer = TextfileWriter(
+        tmp_path,
+        "alpha",
+        RenderCache(lambda: render(registry.snapshot())),
+        const_labels=registry.const_labels,
+        interval=0.05,
+    )
     writer.start()
     try:
         assert _wait_for(lambda: writer.path.exists())
         assert writer.path == tmp_path / "stormlog-alpha.prom"
         assert writer.lock_path == tmp_path / "stormlog-alpha.lock"
-        exposition = check_exposition(writer.path.read_text())
+        text = writer.path.read_text()
+        samples = [line for line in text.splitlines() if not line.startswith("#")]
+        assert samples and all('stormlog_producer="alpha"' in s for s in samples)
+        exposition = check_exposition(text)
         assert exposition.value("stormlog_run_active", stormlog_producer="alpha") == 1
         updated = exposition.value(
             "stormlog_textfile_updated_timestamp_seconds", stormlog_producer="alpha"
@@ -71,6 +83,18 @@ def test_the_slot_names_the_file_the_lock_and_the_label(tmp_path: Path) -> None:
         assert abs(updated - time.time()) < 60
     finally:
         writer.close()
+
+
+@pytest.mark.parametrize("labels", [{}, {PRODUCER_LABEL: "beta"}])
+def test_a_render_not_labelled_with_the_slot_is_refused(
+    tmp_path: Path, labels: dict[str, str]
+) -> None:
+    # Two slots in one directory would otherwise write the same series twice,
+    # which node_exporter reports as duplicates.
+    with pytest.raises(ValueError, match=PRODUCER_LABEL):
+        TextfileWriter(
+            tmp_path, "alpha", RenderCache(lambda: BODY), const_labels=labels
+        )
 
 
 def test_the_final_write_says_the_run_ended_and_frees_the_slot(tmp_path: Path) -> None:
@@ -109,7 +133,10 @@ def test_a_slot_is_reused_after_its_writer_exits(tmp_path: Path) -> None:
     first.start()
     first.close()
     second = TextfileWriter(
-        tmp_path, "alpha", RenderCache(lambda: b"# TYPE stormlog_x gauge\n")
+        tmp_path,
+        "alpha",
+        RenderCache(lambda: b"# TYPE stormlog_x gauge\n"),
+        const_labels={PRODUCER_LABEL: "alpha"},
     )
     second.start()
     second.close()
@@ -233,7 +260,12 @@ from pathlib import Path
 from stormlog._export.renders import RenderCache
 from stormlog._export.textfile import TextfileWriter
 
-TextfileWriter(Path(sys.argv[1]), "alpha", RenderCache(lambda: b"")).acquire()
+TextfileWriter(
+    Path(sys.argv[1]),
+    "alpha",
+    RenderCache(lambda: b""),
+    const_labels={"stormlog_producer": "alpha"},
+).acquire()
 print("held", flush=True)
 time.sleep(60)
 """
@@ -362,7 +394,13 @@ def test_a_failed_render_is_counted_and_the_writer_carries_on(tmp_path: Path) ->
 
     clock = {"now": 0.0}
     cache = RenderCache(flaky, min_interval=0.0, clock=lambda: clock["now"])
-    writer = TextfileWriter(tmp_path, "alpha", cache, interval=0.02)
+    writer = TextfileWriter(
+        tmp_path,
+        "alpha",
+        cache,
+        const_labels={PRODUCER_LABEL: "alpha"},
+        interval=0.02,
+    )
     errors: list[BaseException | None] = []
     previous_hook = threading.excepthook
     threading.excepthook = lambda args: errors.append(args.exc_value)

@@ -1,7 +1,9 @@
 """A Prometheus textfile per producer slot, for node_exporter or no server at all.
 
-One slot names everything: the producer label in the file, the file
-``DIR/stormlog-<slot>.prom`` and its lock ``DIR/stormlog-<slot>.lock``. Two
+One slot names everything: the producer label on every series in the file,
+the file ``DIR/stormlog-<slot>.prom`` and its lock
+``DIR/stormlog-<slot>.lock``. The writer cannot label a render it is given,
+so it is refused unless the render's constant labels name its slot. Two
 writers that would emit the same label in one directory therefore contend
 for one lock, and the second is refused.
 
@@ -27,7 +29,7 @@ import re
 import socket
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,7 +81,11 @@ def slot_paths(directory: Path, slot: str) -> tuple[Path, Path]:
 
 
 class TextfileWriter:
-    """Write the shared render to the slot's file now and every ``interval``."""
+    """Write the shared render to the slot's file now and every ``interval``.
+
+    ``const_labels`` are the labels the render puts on every series; they
+    must include ``stormlog_producer`` with the slot as its value.
+    """
 
     def __init__(
         self,
@@ -87,6 +93,7 @@ class TextfileWriter:
         slot: str,
         renders: RenderCache,
         *,
+        const_labels: Mapping[str, str],
         interval: float = 15.0,
         remove_on_exit: bool = False,
         forbidden: Iterable[Path] = (),
@@ -94,6 +101,11 @@ class TextfileWriter:
     ) -> None:
         self.directory = Path(directory)
         self.slot = validate_slot(slot)
+        if const_labels.get(PRODUCER_LABEL) != slot:
+            raise ValueError(
+                f"the render must label every series {PRODUCER_LABEL}={slot!r}, "
+                f"not {const_labels.get(PRODUCER_LABEL)!r}"
+            )
         self.path, self.lock_path = slot_paths(self.directory, slot)
         self.renders = renders
         self.interval = interval

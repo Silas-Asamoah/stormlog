@@ -72,7 +72,9 @@ def test_renders_with_a_stuck_textfile_writer_stay_within_three_renders(
         return Stuck(handle) if str(path).endswith(".tmp") else handle
 
     monkeypatch.setattr(textfile, "open", stuck_open, raising=False)
-    writer = TextfileWriter(tmp_path, "alpha", cache, interval=3600)
+    writer = TextfileWriter(
+        tmp_path, "alpha", cache, const_labels=registry.const_labels, interval=3600
+    )
     tracemalloc.start()
     try:
         baseline = tracemalloc.get_traced_memory()[0]
