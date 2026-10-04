@@ -121,3 +121,48 @@ def test_sigterm_ends_the_watch_with_a_report(tmp_path: Path) -> None:
     report = json.loads((root / "report.json").read_text())
     assert report["verdict"]["exit_code"] == 0
     assert report["metrics"]["scrapes_ok"] >= 1
+
+
+def test_sigterm_ends_a_watch_whose_scrape_trickles(tmp_path: Path) -> None:
+    """A /metrics sending a byte every 0.2 s kept the watch past SIGTERM
+    until it was killed, losing its report."""
+    root = tmp_path / "watch"
+    metrics = FakeMetrics()
+    metrics.dribble = 0.2
+    with serve_metrics(metrics) as base_url:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "stormlog.entrypoint",
+                "infer",
+                "watch",
+                "--root",
+                str(root),
+                "--base-url",
+                base_url,
+                "--interval",
+                "0.5",
+            ],
+            cwd=REPO,
+            env={**os.environ, "PYTHONPATH": str(REPO)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 60
+            while metrics.scrapes == 0:
+                assert process.poll() is None, process.communicate()
+                assert time.monotonic() < deadline, "the watcher never scraped"
+                time.sleep(0.05)
+            time.sleep(1.0)  # inside a trickling scrape, or past one
+            process.send_signal(signal.SIGTERM)
+            out, err = process.communicate(timeout=15)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+    assert process.returncode == 1, err  # no scrape ever finished
+    report = json.loads((root / "report.json").read_text())
+    assert report["payload"]["unsound"] == ["no_successful_scrape"]

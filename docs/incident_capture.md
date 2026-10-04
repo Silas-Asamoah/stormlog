@@ -52,7 +52,13 @@ writes anything; so does a watcher whose `incidents/` another process holds.
 
 1. Scrape `/metrics`. One scrape is in flight at a time; a tick that comes
    due during a slow scrape is skipped and counted. A response over 8 MiB or
-   20,000 series is refused and counted as oversized.
+   20,000 series is refused and counted as oversized. A scrape has
+   `scrape_timeout_seconds` in all, not per read, so an answer that trickles
+   in cannot hold the watch: past the timeout the scrape is counted failed
+   and its fetch is left to finish on its own thread. No other fetch starts
+   until it has; the ticks meanwhile are counted missed, but still evaluate
+   the triggers and seal incidents. SIGINT, SIGTERM or the end of
+   `--duration` cut a scrape short at once.
 2. Keep the scrape in the bounded history (`history.seconds`, 600 by
    default, and `history.bytes`, 32 MiB; see "The recent past in memory").
    A scrape larger than the whole bound is counted as oversized too, and

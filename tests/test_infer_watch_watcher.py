@@ -558,3 +558,45 @@ def test_a_scrape_larger_than_the_whole_history_is_counted_oversized(
     assert "no_successful_scrape" in outcome.unsound
     metrics = _report(tmp_path)["metrics"]
     assert metrics["scrapes_ok"] == 0 and metrics["scrapes_oversized"] > 0
+
+
+@pytest.mark.parametrize("ends_by", ["stop", "duration"])
+def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
+    tmp_path: Path, ends_by: str
+) -> None:
+    """A /metrics answering a byte every 0.2 s never times out per read: it
+    held the watch for minutes, deaf to SIGTERM and to --duration. Now each
+    scrape has its timeout in all, the fetch it gives up on is the only one
+    in flight, and the ticks meanwhile still run."""
+    metrics = FakeMetrics()
+    metrics.dribble = 0.2
+    payload = watch_config("", scrape_timeout_seconds=0.5)
+    options = WatchOptions(
+        duration_seconds=1.2 if ends_by == "duration" else None,
+        shutdown_deadline_seconds=10.0,
+    )
+    with serve_metrics(metrics) as base_url:
+        payload["server"]["base_url"] = base_url
+        started = time.monotonic()
+        outcome = _watch(
+            tmp_path,
+            payload,
+            options=options,
+            stop_after=1.2 if ends_by == "stop" else None,
+        )
+        elapsed = time.monotonic() - started
+    assert elapsed < 4.0
+    assert outcome.unsound == ["no_successful_scrape"]
+    assert metrics.max_in_flight == 1
+    records = read_ledger(tmp_path)
+    health = of_type(records, WATCH_HEALTH)
+    statuses = [record["scrape"]["status"] for record in health]
+    assert "error" in statuses and "skipped" in statuses
+    (given_up, *_rest) = [
+        r["scrape"] for r in health if r["scrape"]["status"] == "error"
+    ]
+    assert given_up["error"] == (
+        "abandoned: no whole response within the 0.5 s scrape timeout"
+    )
+    stats = _report(tmp_path)["payload"]["stats"]
+    assert stats["ticks_missed_total"] >= 1
