@@ -338,6 +338,24 @@ def test_an_outcome_the_candidate_lost_fails_its_gates(how: str) -> None:
     assert comparison.exit_code == 4
 
 
+def test_a_metric_every_crashed_run_lost_says_so_gated_or_not() -> None:
+    # With no candidate value left, the statistics alone would read
+    # insufficient_blocks, hiding why.
+    baseline, candidate = _arms(SAME)
+    candidate = [
+        _run("candidate", i, 100.0, status="interrupted", started=2 * i + 1)
+        for i in range(6)
+    ]
+    for run in candidate:
+        _lose_case(run, "unreadable")
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    metrics = comparison.cases[CASE]["metrics"]
+    assert metrics["client.e2e.p50"].reason == "outcome_unrecoverable"
+    assert metrics["client.e2e.p95"].reason == "outcome_unrecoverable"
+    gate = metrics["client.e2e.p95"].gate
+    assert gate is not None and gate.status == "fail"
+
+
 def test_a_case_a_completed_candidate_run_lacks_is_an_outcome() -> None:
     baseline, candidate = _arms(SAME)
     del candidate[1].report["cases"][CASE]
