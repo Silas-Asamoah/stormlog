@@ -281,7 +281,7 @@ stormlog infer profile ... --otlp-file artifacts/spans.jsonl
 | `--otlp-header NAME=VALUE` | A request header, such as an API key; repeatable. `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` are read too, flags winning. Values are sent, never recorded. |
 | `--otlp-resource-attribute KEY=VALUE` | A resource attribute; repeatable. See "The resource" below. |
 | `--otlp-resource-attribute-allow KEY` | Accept one more resource key. |
-| `--otlp-sample-ratio RATIO` | Keep this fraction of successful request spans (default 1). Failed and cancelled requests are always kept. |
+| `--otlp-sample-ratio RATIO` | Keep this fraction of the successful request spans sent without trace context (default 1). Failed and cancelled requests, and every request sent with a `traceparent`, are always kept. Under `--trace-context follow-sampling` it is also the flag's ratio; see "Trace context". |
 | `--otlp-flush-timeout SECONDS` | How long the end of the run waits for spans to leave (default 5; at most 2 after Ctrl+C). |
 | `--otlp-probe-interval SECONDS` | While the collector is down, how often it is retried (default 8; 0.5 to 30). |
 | `--export-content ITEMS` | Free text spans may carry, comma-separated: `digests`, `errors`, `prompts`, `outputs`. Default none; see "What a span holds". |
@@ -306,7 +306,10 @@ session and the record: the same artifact always maps to the same spans.
 
 `--otlp-sample-ratio` keeps a successful request span when the lowest 56
 bits of its trace ID are at least (1 − ratio) · 2⁵⁶; left-out spans are
-counted as `sampled_out`. A failed or cancelled request is always kept.
+counted as `sampled_out`. A failed or cancelled request is always kept, and
+so is every request sent with a `traceparent`: the server may have
+recorded a child of it, which without it would point at a parent no
+backend ever receives.
 
 ### What a span holds
 
@@ -489,13 +492,23 @@ decides what the sampled flag does:
 | `always_on`, `traceidratio:p` | all, or p | the same; the header sets only the parent | the same; the flag is ignored |
 | `always_off` | none | none | none |
 
-- **`preserve-engine`** is the mode to use when propagation is on. The
-  server records what it would have recorded without the header, so
-  [vLLM span ingestion](vllm_telemetry.md) keeps every span.
-- **`follow-sampling`** sends Stormlog's own decision from
-  `--otlp-sample-ratio` (default 1). The server then drops its spans for
-  every request Stormlog did not sample, including the failed and slow ones
-  that Stormlog keeps after the fact.
+- **`preserve-engine`** is the mode to use when propagation is on and the
+  server keeps its default sampler: it records what it would have recorded
+  without the header, so [vLLM span ingestion](vllm_telemetry.md) keeps
+  every span, and every request span Stormlog exports has its server child.
+  Under a parent-based ratio sampler it records every Stormlog request
+  instead of its ratio; when `--server-trace-sampler` declares such a
+  sampler, the run warns so. `--otlp-sample-ratio` has no effect here and is
+  refused: every request carries a sampled `traceparent`, and every such
+  span is exported.
+- **`follow-sampling`** sends Stormlog's own decision at
+  `--otlp-sample-ratio`. When `--server-trace-sampler` declares a
+  parent-based sampler with a known share, the ratio defaults to that share
+  (else 1), and a higher one is refused, since it would raise the server's
+  volume; a sampler that is not parent-based ignores the flag, so the ratio
+  is left alone. The server then
+  drops its spans for every request Stormlog did not sample, including the
+  failed and slow ones that Stormlog keeps after the fact.
 
 Stormlog's decision keeps a trace when the lowest 56 bits of its trace ID
 are at least (1 − ratio) · 2⁵⁶, the OpenTelemetry ProbabilitySampler's
@@ -503,7 +516,13 @@ predicate, so it can be recomputed from the recorded ID. Stormlog sends no
 `th` threshold, so it claims no agreement with other samplers downstream.
 
 Stormlog cannot read the server's sampler. `--server-trace-sampler
-NAME[:ARG]` records it as you declare it, unverified.
+NAME[:ARG]` records it as you declare it, unverified, after checking NAME
+against the OpenTelemetry SDK's `OTEL_TRACES_SAMPLER` names (`always_on`,
+`always_off`, `traceidratio`, `parentbased_always_on`,
+`parentbased_always_off`, `parentbased_traceidratio`, `jaeger_remote`,
+`parentbased_jaeger_remote`, `xray`) and ARG as a ratio from 0 to 1 for the
+ratio samplers: a typo would otherwise make two compared runs differ
+silently. Anything else exits 2.
 
 ## When something goes wrong
 
