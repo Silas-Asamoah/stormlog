@@ -201,3 +201,46 @@ def test_a_gate_it_cannot_read_is_a_usage_error(
     )
     assert code == ExitCode.USAGE
     assert message in err
+
+
+def test_segments_are_compared_as_cases_of_their_own(
+    arms: dict[str, list[str]],
+) -> None:
+    code, out, _err = _compare(
+        "--baseline",
+        *arms["baseline"],
+        "--candidate",
+        *arms["slower"],
+        "--segment",
+        "early=0:0.05",
+        "--segment",
+        "whole=0:60",
+        "--format",
+        "json",
+    )
+    assert code == ExitCode.OK
+    cases = json.loads(out)["payload"]["cases"]
+    (case_id,) = [c for c in cases if "/" not in c]
+    assert {f"{case_id}/early", f"{case_id}/whole"} <= set(cases)
+    whole = cases[f"{case_id}/whole"]["metrics"]
+    assert whole["throughput_rps"]["n_pairs"] == 3
+    assert "client.e2e.p95" in whole
+
+
+@pytest.mark.parametrize(
+    ("segment", "message"),
+    [("early", "NAME=START:END"), ("early=5:1", "offsets must satisfy")],
+)
+def test_a_segment_it_cannot_read_is_a_usage_error(
+    arms: dict[str, list[str]], segment: str, message: str
+) -> None:
+    code, _out, err = _compare(
+        "--baseline",
+        *arms["baseline"],
+        "--candidate",
+        *arms["slower"],
+        "--segment",
+        segment,
+    )
+    assert code == ExitCode.USAGE
+    assert message in err

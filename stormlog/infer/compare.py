@@ -284,7 +284,7 @@ def _excluded(
         for run in runs:
             for case_id in _case_ids(arms, spec):
                 reasons = list(run.failures_for(case_id))
-                if case_id not in run.cases:
+                if case_id not in run.comparable_cases:
                     reasons.append("case_missing")
                 if reasons:
                     excluded.append(
@@ -437,7 +437,7 @@ def _case_ids(arms: Mapping[str, list[RunSummary]], spec: ComparisonSpec) -> lis
     ids: set[str] = set()
     for runs in arms.values():
         for run in runs:
-            ids.update(run.cases)
+            ids.update(run.comparable_cases)
     return sorted(ids)
 
 
@@ -473,7 +473,7 @@ def _case_metrics(
     blocked: str | None,
 ) -> dict[str, MetricComparison]:
     reference = next(
-        (run.cases[case_id] for runs in kept.values() for run in runs), None
+        (run.comparable_cases[case_id] for runs in kept.values() for run in runs), None
     )
     if reference is None:
         return {}
@@ -540,7 +540,7 @@ def _readings(
     for arm, runs in kept.items():
         values[arm] = []
         for run in runs:
-            value, reason = metric.read(run.cases[case_id])
+            value, reason = metric.read(run.comparable_cases[case_id])
             values[arm].append(value)
             if reason:
                 reasons.append(reason)
@@ -559,7 +559,7 @@ def _metric_blocker(
         return sorted(set(reasons))[0]
     if metric.slo:
         coverages = [
-            evidence_coverage(run.cases[case_id])
+            evidence_coverage(run.comparable_cases[case_id])
             for runs in kept.values()
             for run in runs
         ]
@@ -589,7 +589,7 @@ def _attainment_gate(
     target = spec.min_attainment
     assert target is not None
     lowers = [
-        ((run.cases[case_id].get("slo") or {}).get("attainment_lower"))
+        ((run.comparable_cases[case_id].get("slo") or {}).get("attainment_lower"))
         for run in candidate
     ]
     known = [float(x) for x in lowers if isinstance(x, (int, float))]
@@ -611,10 +611,12 @@ def _pooled_attainment(
 ) -> dict[str, Any]:
     """Requests as independent trials: model-based, and only when asked for."""
     met = sum(
-        int((r.cases[case_id].get("slo") or {}).get("met") or 0) for r in candidate
+        int((r.comparable_cases[case_id].get("slo") or {}).get("met") or 0)
+        for r in candidate
     )
     offered = sum(
-        int((r.cases[case_id].get("slo") or {}).get("offered") or 0) for r in candidate
+        int((r.comparable_cases[case_id].get("slo") or {}).get("offered") or 0)
+        for r in candidate
     )
     bound = clopper_pearson(
         met, max(offered, 1), spec.confidence, model="independent_requests"

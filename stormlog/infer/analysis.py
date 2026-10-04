@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +21,9 @@ from .observers import observer_lines, observer_states
 from .populations import (
     CasePopulation,
     MeasuredInterval,
+    Membership,
+    Segment,
+    SegmentPopulation,
     case_populations,
     goodput,
     rate,
@@ -72,10 +75,14 @@ def analyze_inference_events(
     vllm_span_paths: Iterable[str | Path] = (),
     slo: SloSpec | None = None,
     slo_source: str = "flags",
+    segments: Sequence[Segment] = (),
+    segment_membership: Membership = "arrival",
 ) -> dict[str, Any]:
     """Analyze an inference profiling JSONL artifact.
 
     ``slo`` overrides the policy the artifact recorded, if it recorded one.
+    With ``segments``, each case also reports each segment of its measured
+    phase on its own (see ``populations.Segment``).
     """
     records = _load_jsonl(path)
     policy = _policy(records, slo, slo_source)
@@ -93,15 +100,15 @@ def analyze_inference_events(
     )
     timelines = [(member, _member_timeline(member)) for member in members]
     ok_requests = [record for record in requests if record.get("status") == "ok"]
+    context = _CaseContext(
+        spans=spans,
+        policy=policy,
+        server_ids=_server_admitted_ids(records, spans, external_spans),
+        segments=tuple(segments),
+        membership=segment_membership,
+    )
     cases = _case_reports(
-        records,
-        requests,
-        samples,
-        timelines,
-        "group" in join,
-        spans,
-        policy,
-        _server_admitted_ids(records, spans, external_spans),
+        records, requests, samples, timelines, "group" in join, context
     )
     if timelines:
         join["case_coverage"] = _coverage_counts(cases)
@@ -271,22 +278,37 @@ def _span_source(records: list[dict[str, Any]]) -> bool:
     return False
 
 
+@dataclass(frozen=True)
+class _CaseContext:
+    """What every case report shares: spans, the policy, server evidence, segments."""
+
+    spans: JoinedSpans
+    policy: _Policy | None
+    server_ids: set[str] | None
+    segments: tuple[Segment, ...] = ()
+    membership: Membership = "arrival"
+
+
 def _case_reports(
     records: list[dict[str, Any]],
     requests: list[dict[str, Any]],
     samples: list[dict[str, Any]],
     timelines: list[tuple[_Member, _ServerTimeline]],
     grouped: bool,
-    spans: JoinedSpans,
-    policy: _Policy | None,
-    server_ids: set[str] | None,
+    context: _CaseContext,
 ) -> dict[str, dict[str, Any]]:
     by_case: dict[str, list[dict[str, Any]]] = {}
     for record in requests:
         by_case.setdefault(str(record.get("case_id", "unknown")), []).append(record)
     windows = _measured_windows(records)
     cache_states = _case_records(records, "infer.cache_state")
-    populations = case_populations(records, server_admitted_ids=server_ids)
+    populations = case_populations(
+        records,
+        segments=context.segments,
+        membership=context.membership,
+        server_admitted_ids=context.server_ids,
+    )
+    spans, policy = context.spans, context.policy
     cases = {}
     for case_id, case_requests in sorted(by_case.items()):
         cases[case_id] = _case_report(
@@ -309,7 +331,46 @@ def _case_reports(
                 slo_source=policy.source,
                 cohort=populations[case_id].population,
             ).to_record()
+        if context.segments:
+            cases[case_id]["segments"] = {
+                name: _segment_report(case_requests, segment, context)
+                for name, segment in populations[case_id].segments.items()
+            }
     return cases
+
+
+def _segment_report(
+    case_requests: list[dict[str, Any]],
+    segment: SegmentPopulation,
+    context: _CaseContext,
+) -> dict[str, Any]:
+    """One segment of a case: its cohort, rates, latency and SLO, on its own."""
+    ids = set(segment.request_ids)
+    members = [r for r in case_requests if str(r.get("request_id")) in ids]
+    ok = [r for r in members if r.get("status") == "ok"]
+    report: dict[str, Any] = {
+        "population": segment.population.to_record(),
+        "intervals": {
+            "rate": segment.interval.to_record(),
+            "membership": segment.membership,
+        },
+        "throughput": _throughput(
+            len(ok),
+            sum(_int_value(r.get("output_tokens")) for r in ok),
+            sum(_int_value(r.get("total_tokens")) for r in ok),
+            segment.interval,
+        ),
+        "latency": latency_summary(members, spans=context.spans),
+    }
+    if context.policy is not None:
+        report["slo"] = goodput(
+            members,
+            context.policy.spec,
+            segment.interval,
+            spans=context.spans,
+            slo_source=context.policy.source,
+        ).to_record()
+    return report
 
 
 def _case_report(

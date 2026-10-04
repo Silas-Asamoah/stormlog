@@ -219,6 +219,7 @@ class SegmentPopulation:
     population: Population
     interval: MeasuredInterval
     membership: Membership
+    request_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -657,6 +658,7 @@ def _segment(
         population=count_population(members, server_admitted_ids=server_ids),
         interval=MeasuredInterval("segment", begin, end, cohort),
         membership=membership,
+        request_ids=tuple(str(r.get("request_id")) for r in members),
     )
 
 

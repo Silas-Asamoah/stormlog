@@ -40,6 +40,8 @@ stormlog infer compare \
 | `--on-incomplete exclude\|fail` | A run set aside by a protocol failure is listed (`exclude`), or fails its contrasts (`fail`) |
 | `--allow-not-evaluable` | Exit 0 although a gate could not be evaluated: for exploration, and recorded |
 | `--evidence-floor F` | The `evidence_coverage` SLO metrics need in every run (1.0) |
+| `--segment NAME=START:END` | Also compare this slice of each case's measured phase, in seconds from its start; repeatable |
+| `--segment-membership arrival\|overlap` | A segment's requests: those that arrived in it (the default), or that overlap it |
 | `--format txt\|json`, `--report FILE` | Text, or the report envelope on stdout; `--report` writes the envelope too |
 
 Metrics, for every case: `goodput_rps`, `attainment` (bounds when outcomes
@@ -49,6 +51,14 @@ p90, p95 and p99 of each latency metric the runs have (`client.ttft`,
 and `server.e2e` with spans). Latency quantiles are the failure-penalized
 estimand: a quantile that falls among failed requests (`penalized`) or rests
 on too few requests (`insufficient_tail_samples`) cannot be gated.
+
+### Segments
+
+A segment is a slice of each case's measured phase, such as the seconds
+around a profiler's stop. With `--segment`, each segment is compared as a
+case of its own, named `<case>/<segment>`, with the same metrics: its
+requests (by arrival, or by overlap), and its rates per second of the
+segment, clipped to the phase. A segment fails with its case.
 
 ### Modes
 
