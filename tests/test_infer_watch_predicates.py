@@ -99,6 +99,30 @@ def test_a_stale_or_failed_end_or_a_missing_start_is_a_data_gap() -> None:
     assert start.reason == REASON_START_MISSING
 
 
+def test_a_tick_during_a_slow_scrape_judges_the_one_before() -> None:
+    """Scrapes start every second and take 50 ms or 300 ms. A tick 0.1 s into
+    a slow one finds the newest finished scrape 1.05 s old, past a tick:
+    fetch jitter under load must not turn into data gaps."""
+    history = []
+    for second in range(40):
+        mono, took = second * S, (300 if second % 2 else 50) * 1_000_000
+        record = scrape(_waiting(9), second, duration_ms=took / 1e6)
+        history.append((Stamped(mono, mono + took, mono), record))
+    at = 35 * S + 100_000_000
+    done = [entry for entry in history if entry[0].done_mono_ns <= at]
+    strict = select_window(done, at_ns=at, window_ns=30 * S, tick_ns=S)
+    assert strict.reason == REASON_END_STALE
+    judged = select_window(
+        done, at_ns=at, window_ns=30 * S, tick_ns=S, scrape_timeout_ns=S // 2
+    )
+    assert judged.reason is None and judged.end_ns == 34 * S + 50_000_000
+    engine = TriggerEngine(
+        [_queue_trigger()], tick_seconds=1, scrape_timeout_seconds=0.5
+    )
+    (result,) = engine.tick(at, done)
+    assert result.evaluation.classification == VIOLATING
+
+
 # ----------------------------------------------------------------- predicates
 
 
