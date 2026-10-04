@@ -504,7 +504,10 @@ class InjectionRun:
         # The measured window ends where the victim's did, not after its
         # drain: drain time has completions but no arrivals to score.
         windows = progress.windows(_measured_end(records) or self.clock())
-        clock = _victim_clock(records)
+        victim_clock = _victim_clock(records)
+        # A victim that never wrote a context (one that failed before
+        # measuring) leaves the harness's own stamps: this host's clock.
+        clock = victim_clock or _harness_clock()
         truth = _Truth(
             run_id=self.directory.label,
             window=PhaseWindow(windows.measured_start, windows.measured_end),
@@ -513,7 +516,7 @@ class InjectionRun:
             records=records,
             baseline=(windows.priming_end, windows.baseline_end),
             clock_domain=clock,
-            same_clock=clock is not None and clock == _harness_clock(),
+            same_clock=victim_clock is not None and victim_clock == _harness_clock(),
             producers=tuple(self.channel.view.producers if self.channel else ()),
         )
         write_run(

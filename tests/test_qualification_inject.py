@@ -19,6 +19,7 @@ import pytest
 
 from examples.qualification.__main__ import main
 from examples.qualification.fake_engine.process import FakeEngineProcess, _environment
+from examples.qualification.inject import _harness_clock
 from examples.qualification.run_dir import verify
 from stormlog.infer.qualify.ground_truth import load_injections, load_run
 from tests.qualification_fake_engine_helpers import post, wait_until
@@ -405,6 +406,8 @@ def test_a_run_that_fails_is_published_with_its_reason(tmp_path: Path) -> None:
     record = load_run(run / "truth" / "run.json")
     assert record.protocol_failure is not None
     assert "before measuring" in record.protocol_failure
+    # No victim clock: the run's times are the harness's, on this host.
+    assert record.clock_domain == _harness_clock()
     (skipped,) = load_injections(run / "truth" / "injections.jsonl")
     assert skipped.status in ("protocol_failure", "not_actuated")
 
