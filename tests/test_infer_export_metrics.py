@@ -13,6 +13,7 @@ from stormlog.infer.events import REQUEST_PHASES, REQUEST_STATUSES
 from stormlog.infer.export_metrics import (
     ALL_CASES,
     CHUNK_BUCKETS,
+    LATENCY_BUCKETS,
     REQUEST_LIMITS,
     ProfileLabels,
     ProfileMetrics,
@@ -135,6 +136,26 @@ def test_a_completed_request_fills_every_client_family() -> None:
         )
         == 1
     )
+
+
+def test_a_long_generation_lands_below_the_top_bucket() -> None:
+    # 4,096 tokens at 30 tokens a second take about 136 s: in +Inf, a
+    # quantile there reads as the top bound whatever the latency was.
+    registry, metrics = _metrics()
+    _feed(registry, metrics, _request(e2e_latency_ms=136_000.0))
+    exposition = _exposition(registry)
+    case = {"case": "poisson2_in8_out8", "phase": "measured"}
+    buckets = "stormlog_infer_request_duration_seconds_bucket"
+    assert exposition.value(buckets, le="120.0", **case) == 0
+    assert exposition.value(buckets, le="180.0", **case) == 1
+
+
+def test_latency_buckets_are_finer_where_requests_live() -> None:
+    # Between 10 s and 2 min a quantile interpolates inside one bucket; each
+    # spans at most half again its lower bound.
+    bounds = [b for b in LATENCY_BUCKETS if 10.0 <= b <= 120.0]
+    assert all(high <= 1.5 * low for low, high in zip(bounds, bounds[1:]))
+    assert {0.15, 0.2} <= set(CHUNK_BUCKETS)
 
 
 def test_a_closed_loop_request_has_no_latency_from_intended() -> None:
