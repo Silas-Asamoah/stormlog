@@ -390,3 +390,36 @@ def test_the_proc_search_finds_the_mark_and_passes_an_unmarked_environment(
     assert (search.found, search.unclear, search.unreadable) == (set(), set(), 0)
     environ.write_bytes(b"HOME=/root\0STORMLOG_RUN_MARK=m\0")
     assert ep._proc_marked(b"STORMLOG_RUN_MARK=m\0", tmp_path).found == {pid}
+
+
+def test_a_process_started_after_the_launch_ended_is_not_its(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Only a process the launch's tree was alive to start can be its: one
+    # an orphan of another run started after this launch's leader exited is
+    # another's (concurrent tests on a Mac made such orphans blind).
+    from stormlog.infer import experiment_process as ep
+
+    launch_s = 1_000_000.0
+    _table(
+        monkeypatch,
+        {
+            30: ep._Process(launch_s + 5, 1, os.getuid()),
+            31: ep._Process(launch_s + 20, 1, os.getuid()),
+        },
+    )
+    since = {"pid": 1, "create_time": launch_s}
+    may = ep._may_be_launched
+    assert may(30, since, Path("/proc"), "psutil", lasted_s=10.0) is True
+    assert may(31, since, Path("/proc"), "psutil", lasted_s=10.0) is False
+    # Still running, or not known: no bound.
+    assert may(31, since, Path("/proc"), "psutil", lasted_s=None) is True
+
+
+def test_a_launch_knows_how_long_its_leader_ran() -> None:
+    launched = launch("step", [sys.executable, "-c", "import time; time.sleep(0.3)"])
+    assert launched.lasted_s() is None
+    launched.process.wait(timeout=5)
+    launched.poll()
+    lasted = launched.lasted_s()
+    assert lasted is not None and 0.2 < lasted < 5
