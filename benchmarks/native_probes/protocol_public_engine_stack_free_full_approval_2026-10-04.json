@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_protocol_approval_record",
+  "issue": 118,
+  "proposal_path": "artifacts/native-probes/readiness/public_engine_stack_free_full_preflight_proposal.json",
+  "proposal_sha256": "8b35a7d2005c952f71f291e483d90e76ff9f312c7b28038cf7be63e953f3824d",
+  "user_approval": "i approve",
+  "approval_scope": "One full-workload stack-free public-engine qualification preflight only; no final matched repetition",
+  "prior_bounded_diagnostic_disposition": "remains partial",
+  "local_date": "2026-10-04"
+}

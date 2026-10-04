@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_hardware_preflight_evidence",
+  "issue": 118,
+  "scope": "Full pinned off-mode vLLM workload with approved 10-second shutdown amendment; one hardware preflight, not a final matched repetition",
+  "machine": {
+    "provider": "JarvisLabs",
+    "machine_id": 525221,
+    "region": "IN2",
+    "gpu": "NVIDIA L4",
+    "status_after": "Paused",
+    "running_instances_after": 0,
+    "filesystems_after": 0
+  },
+  "pinned_adapter_sha256": "dd9a7c06e1e64617a1290b40baf46f5296f0139e0d48ba64cc0f6718ace6d251",
+  "runner_sha256": "cb8532fafd997ec0b628c0582de3d4e3bd13567eefe74924cb4cce5cc8377a6d",
+  "managed_run_id": "r_8111dba8",
+  "outcome": {
+    "managed_run_state": "succeeded",
+    "wrapper_exit_code": 0,
+    "started_utc_remote_runner": "2026-10-04T06:47:49Z",
+    "ended_utc_remote_runner": "2026-10-04T06:52:34Z",
+    "warmup_offered": 200,
+    "warmup_successful": 200,
+    "measured_offered": 2200,
+    "measured_successful": 2200,
+    "server_shutdown_timeout_seconds": 10,
+    "server_return_code": 0,
+    "force_kill_marker_logged": false,
+    "engine_dead_error_logged": false,
+    "resource_tracker_leak_logged": false,
+    "host_rss_samples": 2029,
+    "host_rss_valid_samples": 2029,
+    "gpu_memory_samples": 203,
+    "gpu_memory_valid_samples": 203,
+    "measured_window_seconds": 220.517201534,
+    "disposition": "off_full_workload_preflight_qualified_on_this_l4",
+    "limit": "One fresh-process off-mode preflight qualifies this mode's full workload and clean teardown under the approved adapter. It is not one of five matched repetitions and establishes no memory reduction."
+  },
+  "memory_observation": {
+    "host_rss_peak_bytes": 3579854848,
+    "host_rss_median_bytes": 3579854848,
+    "gpu_process_memory_peak_bytes": 19063111680,
+    "gpu_process_memory_median_bytes": 19063111680,
+    "vm_pin_lower_bound_peak_bytes": 0,
+    "pinned_host_memory_bytes": null,
+    "collector_buffer_bytes": null,
+    "total_memory_claim": "inconclusive"
+  },
+  "latency_observation": {
+    "e2e_p95_ms": 637.691608,
+    "e2e_p99_ms": 640.48821671,
+    "ttft_p95_ms": 32.236256000000004,
+    "interpretation": "Single off-mode preflight only; no paired perturbation or uncertainty estimate."
+  },
+  "raw_archive": {
+    "path": "artifacts/native-probes/readiness/stormlog-off-full-shutdown-525221.tar.gz",
+    "sha256": "b731de9a9e8e60be402743be1262379b6ea4b3d0da31c2aeaa095ffe1bc4179e",
+    "archive_bytes": 171888,
+    "remote_and_local_archive_sha256_match": true,
+    "internal_files_hash_verified": 15,
+    "internal_files_hash_failed": 0
+  },
+  "cloud_cost": {
+    "account_balance_before_usd": 16.9996,
+    "account_balance_after_usd": 16.9363,
+    "balance_decrease_usd": 0.0633,
+    "managed_run_instance_cost_usd_at_final_status": 0.053,
+    "interpretation": "The balance decrease includes retained storage and is not a per-run invoice."
+  },
+  "safety": {
+    "hard_run_timeout_seconds": 900,
+    "independent_pause_guard_minutes": 20,
+    "remote_free_space_stop_gib": 20,
+    "guard_verified_before_resume": true,
+    "guard_removed_after_pause_verified": true
+  },
+  "readiness": {
+    "off_mode_full_preflight_qualified": true,
+    "public_engine_full_preflight_qualified": false,
+    "proton_full_preflight_qualified": false,
+    "direct_cupti_full_memory_preflight_qualified": false,
+    "trusted_nsight_full_correctness_preflight_qualified": false,
+    "final_repetitions_started": false,
+    "validated_matrix_cells_promoted": 0,
+    "integration_decision": "pending_comparative_evidence"
+  }
+}

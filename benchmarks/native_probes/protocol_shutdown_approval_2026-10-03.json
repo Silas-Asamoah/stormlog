@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_protocol_shutdown_approval",
+  "issue": 118,
+  "proposal_path": "artifacts/native-probes/readiness/shutdown_amendment_proposal.json",
+  "proposal_sha256": "a9b564436abb793a6e5605275f4a8a8ed6b0a27ba3839b4a009ebfda36a32e5b",
+  "approval_source": "User reply 'Approved. Go ahead' on 2026-10-03 to the exact --shutdown-timeout 10 amendment",
+  "approved_scope": "Add --shutdown-timeout 10 to the vLLM server command in off, public-engine, proton, direct-cupti, and trusted modes; post-window teardown only",
+  "numeric_acceptance_policy_workload_capture_bound_and_failure_rules_unchanged": true,
+  "final_trials_authorized_only_after_hardware_preflight": true,
+  "final_trials_started": false,
+  "status": "approved_implemented_bounded_preflight_found_public_profiler_shutdown_failures"
+}
