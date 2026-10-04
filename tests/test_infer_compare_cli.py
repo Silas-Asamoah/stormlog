@@ -191,6 +191,11 @@ def test_two_runs_of_one_arm_in_a_block_are_invalid_input(
         ("nothing.here=non-inferiority:0.05", "names no metric"),
         ("client.e2e.p95=sometimes:0.05", "gate rule must be one of"),
         ("client.e2e.p95=significant:lots", "is not a number"),
+        # Budgets that can never fail: a fraction above 1, and a fall of
+        # 100% or more in a rate, which cannot fall below zero.
+        ("attainment=non-inferiority:1.5", "can never fail"),
+        ("goodput_rps=non-inferiority:1", "can never fail"),
+        ("throughput_rps=significant:5", "can never fail"),
     ],
 )
 def test_a_gate_it_cannot_read_is_a_usage_error(
@@ -201,6 +206,27 @@ def test_a_gate_it_cannot_read_is_a_usage_error(
     )
     assert code == ExitCode.USAGE
     assert message in err
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--min-attainment", "0.99", "--min-run-pass", "0"],
+        ["--min-attainment", "0.99", "--min-run-pass", "1.5"],
+        ["--min-attainment", "0"],
+        ["--min-attainment", "1.5"],
+        ["--evidence-floor", "-1"],
+        ["--evidence-floor", "2"],
+    ],
+)
+def test_shares_outside_their_range_are_usage_errors(
+    arms: dict[str, list[str]], flags: list[str]
+) -> None:
+    code, _out, err = _compare(
+        "--baseline", *arms["baseline"], "--candidate", *arms["slower"], *flags
+    )
+    assert code == ExitCode.USAGE
+    assert "is not valid" in err
 
 
 def test_segments_are_compared_as_cases_of_their_own(
