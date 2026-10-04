@@ -32,9 +32,10 @@ makes a gate ``not_evaluable``.
 A ``fraction`` metric (a failure fraction, an SLO attainment) is gated on a
 claim about runs, not on an interval: k of n candidate runs stayed within
 the budget of their block's baseline, and the one-sided Clopper-Pearson
-lower bound of k/n is at least 0.5. That is exact when runs are independent,
-however failures cluster within a run, which no interval on the fraction
-is. Each run needs ``3 / budget`` requests, so that one failure cannot
+lower bound of k/n is at least 0.5. With blocks that is exact when runs are
+independent, however failures cluster within a run, which no interval on
+the fraction is. Without blocks the gate is not evaluable: judging every
+run against one estimated baseline mean correlates the judgements. Each run needs ``3 / budget`` requests, so that one failure cannot
 breach the budget. The paired t, with its standard error floored at the
 pooled binomial one, is the descriptive interval, and the pooled requests'
 Clopper-Pearson bounds are reported, labelled model-based.
@@ -1380,21 +1381,24 @@ def _run_level_gate(
     """k of n candidate runs within the budget; passes iff the one-sided
     Clopper-Pearson lower bound of k/n is at least ``RUN_PASS_SHARE``.
 
-    A run is judged on its worst case against its block's baseline (or the
-    baseline arm's mean, without blocks); a run with no value, or with no
-    baseline to judge it by, is a miss.
+    A run is judged on its worst case against its block's baseline; a run
+    with no value, or with no baseline to judge it by, is a miss. Without
+    blocks there is no claim: judged against one estimated baseline mean,
+    the runs' judgements are correlated and the bound is not exact.
     """
     gate = request.gate
     if gate is None:
         return None
-    blocker = _run_level_blocker(request, baseline, candidate)
+    blocker = _run_level_blocker(request, baseline, candidate, blocks)
     if blocker is not None:
         return GateOutcome(NOT_EVALUABLE, blocker, gate, RUN_LEVEL)
-    within = _runs_within(request, gate.budget, baseline, candidate, blocks)
+    assert blocks is not None
+    references = _references(baseline, blocks, request)
+    within = _runs_within(request, gate.budget, candidate, references)
     k, n = sum(1 for ok in within if ok), len(within)
     bound = clopper_pearson(k, n, request.confidence, model="independent_runs")
     status = PASS if bound.lower >= RUN_PASS_SHARE else FAIL
-    reference = "block_baseline" if blocks is not None else "baseline_mean"
+    reference = "block_baseline"
     sided = 0.5 + request.confidence / 2
     claim = {
         "model": "independent_runs",
@@ -1414,13 +1418,18 @@ def _run_level_gate(
 
 
 def _run_level_blocker(
-    request: _Request, baseline: Sequence[RunValue], candidate: Sequence[RunValue]
+    request: _Request,
+    baseline: Sequence[RunValue],
+    candidate: Sequence[RunValue],
+    blocks: tuple[Sequence[Hashable], Sequence[Hashable]] | None,
 ) -> str | None:
     """Why the run-level claim cannot be made, before any run is judged."""
     gate = request.gate
     assert gate is not None
     if request.unavailable is not None:
         return request.unavailable
+    if blocks is None:
+        return "fraction_needs_blocks"
     counts = _measured_counts(request.trials, baseline, candidate)
     if counts is None:
         return "requests_per_run_unrecorded"
@@ -1457,15 +1466,12 @@ def _measured_counts(
 def _runs_within(
     request: _Request,
     budget: float,
-    baseline: Sequence[RunValue],
     candidate: Sequence[RunValue],
-    blocks: tuple[Sequence[Hashable], Sequence[Hashable]] | None,
+    references: Sequence[float | None],
 ) -> list[bool]:
     """Whether each candidate run's worst case is within the budget."""
     sign = _sign(request.direction)
-    # The baseline's good side and the candidate's bad side: the worst case.
-    good, bad = (0, 1) if request.direction == LOWER_IS_BETTER else (1, 0)
-    references = _references(baseline, candidate, blocks, good)
+    bad = 1 if request.direction == LOWER_IS_BETTER else 0
     within = []
     for value, reference in zip(candidate, references):
         run = _bounds(value)
@@ -1478,15 +1484,12 @@ def _runs_within(
 
 def _references(
     baseline: Sequence[RunValue],
-    candidate: Sequence[RunValue],
-    blocks: tuple[Sequence[Hashable], Sequence[Hashable]] | None,
-    good: int,
+    blocks: tuple[Sequence[Hashable], Sequence[Hashable]],
+    request: _Request,
 ) -> list[float | None]:
-    """Each candidate run's reference: its block's baseline, or the arm's mean."""
-    if blocks is None:
-        values = [b[good] for b in map(_bounds, baseline) if b is not None]
-        mean = sum(values) / len(values) if values else None
-        return [mean] * len(candidate)
+    """Each candidate run's reference: its block's baseline, on its good
+    side, so that the comparison is the worst case."""
+    good = 0 if request.direction == LOWER_IS_BETTER else 1
     by_block = {label: _bounds(v) for label, v in zip(blocks[0], baseline)}
     found = []
     for label in blocks[1]:

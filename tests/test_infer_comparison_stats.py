@@ -170,11 +170,20 @@ def test_a_run_is_judged_against_its_own_blocks_baseline() -> None:
     assert within.gate is not None and within.gate.status == "pass"
     beyond = _fractions([0.015] * 7 + [0.025], baseline=[0.01] * 8)
     assert beyond.gate is not None and beyond.gate.status == "fail"
-    # Without blocks, each candidate run against the baseline arm's mean.
+    assert within.gate.claim is not None
+    assert within.gate.claim["reference"] == "block_baseline"
+
+
+def test_a_fraction_gate_without_blocks_is_not_evaluable() -> None:
+    # rev-213-a's D1: judged against one estimated baseline mean, the runs'
+    # judgements are correlated and the bound is not exact; with one
+    # baseline run, false passes reached 9% against a nominal 1.3%.
     unpaired = _fractions([0.015] * 8, baseline=[0.0, 0.02] * 4, blocks=None)
-    assert unpaired.gate is not None and unpaired.gate.status == "pass"
-    assert unpaired.gate.claim is not None
-    assert unpaired.gate.claim["reference"] == "baseline_mean"
+    assert unpaired.gate is not None
+    assert (unpaired.gate.status, unpaired.gate.reason) == (
+        "not_evaluable",
+        "fraction_needs_blocks",
+    )
 
 
 def test_an_unmeasurable_candidate_run_is_a_miss() -> None:
