@@ -535,11 +535,9 @@ class InferenceProfiler:
 
     def _close_export(self, completed: bool) -> None:
         if self.export is not None:
-            deadline = (
-                EXPORT_CLOSE_SECONDS
-                if completed and not self._ctrl_c.pressed
-                else EXPORT_INTERRUPT_CLOSE_SECONDS
-            )
+            deadline = self.config.export.otlp_flush_timeout_seconds
+            if not completed or self._ctrl_c.pressed:
+                deadline = min(deadline, EXPORT_INTERRUPT_CLOSE_SECONDS)
             self.export.close(deadline)
 
     async def _wait_for_late_spans(self) -> None:
@@ -1657,9 +1655,8 @@ def _lag_ms(arrival: Arrival, sent_at_ns: int) -> float:
     return (sent_at_ns - arrival.intended_at_ns) / 1_000_000.0
 
 
-# How long closing the exporters may take: they finish what is queued, then
-# freeze. Shorter after Ctrl+C.
-EXPORT_CLOSE_SECONDS = 5.0
+# How long closing the exporters may take after Ctrl+C, at most; otherwise
+# --otlp-flush-timeout (5 s). They finish what is queued, then freeze.
 EXPORT_INTERRUPT_CLOSE_SECONDS = 2.0
 # The server declined the request: rate limited or overloaded.
 REJECTED_HTTP_STATUSES = frozenset({429, 503})
