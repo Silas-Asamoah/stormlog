@@ -821,6 +821,23 @@ def test_an_interrupted_write_is_cut_back_too(
     assert [json.loads(line)["seq"] for line in lines] == [1, 2]
 
 
+def test_a_bounded_sink_on_a_healthy_disk_flushes_instead_of_dropping(
+    tmp_path: Path,
+) -> None:
+    """A burst that fills the buffer before the next scheduled flush."""
+    sink = AppendOnlyTelemetrySink(
+        TelemetrySinkConfig(
+            root_dir=tmp_path, max_buffer_bytes=64 * 1024, write_rollups=False
+        )
+    )
+    for seq in range(200):  # 2 KB each: 400 KB against a 64 KiB bound
+        sink.append({"seq": seq, "pad": "p" * 2000})
+    assert sink.failure_diagnostics()["dropped_records"] == 0
+    sink.close()
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    assert [r["seq"] for r in _segment_records(segment)] == list(range(200))
+
+
 def test_bounded_mode_settings_are_validated(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_buffer_bytes"):
         TelemetrySinkConfig(root_dir=tmp_path, max_buffer_bytes=0)

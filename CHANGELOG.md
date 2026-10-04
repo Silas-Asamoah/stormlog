@@ -371,9 +371,10 @@ the flaky benchmark memory gates
   when a write fails partway, for example on a full disk. Before, the next
   successful flush extended the partial line into a corrupt record. A new
   opt-in bound, `TelemetrySinkConfig(max_buffer_bytes=...)`, keeps a sink on
-  a failing disk from growing memory: records over the bound are dropped and
-  counted, and failed flushes are counted and retried with backoff instead
-  of raising. `failure_diagnostics()` reports the counters.
+  a failing disk from growing memory: a full buffer is flushed first, and
+  records that still do not fit are dropped and counted; failed flushes,
+  manifest writes and segment deletions are counted and retried with backoff
+  instead of raising. `failure_diagnostics()` reports the counters.
   ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
 
 ## [0.3.10] - 2026-10-01
