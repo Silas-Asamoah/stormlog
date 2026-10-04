@@ -168,10 +168,14 @@ def _exclusion_findings(comparison: Comparison) -> list[Finding]:
 
 
 def _set_aside_reasons(item: Mapping[str, Any]) -> str:
-    """Why a run was set aside, and the attempt kept in its place."""
-    reasons = ", ".join(item["reasons"])
+    """Why a run was set aside, the evidence for an external cause, and the
+    attempt kept in its place."""
+    text = ", ".join(item["reasons"])
+    evidence = item.get("evidence") or {}
+    if evidence:
+        text += "; evidence: " + "; ".join(evidence.values())
     kept = item.get("attempt_kept")
-    return reasons if kept is None else f"{reasons}; kept {kept}"
+    return text if kept is None else f"{text}; kept {kept}"
 
 
 def _unverified(comparison: Comparison, path: str | None) -> Finding:
