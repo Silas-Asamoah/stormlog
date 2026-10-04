@@ -193,6 +193,12 @@ were missed: fewer scrapes were attempted than one a tick, give or take
 one. `fidelity_detail.scrapes` gives the counts: attempted, expected, ok
 and failed.
 
+The watcher decides on its monotonic clock and writes times on the wall
+clock as it read it at the start, plus the time elapsed since: a wall-clock
+step during the watch (NTP, a manual change) moves no window, but then the
+bounds an incident records and the wall times its scrapes carry differ by
+the size of the step.
+
 The `infer.incident` record goes to the ledger, and into `report.json`, also
 when its bundle could not be written (a full disk, say): its `bundle` is then
 null and `bundle_error` says why. A watch whose every incident write failed
