@@ -246,10 +246,33 @@ def test_overlap_segments_are_compared_but_never_gated(
         "json",
     )
     assert code in (ExitCode.OK, ExitCode.GATE_FAILED)
-    cases = json.loads(out)["payload"]["cases"]
+    envelope = json.loads(out)
+    cases = envelope["payload"]["cases"]
     (segment,) = [case for case_id, case in cases.items() if "/" in case_id]
     assert segment["membership"] == "overlap" and segment["gated"] is False
     assert all(metric["gate"] is None for metric in segment["metrics"].values())
+    # The summary counts only the gates the whole case carries.
+    gated = sum(
+        1
+        for case in cases.values()
+        for metric in case["metrics"].values()
+        if metric["gate"] is not None
+    )
+    assert gated == 1
+    assert f"of {gated}" in envelope["verdict"]["summary"] or (
+        f"({gated} gates)" in envelope["verdict"]["summary"]
+    )
+    _code, text, _err = _compare(
+        "--baseline",
+        *arms["baseline"],
+        "--candidate",
+        *arms["slower"],
+        "--segment",
+        "early=0:0.5",
+        "--segment-membership",
+        "overlap",
+    )
+    assert "/early (overlap: diagnostics only, not gated):" in text
 
 
 def test_a_run_given_twice_is_invalid_input(arms: dict[str, list[str]]) -> None:
