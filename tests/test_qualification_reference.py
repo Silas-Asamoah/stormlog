@@ -9,8 +9,10 @@ from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
 from examples.qualification.reference import (
     HookTailer,
     ReferenceChannel,
+    Scrape,
     VictimView,
     chunk_gaps,
+    hit_ratios,
     merge_spans,
     request_spans,
     scrape_metrics,
@@ -238,6 +240,22 @@ def test_the_victims_chunk_gaps_are_read_incrementally(tmp_path: Path) -> None:
     spans = request_spans(records, VICTIM)
     assert len(spans) == 4
     assert late.in_flight == merge_spans(spans)
+
+
+def test_the_engine_hit_ratio_comes_from_counter_deltas() -> None:
+    def scrape(at: int, queries: float | None, hits: float | None) -> Scrape:
+        return Scrape(at, 0.0, 0.0, prefix_queries=queries, prefix_hits=hits)
+
+    scrapes = [
+        scrape(1, 100, 75),
+        scrape(2, 200, 150),  # 75 of 100 tokens hit
+        scrape(3, 200, 150),  # no query in between: says nothing
+        scrape(4, 300, 190),  # 40 of 100
+        scrape(5, 10, 5),  # a counter fell (a restart): skipped
+        scrape(6, None, None),  # no counters on this page
+        scrape(7, 110, 55),
+    ]
+    assert hit_ratios(scrapes) == [(2, 0.75), (4, 0.4)]
 
 
 def test_in_flight_intervals_merge_overlapping_requests() -> None:
