@@ -382,7 +382,8 @@ def _attempts(
     prelude_failures: list[str],
 ) -> list[dict[str, Any]]:
     """Any attempt the runner was killed in, finished; the run's attempt; and
-    one more on a fresh server if its probe did not finish."""
+    one more on a fresh server if its probe did not finish and its cleanup
+    verified, so the fresh server never starts beside a survivor."""
     base = f"{plan.experiment_id}-b{block:02d}-p{position}-{arm.name}"
     interrupted = [
         _finish_interrupted(leftover, arm, block, position, resuming.causes)
@@ -401,12 +402,18 @@ def _attempts(
     )
     if first is None:
         return interrupted
-    if "probe_incomplete" not in first["reasons"]:
+    if "probe_incomplete" not in first["reasons"] or _left_running(first):
         return [*interrupted, first]
     again = _attempt(
         plan, arm, block, position, output, env, False, True, prelude_failures
     )
     return [*interrupted, first] + ([again] if again is not None else [])
+
+
+def _left_running(record: Mapping[str, Any]) -> bool:
+    """Whether a process the attempt started may still run: a server, a
+    treatment or a prelude whose cleanup did not verify."""
+    return any("cleanup_unverified" in reason for reason in record["reasons"])
 
 
 def _leftovers(runs: Path, base: str) -> list[Path]:
