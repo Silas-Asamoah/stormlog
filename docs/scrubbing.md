@@ -153,8 +153,11 @@ The patterns err on the side of removing too much. A key matches when any
 word from `SECRET_KEY_WORDS` appears anywhere in it, so `max_tokens="128"`,
 `session_id: s-123`, `keyboard: present`, `bypass=true` and
 `Author: Jane Doe` all lose their values, and a key run together with the
-word before it is still removed. A bare value containing spaces loses only
-its first word, which is one reason consent is needed.
+word before it is still removed. A bare value runs to whitespace, `&`, `,`,
+`;` or a quote, so a bracket after it goes with it: `cfg:(password=x)`
+becomes `cfg:(password=<redacted>`, since a password may hold a bracket. A
+bare value containing spaces loses only its first word, which is one reason
+consent is needed.
 
 Keys and values in escaped quotes, as JSON written inside a JSON string
 spells them (`{\"api_key\": \"...\"}`), are read too.

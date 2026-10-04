@@ -99,7 +99,13 @@ _SINGLE_QUOTED = re.compile(r"'((?:[^'\\]|\\.)*)(?:'|\\?\Z)")
 # at the escaped closing quote, at the enclosing string's own quote, or at
 # the end of the text.
 _ESCAPED_QUOTED = re.compile(r'\\"((?:[^"\\]|\\[^"])*)(?:\\"|"|\\?\Z)')
-_BARE_VALUE = re.compile(r"[^\s&,;\"'(){}\[\]<>]+")
+# A bare value runs to whitespace, a pair separator or a quote. Brackets do
+# not end it: a password may hold one, and a bracket after a value is cut
+# along with it, which is the safe mistake. A member's bare value, in JSON
+# or a dict repr, is a number or a literal, so its object's or array's
+# closing bracket ends it.
+_BARE_VALUE = re.compile(r"[^\s&,;\"']+")
+_MEMBER_BARE_VALUE = re.compile(r'[^\s,}\]"]+')
 # Well-known credential shapes. No word boundary in front: a key glued to
 # the text before it is still a key, and removing a little too much is the
 # safe mistake. Each is linear: where a prefix's class covers the prefix
@@ -195,7 +201,7 @@ class _NextMatch:
 
 def _member_spans(text: str) -> Iterator[Span]:
     """The value of each member whose key, escapes decoded, is secret-like."""
-    values = _Values(text)
+    values = _Values(text, _MEMBER_BARE_VALUE)
     for match in _QUOTED_KEY.finditer(text):
         key = next(group for group in match.groups() if group is not None)
         if is_forbidden_key_name(_json_unescaped(key)):
@@ -241,8 +247,9 @@ class _Values:
     already redacted is skipped, so nested values are not rescanned.
     """
 
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, bare: re.Pattern[str] = _BARE_VALUE) -> None:
         self.text = text
+        self.bare = bare
         self.run_start = self.run_end = -1
         self.covered = -1
 
@@ -264,7 +271,7 @@ class _Values:
 
     def _bare_end(self, position: int) -> int:
         if not self.run_start <= position < self.run_end:
-            match = _BARE_VALUE.match(self.text, position)
+            match = self.bare.match(self.text, position)
             self.run_start = position
             self.run_end = match.end() if match else position
         return self.run_end

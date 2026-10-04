@@ -386,8 +386,10 @@ def test_url_user_information_is_found_whatever_it_holds(
         ("error: password: hunter2-secret", "error: password: <redacted>"),
         ("error:password=hunter2-secret", "error:password=<redacted>"),
         ("x=password=hunter2-secret", "x=password=<redacted>"),
-        ("request: {api_key=opaque-value}", "request: {api_key=<redacted>}"),
-        ("cfg:(password=hunter2-secret)", "cfg:(password=<redacted>)"),
+        # A bare value runs to whitespace, & , ; or a quote: a closing
+        # bracket after it goes with it, since a password may hold one.
+        ("request: {api_key=opaque-value}", "request: {api_key=<redacted>"),
+        ("cfg:(password=hunter2-secret)", "cfg:(password=<redacted>"),
         ("status:401;token=opaque-value", "status:401;token=<redacted>"),
         ('error: "password=hunter2-secret"', 'error: "password=<redacted>"'),
         ("msg='token=opaque-credential-1'", "msg='token=<redacted>'"),
@@ -400,6 +402,27 @@ def test_url_user_information_is_found_whatever_it_holds(
     ],
 )
 def test_only_a_secret_key_consumes_a_value(text: str, scrubbed: str) -> None:
+    assert scrub_text(text) == scrubbed
+
+
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        ("password=Ab3)xYz9-secret", "password=<redacted>"),
+        ("password=p@ss(w0rd)tail", "password=<redacted>"),
+        ("password=(secret-value)", "password=<redacted>"),
+        ("password: (opaque-cred-123)", "password: <redacted>"),
+        ("token=<opaque-cred-123>", "token=<redacted>"),
+        ("token=abc]def123", "token=<redacted>"),
+        ("api_key=x}yz-opaque-123", "api_key=<redacted>"),
+        ("password=a>b-opaque-123", "password=<redacted>"),
+        ("--password Xy(3$kL]q-opaque", "--password <redacted>"),
+        ("PASSWORD Xy(3$kL]q-opaque", "PASSWORD <redacted>"),
+    ],
+)
+def test_a_bare_value_keeps_its_brackets(text: str, scrubbed: str) -> None:
+    # The re-check's NEW-2: a bare value cut at a bracket leaked the rest of
+    # the password, or all of it when the password started with one.
     assert scrub_text(text) == scrubbed
 
 
