@@ -185,6 +185,10 @@ def test_prometheus_shows_the_span_accounting(tmp_path: Path) -> None:
         ["--otlp-endpoint", "grpc://127.0.0.1:4317"],
         ["--otlp-endpoint", "http://user:pw@127.0.0.1:4318"],
         ["--otlp-header", "x-api-key=abc"],
+        # Given, though at their defaults, with no destination to apply to.
+        ["--otlp-flush-timeout", "5"],
+        ["--otlp-probe-interval", "8"],
+        ["--otlp-sample-ratio", "1"],
         ["--otlp-endpoint", "http://127.0.0.1:4318", "--otlp-file", "spans.jsonl"],
         ["--otlp-endpoint", "http://127.0.0.1:4318", "--export-content", "bodies"],
         [

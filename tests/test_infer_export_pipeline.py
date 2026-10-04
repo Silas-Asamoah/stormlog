@@ -744,6 +744,24 @@ def test_an_export_flag_given_its_default_still_needs_a_destination(
 def test_a_json_setting_given_its_default_still_needs_a_destination() -> None:
     with pytest.raises(ValueError, match="prometheus-slot"):
         ExportConfig.from_mapping({"prometheus_slot": "default"})
+    with pytest.raises(ValueError, match="otlp-flush-timeout"):
+        ExportConfig.from_mapping({"otlp_flush_timeout_seconds": 5.0})
+    with pytest.raises(ValueError, match="otlp-sample-ratio"):
+        ExportConfig.from_mapping({"sample_ratio": 1.0})
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("--otlp-flush-timeout", "5"),
+        ("--otlp-probe-interval", "8"),
+    ],
+)
+def test_an_otlp_flag_given_its_default_still_needs_a_destination(
+    argv: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match=argv[0]):
+        export_config_from_args(_args(*argv))
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "1e300", "3601"])

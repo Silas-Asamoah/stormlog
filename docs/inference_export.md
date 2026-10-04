@@ -61,6 +61,7 @@ A setting that cannot be used exits 2 before anything is sent, and no
 artifact is written (see the [exit-code contract](report_contract.md)):
 - an address that is not `HOST:PORT`;
 - an export flag given without `--prometheus-listen` or `--prometheus-textfile-dir`, even with its default value;
+- a span flag (`--otlp-flush-timeout`, `--otlp-probe-interval`, `--otlp-sample-ratio` and the like) given without `--otlp-endpoint` or `--otlp-file`, even with its default value; `--otlp-sample-ratio` also applies with `--trace-context follow-sampling`;
 - a slot another live writer holds, or whose lock is not a plain file (a
   link, a directory);
 - a textfile directory that is missing, holds the artifact, or cannot be

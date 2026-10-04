@@ -116,7 +116,7 @@ class ExportConfig:
         _check_dependent(self, settings)
         _check_numbers(self)
         _check_trace_context(self, command, settings)
-        _check_otlp(self)
+        _check_otlp(self, settings)
 
     @classmethod
     def from_mapping(
@@ -260,7 +260,7 @@ def _check_trace_context(
     if not 0.0 <= config.sample_ratio <= 1.0:
         raise ValueError("--otlp-sample-ratio must be between 0 and 1")
     if (
-        config.sample_ratio != 1.0
+        "sample_ratio" in given
         and config.trace_context != FOLLOW_SAMPLING
         and not config.otlp_enabled
     ):
@@ -340,13 +340,13 @@ def sampler_warnings(config: ExportConfig) -> list[str]:
     ]
 
 
-def _check_otlp(config: ExportConfig) -> None:
+def _check_otlp(config: ExportConfig, given: set[str]) -> None:
     if config.otlp_endpoint is not None and config.otlp_file is not None:
         raise ValueError("use one of --otlp-endpoint and --otlp-file, not both")
     if config.otlp_endpoint is not None:
         Destination.parse(config.otlp_endpoint)
     if not config.otlp_enabled:
-        _check_otlp_dependent(config)
+        _check_otlp_dependent(given)
     elif config.otlp_file is None and config.otlp_file_fsync:
         raise ValueError("--otlp-file-fsync only applies with --otlp-file")
     _check_otlp_values(config)
@@ -384,8 +384,9 @@ def _check_otlp_names(config: ExportConfig) -> None:
             )
 
 
-def _check_otlp_dependent(config: ExportConfig) -> None:
-    defaults = ExportConfig()
+def _check_otlp_dependent(given: set[str]) -> None:
+    # Given, not changed from the default: a flag set to its default does
+    # nothing without a destination either.
     for name, flag in (
         ("otlp_file_fsync", "--otlp-file-fsync"),
         ("otlp_headers", "--otlp-header"),
@@ -396,7 +397,7 @@ def _check_otlp_dependent(config: ExportConfig) -> None:
         ("otlp_probe_interval_seconds", "--otlp-probe-interval"),
         ("export_content", "--export-content"),
     ):
-        if getattr(config, name) != getattr(defaults, name):
+        if name in given:
             raise ValueError(f"{flag} only applies with --otlp-endpoint or --otlp-file")
 
 
