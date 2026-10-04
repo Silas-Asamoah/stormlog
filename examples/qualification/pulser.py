@@ -76,15 +76,27 @@ class Target:
 
 @dataclass(frozen=True)
 class Pulse:
-    """One pulse's actual times, in ``time.time_ns()``."""
+    """One pulse as it happened. Lengths are measured on the monotonic
+    clock; the wall-clock times are one wall reading at ``SIGSTOP`` plus
+    those lengths, so a clock step can't bend them. ``held_ns`` runs from
+    ``SIGSTOP`` sent to ``SIGCONT`` sent: the most the target was stopped."""
 
     stop_sent_ns: int
     stopped_ns: int
     continue_sent_ns: int
 
+    @classmethod
+    def measured(cls, wall_ns: int, sent: int, stopped: int, continued: int) -> Pulse:
+        """From the wall time at ``SIGSTOP`` and monotonic times."""
+        return cls(wall_ns, wall_ns + stopped - sent, wall_ns + continued - sent)
+
     @property
     def confirm_latency_ns(self) -> int:
         return self.stopped_ns - self.stop_sent_ns
+
+    @property
+    def held_ns(self) -> int:
+        return self.continue_sent_ns - self.stop_sent_ns
 
     def to_record(self) -> dict[str, int]:
         return {
@@ -92,6 +104,7 @@ class Pulse:
             "stopped_ns": self.stopped_ns,
             "confirm_latency_ns": self.confirm_latency_ns,
             "continue_sent_ns": self.continue_sent_ns,
+            "held_ns": self.held_ns,
         }
 
 
@@ -172,15 +185,18 @@ class Pulser:
                 raise PulseRefused("the pulser is closed")
             self._ensure_watchdog()
             self._signal(signal.SIGSTOP)
-            stop_sent = time.time_ns()
+            wall, sent = time.time_ns(), time.monotonic_ns()
             try:
-                stopped = self._confirm_stopped(stop_sent)
+                stopped = self._confirm_stopped(sent)
                 if during is not None:
                     during()
-                time.sleep(max(0.0, seconds - (time.time_ns() - stopped) / 1e9))
+                # Ends ``seconds`` after SIGSTOP, however long it took to see
+                # the stop, and whatever the wall clock does.
+                _sleep_until(sent + int(seconds * 1e9))
             finally:
                 self._continue()
-            pulse = Pulse(stop_sent, stopped, time.time_ns())
+                continued = time.monotonic_ns()
+            pulse = Pulse.measured(wall, sent, stopped, continued)
         self.pulses.append(pulse)
         return pulse
 
@@ -192,17 +208,22 @@ class Pulser:
         *,
         stop: threading.Event | None = None,
     ) -> list[Pulse]:
-        """``count`` pulses, one per period, until ``stop`` is set."""
+        """``count`` pulses, one per period, until ``stop`` is set. A pulse
+        never follows the last one sooner than the period allows, nor sooner
+        than the target was actually stopped, so a schedule that falls
+        behind keeps the duty cap instead of catching up back to back."""
         check_schedule(pulse_seconds, period_seconds)
         done: list[Pulse] = []
-        start = time.monotonic()
+        period_ns = int(period_seconds * 1e9)
+        rest_ns = period_ns - int(pulse_seconds * 1e9)
+        start = not_before = time.monotonic_ns()
         for index in range(count):
-            wait = start + index * period_seconds - time.monotonic()
-            if stop is not None and stop.wait(max(0.0, wait)):
+            due = max(start + index * period_ns, not_before)
+            if _wait_until(due, stop):
                 break
-            if stop is None:
-                time.sleep(max(0.0, wait))
-            done.append(self.pulse(pulse_seconds))
+            pulse = self.pulse(pulse_seconds)
+            done.append(pulse)
+            not_before = time.monotonic_ns() + max(rest_ns, pulse.held_ns)
         return done
 
     def close(self) -> None:
@@ -249,12 +270,26 @@ class Pulser:
             os.kill(self.target.pid, signal.SIGCONT)
 
     def _confirm_stopped(self, stop_sent: int) -> int:
+        """When the stop was seen, on the monotonic clock."""
         deadline = stop_sent + int(CONFIRM_TIMEOUT_SECONDS * 1e9)
-        while time.time_ns() < deadline:
+        while time.monotonic_ns() < deadline:
             if self.target.is_stopped():
-                return time.time_ns()
+                return time.monotonic_ns()
             time.sleep(CONFIRM_POLL_SECONDS)
         raise PulseRefused(f"pid {self.target.pid} did not stop within 1 s")
+
+
+def _sleep_until(monotonic_ns: int) -> None:
+    time.sleep(max(0.0, (monotonic_ns - time.monotonic_ns()) / 1e9))
+
+
+def _wait_until(monotonic_ns: int, stop: threading.Event | None) -> bool:
+    """Wait for ``monotonic_ns``; whether ``stop`` was set meanwhile."""
+    delay = max(0.0, (monotonic_ns - time.monotonic_ns()) / 1e9)
+    if stop is None:
+        time.sleep(delay)
+        return False
+    return stop.wait(delay)
 
 
 def _start_watchdog(
