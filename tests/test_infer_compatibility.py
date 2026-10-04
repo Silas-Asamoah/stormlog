@@ -300,6 +300,11 @@ def test_vllm_environment_variables_are_classified_by_name() -> None:
     assert classify("vllm_env/VLLM_PORT") == LAUNCH
     assert classify("vllm_env/VLLM_ATTENTION_BACKEND") == IDENTITY
     assert classify("vllm_env/VLLM_SERVER_DEV_MODE") == OBSERVATION
+    # Performance settings block; their cache directories only place a run.
+    assert classify("environ.LD_PRELOAD") == IDENTITY
+    assert classify("environ.OMP_NUM_THREADS") == IDENTITY
+    assert classify("environ.TRITON_CACHE_DIR") == LAUNCH
+    assert classify("environ.TORCHINDUCTOR_CACHE_DIR") == LAUNCH
 
 
 def _records(
