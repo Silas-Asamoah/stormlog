@@ -24,9 +24,11 @@ among the first k candidates.
   mechanism followed from something else.
 - **False claims.** A scored fault claim (eligible, cause ``fault``, at
   ``warning``) among the candidates that is not neutral, is not of the
-  label's kind at its component, and is not declared in ``secondary`` or
-  ``allows``. In a negative episode it is a false positive; in a fault
-  episode it is counted as spurious. A secondary of the label's kind is
+  label's kind at its component, and is not in ``allows``. A ``secondary``
+  entry exempts a finding only through its valid edge (it is then neutral,
+  so not a candidate); in any other role or place it counts, as A.4 says.
+  In a negative episode it is a false positive; in a fault episode it is
+  counted as spurious. A secondary of the label's kind is
   neither a match nor a false claim: it names the true mechanism, in the
   wrong role.
 """
@@ -240,9 +242,8 @@ def _labelled(finding: FindingView, injection: Injection) -> bool:
     return any(location_matches(finding, entry, 2) for entry in entries)
 
 
-def _declared(finding: FindingView, injection: Injection) -> bool:
-    entries: tuple[Location, ...] = (*injection.secondary, *injection.allows)
-    return any(location_matches(finding, entry, 2) for entry in entries)
+def _allowed(finding: FindingView, injection: Injection) -> bool:
+    return any(location_matches(finding, entry, 2) for entry in injection.allows)
 
 
 def is_neutral(
@@ -421,7 +422,7 @@ def _false_claims(
         for finding in ranked
         if finding.scored_fault_claim
         and not _named(finding, expectation)
-        and not _declared(finding, injection)
+        and not _allowed(finding, injection)
     )
 
 

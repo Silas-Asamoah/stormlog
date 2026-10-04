@@ -248,7 +248,9 @@ has all of these properties:
 - it is eligible, has cause `fault`, and is at `warning`;
 - it is not neutral;
 - it is not of the label's kind at the label's component;
-- it is not declared in `secondary` or `allows`.
+- it is not in `allows`. A `secondary` entry exempts a finding only by
+  making it neutral, through its valid edge in time and place (A.4); a
+  declared kind in any other role, or without that edge, counts.
 
 In a negative run it is a false positive; in a fault episode it is counted as
 spurious.

@@ -217,9 +217,47 @@ def test_a_secondary_outside_its_upstreams_window_is_not_neutral() -> None:
     )
     assert score.neutral == ()
     assert score.candidates == (queue["id"], kv["id"])
-    # Declared in the label's secondary list, so not a false claim.
-    assert score.false_claims == ()
+    # A.4: a declared secondary is neutral only through its valid edge, in
+    # time and place; otherwise it is scored as a primary, so a false claim.
+    assert score.false_claims == (queue["id"],)
     assert score.secondary_errors == 1
+
+
+def test_a_declared_secondary_kind_claimed_as_a_primary_fault_is_false() -> None:
+    # T2 declares mixed-prefill interference as a secondary; a primary fault
+    # claim of it, with no upstream at all, is a false positive.
+    twin = replace(
+        negative("T2"),
+        cause_class="workload_change",
+        expects=(
+            Expectation(
+                "longer_inputs",
+                "workload",
+                cause="workload_change",
+                min_severity="info",
+            ),
+        ),
+        secondary=(
+            Neutral(
+                "mixed_prefill_interference",
+                "scheduler",
+                edge=f"{KV}->mixed_prefill_interference",
+            ),
+        ),
+        allows=(Neutral("load_increase", "workload"),),
+    )
+    claim = finding("m", "mixed_prefill_interference", 1, component="scheduler")
+    score = score_episode(twin, diagnosis(claim), CONFIG)
+    assert score.false_claims == (claim["id"],)
+
+
+def test_an_allowed_finding_is_never_a_false_claim() -> None:
+    # allows entries are neutral whatever their role: here a fault claim of
+    # a kind the label allows (a contrived one, to isolate the rule).
+    allowing = replace(episode(), allows=(Neutral("host_stall", "engine_core"),))
+    stall = finding("h", "host_stall", 1, component="engine_core")
+    score = score_episode(allowing, diagnosis(stall), CONFIG)
+    assert score.false_claims == ()
 
 
 def test_a_run_wide_finding_is_never_a_candidate() -> None:
