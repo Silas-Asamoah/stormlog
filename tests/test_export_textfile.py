@@ -248,3 +248,31 @@ def test_closing_a_writer_that_never_started_releases_its_lock(tmp_path: Path) -
     writer.acquire()
     writer.close()
     assert not writer.lock_path.exists() and not writer.path.exists()
+
+
+def test_a_failed_render_is_counted_and_the_writer_carries_on(tmp_path: Path) -> None:
+    calls = {"n": 0}
+
+    def flaky() -> bytes:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("one bad render")
+        return BODY
+
+    clock = {"now": 0.0}
+    cache = RenderCache(flaky, min_interval=0.0, clock=lambda: clock["now"])
+    writer = TextfileWriter(tmp_path, "alpha", cache, interval=0.02)
+    errors: list[BaseException | None] = []
+    previous_hook = threading.excepthook
+    threading.excepthook = lambda args: errors.append(args.exc_value)
+    try:
+        writer.start()
+        assert _wait_for(lambda: writer.stats.writes_failed >= 1)
+        assert _wait_for(lambda: writer.stats.writes_ok >= 2)
+        writer.close()
+    finally:
+        threading.excepthook = previous_hook
+    assert errors == []
+    assert writer.stats.last_error == "RuntimeError: one bad render"
+    exposition = check_exposition(writer.path.read_text())
+    assert exposition.value("stormlog_run_active") == 0

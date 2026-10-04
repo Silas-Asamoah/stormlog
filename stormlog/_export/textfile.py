@@ -140,14 +140,24 @@ class TextfileWriter:
             self._lock_owned = False
 
     def _run(self) -> None:
-        while not self._stop.is_set():
+        try:
+            while not self._stop.is_set():
+                self._write_once()
+                self._wake.wait(self.interval)
+                self._wake.clear()
+        finally:
+            # The final write, after the run ended: stormlog_run_active is 0.
             self._write_once()
-            self._wake.wait(self.interval)
-            self._wake.clear()
-        # The final write, after the run ended: stormlog_run_active is 0.
-        self._write_once()
 
     def _write_once(self) -> None:
+        """One write; any failure is counted, never raised, so the writer lives."""
+        try:
+            self._write()
+        except Exception as exc:  # a render that failed, or a bug
+            self.stats.writes_failed += 1
+            self.stats.last_error = f"{type(exc).__name__}: {exc}"
+
+    def _write(self) -> None:
         if self.remove_on_exit and not self._active:
             return
         # The generation stays acquired for the whole write, so a writer
