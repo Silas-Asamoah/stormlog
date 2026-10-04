@@ -310,10 +310,14 @@ exactly them. The plan's `server.model` says how:
   load reads: `config.json`, a tokenizer (`tokenizer.json`,
   `tokenizer.model` or `vocab.json`), weights, and every shard a
   `*.index.json` names. The cache keeps no list of a commit's files, so a
-  pin may give one, recorded when the revision was pinned (`"files": [...]`,
-  say from `huggingface_hub.list_repo_files`), and every file it lists must
-  be present. The evidence says which: `pinned_commit_verified` when the
-  pin's file list was checked, and `pinned_snapshot_verified` without one,
+  pin may give one, recorded when the revision was pinned: `"files"` maps
+  each path to its blob (the hub's `lfs.sha256` for a file in LFS, its git
+  `blob_id` otherwise, as `HfApi().model_info(repo, revision=commit,
+  files_metadata=True).siblings` lists them). The snapshot must then hold
+  exactly those files, each linked to that blob, so a link re-pointed at
+  another commit's blob fails. The evidence says which:
+  `pinned_commit_verified` when the pin's file list was checked, and
+  `pinned_snapshot_verified` without one,
   which says every file present is the commit's and nothing a load reads is
   missing. Both name the bytes the server loaded. Each server gets
   `--revision <commit> --tokenizer-revision <commit>` and `HF_HUB_OFFLINE=1`,
