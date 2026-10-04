@@ -221,6 +221,78 @@ def test_ctrl_c_still_freezes_and_records_final_counts(tmp_path: Path) -> None:
     assert sum(exposition.matching("stormlog_infer_requests_total")) == len(sent)
 
 
+def _slow_worker(monkeypatch: pytest.MonkeyPatch, delay: float = 0.05) -> None:
+    """An exporter that applies each record ``delay`` late, so it ends behind."""
+    real_apply = ProfileMetrics.apply
+
+    def slow_apply(self: ProfileMetrics, envelope: Any) -> None:
+        time.sleep(delay)
+        real_apply(self, envelope)
+
+    monkeypatch.setattr(ProfileMetrics, "apply", slow_apply)
+
+
+def test_the_capability_record_has_the_counts_after_the_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With the exporter behind, a record written before the close drained
+    # would show fewer applied than offered, and fewer than the textfile.
+    _slow_worker(monkeypatch)
+    output = tmp_path / "infer.jsonl"
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    with _fake_server() as endpoint:
+        config = _config(
+            endpoint,
+            output,
+            ExportConfig(prometheus_textfile_dir=metrics_dir),
+            concurrency=(4,),
+            request_count=12,
+            warmup_requests=0,
+            stream=False,
+        )
+        InferenceProfiler(config).run()
+    summary = _capability(_records(output))["metadata"]["summary"]["records"]
+    assert summary["offered"] == summary["applied"] and summary["exact"]
+    exposition = check_exposition((metrics_dir / "stormlog-default.prom").read_text())
+    applied = exposition.value("stormlog_metrics_records_applied_total")
+    assert applied == summary["applied"]
+
+
+def test_a_ctrl_c_skips_the_linger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With the exporter far behind, a Ctrl+C still ends the run well within
+    # its 30 s linger.
+    _slow_worker(monkeypatch, delay=0.2)
+    output = tmp_path / "infer.jsonl"
+    with _fake_server() as endpoint:
+        config = _config(
+            endpoint,
+            output,
+            ExportConfig(
+                prometheus_listen=f"127.0.0.1:{_free_port()}",
+                prometheus_linger_seconds=30,
+            ),
+            concurrency=(8,),
+            request_count=5000,
+            warmup_requests=0,
+            stream=False,
+        )
+        profiler = InferenceProfiler(config)
+        timer = threading.Timer(1.0, signal.raise_signal, (signal.SIGINT,))
+        timer.start()
+        started = time.perf_counter()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                profiler.run()
+        finally:
+            timer.cancel()
+        assert time.perf_counter() - started < 20  # no 30 s linger
+    summary = _capability(_records(output))["metadata"]["summary"]["records"]
+    assert summary["dropped"]["shutdown"] > 0  # it was behind when it stopped
+
+
 def test_a_ctrl_c_inside_the_close_still_finishes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
