@@ -6,16 +6,22 @@ Carlo standard error of a 2.5% rate is about 0.11 points):
 
 1. **Paired t, non-inferiority, at a true effect equal to the budget.** The
    share of gates that pass is the false-safe rate; it must not exceed
-   0.0283 (0.025 plus three standard errors). Normal and t3 noise, block
-   spread 0, 0.05 and 0.2, at 3, 6, 8 and 10 blocks. Leave-one-out is
-   applied as the module applies it.
+   0.0283 (0.025 plus three standard errors). Normal and t3 noise, at 3,
+   6, 8 and 10 blocks, with a treatment effect that varies by block
+   (block-by-arm interaction, spread 0, 0.05 and 0.2): a block effect
+   shared by both arms cancels in the log ratio, so it tests nothing.
+   Leave-one-out is applied as the module applies it. The same for a
+   higher-is-better metric at a true fall equal to the budget, and for
+   the independent design (min-df Welch) at 3 and 6 runs per arm.
 2. **The same with missing outcomes**, 0.5% and 2% of requests unknown, an
    attainment gate judged on the worst case.
 3. **Min-df Welch on logs, independent runs:** coverage must be at least
    0.947 in an adversarial 20-against-3 case and four more.
-4. **The run-level attainment gate:** with the true share of runs that meet
-   the target below q, it must pass at most 0.0283 of the time, whatever
-   the correlation within a run.
+4. **The run-level attainment gate:** at the supremum of a false claim
+   (the true share of runs that meet the target equal to q), it must pass
+   at most 0.0283 of the time, whatever the correlation within a run.
+   Only cells where the gate can pass at all are kept: 6 runs need 6 of 6
+   at q = 0.5, and no 10 runs can show q = 0.9.
 5. **The skew screen:** under normal noise it must flag 0.05 +- 0.005.
 
 Two scenarios are outside what the rules claim, and are measured as limits:
@@ -121,22 +127,61 @@ def non_inferiority_passes(log_d: np.ndarray, budget: float) -> np.ndarray:
 
 
 def paired_false_safe(
-    rng: np.random.Generator, noise: Noise, sigma_block: float, n: int, reps: int
+    rng: np.random.Generator, noise: Noise, sigma_interaction: float, n: int, reps: int
 ) -> float:
     """At a true +budget latency change, how often non-inferiority passes.
 
-    Skewed noise is put in the block log ratios themselves, with the same
-    spread as the other cells: two equally skewed arms would cancel.
+    The treatment's effect varies by block by ``sigma_interaction`` around
+    the budget, its mean. Skewed noise is put in the block log ratios
+    themselves, with the same spread as the other cells: two equally
+    skewed arms would cancel.
     """
-    block = sigma_block * rng.standard_normal((reps, n))
+    effect = math.log1p(BUDGET) + sigma_interaction * rng.standard_normal((reps, n))
     if noise in (skewed, skewed_left):
-        base = 5.0 + block
         spread = SIGMA_RUN * math.sqrt(2) * noise(rng, (reps, n))
-        cand = 5.0 + block + math.log1p(BUDGET) + spread
-    else:
-        base = 5.0 + block + SIGMA_RUN * noise(rng, (reps, n))
-        cand = 5.0 + block + math.log1p(BUDGET) + SIGMA_RUN * noise(rng, (reps, n))
+        return float(non_inferiority_passes(effect + spread, BUDGET).mean())
+    base = 5.0 + SIGMA_RUN * noise(rng, (reps, n))
+    cand = 5.0 + effect + SIGMA_RUN * noise(rng, (reps, n))
     return float(non_inferiority_passes(cand - base, BUDGET).mean())
+
+
+def higher_is_better_false_safe(rng: np.random.Generator, n: int, reps: int) -> float:
+    """Goodput at a true fall equal to the budget: passes iff lower >= -budget."""
+    base = 5.0 + SIGMA_RUN * rng.standard_normal((reps, n))
+    cand = 5.0 + math.log1p(-BUDGET) + SIGMA_RUN * rng.standard_normal((reps, n))
+    return float(_higher_passes(cand - base).mean())
+
+
+def independent_false_safe(rng: np.random.Generator, n: int, reps: int) -> float:
+    """Independent runs, n per arm, min-df Welch, at a true +budget change.
+
+    Leave-one-out drops a run of either arm, as the module does.
+    """
+    a = 5.0 + SIGMA_RUN * rng.standard_normal((reps, n))
+    b = 5.0 + math.log1p(BUDGET) + SIGMA_RUN * rng.standard_normal((reps, n))
+    return float(_independent_passes(a, b).mean())
+
+
+def _independent_passes(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Min-df Welch on logs, lower is better, leave-one-out over either arm."""
+
+    def passes(first: np.ndarray, second: np.ndarray) -> np.ndarray:
+        na, nb = first.shape[1], second.shape[1]
+        se = np.sqrt(first.var(axis=1, ddof=1) / na + second.var(axis=1, ddof=1) / nb)
+        upper = second.mean(axis=1) - first.mean(axis=1)
+        upper = upper + stats.t.ppf(0.975, min(na, nb) - 1) * se
+        return np.expm1(upper) <= BUDGET
+
+    result = passes(a, b)
+    n = min(a.shape[1], b.shape[1])
+    if n > MIN_GATE_PAIRS:
+        stable = np.ones(len(a), dtype=bool)
+        for left_out in range(a.shape[1]):
+            stable &= passes(np.delete(a, left_out, axis=1), b) == result
+        for left_out in range(b.shape[1]):
+            stable &= passes(a, np.delete(b, left_out, axis=1)) == result
+        result &= stable
+    return result
 
 
 def paired_power(
@@ -212,8 +257,17 @@ def welch_min_df_coverage(
     return float(np.mean((diff - half <= truth) & (truth <= diff + half)))
 
 
+def run_gate_reachable(n: int, q: float) -> bool:
+    """Whether n runs of n can show a share q: 0.025^(1/n) >= q."""
+    return bool(0.025 ** (1 / n) >= q)
+
+
 def run_gate_false_pass(n: int, p_run: float, q: float) -> float:
-    """Exact: P(the Clopper-Pearson lower bound of k/n >= q) when k ~ Bin(n, p)."""
+    """Exact: P(the Clopper-Pearson lower bound of k/n >= q) when k ~ Bin(n, p).
+
+    It rises with p, so its supremum over the false claims (p < q) is its
+    value at p = q.
+    """
     passing = [
         k
         for k in range(n + 1)
@@ -227,22 +281,23 @@ def clustered_run_gate(
 ) -> dict[str, float]:
     """Correlated failures within a run: the run is the unit that matters.
 
-    Each run serves every request (attainment 1.0) with probability 0.9, and
-    otherwise misses 5% of them (0.95). The claim under test is "a run meets
-    0.99 with probability at least 0.95", which is false (0.9). The run-level
-    gate should rarely pass; pooling requests as if they were independent
-    sees a 99.5% pooled attainment and passes far more often.
+    Each run serves every request (attainment 1.0) with probability 0.7, and
+    otherwise misses 2% of them (0.98). The claim under test is "a run meets
+    0.99 with probability at least 0.8", which is false (0.7), and which 30
+    or 60 runs can show (``run_gate_reachable``). The run-level gate should
+    rarely pass; pooling requests as if they were independent sees a 99.4%
+    pooled attainment and passes far more often.
     """
-    good = rng.random((reps, n)) < 0.9
+    good = rng.random((reps, n)) < 0.7
     k = good.sum(axis=1)
     lower_runs = np.where(
         k == 0, 0.0, stats.beta.ppf(0.025, np.maximum(k, 1), n - k + 1)
     )
-    met = np.where(good, requests, round(0.95 * requests)).sum(axis=1)
+    met = np.where(good, requests, round(0.98 * requests)).sum(axis=1)
     total = n * requests
     lower_pooled = stats.beta.ppf(0.025, met, total - met + 1)
     return {
-        "runs": float(np.mean(lower_runs >= 0.95)),
+        "runs": float(np.mean(lower_runs >= 0.8)),
         "pooled_requests": float(np.mean(lower_pooled >= 0.99)),
     }
 
@@ -259,33 +314,70 @@ def skew_screen_rate(rng: np.random.Generator, n: int, reps: int) -> float:
 
 
 def check_against_module(rng: np.random.Generator, samples: int = 200) -> int:
-    """Run sample replications through compare_values; return disagreements."""
-    from stormlog.infer.comparison_stats import GateRule, compare_values
+    """Run sample replications through compare_values; return disagreements.
 
+    Three configurations: paired latency at +budget, paired goodput at
+    -budget (higher is better), and independent latency runs (min-df Welch).
+    """
     disagreements = 0
     for n in (3, 6, 8):
-        blocks = [f"b{i}" for i in range(n)]
         for _ in range(samples):
-            base = np.exp(5.0 + SIGMA_RUN * rng.standard_normal(n))
-            cand = np.exp(5.0 + math.log1p(BUDGET) + SIGMA_RUN * rng.standard_normal(n))
-            expected = bool(
-                non_inferiority_passes((np.log(cand) - np.log(base))[None, :], BUDGET)[
-                    0
-                ]
-            )
-            result = compare_values(
-                "x",
-                list(base),
-                list(cand),
-                direction="lower_is_better",
-                scale="log_ratio",
-                unit="relative",
-                blocks=(blocks, blocks),
-                gate=GateRule("non-inferiority", BUDGET, "relative"),
-            )
-            assert result.gate is not None
-            disagreements += (result.gate.status == "pass") != expected
+            disagreements += _agrees_paired(rng, n, higher=False)
+            disagreements += _agrees_paired(rng, n, higher=True)
+            disagreements += _agrees_independent(rng, n)
     return disagreements
+
+
+def _module_passes(
+    base: np.ndarray, cand: np.ndarray, *, higher: bool, paired: bool
+) -> bool:
+    from stormlog.infer.comparison_stats import GateRule, compare_values
+
+    labels = [f"b{i}" for i in range(len(base))]
+    result = compare_values(
+        "x",
+        list(base),
+        list(cand),
+        direction="higher_is_better" if higher else "lower_is_better",
+        scale="log_ratio",
+        unit="relative",
+        blocks=(labels, labels) if paired else None,
+        gate=GateRule("non-inferiority", BUDGET, "relative"),
+    )
+    assert result.gate is not None
+    return result.gate.status == "pass"
+
+
+def _agrees_paired(rng: np.random.Generator, n: int, *, higher: bool) -> int:
+    shift = math.log1p(-BUDGET) if higher else math.log1p(BUDGET)
+    base = 5.0 + SIGMA_RUN * rng.standard_normal(n)
+    cand = 5.0 + shift + SIGMA_RUN * rng.standard_normal(n)
+    d = (cand - base)[None, :]
+    if higher:
+        expected = bool(_higher_passes(d)[0])
+    else:
+        expected = bool(non_inferiority_passes(d, BUDGET)[0])
+    found = _module_passes(np.exp(base), np.exp(cand), higher=higher, paired=True)
+    return int(found != expected)
+
+
+def _higher_passes(d: np.ndarray) -> np.ndarray:
+    passes = np.expm1(paired_lower(d)) >= -BUDGET
+    if d.shape[1] > MIN_GATE_PAIRS:
+        stable = np.ones(len(d), dtype=bool)
+        for left_out in range(d.shape[1]):
+            kept = np.delete(d, left_out, axis=1)
+            stable &= (np.expm1(paired_lower(kept)) >= -BUDGET) == passes
+        passes &= stable
+    return passes
+
+
+def _agrees_independent(rng: np.random.Generator, n: int) -> int:
+    a = 5.0 + SIGMA_RUN * rng.standard_normal(n)
+    b = 5.0 + math.log1p(BUDGET) + SIGMA_RUN * rng.standard_normal(n)
+    expected = bool(_independent_passes(a[None, :], b[None, :])[0])
+    found = _module_passes(np.exp(a), np.exp(b), higher=False, paired=False)
+    return int(found != expected)
 
 
 # ----------------------------------------------------------------- report
@@ -297,7 +389,7 @@ def run(reps: int, seed: int = SEED, module_samples: int = 200) -> dict[str, Any
     results["paired_false_safe"] = [
         {
             "noise": name,
-            "sigma_block": sigma,
+            "sigma_interaction": sigma,
             "blocks": n,
             "false_safe": paired_false_safe(rng, NOISES[name], sigma, n, reps),
             "supported": not name.startswith("lognormal"),
@@ -305,6 +397,14 @@ def run(reps: int, seed: int = SEED, module_samples: int = 200) -> dict[str, Any
         for name in NOISES
         for sigma in (0.0, 0.05, 0.2)
         for n in (3, 6, 8, 10)
+    ]
+    results["higher_is_better_false_safe"] = [
+        {"blocks": n, "false_safe": higher_is_better_false_safe(rng, n, reps)}
+        for n in (3, 6, 10)
+    ]
+    results["independent_false_safe"] = [
+        {"runs_per_arm": n, "false_safe": independent_false_safe(rng, n, reps)}
+        for n in (3, 6)
     ]
     results["paired_power"] = [
         {"sigma_run": sigma, "blocks": n, **paired_power(rng, sigma, n, reps)}
@@ -328,12 +428,13 @@ def run(reps: int, seed: int = SEED, module_samples: int = 200) -> dict[str, Any
         for label, na, nb, sa, sb, ratio in INDEPENDENT_CASES
     ]
     results["run_gate_false_pass"] = [
-        {"runs": n, "p_run": p, "q": q, "false_pass": run_gate_false_pass(n, p, q)}
-        for n in (6, 8, 10)
-        for p, q in ((0.49, 0.5), (0.89, 0.9))
+        {"runs": n, "p_run": q, "q": q, "false_pass": run_gate_false_pass(n, q, q)}
+        for n in (6, 8, 10, 30)
+        for q in (0.5, 0.6, 0.8)
+        if run_gate_reachable(n, q)
     ]
     results["clustered_runs"] = {
-        str(n): clustered_run_gate(rng, n, reps) for n in (6, 10, 30)
+        str(n): clustered_run_gate(rng, n, reps) for n in (30, 60)
     }
     results["skew_screen"] = [
         {"blocks": n, "rate": skew_screen_rate(rng, n, reps)}
@@ -354,6 +455,11 @@ def verdict(results: dict[str, Any]) -> dict[str, bool]:
         "missing_outcomes": all(
             row["false_safe"] <= CRITERION_FALSE_SAFE
             for row in results["missing_outcomes_false_safe"]
+        ),
+        "higher_is_better_and_independent": all(
+            row["false_safe"] <= CRITERION_FALSE_SAFE
+            for key in ("higher_is_better_false_safe", "independent_false_safe")
+            for row in results[key]
         ),
         "independent_coverage": all(
             row["coverage"] >= CRITERION_COVERAGE

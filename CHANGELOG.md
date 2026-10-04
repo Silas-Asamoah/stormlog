@@ -91,11 +91,13 @@ the flaky benchmark memory gates
   `examples/analysis/simulation_results.json`, tables in
   `docs/inference_comparison.md`): non-inferiority's false-safe rate at a true
   change equal to the budget stays at or below 2.83% for normal and t3 noise,
-  missing outcomes only make it more careful, the independent design covers
-  at least 0.958, the run-level attainment gate holds under correlated
-  failures where pooled requests do not, and the skew screen flags 5% of
-  normal noise. Strong right skew (8–12%) and pooled requests are published
-  as limits. (#213)
+  with the effect varying by block, for a higher-is-better metric and for the
+  independent design; missing outcomes only make it more careful, the
+  independent design covers at least 0.958, the run-level attainment gate
+  holds at the supremum of a false claim and under correlated failures where
+  pooled requests do not, and the skew screen flags 5% of normal noise. Every
+  run-gate cell is one the gate can pass. Strong right skew (8–12%) and pooled
+  requests are published as limits. (#213)
 - `tests/fixtures/infer/comparison_contract_v1.json`: the comparison's
   units contract, 19 cases whose expected effects, intervals and gate
   outcomes are computed from the formulas by
