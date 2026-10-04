@@ -788,9 +788,11 @@ whose actuation raised (a stop that never took, a target gone) is published
 as `not_actuated` with the error, its dose and, for pulses, every pulse that
 completed before it, then the one the failure cut short. A run that fails
 part way (the victim exiting before it measures, say) or is interrupted
-publishes every episode it attempted, the rest as skipped (`run_ended`, or
-`recovery_timeout` after a recovery timeout), with the reason as the run
-record's protocol failure. An episode interrupted mid-action is published
+publishes every episode it attempted, the rest as skipped (`run_ended`;
+`recovery_timeout` after a recovery timeout; or `baseline_too_thin` when the
+episode that timed out could never have recovered, because a baseline
+series it needs was too thin, which its own record lists under
+`recovery_blocked`), with the reason as the run record's protocol failure. An episode interrupted mid-action is published
 `not_actuated` with actuation `interrupted`, its dose and, for pulses, every
 pulse that completed, then the one in progress: the target was stopped, and
 the truth says so. A completed pulse's record says `completed: true`; one
