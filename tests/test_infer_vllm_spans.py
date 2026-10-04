@@ -424,6 +424,10 @@ print(grew, vllm_spans.protobuf_parse_estimate(counts, len(body)))
 # the receiver several times over: about 2 s of CPU with pure Python, and
 # more on a loaded machine. The receiver's own deadlines are unchanged.
 TRACED_POST_TIMEOUT_S = 30.0
+# The request deadline also bounds the protobuf wire scan, which tracemalloc
+# and a loaded machine slow down too; tests that measure memory, or scan a
+# body to its message cap, give it as long as their client waits.
+UNHURRIED = ReceiverLimits(request_deadline_seconds=TRACED_POST_TIMEOUT_S)
 
 
 def _post(url: str, body: bytes, media: str, *, timeout: float = 5.0) -> int:
@@ -953,7 +957,7 @@ class TestReceiverAdmission:
             body = _export_request(
                 [_span_message("s", attributes={}, start=1, end=2)] * 150_000
             )
-        with _receiver() as receiver:
+        with _receiver(limits=UNHURRIED) as receiver:
             url = f"http://{receiver.listen}/v1/traces"
             tracemalloc.start()
             try:
@@ -980,7 +984,7 @@ class TestReceiverAdmission:
             '{"resourceSpans":[{"scopeSpans":[{"spans":[' + ",".join(spans) + "]}]}]}"
         ).encode()
         charged: list[int] = []
-        with _receiver() as receiver:
+        with _receiver(limits=UNHURRIED) as receiver:
             real_reserve = receiver._reserve
 
             def spy(handler: Any, reservation: Any, amount: int) -> bool:
@@ -1099,9 +1103,11 @@ class TestReceiverAdmission:
         monkeypatch.setattr(
             vllm_spans, "parse_otlp_protobuf", lambda data: parsed.append(len(data))
         )
-        with _receiver() as receiver:
+        with _receiver(limits=UNHURRIED) as receiver:
             url = f"http://{receiver.listen}/v1/traces"
-            status = _post(url, body, "application/x-protobuf")
+            status = _post(
+                url, body, "application/x-protobuf", timeout=TRACED_POST_TIMEOUT_S
+            )
             metadata = receiver.capability_metadata()
         assert status == 413
         assert metadata[reason] == 1
@@ -1179,7 +1185,7 @@ class TestReceiverAdmission:
             )
             body = _export_request([span] * count)
         charged: list[int] = []
-        with _receiver() as receiver:
+        with _receiver(limits=UNHURRIED) as receiver:
             real_reserve = receiver._reserve
 
             def spy(handler: Any, reservation: Any, amount: int) -> bool:
@@ -1371,7 +1377,7 @@ class TestReceiverAdmission:
                 ]
             }
         ).encode()
-        with _receiver() as receiver:
+        with _receiver(limits=UNHURRIED) as receiver:
             url = f"http://{receiver.listen}/v1/traces"
             tracemalloc.start()
             try:
@@ -1412,7 +1418,7 @@ class TestReceiverAdmission:
         body = json.dumps(
             {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
         ).encode()
-        with _receiver() as receiver:
+        with _receiver(limits=UNHURRIED) as receiver:
             url = f"http://{receiver.listen}/v1/traces"
             tracemalloc.start()
             try:
