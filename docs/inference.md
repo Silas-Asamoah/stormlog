@@ -185,10 +185,15 @@ Request outcomes:
 | `timeout` | The client gave up after `--timeout` while waiting for the response |
 | `rejected` | The server answered HTTP 429 or 503; `http_status` says which |
 | `unreachable` | The connection failed before any byte of the request was sent: refused, DNS, a connect timeout or a TLS handshake. The server never saw the request |
-| `delivery_unknown` | The connection completed but sending the request failed, so the server may or may not have received it |
+| `delivery_unknown` | The connection completed, but sending the request failed, or the server reset or closed the connection before any byte of a response. A small request is handed to the operating system before the server reads it, so the server may or may not have received it |
 | `error` | Any other failure, with `http_status` when there was one. Redirects are not followed, so a 3xx is an `error` with its status |
 | `dropped` | Never sent: `--overflow drop` turned the arrival away, or the drain deadline passed while `--overflow wait` held it; `error_message` says which |
 | `cancelled` | Still running when the drain deadline passed; the call itself runs on until it finishes or times out |
+
+Inference requests, and cache resets, ignore proxies set in the environment
+(`HTTP_PROXY`, `HTTPS_PROXY`). Through a proxy, the connection reaches the
+proxy, and a server that cannot be reached reads as the proxy's HTTP 502, an
+`error`, rather than as `unreachable`.
 
 ### Prompts and prefix sharing
 

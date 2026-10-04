@@ -38,6 +38,7 @@ from .openai_client import (
     ChatCompletionResult,
     ConnectError,
     EndpointHTTPError,
+    NoResponseError,
     OpenAIChatCompletionsClient,
 )
 from .prompts import Prompt, PromptSource
@@ -1348,13 +1349,16 @@ def classify_failure(exc: BaseException) -> tuple[str, int | None]:
     urllib wraps every error from connecting and sending in ``URLError``.
     A failure inside ``connect()``, before any byte of the request was sent,
     is ``unreachable``: the server never saw the request. A failure while
-    sending is ``delivery_unknown``: the server may have received it. A
-    timeout while waiting for the response, or a read that stalls, is
-    ``timeout``. Redirects are not followed, so a 3xx is an ``error``.
+    sending, or a reset or close before any byte of the response, is
+    ``delivery_unknown``: the server may have received it. A timeout while
+    waiting for the response, or a read that stalls, is ``timeout``.
+    Redirects are not followed, so a 3xx is an ``error``.
     """
     http_status = exc.status if isinstance(exc, EndpointHTTPError) else None
     if http_status in REJECTED_HTTP_STATUSES:
         return "rejected", http_status
+    if isinstance(exc, NoResponseError):
+        return "delivery_unknown", None
     if isinstance(exc, urllib.error.URLError) and not isinstance(
         exc, urllib.error.HTTPError
     ):

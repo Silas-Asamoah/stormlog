@@ -203,12 +203,15 @@ the flaky benchmark memory gates
   new request statuses:
   - `unreachable`: the connection failed before any byte was sent. A connect
     timeout used to be `timeout`, and a refused connection `error`.
-  - `delivery_unknown`: sending failed after the connection completed, so the
-    server may have received the request.
+  - `delivery_unknown`: sending failed after the connection completed, or
+    the connection closed before any byte of a response, so the server may
+    have received the request.
 
-  Inference requests no longer follow HTTP redirects. urllib re-sent a
-  redirected POST as a GET to another address, so a 3xx is now recorded as
-  `error` with its status. (#213)
+  Inference requests and cache resets no longer follow HTTP redirects.
+  urllib re-sent a redirected POST as a GET to another address, so a 3xx is
+  now recorded as `error` with its status. They also ignore proxies set in
+  the environment, through which an unreachable server read as the proxy's
+  HTTP 502. (#213)
 - **Breaking:** `gpumemprof`, `tfmemprof` and `jaxmemprof diagnose` exit 3
   for memory risk. They used to exit 2, which could not be told apart from
   an `argparse` usage error from the same command. The bundle manifest's

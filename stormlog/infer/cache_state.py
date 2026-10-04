@@ -24,6 +24,7 @@ from typing import Any
 
 # Re-exported: callers imported redact_url from here before it moved.
 from ..scrub import redact_url
+from .openai_client import inference_opener
 
 UNSPECIFIED = "unspecified"
 COLD = "cold"
@@ -129,7 +130,8 @@ def _post_reset(
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     request = urllib.request.Request(url, data=b"", headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        # As inference requests do: no redirects, and no environment proxy.
+        with inference_opener().open(request, timeout=timeout_seconds) as response:
             success = _success_field(response.read(_RESET_BODY_LIMIT))
             return CacheReset(
                 recorded,

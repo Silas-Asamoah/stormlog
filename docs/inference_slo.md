@@ -223,7 +223,7 @@ Every measured request lands in exactly one count, by status:
 | `dropped` | Never sent |
 | `sent` | `offered − dropped` |
 | `unreachable` | `connect()` failed; no byte was sent |
-| `delivery_unknown` | Sending failed after the connection completed |
+| `delivery_unknown` | Sending failed after the connection completed, or the connection closed before any byte of a response |
 | `rejected` | HTTP 429 or 503 |
 | `accepted` | `sent − unreachable − delivery_unknown − rejected`: the client's view that nothing refused them |
 | `successful`, `failed`, `timed_out`, `cancelled` | Statuses `ok`, `error`, `timeout`, `cancelled` |

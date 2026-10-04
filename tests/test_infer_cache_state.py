@@ -3,8 +3,10 @@
 import contextlib
 import io
 import json
+import socket
 import threading
 import time
+import urllib.request
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -394,6 +396,26 @@ def test_a_success_field_that_is_not_true_is_a_refusal(body: bytes) -> None:
     assert reset.answer == "refused"
     assert not reset.succeeded
     assert run_kind("cold", 0, reset) == "unspecified"
+
+
+def test_a_reset_does_not_go_through_an_environment_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # urlopen keeps the opener it first built; a fresh one reads the proxies.
+    monkeypatch.setattr(urllib.request, "_opener", None)
+    with _answering_server(b'{"success": true}') as proxy:
+        for name in ("http_proxy", "HTTP_PROXY"):
+            monkeypatch.setenv(name, proxy.rsplit("/", 1)[0])
+        for name in ("no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            closed = probe.getsockname()[1]
+        reset = reset_cache(
+            f"http://127.0.0.1:{closed}/reset_prefix_cache", timeout_seconds=5
+        )
+    assert _AnsweringResetHandler.calls == 0
+    assert not reset.succeeded and reset.status is None
 
 
 def test_the_report_says_whether_a_reset_was_attempted() -> None:

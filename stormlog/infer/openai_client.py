@@ -35,12 +35,31 @@ class ConnectError(OSError):
         self.cause = cause
 
 
+class NoResponseError(ConnectionError):
+    """The connection failed after the request was sent, before any response.
+
+    A small request fits in the socket buffer, so it counts as sent before
+    the server has read a byte of it. A reset or close while waiting for the
+    status line leaves delivery as unknown as a failure while sending.
+    """
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(f"{type(cause).__name__}: {cause}")
+        self.cause = cause
+
+
 class _TrackedHTTPConnection(http.client.HTTPConnection):
     def connect(self) -> None:
         try:
             super().connect()
         except OSError as exc:
             raise ConnectError(exc) from exc
+
+    def getresponse(self) -> http.client.HTTPResponse:
+        try:
+            return super().getresponse()
+        except ConnectionError as exc:
+            raise NoResponseError(exc) from exc
 
 
 class _TrackedHTTPSConnection(http.client.HTTPSConnection):
@@ -49,6 +68,12 @@ class _TrackedHTTPSConnection(http.client.HTTPSConnection):
             super().connect()
         except OSError as exc:
             raise ConnectError(exc) from exc
+
+    def getresponse(self) -> http.client.HTTPResponse:
+        try:
+            return super().getresponse()
+        except ConnectionError as exc:
+            raise NoResponseError(exc) from exc
 
 
 class _TrackedHTTPHandler(urllib.request.HTTPHandler):
@@ -77,9 +102,17 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def inference_opener() -> urllib.request.OpenerDirector:
-    """An opener that marks connect-stage failures and follows no redirects."""
+    """An opener that marks where a request failed and goes straight there.
+
+    It follows no redirects and ignores proxies from the environment. Through
+    a proxy, ``connect()`` reaches the proxy, so a server that cannot be
+    reached reads as the proxy's HTTP 502 rather than as ``unreachable``.
+    """
     return urllib.request.build_opener(
-        _NoRedirect(), _TrackedHTTPHandler(), _TrackedHTTPSHandler()
+        urllib.request.ProxyHandler({}),
+        _NoRedirect(),
+        _TrackedHTTPHandler(),
+        _TrackedHTTPSHandler(),
     )
 
 
