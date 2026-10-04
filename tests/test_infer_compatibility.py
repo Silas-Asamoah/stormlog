@@ -414,7 +414,11 @@ def test_a_runs_fields_come_from_its_artifact() -> None:
 
 
 def _bound(
-    *, pid: int = 100, start_ticks: int = 500, evidence: str = "pinned_commit_verified"
+    *,
+    pid: int = 100,
+    start_ticks: int = 500,
+    evidence: str = "pinned_commit_verified",
+    boot_id: str = "boot-1",
 ) -> dict[str, Any]:
     """The runner's record: weights verified before it launched this server."""
     return model_identity_record(
@@ -426,7 +430,7 @@ def _bound(
         session_id="s",
         run_id="r",
         server={"pid": pid, "start_ticks": start_ticks},
-        boot_id="boot-1",
+        boot_id=boot_id,
     )
 
 
@@ -456,9 +460,12 @@ def test_a_description_alone_never_verifies_its_weights() -> None:
     [
         _bound(pid=101),
         _bound(start_ticks=999),
+        # PID and start ticks repeat across boots: a record from another one
+        # names another server.
+        _bound(boot_id="boot-2"),
         _bound(evidence="inferred"),
     ],
-    ids=["another_pid", "a_restarted_server", "not_verified"],
+    ids=["another_pid", "a_restarted_server", "another_boot", "not_verified"],
 )
 def test_the_runners_record_verifies_only_the_server_it_launched(
     record: dict[str, Any]
