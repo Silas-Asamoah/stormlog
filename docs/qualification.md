@@ -631,8 +631,11 @@ A plan, `stormlog.qualify.plan/1`, holds:
 - the episodes in order, each dose filled from the catalog's defaults.
 
 `load_plan` refuses a plan that can't be run, listing every problem: an
-unknown type, a neighbor without a rate or a concurrency, a pulse past the
-pulser's caps, a capture that isn't between 0 and 60 s.
+unknown type or one this harness doesn't run yet, a neighbor without a rate
+or a concurrency, a pulse past the pulser's caps, a capture that isn't
+between 0 and 60 s, a timeline or victim value that isn't a number in range
+(a minimum recovery longer than the timeout among them), an unknown
+threshold override, and a plan with no episode.
 
 ```json
 {"format": "stormlog.qualify.plan/1", "profile": "dx-off", "seed": 7,

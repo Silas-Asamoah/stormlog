@@ -100,3 +100,63 @@ def test_a_bad_plan_lists_every_problem() -> None:
         parse_plan(_plan({"type": "F9"}))
     with pytest.raises(PlanError, match="format is not"):
         parse_plan({"format": "other"})
+
+
+def _problems(record: dict[str, Any]) -> list[str]:
+    with pytest.raises(PlanError) as error:
+        parse_plan(record)
+    return error.value.problems
+
+
+def test_every_bad_episode_is_listed_beside_the_dose_problems() -> None:
+    problems = _problems(
+        _plan(
+            {"type": "F5"},
+            {"type": "X1"},
+            {"type": "F9"},
+            {"type": "F4a", "dose": {"pulse_ms": 3000}},
+        )
+    )
+    assert [problem.split(":")[0] for problem in problems] == [
+        "episodes[0]",
+        "episodes[1]",
+        "episodes[2]",
+        "episodes[3] (F4a)",
+    ]
+    assert "not run by this harness yet" in problems[0]
+    assert "unknown episode type" in problems[2]
+
+
+@pytest.mark.parametrize(
+    ("changes", "problem"),
+    [
+        ({"timeline": {"priming": -5}}, "timeline.priming must be a positive number"),
+        ({"timeline": {"episode": 0}}, "timeline.episode must be a positive number"),
+        ({"timeline": {"priming": "30"}}, "timeline.priming must be a positive number"),
+        (
+            {"timeline": {"min_recovery": 200, "recovery_timeout": 10}},
+            "timeline.min_recovery is longer than timeline.recovery_timeout",
+        ),
+        (
+            {"victim": {"rate_per_second": 0}},
+            "victim.rate_per_second must be a positive number",
+        ),
+        (
+            {"victim": {"shared_prefix_ratio": 2.0}},
+            "victim.shared_prefix_ratio must be a number in (0, 1]",
+        ),
+        (
+            {"victim": {"input_tokens": 0}},
+            "victim.input_tokens must be a positive integer",
+        ),
+        ({"episodes": []}, "a plan has at least one episode"),
+        ({"thresholds": {"hold": "10"}}, "thresholds.hold must be a number"),
+        ({"thresholds": {"tempo": 1}}, "thresholds.tempo is not a threshold"),
+    ],
+)
+def test_the_timeline_victim_and_thresholds_are_checked(
+    changes: dict[str, Any], problem: str
+) -> None:
+    record = _plan({"type": "N"})
+    record.update(changes)
+    assert problem in _problems(record)
