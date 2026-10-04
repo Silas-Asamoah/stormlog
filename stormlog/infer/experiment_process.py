@@ -20,6 +20,7 @@ there.
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import secrets
@@ -38,6 +39,7 @@ from .server_process import (
     PROC,
     SERVER_ROLES,
     group_members,
+    listening_ports,
     process_tree,
     read_process,
     still_running,
@@ -129,8 +131,14 @@ def launch(
     cpu_affinity: str | None = None,
     log_path: Path | None = None,
     cwd: Path | None = None,
+    journal: Path | None = None,
 ) -> Launched:
-    """Start a command in a session of its own, pinned to its CPUs if asked."""
+    """Start a command in a session of its own, pinned to its CPUs if asked.
+
+    ``journal`` gets a line naming the launch (PID, group, start time and
+    mark) as soon as it starts, so a runner that is killed leaves a record
+    of what it left running.
+    """
     cpus = parse_cpu_list(cpu_affinity) if cpu_affinity else None
     log = log_path.open("ab") if log_path is not None else None
     mark = secrets.token_hex(16)
@@ -155,9 +163,69 @@ def launch(
         _log=log,
     )
     launched.identity = identify(process.pid)
+    if journal is not None:
+        _journal(journal, launched)
     if cpus:
         launched.affinity_applied = affinity_matches(process.pid, cpus)
     return launched
+
+
+def _journal(path: Path, launched: Launched) -> None:
+    entry = {
+        "name": launched.name,
+        "pid": launched.pid,
+        "pgid": launched.pid,
+        "mark": launched.mark,
+        "started_at_ns": launched.started_at_ns,
+        "identity": launched.identity,
+    }
+    with path.open("a") as handle:
+        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+def journaled(path: Path) -> list[dict[str, Any]]:
+    """The launches a journal names; an unreadable line is skipped."""
+    found = []
+    for line in path.read_text().splitlines() if path.is_file() else []:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and isinstance(entry.get("pgid"), int):
+            found.append(entry)
+    return found
+
+
+def stop_journaled(
+    entry: Mapping[str, Any], *, timeout_s: float = KILL_WAIT_SECONDS
+) -> Cleanup:
+    """Stop what a launch the runner no longer holds left running.
+
+    Its group is signalled only while its leader is still that process (same
+    PID and start time); then the group, its session and anything carrying
+    its mark are verified gone, as after any launch.
+    """
+    identity = entry.get("identity") or {}
+    pgid = int(entry["pgid"])
+    for signum in (signal.SIGTERM, signal.SIGKILL):
+        if not still_there(identity):
+            break
+        _signal_group(pgid, signum)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline and still_there(identity):
+            time.sleep(POLL_SECONDS)
+    return verify_cleanup(
+        pgid, mark=entry.get("mark"), since=identity, wait_s=timeout_s
+    )
+
+
+def clean_up_after(launched: Launched, *, wait_s: float = KILL_WAIT_SECONDS) -> Cleanup:
+    """After a step ends, stop whatever it left in its group and verify that
+    nothing it started is left, as after a server."""
+    _signal_group(launched.pid, signal.SIGTERM)
+    return verify_cleanup(
+        launched.pid, mark=launched.mark, since=launched.identity, wait_s=wait_s
+    )
 
 
 def _pin(cpus: set[int]) -> Any:
@@ -500,6 +568,31 @@ def _kill(pid: int) -> None:
         return
 
 
+def listens(pid: int, port: int, *, proc: Path = PROC) -> bool | None:
+    """Whether the process or a descendant listens on the TCP port; None
+    where that cannot be read."""
+    if _linux():
+        pids = [info.pid for info in process_tree(pid, proc)] or [pid]
+        ports = listening_ports(pids, proc)
+        return None if ports is None else port in ports
+    try:
+        root = psutil.Process(pid)
+        return any(
+            _psutil_listens(process, port)
+            for process in [root, *root.children(recursive=True)]
+        )
+    except (psutil.Error, OSError):
+        return None
+
+
+def _psutil_listens(process: psutil.Process, port: int) -> bool:
+    read = getattr(process, "net_connections", None) or process.connections
+    return any(
+        conn.status == psutil.CONN_LISTEN and conn.laddr.port == port
+        for conn in read(kind="tcp")
+    )
+
+
 def unexpected_roles(pid: int, *, proc: Path = PROC) -> list[dict[str, Any]] | None:
     """Processes in the server's tree that are not vLLM's own; None off Linux.
 
@@ -557,6 +650,7 @@ def run_step(
     cpu_affinity: str | None = None,
     timeout_s: float,
     log_path: Path | None = None,
+    journal: Path | None = None,
 ) -> tuple[Launched, bool]:
     """Run a command to its end, or stop its group at the timeout.
 
@@ -568,6 +662,7 @@ def run_step(
         env=env,
         cpu_affinity=cpu_affinity,
         log_path=log_path,
+        journal=journal,
     )
     try:
         launched.process.wait(timeout=timeout_s)
@@ -583,13 +678,17 @@ __all__ = [
     "Cleanup",
     "Launched",
     "affinity_matches",
+    "clean_up_after",
     "identify",
+    "journaled",
+    "listens",
     "launch",
     "parse_cpu_list",
     "remembered_tree",
     "run_step",
     "still_there",
     "stop",
+    "stop_journaled",
     "unexpected_roles",
     "verify_cleanup",
     "wait_for_file",

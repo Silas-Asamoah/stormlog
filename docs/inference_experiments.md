@@ -92,8 +92,12 @@ a prelude that fails marks the block's runs `prelude_failed`, and one whose
 server leaves processes (`prelude_failed:<name>:cleanup_unverified`) stops
 the experiment, as a run's cleanup does (below). Each run then:
 
-1. starts the arm's server (the plan's command plus the arm's arguments and
-   environment), waits for `/health`, probes it once (`server-probe.json`,
+1. checks nothing already accepts connections on the server's port
+   (`server_port_in_use` stops the experiment: launching would measure the
+   other server), starts the arm's server (the plan's command plus the
+   arm's arguments and environment), waits for `/health`, which counts only
+   while the launched server runs and, where that can be read, listens on
+   the port, probes it once (`server-probe.json`,
    see [Inference Profiling](inference.md)), and checks the server's process
    tree holds only vLLM's own processes (`api_server`, `engine_core`,
    `worker` and Python's helpers), waiting up to 10 s for anything else,
@@ -140,7 +144,7 @@ reasons:
 | --- | --- | --- |
 | `completed` | Every step exited as expected, every artifact is there and labelled, and every treatment held up | Compared |
 | `outcome_failure` | The server exited (`server_exited`); a step failed or timed out; an artifact is missing; a treatment was not ready, stopped before the workload ended (`treatment_unhealthy`, even with exit 0), or exited unexpectedly | Compared: outcomes are data, and a retry never replaces them |
-| `protocol_failure` | A server that never became healthy, unless its arm's own launch kept it from starting (below); a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`, `treatment_cleanup_unverified:<name>`) | Set aside with its block, both arms, with the reason; may be retried |
+| `protocol_failure` | A server that never became healthy, unless its arm's own launch kept it from starting (below); a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`, `treatment_cleanup_unverified:<name>`); a server port already taken (`server_port_in_use`) | Set aside with its block, both arms, with the reason; may be retried |
 
 When both kinds apply, the outcome wins, unless the protocol fault came
 before the first workload step started.
@@ -166,9 +170,18 @@ cause that sets aside its block (`external:<reason>`).
 A cleanup that left processes stops the experiment, not just its block:
 no server, treatment or prelude starts beside them. Every planned run after
 it is indexed with state `not_run`, the reason `cleanup_unverified`, and
-`stopped_after: <label>`. Each survivor is recorded by its PID and start
-time, and a resume refuses (a usage error, exit 2) while any is still
-running; once the host is clean, it runs them. A `probe_incomplete` run is run
+`stopped_after: <label>`. A server port something else already holds stops
+it the same way (`server_port_in_use`). Each survivor is recorded by its
+PID and start time, and a resume refuses (a usage error, exit 2) while any
+is still running; once the host is clean, it runs them.
+
+A runner that is killed (SIGKILL, an ssh drop, the OOM killer) runs no
+cleanup, and what it launched lives on in sessions of its own. So every
+launch, of a run or a prelude, is journaled in `launches.ndjson` as it
+starts: PID, process group, start time and mark. A resume stops each
+journaled launch of an unfinished attempt or prelude whose leader is still
+that process, by its group, and then verifies its group, session and mark
+are gone, as after any launch; if they are not, it refuses (exit 2). A `probe_incomplete` run is run
 again at once on a fresh server, after its group is verified gone, and both
 attempts are kept.
 
@@ -180,7 +193,7 @@ attempts are kept.
 | `prereg.json` | The pre-registration, when the plan has one |
 | `order.json` | Each block's arms in run order, whether positions balance, and each arm's position counts |
 | `index.jsonl` | One line per attempt: state, reasons, every process with its PID, times, exit code and affinity, the server's and each treatment's cleanup; and one per run a stop left unstarted (`not_run`) |
-| `runs/<label>/` | The run: its artifacts, `describe-*.json`, the logs of the server, every step and treatment, `attempt.json`, `commands.sh`, `run.json`, `SHA256SUMS` |
+| `runs/<label>/` | The run: its artifacts, `describe-*.json`, the logs of the server, every step and treatment, `attempt.json`, `launches.ndjson`, `commands.sh`, `run.json`, `SHA256SUMS` |
 | `preludes/` | Each block's preludes, their logs, and their server's cleanup (`cleanup.json`) |
 | `sanitizer.json` | Whether the bundle is publishable, and any secret found, by file and line |
 
