@@ -320,6 +320,24 @@ def test_an_overlap_segment_is_diagnostics_and_carries_no_gate(
     assert f"- {CASE}/early (overlap: diagnostics only, not gated):" in lines
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        ComparisonSpec(gates=E2E_GATE, cases=(f"{CASE}/early",)),
+        ComparisonSpec(min_attainment=0.9, cases=(f"{CASE}/early",)),
+    ],
+    ids=["gate", "min_attainment"],
+)
+def test_gates_asked_only_of_overlap_segments_never_pass_vacuously(
+    spec: ComparisonSpec,
+) -> None:
+    baseline, candidate = _arms(SAME)
+    _with_segment(baseline, "overlap")
+    _with_segment(candidate, "overlap")
+    with pytest.raises(InferUsageError, match="diagnostics only"):
+        compare_runs(baseline, candidate, spec)
+
+
 def test_a_case_no_run_offered_a_request_is_refused() -> None:
     # Such as a segment outside every run's measured phase.
     baseline, candidate = _arms(SLOWER)

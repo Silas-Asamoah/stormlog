@@ -68,7 +68,11 @@ quantiles (p95 5,333 ms by arrival against 5,650 ms by overlap, in
 fable-213's simulation of a 2 s arm). An overlap segment is therefore
 **diagnostics only**: compared, marked `membership: overlap` and
 `gated: false`, and never gated, whatever `--gate` or `--min-attainment`
-asks; the whole cases, and segments by arrival, are gated as usual. Its
+asks; the whole cases, and segments by arrival, are gated as usual. The text
+report marks each one `(overlap: diagnostics only, not gated)`, and the gate
+summary counts none of them. Gates asked of a comparison whose every case is
+an overlap segment (`--case <case>/<segment>`) are a usage error rather than
+a pass that gated nothing. Its
 rates (goodput, throughput, output tokens) read `overlapping_cohort`. Any
 rate a run cannot give is read with its interval's reason (`rate_reason`),
 or `rate_unavailable`.

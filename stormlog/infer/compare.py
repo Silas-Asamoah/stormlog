@@ -326,6 +326,7 @@ def compare_runs(
         )
         for case_id in _case_ids(arms, spec)
     }
+    _check_something_gated(cases, spec)
     comparison = Comparison(
         spec=spec,
         design=design,
@@ -755,6 +756,18 @@ def _case(
         slo_blocked = blocked or _slo_blocker(case_id, kept)
         case.update(_attainment_gate(case_id, kept[CANDIDATE], spec, slo_blocked))
     return case
+
+
+def _check_something_gated(
+    cases: Mapping[str, Mapping[str, Any]], spec: ComparisonSpec
+) -> None:
+    """Gates asked only of overlap segments would pass by gating nothing."""
+    asked = bool(spec.gates) or spec.min_attainment is not None
+    if asked and cases and not any(case.get("gated", True) for case in cases.values()):
+        raise InferUsageError(
+            "every case compared is a segment by overlap, which is diagnostics "
+            "only and never gated; gate whole cases or segments by arrival"
+        )
 
 
 def _membership(case_id: str, kept: Mapping[str, list[RunSummary]]) -> str | None:
