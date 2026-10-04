@@ -87,7 +87,9 @@ identical times.
 
 `stormlog.infer.experiment.run_plan(plan, output_dir)` runs each block in
 the plan's order. Before a block's first run it runs the block's preludes;
-a prelude that fails marks the block's runs `prelude_failed`. Each run then:
+a prelude that fails marks the block's runs `prelude_failed`, and one whose
+server leaves processes (`prelude_failed:<name>:cleanup_unverified`) stops
+the experiment, as a run's cleanup does (below). Each run then:
 
 1. starts the arm's server (the plan's command plus the arm's arguments and
    environment), waits for `/health`, probes it once (`server-probe.json`,
@@ -141,8 +143,12 @@ each of the run's artifacts as an `infer.run_state` record (`state`,
 `reasons`, `before_treatment`), and `infer compare` reads it: an outcome
 failure is compared and counted against its arm (`runner:<reason>`), even
 when the profile's session finished, and a protocol failure is the external
-cause that sets aside its block (`external:<reason>`). A cleanup that left processes stops
-the block: no server starts beside them. A `probe_incomplete` run is run
+cause that sets aside its block (`external:<reason>`).
+
+A cleanup that left processes stops the experiment, not just its block:
+no server, treatment or prelude starts beside them. Every planned run after
+it is indexed with state `not_run` and the reason `stopped_after:<label>`.
+Once the host is clean, a resume runs them. A `probe_incomplete` run is run
 again at once on a fresh server, after its group is verified gone, and both
 attempts are kept.
 
@@ -153,9 +159,9 @@ attempts are kept.
 | `plan.json` | The plan's and the pre-registration's SHA-256 |
 | `prereg.json` | The pre-registration, when the plan has one |
 | `order.json` | Each block's arms in run order, whether positions balance, and each arm's position counts |
-| `index.jsonl` | One line per attempt: state, reasons, every process with its PID, times, exit code and affinity, the server's cleanup |
+| `index.jsonl` | One line per attempt: state, reasons, every process with its PID, times, exit code and affinity, the server's cleanup; and one per run a stop left unstarted (`not_run`) |
 | `runs/<label>/` | The run: its artifacts, `describe-*.json`, the logs of the server, every step and treatment, `commands.sh`, `run.json`, `SHA256SUMS` |
-| `preludes/` | Each block's preludes and their logs |
+| `preludes/` | Each block's preludes, their logs, and their server's cleanup (`cleanup.json`) |
 | `sanitizer.json` | Whether the bundle is publishable, and any secret found, by file and line |
 
 `commands.sh` holds each command exactly as run. A `secret_env` variable is
@@ -292,7 +298,7 @@ a process forked after the tree was remembered (a late collector child) and
 then moved to a session of its own is found too. A survivor is killed by
 PID; one that outlives that is a failed cleanup (`collector_cleanup_unverified`
 for the server, `treatment_cleanup_unverified:<name>` for a treatment), and
-the runner does not start the next server beside it. On Linux these checks
+the experiment stops there. On Linux these checks
 read `/proc`; elsewhere they use `psutil`, which reads the mark too, and
 remembered processes are not tracked. The mark differs from run to run and
 is a label to comparisons.
