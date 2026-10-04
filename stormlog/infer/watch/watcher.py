@@ -493,8 +493,9 @@ class Watcher:
             # The ledger's own refusals are in ledger_dropped.
             "io_rejected": self._store_worker.stats().rejected,
             "ledger_dropped": int(ledger["ledger_dropped"]),
-            "export_failures": int(ledger["export_failures"]),
         }
+        if self.ledger.observer is not None:  # no exporter, no export failures
+            loss["export_failures"] = int(ledger["export_failures"])
         if self._watches_frozen:
             loss["scrape_frozen_ticks"] = int(
                 counter_value(snapshot, "frozen_ticks_total")

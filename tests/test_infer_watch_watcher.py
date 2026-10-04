@@ -752,3 +752,22 @@ def test_a_second_signal_cuts_the_shutdown_short_and_keeps_the_root(
     with pytest.raises(InferUsageError, match="another watcher"):
         Watcher(resolve_watch_config(watch_config(base_url)), tmp_path)
     watcher.close()
+
+
+@pytest.mark.parametrize("exporting", [False, True])
+def test_export_failures_are_null_without_an_exporter(
+    tmp_path: Path, exporting: bool
+) -> None:
+    """A source that is not running is null, never 0: export_failures was 0
+    with no observer."""
+    metrics = FakeMetrics()
+    metrics.waiting = 20
+    with serve_metrics(metrics) as base_url:
+        _watch(
+            tmp_path,
+            watch_config(base_url),
+            options=WatchOptions(duration_seconds=1.5),
+            observer=_Observer() if exporting else None,
+        )
+    incident = of_type(read_ledger(tmp_path), INCIDENT)[0]
+    assert incident["loss"]["export_failures"] == (0 if exporting else None)
