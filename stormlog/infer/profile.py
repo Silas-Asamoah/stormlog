@@ -35,7 +35,7 @@ from .errors import InferInputError
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .host_clock import host_boot_id, wall_clock_domain
 from .manifest import BEFORE as MANIFEST_BEFORE
-from .manifest import declared_record, description_record
+from .manifest import before_refusals, declared_record, description_record
 from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
 from .openai_client import (
     ChatCompletionResult,
@@ -87,6 +87,7 @@ class InferenceProfiler:
         self._before_probe: ServerProbe | None = None
         self.session = create_session_summary(source="stormlog.infer.profile")
         self.run_id = run_id or config.run_id or new_session_id()
+        self._check_before_description()
         self.token_counter = build_token_counter(
             tokenizer=config.tokenizer,
             model=config.model,
@@ -152,6 +153,26 @@ class InferenceProfiler:
     def _x_request_id(self, request_id: str) -> str:
         """The run-scoped ``X-Request-Id`` sent with a request and recorded on it."""
         return f"stormlog-{self.run_id}-{request_id}"
+
+    def _check_before_description(self) -> None:
+        """Refuse a before description of another run; warn when it is old."""
+        description = self.config.server_description
+        if description is None:
+            return
+        refusals = before_refusals(description, run_id=self.run_id)
+        if refusals:
+            raise InferInputError(
+                "--describe-server: " + "; ".join(refusals) + ". Pass the run's "
+                "--run-id, or describe the server for this run"
+            )
+        observed = description.get("observed_at_ns")
+        age = (time.time_ns() - observed) / 1e9 if isinstance(observed, int) else None
+        if age is not None and age > _STALE_DESCRIPTION_SECONDS and self.on_warning:
+            self.on_warning(
+                f"--describe-server was taken {age / 3600:.1f} h ago by the "
+                "server's clock; describe the server again so it shows the "
+                "server this run measures"
+            )
 
     def _check_schedules(self) -> None:
         """Refuse an open-loop schedule above the arrival cap up front."""
@@ -1422,6 +1443,8 @@ def _lag_ms(arrival: Arrival, sent_at_ns: int) -> float:
     return (sent_at_ns - arrival.intended_at_ns) / 1_000_000.0
 
 
+# A before description older than this, by the server's clock, gets a warning.
+_STALE_DESCRIPTION_SECONDS = 3600.0
 # The server declined the request: rate limited or overloaded.
 REJECTED_HTTP_STATUSES = frozenset({429, 503})
 # How long the finished run waits for the vLLM execution hook to seal its open
