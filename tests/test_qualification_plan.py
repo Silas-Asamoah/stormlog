@@ -48,7 +48,7 @@ def _plan(*episodes: dict[str, Any], **changes: Any) -> dict[str, Any]:
         "profile": "dx-off",
         "seed": 7,
         "victim": {"rate_per_second": 3.0, "input_tokens": 64, "output_tokens": 8},
-        "timeline": {"priming": 5, "baseline": 5, "episode": 5},
+        "timeline": {"priming": 5, "baseline": 10, "episode": 5},
         "episodes": list(episodes),
     }
     record.update(changes)
@@ -77,8 +77,8 @@ def test_a_plan_fills_each_dose_from_the_catalog() -> None:
     assert plan.episodes[3].dose == {"pulse_ms": 60, "period_ms": 2000}
     assert plan.victim.shared_prefix_tokens == 48
     assert parse_plan(plan.to_record()) == plan
-    # 5 + 5 + 4 x (5 + 150) + 60
-    assert plan.victim_duration_seconds() == 690
+    # 5 + 10 + 4 x (5 + 150) + 60
+    assert plan.victim_duration_seconds() == 695
 
 
 def test_a_bad_plan_lists_every_problem() -> None:
@@ -106,6 +106,43 @@ def _problems(record: dict[str, Any]) -> list[str]:
     with pytest.raises(PlanError) as error:
         parse_plan(record)
     return error.value.problems
+
+
+QUEUE = {
+    "type": "T1",
+    "dose": {"rate_per_second": 2, "input_tokens": 128, "output_tokens": 16},
+}
+SHORT = {"priming": 2, "baseline": 3, "episode": 2}
+
+
+def test_a_queue_episode_needs_windows_long_enough_for_its_samples() -> None:
+    # Fable's A2 deltas, N0 and D2: at one gauge scrape a second, a 3 s
+    # baseline holds 3 waiting counts and a 2.5 s hold 2 or 3, under the 5
+    # queue recovery needs; at 3 requests/s neither holds 20 waits. T1
+    # could never recover, timed out, and the run skipped the rest.
+    problems = _problems(_plan(QUEUE, timeline=SHORT, thresholds={"hold": 2.5}))
+    assert [problem.split(":")[0] for problem in problems] == [
+        "timeline.baseline is 3 s",
+        "timeline.baseline is 3 s",
+        "thresholds.hold is 2.5 s",
+        "thresholds.hold is 2.5 s",
+    ]
+    assert "5 waiting counts, at least 6 s" in problems[0]
+    assert "20 victim waits, at least 6.66667 s at 3 requests/s" in problems[1]
+    timeline = {**SHORT, "baseline": 7}
+    assert parse_plan(_plan(QUEUE, timeline=timeline, thresholds={"hold": 7}))
+    # Other types need no such samples.
+    assert parse_plan(_plan({"type": "N"}, timeline=SHORT, thresholds={"hold": 2.5}))
+
+
+def test_a_plan_may_lower_the_queue_minimums_as_counts() -> None:
+    fewer = {"hold": 3, "min_gauge_samples": 2, "min_wait_samples": 5}
+    plan = parse_plan(_plan(QUEUE, timeline=SHORT, thresholds=fewer))
+    thresholds = plan.recovery_thresholds()
+    assert (thresholds.min_gauge_samples, thresholds.min_wait_samples) == (2, 5)
+    assert _problems(_plan({"type": "N"}, thresholds={"min_gauge_samples": 2.5})) == [
+        "thresholds.min_gauge_samples must be a positive integer"
+    ]
 
 
 def test_every_bad_episode_is_listed_beside_the_dose_problems() -> None:

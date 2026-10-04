@@ -6,8 +6,9 @@ recovery), its episodes in order with their doses, and a seed. ``load_plan``
 checks it before anything is sent, and lists every problem: every episode
 type is in the catalog and run by this harness, every dose has what its
 method needs, pulses keep the pulser's caps, the timeline's and the
-victim's values are numbers in range, and every threshold override is a
-known one.
+victim's values are numbers in range, every threshold override is a
+known one, and a plan with queue episodes has a baseline and a hold long
+enough for the samples queue recovery needs.
 """
 
 from __future__ import annotations
@@ -18,13 +19,15 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Mapping
 
-from stormlog.infer.qualify.recovery import SECOND, Thresholds
+from stormlog.infer.qualify.recovery import SECOND, Thresholds, base_type
 
 from .catalog import CAPTURE, NEIGHBOR, PULSE, EpisodeType, episode_type
 from .neighbor import NeighborShape
 from .pulser import PulseRefused, check_schedule
 
 FORMAT = "stormlog.qualify.plan/1"
+# inject scrapes the engine's gauges once a poll, and polls once a second.
+POLL_SECONDS = 1.0
 
 
 class PlanError(ValueError):
@@ -94,9 +97,9 @@ class Plan:
     timeline: Timeline
     episodes: tuple[EpisodePlan, ...]
     binding: str = "vllm-0.30"
-    # Overrides of recovery's frozen thresholds, in seconds or fractions:
-    # window, hold, cadence_hold, priming_window, cached_loss_below,
-    # cached_recovered_at, kv_margin, priming_cached_at_least.
+    # Overrides of recovery's frozen thresholds, in seconds (window, hold,
+    # cadence_hold, priming_window), sample counts (min_wait_samples,
+    # min_gauge_samples) or fractions (the rest).
     thresholds: Mapping[str, float] = field(default_factory=dict)
 
     def recovery_thresholds(self) -> Thresholds:
@@ -109,6 +112,8 @@ class Plan:
         for name, value in self.thresholds.items():
             if name in _SECONDS:
                 values[f"{name}_ns"] = int(value * SECOND)
+            elif name in _COUNTS:
+                values[name] = int(value)
             else:
                 values[name] = float(value)
         return Thresholds(**values)
@@ -158,7 +163,7 @@ def parse_plan(record: Mapping[str, Any]) -> Plan:
     if problems:
         raise PlanError(problems)
     try:
-        return Plan(
+        plan = Plan(
             profile=str(record["profile"]),
             seed=int(record.get("seed", 0)),
             victim=Victim(**record.get("victim", {})),
@@ -168,6 +173,10 @@ def parse_plan(record: Mapping[str, Any]) -> Plan:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise PlanError([f"malformed plan: {error}"]) from error
+    problems = _sample_problems(plan)
+    if problems:
+        raise PlanError(problems)
+    return plan
 
 
 def _episodes(entries: list[Any]) -> tuple[list[EpisodePlan], list[str]]:
@@ -264,17 +273,61 @@ def _order_problems(timeline: Any) -> list[str]:
 def _threshold_problems(thresholds: Any) -> list[str]:
     if not isinstance(thresholds, Mapping):
         return ["thresholds must be an object"]
-    known = _SECONDS | _FRACTIONS
+    known = _SECONDS | _COUNTS | _FRACTIONS
     problems = []
     for name, value in thresholds.items():
         if name not in known:
             problems.append(f"thresholds.{name} is not a threshold")
+        elif name in _COUNTS and not _fits(value, _COUNT):
+            problems.append(f"thresholds.{name} must be {_DESCRIBED[_COUNT]}")
         elif not _is_number(value):
             problems.append(f"thresholds.{name} must be a number")
     return problems
 
 
+# The types whose recovery is judged on the victim's waits and the waiting
+# gauge (recovery's queue criteria), and their short twins.
+_QUEUE_TYPES = frozenset({"F1", "T1", "W1"})
+
+
+def _sample_problems(plan: Plan, poll_seconds: float = POLL_SECONDS) -> list[str]:
+    """A baseline or hold too short for the samples queue recovery needs.
+
+    A queue criterion holds over a hold with at least ``min_gauge_samples``
+    waiting counts and ``min_wait_samples`` waits, and never holds at all
+    when the baseline has fewer: such a plan's F1, T1 and W1 would always
+    time out. Each window needs one scrape more than the minimum, since a
+    poll takes a little longer than its period, and the victim's expected
+    requests in it.
+    """
+    if not any(base_type(e.type) in _QUEUE_TYPES for e in plan.episodes):
+        return []
+    thresholds = plan.recovery_thresholds()
+    windows = {
+        "timeline.baseline": plan.timeline.baseline,
+        "thresholds.hold": thresholds.hold_ns / SECOND,
+    }
+    scrapes = (thresholds.min_gauge_samples + 1) * poll_seconds
+    rate = plan.victim.rate_per_second
+    problems = []
+    for name, seconds in windows.items():
+        if seconds < scrapes:
+            problems.append(
+                f"{name} is {seconds:g} s: queue recovery needs "
+                f"{thresholds.min_gauge_samples} waiting counts, at least "
+                f"{scrapes:g} s at one scrape per {poll_seconds:g} s"
+            )
+        if seconds * rate < thresholds.min_wait_samples:
+            problems.append(
+                f"{name} is {seconds:g} s: queue recovery needs "
+                f"{thresholds.min_wait_samples} victim waits, at least "
+                f"{thresholds.min_wait_samples / rate:g} s at {rate:g} requests/s"
+            )
+    return problems
+
+
 _SECONDS = frozenset({"window", "hold", "cadence_hold", "priming_window"})
+_COUNTS = frozenset({"min_wait_samples", "min_gauge_samples"})
 _FRACTIONS = frozenset(
     {
         "cached_loss_below",
@@ -319,6 +372,7 @@ def _dose_problems(index: int, episode: EpisodePlan) -> list[str]:
 
 __all__ = [
     "FORMAT",
+    "POLL_SECONDS",
     "EpisodePlan",
     "Plan",
     "PlanError",

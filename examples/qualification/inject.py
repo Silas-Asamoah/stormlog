@@ -75,7 +75,7 @@ from .catalog import CAPTURE, NEIGHBOR, PULSE
 from .fake_engine.process import _environment
 from .neighbor import Neighbor
 from .outcomes import Slo, count_outcomes
-from .plan import EpisodePlan, Plan
+from .plan import POLL_SECONDS, EpisodePlan, Plan
 from .pulser import Pulser, Target, handle_termination
 from .reference import ReferenceChannel
 from .run_dir import RunDirectory
@@ -200,7 +200,7 @@ class InjectionRun:
         server: Server,
         victim_arguments: Sequence[str] = (),
         *,
-        poll_seconds: float = 1.0,
+        poll_seconds: float = POLL_SECONDS,
         clock: Callable[[], int] = time.time_ns,
     ) -> None:
         self.plan = plan
