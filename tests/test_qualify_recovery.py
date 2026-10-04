@@ -450,3 +450,32 @@ def test_a_twin_that_leaves_the_signals_alone_is_realized() -> None:
         Signals(in_flight=None, victim_preemptions=[85 * S], kv_usage=flat), actions
     )
     assert not realization("T2", late, effect_timing("T2", late))[0]
+
+
+def test_a_baseline_too_thin_to_compare_with_never_recovers() -> None:
+    # No victim request in flight through the 0-45 s baseline, so it has no
+    # busy gap; then an engine 3x slow forever. An all-infinite baseline let
+    # any 20 gaps "recover" at the SIGCONT; now nothing does.
+    steps = [tick * 60 * MS for tick in range(0, 200_000 // 60)]
+    signals = Signals(in_flight=[(50 * S, 200 * S)], step_starts=steps)
+    actions = Actions(
+        first_stop_confirmed_ns=60 * S,
+        last_continue_ns=62 * S + 100 * MS,
+        pulses=PULSES,
+    )
+    ctx = context(signals, actions)
+    assert ctx.baseline.steps.count == 0
+    assert effect_timing("F4a", ctx).end_ns is None
+
+
+def test_a_queue_twin_without_baseline_waits_never_recovers() -> None:
+    # T1 recovers on the victim's waits; a baseline with none gave an
+    # infinite p95, and 5 s waits forever recovered at once.
+    waits = [(tenth * S // 10, 5.0) for tenth in range(550, 2000)]
+    waiting = every_second(0, 200, lambda s: 2.0)
+    signals = Signals(in_flight=None, waits=waits, waiting=waiting)
+    ctx = context(signals, Actions(first_send_ns=60 * S))
+    assert (ctx.baseline.wait_count, ctx.baseline.waiting_count) == (0, 46)
+    timing = effect_timing("T1", ctx)
+    assert timing.onset_ns == 60 * S
+    assert timing.end_ns is None
