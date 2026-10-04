@@ -177,6 +177,46 @@ def test_a_close_before_any_response_byte_is_delivery_unknown(
     assert classify_failure(raised.value) == ("delivery_unknown", None)
 
 
+@pytest.mark.parametrize(
+    ("status_line", "expected"),
+    [
+        (b"HTTP/1.1 500 Internal Server Error\r\n", ("error", 500)),
+        (b"HTTP/1.1 503 Service Unavailable\r\n", ("rejected", 503)),
+    ],
+    ids=["500", "503"],
+)
+def test_a_reset_after_the_status_line_is_the_answer_it_gave(
+    status_line: bytes, expected: tuple[str, int | None]
+) -> None:
+    # The server answered, then reset before its headers ended: it took the
+    # request, so delivery is not unknown.
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    def answer_and_reset() -> None:
+        connection, _address = listener.accept()
+        connection.recv(65536)
+        connection.sendall(status_line)
+        connection.setsockopt(
+            socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00"
+        )
+        connection.close()
+
+    thread = threading.Thread(target=answer_and_reset, daemon=True)
+    thread.start()
+    client = _client(f"http://127.0.0.1:{port}/v1/chat/completions")
+    try:
+        with pytest.raises(OSError) as raised:
+            _complete(client)
+    finally:
+        thread.join(timeout=5)
+        listener.close()
+
+    assert classify_failure(raised.value) == expected
+
+
 def test_a_tls_handshake_that_fails_is_unreachable() -> None:
     # The HTTPS connection is tracked too: the handshake is part of connect().
     with _redirecting_server() as endpoint:

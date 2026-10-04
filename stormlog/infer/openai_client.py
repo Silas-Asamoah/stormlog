@@ -49,7 +49,49 @@ class NoResponseError(ConnectionError):
         self.cause = cause
 
 
-class _TrackedHTTPConnection(http.client.HTTPConnection):
+class CutResponseError(ConnectionError):
+    """The server answered with a status line, then the connection failed.
+
+    The server took the request: delivery is known, and the status is the
+    answer it gave, cut short.
+    """
+
+    def __init__(self, status: int, cause: BaseException) -> None:
+        super().__init__(f"HTTP {status}, then {type(cause).__name__}: {cause}")
+        self.status = status
+        self.cause = cause
+
+
+class _StatusLine:
+    """The status a connection's response line gave, once it arrived."""
+
+    def __init__(self) -> None:
+        self.status: int | None = None
+
+
+def _response_class(seen: _StatusLine) -> type[http.client.HTTPResponse]:
+    class _Response(http.client.HTTPResponse):
+        def _read_status(self) -> tuple[str, int, str]:
+            version, status, reason = super()._read_status()  # type: ignore[misc]
+            seen.status = int(status)
+            return str(version), int(status), str(reason)
+
+    return _Response
+
+
+class _Answered:
+    """Tells a failure before the status line from one after it."""
+
+    def _track(self) -> None:
+        self._status_line = _StatusLine()
+        self.response_class = _response_class(self._status_line)
+
+    def _failed(self, exc: ConnectionError) -> ConnectionError:
+        status = self._status_line.status
+        return NoResponseError(exc) if status is None else CutResponseError(status, exc)
+
+
+class _TrackedHTTPConnection(_Answered, http.client.HTTPConnection):
     def connect(self) -> None:
         try:
             super().connect()
@@ -57,13 +99,14 @@ class _TrackedHTTPConnection(http.client.HTTPConnection):
             raise ConnectError(exc) from exc
 
     def getresponse(self) -> http.client.HTTPResponse:
+        self._track()
         try:
             return super().getresponse()
         except ConnectionError as exc:
-            raise NoResponseError(exc) from exc
+            raise self._failed(exc) from exc
 
 
-class _TrackedHTTPSConnection(http.client.HTTPSConnection):
+class _TrackedHTTPSConnection(_Answered, http.client.HTTPSConnection):
     def connect(self) -> None:
         try:
             super().connect()
@@ -71,10 +114,11 @@ class _TrackedHTTPSConnection(http.client.HTTPSConnection):
             raise ConnectError(exc) from exc
 
     def getresponse(self) -> http.client.HTTPResponse:
+        self._track()
         try:
             return super().getresponse()
         except ConnectionError as exc:
-            raise NoResponseError(exc) from exc
+            raise self._failed(exc) from exc
 
 
 class _TrackedHTTPHandler(urllib.request.HTTPHandler):

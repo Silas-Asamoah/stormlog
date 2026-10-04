@@ -37,6 +37,7 @@ from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
 from .openai_client import (
     ChatCompletionResult,
     ConnectError,
+    CutResponseError,
     EndpointHTTPError,
     NoResponseError,
     OpenAIChatCompletionsClient,
@@ -1351,12 +1352,16 @@ def classify_failure(exc: BaseException) -> tuple[str, int | None]:
     urllib wraps every error from connecting and sending in ``URLError``.
     A failure inside ``connect()``, before any byte of the request was sent,
     is ``unreachable``: the server never saw the request. A failure while
-    sending, or a reset or close before any byte of the response, is
-    ``delivery_unknown``: the server may have received it. A timeout while
-    waiting for the response, or a read that stalls, is ``timeout``.
-    Redirects are not followed, so a 3xx is an ``error``.
+    sending, or a reset or close before the response's status line, is
+    ``delivery_unknown``: the server may have received it. After the status
+    line the server has answered, so a reset is the answer it gave: an
+    ``error`` (or ``rejected``) with that status. A timeout while waiting
+    for the response, or a read that stalls, is ``timeout``. Redirects are
+    not followed, so a 3xx is an ``error``.
     """
-    http_status = exc.status if isinstance(exc, EndpointHTTPError) else None
+    http_status = (
+        exc.status if isinstance(exc, (EndpointHTTPError, CutResponseError)) else None
+    )
     if http_status in REJECTED_HTTP_STATUSES:
         return "rejected", http_status
     if isinstance(exc, NoResponseError):

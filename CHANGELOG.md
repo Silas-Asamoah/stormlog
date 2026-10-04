@@ -214,8 +214,9 @@ the flaky benchmark memory gates
   - `unreachable`: the connection failed before any byte was sent. A connect
     timeout used to be `timeout`, and a refused connection `error`.
   - `delivery_unknown`: sending failed after the connection completed, or
-    the connection closed before any byte of a response, so the server may
-    have received the request.
+    the connection closed before the response's status line, so the server
+    may have received the request. A reset after the status line is the
+    answer the server gave: an `error` (or `rejected`) with its status.
 
   Inference requests and cache resets no longer follow HTTP redirects.
   urllib re-sent a redirected POST as a GET to another address, so a 3xx is
