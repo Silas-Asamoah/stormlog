@@ -303,16 +303,46 @@ def test_a_preempted_attempt_is_set_aside_with_its_evidence_and_retried(
     ]
 
 
-def test_an_attempt_interrupted_with_no_cause_given_is_an_outcome_kept(
+def test_a_resume_refuses_an_interrupted_attempt_no_one_has_explained(
     tmp_path: Path,
 ) -> None:
+    # Turning an interruption into a permanent outcome failure, or setting
+    # it aside, is a decision: a forgotten flag after a preemption must not
+    # make it.
+    document = _plan(_port(), blocks=1)
+    records = _run(tmp_path, document)
+    exp = tmp_path / "exp"
+    label = next(r["label"] for r in records if r["arm"] == "watch")
+    _interrupt(exp, label)
+    with pytest.raises(InferUsageError, match=f"{label} was interrupted"):
+        _run(tmp_path, document, resume=True, retry_incomplete=True)
+    with pytest.raises(InferUsageError, match="both an external cause and"):
+        _run(
+            tmp_path,
+            document,
+            resume=True,
+            external_causes={label: PREEMPTED},
+            interrupted_as_outcome={label},
+        )
+    # Refused before anything changed: the attempt is still as it was left.
+    assert (exp / "runs" / f"{label}.partial").is_dir()
+    assert len((exp / "index.jsonl").read_text().splitlines()) == 1
+
+
+def test_an_interrupted_attempt_marked_as_an_outcome_is_kept(tmp_path: Path) -> None:
     # The lead's C6: an interruption is an outcome unless its cause is
     # recorded, and a retry never replaces an outcome.
     document = _plan(_port(), blocks=1)
     records = _run(tmp_path, document)
     label = next(r["label"] for r in records if r["arm"] == "watch")
     _interrupt(tmp_path / "exp", label)
-    (only,) = _run(tmp_path, document, resume=True, retry_incomplete=True)
+    (only,) = _run(
+        tmp_path,
+        document,
+        resume=True,
+        retry_incomplete=True,
+        interrupted_as_outcome={label},
+    )
     assert (only["label"], only["state"], only["reasons"], only["interrupted"]) == (
         label,
         "outcome_failure",
@@ -324,7 +354,7 @@ def test_an_attempt_interrupted_with_no_cause_given_is_an_outcome_kept(
     assert "runner:runner_interrupted" in summary.outcome_failures
 
 
-def test_an_external_cause_is_refused_unless_it_names_an_interrupted_attempt(
+def test_a_cause_or_an_outcome_must_name_an_interrupted_attempt(
     tmp_path: Path,
 ) -> None:
     document = _plan(_port(), blocks=1)
@@ -332,8 +362,12 @@ def test_an_external_cause_is_refused_unless_it_names_an_interrupted_attempt(
     finished = records[0]["label"]
     with pytest.raises(InferUsageError, match="not an interrupted attempt"):
         _run(tmp_path, document, resume=True, external_causes={finished: PREEMPTED})
+    with pytest.raises(InferUsageError, match="not an interrupted attempt"):
+        _run(tmp_path, document, resume=True, interrupted_as_outcome={finished})
     with pytest.raises(InferUsageError, match="only on resume"):
         _run(tmp_path / "fresh", document, external_causes={finished: PREEMPTED})
+    with pytest.raises(InferUsageError, match="only on resume"):
+        _run(tmp_path / "fresh", document, interrupted_as_outcome={finished})
 
 
 @pytest.mark.parametrize(
@@ -593,6 +627,7 @@ def test_the_example_cli_runs_a_plan_and_says_how_it_ended(
     assert main(["--plan", str(plan_path), "--output", str(tmp_path / "exp")]) == 0
     printed = capsys.readouterr().out
     assert "t213-b00-p0-off-a1: completed" in printed
+    original = plan_path.read_text()
     document["server"]["command"] = ["{python}", "-c", "raise SystemExit(1)"]
     plan_path.write_text(json.dumps(document))
     code = main(["--plan", str(plan_path), "--output", str(tmp_path / "broken")])
@@ -605,6 +640,16 @@ def test_the_example_cli_runs_a_plan_and_says_how_it_ended(
     )
     cause = ["--external-cause", "t213-b00-p0-off-a1=oom:dmesg"]
     assert main(["--plan", str(plan_path), "--output", "y", "--resume", *cause]) == 2
+    _interrupt(tmp_path / "exp", "t213-b00-p1-watch-a1")
+    plan_path.write_text(original)
+    resume = ["--plan", str(plan_path), "--output", str(tmp_path / "exp"), "--resume"]
+    assert main(resume) == 2
+    assert "t213-b00-p1-watch-a1 was interrupted" in capsys.readouterr().err
+    marked = ["--interrupted-as-outcome", "t213-b00-p1-watch-a1"]
+    assert main([*resume, *marked]) == 0
+    assert "t213-b00-p1-watch-a1: outcome_failure (runner_interrupted)" in (
+        capsys.readouterr().out
+    )
 
 
 def test_treatments_are_observers_a_comparison_can_see(tmp_path: Path) -> None:

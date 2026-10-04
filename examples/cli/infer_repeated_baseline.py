@@ -9,10 +9,12 @@ workload steps, and the order. Each run's artifacts land in
 
 Run it again with ``--resume`` to continue an interrupted experiment, and
 with ``--retry-incomplete`` to retry runs that ended in a protocol failure.
-A run the runner was killed in is then an outcome failure, unless its cause
-is given with its evidence::
+A resume refuses to go on while a run the runner was killed in is not
+explained: give its cause with its evidence, which sets it aside and lets
+``--retry-incomplete`` run it again, or mark it an outcome failure, kept::
 
     --external-cause t221-b03-p1-watch-a1=spot_preemption:"box paused at 03:12"
+    --interrupted-as-outcome t221-b03-p1-watch-a1
 
 Exit codes: 0 when every planned run finished (completed, or an outcome
 failure, which is data); 3 when some run ended in a protocol failure; 5 for
@@ -62,6 +64,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--external-cause", action="append", default=[], metavar="LABEL=REASON:EVIDENCE"
     )
+    parser.add_argument(
+        "--interrupted-as-outcome", action="append", default=[], metavar="LABEL"
+    )
     args = parser.parse_args(argv)
     try:
         records = run_plan(
@@ -71,6 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             retry_incomplete=args.retry_incomplete,
             on_event=_print,
             external_causes=_causes(args.external_cause),
+            interrupted_as_outcome=args.interrupted_as_outcome,
         )
     except InferUsageError as exc:
         print(f"Error: {exc}", file=sys.stderr)

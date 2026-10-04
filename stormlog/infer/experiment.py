@@ -31,11 +31,12 @@ When both apply, the outcome wins unless the protocol fault came before the
 first workload step started.
 
 A run whose runner was killed (a preempted box, an operator's abort) leaves
-its attempt in ``runs/<label>.partial`` with no state. A resume finishes
-it in place and indexes it: an ``outcome_failure``
-(``runner_interrupted``), unless an external cause with its evidence is
-given for it (``external_causes``), which makes it a ``protocol_failure``
-that may be retried.
+its attempt in ``runs/<label>.partial`` with no state. A resume refuses to
+go on until each such attempt is explained: by an external cause with its
+evidence (``external_causes``), which makes it a ``protocol_failure`` that
+may be retried, or by marking it an outcome (``interrupted_as_outcome``),
+an ``outcome_failure`` (``runner_interrupted``) that is kept. It then
+finishes the attempt in place and indexes it.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -197,14 +198,16 @@ def run_plan(
     environment: Environment | None = None,
     on_event: Events | None = None,
     external_causes: Mapping[str, ExternalCause] | None = None,
+    interrupted_as_outcome: Collection[str] = (),
 ) -> list[dict[str, Any]]:
     """Run every block of the plan; return the index entries written.
 
-    ``external_causes`` names, by label, attempts the runner was killed in
-    and why; each must be an interrupted attempt this resume finishes.
+    Every attempt the runner was killed in must be named, by label, in
+    ``external_causes`` (why it does not count) or ``interrupted_as_outcome``
+    (it counts against its arm); a resume refuses until each is.
     """
     causes = dict(external_causes or {})
-    _check_causes(output_dir, causes, resume)
+    _check_interrupted(output_dir, causes, set(interrupted_as_outcome), resume)
     env = environment or Environment(secrets=_secrets(plan))
     order = plan_order(plan)
     _prepare(plan, order, output_dir, resume)
@@ -234,22 +237,56 @@ class _Resume:
     causes: Mapping[str, ExternalCause]
 
 
-def _check_causes(
-    output: Path, causes: Mapping[str, ExternalCause], resume: bool
+def _check_interrupted(
+    output: Path,
+    causes: Mapping[str, ExternalCause],
+    outcomes: set[str],
+    resume: bool,
 ) -> None:
-    """An external cause can only explain an attempt the runner was killed in.
+    """Every attempt the runner was killed in is explained one way, and only
+    those are.
 
     A finished attempt keeps the state it recorded, so an outcome failure
-    can never be turned into a set-aside.
+    can never be turned into a set-aside; and an interruption no one
+    explained is neither set aside nor counted by default, since a
+    forgotten flag after a preemption would decide it.
     """
-    if causes and not resume:
-        raise InferUsageError("external causes are given only on resume")
-    for label in causes:
-        if not (output / "runs" / f"{label}.partial").is_dir():
-            raise InferUsageError(
-                f"{label} is not an interrupted attempt: a finished attempt "
-                "keeps the state it recorded"
-            )
+    named = set(causes) | outcomes
+    if named and not resume:
+        raise InferUsageError(
+            "external causes and interrupted outcomes are given only on resume"
+        )
+    if not resume:
+        return
+    both = sorted(set(causes) & outcomes)
+    if both:
+        raise InferUsageError(
+            f"{', '.join(both)}: both an external cause and an outcome"
+        )
+    interrupted = _interrupted_labels(output / "runs")
+    unknown = sorted(named - interrupted)
+    if unknown:
+        raise InferUsageError(
+            f"{', '.join(unknown)} is not an interrupted attempt: a finished "
+            "attempt keeps the state it recorded"
+        )
+    unexplained = sorted(interrupted - named)
+    if unexplained:
+        raise InferUsageError(
+            f"{', '.join(unexplained)} was interrupted: give its external cause "
+            "(external_causes, --external-cause) or mark it an outcome "
+            "(interrupted_as_outcome, --interrupted-as-outcome)"
+        )
+
+
+def _interrupted_labels(runs: Path) -> set[str]:
+    if not runs.is_dir():
+        return set()
+    return {
+        path.name[: -len(".partial")]
+        for path in runs.iterdir()
+        if path.name.endswith(".partial") and path.is_dir()
+    }
 
 
 def _verified_model(plan: ExperimentPlan) -> VerifiedModel | None:
