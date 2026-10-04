@@ -441,3 +441,13 @@ def test_skew_limits_follow_the_table_then_the_standard_error() -> None:
     assert skew_limit(40) == pytest.approx(
         1.96 * math.sqrt(6 * 40 * 39 / (38 * 41 * 43))
     )
+
+
+@pytest.mark.parametrize(
+    ("budget", "unit"), [(-0.01, "relative"), (math.inf, "relative"), (1.5, "fraction")]
+)
+def test_a_gate_budget_that_cannot_mean_anything_is_refused(
+    budget: float, unit: str
+) -> None:
+    with pytest.raises(InferUsageError):
+        GateRule("non-inferiority", budget, unit)

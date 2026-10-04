@@ -32,14 +32,14 @@ stormlog infer compare \
 | `--design auto\|paired_blocks\|independent` | `auto` pairs runs by block when every run is labelled |
 | `--allow FIELD` | A field (`engine.max_num_seqs`) or `vllm_config` JSON pointer (`/scheduler_config`) that may differ |
 | `--added-observers NAME,...` | The observers an `incremental` candidate adds |
-| `--gate METRIC=RULE:BUDGET` | Gate a metric, or every metric a pattern names (`client.*.p99`). A latency, goodput or throughput budget is relative (0.05 is 5%); an attainment or failure-fraction budget is a fraction (0.01 is one point) |
+| `--gate METRIC=RULE:BUDGET` | Gate a metric, or every metric a pattern names (`client.*.p99`). A latency, goodput or throughput budget is relative (0.05 is 5%); an attainment or failure-fraction budget is a fraction (0.01 is one point). A budget that can never fail is a usage error: a fraction above 1, or a fall of 100% or more in a rate |
 | `--fallback METRIC=BUDGET:UNIT` | A pre-registered budget on the difference, for when a zero leaves the log ratio undefined |
 | `--min-complete-blocks N` | Every gate needs at least N complete pairs |
-| `--min-attainment X`, `--min-run-pass Q` | At least a share Q (0.5) of candidate runs reach attainment X: a claim about runs. `--attainment-model bernoulli` pools requests instead, labelled model-based |
+| `--min-attainment X`, `--min-run-pass Q` | At least a share Q (0.5) of candidate runs reach attainment X: a claim about runs. Both are in (0, 1]. `--attainment-model bernoulli` pools requests instead, labelled model-based |
 | `--family all_budgets\|any_regression` | `any_regression` adjusts the regression tests with Holm's method; its gates use `significant` |
 | `--on-incomplete exclude\|fail` | A run set aside by a protocol failure is listed (`exclude`), or fails its contrasts (`fail`) |
 | `--allow-not-evaluable` | Exit 0 although a gate could not be evaluated: for exploration, and recorded |
-| `--evidence-floor F` | The `evidence_coverage` SLO metrics need in every run (1.0) |
+| `--evidence-floor F` | The `evidence_coverage` SLO metrics need in every run (1.0), in [0, 1] |
 | `--segment NAME=START:END` | Also compare this slice of each case's measured phase, in seconds from its start; repeatable |
 | `--segment-membership arrival\|overlap` | A segment's requests: those that arrived in it (the default), or that overlap it |
 | `--format txt\|json`, `--report FILE` | Text, or the report envelope on stdout; `--report` writes the envelope too |

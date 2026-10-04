@@ -126,15 +126,38 @@ def default_metrics(case: Mapping[str, Any]) -> list[MetricSpec]:
 _FRACTION_METRICS = ("attainment", "failure_fraction")
 
 
-def metric_unit(pattern: str) -> str | None:
-    """The effect unit of the metrics a name or pattern matches, if it is one."""
+def vacuous_budget(pattern: str, budget: float) -> str | None:
+    """Why a budget on the metrics a pattern matches could never fail, if so.
+
+    A fraction above 1 is beyond every fraction, and a rate cannot fall by
+    100% or more, so a relative budget of 1 on one cannot be exceeded.
+    """
+    matched = _matching(pattern)
+    if budget > 1 and any(name in _FRACTION_METRICS for name in matched):
+        return f"a fraction budget of {budget:g} is above 1: it can never fail"
+    rates = sorted(name for name in matched if name in _RATE_METRICS)
+    if budget >= 1 and rates:
+        return (
+            f"{', '.join(rates)} cannot fall by {budget:.0%}, so the budget can "
+            "never fail"
+        )
+    return None
+
+
+_RATE_METRICS = frozenset({"goodput_rps", "throughput_rps", "output_tps"})
+
+
+def _matching(pattern: str) -> list[str]:
     names = list(_FRACTION_METRICS) + [
-        "goodput_rps",
-        "throughput_rps",
-        "output_tps",
+        *sorted(_RATE_METRICS),
         *(f"{key}.{level}" for key in LATENCY_KEYS for level in LEVELS),
     ]
-    matched = [name for name in names if fnmatch.fnmatchcase(name, pattern)]
+    return [name for name in names if fnmatch.fnmatchcase(name, pattern)]
+
+
+def metric_unit(pattern: str) -> str | None:
+    """The effect unit of the metrics a name or pattern matches, if it is one."""
+    matched = _matching(pattern)
     units = {"fraction" if name in _FRACTION_METRICS else RELATIVE for name in matched}
     return units.pop() if len(units) == 1 else None
 

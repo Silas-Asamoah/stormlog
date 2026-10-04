@@ -41,7 +41,7 @@ from .compare import (
     ComparisonSpec,
     compare_runs,
 )
-from .compare_metrics import metric_unit
+from .compare_metrics import metric_unit, vacuous_budget
 from .compare_report import comparison_lines, comparison_report, error_report
 from .comparison_stats import INDEPENDENT, PAIRED, GateRule
 from .compatibility import CONFIG, MODES
@@ -1361,10 +1361,14 @@ def _gate(
         raise InferUsageError(
             f"--gate {text!r}: {metric!r} names no metric, or metrics in different units"
         )
+    amount = _number(budget, f"--gate {text!r}")
+    vacuous = vacuous_budget(metric, amount)
+    if vacuous is not None:
+        raise InferUsageError(f"--gate {text!r}: {vacuous}")
     fallback_budget, fallback_unit = fallbacks.get(metric, (None, None))
     return metric, GateRule(
         rule,
-        _number(budget, f"--gate {text!r}"),
+        amount,
         unit,
         min_complete_blocks=min_blocks,
         fallback_budget=fallback_budget,
