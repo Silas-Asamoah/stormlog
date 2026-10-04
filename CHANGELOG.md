@@ -38,6 +38,25 @@ the flaky benchmark memory gates
   a `--prometheus-slot` another live run holds. The exporter closes before
   the capability records, so its `export.prometheus` record holds final
   counts. See `docs/inference_export.md`.
+- OTLP span export for `stormlog infer profile` (#220). `--otlp-endpoint URL`
+  sends the capture, its phases and every request sent as spans over
+  OTLP/HTTP (protobuf with the `infer-otlp` extra, JSON otherwise, gzip),
+  and `--otlp-file PATH` writes them as OTLP JSON lines. Every span offered
+  ends as exported, rejected, refused, dropped or unknown, exactly, with
+  `max_extra_copies` bounding what lost answers can duplicate; retries,
+  a breaker with recorded transitions, and `--otlp-flush-timeout` keep a
+  slow or dead collector from holding up the run. Span attributes are an
+  allowlist; resource attributes from `OTEL_RESOURCE_ATTRIBUTES` and
+  `--otlp-resource-attribute` pass only for a fixed list of keys; header
+  values and every credential the run holds are redacted wherever they
+  would appear. Prompts, outputs and server error text leave only with
+  `--export-content`. The final counts are in an `export.otlp` capability
+  record, and in `stormlog_export_*` metrics when Prometheus is on too.
+- `--trace-context {off,preserve-engine,follow-sampling}` on `stormlog infer
+  profile` sends a W3C `traceparent` with each request and records its
+  `trace_id` and `span_id` on `infer.request`; off by default.
+  `--server-trace-sampler` records the server's sampler as declared.
+  Completed requests now also record their `http_status`. (#220)
 - `stormlog.scrub`, shared scrubbing primitives for what Stormlog records or
   sends elsewhere: `redact_url` (moved from `stormlog.infer.cache_state`,
   which still exports it) with a new `origin_only` mode; `KnownSecrets`,

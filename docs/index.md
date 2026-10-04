@@ -88,7 +88,7 @@ examples/test_guides/README
 3. [Inference SLOs and goodput](inference_slo.md)
 4. [Inference execution correlation](inference_correlation.md)
 5. [vLLM native telemetry](vllm_telemetry.md)
-6. [Exporting inference metrics](inference_export.md)
+6. [Exporting inference metrics and spans](inference_export.md)
 7. [TUI](tui.md)
 8. [Production Cookbook](cookbook/index.md)
 9. [Troubleshooting](troubleshooting.md)
