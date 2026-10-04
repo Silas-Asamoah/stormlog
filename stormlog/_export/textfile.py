@@ -222,6 +222,10 @@ class TextfileWriter:
         # and the body is written as it is, never copied.
         generation = self.renders.acquire()
         try:
+            # Checked once, before the write: a change landing between the
+            # check and the write would not be flagged. The run freezes its
+            # values and invalidates the render before it closes the writer,
+            # so none lands there.
             if not self._active and not self.renders.is_fresh(generation):
                 self.stats.final_stale = True
             self._write_file(generation.body)
