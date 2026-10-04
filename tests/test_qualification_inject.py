@@ -127,6 +127,11 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     checks = {c["name"]: c for c in twin.validity.checks}
     assert checks["engine_hit_ratio_fell"]["passed"] is True
     assert not checks["engine_hit_ratio_fell"]["incomplete"]
+    # Its effect, the benign change, spans its whole action, as N's does.
+    times = twin.times
+    assert times.effect_onset_ns is not None and times.action_end_ns is not None
+    assert times.effect_end_ns is not None
+    assert times.effect_end_ns >= times.action_end_ns > times.effect_onset_ns
     # Every label at an engine component names the engine #218 will name:
     # the producer in the fake engine's hello, for L2.
     (hello,) = [
