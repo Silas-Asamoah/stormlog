@@ -313,6 +313,45 @@ def test_the_pulse_a_failure_cut_short_is_in_what_was_done(
     assert cut["completed"] is False and cut["continue_sent_ns"] is None
 
 
+def test_a_pulse_continued_by_someone_else_leaves_the_episode_not_actuated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rev-220-a's final A2 delta-2 note: nothing read continued_by_other.
+    # A pulse someone else continued wasn't the stop the dose asked for, so
+    # the episode is not actuated, with actuation interrupted_by_other (the
+    # lead's ruling), and its record names the pulse.
+    from types import SimpleNamespace
+    from typing import cast
+
+    from examples.qualification.inject import InjectionRun, Server, _actuation
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.pulser import Target
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    dose = {"pulse_ms": 300, "period_ms": 800}
+    plan = parse_plan({**record, "episodes": [{"type": "F4a", "dose": dose}]})
+    loop = "import time\nwhile True:\n    time.sleep(0.01)\n"
+    stand_in = subprocess.Popen([sys.executable, "-c", loop], start_new_session=True)
+
+    def continue_it() -> None:
+        os.kill(stand_in.pid, signal.SIGCONT)  # the operator's
+
+    try:
+        target = Target.of(stand_in.pid, "engine_core")
+        server = Server("http://127.0.0.1:9", "m", tmp_path, {"engine_core": target})
+        run = InjectionRun(plan, RunDirectory(tmp_path / "runs", "q221-y"), server)
+        _after_the_stop_is_confirmed(monkeypatch, continue_it)
+        _actions, actuated, injected = run._pulse(plan.episodes[0])
+    finally:
+        stand_in.kill()
+        stand_in.wait()
+    assert actuated is False
+    assert injected["interrupted_by_other"] == [0]
+    attempt = cast(Any, SimpleNamespace(actuated=actuated, injected=injected))
+    assert _actuation(attempt) == "interrupted_by_other"
+
+
 def test_targets_are_bound_at_startup(tmp_path: Path) -> None:
     from examples.qualification.__main__ import _targets
 
