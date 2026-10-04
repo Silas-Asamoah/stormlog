@@ -239,17 +239,26 @@ def test_a_mark_search_that_could_not_read_an_environment_says_so(
     assert verify_cleanup(launched.pid, wait_s=0.3).to_record()["mark_search"] is None
 
 
-def test_an_unreadable_process_that_may_be_the_launchs_fails_the_cleanup() -> None:
+ORPHAN = (
+    "import subprocess, sys; "
+    "child = subprocess.Popen(['/bin/sleep', '60'], env={}, start_new_session=True); "
+    "open(sys.argv[1], 'w').write(str(child.pid))"
+)
+
+
+def test_an_unreadable_process_that_may_be_the_launchs_fails_the_cleanup(
+    tmp_path: Path,
+) -> None:
     # The lead's ruling on rev-213-a's E6: a process whose environment
     # cannot be read, or was emptied, and that may be the launch's cannot be
-    # shown unmarked, so the cleanup is not verified. The repro: /bin/sleep
-    # exec'd with an empty environment in a session of its own (on macOS
-    # psutil cannot read a platform binary's environment either).
-    import subprocess
-
-    launched = launch("server", [sys.executable, "-c", "pass"])
+    # shown unmarked, so the cleanup is not verified. The repro: the launch
+    # leaves /bin/sleep, exec'd with an empty environment in a session of
+    # its own, and exits, so init adopts it (on macOS psutil cannot read a
+    # platform binary's environment either).
+    pid_file = tmp_path / "orphan.pid"
+    launched = launch("server", [sys.executable, "-c", ORPHAN, str(pid_file)])
     launched.process.wait(timeout=5)
-    escapee = subprocess.Popen(["/bin/sleep", "60"], env={}, start_new_session=True)
+    orphan = int(pid_file.read_text())
     try:
         time.sleep(0.2)
         cleanup = verify_cleanup(
@@ -260,14 +269,13 @@ def test_an_unreadable_process_that_may_be_the_launchs_fails_the_cleanup() -> No
         (blind,) = [
             item
             for item in cleanup.to_record()["mark_search"]["blind"]
-            if item["pid"] == escapee.pid
+            if item["pid"] == orphan
         ]
         assert still_there(blind)
         # It may not be the launch's, so it is never killed.
-        assert escapee.pid not in cleanup.killed and escapee.poll() is None
+        assert orphan not in cleanup.killed and still_there(blind)
     finally:
-        escapee.kill()
-        escapee.wait()
+        os.kill(orphan, 9)
 
 
 def _table(monkeypatch: pytest.MonkeyPatch, table: dict[int, Any]) -> None:
@@ -280,9 +288,10 @@ def test_a_process_that_cannot_be_the_launchs_is_not_counted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Excluded: another user's (sudo's too), one older than the launch, and
-    # another process's child. An orphan or the runner's own child may be
-    # the launch's, whatever it runs: rev-213-a's N6(a) found an escapee
-    # running /usr/sbin/iostat cleared by a rule for launchd's executables.
+    # any process with a parent other than init, the runner included. An
+    # orphan may be the launch's, whatever it runs: rev-213-a's N6(a) found
+    # an escapee running /usr/sbin/iostat cleared by a rule for launchd's
+    # executables.
     from stormlog.infer import experiment_process as ep
 
     runner, uid = os.getpid(), os.getuid()
@@ -306,7 +315,7 @@ def test_a_process_that_cannot_be_the_launchs_is_not_counted(
     }
     assert found == {
         10: True,
-        11: True,
+        11: False,
         12: False,
         13: False,
         14: False,

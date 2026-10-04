@@ -369,8 +369,9 @@ Any `blind` process keeps the cleanup from verifying, holds a resume like a
 survivor, and is never killed, since it may be another's. A process is not
 the launch's when another user runs it (so anything run under `sudo` is
 excluded too, and `sudo` strips the mark anyway), when it started more than
-2 s before the launch, or when its parent is neither the runner nor `init`
-(an escapee whose parent died is adopted by `init`). Start times are
+2 s before the launch, or when its parent is not `init` (a launch's
+process that left its group and session is an orphan, adopted by `init`;
+any other parent shows whose it is). Start times are
 compared in the processes' own clock (ticks since boot, or `psutil`'s
 creation time), so a wall-clock step does not matter. An orphan adopted by a
 subreaper other than `init` is missed, and so is a descendant that exec'd
