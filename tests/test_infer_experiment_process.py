@@ -10,10 +10,12 @@ from pathlib import Path
 import pytest
 
 from stormlog.infer.experiment_process import (
+    identify,
     launch,
     parse_cpu_list,
     remembered_tree,
     run_step,
+    still_there,
     stop,
     verify_cleanup,
     wait_for_file,
@@ -138,3 +140,22 @@ def test_the_mark_is_not_a_difference_between_runs() -> None:
     from stormlog.infer.config_classes import LABEL, field_class
 
     assert field_class("environ.STORMLOG_RUN_MARK") == LABEL
+
+
+def test_a_survivor_is_known_by_its_start_time_as_well_as_its_pid() -> None:
+    import subprocess
+
+    process = subprocess.Popen(["/bin/sleep", "60"])
+    try:
+        survivor = identify(process.pid)
+        assert survivor["pid"] == process.pid
+        assert still_there(survivor)
+        # The same PID, started at another time, is another process.
+        other = {k: (v + 1 if k != "pid" else v) for k, v in survivor.items()}
+        assert not still_there(other)
+    finally:
+        process.kill()
+        process.wait()
+    assert not still_there(survivor)
+    # A survivor recorded without its start time cannot be told apart.
+    assert not still_there({"pid": os.getpid()})

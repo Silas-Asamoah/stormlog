@@ -33,7 +33,8 @@ first workload step started.
 
 A cleanup that left processes, a run's or a prelude's, stops the
 experiment: nothing more starts beside them. Every planned run after it is
-indexed ``not_run``, and a resume runs them once the host is clean.
+indexed ``not_run``, and a resume runs them once the host is clean: it
+refuses while a survivor, known by its PID and start time, still runs.
 
 A run whose runner was killed (a preempted box, an operator's abort) leaves
 its attempt in ``runs/<label>.partial`` with no state. A resume refuses to
@@ -55,7 +56,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,7 @@ from .experiment_process import (
     process_key,
     remembered_tree,
     run_step,
+    still_there,
     stop,
     unexpected_roles,
     verify_cleanup,
@@ -215,6 +217,8 @@ def run_plan(
     """
     causes = dict(external_causes or {})
     _check_interrupted(output_dir, causes, set(interrupted_as_outcome), resume)
+    if resume:
+        _check_nothing_left(output_dir)
     env = environment or Environment(secrets=_secrets(plan))
     order = plan_order(plan)
     _prepare(plan, order, output_dir, resume)
@@ -290,6 +294,33 @@ def _check_interrupted(
             "(external_causes, --external-cause) or mark it an outcome "
             "(interrupted_as_outcome, --interrupted-as-outcome)"
         )
+
+
+def _check_nothing_left(output: Path) -> None:
+    """Refuse to resume while a process an earlier cleanup left still runs."""
+    for where, cleanup in _cleanups(output):
+        if cleanup.get("verified") is not False:
+            continue
+        running = [s["pid"] for s in cleanup.get("survivors", []) if still_there(s)]
+        if running:
+            pids = ", ".join(str(pid) for pid in running)
+            raise InferInputError(
+                f"{where}: its cleanup left {pids} running; stop it, then resume"
+            )
+
+
+def _cleanups(output: Path) -> Iterator[tuple[str, Mapping[str, Any]]]:
+    """Every cleanup the experiment recorded: each run's server and
+    treatments, and each prelude's server."""
+    for path in sorted((output / "runs").glob("*/run.json")):
+        record = json.loads(path.read_text())
+        if record.get("cleanup"):
+            yield path.parent.name, record["cleanup"]
+        for process in record.get("processes", []):
+            if process.get("cleanup"):
+                yield f"{path.parent.name} {process['name']}", process["cleanup"]
+    for path in sorted((output / "preludes").glob("*/cleanup.json")):
+        yield f"prelude {path.parent.name}", json.loads(path.read_text())
 
 
 def _interrupted_labels(runs: Path) -> set[str]:
@@ -1003,11 +1034,14 @@ class _Run:
             if code not in treatment.expect_exit and not unhealthy:
                 self.record.outcome(f"treatment_failed:{name}:{code}")
             # Whatever it started must not run on into the next run.
-            if not verify_cleanup(launched.pid, mark=launched.mark).verified:
+            cleanup = verify_cleanup(launched.pid, mark=launched.mark)
+            if not cleanup.verified:
                 self.record.protocol(
                     f"treatment_cleanup_unverified:{name}", before_treatment=False
                 )
-            self.record.processes.append(launched.to_record())
+            self.record.processes.append(
+                {**launched.to_record(), "cleanup": cleanup.to_record()}
+            )
 
     # Steps ----------------------------------------------------------------
 
