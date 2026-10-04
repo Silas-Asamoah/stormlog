@@ -838,6 +838,44 @@ def test_a_bounded_sink_on_a_healthy_disk_flushes_instead_of_dropping(
     assert [r["seq"] for r in _segment_records(segment)] == list(range(200))
 
 
+def test_a_bounded_buffer_holds_what_it_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tiny records kept as a list of bytes objects held 5.7 times the bound,
+    and the flush joined them into one more copy."""
+    import tracemalloc
+
+    bound = 256 * 1024
+    sink = _bounded_sink(
+        tmp_path,
+        max_buffer_bytes=bound,
+        flush_every_events=1_000_000,
+        failure_backoff_seconds=3600.0,
+        failure_backoff_max_seconds=3600.0,
+    )
+    sink.append({"s": 0})
+    disk = _FailingDisk(monkeypatch, partial=False)
+    sink.flush(force=True)  # fails: the next retry is an hour away
+    tracemalloc.start()
+    try:
+        held_before = tracemalloc.get_traced_memory()[0]
+        while not sink.failure_diagnostics()["dropped_records"]:
+            sink.append({"s": 1})
+        held = tracemalloc.get_traced_memory()[0] - held_before
+        disk.failing = False
+        sink._flush_retry_at = 0.0
+        tracemalloc.reset_peak()
+        before_flush = tracemalloc.get_traced_memory()[0]
+        sink.flush(force=True)
+        flush_peak = tracemalloc.get_traced_memory()[1] - before_flush
+    finally:
+        tracemalloc.stop()
+    assert held < 1.25 * bound
+    assert flush_peak < 64 * 1024
+    assert sink.failure_diagnostics()["buffered_records"] == 0
+    sink.close()
+
+
 def test_bounded_mode_settings_are_validated(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_buffer_bytes"):
         TelemetrySinkConfig(root_dir=tmp_path, max_buffer_bytes=0)

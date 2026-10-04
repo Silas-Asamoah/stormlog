@@ -119,7 +119,9 @@ class AppendOnlyTelemetrySink:
         self._sessions: dict[str, SessionSummary] = {}
         self._active_session_id: str | None = None
         self._next_segment_index = 1
-        self._buffer: list[bytes] = []
+        # One buffer: what it holds is what buffered_bytes counts, and a
+        # flush writes it as it is, with no joined copy.
+        self._buffer = bytearray()
         self._buffered_event_count = 0
         self._buffered_bytes = 0
         self._fd: int | None = None
@@ -185,7 +187,7 @@ class AppendOnlyTelemetrySink:
                     self._dropped_records += 1
                     self._dropped_bytes += len(line)
                     return
-            self._buffer.append(line)
+            self._buffer += line
             self._buffered_event_count += 1
             self._buffered_bytes += len(line)
             self._flush_locked(force=False)
@@ -283,9 +285,9 @@ class AppendOnlyTelemetrySink:
                 return
 
         current = self._ensure_current_segment_locked()
-        payload = b"".join(self._buffer)
         try:
-            self._write_payload_locked(current, payload)
+            with memoryview(self._buffer) as payload:  # released however it ends
+                self._write_payload_locked(current, payload)
         except OSError as exc:
             self._record_flush_failure_locked(exc, now)
             if not self._bounded:
@@ -293,8 +295,8 @@ class AppendOnlyTelemetrySink:
             return
 
         current.event_count += self._buffered_event_count
-        current.size_bytes += len(payload)
-        self._buffer.clear()
+        current.size_bytes += len(self._buffer)
+        self._buffer = bytearray()
         self._buffered_event_count = 0
         self._buffered_bytes = 0
         self._last_flush_monotonic = now
@@ -319,7 +321,7 @@ class AppendOnlyTelemetrySink:
                 raise
 
     def _write_payload_locked(
-        self, current: TelemetrySinkSegment, payload: bytes
+        self, current: TelemetrySinkSegment, payload: memoryview
     ) -> None:
         """Append every byte and fsync, or cut the segment back as it was.
 
@@ -362,7 +364,7 @@ class AppendOnlyTelemetrySink:
             return
         self._dropped_records += self._buffered_event_count
         self._dropped_bytes += self._buffered_bytes
-        self._buffer.clear()
+        self._buffer = bytearray()
         self._buffered_event_count = 0
         self._buffered_bytes = 0
 
@@ -669,7 +671,7 @@ class AppendOnlyTelemetrySink:
         return merged
 
 
-def _write_all(fd: int, payload: bytes) -> None:
+def _write_all(fd: int, payload: bytes | memoryview) -> None:
     """Write every byte; a short write continues, an error raises."""
     view = memoryview(payload)
     while view:
