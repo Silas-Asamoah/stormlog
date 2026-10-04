@@ -38,6 +38,18 @@ COMPONENT_PROMETHEUS = "export.prometheus"
 METRIC_QUEUE_ITEMS = 65_536
 METRIC_QUEUE_BYTES = 8 * 1024 * 1024
 HEALTH_INTERVAL_SECONDS = 1.0
+# The textfile's final write gets at least this long, whatever is left of
+# the close's deadline: it renders once and writes one file.
+TEXTFILE_CLOSE_FLOOR_SECONDS = 0.5
+# The steps of a close, in order; each runs once, across calls.
+_CLOSE_STEPS = (
+    "_close_queue",
+    "_join_worker",
+    "_stop_poller",
+    "_freeze",
+    "_invalidate",
+    "_close_textfile",
+)
 # Drops within this window make the pipeline report itself degraded.
 HEALTH_WINDOW_SECONDS = 60
 
@@ -141,6 +153,7 @@ class ExportPipeline:
         self._worker: threading.Thread | None = None
         self._poller: threading.Thread | None = None
         self._closed = False
+        self._close_done: set[str] = set()
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------- set-up
@@ -284,20 +297,38 @@ class ExportPipeline:
 
     # ------------------------------------------------------------- the end
     def close(self, deadline: float) -> None:
-        """Stop, drain within ``deadline`` seconds, freeze. Idempotent; never raises."""
-        with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-        try:
-            self._close(time.monotonic() + max(0.0, deadline))
-        except Exception:
-            self._error("close")
+        """Stop, drain within ``deadline`` seconds, freeze; never raises an error.
 
-    def _close(self, until: float) -> None:
+        The steps run in order, each once across calls. An interrupt, such as
+        a Ctrl+C, inside one ends that step; the steps after it then run
+        without waiting, and the interrupt propagates once they are done. A
+        later close finishes any step an interrupt kept from starting.
+        """
+        with self._lock:
+            self._closed = True
+            pending = [step for step in _CLOSE_STEPS if step not in self._close_done]
+        until = time.monotonic() + max(0.0, deadline)
+        interrupt: BaseException | None = None
+        for step in pending:
+            try:
+                getattr(self, step)(until if interrupt is None else 0.0)
+            except Exception:
+                self._error("close")
+            except BaseException as exc:  # KeyboardInterrupt, SystemExit
+                interrupt = interrupt or exc
+            finally:
+                self._close_done.add(step)
+        if interrupt is not None:
+            raise interrupt
+
+    def _close_queue(self, until: float) -> None:
         self.queue.close()
+
+    def _join_worker(self, until: float) -> None:
         if self._worker is not None:
             self._worker.join(max(0.0, until - time.monotonic()))
+
+    def _stop_poller(self, until: float) -> None:
         self._stop_health.set()
         poller = self._poller
         if poller is not None:
@@ -305,11 +336,18 @@ class ExportPipeline:
         # A last read of the sources, unless one is stuck in the poller.
         if poller is None or not poller.is_alive():
             self._poll_sources()
+
+    def _freeze(self, until: float) -> None:
         self.registry.freeze(final=self._final_counts)
+
+    def _invalidate(self, until: float) -> None:
         # Renders from before the freeze no longer show the final values.
         self.renders.invalidate()
+
+    def _close_textfile(self, until: float) -> None:
         if self.textfile is not None:
-            self.textfile.close(max(0.0, until - time.monotonic()))
+            left = until - time.monotonic()
+            self.textfile.close(max(left, TEXTFILE_CLOSE_FLOOR_SECONDS))
 
     def _final_counts(self) -> None:
         # Under the registry's lock: no record can be applied meanwhile, so

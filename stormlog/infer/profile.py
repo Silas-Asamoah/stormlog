@@ -207,18 +207,24 @@ class InferenceProfiler:
             self._end_export(interrupted=sys.exc_info()[0] is not None)
 
     def _end_export(self, *, interrupted: bool) -> None:
-        """Close (a no-op after the capture closed it), linger, stop serving."""
+        """Close (a no-op after the capture closed it), linger, stop serving.
+
+        The close here is the first one when the capture never reached its
+        own, so it has the interrupted run's deadline, not none.
+        """
         export = self.export
         if export is None:
             return
-        export.close(0.0)
-        linger = self.config.export.prometheus_linger_seconds
-        if linger > 0 and not interrupted and export.server is not None:
-            try:
-                time.sleep(linger)
-            except KeyboardInterrupt:
-                pass  # Ctrl+C during the linger only ends the linger
-        export.stop_serving()
+        try:
+            export.close(EXPORT_INTERRUPT_CLOSE_SECONDS)
+            linger = self.config.export.prometheus_linger_seconds
+            if linger > 0 and not interrupted and export.server is not None:
+                try:
+                    time.sleep(linger)
+                except KeyboardInterrupt:
+                    pass  # Ctrl+C during the linger only ends the linger
+        finally:
+            export.stop_serving()
 
     async def _run_async(self) -> dict[str, Any]:
         output_path = Path(self.config.output_path)
@@ -414,14 +420,17 @@ class InferenceProfiler:
                     stop_spans.set()
                     await _wait_for(span_task)
                     self._stop_span_receiver(writer)
-                    # Before the capability records, so the export's counts
-                    # in them are final; synchronous, so a cancellation
-                    # cannot skip it.
-                    self._close_export(completed)
-                    # Written on the way out of an interrupted run too, so
-                    # the artifact says what the engine exposed before it
-                    # says why the run stopped.
-                    self._write_capabilities(writer)
+                    try:
+                        # Before the capability records, so the export's
+                        # counts in them are final; synchronous, so a
+                        # cancellation cannot skip it, and an interrupt
+                        # inside it still finishes it.
+                        self._close_export(completed)
+                    finally:
+                        # Written on the way out of an interrupted run too,
+                        # so the artifact says what the engine exposed
+                        # before it says why the run stopped.
+                        self._write_capabilities(writer)
 
     def _start_export(self) -> None:
         export = self.export

@@ -109,6 +109,48 @@ def test_close_applies_what_was_queued_then_freezes(tmp_path: Path) -> None:
     assert exposition.value("stormlog_run_active") == 0
 
 
+def test_an_interrupted_close_finishes_and_a_later_close_is_a_no_op(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline = ExportPipeline(
+        ExportConfig(prometheus_textfile_dir=tmp_path, prometheus_slot="t"), LABELS
+    )
+    pipeline.start(started_at=1_700_000_000.0)
+    pipeline.observe(_request())
+    worker = pipeline._worker
+    assert worker is not None
+
+    def interrupted_join(timeout: float | None = None) -> None:
+        raise KeyboardInterrupt  # a second Ctrl+C while the close waits
+
+    monkeypatch.setattr(worker, "join", interrupted_join)
+    with pytest.raises(KeyboardInterrupt):
+        pipeline.close(2.0)
+    monkeypatch.undo()
+    # Every step after the interrupted one ran: frozen, final file, lock freed.
+    assert pipeline.registry.frozen
+    text = (tmp_path / "stormlog-t.prom").read_text()
+    assert check_exposition(text).value("stormlog_run_active") == 0
+    assert not (tmp_path / "stormlog-t.lock").exists()
+    pipeline.close(0.0)  # the run's fallback close
+    pipeline.stop_serving()
+
+
+def test_a_first_close_with_no_time_left_still_writes_the_final_file(
+    tmp_path: Path,
+) -> None:
+    pipeline = ExportPipeline(
+        ExportConfig(prometheus_textfile_dir=tmp_path, prometheus_slot="t"), LABELS
+    )
+    pipeline.start(started_at=1_700_000_000.0)
+    pipeline.close(0.0)
+    text = (tmp_path / "stormlog-t.prom").read_text()
+    assert check_exposition(text).value("stormlog_run_active") == 0
+    assert not (tmp_path / "stormlog-t.lock").exists()
+    assert pipeline.summary()["textfile"]["abandoned"] is False
+    pipeline.stop_serving()
+
+
 def test_records_a_paused_worker_never_applied_are_dropped_at_shutdown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
