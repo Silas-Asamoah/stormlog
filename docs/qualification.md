@@ -816,7 +816,10 @@ written), SIGTERM, SIGHUP and SIGINT are held until it is published: the
 first cuts the victim's drain short with SIGINT, so the victim still records
 its end, and a second kills it. The run is then recorded as interrupted, and
 `inject` exits as the first such signal would have, once the run is
-published.
+published. The signals are held from the moment the episodes end, inside
+the run's own handler, so none can slip between the episodes and the finish.
+A third is not held: a publish that hangs (a full disk) can still be ended,
+by whatever handled the signal before.
 
 **The run directory** is named by an opaque label, `q221-<16 hex>`, that says
 nothing about its episodes:
