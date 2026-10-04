@@ -179,8 +179,10 @@ trigger's first violating window, at most `pre_seconds`; an exporter restart
 or a test trigger, which has no window, reaches back the whole
 `pre_seconds`. Its post-window runs `post_seconds` past the firing. Firings
 within the post-window, its last instant included, join it, and widen its
-pre-window to their own: at most 16 triggers in one incident. A test
-trigger never joins an incident and is never joined.
+pre-window to their own: at most 16 triggers in one incident. A joining
+trigger that counts toward the exit code makes the incident count, and a
+metric or signal trigger joining a health incident takes it out of
+`health_only`. A test trigger never joins an incident and is never joined.
 
 When the post-window ends, the incident is sealed: its windows, the scrapes
 inside them and its `infer.incident` record go into `gen-0/incident.jsonl`
