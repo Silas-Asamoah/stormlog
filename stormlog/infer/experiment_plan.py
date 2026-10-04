@@ -126,6 +126,9 @@ class ExperimentPlan:
     affinity_disjoint: bool = False
     prereg: Mapping[str, Any] | None = None
     digest: str = ""
+    # The arm others' launches are judged against: a server that an arm's own
+    # launch keeps from starting is that arm's outcome.
+    control_arm: str | None = None
 
     @property
     def prereg_digest(self) -> str | None:
@@ -188,9 +191,23 @@ def plan_from_document(document: Any) -> ExperimentPlan:
         affinity_disjoint=bool(document.get("affinity_disjoint", False)),
         prereg=document.get("prereg"),
         digest=_digest(document),
+        control_arm=_control_arm(document.get("control_arm"), arms),
     )
     _check_placeholders(plan)
     return plan
+
+
+def _control_arm(raw: Any, arms: Mapping[str, Arm]) -> str | None:
+    """The named control arm, or else the one arm that launches the plan's
+    server as it is; None when no arm, or more than one, does."""
+    if raw is not None:
+        if raw not in arms:
+            raise ValueError(f"control_arm {raw!r} is not an arm")
+        return str(raw)
+    bare = [
+        name for name, arm in arms.items() if not arm.server_args and not arm.server_env
+    ]
+    return bare[0] if len(bare) == 1 else None
 
 
 def _check_header(document: Any) -> None:

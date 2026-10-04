@@ -122,7 +122,10 @@ the flaky benchmark memory gates
   server before measuring, and a `/server_info` that does not answer
   (`probe_incomplete`) is retried once on a fresh server. Each run ends
   `completed`, `outcome_failure` (kept as data) or `protocol_failure` (set
-  aside, retryable), recorded in `index.jsonl`. A cleanup that left
+  aside, retryable), recorded in `index.jsonl`; a server that never became
+  healthy is its arm's outcome when the arm's own launch differs from the
+  plan's `control_arm` and the control's server came up in the block
+  (`decided_by`). A cleanup that left
   processes, a run's or a prelude's, stops the experiment, and the runs it
   left are indexed `not_run` for a resume, which refuses while a survivor
   still runs; resumes refuse a changed
