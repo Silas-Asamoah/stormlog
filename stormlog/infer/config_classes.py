@@ -15,9 +15,9 @@ Every field has a class:
 by JSON pointer; the longest pointer that covers a leaf decides. A leaf that
 no pointer covers is ``unclassified`` and blocks a comparison it differs in:
 a configuration hash alone never allows a difference. The launch entries
-come from vLLM 0.30.0's source; two identical launches on the GPU host
-measure which leaves really vary, and the table is versioned so a change to
-it is visible.
+come from vLLM 0.30.0's source. Two identical launches (Qwen2.5-0.5B on an
+A30) had 406 leaves, all classified, and differed only in ``/instance_id``.
+The table is versioned so that a change to it is visible.
 """
 
 from __future__ import annotations
