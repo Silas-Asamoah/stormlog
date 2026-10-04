@@ -109,7 +109,7 @@ its **outcome failures**, which never do.
 
 | Protocol failure | When |
 | --- | --- |
-| `external:<reason>` | An experiment runner recorded an external cause in an `infer.run_state` record: a preemption, an operator abort, a server that never became healthy, a failed prelude |
+| `external:<reason>` | An experiment runner recorded an external cause in an `infer.run_state` record with state `protocol_failure`: a preemption, an operator abort, a server that never became healthy, a failed prelude |
 | `identity_changed` | The server's identity changed between its before and after descriptions |
 | `description_mismatch` | The before description disagrees with the server the probe reached: its model, vLLM version or driver |
 | `probe_incomplete` | The server probe's `/server_info` did not answer in time, or the server dropped it unanswered |
@@ -117,12 +117,15 @@ its **outcome failures**, which never do.
 | `cache_reset_not_acknowledged` (a case) | A cold cache was asked for and no reset was acknowledged |
 
 A run that did not finish (`session_<status>`: `interrupted`, `incomplete`,
-or no terminal record) is an **outcome**, like failed requests, timeouts or
-a candidate that served nothing: the treatment may have stopped it, so it
-is compared, not set aside. Outcome beats protocol: unless an external
-cause is recorded, such a run's run-level faults (`identity_changed`,
-`probe_incomplete`, `description_mismatch`) are outcomes too, as is a
-cohort it cut short (`phase_window_missing`, `records_missing`). A case a
+or no terminal record) is an **outcome**, like failed requests, timeouts, a
+candidate that served nothing, or an outcome a runner recorded
+(`runner:<reason>`, from `infer.run_state` with state `outcome_failure`: a
+server that exited, a step that failed or timed out, a treatment that
+stopped early): the treatment may have caused it, so it is compared, not
+set aside. Outcome beats protocol: unless an external cause is recorded,
+such a run's run-level faults (`identity_changed`, `probe_incomplete`,
+`description_mismatch`) are outcomes too, as is a cohort an unfinished run
+cut short (`phase_window_missing`, `records_missing`). A case a
 run lacks is an outcome as well. Where such a run has no value for a
 metric, the outcome cannot be recovered: a candidate's gate on it fails
 (`outcome_unrecoverable`), and a baseline's leaves it `not_evaluable`

@@ -176,3 +176,28 @@ def test_an_unfinished_run_keeps_its_run_faults_as_outcomes() -> None:
         "probe_incomplete",
         "external:preempted",
     )
+
+
+def test_an_outcome_the_runner_recorded_is_kept_and_outranks_protocol() -> None:
+    # The server died during the treatment and came back with a new identity:
+    # the runner's precedence already made it an outcome.
+    probe = {"event_type": "infer.server_probe", "phase": "after", "incomplete": True}
+    state = {
+        "event_type": "infer.run_state",
+        "state": "outcome_failure",
+        "reasons": ["server_exited:-9"],
+        "before_treatment": [],
+    }
+    report = {"manifest": {"protocol_failure": "identity_changed"}}
+    summary = _summary(report, probe, state)
+    assert summary.protocol_failures == ()
+    assert summary.outcome_failures == (
+        "runner:server_exited:-9",
+        "identity_changed",
+        "probe_incomplete",
+    )
+    completed = {**state, "state": "completed", "reasons": []}
+    assert _summary(report, probe, completed).protocol_failures == (
+        "identity_changed",
+        "probe_incomplete",
+    )
