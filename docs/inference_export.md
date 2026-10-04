@@ -114,9 +114,9 @@ Histogram bucket bounds are fixed, in seconds:
 
 | Histogram | Bounds |
 | --- | --- |
-| request duration, latency from intended | 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 30 60 120 |
+| request duration, latency from intended | 0.05 0.1 0.25 0.5 1 2 5 10 15 20 30 45 60 90 120 180 300 600 |
 | time to first token, time to first chunk | 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 30 |
-| chunk interarrival | 0.001 0.0025 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 30 |
+| chunk interarrival | 0.001 0.0025 0.005 0.01 0.025 0.05 0.1 0.15 0.2 0.25 0.5 1 2.5 5 10 30 |
 | dispatch lag | 0.0005 0.001 0.0025 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 |
 | scrape duration | 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 |
 
@@ -137,13 +137,13 @@ gives both figures. For a closed-loop matrix with scraping and traces on:
 
 | Cases | Samples | Largest scrape |
 | --- | --- | --- |
-| 2 | about 700 | about 0.3 MiB |
-| 20 | about 4,500 | about 1 MiB |
-| 200 | about 43,000 | about 9 MiB |
-| 300 | about 64,000: refused at the default | about 13 MiB |
+| 2 | about 780 | about 0.3 MiB |
+| 20 | about 5,000 | about 1.2 MiB |
+| 200 | about 48,000 | about 9.7 MiB |
+| 300 | about 71,000: refused at the default | about 14 MiB |
 
-Most of a case's samples are its five client histograms: 17 samples each, per
-phase. For a larger matrix, raise the limits or pass
+Most of a case's samples are its five client histograms: 15 to 21 samples
+each, per phase. For a larger matrix, raise the limits or pass
 `--prometheus-case-label off`.
 
 A configured value longer than 64 characters, such as a long model path,
