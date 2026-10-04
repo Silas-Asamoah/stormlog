@@ -417,18 +417,22 @@ be at least 0.947:
 
 **The run-level attainment gate**, at the supremum of a false claim: the
 pass rate rises with the true share of runs that meet the target, so its
-largest value below q is at q itself (exact binomial pass rates). Only cells
-where the gate can pass at all are shown: n runs show at most a share of
-`0.025^(1/n)`, so 6 runs need 6 of 6 at q = 0.5 and 8 runs 8 of 8 (7 of 8
-gives 0.47), and no 10 runs can show q = 0.9.
+largest value below q is at q itself (exact binomial pass rates). n runs
+show at most a share of `0.025^(1/n)`, so 6 runs need 6 of 6 at q = 0.5 and
+8 runs 8 of 8 (7 of 8 gives 0.47). A cell where the gate cannot pass at all
+measures nothing, so it is marked, with the fewest runs that could pass:
 
 | Runs | q, and the true share of runs meeting the target | Pass rate |
 | --- | --- | --- |
 | 6 | 0.5 | 1.56% |
+| 6 | 0.6 | cannot pass (needs 8 runs) |
+| 6 | 0.8 | cannot pass (needs 17 runs) |
 | 8 | 0.5 | 0.39% |
 | 8 | 0.6 | 1.68% |
+| 8 | 0.8 | cannot pass (needs 17 runs) |
 | 10 | 0.5 | 1.07% |
 | 10 | 0.6 | 0.60% |
+| 10 | 0.8 | cannot pass (needs 17 runs) |
 | 30 | 0.5 | 2.14% |
 | 30 | 0.6 | 1.72% |
 | 30 | 0.8 | 1.05% |
@@ -438,7 +442,7 @@ probability 0.7 and otherwise misses 2% of requests; the claim that a run
 meets 0.99 with probability 0.8 is false), the run-level gate almost never
 passes; pooling requests as if they were independent passes most of the
 time, which is why `--attainment-model bernoulli` is labelled model-based.
-Fewer than 30 runs cannot show a share of 0.8 at all:
+Fewer than 17 runs cannot show a share of 0.8 at all:
 
 | Runs | Run-level gate | Pooled requests (`bernoulli`) |
 | --- | --- | --- |
