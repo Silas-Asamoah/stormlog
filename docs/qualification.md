@@ -113,7 +113,8 @@ exposure from it and the run's episodes (`negative_exposure`).
    p < 0.05. A missed SLO, an unreachable request included, is a violation;
    an unknown outcome is not. It gives `partial` (reason
    `slo_evidence_coverage`) when outcomes are known for less than 0.9 of the
-   window's requests.
+   window's requests, and (reason `no_baseline_outcomes`) when no baseline
+   outcome is known to compare with.
 
 **Status.** `decide_status` returns the first failure, in this order:
 

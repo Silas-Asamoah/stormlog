@@ -365,3 +365,12 @@ def test_a_run_record_round_trips(tmp_path: Path) -> None:
         parse_run(record)
     with pytest.raises(GroundTruthError, match="format"):
         parse_run({"format": "other"})
+
+
+def test_impact_without_baseline_outcomes_is_partial() -> None:
+    # With nothing known in the baseline there is nothing to compare with:
+    # Fisher's p of 1.0 would read as no impact.
+    alone = assess_impact(
+        OutcomeCounts(violations=9, met=31), OutcomeCounts(unknown=12)
+    )
+    assert (alone.status, alone.reason) == (IMPACT_PARTIAL, "no_baseline_outcomes")
