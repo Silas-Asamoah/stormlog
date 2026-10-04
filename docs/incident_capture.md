@@ -163,7 +163,7 @@ The session record in the ledger holds the resolved configuration, every
 trigger as resolved (its `W`, `F`, `C`, `G`, clear tolerance, policy and
 predicate), its SHA-256 digest, so two configs that watch the same way have
 the same digest, and for each trigger the shortest violation that can fire
-it and its detection bound in seconds. The `export` section, which may hold
+it (`F − W − Δ`, at least 0) and its detection bound in seconds. The `export` section, which may hold
 credentials, is #220's and is left out of both. The watcher evaluates its triggers as
 each scrape returns, so an evaluation can run up to `scrape_timeout_seconds`
 after its tick: the bound counts that lateness (`j` in "A lasting violation

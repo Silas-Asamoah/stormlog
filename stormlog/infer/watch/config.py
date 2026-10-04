@@ -158,7 +158,7 @@ class WatchConfig:
             "guarantees": {
                 spec.trigger_id: {
                     "shortest_firing_violation_seconds": (
-                        spec.sustain.shortest_firing_violation()
+                        spec.sustain.shortest_firing_violation(self.tick_seconds)
                     ),
                     # Each evaluation can run up to a scrape timeout late.
                     "detection_bound_seconds": spec.sustain.detection_bound(
