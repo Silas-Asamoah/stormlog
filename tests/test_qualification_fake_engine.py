@@ -67,6 +67,29 @@ def test_a_whole_completion_answers_once() -> None:
     assert body["usage"]["completion_tokens"] == 3
 
 
+@pytest.mark.parametrize(
+    ("asked", "expected"),
+    [
+        ({}, 4096 - 9),
+        ({"max_tokens": 3, "max_completion_tokens": 2}, 2),
+        ({"max_tokens": 3, "max_completion_tokens": None}, 3),
+        ({"max_tokens": 10_000}, 4096 - 9),
+    ],
+)
+def test_a_requests_token_cap_follows_vllm_030(
+    asked: dict[str, object], expected: int
+) -> None:
+    # vLLM 0.30's get_max_tokens: max_completion_tokens wins, and the cap
+    # is the model's room after the prompt (max_model_len 4096), which is
+    # also the default; the fake engine used 16.
+    with FakeEngine(FAST) as engine:
+        body = {"messages": [{"role": "user", "content": words(5, "a")}], **asked}
+        request = engine.new_request(body, None, None)
+        assert request.prompt_len == 9  # the template, then five words
+        engine.engine.abort(request)
+    assert request.max_tokens == expected
+
+
 def test_request_ids_follow_vllm_030() -> None:
     with FakeEngine(FAST) as engine:
         chat(engine, "x", request_id="stormlog-run-1-c1_0")

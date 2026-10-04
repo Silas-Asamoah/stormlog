@@ -180,12 +180,18 @@ class FakeEngine:
             for message in body.get("messages") or []
             if isinstance(message, dict)
         )
-        limit = body.get("max_tokens") or body.get("max_completion_tokens") or 16
+        prompt = prompt_tokens(text)
+        # vLLM 0.30's get_max_tokens: max_completion_tokens before max_tokens,
+        # and never past the model's room after the prompt, the default.
+        asked = body.get("max_completion_tokens")
+        if asked is None:
+            asked = body.get("max_tokens")
+        room = MAX_MODEL_LEN - len(prompt)
         request = FakeRequest(
             internal_id=internal,
             external_id=external,
-            prompt=prompt_tokens(text),
-            max_tokens=max(1, int(limit)),
+            prompt=prompt,
+            max_tokens=max(1, room if asked is None else min(int(asked), room)),
             arrival_ns=time.time_ns(),
             traceparent=traceparent,
             top_p=_sampling(body, "top_p"),
