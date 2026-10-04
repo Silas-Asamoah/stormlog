@@ -95,6 +95,11 @@ the flaky benchmark memory gates
   comparison: its report, labels, comparable fields, and protocol failures
   (unfinished session, identity change, incomplete probe, invalid cohort,
   unacknowledged cold-cache reset). (#213)
+- `stormlog.infer.experiment_plan`: experiment plans
+  (`stormlog.infer.experiment_plan` v1) with arms, workload steps (shared with
+  `same_as:<arm>`), treatments, block preludes, a seeded `random`, `williams`
+  or `explicit` order, one seed per block shared by every arm, and command
+  templates whose placeholders are checked when the plan loads. (#213)
 - Segments: `infer compare --segment NAME=START:END` (and
   `analyze_inference_events(segments=...)`) compare a slice of each case's
   measured phase as a case of its own, `<case>/<segment>`, with its own
