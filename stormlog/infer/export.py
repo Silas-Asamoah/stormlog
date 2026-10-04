@@ -153,6 +153,7 @@ class ExportPipeline:
         self._counts = _Counts()
         self._drops = _DropWindow()
         self._stop_health = threading.Event()
+        self._stop_applying = threading.Event()
         self._worker: threading.Thread | None = None
         self._poller: threading.Thread | None = None
         self._closed = False
@@ -246,7 +247,9 @@ class ExportPipeline:
                     return
                 continue
             for envelope in batch:
-                if not self._apply(envelope):
+                # Past the close's wait the freeze must not queue behind
+                # the backlog: what is left is counted as a shutdown drop.
+                if self._stop_applying.is_set() or not self._apply(envelope):
                     return
 
     def _apply(self, envelope: Envelope) -> bool:
@@ -331,8 +334,11 @@ class ExportPipeline:
         self.queue.close()
 
     def _join_worker(self, until: float) -> None:
-        if self._worker is not None:
-            self._worker.join(max(0.0, until - time.monotonic()))
+        try:
+            if self._worker is not None:
+                self._worker.join(max(0.0, until - time.monotonic()))
+        finally:
+            self._stop_applying.set()
 
     def _stop_poller(self, until: float) -> None:
         self._stop_health.set()

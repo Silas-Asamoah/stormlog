@@ -277,12 +277,23 @@ def test_the_capability_record_has_the_counts_after_the_close(
     assert applied == summary["applied"]
 
 
-def test_a_ctrl_c_skips_the_linger(
+def test_a_ctrl_c_ends_a_lingering_run_within_the_close_deadline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # With the exporter far behind, a Ctrl+C still ends the run well within
-    # its 30 s linger.
+    # The interrupted close has 2 s, though the exporter is far behind, and
+    # the 30 s linger is skipped.
     _slow_worker(monkeypatch, delay=0.2)
+    closes: list[float] = []
+    real_close = ExportPipeline.close
+
+    def timed_close(self: ExportPipeline, deadline: float) -> None:
+        started = time.perf_counter()
+        try:
+            real_close(self, deadline)
+        finally:
+            closes.append(time.perf_counter() - started)
+
+    monkeypatch.setattr(ExportPipeline, "close", timed_close)
     output = tmp_path / "infer.jsonl"
     with _fake_server() as endpoint:
         config = _config(
@@ -307,6 +318,8 @@ def test_a_ctrl_c_skips_the_linger(
         finally:
             timer.cancel()
         assert time.perf_counter() - started < 20  # no 30 s linger
+    # The capture's close, then the run's, which has nothing left to do.
+    assert closes and closes[0] < 3.5 and sum(closes[1:]) < 0.5
     summary = _capability(_records(output))["metadata"]["summary"]["records"]
     assert summary["dropped"]["shutdown"] > 0  # it was behind when it stopped
 
