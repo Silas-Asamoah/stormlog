@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -114,6 +115,19 @@ def inference_opener() -> urllib.request.OpenerDirector:
         _TrackedHTTPHandler(),
         _TrackedHTTPSHandler(),
     )
+
+
+def ignored_proxies() -> dict[str, Any]:
+    """What the environment asked of proxies, which the opener ignores.
+
+    Only the schemes: a proxy's URL can carry its credentials.
+    """
+    schemes = {
+        name.lower()[: -len("_proxy")]
+        for name, value in os.environ.items()
+        if value and name.lower().endswith("_proxy")
+    }
+    return {"ignored": True, "schemes": sorted(schemes)}
 
 
 @dataclass(frozen=True)

@@ -40,6 +40,7 @@ from .openai_client import (
     EndpointHTTPError,
     NoResponseError,
     OpenAIChatCompletionsClient,
+    ignored_proxies,
 )
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
@@ -303,6 +304,7 @@ class InferenceProfiler:
                             if self.execution_dir is not None
                             else None
                         ),
+                        "environment_proxies": ignored_proxies(),
                     },
                 }
             )

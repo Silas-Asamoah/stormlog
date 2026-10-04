@@ -196,7 +196,9 @@ Request outcomes:
 Inference requests, and cache resets, ignore proxies set in the environment
 (`HTTP_PROXY`, `HTTPS_PROXY`). Through a proxy, the connection reaches the
 proxy, and a server that cannot be reached reads as the proxy's HTTP 502, an
-`error`, rather than as `unreachable`.
+`error`, rather than as `unreachable`. The session record says so
+(`config.environment_proxies`: `ignored`, and the schemes the environment
+set, never their URLs). To go through a proxy, point the endpoint at it.
 
 ### Prompts and prefix sharing
 

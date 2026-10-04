@@ -193,7 +193,13 @@ the flaky benchmark memory gates
   - `throughput.duration_seconds` is replaced by `interval_seconds`,
     `interval_kind` and `numerator_cohort`. The rate keys keep their names
     with the new denominator, so a consumer must check `analysis_version`
-    before reading any rate; `docs/inference.md` has a migration table.
+    before reading any rate:
+
+    | Version 1 | Version 2 |
+    | --- | --- |
+    | `throughput.duration_seconds`: first successful start to last successful end | `interval_seconds`, `interval_kind`, `numerator_cohort` |
+    | `requests_per_second`, `output_tokens_per_second`, `total_tokens_per_second` over `duration_seconds` | The same keys over `interval_seconds` |
+    | A rate over an empty span: `0.0` | `null`, with `intervals.rate_reason` |
   - A rate over an empty interval is `null`, not `0.0`, and so is every rate
     of an open loop with no known endpoint, such as a replay without
     `--duration` (`rate_reason: endpoint_undeclared`).
@@ -215,7 +221,8 @@ the flaky benchmark memory gates
   urllib re-sent a redirected POST as a GET to another address, so a 3xx is
   now recorded as `error` with its status. They also ignore proxies set in
   the environment, through which an unreachable server read as the proxy's
-  HTTP 502. (#213)
+  HTTP 502, and the session config records that they did
+  (`environment_proxies`). (#213)
 - **Breaking:** `gpumemprof`, `tfmemprof` and `jaxmemprof diagnose` exit 3
   for memory risk. They used to exit 2, which could not be told apart from
   an `argparse` usage error from the same command. The bundle manifest's

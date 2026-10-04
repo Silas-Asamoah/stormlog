@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import socket
 import threading
 import urllib.error
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +19,7 @@ from stormlog.infer.openai_client import (
     OpenAIChatCompletionsClient,
 )
 from stormlog.infer.profile import classify_failure
+from tests.infer_workload_helpers import run_profile_with_fake_client
 
 
 class _RedirectHandler(BaseHTTPRequestHandler):
@@ -210,3 +213,21 @@ def test_environment_proxies_are_not_used(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert classify_failure(raised.value) == ("unreachable", None)
     assert _RedirectHandler.posts == [] and _RedirectHandler.gets == []
+
+
+def test_the_session_records_the_proxies_it_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("http_proxy", "http://user:secret@proxy.example:3128")
+    for name in ("https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    run_profile_with_fake_client(tmp_path, latency_seconds=0.0, request_count=1)
+    records = [
+        json.loads(line) for line in (tmp_path / "infer.jsonl").read_text().splitlines()
+    ]
+    session = next(r for r in records if r.get("event_type") == "infer.session")
+    assert session["config"]["environment_proxies"] == {
+        "ignored": True,
+        "schemes": ["http"],
+    }
+    assert "secret" not in json.dumps(session)
