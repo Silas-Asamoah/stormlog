@@ -37,9 +37,10 @@ from typing import Any
 
 from scipy import stats
 
-from .compare_metrics import MetricSpec, default_metrics, evidence_coverage
+from .compare_metrics import RUN_MISSES, MetricSpec, default_metrics, evidence_coverage
 from .comparison_stats import (
     FAIL,
+    FRACTION_UNIT,
     INDEPENDENT,
     MIN_GATE_PAIRS,
     NOT_EVALUABLE,
@@ -1071,21 +1072,33 @@ def _metric_blocker(
     reasons: list[str],
     spec: ComparisonSpec,
 ) -> str | None:
-    """Why this metric's gate cannot be decided, from the runs' readings."""
+    """Why this metric's gate cannot be decided, from the runs' readings.
+
+    A fraction's run that could not be measured is a miss in its run-level
+    claim, as in ``compare_values``, not a reason the claim cannot be made.
+    """
+    if metric.unit == FRACTION_UNIT:
+        reasons = [reason for reason in reasons if reason not in RUN_MISSES]
     if reasons:
         return sorted(set(reasons))[0]
-    if metric.slo:
-        differs = _slo_blocker(case_id, kept)
-        if differs is not None:
-            return differs
-        coverages = [
-            evidence_coverage(run.comparable_cases[case_id])
-            for runs in kept.values()
-            for run in runs
-            if case_id in run.comparable_cases
-        ]
-        if any(c is None or c < spec.evidence_floor for c in coverages):
-            return "evidence_coverage_below_floor"
+    return _slo_metric_blocker(case_id, kept, spec) if metric.slo else None
+
+
+def _slo_metric_blocker(
+    case_id: str, kept: Mapping[str, list[RunSummary]], spec: ComparisonSpec
+) -> str | None:
+    """An SLO metric's policy must be one, and its evidence cover the floor."""
+    differs = _slo_blocker(case_id, kept)
+    if differs is not None:
+        return differs
+    coverages = [
+        evidence_coverage(run.comparable_cases[case_id])
+        for runs in kept.values()
+        for run in runs
+        if case_id in run.comparable_cases
+    ]
+    if any(c is None or c < spec.evidence_floor for c in coverages):
+        return "evidence_coverage_below_floor"
     return None
 
 

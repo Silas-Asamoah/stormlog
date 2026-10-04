@@ -35,6 +35,10 @@ UNMEASURABLE = "unmeasurable"
 NO_SLO = "no_slo_policy"
 RATE_UNAVAILABLE = "rate_unavailable"
 NO_VALUE = "no_value"
+POPULATION_UNRECORDED = "population_unrecorded"
+# A run whose fraction could not be measured: a miss in the run-level claim,
+# not a reason the claim cannot be made.
+RUN_MISSES = (UNMEASURABLE, POPULATION_UNRECORDED)
 LATENCY_KEYS = (
     "client.ttft",
     "client.e2e",
@@ -226,7 +230,7 @@ def _failure_fraction(case: Mapping[str, Any]) -> Reading:
     population = case.get("population") or {}
     offered, successful = population.get("offered"), population.get("successful")
     if not (is_number(offered) and is_number(successful)) or offered <= 0:
-        return None, "population_unrecorded"
+        return None, POPULATION_UNRECORDED
     return (offered - successful) / offered, None
 
 
