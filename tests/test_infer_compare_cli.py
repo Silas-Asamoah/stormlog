@@ -88,6 +88,22 @@ def test_the_json_envelope_is_a_valid_report_with_the_payload(
     assert report["verdict"]["exit_code"] == code
 
 
+def test_allow_within_arm_reaches_the_comparison(arms: dict[str, list[str]]) -> None:
+    code, out, _err = _compare(
+        "--baseline",
+        *arms["baseline"],
+        "--candidate",
+        *arms["slower"],
+        "--allow-within-arm",
+        "engine.max_num_seqs",
+        "--format",
+        "json",
+    )
+    assert code == ExitCode.OK
+    spec = json.loads(out)["payload"]["spec"]
+    assert (spec["allow"], spec["allow_within_arm"]) == ([], ["engine.max_num_seqs"])
+
+
 def test_a_gate_that_cannot_be_evaluated_exits_4_and_points_at_its_metric(
     arms: dict[str, list[str]],
 ) -> None:
