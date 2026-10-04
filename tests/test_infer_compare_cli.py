@@ -170,6 +170,64 @@ def test_runs_that_cannot_be_compared_exit_5_and_still_leave_a_report(
     assert report["findings"][0]["id"] == "inference.comparison.invalid_input"
 
 
+def test_an_unreadable_slo_file_exits_5_and_still_leaves_a_report(
+    arms: dict[str, list[str]], tmp_path: Path
+) -> None:
+    path = tmp_path / "comparison.json"
+    code, _out, err = _compare(
+        "--baseline",
+        *arms["baseline"],
+        "--candidate",
+        *arms["slower"],
+        "--slo-file",
+        str(tmp_path / "missing-slo.json"),
+        "--report",
+        str(path),
+    )
+    assert code == ExitCode.INVALID_INPUT
+    assert "SLO policy" in err
+    assert load_report(path)["verdict"]["exit_code"] == ExitCode.INVALID_INPUT
+
+
+def test_allowed_gates_that_could_not_be_evaluated_are_not_called_passed(
+    arms: dict[str, list[str]]
+) -> None:
+    code, out, _err = _compare(
+        "--baseline",
+        *arms["baseline"],
+        "--candidate",
+        *arms["slower"],
+        "--gate",
+        "client.e2e.p95=non-inferiority:0.05",
+        "--allow-not-evaluable",
+        "--format",
+        "json",
+    )
+    summary = json.loads(out)["verdict"]["summary"]
+    assert code == ExitCode.OK
+    assert not summary.startswith("every gate passed")
+    assert "could not be evaluated (allowed)" in summary
+
+
+def test_a_fallback_that_names_no_gate_is_a_usage_error(
+    arms: dict[str, list[str]]
+) -> None:
+    # Fallbacks belong to a gate by its METRIC text; one under another
+    # name would be ignored without a word.
+    code, _out, err = _compare(
+        "--baseline",
+        *arms["baseline"],
+        "--candidate",
+        *arms["slower"],
+        "--gate",
+        "goodput*=non-inferiority:0.05",
+        "--fallback",
+        "goodput_rps=0.5:requests_per_second",
+    )
+    assert code == ExitCode.USAGE
+    assert "names no --gate" in err
+
+
 def test_two_runs_of_one_arm_in_a_block_are_invalid_input(
     arms: dict[str, list[str]],
 ) -> None:

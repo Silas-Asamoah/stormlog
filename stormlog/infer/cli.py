@@ -1237,9 +1237,9 @@ def _add_compare_parser(subparsers: Any) -> None:
 def cmd_compare(args: argparse.Namespace) -> int:
     """Compare two arms of runs; the report is written even for exit 5."""
     spec = _comparison_spec(args)
-    slo, slo_source = _slo_policy(args)
     argv = sys.argv[1:]
     try:
+        slo, slo_source = _slo_policy(args)
         comparison = compare_runs(
             [_summary(path, slo, slo_source, args) for path in args.baseline],
             [_summary(path, slo, slo_source, args) for path in args.candidate],
@@ -1305,6 +1305,13 @@ def _emit_report(report: dict[str, Any], args: argparse.Namespace) -> None:
 
 def _comparison_spec(args: argparse.Namespace) -> ComparisonSpec:
     fallbacks = dict(_fallback(item) for item in args.fallback)
+    named = {item.partition("=")[0] for item in args.gate}
+    for metric in fallbacks:
+        if metric not in named:
+            raise InferUsageError(
+                f"--fallback {metric}: names no --gate; give it the same METRIC "
+                "as the gate it belongs to"
+            )
     gates = tuple(
         _gate(item, args.min_complete_blocks, fallbacks) for item in args.gate
     )

@@ -33,12 +33,12 @@ stormlog infer compare \
 | `--allow FIELD` | A field (`engine.max_num_seqs`) or `vllm_config` JSON pointer (`/scheduler_config`) that may differ |
 | `--added-observers NAME,...` | The observers an `incremental` candidate adds |
 | `--gate METRIC=RULE:BUDGET` | Gate a metric, or every metric a pattern names (`client.*.p99`). A latency, goodput or throughput budget is relative (0.05 is 5%); an attainment or failure-fraction budget is a fraction (0.01 is one point). A budget that can never fail is a usage error: a fraction above 1, or a fall of 100% or more in a rate |
-| `--fallback METRIC=BUDGET:UNIT` | A pre-registered budget on the difference, for when a zero leaves the log ratio undefined |
+| `--fallback METRIC=BUDGET:UNIT` | A pre-registered budget on the difference, for when a zero leaves the log ratio undefined. `METRIC` is the gate's own text, pattern included; a fallback that names no `--gate` is a usage error |
 | `--min-complete-blocks N` | Every gate needs at least N complete pairs |
 | `--min-attainment X`, `--min-run-pass Q` | At least a share Q (0.5) of candidate runs reach attainment X: a claim about runs. Both are in (0, 1]. A candidate run whose SLO could not be judged counts as not reaching X, and the gate obeys the same blockers as the metric gates (unverified comparability, observers, `--on-incomplete fail`); when it cannot be evaluated, it exits 4 like they do. `--attainment-model bernoulli` pools requests instead, labelled model-based |
 | `--family all_budgets\|any_regression` | `any_regression` adjusts the regression tests with Holm's method; its gates use `significant` |
 | `--on-incomplete exclude\|fail` | A run set aside by a protocol failure is listed (`exclude`), or fails its contrasts (`fail`) |
-| `--allow-not-evaluable` | Exit 0 although a gate could not be evaluated: for exploration, and recorded |
+| `--allow-not-evaluable` | Exit 0 although a gate could not be evaluated: for exploration, and recorded. The summary then says how many could not be evaluated, never that every gate passed |
 | `--evidence-floor F` | The `evidence_coverage` SLO metrics need in every run (1.0), in [0, 1] |
 | `--segment NAME=START:END` | Also compare this slice of each case's measured phase, in seconds from its start; repeatable |
 | `--segment-membership arrival\|overlap` | A segment's requests: those that arrived in it (the default), or that overlap it |
@@ -116,6 +116,11 @@ failures**: faults of the measurement that exclude it, with a reason.
 
 Failed requests, timeouts, or a candidate that served nothing are outcomes,
 never protocol failures: they are compared, not excluded.
+
+A block holds one usable run of each arm; a second is invalid input. A run
+its protocol set aside does not count, so a block retried after a protocol
+failure (`--attempt 2`) keeps the attempt that finished, and lists the one
+that did not.
 
 The kept runs must have measured one server. Every run is checked against
 its arm's first run, and every run against the other arm's first, because
@@ -256,7 +261,9 @@ A gate is `not_evaluable`, never passed, when:
   the case's `absent_gates`): a gate on something never measured gates
   nothing, and must not read as a pass.
 
-A `--case` that no run has is invalid input (exit 5).
+A `--case` that no run has is invalid input (exit 5). A case no kept run
+offered a request, such as a segment outside every run's phase, cannot be
+gated (`empty_case`).
 
 ## Guards
 
