@@ -672,13 +672,21 @@ class AppendOnlyTelemetrySink:
 
 
 def _write_all(fd: int, payload: bytes | memoryview) -> None:
-    """Write every byte; a short write continues, an error raises."""
-    view = memoryview(payload)
-    while view:
-        written = os.write(fd, view)
-        if written <= 0:
-            raise OSError("write made no progress")
-        view = view[written:]
+    """Write every byte; a short write continues, an error raises.
+
+    One view, released however this ends, with each slice only an argument
+    to the write: a view left in this frame would live on in the traceback
+    of the error raised here, and while a caller kept that error, the
+    sink's bytearray buffer could not be resized and the next append would
+    raise BufferError.
+    """
+    with memoryview(payload) as view:
+        offset = 0
+        while offset < len(view):
+            written = os.write(fd, view[offset:])
+            if written <= 0:
+                raise OSError("write made no progress")
+            offset += written
 
 
 def resolve_telemetry_sink_segment_paths(path: str | Path) -> list[Path]:

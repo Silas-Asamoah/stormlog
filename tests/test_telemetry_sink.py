@@ -554,6 +554,9 @@ class _FailingDisk:
                 return real_write(fd, data)
             if partial and len(data) > 1:
                 real_write(fd, bytes(data[: len(data) // 2]))
+            # Like os.write, keep no reference to the buffer once it fails:
+            # this frame lives on in the error's traceback.
+            del data
             raise OSError(errno.ENOSPC, "No space left on device")
 
         monkeypatch.setattr(telemetry_sink.os, "write", write)
@@ -607,6 +610,32 @@ def test_a_default_sink_still_raises_but_cuts_the_partial_line(
     segment = next(tmp_path.glob("segment-*.jsonl"))
     assert segment.read_text() == '{"seq": 1}\n'
     sink._stop_flush_thread()
+
+
+def test_a_default_sink_takes_records_after_a_flush_error_its_caller_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A view of the buffer left in the error's traceback kept the buffer
+    from growing: the next append raised BufferError."""
+    sink = AppendOnlyTelemetrySink(
+        TelemetrySinkConfig(
+            root_dir=tmp_path, flush_every_events=1, write_rollups=False
+        )
+    )
+    sink.append({"seq": 1})
+    disk = _FailingDisk(monkeypatch, partial=True)
+    with pytest.raises(OSError) as kept:
+        sink.append({"seq": 2, "pad": "x" * 200})
+    try:
+        sink.append({"seq": 3})
+    except OSError:
+        disk.failing = False
+        sink.append({"seq": 4})  # retried inside the handler
+    assert kept.value.errno is not None
+    sink.append({"seq": 5})
+    sink.close()
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    assert [r["seq"] for r in _segment_records(segment)] == [1, 2, 3, 4, 5]
 
 
 def test_a_bounded_sink_holds_at_most_its_buffer_under_sustained_failure(
