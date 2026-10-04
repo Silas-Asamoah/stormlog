@@ -291,7 +291,7 @@ def test_an_unwritable_report_exits_one(tmp_path: Path) -> None:
 def test_the_stop_event_seals_open_incidents_as_interrupted(tmp_path: Path) -> None:
     metrics = FakeMetrics()
     metrics.waiting = 20
-    payload = watch_config("", incident={"pre_seconds": 5, "post_seconds": 30})
+    payload = watch_config("", incident={"pre_seconds": 5, "post_seconds": 20})
     with serve_metrics(metrics) as base_url:
         payload["server"]["base_url"] = base_url
         outcome = _watch(
@@ -648,7 +648,7 @@ def test_history_evictions_are_counted_by_cause(tmp_path: Path) -> None:
         payload = watch_config(
             base_url,
             history={"seconds": 0.5},
-            incident={"pre_seconds": 0.5, "post_seconds": 0.5},
+            incident={"pre_seconds": 0.2, "post_seconds": 0.3},
         )
         _watch(tmp_path, payload, options=WatchOptions(duration_seconds=1.5))
     stats = _report(tmp_path)["payload"]["stats"]

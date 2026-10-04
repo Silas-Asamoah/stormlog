@@ -95,12 +95,14 @@ class Sustain:
     def with_defaults(
         cls, *, window: float, hold: float, clear: float | None, tick: float
     ) -> Sustain:
-        """``C = F``, ``G = F / 2`` and ``clear_tolerance = min(2Δ, F / 10)``."""
+        """``C = F``, ``G = max(F / 2, 2Δ)`` and ``clear_tolerance =
+        min(2Δ, F / 10)``: a gap of two ticks, one late scrape and the next
+        refused, never resets a trigger."""
         return cls(
             window=window,
             hold=hold,
             clear=hold if clear is None else clear,
-            gap=hold / 2,
+            gap=max(hold / 2, 2 * tick),
             clear_tolerance=min(2 * tick, hold / 10),
         )
 

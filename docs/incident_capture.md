@@ -81,9 +81,14 @@ once, without a sustain.
 ### Configuration
 
 Every key is optional except `server.base_url`, which the command line can
-give instead. An unknown key, a wrong type or contradictory settings are
-refused with exit 2; a file that cannot be read, or is not a version-1 watch
-config, exits 5.
+give instead. An unknown key, a wrong type, a number that is not finite
+(JSON readers accept `NaN` and `Infinity`), a share outside (0, 1], a tick
+under 0.05 s, a server URL that is not http or https with a host, or
+contradictory settings (a hold shorter than its window, a window longer
+than the history, or `pre_seconds` plus `post_seconds` longer than the
+history, which the seal reads both windows from) are refused with exit 2,
+before anything is created under the root; a file that cannot be read, or
+is not a version-1 watch config, exits 5.
 
 ```json
 {
@@ -400,8 +405,9 @@ scraper that fails now and then.
 | resolving | `C` of clear in all, counted from the evaluation after the one that started resolving | inactive; the trigger can fire again |
 
 Masked time never counts toward `G`. The defaults are `W` = 30 s, `F` =
-60 s, `C` = `F`, `G` = `F / 2`, and `clear_tolerance` = `min(2Δ, F / 10)`;
-`F` must be at least `W`.
+60 s, `C` = `F`, `G` = `max(F / 2, 2Δ)` (never under two ticks, so one late
+scrape and one refused cannot reset a trigger), and `clear_tolerance` =
+`min(2Δ, F / 10)`; `F` must be at least `W`.
 
 What this guarantees is about the predicate the watcher evaluates, not about
 the fault behind it. A 20 s fault can keep a queue observably saturated for
