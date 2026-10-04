@@ -537,7 +537,7 @@ def _bootstrap(
 
 
 def skew_limit(n: int) -> float | None:
-    """The 95% quantile of |G1| under normal noise at n; 1.96 SE beyond 30."""
+    """The 95% quantile of ``|G1|`` under normal noise at n; 1.96 SE beyond 30."""
     if n < 3:
         return None
     if n in SKEW_Q95_NORMAL:
