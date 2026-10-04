@@ -13,9 +13,10 @@ too many is refused before ``ParseFromString`` runs.
 The scan stops as soon as a count passes its cap; what it returns then is
 over that cap, which is all the receiver needs to refuse the export.
 Anything protobuf could not parse as this message is a ``ValueError``. So
-are two things the pure-Python backend would parse: groups (wire types 3
-and 4), which no OTLP message uses, and messages nested deeper than
-protobuf's default limit of 100 levels, where upb stops too.
+are two things the pure-Python backend of protobuf 4 would parse: groups
+(wire types 3 and 4), which no OTLP message uses, and messages nested more
+than 100 levels below the request, protobuf's default limit, where upb and
+later pure-Python versions stop.
 """
 
 from __future__ import annotations
@@ -28,7 +29,8 @@ from typing import Any
 _SPAN = "opentelemetry.proto.trace.v1.Span"
 _KEY_VALUE = "opentelemetry.proto.common.v1.KeyValue"
 _ANY_VALUE = "opentelemetry.proto.common.v1.AnyValue"
-# protobuf's own default recursion limit.
+# protobuf's own default recursion limit: how many levels of messages may
+# nest below the root.
 MAX_DEPTH = 100
 _VARINT = 0
 _FIXED64 = 1
@@ -181,7 +183,7 @@ class _Walk:
         return pos
 
     def _enter(self, kind: int, end: int) -> None:
-        if len(self.ends) >= MAX_DEPTH:
+        if len(self.ends) > MAX_DEPTH:
             raise ValueError("protobuf messages nested too deep")
         self.ends.append(end)
         self.kinds.append(kind)

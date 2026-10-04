@@ -163,6 +163,34 @@ def test_nesting_deeper_than_protobuf_allows_is_refused() -> None:
         count_trace_request(body, **UNBOUNDED)
 
 
+def _nested(levels: int) -> bytes:
+    """An export with ``levels`` messages nested below the request: resource
+    spans, scope spans, a span, an attribute, its value, then arrays and
+    values in turn."""
+    value = b""
+    for level in range(levels - 5):
+        number = 5 if level % 2 == levels % 2 else 1  # array_value / values
+        value = _field(number, value)
+    attribute = _field(2, value)  # KeyValue.value
+    return _field(1, _field(2, _field(2, _field(9, attribute))))
+
+
+def test_the_scan_nests_exactly_as_deep_as_upb() -> None:
+    """upb parses 100 levels below the request and refuses 101; so does
+    the scan, whichever backend is installed."""
+    _service, request_class = _modules()
+    deepest, too_deep = _nested(MAX_DEPTH), _nested(MAX_DEPTH + 1)
+    assert count_trace_request(deepest, **UNBOUNDED).messages == MAX_DEPTH + 1
+    with pytest.raises(ValueError, match="nested too deep"):
+        count_trace_request(too_deep, **UNBOUNDED)
+    from google.protobuf.internal import api_implementation
+
+    if api_implementation.Type() == "upb":
+        request_class.FromString(deepest)
+        with pytest.raises(Exception):
+            request_class.FromString(too_deep)
+
+
 def _field(number: int, payload: bytes) -> bytes:
     """A length-delimited field, its length as a varint."""
     length = len(payload)
