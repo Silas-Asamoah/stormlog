@@ -172,6 +172,24 @@ def test_an_unlisted_status_is_rejected_and_counted_not_invented() -> None:
     assert family.stats.rejected == 1
 
 
+@pytest.mark.parametrize("count", [-1_000_000, 2**53, 10**400, True])
+def test_a_token_count_no_counter_can_take_is_rejected(count: object) -> None:
+    # Usage counts come from the server: a negative one would make a counter
+    # go down, and a huge one would not add exactly.
+    registry, metrics = _metrics()
+    _feed(registry, metrics, _request(prompt_tokens=count, output_tokens=7))
+    exposition = _exposition(registry)
+    case = {"case": "poisson2_in8_out8", "phase": "measured"}
+    tokens = "stormlog_infer_tokens_total"
+    assert (
+        exposition.value(tokens, direction="prompt", source="server_usage", **case) == 0
+    )
+    assert exposition.value(tokens, direction="output", source="estimated", **case) == 7
+    assert exposition.value("stormlog_infer_requests_total", status="ok", **case) == 1
+    family = next(f for f in registry.families if f.spec.name == tokens)
+    assert family.stats.rejected == 1
+
+
 def test_with_the_case_label_off_every_case_is_all() -> None:
     registry, metrics = _metrics(case_label=False)
     _feed(registry, metrics, _request())

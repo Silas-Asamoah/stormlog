@@ -44,6 +44,9 @@ SCRAPE_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
 ALL_CASES = "all"
 CLOSED_LOOP = "closed"
 DIRECTIONS = ("prompt", "output")
+# A token count a counter can add exactly; the server's usage is checked
+# against it, since a negative count would make a counter go down.
+MAX_TOKEN_COUNT = 2**53
 SCRAPE_OUTCOMES = ("ok", "error")
 TRACE_STOP_REASONS = (
     "phase_end",
@@ -199,16 +202,28 @@ class ProfileMetrics:
             if isinstance(value, (int, float)):
                 family.observe(base, value / 1e3)
         self._apply_from_intended(base, fields)
-        for direction in DIRECTIONS:
-            count = fields.get(f"{direction}_tokens")
-            if isinstance(count, int):
-                source = str(fields.get(f"{direction}_source"))
-                families.tokens.inc(base + (direction, source), count)
+        self._apply_tokens(base, fields)
         counts, total = fields.get("chunk_counts"), fields.get("chunk_sum")
         if isinstance(counts, tuple) and isinstance(total, (int, float)):
             families.chunk_gaps.observe_counts(
                 base, [int(c or 0) for c in counts], total
             )
+
+    def _apply_tokens(self, base: tuple[str, ...], fields: Mapping[str, Value]) -> None:
+        tokens = self._families.tokens
+        for direction in DIRECTIONS:
+            count = fields.get(f"{direction}_tokens")
+            if count is None:
+                continue
+            if (
+                isinstance(count, int)
+                and not isinstance(count, bool)
+                and 0 <= count < MAX_TOKEN_COUNT
+            ):
+                source = str(fields.get(f"{direction}_source"))
+                tokens.inc(base + (direction, source), count)
+            else:
+                tokens.stats.rejected += 1
 
     def _apply_from_intended(
         self, base: tuple[str, ...], fields: Mapping[str, Value]
