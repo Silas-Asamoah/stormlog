@@ -34,6 +34,8 @@ from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .errors import InferInputError
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .host_clock import host_boot_id, wall_clock_domain
+from .manifest import BEFORE as MANIFEST_BEFORE
+from .manifest import declared_record, description_record
 from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
 from .openai_client import (
     ChatCompletionResult,
@@ -408,6 +410,26 @@ class InferenceProfiler:
         if self._before_probe is not None and self._before_probe.answers:
             writer.append(
                 self._before_probe.to_record(session_id=self.session.session_id)
+            )
+        self._write_manifests(writer)
+
+    def _write_manifests(self, writer: JsonlEventWriter) -> None:
+        """The before description and the declarations the run was given."""
+        session_id = self.session.session_id
+        if self.config.server_description is not None:
+            writer.append(
+                description_record(
+                    self.config.server_description,
+                    role=MANIFEST_BEFORE,
+                    session_id=session_id,
+                    run_id=self.run_id,
+                )
+            )
+        if self.config.declarations is not None:
+            writer.append(
+                declared_record(
+                    self.config.declarations, session_id=session_id, run_id=self.run_id
+                )
             )
 
     async def _wait_for_late_spans(self) -> None:

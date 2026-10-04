@@ -390,6 +390,10 @@ The report includes:
   `infer profile` wrote), a top-level `slo` block naming the policy and, per
   case, SLO attainment and goodput as lower and upper bounds (see
   [Inference SLOs and goodput](inference_slo.md))
+- with a server description (`--describe-server`, `attach-manifest`), a
+  `manifest` block: the descriptions, declared fields, and what changed or
+  drifted between before and after (see
+  [Inference server descriptions](inference_server.md))
 - failure rate
 - highest recorded client-local device memory when system telemetry is available
 - scoped server memory observations when a matching on-host collector artifact is supplied
