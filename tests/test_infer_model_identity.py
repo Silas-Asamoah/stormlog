@@ -165,6 +165,23 @@ def test_a_staged_hub_snapshot_stores_its_files_not_its_links(
     assert stored.read_bytes() == WEIGHTS
 
 
+def _repo(cache: Path) -> Path:
+    return cache / ("models--" + REPO.replace("/", "--"))
+
+
+def test_a_dangling_snapshot_link_is_refused_not_a_crash(tmp_path: Path) -> None:
+    # rev-213-a's E4: FileNotFoundError, exit 1, before any server started.
+    cache = _hub(tmp_path)
+    (_repo(cache) / "blobs" / hashlib.sha256(WEIGHTS).hexdigest()).unlink()
+    with pytest.raises(InferInputError, match="model.safetensors: its blob is missing"):
+        prepare_model({"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)})
+    snapshot = _repo(cache) / "snapshots" / COMMIT
+    with pytest.raises(InferInputError, match="model.safetensors: cannot be read"):
+        prepare_model(
+            {"route": "staged", "source": str(snapshot), "store": str(tmp_path / "s")}
+        )
+
+
 def test_an_unknown_route_is_refused() -> None:
     with pytest.raises(InferInputError, match="route"):
         prepare_model({"route": "trust_me"})

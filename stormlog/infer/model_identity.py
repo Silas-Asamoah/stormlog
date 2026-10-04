@@ -142,6 +142,8 @@ def _checked_blob(directory: Path, path: Path) -> ModelFile:
     if blob is None:
         raise InferInputError(f"model file {relative}: not a link into the blobs")
     content = path.resolve()
+    if not content.is_file():
+        raise InferInputError(f"model file {relative}: its blob is missing")
     expected = blob.name
     algorithm = SHA256 if len(expected) == 64 else GIT_SHA1
     actual = sha256(content) if algorithm == SHA256 else git_sha1(content)
@@ -157,16 +159,7 @@ def _staged(spec: Mapping[str, Any]) -> VerifiedModel:
     source, store = Path(str(spec["source"])), Path(str(spec["store"]))
     if not source.is_dir():
         raise InferInputError(f"model source {source} is not a directory")
-    files = tuple(
-        ModelFile(
-            path.relative_to(source).as_posix(),
-            SHA256,
-            sha256(path),
-            path.stat().st_size,
-            checked=True,
-        )
-        for path in walk(source)
-    )
+    files = tuple(_source_file(source, path) for path in walk(source))
     digest = weights_digest(files)
     assert digest is not None
     target = store / digest
@@ -184,6 +177,18 @@ def _staged(spec: Mapping[str, Any]) -> VerifiedModel:
         stats=_stats(target),
         verified_at_ns=time.time_ns(),
     )
+
+
+def _source_file(source: Path, path: Path) -> ModelFile:
+    relative = path.relative_to(source).as_posix()
+    try:
+        return ModelFile(
+            relative, SHA256, sha256(path), path.stat().st_size, checked=True
+        )
+    except OSError as exc:
+        raise InferInputError(
+            f"model file {relative}: cannot be read ({exc.strerror})"
+        ) from exc
 
 
 def _stage(source: Path, target: Path, files: Sequence[ModelFile]) -> None:

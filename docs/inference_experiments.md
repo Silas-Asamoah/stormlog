@@ -265,7 +265,8 @@ exactly them. The plan's `server.model` says how:
   every file of that snapshot is hashed and checked against the name of the
   blob it links to (SHA-256 for a file in LFS, git's SHA-1 for the rest),
   even where a deduplicated cache links that blob on to a shared store under
-  another name. Each server gets
+  another name. A link whose blob is missing is refused (exit 5), as is a
+  `staged` file that cannot be read. Each server gets
   `--revision <commit> --tokenizer-revision <commit>` and `HF_HUB_OFFLINE=1`,
   so it cannot load anything else. `{model}` is the repository.
 - **`staged`**: every file of a local directory is hashed, and each file
