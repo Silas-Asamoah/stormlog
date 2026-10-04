@@ -482,8 +482,10 @@ class InjectionRun:
 
     def _write_truth(self, progress: _Progress) -> None:
         attempts, priming = progress.attempts, progress.priming
-        windows = progress.windows(self.clock())
         records = self._victim_records()
+        # The measured window ends where the victim's did, not after its
+        # drain: drain time has completions but no arrivals to score.
+        windows = progress.windows(_measured_end(records) or self.clock())
         clock = _victim_clock(records)
         truth = _Truth(
             run_id=self.directory.label,
@@ -789,6 +791,18 @@ def name_engine(
         replace(e, engine=producer) if e.component in ENGINE_COMPONENTS else e
         for e in expects
     )
+
+
+def _measured_end(records: list[dict[str, Any]]) -> int | None:
+    """When the victim's measured window ended, from its phase window."""
+    ends = [
+        int(record["window_ended_at_ns"])
+        for record in records
+        if record.get("event_type") == "infer.phase_window"
+        and record.get("phase") == "measured"
+        and record.get("window_ended_at_ns") is not None
+    ]
+    return ends[-1] if ends else None
 
 
 def _victim_clock(records: list[dict[str, Any]]) -> str | None:

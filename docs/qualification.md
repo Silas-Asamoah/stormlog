@@ -744,7 +744,9 @@ One run goes:
 
    Beside them, `truth/run.json` (`stormlog.qualify.run/1`) holds the run's
    measured, priming, baseline and final-recovery windows, and a failed
-   priming check as the run's protocol failure. The victim runs under the
+   priming check as the run's protocol failure. The measured window ends
+   where the victim's measured phase window did (`window_ended_at_ns`), not
+   after its drain: drain time has completions but no arrivals to score. The victim runs under the
    run's label as its `--run-id`, so its artifact names the run its truth
    belongs to.
 

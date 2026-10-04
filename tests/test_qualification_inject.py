@@ -188,6 +188,9 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
         if r.get("event_type") == "infer.phase_window" and r["phase"] == "measured"
     ]
     assert measured["stopped_early"] is True
+    # The run's measured window ends where the victim's did, before its
+    # drain (Fable's A2 delta N5).
+    assert record.measured.end_ns == measured["window_ended_at_ns"]
     sessions = [r for r in victim_records if r.get("event_type") == "infer.session"]
     assert sessions[-1]["status"] == "completed"
     assert "KeyboardInterrupt" not in (run / "probes" / "victim.log").read_text()
