@@ -29,6 +29,13 @@ Every run ends in one state, recorded in ``index.jsonl`` with its reasons:
 
 When both apply, the outcome wins unless the protocol fault came before the
 first workload step started.
+
+A run whose runner was killed (a preempted box, an operator's abort) leaves
+its attempt in ``runs/<label>.partial`` with no state. A resume finishes
+it in place and indexes it: an ``outcome_failure``
+(``runner_interrupted``), unless an external cause with its evidence is
+given for it (``external_causes``), which makes it a ``protocol_failure``
+that may be retried.
 """
 
 from __future__ import annotations
@@ -97,6 +104,8 @@ COMPLETED = "completed"
 OUTCOME_FAILURE = "outcome_failure"
 PROTOCOL_FAILURE = "protocol_failure"
 INDEX = "index.jsonl"
+# What may set aside an interrupted attempt; anything else is an outcome.
+EXTERNAL_REASONS = ("spot_preemption", "operator_abort", "infra_fault")
 SUMS = "SHA256SUMS"
 HEALTH_POLL_SECONDS = 1.0
 ROLE_WAIT_SECONDS = 10.0
@@ -125,6 +134,9 @@ class RunRecord:
     notes: list[str] = field(default_factory=list)
     # A retried attempt runs later than its planned slot.
     order_broken: bool = False
+    # The runner was killed during it; finished on resume.
+    interrupted: bool = False
+    external_cause: dict[str, str] | None = None
 
     def outcome(self, reason: str) -> None:
         self.reasons.append(reason)
@@ -147,6 +159,27 @@ class RunRecord:
 
 
 @dataclass(frozen=True)
+class ExternalCause:
+    """Why an interrupted attempt does not count: one of three causes, with
+    the evidence an operator or a driver can show for it."""
+
+    reason: str
+    evidence: str
+
+    def __post_init__(self) -> None:
+        if self.reason not in EXTERNAL_REASONS:
+            raise InferUsageError(
+                f"external cause {self.reason!r} is not spot_preemption, "
+                "operator_abort or infra_fault"
+            )
+        if not self.evidence.strip():
+            raise InferUsageError(f"external cause {self.reason} needs evidence")
+
+    def to_record(self) -> dict[str, str]:
+        return {"reason": self.reason, "evidence": self.evidence}
+
+
+@dataclass(frozen=True)
 class Environment:
     """What a run's commands get beyond the plan: interpreter and secrets."""
 
@@ -163,8 +196,15 @@ def run_plan(
     retry_incomplete: bool = False,
     environment: Environment | None = None,
     on_event: Events | None = None,
+    external_causes: Mapping[str, ExternalCause] | None = None,
 ) -> list[dict[str, Any]]:
-    """Run every block of the plan; return the index entries written."""
+    """Run every block of the plan; return the index entries written.
+
+    ``external_causes`` names, by label, attempts the runner was killed in
+    and why; each must be an interrupted attempt this resume finishes.
+    """
+    causes = dict(external_causes or {})
+    _check_causes(output_dir, causes, resume)
     env = environment or Environment(secrets=_secrets(plan))
     order = plan_order(plan)
     _prepare(plan, order, output_dir, resume)
@@ -174,11 +214,42 @@ def run_plan(
     written: list[dict[str, Any]] = []
     for block, arms in enumerate(order.blocks):
         written += _run_block(
-            plan, block, arms, output_dir, env, resume, retry_incomplete, on_event
+            plan,
+            block,
+            arms,
+            output_dir,
+            env,
+            _Resume(resume, retry_incomplete, causes),
+            on_event,
         )
     report = sanitize_bundle(output_dir, env.secrets.values())
     (output_dir / "sanitizer.json").write_text(json.dumps(report, indent=2) + "\n")
     return written
+
+
+@dataclass(frozen=True)
+class _Resume:
+    resume: bool
+    retry: bool
+    causes: Mapping[str, ExternalCause]
+
+
+def _check_causes(
+    output: Path, causes: Mapping[str, ExternalCause], resume: bool
+) -> None:
+    """An external cause can only explain an attempt the runner was killed in.
+
+    A finished attempt keeps the state it recorded, so an outcome failure
+    can never be turned into a set-aside.
+    """
+    if causes and not resume:
+        raise InferUsageError("external causes are given only on resume")
+    for label in causes:
+        if not (output / "runs" / f"{label}.partial").is_dir():
+            raise InferUsageError(
+                f"{label} is not an interrupted attempt: a finished attempt "
+                "keeps the state it recorded"
+            )
 
 
 def _verified_model(plan: ExperimentPlan) -> VerifiedModel | None:
@@ -232,8 +303,7 @@ def _run_block(
     arms: list[str],
     output: Path,
     env: Environment,
-    resume: bool,
-    retry: bool,
+    resuming: _Resume,
     on_event: Events | None,
 ) -> list[dict[str, Any]]:
     written: list[dict[str, Any]] = []
@@ -250,8 +320,7 @@ def _run_block(
             position,
             output,
             env,
-            resume,
-            retry,
+            resuming,
             prelude_failures,
         )
         for record in records:
@@ -271,22 +340,120 @@ def _attempts(
     position: int,
     output: Path,
     env: Environment,
-    resume: bool,
-    retry: bool,
+    resuming: _Resume,
     prelude_failures: list[str],
 ) -> list[dict[str, Any]]:
-    """A run's attempt, and one more on a fresh server if its probe did not finish."""
+    """Any attempt the runner was killed in, finished; the run's attempt; and
+    one more on a fresh server if its probe did not finish."""
+    base = f"{plan.experiment_id}-b{block:02d}-p{position}-{arm.name}"
+    interrupted = [
+        _finish_interrupted(leftover, arm, block, position, resuming.causes)
+        for leftover in _leftovers(output / "runs", base)
+    ]
     first = _attempt(
-        plan, arm, block, position, output, env, resume, retry, prelude_failures
+        plan,
+        arm,
+        block,
+        position,
+        output,
+        env,
+        resuming.resume,
+        resuming.retry,
+        prelude_failures,
     )
     if first is None:
-        return []
+        return interrupted
     if "probe_incomplete" not in first["reasons"]:
-        return [first]
+        return [*interrupted, first]
     again = _attempt(
         plan, arm, block, position, output, env, False, True, prelude_failures
     )
-    return [first] + ([again] if again is not None else [])
+    return [*interrupted, first] + ([again] if again is not None else [])
+
+
+def _leftovers(runs: Path, base: str) -> list[Path]:
+    """A run's attempts its runner was killed in, oldest first."""
+    pattern = re.compile(re.escape(base) + r"-a(\d+)\.partial$")
+    found = [
+        (int(match.group(1)), path)
+        for path in runs.iterdir()
+        if (match := pattern.match(path.name)) is not None
+    ]
+    return [path for _, path in sorted(found)]
+
+
+def _finish_interrupted(
+    leftover: Path,
+    arm: Arm,
+    block: int,
+    position: int,
+    causes: Mapping[str, ExternalCause],
+) -> dict[str, Any]:
+    """An attempt the runner was killed in, finished in place and kept.
+
+    It is an outcome failure, since what stopped the runner may be the
+    treatment, unless an external cause is given for it.
+    """
+    label = leftover.name[: -len(".partial")]
+    attempt = int(label.rsplit("-a", 1)[1])
+    final = leftover.with_name(label)
+    record = RunRecord(
+        label=label,
+        arm=arm.name,
+        block=block,
+        position_planned=position,
+        position_actual=position,
+        attempt=attempt,
+        run_dir=str(final),
+        order_broken=attempt > 1,
+        interrupted=True,
+    )
+    record.notes.append("the runner was stopped during this attempt")
+    cause = causes.get(label)
+    if cause is None:
+        record.outcome("runner_interrupted")
+    else:
+        record.protocol(cause.reason, before_treatment=False)
+        record.external_cause = cause.to_record()
+    _append_run_state(_session_artifacts(leftover), record, label)
+    (leftover / "run.json").write_text(
+        json.dumps(record.to_record(), indent=2, sort_keys=True) + "\n"
+    )
+    _write_sums(leftover)
+    leftover.rename(final)
+    return record.to_record()
+
+
+def _session_artifacts(run_dir: Path) -> list[Path]:
+    """The infer artifacts in a run's directory: files that open with a session."""
+    found = []
+    for path in sorted(run_dir.rglob("*.jsonl")):
+        try:
+            with path.open() as handle:
+                first = json.loads(handle.readline())
+        except (OSError, ValueError):
+            continue
+        if isinstance(first, dict) and first.get("event_type") == "infer.session":
+            found.append(path)
+    return found
+
+
+def _append_run_state(paths: list[Path], record: RunRecord, run_id: str) -> None:
+    """Tell each artifact how the run ended, so a comparison need not trust the
+    session alone: an outcome is compared and counted against its arm, and a
+    protocol failure is the external cause that sets aside its block."""
+    state: dict[str, Any] = {
+        "event_type": RUN_STATE_EVENT,
+        "run_id": run_id,
+        "state": record.state,
+        "reasons": list(record.reasons),
+        "before_treatment": list(record.before_treatment),
+    }
+    if record.external_cause is not None:
+        state["external_cause"] = dict(record.external_cause)
+    for path in paths:
+        with path.open("a") as handle:
+            handle.write(json.dumps(state, sort_keys=True) + "\n")
 
 
 def _attempt(
@@ -304,16 +471,11 @@ def _attempt(
 
     On resume a run is skipped when its last attempt verifies and ended
     ``completed`` or ``outcome_failure``: an outcome is never retried away.
-    A ``protocol_failure`` is retried only with ``retry``. A leftover
-    ``.partial`` directory is kept, renamed ``.abandoned``.
+    A ``protocol_failure`` is retried only with ``retry``.
     """
     runs = output / "runs"
     base = f"{plan.experiment_id}-b{block:02d}-p{position}-{arm.name}"
     finished = _finished_attempts(runs, base)
-    for leftover in runs.glob(f"{base}-a*.partial"):
-        leftover.rename(
-            leftover.with_name(leftover.name[: -len(".partial")] + ".abandoned")
-        )
     if resume and finished and not _retry_wanted(finished[-1], retry):
         return None
     run = _Run(plan, arm, block, position, len(finished) + 1, runs, env)
@@ -482,20 +644,7 @@ class _Run:
         return self.record.to_record()
 
     def _record_state(self) -> None:
-        """Tell each artifact how the run ended, so a comparison need not trust
-        the session alone: an outcome is compared and counted against its
-        arm, and a protocol failure is the external cause that sets aside
-        its block."""
-        record = {
-            "event_type": RUN_STATE_EVENT,
-            "run_id": self.label,
-            "state": self.record.state,
-            "reasons": list(self.record.reasons),
-            "before_treatment": list(self.record.before_treatment),
-        }
-        for path in self._infer_artifacts():
-            with path.open("a") as handle:
-                handle.write(json.dumps(record, sort_keys=True) + "\n")
+        _append_run_state(self._infer_artifacts(), self.record, self.label)
 
     # Server -------------------------------------------------------------
 
@@ -959,10 +1108,12 @@ def _write_sums(run_dir: Path) -> None:
 
 __all__ = [
     "COMPLETED",
+    "EXTERNAL_REASONS",
     "INDEX",
     "OUTCOME_FAILURE",
     "PROTOCOL_FAILURE",
     "Environment",
+    "ExternalCause",
     "RunRecord",
     "run_plan",
 ]
