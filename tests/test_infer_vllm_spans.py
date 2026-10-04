@@ -367,8 +367,9 @@ def _in_one_span(span: bytes) -> bytes:
 
 
 _UNKNOWN_VARINT = bytes([0x98, 0x06, 0x01])  # field 99, which no span has
-# Exports the parser keeps field by field outside any message, by name.
-_UNKNOWN_EXPORTS = {
+# Exports encoded by hand, by name: fields the parser keeps one by one
+# outside any message, and text it decodes.
+_ENCODED_EXPORTS = {
     "unknown_varints": lambda: _in_one_span(_UNKNOWN_VARINT * 100_000),
     "unknown_strings": lambda: _in_one_span(
         _length_delimited(99, b"x" * 1000) * 10_000
@@ -380,6 +381,10 @@ _UNKNOWN_EXPORTS = {
     # Span.start_time_unix_nano is a fixed64; as a varint it is unknown.
     "a_known_field_in_another_wire_type": lambda: _in_one_span(
         bytes([0x38, 0x01]) * 100_000
+    ),
+    # Span.name: pure Python stores all 4 million characters in 4 bytes each.
+    "a_name_outside_the_basic_multilingual_plane": lambda: _in_one_span(
+        _length_delimited(5, "\U0001f600".encode() + b"a" * 4_000_000)
     ),
 }
 # Every repeated field of the installed schema, by name.
@@ -1014,7 +1019,7 @@ class TestReceiverAdmission:
             "named_spans",
             *_REPEATED_MESSAGE_FIELDS,
             *_REPEATED_SCALAR_FIELDS,
-            *_UNKNOWN_EXPORTS,
+            *_ENCODED_EXPORTS,
         ],
     )
     def test_a_protobuf_parse_holds_no_more_than_it_is_charged(
@@ -1038,8 +1043,8 @@ class TestReceiverAdmission:
         fields = {**_REPEATED_MESSAGE_FIELDS, **_REPEATED_SCALAR_FIELDS}
         if shape in fields:
             body.write_bytes(export_with(fields[shape], 100_000).SerializeToString())
-        elif shape in _UNKNOWN_EXPORTS:
-            body.write_bytes(_UNKNOWN_EXPORTS[shape]())
+        elif shape in _ENCODED_EXPORTS:
+            body.write_bytes(_ENCODED_EXPORTS[shape]())
         else:
             body.write_bytes(_small_message_export(shape, 100_000))
         env = dict(os.environ)

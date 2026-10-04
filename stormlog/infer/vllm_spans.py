@@ -545,11 +545,16 @@ class ProtobufRates:
 # grows by doubling (2.5 with 7.36), and 170 to 320 bytes plus up to 4.3 a
 # byte with pure Python. An element of a repeated string of up to 20
 # characters took 35 to 91 bytes with upb and 10 to 111 with pure Python.
-# Any other backend is charged as the pure-Python one.
+# A byte of text took 2 with upb, the parse's copy of the body and its
+# own, and up to 6 with pure Python, which decodes strings as it parses: 3
+# for ASCII, 6 when one character outside the Basic Multilingual Plane
+# makes Python store every character of the string in 4 bytes. That rate
+# covers an unknown field's bytes too. Any other backend is charged as the
+# pure-Python one.
 PROTOBUF_RATES = {
-    "upb": ProtobufRates(message=384, element=192, byte=2, unknown_byte=2)
+    "upb": ProtobufRates(message=384, element=192, byte=3, unknown_byte=2)
 }
-PROTOBUF_RATES_OTHER = ProtobufRates(message=1536, element=640, byte=2, unknown_byte=2)
+PROTOBUF_RATES_OTHER = ProtobufRates(message=1536, element=640, byte=8, unknown_byte=0)
 SPAN_BYTES = 2048
 VALUE_BYTES = 256
 TEXT_BYTES = 4

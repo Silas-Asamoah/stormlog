@@ -141,9 +141,9 @@ An export is charged, step by step and before each step runs:
    The parse is then charged, with protobuf's upb backend (with any other
    in brackets): 384 bytes a message (1,536); 192 bytes (640) for each
    field the parser keeps one by one, an unknown field or an element of a
-   repeated string or number; 2 bytes a content byte; and 2 more a byte of
-   unknown fields. Then the spans it yields are charged, 2 KiB a span, 256
-   bytes an attribute value and 4 bytes a content byte.
+   repeated string or number; 3 bytes a content byte (8); and 2 more a byte
+   of unknown fields (none). Then the spans it yields are charged, 2 KiB a
+   span, 256 bytes an attribute value and 4 bytes a content byte.
 
 The rates are measured and rounded up: json.loads at 90 bytes a token, a
 span and its record at 2 KB and an attribute value at 190 bytes on CPython
@@ -154,11 +154,14 @@ more than per byte: 100,000 empty spans are 200 KB on the wire and about
 19 MB parsed). An unknown field took about 120 bytes with upb and 470
 with pure Python (the first in a message; 170 to 320 each after it with
 pure Python), and its bytes up to 3.9 a byte with upb 4.24 and 4.3 with
-pure Python. A vLLM batch of 512 request spans, about 266 KB of protobuf,
-is charged about 8.5 MiB with upb (21 MiB with the pure-Python backend), or
-14 MiB as JSON. The largest export of such spans one receiver takes alone
-is about 3.8 MiB with upb, 7,700 spans, and 1.5 MiB with the pure-Python
-backend.
+pure Python. A byte of text took 2 with upb, the parse's copy of the body
+and its own, and up to 6 with pure Python, which decodes strings as it
+parses (3 for ASCII; 6 when one character outside the Basic Multilingual
+Plane makes Python store every character at 4 bytes). A vLLM batch of 512
+request spans, about 266 KB of protobuf, is charged about 8.7 MiB with upb
+(23 MiB with the pure-Python backend), or 14 MiB as JSON. The largest
+export of such spans one receiver takes alone is about 3.7 MiB with upb,
+7,500 spans, and 1.4 MiB with the pure-Python backend.
 
 An export must say how long it is: a chunked body, or one with no
 `Content-Length`, is answered 411 and counted in `bad_requests` (OTLP/HTTP
