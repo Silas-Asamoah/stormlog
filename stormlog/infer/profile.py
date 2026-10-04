@@ -1224,6 +1224,7 @@ class InferenceProfiler:
             output_token_exact=output_count.exact,
             total_tokens=total_tokens,
             finish_reason=result.finish_reason,
+            http_status=result.http_status,
         )
 
     def _failure_event(
