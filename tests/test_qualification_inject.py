@@ -148,6 +148,16 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     sessions = [r for r in victim_records if r.get("event_type") == "infer.session"]
     assert sessions[-1]["status"] == "completed"
     assert "KeyboardInterrupt" not in (run / "probes" / "victim.log").read_text()
+    # The reference hook log is in the truth, beside the first-seen notes
+    # that cut it for the replay.
+    copied = [
+        line
+        for path in (run / "truth" / "reference" / "hook").rglob("*.jsonl*")
+        for line in path.read_text().splitlines()
+        if line.strip()
+    ]
+    noted = (run / "probes" / "hook-firstseen.jsonl").read_text().splitlines()
+    assert len(copied) >= len(noted) > 0
 
 
 def test_a_bad_plan_is_refused_before_anything_runs(tmp_path: Path) -> None:

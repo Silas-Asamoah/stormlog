@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import time
 import urllib.error
 import urllib.request
@@ -93,6 +94,20 @@ class HookTailer:
         _append_lines(self.firstseen, notes)
         _append_lines(self.seals, seals)
         return records
+
+    def copy_to(self, destination: Path) -> int:
+        """Copy every epoch this tailer read, as it stands now, under
+        ``destination`` with the same ``<host>/<epoch>`` layout; returns
+        how many files were copied."""
+        copied = 0
+        for epoch in sorted({directory for directory, _number in self._segments}):
+            target = destination / epoch.relative_to(self.root)
+            target.mkdir(parents=True, exist_ok=True)
+            for path in sorted(epoch.iterdir()):
+                if path.is_file():
+                    shutil.copy2(path, target / path.name)
+                    copied += 1
+        return copied
 
     def _epoch_directories(self) -> list[Path]:
         if not self.root.is_dir():

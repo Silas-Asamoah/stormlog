@@ -469,7 +469,10 @@ reader:
   (`probes/hook-firstseen.jsonl`) and when each segment was sealed
   (`probes/seal-observations.jsonl`). A damaged line (a torn write) is
   skipped and counted, and a segment found shorter than what was read is
-  read again; both are noted in `probes/hook-problems.jsonl`. The harness's
+  read again; both are noted in `probes/hook-problems.jsonl`. At the end of
+  the run every epoch it read is copied into `truth/reference/hook`, before
+  the run is hashed, so the replay has the records its first-seen notes
+  describe. The harness's
   poller records a poll that fails in `probes/poll-errors.jsonl` and polls
   on; it stops, a poll in progress waited out, before the run is hashed. The replay uses these times to cut the
   hook log to what an online analyzer could have read.
@@ -688,7 +691,7 @@ nothing about its episodes:
 <root>/<label>/
   run/      victim.jsonl            the only path handed to the diagnoser
   truth/    run.json, injections.jsonl, episodes.json, plan.json, neighbor-<n>.jsonl,
-            reference/
+            reference/scrapes.jsonl, reference/hook/<host>/<epoch>/
   probes/   markers/, append-times.jsonl, client-idle.jsonl, hook-firstseen.jsonl,
             seal-observations.jsonl, victim.log
   SHA256SUMS
