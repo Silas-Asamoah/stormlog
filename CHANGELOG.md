@@ -67,9 +67,11 @@ the flaky benchmark memory gates
   (`outcome_unrecoverable`), as does an outcome a runner records in
   `infer.run_state`; only a protocol failure, such as an external cause a
   runner records there (listed with its evidence), sets aside a block, both
-  arms, and more than one block lost leaves the case's gates
-  `not_evaluable`. A retried block keeps its last attempt, but a retry
-  never replaces an outcome failure. An SLO gate over runs judged by
+  arms, and a gate's pre-registered `min_complete_blocks` says how many may
+  go. A baseline outcome failure leaves the case's contrasts
+  `not_evaluable: control_failed`, so a broken baseline never passes the
+  candidate. A retried block keeps its last attempt, but a retry never
+  replaces an outcome failure. An SLO gate over runs judged by
   different policies is refused unless `--slo` judges them all. Gates are
   `--gate METRIC=RULE:BUDGET` with `non-inferiority`, `significant` or
   `demonstrated`, and a budget that can never fail is a usage error;
@@ -109,12 +111,13 @@ the flaky benchmark memory gates
   fewest runs that could, never as a pass rate of 0. Strong right skew
   (8–12%) and pooled requests are published as limits. (#213)
 - `tests/fixtures/infer/comparison_contract_v1.json`: the comparison's
-  units contract, 26 cases whose expected effects, intervals and gate
+  units contract, 27 cases whose expected effects, intervals and gate
   outcomes are computed from the formulas and the gate rules by
   `examples/analysis/comparison_contract.py`, including the run-level claim
   on fractions (the attainment budget boundary, 6 of 6, 8 of 8, 7 of 8 and
-  9 of 10, an all-zero failure fraction, too few requests a run) and the
-  independent design's gate. (#213)
+  9 of 10, an all-zero failure fraction, too few requests a run), a
+  baseline outcome failure (`control_failed`) and the independent design's
+  gate. (#213)
 - `stormlog.infer.comparison_stats`: one metric compared between a
   baseline and a candidate arm of runs. Paired t on block log ratios (or
   differences) when runs carry block labels, Welch t with df = min(nA, nB) − 1
