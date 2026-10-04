@@ -297,6 +297,48 @@ def test_a_generation_whose_files_vanished_is_never_published(
     assert store.manifest(incident_id).current == "gen-0"  # type: ignore[union-attr]
 
 
+def _fd_name(fd: int) -> str:
+    """The last path component an open descriptor refers to."""
+    import fcntl
+
+    if os.path.isdir("/proc/self/fd"):
+        return os.readlink(f"/proc/self/fd/{fd}").rsplit("/", 1)[-1]
+    raw = fcntl.fcntl(fd, getattr(fcntl, "F_GETPATH"), b"\0" * 1024)  # macOS
+    return bytes(raw).rstrip(b"\0").decode().rsplit("/", 1)[-1]
+
+
+def test_publication_syncs_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every file and directory reaches the disk before the manifest names
+    it, and a new bundle's own entry in the store before anything inside."""
+    synced: list[str] = []
+    real_fsync = store_module.os.fsync
+
+    def fsync(fd: int) -> None:
+        synced.append(_fd_name(fd))
+        real_fsync(fd)
+
+    store = IncidentStore(tmp_path, _limits())
+    monkeypatch.setattr(store_module.os, "fsync", fsync)
+    incident_id = store.new_incident_id()
+    writer = store.new_bundle(incident_id, KIB)
+    assert writer is not None
+    assert synced == ["incidents"]  # the new bundle's directory entry
+    with writer.file("incident.jsonl") as out:
+        out.write(b"x\n")
+    writer.publish()
+    assert synced == [
+        "incidents",
+        "incident.jsonl",  # closing the file
+        "incident.jsonl",  # the generation, file by file
+        "gen-0",
+        incident_id,  # the generation's entry in the bundle
+        "manifest.json.tmp",
+        incident_id,  # the manifest's rename
+    ]
+
+
 # ------------------------------------------------------------------ readers
 
 
