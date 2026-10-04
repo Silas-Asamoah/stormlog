@@ -21,7 +21,10 @@ from dataclasses import dataclass
 @dataclass
 class WatchdogStats:
     armed: int = 0
+    # Deadlines that passed and shut their socket down.
     fired: int = 0
+    # Deadlines that passed but whose shutdown failed: nothing was cut.
+    failed: int = 0
 
 
 class Watchdog:
@@ -45,7 +48,13 @@ class Watchdog:
         self.stats = WatchdogStats()
 
     def arm(self, sock: socket.socket, deadline: float) -> int:
-        """Shut ``sock`` down when the clock passes ``deadline``; returns a token."""
+        """Shut ``sock`` down when the clock passes ``deadline``; returns a token.
+
+        ``ValueError`` for a closed or detached socket, which no shutdown
+        could reach.
+        """
+        if sock.fileno() == -1:
+            raise ValueError("a closed or detached socket cannot be armed")
         with self._cond:
             self._next_token += 1
             token = self._next_token
@@ -66,6 +75,7 @@ class Watchdog:
             return True
 
     def fired(self, token: int) -> bool:
+        """Whether ``token``'s deadline passed and shut its socket down."""
         with self._cond:
             return token in self._fired
 
@@ -100,9 +110,10 @@ class Watchdog:
         sock = self._sockets.pop(token, None)
         if sock is None:
             return
-        self._fired.add(token)
-        self.stats.fired += 1
         try:
             sock.shutdown(socket.SHUT_RDWR)
         except OSError:
-            pass
+            self.stats.failed += 1
+            return
+        self._fired.add(token)
+        self.stats.fired += 1

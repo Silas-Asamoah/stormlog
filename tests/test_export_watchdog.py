@@ -4,6 +4,8 @@ import socket
 import threading
 import time
 
+import pytest
+
 from stormlog._export.watchdog import Watchdog
 
 
@@ -83,4 +85,33 @@ def test_deadlines_fire_in_order_from_one_thread() -> None:
         for near, far in pairs:
             near.close()
             far.close()
+        watchdog.stop()
+
+
+def test_a_shutdown_that_fails_is_counted_and_not_reported_as_fired() -> None:
+    # An unconnected socket refuses shutdown, as a detached one would.
+    watchdog = Watchdog()
+    sock = socket.socket()
+    try:
+        token = watchdog.arm(sock, time.monotonic() + 0.05)
+        deadline = time.monotonic() + 5
+        while watchdog.stats.failed == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert watchdog.stats.failed == 1 and watchdog.stats.fired == 0
+        assert not watchdog.fired(token)
+    finally:
+        sock.close()
+        watchdog.stop()
+
+
+def test_a_closed_socket_cannot_be_armed() -> None:
+    # Its deadline could never cut anything: the pre-wrap socket of a TLS
+    # connection is in this state.
+    watchdog = Watchdog()
+    sock = socket.socket()
+    sock.close()
+    try:
+        with pytest.raises(ValueError, match="closed"):
+            watchdog.arm(sock, time.monotonic() + 1)
+    finally:
         watchdog.stop()
