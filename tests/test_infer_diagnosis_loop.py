@@ -39,6 +39,7 @@ from tests.vllm_execution_helpers import (
     hello,
     member,
     scheduled,
+    terminal,
 )
 
 MS = 1_000_000
@@ -326,6 +327,35 @@ def test_no_ongoing_stall_once_every_request_finished() -> None:
         records, LoopGapConfig(now_wall_ns=_end(records) + 900 * MS)
     )
     assert signal.exceeds is False
+
+
+def _ended(how: str) -> tuple[list[dict[str, Any]], int]:
+    """A 60-step loop whose requests ended without a completion naming a
+    finish: cancelled by the client, discarded after an end of sequence
+    under async scheduling, or with the epoch itself ended."""
+    records = _loop(60, beats=False)
+    end = max(int(r["mono_ns"]) for r in records if r["kind"] == "completed")
+    if how == "aborted":
+        records += [
+            terminal(n, end + MS, status="FINISHED_ABORTED", finish_reason="abort")
+            for n in ("a", "b")
+        ]
+    elif how == "discarded":
+        last = [r for r in records if r["kind"] == "completed"][-1]
+        last["members"] = [done(n, outcome="discarded_finished") for n in ("a", "b")]
+    else:
+        records.append(
+            {"kind": "goodbye", "wall_ns": end + WALL_OFFSET + MS, "mono_ns": end + MS}
+        )
+    return _sequenced(records), end + WALL_OFFSET
+
+
+@pytest.mark.parametrize("how", ["aborted", "discarded", "goodbye"])
+def test_requests_that_ended_leave_no_ongoing_stall(how: str) -> None:
+    records, end = _ended(how)
+    signal = engine_loop_gap(records, LoopGapConfig(now_wall_ns=end + SECOND))
+    assert signal.exceeds is False
+    assert not signal.detail.get("ongoing")
 
 
 # ------------------------------------------------------------- baseline
