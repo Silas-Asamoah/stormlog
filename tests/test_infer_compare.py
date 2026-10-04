@@ -673,10 +673,11 @@ def test_a_candidate_arm_mixing_two_configurations_is_refused() -> None:
         compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
 
 
-def test_an_allowed_difference_is_allowed_within_an_arm_too() -> None:
+def test_a_difference_within_an_arm_needs_its_own_allowance_and_is_named() -> None:
     # On the A30 box, the first launch of a model after a resume compiled
-    # cold and got a smaller KV cache; the error says to allow the field,
-    # so allowing it must work for the runs of one arm as well.
+    # cold and got a smaller KV cache. rev-213-a's D2: --allow, meant for
+    # the treatment difference between arms, also let an arm mix both
+    # settings, and nothing named the mix.
     baseline, candidate = _arms(SAME)
     cold = _fields(**{"effective.kv_cache_size_tokens": 855088})
     warm = _fields(**{"effective.kv_cache_size_tokens": 890960})
@@ -688,12 +689,25 @@ def test_an_allowed_difference_is_allowed_within_an_arm_too() -> None:
         _run("candidate", i, e, fields=warm, started=2 * i + 1)
         for i, e in enumerate(SAME)
     ]
-    with pytest.raises(InferInputError, match="allow a difference with --allow"):
+    field = "effective.kv_cache_size_tokens"
+    within = "allow a difference within an arm with --allow-within-arm"
+    with pytest.raises(InferInputError, match=within):
         compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
-    allowed = ComparisonSpec(gates=E2E_GATE, allow=("effective.kv_cache_size_tokens",))
+    with pytest.raises(InferInputError, match=within):
+        compare_runs(
+            baseline, candidate, ComparisonSpec(gates=E2E_GATE, allow=(field,))
+        )
+    allowed = ComparisonSpec(gates=E2E_GATE, allow_within_arm=(field,))
     comparison = compare_runs(baseline, candidate, allowed)
     gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
     assert gate is not None and gate.status == "pass"
+    first = baseline[0].name
+    assert comparison.diagnostics["within_arm_allowed"] == [
+        [first, run.name, [field]] for run in baseline[1:]
+    ]
+    assert comparison.spec.to_record()["allow_within_arm"] == [field]
+    text = "\n".join(comparison_lines(comparison))
+    assert f"Within an arm: {first} and {baseline[1].name} differ in {field}" in text
 
 
 def _observer(requested: bool, healthy: bool | None = True) -> dict[str, Any]:

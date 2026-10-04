@@ -1171,6 +1171,14 @@ def _add_compare_parser(subparsers: Any) -> None:
         help="A field or vllm_config JSON pointer that may differ between arms",
     )
     parser.add_argument(
+        "--allow-within-arm",
+        action="append",
+        default=[],
+        metavar="FIELD",
+        help="A field or vllm_config JSON pointer that may differ between the "
+        "runs of one arm; each such pair is named in the diagnostics",
+    )
+    parser.add_argument(
         "--added-observers",
         default="",
         metavar="NAME,...",
@@ -1322,6 +1330,7 @@ def _comparison_spec(args: argparse.Namespace) -> ComparisonSpec:
         design=args.design,
         mode=args.mode,
         allow=tuple(args.allow),
+        allow_within_arm=tuple(args.allow_within_arm),
         on_incomplete=args.on_incomplete,
         gates=gates,
         allow_not_evaluable=args.allow_not_evaluable,
