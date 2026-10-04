@@ -113,3 +113,83 @@ These limits apply only to what the watcher keeps under its root. vLLM
 writes each profiler trace into its own trace directory before the watcher
 can measure it, so nothing here bounds that write; see the watcher's
 trace-volume settings.
+
+## Triggers and what "sustained" means
+
+A trigger asks a question of the server's recent `/metrics` scrapes once per
+tick (Δ, 1 s by default) and only fires when the answer stays bad for long
+enough. Each evaluation looks at a window of the last `W` seconds and is one
+of:
+
+- **violating**;
+- **clear**;
+- **data gap**: the window cannot be judged. A scrape failed or is missing at
+  either end, too few samples arrived, a counter went backwards or was
+  recreated, or the exporter restarted, anywhere inside the window;
+- **masked**: the window overlaps the watcher's own profiler start or stop
+  and the recovery after it.
+
+The window's end scrape must have finished within one tick of the
+evaluation, and its start scrape within one tick of `t - W`. After an
+outage a window is a data gap until its start scrape follows the outage.
+
+| State | On | Next |
+| --- | --- | --- |
+| inactive | violating | pending, with nothing accumulated yet |
+| pending | violating | pending, adding the time since the previous evaluation; fires once that reaches the hold time `F` |
+| pending | masked; a data gap of at most `G` in all since the last judged evaluation; a clear run of at most `clear_tolerance` | pending, the clock paused |
+| pending | more data gap than `G`, or a longer clear run | inactive (a reset, recorded with its reason) |
+| firing | violating, masked or data gap | firing |
+| firing | clear | resolving |
+| resolving | violating | firing again: the same episode, counted as a re-entry |
+| resolving | masked or data gap | resolving, its clock paused |
+| resolving | `C` of clear in all | inactive; the trigger can fire again |
+
+Masked time never counts toward `G`. The defaults are `W` = 30 s, `F` =
+60 s, `C` = `F`, `G` = `F / 2`, and `clear_tolerance` = `min(2Δ, F / 10)`;
+`F` must be at least `W`.
+
+What this guarantees is about the predicate the watcher evaluates, not about
+the fault behind it. A 20 s fault can keep a queue observably saturated for
+much longer.
+- **A violation shorter than `F` never fires.** Accumulation starts at zero
+  on the first violating evaluation, so the accumulated time is at most the
+  span from the first violating tick to the last. A window predicate stays
+  true for at most `d + W` after an observable violation of length `d`, so
+  `d < F - W` never fires: with the defaults, anything under 30 s.
+- **A lasting violation fires on time.** If the predicate turns violating at
+  `a` and stays so, the trigger fires by `a + Δ + F`, plus any time it spent
+  paused. For a persistent change that a predicate sees only once its window
+  is full, `a` is at most the onset plus `W`, so detection takes at most
+  `F + W + Δ` after the onset, plus pauses.
+- **Resets restart the count.** After a reset, the bound counts again from
+  the next violating tick. Data gaps longer than `G` that keep coming back
+  leave no bound at all, and a scrape-health trigger reports them.
+
+Worked example, with `W` = 30, `F` = 60 and `G` = 30. The queue is saturated
+from 0 s, and every scrape fails from 89 s to 121 s:
+1. The first full window is in at 29 s, and the trigger goes pending.
+2. By 88 s it has 59 s of the 60 s it needs. The outage at 89 s stops it.
+3. At 119 s more than 30 s of data gap have passed, and it resets.
+4. Windows can be judged again once their start scrape, at 122 s, follows the
+   outage: at 151 s. The trigger goes pending again and fires at 211 s.
+
+A test reproduces this from scrapes.
+
+### Predicates
+
+Every figure is engine-wide: it covers all of the server's traffic.
+
+| Predicate | Fires when | Judged on |
+| --- | --- | --- |
+| a gauge at or above a value | every sample in the window, or a chosen share of them, is at or above it | the window's minimum, or the share |
+| a counter's rate | the counter rises at least as fast as the threshold | the lower bound of its rate, from the window's timing uncertainty |
+| a histogram's share above a value | more than the chosen share of the window's observations are above the value | the lower bucket bound: a value between two bucket bounds gives an interval `[lo, hi]`, and only `lo` can fire |
+| a #218 signal (`queue_saturation`, `kv_preemption_pressure`, `prefix_cache_loss`) | the signal exceeds its threshold in #218's shared table | the signal's own window rule; the incident says the mechanism is *suspected* |
+| scrape failures | the last `k` scrapes all failed; a failed scrape is evidence here, not a gap | the scrapes |
+| a frozen exporter | over the last `k + 1` scrapes, requests run or wait and no progress counter moves | the gauges and the generation and prompt token counters |
+
+A trigger on a histogram vLLM records when a request completes (e2e, TPOT,
+the `request_*` families) has its masked window widened by the completion
+horizon. Requests delayed by a capture's pause finish up to one request
+lifetime later.
