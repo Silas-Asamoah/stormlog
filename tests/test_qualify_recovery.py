@@ -309,12 +309,16 @@ def test_queue_saturation_ends_when_the_waits_are_back() -> None:
     # Every wait at or below the baseline's p95 almost never holds for 10 s
     # (5% of normal waits are above it), so the effect ended 6 s late on
     # median and up to 90 s late. As many as chance allows may be above it.
+    # A hold's mean wait must also be near the baseline's, which a chance
+    # run of slow waits delays by a few seconds: over 200 seeds, 3 end more
+    # than 3 s late (2 without the mean bound), none more than 5.1 s.
     lags = []
     for seed in range(40):
         end, back = queue_run(seed, elevated_after=0.0)
         assert end is not None, seed
         lags.append((end - back) / S)
-    assert all(-3.0 <= lag <= 3.0 for lag in lags), lags
+    assert all(-3.0 <= lag <= 6.0 for lag in lags), lags
+    assert sum(lag > 3.0 for lag in lags) <= 1, lags
 
 
 def test_queue_saturation_lasts_while_most_waits_stay_long() -> None:
@@ -575,6 +579,35 @@ def test_queue_recovery_doesnt_hold_through_recurring_bursts() -> None:
     )
     calm_waits, calm_gauge = _queue_criteria_of(context(calm, ctx.actions))
     assert calm_waits.holds(50 * S, 60 * S) and calm_gauge.holds(50 * S, 60 * S)
+
+
+def test_queue_recovery_doesnt_hold_through_bursts_under_the_ceilings() -> None:
+    # rev-220-b's delta 2, E6: the ceilings bound how far out a sample may
+    # be, not how often. One wait in ten at 0.5 s (under the 0.6 s ceiling,
+    # twice a baseline p99 that two slow waits set), and a waiting count of
+    # 11 one scrape in five (under twice the highest, 6), passed as chance.
+    # The hold's means now count them.
+    waits = every_second(0, 45, lambda s: 0.3 if s in (10, 30) else 0.05)
+    burst_waits = [
+        (S * 50 + tenth * S // 10, 0.5 if tenth % 10 == 5 else 0.05)
+        for tenth in range(100)
+    ]
+    waiting = every_second(0, 45, lambda s: float(s % 7))
+    burst_gauge = every_second(50, 60, lambda s: 11.0 if s % 5 == 2 else 3.0)
+    signals = Signals(
+        in_flight=None, waits=waits + burst_waits, waiting=waiting + burst_gauge
+    )
+    waits_rule, gauge_rule = _queue_criteria_of(
+        context(signals, Actions(first_send_ns=48 * S))
+    )
+    ceiling = 2 * signals_baseline(signals).wait_p99
+    assert all(value < ceiling for _t, value in burst_waits)
+    assert not waits_rule.holds(50 * S, 60 * S)
+    assert not gauge_rule.holds(50 * S, 60 * S)
+
+
+def signals_baseline(signals: Signals) -> Baseline:
+    return Baseline.measure(signals, 0, 45 * S)
 
 
 def _queue_criteria_of(ctx: Context) -> list[Criterion]:

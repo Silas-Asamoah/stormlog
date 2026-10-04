@@ -292,12 +292,13 @@ class MedianWithin:
 
 class MostlyWithin:
     """At least ``min_samples`` samples in the interval, the first of them
-    inside [low, high], none above ``ceiling``, and no more outside the band
-    than chance allows. The band is a baseline's tail, which
-    ``exceedance_share`` of normal samples leave; the ceiling bounds how far
-    out an allowed sample may be, so recurring bursts far beyond the band
-    don't pass as chance. A hold that began with an outside sample would
-    end the effect before its last sample."""
+    inside [low, high], none above ``ceiling``, their mean at most
+    ``mean_ceiling``, and no more outside the band than chance allows. The
+    band is a baseline's tail, which ``exceedance_share`` of normal samples
+    leave; the ceiling bounds how far out an allowed sample may be, and the
+    mean how often samples may come near it, so recurring bursts beyond the
+    band don't pass as chance. A hold that began with an outside sample
+    would end the effect before its last sample."""
 
     def __init__(
         self,
@@ -308,11 +309,14 @@ class MostlyWithin:
         low: float = float("-inf"),
         high: float = float("inf"),
         ceiling: float = float("inf"),
+        mean_ceiling: float = float("inf"),
     ) -> None:
         self.times = [time for time, _value in points]
         self.inside = [low <= value <= high for _time, value in points]
         self.outside = _prefix(float(not inside) for inside in self.inside)
         self.over = _prefix(float(value > ceiling) for _time, value in points)
+        self.sums = _prefix(value for _time, value in points)
+        self.mean_ceiling = mean_ceiling
         self.min_samples = min_samples
         self.thresholds = thresholds
 
@@ -323,6 +327,8 @@ class MostlyWithin:
         if count < self.min_samples or not self.inside[first]:
             return False
         if self.over[last] > self.over[first]:
+            return False
+        if (self.sums[last] - self.sums[first]) / count > self.mean_ceiling:
             return False
         return self.outside[last] - self.outside[first] <= allowed_exceedances(
             count,
@@ -520,6 +526,8 @@ class Baseline:
     wait_count: int = 0
     waiting_count: int = 0
     hit_ratio_count: int = 0
+    wait_mean: float = math.inf
+    waiting_mean: float = math.inf
 
     @classmethod
     def measure(
@@ -549,6 +557,8 @@ class Baseline:
             wait_count=len(waits),
             waiting_count=len(gauge),
             hit_ratio_count=len(ratios),
+            wait_mean=statistics.fmean(waits) if waits else math.inf,
+            waiting_mean=statistics.fmean(gauge) if gauge else math.inf,
         )
 
 
@@ -596,10 +606,15 @@ def _queue_criteria(context: Context) -> list[Criterion]:
     are above a p95, so "every wait" would almost never hold. But none may
     be far out: no wait above ``long_gap_factor`` times the baseline's p99,
     and no waiting count above that factor times the baseline's highest
-    (or 1), as cadence bounds its gaps. A baseline with fewer samples than
-    a criterion needs in its hold never holds."""
+    (or 1), as cadence bounds its gaps. Nor may they be near those bounds
+    too often: the hold's mean wait is at most the baseline's over
+    ``1 - rate_tolerance`` (1.25 times), as cadence bounds its mean gap, and
+    its mean waiting count too, or at most one more. A
+    baseline with fewer samples than a criterion needs in its hold never
+    holds."""
     baseline, thresholds = context.baseline, context.thresholds
     factor = thresholds.long_gap_factor
+    slack = 1 / (1 - thresholds.rate_tolerance)
     waits: Criterion = Never()
     if baseline.wait_count >= thresholds.min_wait_samples:
         waits = MostlyWithin(
@@ -608,6 +623,7 @@ def _queue_criteria(context: Context) -> list[Criterion]:
             min_samples=thresholds.min_wait_samples,
             high=baseline.wait_p95,
             ceiling=factor * baseline.wait_p99,
+            mean_ceiling=slack * baseline.wait_mean,
         )
     waiting: Criterion = Never()
     if baseline.waiting_count >= thresholds.min_gauge_samples:
@@ -618,6 +634,7 @@ def _queue_criteria(context: Context) -> list[Criterion]:
             low=baseline.waiting_low,
             high=baseline.waiting_high,
             ceiling=factor * max(baseline.waiting_high, 1.0),
+            mean_ceiling=max(slack * baseline.waiting_mean, baseline.waiting_mean + 1),
         )
     return [waits, waiting]
 
