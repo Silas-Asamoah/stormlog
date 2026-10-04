@@ -286,10 +286,12 @@ class MedianWithin:
 
 class MostlyWithin:
     """At least ``min_samples`` samples in the interval, the first of them
-    inside [low, high], and no more outside it than chance allows. The band
-    is a baseline's tail, which ``exceedance_share`` of normal samples
-    leave. A hold that began with an outside sample would end the effect
-    before its last sample."""
+    inside [low, high], none above ``ceiling``, and no more outside the band
+    than chance allows. The band is a baseline's tail, which
+    ``exceedance_share`` of normal samples leave; the ceiling bounds how far
+    out an allowed sample may be, so recurring bursts far beyond the band
+    don't pass as chance. A hold that began with an outside sample would
+    end the effect before its last sample."""
 
     def __init__(
         self,
@@ -299,10 +301,12 @@ class MostlyWithin:
         min_samples: int,
         low: float = float("-inf"),
         high: float = float("inf"),
+        ceiling: float = float("inf"),
     ) -> None:
         self.times = [time for time, _value in points]
         self.inside = [low <= value <= high for _time, value in points]
         self.outside = _prefix(float(not inside) for inside in self.inside)
+        self.over = _prefix(float(value > ceiling) for _time, value in points)
         self.min_samples = min_samples
         self.thresholds = thresholds
 
@@ -311,6 +315,8 @@ class MostlyWithin:
         last = bisect.bisect_right(self.times, end_ns)
         count = last - first
         if count < self.min_samples or not self.inside[first]:
+            return False
+        if self.over[last] > self.over[first]:
             return False
         return self.outside[last] - self.outside[first] <= allowed_exceedances(
             count,
@@ -479,6 +485,7 @@ class Baseline:
     chunks: GapStats
     cached_median: float
     hit_ratio_median: float = 0.0
+    wait_p99: float = math.inf
     wait_count: int = 0
     waiting_count: int = 0
     hit_ratio_count: int = 0
@@ -491,6 +498,7 @@ class Baseline:
         waiting = gauge or [0.0]
         return cls(
             wait_p95=_q95(waits),
+            wait_p99=_q(waits, 0.99),
             waiting_low=min(waiting),
             waiting_high=max(waiting),
             kv_max=max(between(signals.kv_usage, start_ns, end_ns) or [0.0]),
@@ -505,7 +513,11 @@ class Baseline:
 
 
 def _q95(values: Sequence[float]) -> float:
-    found = quantile(values, 0.95)
+    return _q(values, 0.95)
+
+
+def _q(values: Sequence[float], q: float) -> float:
+    found = quantile(values, q)
     return float("inf") if found is None else found
 
 
@@ -541,9 +553,13 @@ class Context:
 def _queue_criteria(context: Context) -> list[Criterion]:
     """Waits back below the baseline's p95, and the waiting count within its
     range, but for as many exceptions as chance allows: 5% of normal waits
-    are above a p95, so "every wait" would almost never hold. A baseline
-    with fewer samples than a criterion needs in its hold never holds."""
+    are above a p95, so "every wait" would almost never hold. But none may
+    be far out: no wait above ``long_gap_factor`` times the baseline's p99,
+    and no waiting count above that factor times the baseline's highest
+    (or 1), as cadence bounds its gaps. A baseline with fewer samples than
+    a criterion needs in its hold never holds."""
     baseline, thresholds = context.baseline, context.thresholds
+    factor = thresholds.long_gap_factor
     waits: Criterion = Never()
     if baseline.wait_count >= thresholds.min_wait_samples:
         waits = MostlyWithin(
@@ -551,6 +567,7 @@ def _queue_criteria(context: Context) -> list[Criterion]:
             thresholds,
             min_samples=thresholds.min_wait_samples,
             high=baseline.wait_p95,
+            ceiling=factor * baseline.wait_p99,
         )
     waiting: Criterion = Never()
     if baseline.waiting_count >= thresholds.min_gauge_samples:
@@ -560,6 +577,7 @@ def _queue_criteria(context: Context) -> list[Criterion]:
             min_samples=thresholds.min_gauge_samples,
             low=baseline.waiting_low,
             high=baseline.waiting_high,
+            ceiling=factor * max(baseline.waiting_high, 1.0),
         )
     return [waits, waiting]
 

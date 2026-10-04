@@ -542,3 +542,37 @@ def test_a_stall_still_open_at_a_holds_end_is_a_long_gap() -> None:
     # idle time, not a stall.
     idle = CadenceWithin(gaps, baseline, Thresholds(), [(0, 520 * MS)])
     assert idle.holds(0, 5 * S)
+
+
+def test_queue_recovery_doesnt_hold_through_recurring_bursts() -> None:
+    # rev-220-b's D9: a chance allowance counts samples out of band, not
+    # how far out. 10 of 100 waits at 30 s (375x the p95) passed as chance,
+    # and so did a saturated waiting gauge 1 sample in 10.
+    waits = every_second(0, 45, lambda s: 0.08 + 0.001 * (s % 7))
+    burst_waits = [
+        (S * 50 + tenth * S // 10, 30.0 if tenth % 10 == 0 else 0.08)
+        for tenth in range(100)
+    ]
+    waiting = every_second(0, 45, lambda s: float(s % 7))
+    burst_gauge = every_second(50, 60, lambda s: 30.0 if s == 55 else 3.0)
+    signals = Signals(
+        in_flight=None, waits=waits + burst_waits, waiting=waiting + burst_gauge
+    )
+    ctx = context(signals, Actions(first_send_ns=48 * S))
+    waits_rule, gauge_rule = _queue_criteria_of(ctx)
+    assert not waits_rule.holds(50 * S, 60 * S)
+    assert not gauge_rule.holds(50 * S, 60 * S)
+    # Without the far-out samples, the same holds pass.
+    calm = Signals(
+        in_flight=None,
+        waits=waits + [(t, 0.08) for t, _v in burst_waits],
+        waiting=waiting + every_second(50, 60, lambda s: 3.0),
+    )
+    calm_waits, calm_gauge = _queue_criteria_of(context(calm, ctx.actions))
+    assert calm_waits.holds(50 * S, 60 * S) and calm_gauge.holds(50 * S, 60 * S)
+
+
+def _queue_criteria_of(ctx: Context) -> list[Criterion]:
+    from stormlog.infer.qualify.recovery import _queue_criteria
+
+    return _queue_criteria(ctx)
