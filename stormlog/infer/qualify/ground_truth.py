@@ -255,10 +255,12 @@ def assess_impact(effect: OutcomeCounts, baseline: OutcomeCounts) -> Impact:
     """A.6 layer 4: impact when the effect window's violations are more
     likely than the baseline's (one-sided Fisher exact, α = 0.05) and at
     least 3; partial when the effect window's SLO evidence covers less than
-    0.9 of its requests."""
+    0.9 of its requests, or when no baseline outcome is known."""
     coverage = effect.coverage
     if coverage is None or coverage < IMPACT_MIN_COVERAGE:
         return Impact(IMPACT_PARTIAL, effect, baseline, reason="slo_evidence_coverage")
+    if baseline.violations + baseline.met == 0:
+        return Impact(IMPACT_PARTIAL, effect, baseline, reason="no_baseline_outcomes")
     p_value = fisher_greater(
         violations=effect.violations,
         met=effect.met,
