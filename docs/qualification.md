@@ -123,7 +123,9 @@ configuration's capture.
 
 `effect_timing(episode_type, context)` gives each mechanism's onset, its end
 (the start of the first interval over which its recovery criteria hold) and
-when recovery held:
+when recovery held. The earliest such interval is found exactly: what an
+interval sees changes only where a sample leaves it or enters it, so every
+such start is tried.
 
 | Episodes | Effect onset | Recovered when, for 10 s |
 | --- | --- | --- |

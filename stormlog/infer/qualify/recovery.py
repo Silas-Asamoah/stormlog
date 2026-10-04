@@ -217,16 +217,18 @@ def held_from(
     hold_ns: int,
 ) -> int | None:
     """The earliest time from ``from_ns`` after which every criterion holds
-    for ``hold_ns``, with the whole hold observed by ``until_ns``. A
-    criterion can only start to hold just after one of its change points,
-    so those are the candidates."""
+    for ``hold_ns``, with the whole hold observed by ``until_ns``. What a
+    hold sees changes only where a change point leaves it (a start just
+    after the point) or enters it (a start one hold before the point), so
+    those are the candidates."""
     candidates = {from_ns}
     for criterion in criteria:
-        candidates.update(
-            point + 1
-            for point in criterion.change_points()
-            if from_ns <= point < until_ns
-        )
+        for point in criterion.change_points():
+            candidates.update(
+                start
+                for start in (point + 1, point - hold_ns)
+                if from_ns <= start < until_ns
+            )
     for start in sorted(candidates):
         end = start + hold_ns
         if end > until_ns:
