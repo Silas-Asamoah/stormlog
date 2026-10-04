@@ -337,11 +337,11 @@ ranked by #218's total `rank`, and top-1 and top-3 are taken over it.
 - **The temporal rule.** Take
   `S = [effect_onset − pre_grace, effect_end + grace(kind)]`. Here
   `pre_grace` is the finding's `window.resolution_ns + window.uncertainty_ns`,
-  at most `ScoreConfig.max_pre_grace_ns` (30 s, frozen with `score_v1`; a
-  run's problems count the findings that claim more), and `grace` is frozen
-  per finding kind (`ScoreConfig.grace_ns`). A finding
-  qualifies when it starts inside `S` and at least half of its window lies
-  inside. A finding with no window, or a run-wide one, never does, nor
+  at most `ScoreConfig.max_pre_grace_ns`: one 5 s onset window, a fixed
+  bound frozen with `score_v1` and never taken from a claim. A run's
+  problems count the findings whose uncertainty alone exceeds it. `grace`
+  is frozen per finding kind (`ScoreConfig.grace_ns`). A finding qualifies
+  when it starts inside `S` and at least half of its window lies inside. A finding with no window, or a run-wide one, never does, nor
   does one whose window ends before it starts or names a clock domain
   other than the victim's. A finding with a severity or role outside #218's
   vocabulary is refused (`ValueError`, naming it).

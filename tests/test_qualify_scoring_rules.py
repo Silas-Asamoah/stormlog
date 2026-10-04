@@ -410,10 +410,14 @@ def test_a_findings_pre_grace_is_capped() -> None:
     early = finding("a", KV, 1, window=(40, 50))
     early["window"]["uncertainty_ns"] = 100 * S
     assert not score_episode(episode(), diagnosis(early), CONFIG).correct(TOP1, 2)
-    # Within the cap, a finding's pre-grace still counts in full.
-    near = finding("a", KV, 1, window=(85, 95))
-    near["window"]["uncertainty_ns"] = 20 * S
+    # The cap is the lead's fixed bound, one 5 s onset window: within it a
+    # finding's pre-grace counts in full, and a start 6 s early never does.
+    near = finding("a", KV, 1, window=(95, 140))
+    near["window"]["uncertainty_ns"] = 4 * S
     assert score_episode(episode(), diagnosis(near), CONFIG).correct(TOP1, 2)
+    wide = finding("a", KV, 1, window=(94, 140))
+    wide["window"]["uncertainty_ns"] = 20 * S
+    assert not score_episode(episode(), diagnosis(wide), CONFIG).correct(TOP1, 2)
 
 
 def test_a_wide_pre_grace_never_hides_a_negative_runs_false_claim() -> None:
@@ -435,7 +439,7 @@ def test_a_wide_pre_grace_never_hides_a_negative_runs_false_claim() -> None:
         for i in range(60)
     ]
     assert runs[0].problems == (
-        "run g0: 1 findings with more pre-grace than max_pre_grace_ns",
+        "run g0: 1 findings with more uncertainty than max_pre_grace_ns",
     )
     summary = summarize(runs, CONFIG)
     assert summary.negative_runs == 60 and summary.false_positive_runs == 60
