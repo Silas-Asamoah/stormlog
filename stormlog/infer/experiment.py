@@ -73,6 +73,7 @@ from .experiment_process import (
 from .manifest import attach_manifest
 from .model_identity import VerifiedModel, changed_files, prepare_model
 from .server_collector import NvmlUnavailableError
+from .server_probe import AUTO, BEFORE, probe_server
 
 COMPLETED = "completed"
 OUTCOME_FAILURE = "outcome_failure"
@@ -215,14 +216,14 @@ def _run_block(
     retry: bool,
     on_event: Events | None,
 ) -> list[dict[str, Any]]:
-    written = []
+    written: list[dict[str, Any]] = []
     prelude_failures = [
         reason
         for prelude in plan.preludes
         for reason in _prelude(plan, prelude, block, output, env)
     ]
     for position, arm in enumerate(arms):
-        record = _attempt(
+        records = _attempts(
             plan,
             plan.arms[arm],
             block,
@@ -233,15 +234,39 @@ def _run_block(
             retry,
             prelude_failures,
         )
-        if record is None:
-            continue
-        _append_index(output, record)
-        written.append(record)
-        if on_event is not None:
-            on_event(record)
-        if "collector_cleanup_unverified" in record["reasons"]:
+        for record in records:
+            _append_index(output, record)
+            if on_event is not None:
+                on_event(record)
+        written += records
+        if any("collector_cleanup_unverified" in r["reasons"] for r in records):
             break  # never measure beside a process that would not stop
     return written
+
+
+def _attempts(
+    plan: ExperimentPlan,
+    arm: Arm,
+    block: int,
+    position: int,
+    output: Path,
+    env: Environment,
+    resume: bool,
+    retry: bool,
+    prelude_failures: list[str],
+) -> list[dict[str, Any]]:
+    """A run's attempt, and one more on a fresh server if its probe did not finish."""
+    first = _attempt(
+        plan, arm, block, position, output, env, resume, retry, prelude_failures
+    )
+    if first is None:
+        return []
+    if "probe_incomplete" not in first["reasons"]:
+        return [first]
+    again = _attempt(
+        plan, arm, block, position, output, env, False, True, prelude_failures
+    )
+    return [first] + ([again] if again is not None else [])
 
 
 def _attempt(
@@ -391,6 +416,7 @@ class _Run:
         self.commands: list[str] = []
         self.server: Launched | None = None
         self.treatments: list[tuple[Treatment, Launched]] = []
+        self.steps_started = False
 
     # The run, in order -------------------------------------------------
 
@@ -454,7 +480,25 @@ class _Run:
         if not _wait_healthy(server.base_url, self.server, server.start_timeout_s):
             self.record.protocol("server_never_healthy", before_treatment=True)
             return False
+        if not self._probe():
+            return False
         return self._only_vllm_processes()
+
+    def _probe(self) -> bool:
+        """Ask the server about itself once, before anything is measured.
+
+        A /server_info that does not answer in time may leave vLLM's
+        environment collector running; the run stops here, and the plan
+        runs it again on a fresh server.
+        """
+        probe = probe_server(self.plan.server.base_url, mode=AUTO, phase=BEFORE)
+        (self.dir / "server-probe.json").write_text(
+            json.dumps(probe.to_record(session_id=self.label), indent=2) + "\n"
+        )
+        if probe.incomplete:
+            self.record.protocol("probe_incomplete", before_treatment=True)
+            return False
+        return True
 
     def _only_vllm_processes(self) -> bool:
         assert self.server is not None
@@ -565,6 +609,7 @@ class _Run:
     # Steps ----------------------------------------------------------------
 
     def _run_steps(self) -> None:
+        self.steps_started = True
         for step in self.arm.workload:
             if not self._run_step(step):
                 return
@@ -598,6 +643,8 @@ class _Run:
     # Artifacts --------------------------------------------------------------
 
     def _check_artifacts(self) -> None:
+        if not self.steps_started:
+            return  # nothing was measured, so nothing is missing
         for step in self.arm.workload:
             for template in step.artifacts:
                 path = Path(expand(template, self.values))
