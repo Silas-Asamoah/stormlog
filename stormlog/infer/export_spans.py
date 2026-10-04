@@ -267,6 +267,8 @@ class ProfileSpans:
             ("stop_reason", record.get("stop_reason") or "not_started"),
             ("start_status", record.get("start_status")),
             ("stop_status", record.get("stop_status")),
+            # A control call that failed: a flag, not its text.
+            ("failed", bool(record.get("start_error") or record.get("stop_error"))),
         ]
         if ERRORS in self.identity.content:
             error = record.get("start_error") or record.get("stop_error")
@@ -351,7 +353,8 @@ class ProfileSpans:
             events=events,
             links=(SpanLink(phase_trace, phase_span),),
             status=STATUS_ERROR if error else STATUS_UNSET,
-            status_message=self._message(fields),
+            # A status description is only for the error status.
+            status_message=self._message(fields) if error else None,
         )
 
     def _content_attributes(
@@ -392,6 +395,7 @@ class ProfileSpans:
         )
 
     def _trace_window_span(self, fields: Mapping[str, Value]) -> Span:
+        failed = fields.get("failed") is True
         requested = _int(fields.get("requested_ns"))
         started = _int(fields.get("started_ns"), requested)
         ids = derived_ids(
@@ -419,7 +423,8 @@ class ProfileSpans:
                     ("stormlog.trace_window.stop_status", fields.get("stop_status")),
                 ]
             ),
-            status_message=self._message(fields),
+            status=STATUS_ERROR if failed else STATUS_UNSET,
+            status_message=self._message(fields) if failed else None,
         )
 
     def _capture_span(self, fields: Mapping[str, Value]) -> Span:
