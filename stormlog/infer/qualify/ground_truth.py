@@ -526,7 +526,9 @@ class RunRecord:
     actions: tuple[dict[str, Any], ...] = ()
 
     def problems(self) -> list[str]:
-        found = []
+        found = [] if self.run_id else ["a run needs its run_id"]
+        if self.measured.end_ns == self.measured.start_ns:
+            found.append("measured has no length")
         for name in ("measured", "priming", "baseline", "final_recovery"):
             interval = getattr(self, name)
             if interval is None:

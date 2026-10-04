@@ -117,6 +117,9 @@ class ScoreConfig:
     gated_metric: str = TOP1
     gated_level: int = 2
     negative_types: frozenset[str] = NEGATIVE_TYPES
+    # A negative run with less exposure than this is no FPR unit: a run
+    # that is all priming must not count as a clean one (C.5 plans ~294 s).
+    min_exposure_ns: int = 60_000_000_000
 
     def grace(self, kind: str) -> int:
         return self.grace_ns.get(kind, self.default_grace_ns)
@@ -579,7 +582,8 @@ def score_run(
 
     Raises:
         GroundTruthError: for a run record or an episode that is malformed.
-        ValueError: for an episode of another run, or one given twice.
+        ValueError: for an episode of another run, one given twice, or one
+            outside the run's measured window.
     """
     _check_run(run, injections)
     findings = findings_of(diagnosis)
@@ -596,6 +600,11 @@ def score_run(
             run.run_id, episodes, problems=problems, excluded_negative=excluded
         )
     exposure = negative_exposure(run, injections, config)
+    unusable = _unusable_exposure(unit, exposure, config)
+    if unusable:
+        return RunScore(
+            run.run_id, episodes, problems=problems, excluded_negative=unusable
+        )
     elsewhere = {
         finding.id
         for injection in injections
@@ -604,6 +613,22 @@ def score_run(
     }
     claims = _negative_claims(findings, elsewhere, exposure, unit, config)
     return RunScore(run.run_id, episodes, unit.episode_id, exposure, claims, problems)
+
+
+def _unusable_exposure(
+    unit: Injection, exposure: Sequence[Interval], config: ScoreConfig
+) -> str | None:
+    """Why a run's exposure can't count it as an FPR unit: too little of it,
+    or its negative episode's own window not wholly inside it."""
+    if sum(interval.length_ns for interval in exposure) < config.min_exposure_ns:
+        return "exposure_below_minimum"
+    onset, end = unit.times.effect_onset_ns, unit.times.effect_end_ns
+    inside = (
+        onset is not None
+        and end is not None
+        and any(i.start_ns <= onset and end <= i.end_ns for i in exposure)
+    )
+    return None if inside else "negative_outside_exposure"
 
 
 def _check_truth(run: RunRecord, injections: Sequence[Injection]) -> None:
@@ -622,14 +647,23 @@ def _check_run(run: RunRecord, injections: Sequence[Injection]) -> None:
     ids = [injection.episode_id for injection in injections]
     if len(set(ids)) != len(ids):
         raise ValueError(f"run {run.run_id}: an episode is given twice")
-    strays = sorted(i.episode_id for i in injections if i.run_id != run.run_id)
-    if strays:
-        raise ValueError(f"run {run.run_id}: episodes of another run: {strays}")
-    clocks = sorted(
-        i.episode_id for i in injections if i.clock_domain != run.clock_domain
+    for what, belongs in (
+        ("of another run", lambda i: i.run_id == run.run_id),
+        ("on another clock", lambda i: i.clock_domain == run.clock_domain),
+        ("outside its window", lambda i: _inside_run(i, run)),
+    ):
+        wrong = sorted(i.episode_id for i in injections if not belongs(i))
+        if wrong:
+            raise ValueError(f"run {run.run_id}: episodes {what}: {wrong}")
+
+
+def _inside_run(injection: Injection, run: RunRecord) -> bool:
+    times = injection.times
+    marks = (times.action_onset_ns, times.effect_onset_ns, times.effect_end_ns)
+    measured = run.measured
+    return all(
+        measured.start_ns <= t <= measured.end_ns for t in marks if t is not None
     )
-    if clocks:
-        raise ValueError(f"run {run.run_id}: episodes on another clock: {clocks}")
 
 
 def assign_findings(
@@ -867,7 +901,7 @@ def summarize(runs: Sequence[RunScore], config: ScoreConfig) -> Summary:
     Raises:
         ValueError: without ``config.supported_types`` (a declared stratum
             with no valid episode must fail, not vanish), or for an episode
-            scored twice.
+            or a run scored twice.
     """
     scores = _episodes(runs)
     faults = [s for s in scores if _counts_for_accuracy(s, config)]
@@ -907,6 +941,8 @@ def _secondary_errors(faults: Sequence[EpisodeScore]) -> tuple[int, int]:
 
 
 def _episodes(runs: Sequence[RunScore]) -> list[EpisodeScore]:
+    if len({run.run_id for run in runs}) != len(runs):
+        raise ValueError("a run is scored twice")
     scores = [episode for run in runs for episode in run.episodes]
     if len({score.episode_id for score in scores}) != len(scores):
         raise ValueError("an episode is scored twice")

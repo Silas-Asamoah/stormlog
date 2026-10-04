@@ -92,7 +92,10 @@ exposure from it and the run's episodes (`negative_exposure`). Every
 sub-window must lie inside the measured one, and `score_run` refuses an
 episode on another clock than its run's: the two are compared. `score_run`
 also checks a run and its episodes built in memory as if they had been read
-from files, and raises `GroundTruthError` on what parsing would refuse.
+from files, and raises `GroundTruthError` on what parsing would refuse. It
+refuses an episode outside the run's measured window, and `summarize` a run
+scored twice. A run record needs its `run_id` and a measured window with
+length.
 
 ```json
 {"format": "stormlog.qualify.run/1", "run_id": "q221-dxoff-b03-r07",
@@ -360,7 +363,7 @@ a coverage gap.
 | Claim | Population | Gate |
 | --- | --- | --- |
 | Accuracy per episode type (top-1 at L2) | `valid` fault episodes, one stratum for every type the support matrix (`ScoreConfig.supported_types`, required) declares. A declared stratum with no valid episode has no bound and fails; each records its excluded episodes by status | Clopper–Pearson lower bound ≥ 0.78 in every stratum |
-| False-positive rate | negative runs: a run holding exactly one `valid` episode of C.5's eight negative types (T1, T2, T3, T3b, H0, W1, P, N). A run's false claims are counted over its whole negative exposure: the measured window less the priming and the span of every attempted fault or instrumentation episode, from its onset to its effect end plus the longest grace of any kind (a finding of any kind is assigned to the episode up to its own grace). I1 and outages are not negatives; a run with two negatives is reported, not counted. Every run with a negative that isn't a unit is counted by why (its episode's status, `protocol_failure` or `several_negatives`) in `excluded_negative_runs`, since each one shrinks the denominator: 0 of 52 bounds the rate at 0.056 | upper bound ≤ 0.05 |
+| False-positive rate | negative runs: a run holding exactly one `valid` episode of C.5's eight negative types (T1, T2, T3, T3b, H0, W1, P, N). A run's false claims are counted over its whole negative exposure: the measured window less the priming and the span of every attempted fault or instrumentation episode, from its onset to its effect end plus the longest grace of any kind (a finding of any kind is assigned to the episode up to its own grace). I1 and outages are not negatives; a run with two negatives is reported, not counted. A unit needs at least `ScoreConfig.min_exposure_ns` (60 s) of exposure, and its negative episode's own window wholly inside it. Every run with a negative that isn't a unit is counted by why (its episode's status, `protocol_failure`, `several_negatives`, `exposure_below_minimum` or `negative_outside_exposure`) in `excluded_negative_runs`, since each one shrinks the denominator: 0 of 52 bounds the rate at 0.056 | upper bound ≤ 0.05 |
 | False claims per negative hour | the same claims over the same exposure, summed over the negative runs | descriptive: the exact Poisson bound |
 | Incident attribution | fault episodes with victim impact | descriptive |
 | Condition localization | fault episodes. An eligible finding of the label's kind at its location counts, in any role, cause or severity | descriptive |

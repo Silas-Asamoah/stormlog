@@ -6,7 +6,9 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from stormlog.infer.qualify.ground_truth import Expectation, Neutral
+import pytest
+
+from stormlog.infer.qualify.ground_truth import Expectation, Interval, Neutral, Times
 from stormlog.infer.qualify.scoring import TOP1, score_episode, score_run, summarize
 from tests.test_qualify_scoring import (
     CONFIG,
@@ -229,3 +231,66 @@ def test_void_negative_runs_are_reported_by_why() -> None:
         "protocol_failure": 1,
     }
     assert runs[3].excluded_negative == "not_realized"
+
+
+# ------------------------------------------------------------------ run bookkeeping
+
+
+def test_a_negative_run_counts_only_with_its_episode_in_enough_exposure() -> None:
+    # rev-220-b's delta D6. A run that is nearly all priming used to be a
+    # clean unit with no exposure; one whose N slot an unended fault had
+    # cut out was a unit that could never be flagged.
+    from tests.test_qualify_scoring import null_run, run_record
+
+    mostly_priming = replace(
+        run_record("p"), measured=Interval(0, 200 * S), priming=Interval(0, 190 * S)
+    )
+    score = score_run(
+        mostly_priming, [replace(null_run(), run_id="p")], diagnosis(), CONFIG
+    )
+    assert score.negative_episode is None
+    assert score.excluded_negative == "exposure_below_minimum"
+    unended = replace(
+        episode(status="recovery_incomplete"),
+        run_id="u",
+        episode_id="u-0",
+        times=Times(action_onset_ns=120 * S, effect_onset_ns=120 * S),
+    )
+    late_null = replace(
+        null_run(),
+        run_id="u",
+        episode_id="u-1",
+        times=Times(
+            action_onset_ns=200 * S, effect_onset_ns=200 * S, effect_end_ns=250 * S
+        ),
+    )
+    score = score_run(run_record("u"), [unended, late_null], diagnosis(), CONFIG)
+    assert score.excluded_negative == "negative_outside_exposure"
+
+
+def test_an_episode_outside_its_runs_window_is_refused() -> None:
+    from tests.test_qualify_scoring import null_run, run_record
+
+    short = replace(run_record("s"), measured=Interval(0, 120 * S), priming=None)
+    with pytest.raises(ValueError, match="outside its window"):
+        score_run(short, [replace(null_run(), run_id="s")], diagnosis(), CONFIG)
+
+
+def test_a_run_record_needs_an_id_and_a_measured_length() -> None:
+    from tests.test_qualify_scoring import run_record
+
+    nameless = replace(run_record("x"), run_id="")
+    empty = replace(run_record("x"), measured=Interval(0, 0), priming=None)
+    assert "a run needs its run_id" in nameless.problems()
+    assert "measured has no length" in empty.problems()
+
+
+def test_a_run_scored_twice_is_refused() -> None:
+    from tests.test_qualify_scoring import null_run
+
+    run = run_of([null_run()], diagnosis(), run_id="twice")
+    other = run_of(
+        [replace(null_run(), episode_id="other")], diagnosis(), run_id="twice"
+    )
+    with pytest.raises(ValueError, match="a run is scored twice"):
+        summarize([run, other], CONFIG)
