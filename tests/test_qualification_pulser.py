@@ -342,3 +342,76 @@ def test_a_stop_that_never_takes_is_refused() -> None:
                 pulser.pulse(0.1)
     finally:
         child.wait()
+
+
+# ------------------------------------------------------------------ pulse timing
+
+
+def test_a_wall_clock_step_does_not_stretch_a_pulse(
+    loop: subprocess.Popen[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # NTP steps the wall clock back 10 s once the stop is confirmed: the
+    # pulse still ends on time, and records its true length.
+    from examples.qualification import pulser as pulser_module
+
+    real = time.time_ns
+    stepped = {"now": False}
+    monkeypatch.setattr(
+        pulser_module.time,
+        "time_ns",
+        lambda: real() - (10_000_000_000 if stepped["now"] else 0),
+    )
+    target = Target.of(loop.pid)
+    with Pulser(target, watchdog=False, max_pulse_seconds=0.5) as pulser:
+        began = time.monotonic()
+        pulse = pulser.pulse(0.5, during=lambda: stepped.update(now=True))
+        lasted = time.monotonic() - began
+    assert lasted < 0.8
+    assert 0.5e9 <= pulse.held_ns < 0.8e9
+    assert 0.4e9 < pulse.continue_sent_ns - pulse.stopped_ns < 0.8e9
+
+
+def test_a_slow_confirmation_does_not_lengthen_the_pulse(
+    loop: subprocess.Popen[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Seeing state T took 0.9 s, the process stopped all along: the pulse
+    # still ends 2 s after SIGSTOP, not 2 s after the confirmation.
+    real_stopped = Target.is_stopped
+    first: dict[str, float] = {}
+
+    def slow_to_see(self: Target) -> bool:
+        first.setdefault("at", time.monotonic())
+        return real_stopped(self) and time.monotonic() - first["at"] > 0.9
+
+    monkeypatch.setattr(Target, "is_stopped", slow_to_see)
+    with Pulser(Target.of(loop.pid), watchdog=False) as pulser:
+        began = time.monotonic()
+        pulse = pulser.pulse(2.0)
+        lasted = time.monotonic() - began
+    assert lasted <= 2.1
+    assert pulse.confirm_latency_ns > 0.8e9
+    assert pulse.held_ns <= 2.1e9
+
+
+def test_a_schedule_that_falls_behind_keeps_the_duty_cap(
+    loop: subprocess.Popen[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Each stop takes 0.3 s to confirm; 0.2 s pulses every 0.4 s must still
+    # leave the target running at least half the time, not back to back.
+    real_stopped = Target.is_stopped
+    since: dict[str, float] = {}
+
+    def slow_to_see(self: Target) -> bool:
+        since.setdefault("at", time.monotonic())
+        seen = real_stopped(self) and time.monotonic() - since["at"] > 0.3
+        if seen:
+            since.clear()
+        return seen
+
+    monkeypatch.setattr(Target, "is_stopped", slow_to_see)
+    with Pulser(Target.of(loop.pid), watchdog=False, max_pulse_seconds=0.2) as pulser:
+        pulses = pulser.run(0.2, 0.4, 5)
+    # Each pulse held 0.3 s, so each is followed by at least 0.3 s running.
+    assert all(pulse.held_ns >= 0.29e9 for pulse in pulses)
+    for this, following in zip(pulses, pulses[1:]):
+        assert following.stop_sent_ns - this.continue_sent_ns >= 0.95 * this.held_ns
