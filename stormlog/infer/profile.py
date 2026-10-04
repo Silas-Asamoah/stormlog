@@ -605,6 +605,8 @@ class InferenceProfiler:
         sampler: SystemSampler,
         stop_event: asyncio.Event,
     ) -> None:
+        interval = self.config.sample_interval_seconds
+        next_at = time.monotonic()
         while not stop_event.is_set():
             try:
                 sample = await asyncio.to_thread(
@@ -615,10 +617,11 @@ class InferenceProfiler:
                 sample = None
             if sample is not None:
                 writer.append(sample.to_record())
+            # A fixed grid: a slow sample delays the next one, not the rate.
+            next_at = max(next_at + interval, time.monotonic())
             try:
                 await asyncio.wait_for(
-                    stop_event.wait(),
-                    timeout=self.config.sample_interval_seconds,
+                    stop_event.wait(), timeout=next_at - time.monotonic()
                 )
             except asyncio.TimeoutError:
                 pass

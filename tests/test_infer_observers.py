@@ -181,6 +181,40 @@ def test_too_few_samples_in_the_phase_is_unhealthy() -> None:
     assert sampler["phases"]["c1"]["reasons"] == ["4 samples of 10 expected"]
 
 
+def test_a_phase_too_short_for_one_sample_is_not_judged() -> None:
+    records = _base()
+    records[1]["drained_at_ns"] = START + SECOND // 20
+    sampler = observer_states(records)["observers"]["system_sampler"]
+    assert sampler["phases"]["c1"] == {
+        "active": None,
+        "healthy": None,
+        "reasons": ["the phase is shorter than one sample interval"],
+    }
+    assert (sampler["active"], sampler["healthy"]) == (None, None)
+
+
+def test_a_scraper_whose_window_did_not_resolve_is_unhealthy() -> None:
+    vllm = {"cases": {"c1": {"state": "unresolved", "reasons": ["counter_reset"]}}}
+    states = observer_states([*_base(), *_scrapes()], vllm=vllm)
+    scraper = states["observers"]["vllm_metrics"]
+    assert scraper["healthy"] is False
+    assert scraper["phases"]["c1"]["reasons"] == ["window unresolved: counter_reset"]
+
+
+def test_a_hook_running_on_the_server_is_requested_without_its_import() -> None:
+    # An overhead baseline must run no observer, and the server's hook is
+    # one whether or not the client imports its log.
+    description = {"server": {"environ": {"STORMLOG_VLLM_HOOK_DIR": "/var/tmp/h"}}}
+    records = [
+        *_base(_config(vllm_execution_dir=None)),
+        {"event_type": "infer.manifest", "role": "before", "description": description},
+    ]
+    execution = observer_states(records)["observers"]["execution"]
+    assert execution["requested"] is True
+    assert execution["settings"] == {"directory": None, "server_hook_dir": "/var/tmp/h"}
+    assert execution["active"] is False
+
+
 def test_a_scraper_that_missed_the_end_or_went_quiet_is_unhealthy() -> None:
     no_end = observer_states([*_base(), *_scrapes(end=False)])["observers"]
     quiet = observer_states([*_base(), *_scrapes(gap=4)])["observers"]

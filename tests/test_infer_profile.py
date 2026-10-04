@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import io
 import json
@@ -881,3 +882,47 @@ class _BlockingClient:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_slow_samples_keep_the_sampling_rate(tmp_path: Path) -> None:
+    # Each sample takes half the interval. Waiting a whole interval after
+    # each one sampled at two thirds of the rate; a fixed grid keeps it.
+    class SlowSampler:
+        def __init__(self) -> None:
+            self.calls: list[float] = []
+
+        def sample(self, *, session_id: str) -> Any:
+            self.calls.append(time.monotonic())
+            time.sleep(0.2)
+            return None
+
+    config = ProfileConfig(
+        endpoint="http://127.0.0.1:1/v1/chat/completions",
+        model="m",
+        concurrency=(1,),
+        input_tokens=(8,),
+        output_tokens=(4,),
+        output_path=str(tmp_path / "infer.jsonl"),
+        system_sampler="none",
+        tokenizer="none",
+        sample_interval_seconds=0.4,
+    )
+    profiler = InferenceProfiler(config)
+    sampler = SlowSampler()
+
+    async def run() -> None:
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            profiler._sample_system_loop(
+                writer=None,  # type: ignore[arg-type]
+                sampler=sampler,  # type: ignore[arg-type]
+                stop_event=stop,
+            )
+        )
+        await asyncio.sleep(2.05)
+        stop.set()
+        await task
+
+    asyncio.run(run())
+    # Slots at 0, 0.4, ..., 2.0 s: five or six, never the four of 0.6 s steps.
+    assert len(sampler.calls) >= 5

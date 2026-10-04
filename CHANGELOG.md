@@ -62,10 +62,12 @@ the flaky benchmark memory gates
   sampler, metrics scraper, span receiver, profiler traces and execution
   hook, whether each was requested, configured, active and healthy, judged
   in every measured phase (enough samples, ok start and end scrapes without
-  long gaps, spans for 99% of accepted requests, traces stopped and
-  imported, no dropped hook records). What the artifact cannot show is
-  `null` with a reason. The `infer.session` config now records
-  `sample_interval_seconds` and `trace`. (#213)
+  long gaps and a resolved window, spans for 99% of accepted requests,
+  traces stopped and imported, no dropped hook records). The hook counts as
+  requested when the server's environment enables it. What the artifact
+  cannot show is `null` with a reason. The `infer.session` config now
+  records `sample_interval_seconds` and `trace`, and the system sampler
+  keeps a fixed grid, so slow samples no longer lower its rate. (#213)
 - `stormlog.infer.compatibility`: whether two runs measured the same
   thing. Each run's fields (from its descriptions, probe, workload,
   observers and declarations) keep their value, source and provenance;
