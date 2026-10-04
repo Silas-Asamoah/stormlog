@@ -578,7 +578,9 @@ def score_run(
 ) -> RunScore:
     """Score a run's episodes against its diagnosis, and, when the run holds
     exactly one valid negative episode, count its false claims over the
-    run's whole negative exposure (C.2, C.5).
+    run's whole negative exposure (C.2, C.5). A finding on another clock
+    than the run's can't be placed: it is a problem, and the run is then
+    no FPR unit, so a clock spelled differently can't make a run look clean.
 
     Raises:
         GroundTruthError: for a run record or an episode that is malformed.
@@ -595,6 +597,11 @@ def score_run(
         for injection in injections
     )
     unit, problems, excluded = _negative_unit(run, injections, config)
+    off_clock = _off_clock(run, findings)
+    if off_clock:
+        problems += (off_clock,)
+        if unit is not None:
+            unit, excluded = None, "findings_off_clock"
     if unit is None:
         return RunScore(
             run.run_id, episodes, problems=problems, excluded_negative=excluded
@@ -613,6 +620,13 @@ def score_run(
     }
     claims = _negative_claims(findings, elsewhere, exposure, unit, config)
     return RunScore(run.run_id, episodes, unit.episode_id, exposure, claims, problems)
+
+
+def _off_clock(run: RunRecord, findings: Sequence[FindingView]) -> str | None:
+    count = sum(
+        1 for f in findings if f.window and not f.window.on_clock(run.clock_domain)
+    )
+    return f"run {run.run_id}: {count} findings on another clock" if count else None
 
 
 def _unusable_exposure(
