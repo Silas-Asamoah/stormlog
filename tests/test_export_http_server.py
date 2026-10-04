@@ -61,6 +61,18 @@ def test_metrics_are_served_once_per_connection(server: MetricsServer) -> None:
     assert _wait_for(lambda: server.stats.ok == 1)
 
 
+def test_head_answers_the_length_without_the_body(server: MetricsServer) -> None:
+    sock = _idle(server)
+    try:
+        sock.sendall(b"HEAD /metrics HTTP/1.1\r\nHost: x\r\n\r\n")
+        head, _, body = _read_all(sock).partition(b"\r\n\r\n")
+    finally:
+        sock.close()
+    assert head.startswith(b"HTTP/1.1 200")
+    assert f"Content-Length: {len(BODY)}".encode() in head
+    assert body == b""
+
+
 def test_other_paths_are_not_found(server: MetricsServer) -> None:
     assert _get(server, "/other").status == 404
     assert _get(server, "/metrics?x=1").status == 200

@@ -401,6 +401,77 @@ def test_close_returns_at_its_deadline_even_if_freeing_the_slot_is_stuck(
     assert _wait_for(lambda: not writer.lock_path.exists())
 
 
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _final_write(tmp_path: Path, *, readers_hold_renders: bool) -> TextfileWriter:
+    """A run whose values change for good just before the writer closes."""
+    values = {"up": 1}
+    clock = _Clock()
+    cache = RenderCache(
+        lambda: f"stormlog_up {values['up']}\n".encode(),
+        min_interval=60.0,
+        clock=clock,
+    )
+    writer = TextfileWriter(
+        tmp_path,
+        "alpha",
+        cache,
+        const_labels={PRODUCER_LABEL: "alpha"},
+        interval=3600,
+    )
+    writer.start()
+    assert _wait_for(lambda: writer.stats.writes_ok == 1)
+    held = []
+    if readers_hold_renders:  # slow scrapes: the publication limit holds
+        for tick in (60.0, 120.0, 180.0):
+            clock.now = tick
+            held.append(cache.acquire())
+    values["up"] = 0
+    cache.invalidate()
+    writer.close()
+    for generation in held:
+        cache.release(generation)
+    return writer
+
+
+def test_a_final_write_from_a_render_out_of_date_says_so(tmp_path: Path) -> None:
+    writer = _final_write(tmp_path, readers_hold_renders=True)
+    assert writer.stats.final_stale
+    assert "stormlog_up 1\n" in writer.path.read_text()
+
+
+def test_a_final_write_from_a_fresh_render_is_not_flagged(tmp_path: Path) -> None:
+    writer = _final_write(tmp_path, readers_hold_renders=False)
+    assert not writer.stats.final_stale
+    assert "stormlog_up 0\n" in writer.path.read_text()
+
+
+def test_closing_leaves_a_lock_file_that_another_writer_put_there(
+    tmp_path: Path,
+) -> None:
+    writer = _writer(tmp_path)
+    writer.acquire()
+    writer.lock_path.unlink()
+    writer.lock_path.write_text(json.dumps({"pid": 1, "host": "other"}))
+    writer.close()
+    assert writer.lock_path.exists()
+
+
+@pytest.mark.usefixtures("no_flock")
+def test_without_flock_closing_leaves_another_writers_lock(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    writer.acquire()
+    writer.lock_path.write_text(json.dumps({"pid": 1, "host": "other"}))
+    writer.close()
+    assert writer.lock_path.exists()
+
+
 @pytest.mark.parametrize("slot", ["", "a b", "x" * 65, "../up", "a/b"])
 def test_slots_are_validated(slot: str) -> None:
     with pytest.raises(ValueError):

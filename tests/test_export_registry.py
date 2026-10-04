@@ -345,6 +345,34 @@ def test_the_byte_budget_covers_four_byte_characters_too() -> None:
     assert len(_text(registry).encode()) <= budget.size
 
 
+def test_the_byte_budget_covers_the_widest_values() -> None:
+    # The byte budget tests above use values of a few characters; the widest
+    # a float renders is a negative one near the smallest normal, in full.
+    widest = -1.2345678901234567e-308
+    assert len(format_value(widest)) == 24
+    registry = Registry(headroom=2)
+    level = registry.add(
+        FamilySpec("stormlog_level", "gauge", "h", labels=("case",)),
+        known=[{"case": "c1"}],
+    )
+    budget = registry.budget()
+    level.set(("c1",), widest)
+    for index in range(2):  # the headroom, at the widest label values too
+        level.set((chr(0x1F600 + index) * MAX_LABEL_VALUE,), widest)
+    assert len(_text(registry).encode()) <= budget.size
+
+
+def test_a_value_on_a_bucket_bound_falls_in_that_bucket() -> None:
+    # Buckets count values less than or equal to their bound.
+    registry = Registry()
+    latency = _latency(registry, ["c1"])  # buckets 0.1, 1.0, 10.0
+    latency.observe(("c1",), 1.0)
+    exposition = check_exposition(_text(registry))
+    name = "stormlog_infer_request_duration_seconds_bucket"
+    assert exposition.value(name, case="c1", le="0.1") == 0
+    assert exposition.value(name, case="c1", le="1.0") == 1
+
+
 def test_a_registry_over_budget_is_refused_with_its_counts() -> None:
     registry = Registry(max_samples=10)
     _requests(registry, ["c1", "c2", "c3", "c4"])
