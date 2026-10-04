@@ -10,7 +10,13 @@ from typing import Any
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
 from examples.qualification.fake_engine.process import _environment
-from examples.qualification.victim import AppendProbe, main, read_marker, run
+from examples.qualification.victim import (
+    SENDS,
+    AppendProbe,
+    main,
+    read_marker,
+    run,
+)
 
 
 def _arguments(engine: FakeEngine, output: Path) -> list[str]:
@@ -50,6 +56,15 @@ def test_the_victim_marks_its_phases_and_times_each_append(tmp_path: Path) -> No
         b["appended_ns"] >= a["appended_ns"] for a, b in zip(appends, appends[1:])
     )
     assert (probes / "client-idle.jsonl").exists()
+    # Each request's send, noted before its answer: in flight from then.
+    sends = {
+        send["x_request_id"]: send["sent_ns"]
+        for send in map(json.loads, (probes / SENDS).read_text().splitlines())
+    }
+    requests = [r for r in map(json.loads, lines) if r.get("x_request_id")]
+    assert sorted(sends) == sorted(r["x_request_id"] for r in requests)
+    for request in requests:
+        assert sends[request["x_request_id"]] <= request["started_at_ns"]
 
 
 def test_the_victim_runs_as_its_own_process(tmp_path: Path) -> None:

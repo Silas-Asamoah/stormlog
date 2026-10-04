@@ -1,4 +1,4 @@
-"""The victim: an ``infer profile`` run with three probes in its own process.
+"""The victim: an ``infer profile`` run with four probes in its own process.
 
 ``python -m examples.qualification.victim --probes DIR -- <infer profile
 arguments>`` runs the profile exactly as ``stormlog infer profile`` would,
@@ -11,7 +11,10 @@ and adds (#221 design A.2):
   append was flushed, in ``DIR/append-times.jsonl``. A client record is
   analyzer-ready then, which the replay needs (R4);
 - **the client idle probe**: gaps of more than 20 ms in a 10 ms timer, in
-  ``DIR/client-idle.jsonl``, so a stall on the client's own host is seen.
+  ``DIR/client-idle.jsonl``, so a stall on the client's own host is seen;
+- **the send probe**: each request's ``X-Request-Id`` and when it was sent,
+  in ``DIR/victim-sends.jsonl``, so the harness counts a request in flight
+  from its send, before the engine admits it or while the engine is hung.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from stormlog.infer import events
+from stormlog.infer import events, openai_client
 from stormlog.infer.cli import (
     _profile_config,
     _validate_profile_arguments,
@@ -35,6 +38,8 @@ from stormlog.infer.profile import InferenceProfiler, PhaseEvent
 
 IDLE_TICK_SECONDS = 0.01
 IDLE_GAP_SECONDS = 0.02
+# The send probe's file, in the probes directory.
+SENDS = "victim-sends.jsonl"
 
 
 class Markers:
@@ -105,6 +110,41 @@ class AppendProbe:
         self._handle.close()
 
 
+class SendProbe:
+    """Notes each request's ``X-Request-Id`` as the client sends it."""
+
+    def __init__(self, out: Path) -> None:
+        self._handle = out.open("a", encoding="utf-8")
+        self._lock = threading.Lock()
+        self._original: Callable[..., Any] | None = None
+
+    def install(self) -> None:
+        client = openai_client.OpenAIChatCompletionsClient
+        original = client.complete
+        self._original = original
+        probe = self
+
+        def complete(self: Any, *args: Any, **kwargs: Any) -> Any:
+            probe.note(kwargs.get("request_id"))
+            return original(self, *args, **kwargs)
+
+        client.complete = complete  # type: ignore[method-assign]
+
+    def note(self, request_id: str | None) -> None:
+        if request_id is None:
+            return
+        line = json.dumps({"x_request_id": request_id, "sent_ns": time.time_ns()})
+        with self._lock:  # requests are sent from several threads
+            self._handle.write(line + "\n")
+            self._handle.flush()
+
+    def uninstall(self) -> None:
+        if self._original is not None:
+            client = openai_client.OpenAIChatCompletionsClient
+            client.complete = self._original  # type: ignore[method-assign]
+        self._handle.close()
+
+
 class IdleProbe:
     """A 10 ms timer on its own thread; a tick that comes 20 ms late or more
     means the client's host stalled."""
@@ -142,14 +182,17 @@ def run(probes: Path, profile_arguments: Sequence[str]) -> dict[str, Any]:
     probes.mkdir(parents=True, exist_ok=True)
     markers = Markers(probes / "markers")
     appends = AppendProbe(probes / "append-times.jsonl")
+    sends = SendProbe(probes / SENDS)
     idle = IdleProbe(probes / "client-idle.jsonl")
     appends.install()
+    sends.install()
     idle.start()
     try:
         profiler = InferenceProfiler(_profile_config(args), on_phase=markers.write)
         return profiler.run()
     finally:
         idle.stop()
+        sends.uninstall()
         appends.uninstall()
 
 
@@ -166,7 +209,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-__all__ = ["AppendProbe", "IdleProbe", "Markers", "main", "read_marker", "run"]
+__all__ = [
+    "SENDS",
+    "AppendProbe",
+    "IdleProbe",
+    "Markers",
+    "SendProbe",
+    "main",
+    "read_marker",
+    "run",
+]
 
 
 if __name__ == "__main__":

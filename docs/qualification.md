@@ -539,11 +539,12 @@ reader:
   client records.
 - **`request_spans`** takes each finished victim request's send and end from
   the same records, and `merge_spans` makes them the in-flight intervals
-  that busy-time cadence needs (`Signals.in_flight`). A victim request the
-  engine admitted (its `alias`) that hasn't finished yet is in flight from
-  its admission to the latest poll: a request stuck in a stall is busy
-  time, so a stall still open at the poll is seen. The victim artifact is
-  read incrementally.
+  that busy-time cadence needs (`Signals.in_flight`). A victim request
+  that hasn't finished yet is in flight from its send (the victim's send
+  probe) or its admission (its `alias`), whichever is known, to the latest
+  poll: a request stuck in a stall is busy time, even one sent while the
+  engine was hung and admitting nothing, so a stall still open at the poll
+  is seen. The victim artifact and its sends are read incrementally.
 
 `ReferenceChannel.signals()` returns them as the `Signals` that
 `stormlog.infer.qualify.recovery` reads.
@@ -696,7 +697,7 @@ and end the run.
 
 `python -m examples.qualification.victim --probes DIR -- <infer profile
 arguments>` runs the profile exactly as `stormlog infer profile` would, and
-adds three probes in its own process:
+adds four probes in its own process:
 
 - **Phase markers** in `DIR/markers/`, one file per phase start and end. The
   harness times its episodes against the measured window from them, while the
@@ -707,6 +708,9 @@ adds three probes in its own process:
 - **The client idle probe:** a 10 ms timer on its own thread. A tick that
   comes 20 ms late or more is noted in `DIR/client-idle.jsonl`, so a stall
   on the client's own host is seen.
+- **The send probe:** each request's `X-Request-Id` and when the client
+  sent it, in `DIR/victim-sends.jsonl`, so the harness counts a request in
+  flight from its send, before the engine admits it or while it is hung.
 
 ### The inject command
 
@@ -797,8 +801,8 @@ nothing about its episodes:
   run/      victim.jsonl            the only path handed to the diagnoser
   truth/    run.json, injections.jsonl, episodes.json, plan.json, neighbor-<n>.jsonl,
             reference/scrapes.jsonl, reference/hook/<host>/<epoch>/
-  probes/   markers/, append-times.jsonl, client-idle.jsonl, hook-firstseen.jsonl,
-            seal-observations.jsonl, victim.log
+  probes/   markers/, append-times.jsonl, client-idle.jsonl, victim-sends.jsonl,
+            hook-firstseen.jsonl, seal-observations.jsonl, victim.log
   SHA256SUMS
 ```
 
