@@ -124,8 +124,8 @@ items are tiny. A scrape larger than the whole bound is refused and counted
 (`oversized`). Only the last few scrapes, as many as the widest trigger
 window needs, are also held parsed (about 130 KB each), and only scrapes the
 memory holds, so a trigger never judges a scrape its incident's bundle
-cannot contain. Scrapes are parsed back one at a time when a bundle is
-written.
+cannot contain. A bundle is written from the compressed copies, expanded
+one at a time and never parsed.
 
 ## Triggers and what "sustained" means
 
