@@ -149,16 +149,18 @@ class _Server(ThreadingHTTPServer):
             _refuse(request)
             self.shutdown_request(request)
             return
-        token = self.owner.watchdog.arm(request, time.monotonic() + self.owner.deadline)
-        with self._lock:
-            self._tokens[id(request)] = token
-            self._connections.add(request)
         self.owner.count("active")
         try:
+            deadline = time.monotonic() + self.owner.deadline
+            token = self.owner.watchdog.arm(request, deadline)
+            with self._lock:
+                self._tokens[id(request)] = token
+                self._connections.add(request)
             super().process_request(request, client_address)
         except BaseException:
-            # No thread started, so none will give the slot back; the caller
-            # counts the error and closes the connection.
+            # A watchdog that cannot arm, or a thread that cannot start:
+            # nothing else will give the slot back. The caller counts the
+            # error and closes the connection.
             self._finished(request)
             raise
 

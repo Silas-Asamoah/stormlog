@@ -264,6 +264,22 @@ def test_a_handler_thread_that_cannot_start_gives_its_slot_back(
     assert server.stats.rejected_busy == 0
 
 
+def test_a_stopped_watchdog_costs_no_slot(server: MetricsServer) -> None:
+    # A watchdog stopped under the server (shared, or the server restarted)
+    # refuses to arm; each connection is then an error, never a lost slot.
+    assert _get(server).status == 200
+    server.watchdog.stop()
+    for _ in range(4):  # twice the slots
+        sock = _idle(server)
+        try:
+            _read_all(sock)
+        except OSError:
+            pass
+        sock.close()
+    assert _wait_for(lambda: server.stats.errors == 4)
+    assert server.stats.rejected_busy == 0 and server.stats.active == 0
+
+
 def test_a_busy_port_raises_for_the_caller_to_record() -> None:
     first = MetricsServer("127.0.0.1:0", RenderCache(lambda: BODY))
     first.start()
