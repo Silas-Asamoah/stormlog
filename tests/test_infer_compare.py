@@ -342,6 +342,20 @@ def test_gates_asked_only_of_overlap_segments_cannot_be_evaluated() -> None:
     assert comparison.exit_code == 4
 
 
+def test_fable_213s_exact_overlap_repro_does_not_pass() -> None:
+    # Exactly as fable-213 ran it: a 40% slower candidate, gates=E2E_GATE,
+    # cases=("c1/early",), and nothing else.
+    baseline, candidate = _arms(SLOWER)
+    _with_segment(baseline, "overlap")
+    _with_segment(candidate, "overlap")
+    spec = ComparisonSpec(gates=E2E_GATE, cases=(f"{CASE}/early",))
+    comparison = compare_runs(baseline, candidate, spec)
+    assert comparison.not_evaluable == [
+        (f"{CASE}/early", "client.e2e.p95", "overlap_not_gated")
+    ]
+    assert comparison.exit_code == 4
+
+
 def test_with_whole_cases_too_overlap_segments_add_no_gates() -> None:
     # The whole case carries every requested gate; the overlap segment stays
     # diagnostics, counted in no gate summary.
