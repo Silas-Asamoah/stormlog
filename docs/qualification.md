@@ -546,7 +546,8 @@ F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
   So a stop is left in place only if the watchdog and the harness are both
   killed within the same 10 ms or so: two independent kills, the one
   residual risk.
-- **Caps.** A pulse lasts at most 2 s, at a duty cycle of at most 50%. A
+- **Caps.** A pulse lasts at most 2 s, at a duty cycle of at most 50%; a
+  `Pulser` asked for a longer cap gets 2 s. A
   pulse ends its length after `SIGSTOP` was sent, timed on the monotonic
   clock, however long the stop took to confirm and whatever the wall clock
   does. The next pulse waits at least the rest of the period, and at least as
@@ -557,7 +558,9 @@ Each pulse records where it landed in the step loop (A.4, #218 R12), from the
 reference hook's records: `in_schedule` (inside a step's `schedule()` call),
 `in_step` (after it, before the step completed: execution or a GPU wait) or
 `between_steps`. Each pulse's stop, confirmation and continue times are kept, with `held_ns`,
-the measured time from `SIGSTOP` to `SIGCONT`, so effect timing can start from
+the measured time from `SIGSTOP` to `SIGCONT` (`continued_by_other` when the
+target was already running, continued by the watchdog's limit or an
+operator, so it was stopped for less), so effect timing can start from
 the first confirmed stop.
 
 `discover_roles(api_server_pid)` names the processes under a vLLM API server by
