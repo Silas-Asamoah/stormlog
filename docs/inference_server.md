@@ -39,7 +39,7 @@ version 1:
 | --- | --- |
 | `observed_at_ns` | When it was taken |
 | `host` | Hostname, boot ID, boot time, `nproc`, and the describing process's CPU affinity |
-| `server` | The root PID and start ticks, the command line's model arguments, every process in the tree, the worker start method, and the kept environment |
+| `server` | The root PID and start ticks, the command line's model arguments, every process in the tree, the worker start method, the kept environment, the TCP ports the tree listens on (`listen_ports`, from its sockets in `/proc/<pid>/net/tcp`), and whether it shares the describer's network namespace (`shares_network_namespace`) |
 | `gpus` | The driver and each NVML device, with the server's processes on it |
 | `model` | The model files, their digests and `identity_evidence` |
 | `log` | The start-up choices from `--server-log`, or `null` |
@@ -114,9 +114,13 @@ The report's `manifest` block lists the `before` and `after` descriptions
 The `before` description is checked against what the server told the probe
 when the run began: the model it serves (`/v1/models` and `/server_info`),
 its vLLM version (`/version`) and the GPU driver (`/server_info`'s
-`system_env`). A disagreement is listed under `description_mismatches` and
-makes `protocol_failure: description_mismatch`: the description is of
-another server, or is stale.
+`system_env`). So is the port: when the probe reached the server on this
+host's loopback, and the server shares the describer's network namespace
+(no container or proxy maps its port), the endpoint's port must be one the
+server listens on, or the description is of a twin server, the same model
+on another GPU or with other settings. A disagreement is listed under
+`description_mismatches` and makes `protocol_failure: description_mismatch`:
+the description is of another server, or is stale.
 
 With both descriptions, it compares them:
 

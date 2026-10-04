@@ -22,6 +22,8 @@ from stormlog.infer.server_process import (
     boot_time_s,
     classify_role,
     group_members,
+    listening_ports,
+    network_namespace,
     process_tree,
     read_environ,
     read_process,
@@ -209,3 +211,32 @@ def test_the_real_proc_gives_this_process_its_start_and_environment() -> None:
     environ = read_environ(os.getpid())
     assert environ is not None and "PATH" in environ
     assert boot_time_s() is not None
+
+
+def _socket(proc: Path, pid: int, fd: int, inode: int) -> None:
+    (proc / str(pid) / "fd").mkdir(exist_ok=True)
+    os.symlink(f"socket:[{inode}]", proc / str(pid) / "fd" / str(fd))
+
+
+def test_the_ports_a_server_listens_on_come_from_its_own_sockets(
+    tmp_path: Path,
+) -> None:
+    proc = fake_server(tmp_path)
+    _socket(proc, 100, 7, 7001)  # the API server's listening socket
+    _socket(proc, 100, 8, 7002)  # a connection it accepted
+    net = proc / "100" / "net"
+    net.mkdir()
+    header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+    rows = [
+        "   0: 00000000:1F4D 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 7001 1",
+        "   1: 0100007F:1F4D 0100007F:D431 01 00000000:00000000 00:00000000 00000000     0        0 7002 1",
+        # Another process's listener in the same namespace: not this server.
+        "   2: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 9999 1",
+    ]
+    (net / "tcp").write_text(header + "\n".join(rows) + "\n")
+    assert listening_ports([100, 101, 102], proc) == [8013]
+    assert listening_ports([999], proc) is None
+    (proc / "100" / "ns").mkdir()
+    os.symlink("net:[4026531840]", proc / "100" / "ns" / "net")
+    assert network_namespace(100, proc) == "net:[4026531840]"
+    assert network_namespace(101, proc) is None

@@ -38,6 +38,8 @@ from .server_process import (
     PROC,
     ProcessInfo,
     boot_time_s,
+    listening_ports,
+    network_namespace,
     process_tree,
     read_environ,
     read_process,
@@ -173,7 +175,16 @@ def _server(
         "processes": [info.to_record(boot_time_s=boot) for info in tree],
         "start_method": _start_method(tree, environ),
         "environ": redact_environ(environ),
+        # What the cross-check needs to tell a twin server on another port.
+        "listen_ports": listening_ports([info.pid for info in tree], proc),
+        "shares_network_namespace": _shares_network(root.pid, proc),
     }
+
+
+def _shares_network(pid: int, proc: Path) -> bool | None:
+    """Whether the server sees the describer's ports: its network namespace."""
+    server, own = network_namespace(pid, proc), network_namespace("self", proc)
+    return None if server is None or own is None else server == own
 
 
 def _process_issues(root: ProcessInfo, environ: Mapping[str, str]) -> list[str]:

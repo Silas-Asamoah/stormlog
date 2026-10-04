@@ -270,6 +270,68 @@ def _is_api_server(arguments: list[str]) -> bool:
     return "vllm.entrypoints.openai.api_server" in arguments
 
 
+_SOCKET = re.compile(r"^socket:\[(\d+)\]$")
+_TCP_LISTEN = "0A"
+
+
+def listening_ports(pids: Iterable[int], proc: Path = PROC) -> list[int] | None:
+    """The TCP ports these processes listen on; None if no descriptor is readable.
+
+    A listening socket is one of their descriptors whose inode the first
+    readable process's network namespace lists in state LISTEN, so another
+    process's listener in the same namespace is left out.
+    """
+    inodes: set[str] = set()
+    tables: list[Path] = []
+    for pid in pids:
+        base = proc / str(pid)
+        try:
+            entries = list((base / "fd").iterdir())
+        except OSError:
+            continue
+        tables.append(base / "net")
+        inodes.update(_socket_inodes(entries))
+    if not tables:
+        return None
+    ports: set[int] = set()
+    for name in ("tcp", "tcp6"):
+        ports |= _listening(tables[0] / name, inodes)
+    return sorted(ports)
+
+
+def _socket_inodes(entries: Iterable[Path]) -> set[str]:
+    found = set()
+    for entry in entries:
+        try:
+            match = _SOCKET.match(os.readlink(entry))
+        except OSError:
+            continue
+        if match:
+            found.add(match.group(1))
+    return found
+
+
+def _listening(table: Path, inodes: set[str]) -> set[int]:
+    try:
+        rows = table.read_text().splitlines()[1:]
+    except OSError:
+        return set()
+    ports = set()
+    for row in rows:
+        fields = row.split()
+        if len(fields) > 9 and fields[3] == _TCP_LISTEN and fields[9] in inodes:
+            ports.add(int(fields[1].rsplit(":", 1)[1], 16))
+    return ports
+
+
+def network_namespace(pid: int | str, proc: Path = PROC) -> str | None:
+    """A process's network namespace (``net:[inode]``), or None."""
+    try:
+        return os.readlink(proc / str(pid) / "ns" / "net")
+    except OSError:
+        return None
+
+
 __all__ = [
     "API_SERVER",
     "COMPILE_WORKER",
@@ -285,6 +347,8 @@ __all__ = [
     "boot_time_s",
     "classify_role",
     "group_members",
+    "listening_ports",
+    "network_namespace",
     "process_tree",
     "read_environ",
     "read_process",

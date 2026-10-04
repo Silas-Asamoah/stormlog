@@ -93,7 +93,8 @@ the flaky benchmark memory gates
   the before one than the run lasted. The report gains a `manifest` block:
   identity changes between before and after are a `protocol_failure:
   identity_changed`, a before description that disagrees with the probed
-  server's model, vLLM version or driver is a `description_mismatch`, settings
+  server's model, vLLM version, driver or listening port is a
+  `description_mismatch`, settings
   only one side could read are `identity_unverified`, and GPU clock and
   temperature changes are drift. `describe-server --run-id` ties a description
   to a run. (#213)
