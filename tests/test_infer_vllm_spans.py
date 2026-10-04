@@ -1018,6 +1018,32 @@ class TestReceiverAdmission:
         assert metadata[reason] == 1
         assert parsed == []
 
+    def test_a_protobuf_export_is_charged_the_parse_estimate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The receiver charges what protobuf_parse_estimate says, the
+        function the RSS measurement checks, not a copy of its formula."""
+        body = _small_message_export("named_spans", 10)
+        estimates: list[int] = []
+        parsed: list[int] = []
+
+        def estimate(counts: Any, content_bytes: int) -> int:
+            estimates.append(counts.spans)
+            return ReceiverLimits().max_inflight_bytes
+
+        monkeypatch.setattr(vllm_spans, "protobuf_parse_estimate", estimate)
+        monkeypatch.setattr(
+            vllm_spans, "parse_otlp_protobuf", lambda data: parsed.append(len(data))
+        )
+        with _receiver() as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            status = _post(url, body, "application/x-protobuf")
+            metadata = receiver.capability_metadata()
+        assert status == 413
+        assert metadata["too_large"] == 1
+        assert estimates == [10]
+        assert parsed == []
+
     @pytest.mark.parametrize("media", ["application/json", "application/x-protobuf"])
     @pytest.mark.parametrize(
         "shape",

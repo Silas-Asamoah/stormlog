@@ -1039,7 +1039,7 @@ class OtlpSpanReceiver:
         if counts.spans > self.limits.max_spans_per_body:
             self._refuse_too_many(handler)
             return None
-        parse = counts.messages * self._message_bytes + PROTOBUF_PARSE_BYTES * len(body)
+        parse = protobuf_parse_estimate(counts, len(body))
         if not self._reserve(handler, reservation, parse):
             return None
         message = parse_otlp_protobuf(body)
