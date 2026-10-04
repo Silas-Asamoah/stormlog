@@ -113,7 +113,7 @@ def analyze_inference_events(
         "analysis_version": ANALYSIS_VERSION,
         "slo": None if policy is None else policy.to_record(),
         "manifest": manifest_summary(records),
-        "observers": observer_states(records, spans=spans),
+        "observers": observer_states(records, spans=spans, vllm=vllm),
         "summary": {
             "total_requests": len(requests),
             "successful_requests": len(ok_requests),

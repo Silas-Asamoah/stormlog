@@ -207,14 +207,21 @@ to the end of its drain), not once for the run:
 
 | Observer | Active in a phase | Healthy in a phase |
 | --- | --- | --- |
-| `system_sampler` | A sample in it | At least 90% of the samples its interval expects |
-| `vllm_metrics` | An ok scrape for it | Ok scrapes at its start and end, and no gap between ok scrapes over twice the interval |
+| `system_sampler` | A sample in it | At least 90% of the samples its interval expects. The sampler keeps a fixed grid, so a slow sample delays the next one, not the rate; a phase shorter than one interval is not judged |
+| `vllm_metrics` | An ok scrape for it | Ok scrapes at its start and end, no gap between ok scrapes over twice the interval, and a metrics window that resolved (the vLLM block's case state) |
 | `vllm_spans` | A span joined to one of its requests | Spans joined for at least 99% of its accepted requests, and no decode or receiver errors in the run |
 | `trace` | A trace started for it | The trace stopped cleanly, wrote a file, and that file was imported |
 | `execution` | An iteration of the hook in it | No dropped records, errors or disk cap in any epoch |
 
-An observer is `healthy` only when it is in every compared phase. What the
-artifact cannot show is `null`, with the reason in `unjudged`: the hook's
+The execution hook is `requested` when the client imports its log
+(`--vllm-execution-dir`), and also when the `before` description shows it
+enabled in the server's environment (`STORMLOG_VLLM_HOOK_DIR`): it observes
+the server either way, so an `overhead` baseline that must run without
+observers sees it.
+
+An observer is `healthy` only when it is in every compared phase it could
+be judged in. What the artifact cannot show is `null`, with the reason in
+`unjudged` (or, for one phase, in that phase's reasons): the hook's
 heartbeat times are not kept in the artifact, so the execution hook is at
 best `null` (not shown unhealthy, not shown healthy). The session record
 now keeps the system sampler's interval and the trace settings, which these

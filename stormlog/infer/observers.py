@@ -12,7 +12,12 @@ The compared phases are every case's measured phase, from its start to the
 end of its drain. Health is judged in each of them, not at one moment: a
 scraper that answered once at the start of the run is not healthy over a
 phase it missed. A state that the artifact cannot show is ``None`` with the
-reason in ``unjudged``, never assumed.
+reason in ``unjudged``, never assumed; so is a phase too short to judge, such
+as one shorter than a sample interval.
+
+The execution hook is requested when the client imports its log, and also
+when the ``before`` description shows it enabled in the server's
+environment: it observes the server either way.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from .manifest import BEFORE, manifests
 from .report_stats import is_number
 
 if TYPE_CHECKING:
@@ -65,14 +71,22 @@ def compared_phases(records: Sequence[Mapping[str, Any]]) -> list[Phase]:
 
 
 def observer_states(
-    records: Sequence[Mapping[str, Any]], *, spans: JoinedSpans | None = None
+    records: Sequence[Mapping[str, Any]],
+    *,
+    spans: JoinedSpans | None = None,
+    vllm: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Every observer's states over the run's compared phases."""
+    """Every observer's states over the run's compared phases.
+
+    ``vllm`` is the report's vLLM block, whose cases say whether each
+    phase's metrics window resolved.
+    """
     config = _session_config(records)
     phases = compared_phases(records)
+    windows = _section(vllm or {}, "cases")
     judges: dict[str, Callable[[], dict[str, Any]]] = {
         "system_sampler": lambda: _sampler(records, config, phases),
-        "vllm_metrics": lambda: _scraper(records, config, phases),
+        "vllm_metrics": lambda: _scraper(records, config, phases, windows),
         "vllm_spans": lambda: _spans(records, config, phases, spans),
         "trace": lambda: _traces(records, config, phases),
         "execution": lambda: _execution(records, config, phases),
@@ -104,25 +118,46 @@ def _state(
             "phases": {},
             "unjudged": list(unjudged),
         }
-    active = bool(phases) and all(item["active"] for item in phases.values())
-    healthy = (
-        active
-        and run_healthy is True
-        and all(item["healthy"] for item in phases.values())
-    )
+    active, healthy = _over_phases(phases, run_healthy)
     return {
         "requested": True,
         "configured": configured,
         "active": active,
-        "healthy": None if run_healthy is None and active else healthy,
+        "healthy": healthy,
         "settings": settings,
         "phases": dict(phases),
         "unjudged": list(unjudged),
     }
 
 
+def _over_phases(
+    phases: Mapping[str, Mapping[str, Any]], run_healthy: bool | None
+) -> tuple[bool | None, bool | None]:
+    """Active and healthy over the phases that could be judged.
+
+    A phase too short to judge has neither; when no phase could be judged,
+    neither has the observer.
+    """
+    judged = _judged(phases)
+    if phases and not judged:
+        return None, None
+    if not judged or not all(item["active"] for item in judged):
+        return False, False
+    if run_healthy is not True:
+        return True, run_healthy
+    return True, all(item["healthy"] for item in judged)
+
+
+def _judged(phases: Mapping[str, Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return [item for item in phases.values() if item["active"] is not None]
+
+
 def _phase(active: bool, healthy: bool, reasons: list[str]) -> dict[str, Any]:
     return {"active": active, "healthy": active and healthy, "reasons": reasons}
+
+
+def _unjudged_phase(reason: str) -> dict[str, Any]:
+    return {"active": None, "healthy": None, "reasons": [reason]}
 
 
 # ------------------------------------------------------------- observers
@@ -137,16 +172,7 @@ def _sampler(
     if name in (None, "noop", "none"):
         return _state(False, settings=settings)
     times = _times(records, "infer.system_sample", "timestamp_ns")
-    judged: dict[str, dict[str, Any]] = {}
-    for phase in phases:
-        count = sum(1 for at in times if phase.holds(at))
-        if not is_number(interval) or interval <= 0:
-            judged[phase.case_id] = _phase(count > 0, False, ["interval_unrecorded"])
-            continue
-        expected = (phase.ended_at_ns - phase.started_at_ns) / 1e9 / interval
-        enough = count >= SAMPLE_RATE_FLOOR * int(expected)
-        reasons = [] if enough else [f"{count} samples of {int(expected)} expected"]
-        judged[phase.case_id] = _phase(count > 0, enough, reasons)
+    judged = {phase.case_id: _sampler_phase(phase, times, interval) for phase in phases}
     if is_number(interval):
         return _state(True, configured=True, phases=judged, settings=settings)
     return _state(
@@ -159,8 +185,23 @@ def _sampler(
     )
 
 
+def _sampler_phase(phase: Phase, times: list[int], interval: Any) -> dict[str, Any]:
+    count = sum(1 for at in times if phase.holds(at))
+    if not is_number(interval) or interval <= 0:
+        return _phase(count > 0, False, ["interval_unrecorded"])
+    expected = int((phase.ended_at_ns - phase.started_at_ns) / 1e9 / interval)
+    if expected == 0:
+        return _unjudged_phase("the phase is shorter than one sample interval")
+    enough = count >= SAMPLE_RATE_FLOOR * expected
+    reasons = [] if enough else [f"{count} samples of {expected} expected"]
+    return _phase(count > 0, enough, reasons)
+
+
 def _scraper(
-    records: Sequence[Mapping[str, Any]], config: Mapping[str, Any], phases: list[Phase]
+    records: Sequence[Mapping[str, Any]],
+    config: Mapping[str, Any],
+    phases: list[Phase],
+    windows: Mapping[str, Any],
 ) -> dict[str, Any]:
     settings = config.get("vllm_metrics")
     if not isinstance(settings, Mapping):
@@ -168,13 +209,19 @@ def _scraper(
     interval = settings.get("interval_seconds")
     scrapes = [r for r in records if r.get("event_type") == "infer.vllm_scrape"]
     judged = {
-        phase.case_id: _scraper_phase(phase, scrapes, interval) for phase in phases
+        phase.case_id: _scraper_phase(
+            phase, scrapes, interval, _section(windows, phase.case_id)
+        )
+        for phase in phases
     }
     return _state(True, configured=True, phases=judged, settings=dict(settings))
 
 
 def _scraper_phase(
-    phase: Phase, scrapes: list[Mapping[str, Any]], interval: Any
+    phase: Phase,
+    scrapes: list[Mapping[str, Any]],
+    interval: Any,
+    window: Mapping[str, Any],
 ) -> dict[str, Any]:
     ok = [
         s
@@ -188,10 +235,24 @@ def _scraper_phase(
         for marker in ("phase_start", "phase_end")
         if not any(s.get("marker") == marker for s in ok)
     ]
+    reasons.extend(_gap_reasons(ok, interval))
+    reasons.extend(_window_reasons(window))
+    return _phase(bool(ok), not reasons, reasons)
+
+
+def _gap_reasons(ok: list[Mapping[str, Any]], interval: Any) -> list[str]:
     gap = _largest_gap_seconds(ok)
     if is_number(interval) and gap > SCRAPE_GAP_FACTOR * interval:
-        reasons.append(f"a {gap:.1f} s gap between ok scrapes")
-    return _phase(bool(ok), not reasons, reasons)
+        return [f"a {gap:.1f} s gap between ok scrapes"]
+    return []
+
+
+def _window_reasons(window: Mapping[str, Any]) -> list[str]:
+    """The phase's metrics window, when the vLLM analysis could not resolve it."""
+    if window.get("state") != "unresolved":
+        return []
+    why = ", ".join(str(reason) for reason in window.get("reasons") or [])
+    return [f"window unresolved: {why}"]
 
 
 def _largest_gap_seconds(scrapes: list[Mapping[str, Any]]) -> float:
@@ -295,35 +356,60 @@ def _execution(
     records: Sequence[Mapping[str, Any]], config: Mapping[str, Any], phases: list[Phase]
 ) -> dict[str, Any]:
     directory = config.get("vllm_execution_dir")
-    if not directory:
+    server_hook = _server_hook_dir(records)
+    if not directory and not server_hook:
         return _state(False)
     summary = _execution_summary(records)
     configured = summary is not None and "failed" not in summary
     problems = _epoch_problems(summary or {})
-    starts = [
-        (r.get("metadata") or {}).get("start_wall_ns")
-        for r in records
-        if r.get("event_type") == "infer.iteration"
-    ]
-    judged = {
-        phase.case_id: _phase(
-            any(phase.holds(at) for at in starts), not problems, list(problems)
-        )
-        for phase in phases
-    }
+    judged = _execution_phases(records, phases, problems)
     # The artifact does not keep the hook's heartbeat times, so a run with
     # no other problem is not shown healthy, only not unhealthy.
     return _state(
         True,
         configured=configured,
         phases=judged,
-        settings={"directory": directory},
+        settings={"directory": directory, "server_hook_dir": server_hook},
         unjudged=["heartbeat_gaps"],
         run_healthy=False if problems else None,
     )
 
 
+def _execution_phases(
+    records: Sequence[Mapping[str, Any]], phases: list[Phase], problems: list[str]
+) -> dict[str, dict[str, Any]]:
+    starts = [
+        (r.get("metadata") or {}).get("start_wall_ns")
+        for r in records
+        if r.get("event_type") == "infer.iteration"
+    ]
+    return {
+        phase.case_id: _phase(
+            any(phase.holds(at) for at in starts), not problems, list(problems)
+        )
+        for phase in phases
+    }
+
+
 # ---------------------------------------------------------------- helpers
+
+
+def _server_hook_dir(records: Sequence[Mapping[str, Any]]) -> Any:
+    """The hook's directory, when the before description shows it enabled."""
+    before = manifests(records)[BEFORE]
+    if not before:
+        return None
+    server = _section(_section(before[-1], "description"), "server")
+    return _section(server, "environ").get(HOOK_DIR_VARIABLE) or None
+
+
+# The variable that enables Stormlog's execution hook in a vLLM server.
+HOOK_DIR_VARIABLE = "STORMLOG_VLLM_HOOK_DIR"
+
+
+def _section(document: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    value = document.get(name)
+    return value if isinstance(value, Mapping) else {}
 
 
 def _session_config(records: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
