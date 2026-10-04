@@ -324,7 +324,7 @@ case gives the inputs and the effect, interval and gate outcome they must
 give. The cases cover:
 - effect units and signs in both directions;
 - a 40% latency regression against a 5% non-inferiority budget;
-- the gate at its budget boundary;
+- the gate at its budget boundary, for latency, throughput and attainment;
 - attainment budgets in fraction units;
 - the zero rules and their fallback in two units;
 - missing-outcome bounds;
@@ -334,7 +334,10 @@ give. The cases cover:
 
 The expected numbers come from the formulas themselves, in
 `examples/analysis/comparison_contract.py`, not from this module, and a
-test checks the fixture is what that script writes.
+test checks the fixture is what that script writes. So do the gate
+outcomes: the script applies each rule to its own interval, after the
+blockers (too few or fewer than pre-registered pairs) and the leave-one-out
+screen, rather than assigning them by hand.
 
 ## Other tools
 

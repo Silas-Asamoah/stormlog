@@ -62,7 +62,8 @@
     "lower": 0.39668488822463266,
     "upper": 0.4033001685446729,
     "gate": "fail",
-    "reason": "exceeds_budget"
+    "reason": "exceeds_budget",
+    "case": "worst_case"
    }
   },
   {
@@ -119,7 +120,8 @@
     "lower": -0.004266771360167998,
     "upper": 0.0060399342596914865,
     "gate": "pass",
-    "reason": null
+    "reason": null,
+    "case": "worst_case"
    }
   },
   {
@@ -163,7 +165,9 @@
     "effect": 0.0399383178241547,
     "lower": 0.029551855596566548,
     "upper": 0.05042956214408593,
-    "gate": "pass"
+    "gate": "pass",
+    "reason": null,
+    "case": "worst_case"
    }
   },
   {
@@ -207,7 +211,9 @@
     "effect": 0.0399383178241547,
     "lower": 0.029551855596566548,
     "upper": 0.05042956214408593,
-    "gate": "fail"
+    "gate": "fail",
+    "reason": "exceeds_budget",
+    "case": "worst_case"
    }
   },
   {
@@ -251,7 +257,9 @@
     "effect": -0.04164631239124877,
     "lower": -0.04704998867841484,
     "upper": -0.03621199470939297,
-    "gate": "pass"
+    "gate": "pass",
+    "reason": null,
+    "case": "worst_case"
    }
   },
   {
@@ -295,7 +303,9 @@
     "effect": -0.04164631239124877,
     "lower": -0.04704998867841484,
     "upper": -0.03621199470939297,
-    "gate": "fail"
+    "gate": "fail",
+    "reason": "exceeds_budget",
+    "case": "worst_case"
    }
   },
   {
@@ -408,7 +418,101 @@
     "effect": -0.005500000000000005,
     "lower": -0.006378020850321185,
     "upper": -0.004621979149678825,
-    "gate": "pass"
+    "gate": "pass",
+    "reason": null,
+    "case": "worst_case"
+   }
+  },
+  {
+   "id": "attainment_boundary_just_above",
+   "note": "higher_is_better, difference in fractions: non-inferiority compares the lower bound with -b",
+   "input": {
+    "baseline": [
+     0.99,
+     0.988,
+     0.991
+    ],
+    "candidate": [
+     0.984,
+     0.983,
+     0.986
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.006767551909898721,
+     "unit": "fraction"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": -0.005333333333333338,
+    "lower": -0.00676755090989872,
+    "upper": -0.0038991157567679563,
+    "gate": "pass",
+    "reason": null,
+    "case": "worst_case"
+   }
+  },
+  {
+   "id": "attainment_boundary_just_below",
+   "note": "higher_is_better, difference in fractions: non-inferiority compares the lower bound with -b",
+   "input": {
+    "baseline": [
+     0.99,
+     0.988,
+     0.991
+    ],
+    "candidate": [
+     0.984,
+     0.983,
+     0.986
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.00676754990989872,
+     "unit": "fraction"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": -0.005333333333333338,
+    "lower": -0.00676755090989872,
+    "upper": -0.0038991157567679563,
+    "gate": "fail",
+    "reason": "exceeds_budget",
+    "case": "worst_case"
    }
   },
   {
@@ -891,6 +995,7 @@
      "upper": 0.005938643771527369
     },
     "gate": "fail",
+    "reason": "exceeds_budget",
     "case": "worst_case"
    }
   },
@@ -989,6 +1094,7 @@
      "upper": 0.005938643771527369
     },
     "gate": "pass",
+    "reason": null,
     "case": "best_case"
    }
   },
@@ -1083,7 +1189,10 @@
     "effect": 0.04095747983714565,
     "lower": -0.03172324731320436,
     "upper": 0.11909376304049979,
-    "df": 2
+    "df": 2,
+    "gate": "pass",
+    "reason": null,
+    "case": "best_case"
    }
   }
  ]
