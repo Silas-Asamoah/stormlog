@@ -175,9 +175,13 @@ absent (`requires_hook`). Write errors also count failed seals and
 must. Only the epoch's `status.json`, passed as `config.status`, says the
 writer is capped (`hook_capped`): no heartbeat ever does.
 `detail["pause_capability"]` says whether the hook records pauses. Without
-it a pause of every running request (vLLM's `PAUSED_ALL`, as for an RL
-weight sync) looks like a stall with ready work, so a stall over its limit is
-no verdict (`pause_state_unknown`). A pause can only remove stalls, so
-records with no stall over its limit still say none exceeded. A log from
-#217's hook, which records no pauses, can therefore say only that no stall
-exceeded or give no verdict, never that one did.
+it, a pause of every running request (vLLM's `PAUSED_ALL`, as for an RL
+weight sync) looks like a stall with ready work wherever a pause can act: a
+gap between steps, or, under async scheduling, a step scheduled before the
+one before it completed, whose output waits for an engine step() call that
+a paused scheduler skips. Such a stall over its limit is no verdict
+(`pause_state_unknown`). A pause changes only what schedule() returns and
+whether the engine steps, so a long schedule() call or a step run within
+one call keeps its verdict. A pause can only remove stalls, so records with
+no stall over its limit still say none exceeded. On a log from #217's hook,
+which records no pauses, spec5's 1,315.5 ms first step still exceeds.
