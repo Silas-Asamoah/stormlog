@@ -413,9 +413,13 @@ class IncidentManager:
                 complete=status == STATUS_COMPLETED,
                 sealed_at_ns=sealed_at,
             )
-        except (BudgetExceeded, OSError) as exc:
+        except BaseException as exc:
+            # Whatever stopped it: a writer left open keeps its reservation
+            # and pins its bundle against every deletion.
             with contextlib.suppress(OSError):
                 writer.abandon()
+            if not isinstance(exc, (BudgetExceeded, OSError)):
+                raise
             disk_full = isinstance(exc, OSError) and exc.errno == errno.ENOSPC
             return None, _error_text(exc), disk_full
         return f"incidents/{incident_id}", None, False
