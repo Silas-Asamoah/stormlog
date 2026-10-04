@@ -951,6 +951,50 @@ def test_a_health_answer_counts_only_from_this_launchs_server(tmp_path: Path) ->
         stop(idle, timeout_s=5)
 
 
+def test_what_a_step_leaves_behind_is_stopped_and_checked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import psutil
+
+    # rev-213-a's N7: a step that exits 0 but leaves a process in its group
+    # (a load generator, a monitor) let it run into the next run's server.
+    document = _plan(_port(), blocks=1)
+    document["arms"] = {"off": document["arms"]["off"]}
+    document["order"] = {"kind": "explicit", "blocks": [["off"]]}
+    leave = {
+        "name": "leave",
+        "command": [
+            "/bin/sh",
+            "-c",
+            # Python, not /bin/sleep: macOS hides a platform binary's
+            # environment, which would make it blind to concurrent tests.
+            "{python} -c 'import time; time.sleep(30)' & "
+            "echo $! > {run_dir}/left.pid; exit 0",
+        ],
+    }
+    document["arms"]["off"]["workload"].append(leave)
+    (record,) = _run(tmp_path, document)
+    assert record["state"] == "completed"
+    step = next(p for p in record["processes"] if p["name"] == "step:leave")
+    assert step["cleanup"]["verified"] is True
+    left = int((Path(record["run_dir"]) / "left.pid").read_text())
+    assert not psutil.pid_exists(left) or (
+        psutil.Process(left).status() == psutil.STATUS_ZOMBIE
+    )
+
+    # One that outlives its kill stops the experiment, as a server's would.
+    from stormlog.infer import experiment_process
+    from stormlog.infer.experiment_process import Cleanup
+
+    monkeypatch.setattr(
+        experiment_process,
+        "verify_cleanup",
+        lambda *args, **kwargs: Cleanup(False, "test", ({"pid": 1},)),
+    )
+    (record,) = _run(tmp_path / "again", document)
+    assert "step_cleanup_unverified:c1" in record["reasons"]
+
+
 def test_a_prelude_server_loads_the_verified_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
