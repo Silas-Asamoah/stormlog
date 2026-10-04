@@ -108,7 +108,7 @@ applied before the data is held whole, and each refusal is counted:
 | span receiver | open connections | 8 | the next connection gets a bare 503 with `Retry-After: 1` and is closed, without a handler thread (`refused_connections`) |
 | span receiver | time to receive a whole request: request line, headers and body, from when the receiver starts waiting for it | 10 s | the connection is closed: with 408 when the body is late (`body_timeouts`), without an answer when the request line or headers are (`header_timeouts`); a kept-alive connection idle this long is closed, uncounted |
 | span receiver | memory charged to the exports being read and decoded at once | 128 MiB, each step charged before it runs (below) | 503 with `Retry-After: 1` when an export does not fit now (`busy`); 413 when it could never fit (`too_large`) |
-| span receiver | spans in one body | 10,000 | 413 (`too_many_spans`); a protobuf export is refused before any span is built |
+| span receiver | spans in one body | 10,000 | 413 (`too_many_spans`); a protobuf export is refused on its wire counts, before it is parsed |
 | span receiver | spans waiting in the queue | 100,000 spans and 64 MiB, each span charged what its record holds: 2 KiB, 256 bytes an attribute value and the size of its text, with the resource, scope and clock domain its export's spans share charged once | 503 with `Retry-After: 1`, and none of the body's spans is kept (`dropped_queue_full`, which counts spans the exporter may resend) |
 
 The scrape's parser reads one line at a time, and its label pattern needs
@@ -125,17 +125,25 @@ An export is charged, step by step and before each step runs:
    estimate of decoding it. For JSON it is counted on the bytes before
    anything is parsed: 128 bytes a structural token, 2 KiB a span (each has
    a `"name"`), 256 bytes an attribute value and 8 bytes a content byte for
-   the text. For protobuf, the parse is charged 24 bytes a content byte with
-   protobuf's upb backend, or 160 with any other; then, from the parsed
-   message, 2 KiB a span, 256 bytes an attribute value and 4 bytes a content
-   byte.
+   the text. For protobuf, the body's messages, spans and attribute values
+   are first counted on the wire, by a scan that builds nothing, and a body
+   with more spans than the limit is refused there, before it is parsed.
+   The parse is then charged 384 bytes a message with protobuf's upb
+   backend, or 1,536 with any other, plus 2 bytes a content byte; then the
+   spans it yields, 2 KiB a span, 256 bytes an attribute value and 4 bytes
+   a content byte.
 
-The rates are measured on CPython 3.10 with protobuf 4.24 and rounded up
-(json.loads at 90 bytes a token, a parse at 19 bytes a byte with upb and
-135 with the pure-Python backend, a span and its record at 2 KB, an
-attribute value at 190 bytes). A vLLM batch of 512 request spans, about
-310 KB of protobuf, is charged about 11 MiB, or 14 MiB as JSON. The largest
-protobuf export one receiver can take alone is about 4 MiB with upb.
+The rates are measured and rounded up: json.loads at 90 bytes a token, a
+span and its record at 2 KB and an attribute value at 190 bytes on CPython
+3.10; a parsed protobuf message, by RSS in a fresh process, at most 275
+bytes with upb and 1,239 with the pure-Python backend, over every OTLP
+message type with protobuf 4.24 and 7.36 (a parse costs per message far
+more than per byte: 100,000 empty spans are 200 KB on the wire and about
+19 MB parsed). A vLLM batch of 512 request spans, about 266 KB of protobuf,
+is charged about 8.5 MiB with upb (21 MiB with the pure-Python backend), or
+14 MiB as JSON. The largest export of such spans one receiver takes alone
+is about 3.8 MiB with upb, 7,700 spans, and 1.5 MiB with the pure-Python
+backend.
 
 An export must say how long it is: a chunked body, or one with no
 `Content-Length`, is answered 411 and counted in `bad_requests` (OTLP/HTTP

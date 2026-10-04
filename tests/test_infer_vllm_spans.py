@@ -323,6 +323,44 @@ class TestJsonReaders:
             read_span_file(empty)
 
 
+def _small_message_export(shape: str, count: int) -> bytes:
+    """An export of ``count`` small messages of one kind."""
+    trace_service, _common, _trace = _otlp()
+    request = trace_service.ExportTraceServiceRequest()
+    if shape == "empty_resource_spans":
+        for _ in range(count):
+            request.resource_spans.add()
+        return bytes(request.SerializeToString())
+    spans = request.resource_spans.add().scope_spans.add().spans
+    if shape == "empty_links":
+        links = spans.add(name="s").links
+        for _ in range(count):
+            links.add()
+        return bytes(request.SerializeToString())
+    for _ in range(count):
+        span = spans.add()
+        if shape == "named_spans":
+            span.name = "s"
+    return bytes(request.SerializeToString())
+
+
+# Parse an export in a fresh process; print how far its peak RSS grew and
+# what the receiver charges for the parse.
+_PARSE_RSS = """
+import resource, sys
+from stormlog.infer import vllm_spans
+from stormlog.infer.otlp_wire import count_trace_request
+body = open(sys.argv[1], "rb").read()
+counts = count_trace_request(body, max_messages=10**12, max_spans=10**12)
+vllm_spans.parse_otlp_protobuf(b"")
+scale = 1 if sys.platform == "darwin" else 1024
+before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+message = vllm_spans.parse_otlp_protobuf(body)
+grew = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) * scale
+print(grew, vllm_spans.protobuf_parse_estimate(counts, len(body)))
+"""
+
+
 def _post(url: str, body: bytes, media: str) -> int:
     request = urllib.request.Request(
         url, data=body, headers={"Content-Type": media}, method="POST"
@@ -861,6 +899,71 @@ class TestReceiverAdmission:
         assert peak < 4 * len(body) + 4 * 1024 * 1024
         assert metadata["spans"] == 0
         assert metadata["too_large"] + metadata["too_many_spans"] == 1
+
+    @pytest.mark.parametrize("backend", ["installed", "python"])
+    @pytest.mark.parametrize(
+        "shape", ["empty_spans", "named_spans", "empty_links", "empty_resource_spans"]
+    )
+    def test_a_protobuf_parse_holds_no_more_than_it_is_charged(
+        self, tmp_path: Path, shape: str, backend: str
+    ) -> None:
+        """Measured where upb's arena shows: the RSS of a fresh process.
+
+        Small messages cost far more than their bytes: 100,000 empty spans
+        are 200 KB on the wire and about 19 MB in upb's arena, against the
+        4.8 MB a charge of 24 bytes a body byte allowed.
+        """
+        import os
+        import subprocess
+        import sys
+
+        pytest.importorskip("resource")
+        body = tmp_path / "export.pb"
+        body.write_bytes(_small_message_export(shape, 100_000))
+        env = dict(os.environ)
+        if backend == "python":
+            env["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+        repo = Path(__file__).resolve().parents[1]
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(repo), *filter(None, [env.get("PYTHONPATH")])]
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", _PARSE_RSS, str(body)],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+            check=True,
+        )
+        grew, charged = (int(n) for n in result.stdout.split())
+        assert grew > 0
+        assert grew <= charged
+
+    @pytest.mark.parametrize(
+        ("shape", "count", "reason"),
+        [
+            ("empty_spans", 200_000, "too_many_spans"),
+            ("empty_resource_spans", 1_000_000, "too_large"),
+        ],
+    )
+    def test_a_protobuf_export_is_refused_on_its_wire_counts_before_parsing(
+        self, shape: str, count: int, reason: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2,684,322 empty spans in 5.4 MB grew the receiver by 301 MB before
+        their 413: now nothing is parsed. A million empty resource_spans hold
+        no span at all, and their messages alone could never fit."""
+        body = _small_message_export(shape, count)
+        parsed: list[int] = []
+        monkeypatch.setattr(
+            vllm_spans, "parse_otlp_protobuf", lambda data: parsed.append(len(data))
+        )
+        with _receiver() as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            status = _post(url, body, "application/x-protobuf")
+            metadata = receiver.capability_metadata()
+        assert status == 413
+        assert metadata[reason] == 1
+        assert parsed == []
 
     @pytest.mark.parametrize("media", ["application/json", "application/x-protobuf"])
     @pytest.mark.parametrize(

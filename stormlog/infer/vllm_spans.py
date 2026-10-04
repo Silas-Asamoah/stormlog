@@ -40,6 +40,7 @@ from .correlation_events import (
     StageEvent,
 )
 from .host_clock import wall_clock_domain
+from .otlp_wire import WireCounts, count_trace_request
 from .vllm_telemetry import (
     SPAN_SOURCE_JSONL,
     SPAN_SOURCE_OTLP_JSON,
@@ -135,14 +136,22 @@ def otlp_protobuf_available() -> bool:
     return _otlp_request_class() is not None
 
 
-def protobuf_parse_bytes() -> int:
-    """What parsing one body byte costs with the installed protobuf backend."""
+def protobuf_message_bytes() -> int:
+    """What one parsed message costs with the installed protobuf backend."""
     try:
         from google.protobuf.internal import api_implementation
     except ImportError:
-        return PROTOBUF_PARSE_BYTES_OTHER
-    return PROTOBUF_PARSE_BYTES.get(
-        api_implementation.Type(), PROTOBUF_PARSE_BYTES_OTHER
+        return PROTOBUF_MESSAGE_BYTES_OTHER
+    return PROTOBUF_MESSAGE_BYTES.get(
+        api_implementation.Type(), PROTOBUF_MESSAGE_BYTES_OTHER
+    )
+
+
+def protobuf_parse_estimate(counts: WireCounts, content_bytes: int) -> int:
+    """An upper bound on what parsing an export holds, from its wire counts."""
+    return (
+        counts.messages * protobuf_message_bytes()
+        + PROTOBUF_PARSE_BYTES * content_bytes
     )
 
 
@@ -160,37 +169,6 @@ def parse_otlp_protobuf(data: bytes | bytearray) -> Any:
         return request_class.FromString(bytes(data))
     except Exception as exc:  # google.protobuf.message.DecodeError and friends
         raise ProtobufDecodeError(f"not an OTLP trace export: {exc}") from exc
-
-
-def message_span_count(message: Any) -> int:
-    return sum(
-        len(scope_spans.spans)
-        for resource_spans in message.resource_spans
-        for scope_spans in resource_spans.scope_spans
-    )
-
-
-def message_value_count(message: Any) -> int:
-    """Attribute values the spans will hold, nested ones included."""
-    values = 0
-    for resource_spans in message.resource_spans:
-        values += _value_count(resource_spans.resource.attributes)
-        for scope_spans in resource_spans.scope_spans:
-            values += sum(_value_count(span.attributes) for span in scope_spans.spans)
-    return values
-
-
-def _value_count(key_values: Any) -> int:
-    return sum(1 + _nested_value_count(item.value) for item in key_values)
-
-
-def _nested_value_count(value: Any) -> int:
-    kind = value.WhichOneof("value")
-    if kind == "array_value":
-        return sum(1 + _nested_value_count(item) for item in value.array_value.values)
-    if kind == "kvlist_value":
-        return _value_count(value.kvlist_value.values)
-    return 0
 
 
 def spans_from_message(message: Any) -> list[RawSpan]:
@@ -533,17 +511,22 @@ class ReceiverStats:
 MAX_BODY_BYTES = 32 * 1024 * 1024
 # What decoding an export costs in memory, so it is charged before it
 # happens. Measured on CPython 3.10 with protobuf 4.24, and rounded up:
-# json.loads peaked at 90 bytes a structural token, and a protobuf parse at
-# 19 bytes a body byte with the upb backend and 135 with the pure-Python
-# one; a decoded span with its record but without attributes took 2 KB, and
-# an attribute value 190 bytes. Text decoded out of a body takes at most 4
-# bytes a byte (a str holding one character outside the Basic Multilingual
-# Plane stores every character in 4 bytes), and JSON is decoded to text
-# whole before it is parsed.
+# json.loads peaked at 90 bytes a structural token; a decoded span with its
+# record but without attributes took 2 KB, and an attribute value 190 bytes.
+# Text decoded out of a body takes at most 4 bytes a byte (a str holding one
+# character outside the Basic Multilingual Plane stores every character in
+# 4 bytes), and JSON is decoded to text whole before it is parsed.
 JSON_TOKEN_BYTES = 128
-PROTOBUF_PARSE_BYTES = {"upb": 24}
-# Any other backend is charged as the pure-Python one.
-PROTOBUF_PARSE_BYTES_OTHER = 160
+# A protobuf parse is charged per message, counted on the wire first, and
+# per body byte for the strings it copies. By RSS in a fresh process, over
+# every OTLP message type, empty and with every field set, a message took
+# at most 275 bytes with the upb backend (a span with a short name, under
+# protobuf 7.36; 198 under 4.24) and 1,239 with the pure-Python one, and a
+# long string one byte a byte with either. Any other backend is charged as
+# the pure-Python one.
+PROTOBUF_MESSAGE_BYTES = {"upb": 384}
+PROTOBUF_MESSAGE_BYTES_OTHER = 1536
+PROTOBUF_PARSE_BYTES = 2
 SPAN_BYTES = 2048
 VALUE_BYTES = 256
 TEXT_BYTES = 4
@@ -563,10 +546,11 @@ class ReceiverLimits:
     exports being read and decoded at once may be charged at most
     ``max_inflight_bytes``, each step charged before it runs: the body, with
     the most a gzip body can inflate to, then an estimate of decoding it
-    (``json_decode_estimate``, or for protobuf its parse and then the spans
-    it holds). An export that does not fit now is answered 503; one that
-    never could, 413. A body with more than ``max_spans_per_body`` spans is
-    refused, a protobuf one before any span is built, and one that does not
+    (``json_decode_estimate``, or for protobuf its parse, from its messages
+    counted on the wire, and then the spans it holds). An export that does
+    not fit now is answered 503; one that never could, 413. A body with more
+    than ``max_spans_per_body`` spans is refused, a protobuf one on its wire
+    counts before it is parsed, and one that does not
     fit the queue whole is refused with 503, so the exporter can resend it;
     spans are never queued in part.
     """
@@ -710,7 +694,7 @@ class OtlpSpanReceiver:
         self.run_id = run_id
         self.limits = limits or ReceiverLimits()
         self.protobuf_available = otlp_protobuf_available()
-        self._parse_bytes = protobuf_parse_bytes()
+        self._message_bytes = protobuf_message_bytes()
         self.stats = ReceiverStats()
         # Each queued span with the bytes it is charged; guarded by _lock.
         self._queue: deque[tuple[VllmSpanRecord, int]] = deque()
@@ -964,16 +948,24 @@ class OtlpSpanReceiver:
             if not self._reserve(handler, reservation, json_decode_estimate(body)):
                 return None
             return decode_otlp_json(json.loads(body.decode("utf-8")))
-        if not self._reserve(handler, reservation, self._parse_bytes * len(body)):
+        # Counted on the wire, so the parse is charged per message and a
+        # body with too many spans is refused before anything is parsed.
+        # Past max_messages the charge could never fit: the scan stops.
+        counts = count_trace_request(
+            body,
+            max_messages=self.limits.max_inflight_bytes // self._message_bytes,
+            max_spans=self.limits.max_spans_per_body,
+        )
+        if counts.spans > self.limits.max_spans_per_body:
+            self._refuse_too_many(handler)
+            return None
+        parse = counts.messages * self._message_bytes + PROTOBUF_PARSE_BYTES * len(body)
+        if not self._reserve(handler, reservation, parse):
             return None
         message = parse_otlp_protobuf(body)
-        spans = message_span_count(message)
-        if spans > self.limits.max_spans_per_body:
-            self._refuse_too_many(handler)  # before a single span is built
-            return None
         built = (
-            spans * SPAN_BYTES
-            + message_value_count(message) * VALUE_BYTES
+            counts.spans * SPAN_BYTES
+            + counts.values * VALUE_BYTES
             + TEXT_BYTES * len(body)
         )
         if not self._reserve(handler, reservation, built):
