@@ -263,10 +263,16 @@ exactly them. The plan's `server.model` says how:
 
 - **`pinned_hub`**: the revision is resolved to a commit in the cache, and
   every file of that snapshot is hashed and checked against the name of the
-  blob it links to (SHA-256 for a file in LFS, git's SHA-1 for the rest),
-  even where a deduplicated cache links that blob on to a shared store under
-  another name. A link whose blob is missing is refused (exit 5), as is a
-  `staged` file that cannot be read. Each server gets
+  blob it links to in the repository's own `blobs` (SHA-256 for a file in
+  LFS, git's SHA-1 for the rest), even where a deduplicated cache links that
+  blob on to a shared store under another name. A link into any other
+  directory, or whose blob is missing, is refused (exit 5), as is a
+  `staged` file that cannot be read. The snapshot must also hold what a
+  load reads: `config.json`, weights, and every shard a `*.index.json`
+  names. The cache keeps no list of a commit's files, so a file that no
+  load reads (a README, say) cannot be told missing offline:
+  `pinned_commit_verified` says every file present is the commit's and
+  nothing a load reads is missing. Each server gets
   `--revision <commit> --tokenizer-revision <commit>` and `HF_HUB_OFFLINE=1`,
   so it cannot load anything else. `{model}` is the repository.
 - **`staged`**: every file of a local directory is hashed, and each file

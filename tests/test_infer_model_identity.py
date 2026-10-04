@@ -182,6 +182,48 @@ def test_a_dangling_snapshot_link_is_refused_not_a_crash(tmp_path: Path) -> None
         )
 
 
+def _add(cache: Path, name: str, content: bytes) -> None:
+    """Another file of the commit, stored as the hub stores a small file."""
+    blob = _git_sha1(content)
+    (_repo(cache) / "blobs" / blob).write_bytes(content)
+    (_repo(cache) / "snapshots" / COMMIT / name).symlink_to(Path("../../blobs") / blob)
+
+
+def test_a_snapshot_link_into_another_directorys_blobs_is_refused(
+    tmp_path: Path,
+) -> None:
+    # rev-213-a's E3: any directory named blobs passed.
+    cache = _hub(tmp_path)
+    elsewhere = tmp_path / "elsewhere" / "blobs"
+    elsewhere.mkdir(parents=True)
+    blob = hashlib.sha256(WEIGHTS).hexdigest()
+    (elsewhere / blob).write_bytes(WEIGHTS)
+    link = _repo(cache) / "snapshots" / COMMIT / "model.safetensors"
+    link.unlink()
+    link.symlink_to(Path(os.path.relpath(elsewhere / blob, link.parent)))
+    with pytest.raises(InferInputError, match="not a link into its repository's"):
+        prepare_model({"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)})
+
+
+def test_a_snapshot_missing_what_a_load_reads_is_refused(tmp_path: Path) -> None:
+    # A file of the commit gone from the snapshot verified as the commit.
+    cache = _hub(tmp_path)
+    index = (
+        b'{"weight_map": {"a": "model.safetensors", '
+        b'"b": "model-00002-of-00002.safetensors"}}'
+    )
+    _add(cache, "model.safetensors.index.json", index)
+    with pytest.raises(
+        InferInputError, match="model-00002-of-00002.safetensors, which its index"
+    ):
+        prepare_model({"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)})
+
+    cache = _hub(tmp_path / "again")
+    (_repo(cache) / "snapshots" / COMMIT / "config.json").unlink()
+    with pytest.raises(InferInputError, match="no config.json"):
+        prepare_model({"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)})
+
+
 def test_an_unknown_route_is_refused() -> None:
     with pytest.raises(InferInputError, match="route"):
         prepare_model({"route": "trust_me"})
