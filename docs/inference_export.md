@@ -606,14 +606,14 @@ one OTLP/HTTP receiver (127.0.0.1:4318) and feeds two pipelines:
   whatever their `service.name`. Its queue and retries are bounded; a retry
   can deliver a batch twice, which the analysis counts as duplicates and
   keeps once.
+- **`traces/backend`** sends everything to Jaeger and to a file, through tail
+  sampling that keeps every failed trace and one in ten others. Remove the
+  sampler to keep all.
 
 The two pipelines share one receiver, so a refusal in either, such as the
 process-wide memory limiter while the backend's tail sampler buffers, is
 the receiver's answer: the sender retries, and the other pipeline gets the
 batch again. The analysis keeps each span once; Jaeger may show it twice.
-- **`traces/backend`** sends everything to Jaeger and to a file, through tail
-  sampling that keeps every failed trace and one in ten others. Remove the
-  sampler to keep all.
 
 ```bash
 OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf \
