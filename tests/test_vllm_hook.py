@@ -872,8 +872,15 @@ def test_a_record_json_cannot_serialize_is_an_error_and_takes_no_number(
     deep: list[Any] = []
     for _ in range(100_000):
         deep = [deep]
+
+    class Changing(dict[str, Any]):
+        """A value another thread changes while json reads it."""
+
+        def items(self) -> Any:
+            raise RuntimeError("dictionary changed size during iteration")
+
     writer = EpochWriter(tmp_path, "engine")
-    for value in (object(), circular, deep):
+    for value in (object(), circular, deep, Changing(a=1)):
         writer.emit("alias", {"internal": value})  # never raises
     writer.emit("alias", {"internal": "x"})
     writer.close()
@@ -881,7 +888,7 @@ def test_a_record_json_cannot_serialize_is_an_error_and_takes_no_number(
     records = _epoch_records(writer.directory)
     assert [(r["kind"], r["seq"]) for r in records] == [("alias", 0), ("goodbye", 1)]
     status = json.loads((writer.directory / "status.json").read_text())
-    assert (status["errors"], status["dropped"]) == (3, {})
+    assert (status["errors"], status["dropped"]) == (4, {})
 
 
 def test_fields_that_are_not_one_object_are_an_error(tmp_path: Path) -> None:

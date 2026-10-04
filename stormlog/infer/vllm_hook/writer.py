@@ -215,7 +215,7 @@ class EpochWriter:
         if isinstance(fields, dict):  # _join splices objects only
             try:
                 return _dumps(fields)
-            except (TypeError, ValueError, RecursionError):
+            except Exception:  # json's own errors, or any a value raises
                 pass
         self.count_error()
         return None
