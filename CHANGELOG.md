@@ -197,8 +197,9 @@ the flaky benchmark memory gates
   record is queued. Before, they were walked in Python to bound their size,
   then serialized again by the writer thread. The records written are
   byte-identical. The queue counts each record at its exact JSON size, so:
-  - its 32 MiB bound now also bounds the memory it holds, where the live
-    records it held could take up to twice that;
+  - the memory it holds is now its 32 MiB of JSON at most, plus about 113
+    bytes a record: about 34 MiB in all at the 20,000-record cap. The live
+    records it held before could take twice the 32 MiB;
   - fewer records are dropped as oversized: only a record whose JSON is over
     4 MiB is, where the old estimate, about 1.65 times the JSON, also
     dropped some that fit.

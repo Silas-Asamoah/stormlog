@@ -64,16 +64,17 @@ A failure inside the hook is counted and never reaches vLLM: every patched call
 runs vLLM's own code exactly once, and its exceptions pass through unchanged.
 
 The hook never makes vLLM wait on a disk. Records go into a queue that a
-background thread writes out. Each record's fields are serialized once, when
-the record is queued, and the queue holds at most 20,000 records and 32 MiB of
-that JSON, counted at its exact size until the record is written; a record that
-does not fit is dropped and counted, and so is a single record over 4 MiB. Two
-kinds of record are dropped before they are serialized, so they cost vLLM no
-encoding: any record while the queue already holds 20,000 records or the disk
-cap has stopped record writing, and a record whose request IDs alone, which
-clients choose, already pass 4 MiB. The thread checks its heartbeat, flush and
-sealing deadlines after every record, so a backlog delays them by one write at
-most.
+background thread writes out. Each record's fields are serialized once, when the
+record is queued, and the queue holds at most 20,000 records and 32 MiB of that
+JSON, counted at its exact size until the record is written. Each queued record
+takes about 113 bytes of memory beyond its JSON, so the queue holds at most
+about 34 MiB. A record that does not fit is dropped and counted, and so is a
+single record over 4 MiB. Two kinds of record are dropped before they are
+serialized, so they cost vLLM no encoding: any record while the queue already
+holds 20,000 records or the disk cap has stopped record writing, and a record
+whose request IDs alone, which clients choose, already pass 4 MiB. The thread
+checks its heartbeat, flush and sealing deadlines after every record, so a
+backlog delays them by one write at most.
 
 ## Raw log format, version 1
 
