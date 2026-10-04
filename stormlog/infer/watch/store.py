@@ -59,6 +59,8 @@ MANIFEST_FILENAME = "manifest.json"
 LOCK_FILENAME = ".lock"
 # Held exclusively by the one store that owns ``<root>/incidents``.
 STORE_LOCK_FILENAME = ".store.lock"
+# A bundle being deleted is renamed to this prefix first.
+TRASH_PREFIX = ".trash-"
 INCIDENTS_DIRNAME = "incidents"
 BUNDLE_NAME = re.compile(r"^inc-\d{8}T\d{6}Z-\d{4}-[0-9a-f]{8}$")
 GENERATION_NAME = re.compile(r"^gen-(\d+)$")
@@ -509,6 +511,7 @@ class IncidentStore:
         clock = time.time() if now is None else now
         # Cleared first: a deletion a reader defers during recovery stays.
         self._deferred.clear()
+        self._empty_trash()
         for bundle in self._bundle_dirs():
             report.temporaries_removed += _remove_temporaries(bundle)
             try:
@@ -638,7 +641,7 @@ class IncidentStore:
         try:
             with _exclusive(bundle):
                 freed = _freed_by(path, bundle)
-                shutil.rmtree(path, ignore_errors=True)
+                self._remove(path, bundle)
         except BlockingIOError:
             self._deferred[path] = bundle
             return False
@@ -649,6 +652,23 @@ class IncidentStore:
                 del self._deferred[inside]
         self.budget.forget(freed)
         return True
+
+    def _remove(self, path: Path, bundle: Path) -> None:
+        """Delete a generation, or a whole bundle by first renaming it out of
+        the store's namespace: a crash part-way through rmtree then leaves a
+        trash directory recover() removes, never a bundle missing its
+        manifest that it would seal again as interrupted."""
+        if path != bundle or not path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+            return
+        trash = self.root / f"{TRASH_PREFIX}{bundle.name}"
+        os.rename(bundle, trash)
+        _fsync_dir(self.root)
+        shutil.rmtree(trash, ignore_errors=True)
+
+    def _empty_trash(self) -> None:
+        for path in self.root.glob(f"{TRASH_PREFIX}*"):
+            shutil.rmtree(path, ignore_errors=True)
 
     def _bundle_dirs(self) -> list[Path]:
         return sorted(

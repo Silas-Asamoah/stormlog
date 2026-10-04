@@ -598,6 +598,44 @@ def _gen0_exact(store: IncidentStore, payload: bytes, *, now_ns: int) -> str:
     return incident_id
 
 
+def test_a_crash_while_pruning_never_brings_a_bundle_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rmtree deletes in directory order; with the manifest first (ext4's
+    hash order can do that), a crash left gen-0 behind and recover() sealed
+    the deleted bundle as interrupted."""
+    store = IncidentStore(tmp_path, _limits(max_incidents=1))
+    base = time.time_ns()
+    old = _gen0(store, b"o\n", now_ns=base)
+    new = _gen0(store, b"n\n", now_ns=base + 1)
+    real_rmtree = store_module.shutil.rmtree
+
+    class Crash(BaseException):
+        pass
+
+    def crash_after_the_manifest(path: Any, ignore_errors: bool = False) -> None:
+        manifest = Path(path) / "manifest.json"
+        if manifest.exists():
+            manifest.unlink()  # the manifest went first...
+            raise Crash  # ...and the process died
+        real_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(store_module.shutil, "rmtree", crash_after_the_manifest)
+    with pytest.raises(Crash):
+        store.prune(now_ns=base + 2)
+    monkeypatch.undo()
+    store.close()
+
+    restarted = IncidentStore(tmp_path, _limits(max_incidents=1))
+    report = restarted.recover()
+    assert report.sealed_interrupted == []
+    assert [m.incident_id for _p, m in restarted.bundles()] == [new]
+    assert not any(
+        p.name.startswith(".trash") for p in (tmp_path / "incidents").iterdir()
+    )
+    assert old not in {p.name for p in (tmp_path / "incidents").iterdir()}
+
+
 def test_a_bundle_being_read_is_pruned_once_the_reader_leaves(
     tmp_path: Path,
 ) -> None:
