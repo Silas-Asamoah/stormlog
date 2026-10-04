@@ -4,22 +4,31 @@ A pulse is ``SIGSTOP``, a confirmed stop, a wait, and ``SIGCONT``. The
 target is named by its pid *and* its start time, checked before every
 signal, so a recycled pid is never signalled. A stopped target is always
 continued: by ``finally`` around each pulse, by ``atexit``, by
-``Pulser.close``, and by a watchdog process that outlives a harness killed
-outright. Pulses are at most 2 s, at a duty cycle of at most 50%.
+``Pulser.close``, by SIGTERM and SIGHUP handlers, and by a watchdog
+(``examples.qualification.watchdog``) in a session of its own, which a
+signal to the harness's process group never reaches. No pulse starts unless
+the watchdog is alive and has said it is ready. Pulses are at most 2 s, at a
+duty cycle of at most 50%.
 """
 
 from __future__ import annotations
 
 import atexit
-import multiprocessing
+import functools
 import os
+import select
 import signal
+import subprocess
+import sys
 import threading
 import time
+import weakref
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import IO, Any, Callable
 
 import psutil
+
+from .fake_engine.process import _environment
 
 MAX_PULSE_SECONDS = 2.0
 MAX_DUTY_CYCLE = 0.5
@@ -27,6 +36,7 @@ CONFIRM_TIMEOUT_SECONDS = 1.0
 CONFIRM_POLL_SECONDS = 0.0005
 # The watchdog continues a target stopped this long past the longest pulse.
 WATCHDOG_SLACK_SECONDS = 1.0
+WATCHDOG_READY_SECONDS = 30.0
 
 
 class PulseRefused(RuntimeError):
@@ -132,10 +142,17 @@ class Pulser:
         self.pulses: list[Pulse] = []
         self._lock = threading.Lock()
         self._closed = False
-        self._watchdog: multiprocessing.process.BaseProcess | None = None
+        self._watched = watchdog
+        self._watchdog: subprocess.Popen[bytes] | None = None
         if watchdog:
             self._watchdog = _start_watchdog(target, max_pulse_seconds)
         atexit.register(self.close)
+        _LIVE.add(self)
+        _handle_termination()
+
+    @property
+    def watchdog_pid(self) -> int | None:
+        return None if self._watchdog is None else self._watchdog.pid
 
     def pulse(
         self, seconds: float, *, during: Callable[[], None] | None = None
@@ -144,15 +161,16 @@ class Pulser:
         stopped. The target is continued however the pulse ends.
 
         Raises:
-            PulseRefused: for a pulse too long, a closed pulser, a target
-                that is no longer the same process, or a stop that was not
-                confirmed within 1 s.
+            PulseRefused: for a pulse too long, a closed pulser, a watchdog
+                that can't be (re)started, a target that is no longer the
+                same process, or a stop that was not confirmed within 1 s.
         """
         if not 0 < seconds <= self.max_pulse_seconds:
             raise PulseRefused(f"a pulse lasts at most {self.max_pulse_seconds} s")
         with self._lock:
             if self._closed:
                 raise PulseRefused("the pulser is closed")
+            self._ensure_watchdog()
             self._signal(signal.SIGSTOP)
             stop_sent = time.time_ns()
             try:
@@ -188,16 +206,32 @@ class Pulser:
         return done
 
     def close(self) -> None:
-        """Continue the target, and stop the watchdog."""
+        """Continue the target, and let the watchdog go: closing its pipe
+        tells it the harness is done, and it continues the target once more
+        and exits."""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
             self._continue()
         if self._watchdog is not None:
-            self._watchdog.terminate()
-            self._watchdog.join(timeout=5)
+            _release(self._watchdog)
         atexit.unregister(self.close)
+        _LIVE.discard(self)
+
+    def continue_now(self) -> None:
+        """Continue the target at once, without waiting for a pulse to end:
+        for a signal handler, which may interrupt a pulse in progress."""
+        self._continue()
+
+    def _ensure_watchdog(self) -> None:
+        """A watchdog that died (the OOM killer, a user) is replaced before
+        the next stop; one that can't be is a refusal."""
+        if not self._watched:
+            return
+        if self._watchdog is not None and self._watchdog.poll() is None:
+            return
+        self._watchdog = _start_watchdog(self.target, self.max_pulse_seconds)
 
     def __enter__(self) -> Pulser:
         return self
@@ -225,37 +259,84 @@ class Pulser:
 
 def _start_watchdog(
     target: Target, max_pulse_seconds: float
-) -> multiprocessing.process.BaseProcess:
-    process = multiprocessing.get_context("spawn").Process(
-        target=watchdog,
-        args=(os.getpid(), target.pid, target.start_time, max_pulse_seconds),
-        name="stormlog-pulse-watchdog",
-        daemon=True,
+) -> subprocess.Popen[bytes]:
+    """A watchdog in its own session, watching ``target``; returns once it
+    says it is ready.
+
+    Raises:
+        PulseRefused: if it isn't ready within 30 s.
+    """
+    command = [
+        sys.executable, "-m", "examples.qualification.watchdog",
+        "--pid", str(target.pid),
+        "--start-time", repr(target.start_time),
+        "--limit", str(max_pulse_seconds + WATCHDOG_SLACK_SECONDS),
+    ]  # fmt: skip
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        env=_environment(),
+        start_new_session=True,
     )
-    process.start()
+    assert process.stdout is not None
+    if _read_line(process.stdout, WATCHDOG_READY_SECONDS) != b"ready":
+        process.kill()
+        process.wait()
+        raise PulseRefused("the pulse watchdog never said it was ready")
     return process
 
 
-def watchdog(
-    harness_pid: int, pid: int, start_time: float, max_pulse_seconds: float
-) -> None:
-    """Continue the target if the harness dies, or if the target stays
-    stopped well past the longest pulse; end once either process is gone."""
-    target = Target(pid, start_time)
-    stopped_since: float | None = None
-    limit = max_pulse_seconds + WATCHDOG_SLACK_SECONDS
-    while target.is_alive():
-        if not psutil.pid_exists(harness_pid):
-            os.kill(pid, signal.SIGCONT)
-            return
-        if target.is_stopped():
-            stopped_since = stopped_since or time.monotonic()
-            if time.monotonic() - stopped_since > limit:
-                os.kill(pid, signal.SIGCONT)
-                stopped_since = None
-        else:
-            stopped_since = None
-        time.sleep(0.05)
+def _read_line(stream: IO[bytes], timeout_seconds: float) -> bytes:
+    deadline = time.monotonic() + timeout_seconds
+    line = b""
+    while not line.endswith(b"\n"):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([stream], [], [], remaining)[0]:
+            break
+        chunk = os.read(stream.fileno(), 1)
+        if not chunk:
+            break
+        line += chunk
+    return line.strip()
+
+
+def _release(process: subprocess.Popen[bytes]) -> None:
+    if process.stdin is not None:
+        process.stdin.close()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+    if process.stdout is not None:
+        process.stdout.close()
+
+
+# Every open pulser, for the termination handlers.
+_LIVE: weakref.WeakSet[Pulser] = weakref.WeakSet()
+_HANDLED: set[int] = set()
+
+
+def _handle_termination() -> None:
+    """On SIGTERM or SIGHUP, continue every target, then exit: their default
+    action would end the harness with no ``finally`` and no ``atexit``.
+    Handlers can be set only from the main thread."""
+    if threading.current_thread() is not threading.main_thread():
+        return
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        if signum not in _HANDLED:
+            previous = signal.getsignal(signum)
+            signal.signal(signum, functools.partial(_on_termination, previous))
+            _HANDLED.add(signum)
+
+
+def _on_termination(previous: Any, signum: int, frame: Any) -> None:
+    for pulser in list(_LIVE):
+        pulser.continue_now()
+    if callable(previous):
+        previous(signum, frame)
+    raise SystemExit(128 + signum)
 
 
 __all__ = [
@@ -268,5 +349,4 @@ __all__ = [
     "ROLE_TITLES",
     "check_schedule",
     "discover_roles",
-    "watchdog",
 ]

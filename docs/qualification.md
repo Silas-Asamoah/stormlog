@@ -500,8 +500,17 @@ F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
   - in a `finally` around each pulse;
   - at `atexit`;
   - by `Pulser.close`;
-  - by a watchdog process that continues it when the harness is killed
-    outright, or when it stays stopped more than 1 s past the longest pulse.
+  - by SIGTERM and SIGHUP handlers, which continue every target before the
+    harness exits (their default action would skip `finally` and `atexit`);
+  - by a watchdog (`examples.qualification.watchdog`) in a session of its
+    own, ignoring SIGINT, SIGTERM and SIGHUP, so a signal to the harness's
+    process group (Ctrl+C, a job's SIGTERM, an ssh disconnect) never reaches
+    it. It reads a pipe from the harness: end of file means the harness is
+    gone, however it died, and the target is continued at once. It also
+    continues a target stopped more than 1 s past the longest pulse.
+- **No stop without a watchdog.** The pulser waits for the watchdog to say
+  it is ready before its first stop, replaces a watchdog that died before the
+  next one, and refuses to pulse if it can't.
 - **Caps.** A pulse lasts at most 2 s, at a duty cycle of at most 50%.
 
 Each pulse's stop, confirmation and continue times are kept, so effect timing

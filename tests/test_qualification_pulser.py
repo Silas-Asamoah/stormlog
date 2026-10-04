@@ -165,3 +165,180 @@ def test_roles_are_found_under_the_api_server_by_title() -> None:
             child.kill()
         server.kill()
         server.wait()
+
+
+# ------------------------------------------------------------------ the harness dies
+
+LOOP = "import time\nwhile True:\n    time.sleep(0.01)\n"
+HARNESS = textwrap.dedent(
+    """
+    import sys, time
+    from examples.qualification.pulser import Pulser, Target
+    pulser = Pulser(Target.of(int(sys.argv[1])), max_pulse_seconds=2.0)
+    print(pulser.watchdog_pid, flush=True)
+
+    def hold() -> None:
+        print("stopped", flush=True)
+        time.sleep(60)
+
+    pulser.pulse(2.0, during=hold)
+    """
+)
+
+
+@pytest.fixture
+def loop() -> Iterator[subprocess.Popen[bytes]]:
+    """A target in a session of its own, as a server the harness didn't start."""
+    process = subprocess.Popen([sys.executable, "-c", LOOP], start_new_session=True)
+    yield process
+    os.kill(process.pid, signal.SIGCONT)
+    process.kill()
+    process.wait()
+
+
+def _pulsing_harness(target: int) -> tuple[subprocess.Popen[str], int]:
+    """A harness in its own session, mid-pulse; returns it and its watchdog."""
+    harness = subprocess.Popen(
+        [sys.executable, "-c", HARNESS, str(target)],
+        env=_environment(),
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    assert harness.stdout is not None
+    watchdog = int(harness.stdout.readline())
+    assert harness.stdout.readline().strip() == "stopped"
+    return harness, watchdog
+
+
+def _running_within(pid: int, seconds: float) -> bool:
+    return wait_until(
+        lambda: psutil.Process(pid).status() != psutil.STATUS_STOPPED, timeout=seconds
+    )
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP])
+def test_a_signal_to_the_harnesss_group_continues_the_target(
+    loop: subprocess.Popen[bytes], signum: int
+) -> None:
+    # A job's SIGTERM or an ssh disconnect's SIGHUP reaches the whole group:
+    # the harness continues its target before exiting, and the watchdog,
+    # in its own session, survives to see it go.
+    harness, watchdog = _pulsing_harness(loop.pid)
+    os.killpg(harness.pid, signum)
+    assert harness.wait(timeout=10) == 128 + signum
+    # Well inside the watchdog's 3 s stopped-too-long limit.
+    assert _running_within(loop.pid, 1.0)
+    assert wait_until(
+        lambda: not psutil.pid_exists(watchdog)
+        or psutil.Process(watchdog).status() == psutil.STATUS_ZOMBIE,
+        timeout=5,
+    )
+
+
+def test_a_harness_group_killed_outright_leaves_the_watchdog_to_continue(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    harness, watchdog = _pulsing_harness(loop.pid)
+    os.killpg(harness.pid, signal.SIGKILL)
+    harness.wait(timeout=10)
+    # The harness's pipe closed: the watchdog continues the target at once.
+    assert _running_within(loop.pid, 1.0)
+
+
+def test_a_dead_watchdog_is_replaced_before_the_next_stop(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    with Pulser(Target.of(loop.pid), max_pulse_seconds=0.5) as pulser:
+        first = pulser.watchdog_pid
+        assert first is not None
+        os.kill(first, signal.SIGKILL)
+        assert wait_until(
+            lambda: pulser._watchdog is not None and pulser._watchdog.poll() is not None
+        )
+        pulser.pulse(0.1)
+        second = pulser.watchdog_pid
+        assert second not in (None, first)
+        assert psutil.Process(second).status() != psutil.STATUS_ZOMBIE
+
+
+def test_no_stop_without_a_watchdog_that_said_it_was_ready(
+    loop: subprocess.Popen[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from examples.qualification import pulser as pulser_module
+
+    monkeypatch.setattr(pulser_module.sys, "executable", "/usr/bin/false")
+    with pytest.raises(PulseRefused, match="never said it was ready"):
+        Pulser(Target.of(loop.pid))
+    assert psutil.Process(loop.pid).status() != psutil.STATUS_STOPPED
+
+
+def test_the_watchdog_continues_a_stop_held_past_the_longest_pulse(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    # The harness is alive but holds the stop far too long: the watchdog
+    # continues the target 1 s after the longest pulse (0.3 s).
+    target = Target.of(loop.pid)
+    continued: list[bool] = []
+    with Pulser(target, max_pulse_seconds=0.3) as pulser:
+        pulser.pulse(
+            0.3, during=lambda: continued.append(_running_within(loop.pid, 3.0))
+        )
+    assert continued == [True]
+
+
+def test_close_and_exit_continue_a_target_stopped_outside_a_pulse(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    target = Target.of(loop.pid)
+    pulser = Pulser(target, watchdog=False)
+    os.kill(loop.pid, signal.SIGSTOP)
+    assert wait_until(target.is_stopped)
+    pulser.close()
+    assert not target.is_stopped()
+    # And at exit, through atexit, without a watchdog to fall back on.
+    script = textwrap.dedent(
+        f"""
+        import os, signal
+        from examples.qualification.pulser import Pulser, Target
+        pulser = Pulser(Target.of({loop.pid}), watchdog=False)
+        os.kill({loop.pid}, signal.SIGSTOP)
+        """
+    )
+    subprocess.run([sys.executable, "-c", script], env=_environment(), check=True)
+    assert _running_within(loop.pid, 1.0)
+
+
+def test_a_recycled_pid_is_never_continued_either(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    # Another process now holds the pid: closing must not SIGCONT it.
+    impostor = Target(loop.pid, Target.of(loop.pid).start_time - 10)
+    pulser = Pulser(impostor, watchdog=False)
+    os.kill(loop.pid, signal.SIGSTOP)
+    assert wait_until(Target.of(loop.pid).is_stopped)
+    pulser.close()
+    time.sleep(0.2)
+    assert psutil.Process(loop.pid).status() == psutil.STATUS_STOPPED
+
+
+def test_a_pulse_past_its_cap_is_refused(loop: subprocess.Popen[bytes]) -> None:
+    with Pulser(Target.of(loop.pid), watchdog=False, max_pulse_seconds=0.2) as pulser:
+        with pytest.raises(PulseRefused, match="at most 0.2 s"):
+            pulser.pulse(0.3)
+    assert psutil.Process(loop.pid).status() != psutil.STATUS_STOPPED
+
+
+def test_a_stop_that_never_takes_is_refused() -> None:
+    # A zombie can't be stopped: the pulse confirms the stop, so it refuses
+    # rather than recording a pulse that never happened.
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    assert wait_until(
+        lambda: psutil.Process(child.pid).status() == psutil.STATUS_ZOMBIE
+    )
+    try:
+        with Pulser(Target.of(child.pid), watchdog=False) as pulser:
+            with pytest.raises(PulseRefused, match="did not stop"):
+                pulser.pulse(0.1)
+    finally:
+        child.wait()
