@@ -58,7 +58,7 @@ registry of Prometheus exporter ports is crowded around 9100–9999.
 A setting that cannot be used exits 2 before anything is sent, and no
 artifact is written (see the [exit-code contract](report_contract.md)):
 - an address that is not `HOST:PORT`;
-- an export flag given without `--prometheus-listen` or `--prometheus-textfile-dir`;
+- an export flag given without `--prometheus-listen` or `--prometheus-textfile-dir`, even with its default value;
 - a slot another live writer holds;
 - a textfile directory that is missing, holds the artifact, or cannot be
   written;

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import math
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Literal
@@ -59,12 +59,17 @@ class ExportConfig:
             return self.prometheus_series_headroom
         return DEFAULT_HEADROOM[command]
 
-    def validate(self) -> None:
-        """Raise ``ValueError`` for a setting the exporter cannot use."""
+    def validate(self, given: Collection[str] | None = None) -> None:
+        """Raise ``ValueError`` for a setting the exporter cannot use.
+
+        ``given`` names the settings that were set, by flag or in JSON, even
+        to their defaults; without it, a setting counts as given when it
+        differs from its default.
+        """
         if self.prometheus_listen is not None:
             parse_listen(self.prometheus_listen)
         validate_slot(self.prometheus_slot)
-        _check_dependent(self)
+        _check_dependent(self, _given(self) if given is None else set(given))
         _check_numbers(self)
 
     @classmethod
@@ -84,7 +89,7 @@ class ExportConfig:
         if values.get("prometheus_textfile_dir") is not None:
             values["prometheus_textfile_dir"] = Path(values["prometheus_textfile_dir"])
         config = cls(**values)
-        config.validate()
+        config.validate(given=set(mapping))
         return config
 
 
@@ -126,32 +131,43 @@ def _check_type(name: str, value: Any) -> None:
         raise ValueError(f"export setting {name} must be {kind}, not {value!r}")
 
 
-def _check_dependent(config: ExportConfig) -> None:
+# Each setting that needs a destination, and the flag that sets it.
+_NEEDS_PROMETHEUS = {
+    "prometheus_slot": "--prometheus-slot",
+    "prometheus_max_series": "--prometheus-max-series",
+    "prometheus_max_bytes": "--prometheus-max-bytes",
+    "prometheus_series_headroom": "--prometheus-series-headroom",
+    "prometheus_case_label": "--prometheus-case-label",
+}
+_NEEDS_TEXTFILE = {
+    "prometheus_textfile_interval_seconds": "--prometheus-textfile-interval",
+    "prometheus_textfile_remove_on_exit": "--prometheus-textfile-remove-on-exit",
+}
+
+
+def _given(config: ExportConfig) -> set[str]:
     defaults = ExportConfig()
+    return {
+        item.name
+        for item in fields(config)
+        if getattr(config, item.name) != getattr(defaults, item.name)
+    }
+
+
+def _check_dependent(config: ExportConfig, given: set[str]) -> None:
     if not config.prometheus_enabled:
-        for name, flag in (
-            ("prometheus_slot", "--prometheus-slot"),
-            ("prometheus_max_series", "--prometheus-max-series"),
-            ("prometheus_max_bytes", "--prometheus-max-bytes"),
-            ("prometheus_series_headroom", "--prometheus-series-headroom"),
-            ("prometheus_case_label", "--prometheus-case-label"),
-        ):
-            if getattr(config, name) != getattr(defaults, name):
+        for name, flag in _NEEDS_PROMETHEUS.items():
+            if name in given:
                 raise ValueError(
                     f"{flag} only applies with --prometheus-listen or "
                     "--prometheus-textfile-dir"
                 )
-    if config.prometheus_listen is None and config.prometheus_linger_seconds:
+    if config.prometheus_listen is None and "prometheus_linger_seconds" in given:
         raise ValueError("--prometheus-linger only applies with --prometheus-listen")
-    if config.prometheus_textfile_dir is None and (
-        config.prometheus_textfile_remove_on_exit
-        or config.prometheus_textfile_interval_seconds
-        != defaults.prometheus_textfile_interval_seconds
-    ):
-        raise ValueError(
-            "--prometheus-textfile-interval and --prometheus-textfile-remove-on-exit "
-            "only apply with --prometheus-textfile-dir"
-        )
+    if config.prometheus_textfile_dir is None:
+        for name, flag in _NEEDS_TEXTFILE.items():
+            if name in given:
+                raise ValueError(f"{flag} only applies with --prometheus-textfile-dir")
 
 
 def _check_numbers(config: ExportConfig) -> None:
@@ -273,8 +289,27 @@ def export_config_from_args(args: argparse.Namespace) -> ExportConfig:
         prometheus_series_headroom=getattr(args, "prometheus_series_headroom", None),
         prometheus_case_label=getattr(args, "prometheus_case_label", None) != "off",
     )
-    config.validate()
+    config.validate(given=_given_flags(args))
     return config
+
+
+# The flags whose value names an ExportConfig field differently.
+_FLAG_FIELDS = {
+    "prometheus_linger": "prometheus_linger_seconds",
+    "prometheus_textfile_interval": "prometheus_textfile_interval_seconds",
+}
+
+
+def _given_flags(args: argparse.Namespace) -> set[str]:
+    """The settings a flag was given for: none of the flags has a default."""
+    given = set()
+    for item in fields(ExportConfig):
+        flag = next((k for k, v in _FLAG_FIELDS.items() if v == item.name), item.name)
+        value = getattr(args, flag, None)
+        # Not given: None, or False from a store_true flag (0.0 == False).
+        if value is not None and value is not False:
+            given.add(item.name)
+    return given
 
 
 def _or(args: argparse.Namespace, name: str, default: Any) -> Any:
