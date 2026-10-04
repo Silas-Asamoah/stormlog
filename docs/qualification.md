@@ -283,11 +283,19 @@ spurious.
 | Label | The episode |
 | --- | --- |
 | `outranked` | has a match, but below the gated top-k |
-| `ineligible` | has a finding of the label's kind that #218 made `claim: observation` |
-| `secondary_only` | has one only as a secondary |
-| `mismatch` | has one with the wrong cause, severity or location |
-| `coverage_gap` | has none, and the diagnosis didn't assess the kind |
-| `no_finding` | has none, and the kind was assessed |
+| `mismatch` | has an eligible primary of the label's kind with the wrong cause, severity or location |
+| `secondary_only` | has the label's kind only as secondaries |
+| `ineligible` | has the label's kind only where #218 made it `claim: observation` |
+| `coverage_gap` | has none, and #218 didn't assess the kind at the label's component |
+| `no_finding` | has none, and the kind was assessed there |
+
+The labels apply in that order. A kind counts as assessed at a component
+when its coverage is `assessed`, or `partial` with every subject assessed
+and only for reasons that exclude other components: #218 PR 1b reports
+`host_stall` partial because it doesn't assess `engine_core` and `worker`
+yet, so an F4b miss at `api_server` is `no_finding`, and an F4a miss a
+coverage gap. The reasons that exclude components are a copy of #218's
+table (`vocabulary.NOT_ASSESSED_COMPONENTS`), checked against its module.
 
 **The claims.**
 
