@@ -25,6 +25,7 @@ from typing import Any, Protocol, runtime_checkable
 from ..diagnosis_signals import SignalConfig, evaluate_signal
 from ..scrape_window import (
     Labels,
+    check_window,
     counter_window,
     exporter_identity,
     gauge_window,
@@ -150,11 +151,16 @@ class GaugeAtLeast:
     engine: str | None = None
 
     def evaluate(self, scrapes: Sequence[VllmScrapeRecord]) -> Evaluation:
+        # A gauge is read sample by sample, never differenced, so the window
+        # is checked here for what differencing would catch: scrapes out of
+        # order or at one instant, and two exporters' samples in one window.
+        window = check_window(scrapes, engine=self.engine, min_scrapes=1)
         gauge = gauge_window(
             scrapes, self.family, labels=self.labels, engine=self.engine
         )
-        if gauge.reasons or gauge.n < self.min_samples:
-            reasons = gauge.reasons or (REASON_TOO_FEW_SAMPLES,)
+        found = tuple(dict.fromkeys((*window.reasons, *gauge.reasons)))
+        if found or gauge.n < self.min_samples:
+            reasons = found or (REASON_TOO_FEW_SAMPLES,)
             return Evaluation(DATA_GAP, samples=gauge.n, reasons=reasons)
         fraction = share_at_least(gauge, self.threshold)
         assert fraction is not None  # n >= min_samples >= 1

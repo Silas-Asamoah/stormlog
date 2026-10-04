@@ -229,6 +229,24 @@ def test_a_series_whose_labels_change_is_a_data_gap() -> None:
     assert "series_labels_changed" in swapped.reasons
 
 
+def test_a_gauge_window_across_an_exporter_restart_or_out_of_order_is_a_gap() -> None:
+    """A gauge is never differenced, so nothing else would notice that its
+    samples came from two exporters or out of order."""
+    gauge = GaugeAtLeast(WAITING, threshold=8)
+    before = [
+        scrape(exposition(gauges={WAITING: 9}, start=1000.0), at) for at in (0, 1)
+    ]
+    after = [scrape(exposition(gauges={WAITING: 9}, start=2000.0), at) for at in (2, 3)]
+    restarted = gauge.evaluate([*before, *after])
+    assert restarted.classification == DATA_GAP
+    assert restarted.reasons == ("engine_restart",)
+    first, second, third = _scrapes([_waiting(9)] * 3)
+    shuffled = gauge.evaluate([first, third, second])
+    assert shuffled.classification == DATA_GAP
+    assert shuffled.reasons == ("scrapes_out_of_order",)
+    assert gauge.evaluate([first, second, third]).classification == VIOLATING
+
+
 def test_a_failed_scrape_inside_the_window_leaves_it_judged() -> None:
     """Only the window's ends must have succeeded; inside, a failure only
     leaves fewer samples, and a counter is differenced across it."""
