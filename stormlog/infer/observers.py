@@ -32,6 +32,7 @@ from .report_stats import is_number
 if TYPE_CHECKING:
     from .vllm_analysis import JoinedSpans
 
+TREATMENTS_EVENT = "infer.treatments"
 SAMPLE_RATE_FLOOR = 0.9
 SCRAPE_GAP_FACTOR = 2.0
 SPAN_JOIN_FLOOR = 0.99
@@ -91,10 +92,40 @@ def observer_states(
         "trace": lambda: _traces(records, config, phases),
         "execution": lambda: _execution(records, config, phases),
     }
+    observers = {name: judge() for name, judge in judges.items()}
+    observers.update(_treatments(records))
     return {
         "compared_phases": [phase.case_id for phase in phases],
-        "observers": {name: judge() for name, judge in judges.items()},
+        "observers": observers,
     }
+
+
+def _treatments(records: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Treatments the experiment runner ran beside the workload, as observers.
+
+    The runner judged each one over the whole run: ready before the
+    workload, and still running when it ended. ``infer.treatments`` records
+    say so; the last one counts.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if record.get("event_type") != TREATMENTS_EVENT:
+            continue
+        for item in record.get("treatments") or []:
+            name = f"treatment:{item.get('name')}"
+            found[name] = {
+                "requested": True,
+                "configured": True,
+                "active": bool(item.get("ready")),
+                "healthy": bool(item.get("healthy")),
+                "settings": {
+                    "command_sha256": item.get("command_sha256"),
+                    "cpu_affinity": item.get("cpu_affinity"),
+                },
+                "phases": {},
+                "unjudged": [],
+            }
+    return found
 
 
 def _state(
@@ -587,6 +618,7 @@ def observer_lines(block: Any) -> list[str]:
 
 
 __all__ = [
+    "TREATMENTS_EVENT",
     "SAMPLE_RATE_FLOOR",
     "SCRAPE_GAP_FACTOR",
     "SPAN_JOIN_FLOOR",

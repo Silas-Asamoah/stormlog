@@ -108,6 +108,15 @@ a prelude that fails marks the block's runs `prelude_failed`. Each run then:
 
 A run's label is `<experiment>-b<block>-p<position>-<arm>-a<attempt>`.
 
+### Treatments are observers
+
+After the workload, the runner appends an `infer.treatments` record to each
+of the run's artifacts: every treatment that ran beside it, the digest of
+its command template, its CPUs, and whether it was ready and stayed up. A
+comparison sees each one as an observer named `treatment:<name>`: an
+`overhead` baseline must have none, and an `incremental` candidate declares
+the ones it adds (`--added-observers treatment:watcher`).
+
 ### How a run ends
 
 Every run ends in exactly one state, written to `index.jsonl` with its
