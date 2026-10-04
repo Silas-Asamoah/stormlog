@@ -361,6 +361,8 @@ class IncidentStore:
         """Repair what a crash left; run before any pruning."""
         report = RecoveryReport()
         clock = time.time() if now is None else now
+        # Cleared first: a deletion a reader defers during recovery stays.
+        self._deferred.clear()
         for bundle in self._bundle_dirs():
             report.temporaries_removed += _remove_temporaries(bundle)
             try:
@@ -372,7 +374,6 @@ class IncidentStore:
                 report.unreadable.append(bundle.name)
                 continue
             report.generations_removed += self._remove_unnamed(bundle, manifest)
-        self._deferred.clear()  # the budget below is rescanned from disk
         self.budget = DiskBudget(self.limits, used_bytes=self._scan_bytes())
         return report
 
