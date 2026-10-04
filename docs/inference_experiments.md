@@ -147,6 +147,42 @@ earlier attempt stays on disk and in the index, and the new one records
 `order_broken: true`, since it runs later than planned. A leftover
 `.partial` directory is kept, renamed `.abandoned`.
 
+## Model identity
+
+A digest of a model path taken after a server started says nothing about
+what the server loaded: the path may have changed in between. So the runner
+fixes the weights before it launches anything, and points every server at
+exactly them. The plan's `server.model` says how:
+
+```json
+"model": {"route": "pinned_hub", "repo": "Qwen/Qwen2.5-0.5B-Instruct",
+          "revision": "main", "hub_cache": "/home/.cache/huggingface/hub"}
+```
+
+```json
+"model": {"route": "staged", "source": "/models/qwen-0.5b", "store": "/home/model-store"}
+```
+
+- **`pinned_hub`**: the revision is resolved to a commit in the cache, and
+  every file of that snapshot is hashed and checked against its blob's name
+  (SHA-256 for a file in LFS, git's SHA-1 for the rest). Each server gets
+  `--revision <commit> --tokenizer-revision <commit>` and `HF_HUB_OFFLINE=1`,
+  so it cannot load anything else. `{model}` is the repository.
+- **`staged`**: every file of a local directory is hashed, and the directory
+  is hard-linked (or copied) into `<store>/<weights_digest>/`, read-only. The
+  server loads that directory: its name is its content. `{model}` is its
+  path.
+
+After each run the files are checked again, by size, modification time and
+inode; a change makes the run `protocol_failure: model_changed`. Each run's
+`model_identity.json` records the files and their digests, and the
+runner's server descriptions carry the evidence (`pinned_commit_verified` or
+`staged_snapshot_verified`), bound to the server's process. Only this
+evidence verifies a model's identity in a comparison.
+
+Without `server.model`, `{model}` is the plan's `server.model.name` (or
+empty), and the model's identity stays unverified.
+
 ## Processes
 
 Every process the runner starts (the server, each step, each treatment) gets
