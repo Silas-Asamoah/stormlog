@@ -54,6 +54,7 @@ CAPTURE_STATUSES = (
     "recorded_by_policy",
 )
 FIDELITY = ("complete", "partial", "missing")
+SEAL_STATUSES = ("completed", "interrupted")
 DETAIL_LEVELS = ("metrics", "spans", "execution", "kernel_trace")
 SUPPRESSION_REASONS = (
     "cooldown",
@@ -261,6 +262,7 @@ def _check_window(window: Mapping[str, Any] | None) -> None:
 
 
 def _check_incident(record: Mapping[str, Any]) -> None:
+    _one_of(record.get("status"), SEAL_STATUSES, "status")
     _check_trigger(record["trigger"])
     for trigger in _bounded(record, "joined_triggers", MAX_JOINED_TRIGGERS):
         _check_trigger(trigger)
@@ -343,6 +345,7 @@ __all__ = [
     "INCIDENT_FINALIZED",
     "INCIDENT_PRUNED",
     "LOSS_KEYS",
+    "SEAL_STATUSES",
     "MAX_ENGINE_SPAN_LINKS",
     "MAX_JOINED_TRIGGERS",
     "MAX_REQUEST_REFS",

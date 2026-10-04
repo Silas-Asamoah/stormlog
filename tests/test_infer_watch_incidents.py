@@ -538,3 +538,35 @@ def test_test_triggers_neither_join_nor_are_joined(harness: Harness) -> None:
 def test_a_firing_at_the_post_window_s_last_instant_joins(harness: Harness) -> None:
     first = harness.fire(200)  # post-window ends at 260 s
     assert harness.fire(260, trigger_id="kv") == first
+
+
+def test_a_post_window_cut_short_is_partial_and_says_why(harness: Harness) -> None:
+    """Cut at 230 s by the watch's end, a post-window meant to run to 260 s
+    was recorded complete over the 30 s it got."""
+    harness.scrapes(80, 230)
+    harness.fire(200)
+    harness.now = 230 * S
+    harness.manager.close(harness.now)
+    (record,) = harness.of_type(INCIDENT)
+    validate_record(record)
+    assert record["status"] == "interrupted"
+    post = record["post_window"]
+    assert post["fidelity"] == "partial"
+    assert post["fidelity_detail"]["scrapes"]["requested_seconds"] == 60.0
+    assert record["pre_window"]["fidelity"] == "complete"
+
+
+def test_a_window_with_missed_ticks_is_partial(harness: Harness) -> None:
+    """Ten ticks with no scrape left a post-window of 51 scrapes in 60 s
+    recorded complete."""
+    harness.scrapes(80, 209)
+    harness.scrapes(220, 262)  # ticks 210-219 never scraped
+    harness.fire(200, pending_since_s=140)
+    harness.tick(261)
+    (record,) = harness.of_type(INCIDENT)
+    assert record["status"] == "completed"
+    post = record["post_window"]
+    assert post["fidelity_detail"]["scrapes"]["attempted"] == 51
+    assert post["fidelity_detail"]["scrapes"]["expected"] == 60
+    assert post["fidelity"] == "partial"
+    assert record["pre_window"]["fidelity"] == "complete"
