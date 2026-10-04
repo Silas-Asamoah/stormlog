@@ -594,12 +594,19 @@ def score_run(
 
 
 def _check_run(run: RunRecord, injections: Sequence[Injection]) -> None:
+    """The run's episodes: each once, all of this run, and all on the run's
+    clock, since its windows and theirs are compared."""
     ids = [injection.episode_id for injection in injections]
     if len(set(ids)) != len(ids):
         raise ValueError(f"run {run.run_id}: an episode is given twice")
     strays = sorted(i.episode_id for i in injections if i.run_id != run.run_id)
     if strays:
         raise ValueError(f"run {run.run_id}: episodes of another run: {strays}")
+    clocks = sorted(
+        i.episode_id for i in injections if i.clock_domain != run.clock_domain
+    )
+    if clocks:
+        raise ValueError(f"run {run.run_id}: episodes on another clock: {clocks}")
 
 
 def assign_findings(

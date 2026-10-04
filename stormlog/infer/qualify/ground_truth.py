@@ -535,7 +535,20 @@ class RunRecord:
                 found.append(f"{name}: times must be integers")
             elif interval.end_ns < interval.start_ns:
                 found.append(f"{name} ends before it begins")
+            elif name != "measured" and not self._inside_measured(interval):
+                found.append(f"{name} lies outside the measured window")
         return found
+
+    def _inside_measured(self, interval: Interval) -> bool:
+        measured = self.measured
+        if not (_is_time(measured.start_ns) and _is_time(measured.end_ns)):
+            return True  # reported on its own
+        return (
+            measured.start_ns
+            <= interval.start_ns
+            <= interval.end_ns
+            <= (measured.end_ns)
+        )
 
     def to_record(self) -> dict[str, Any]:
         return {
