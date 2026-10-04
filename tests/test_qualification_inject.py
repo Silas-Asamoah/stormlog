@@ -49,7 +49,14 @@ def _plan(path: Path) -> Path:
             "final_recovery": 1,
             "min_clean": 0.5,
         },
-        "thresholds": {"window": 1, "hold": 1, "cadence_hold": 1, "priming_window": 1},
+        # Holds of at least two scrape periods: a hold shorter than the
+        # scrape spacing can contain no gauge sample.
+        "thresholds": {
+            "window": 1,
+            "hold": 2.5,
+            "cadence_hold": 1,
+            "priming_window": 1,
+        },
         "episodes": [
             {"type": "N"},
             {"type": "F4a", "dose": {"pulse_ms": 100, "period_ms": 400}},
@@ -105,11 +112,11 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     assert all(pulse["landed"] in landings for pulse in stall.injected["pulses"])
     assert stall.times.effect_onset_ns == stall.times.action_onset_ns
     assert injections["N"].status == "valid"
-    # F2 runs last: under a loaded test host its 1 s KV hold may time out,
-    # which is a run's honest outcome, not the harness failing.
+    # F2's neighbor preempts victim requests: the KV fault is realized.
     kv = injections["F2"]
-    assert kv.validity.actuation == "ok"
-    assert kv.status in ("valid", "not_realized", "recovery_incomplete")
+    assert kv.status == "valid", kv.validity
+    (preempted,) = [c for c in kv.validity.checks if c["name"] == "victim_preempted"]
+    assert preempted["value"] > 0
     assert (run / "run" / "victim.jsonl").exists()
     assert (run / "truth" / "reference" / "scrapes.jsonl").exists()
     assert (run / "probes" / "hook-firstseen.jsonl").exists()
