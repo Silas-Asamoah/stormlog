@@ -300,6 +300,9 @@ def test_vllm_environment_variables_are_classified_by_name() -> None:
     assert classify("vllm_env/VLLM_PORT") == LAUNCH
     assert classify("vllm_env/VLLM_ATTENTION_BACKEND") == IDENTITY
     assert classify("vllm_env/VLLM_SERVER_DEV_MODE") == OBSERVATION
+    # A random name each launch draws (vLLM 0.30's default): every pair of
+    # real launches on the A30 differed in it, and nothing else.
+    assert classify("vllm_env/VLLM_OBJECT_STORAGE_SHM_BUFFER_NAME") == LABEL
     # Performance settings block; their cache directories only place a run.
     assert classify("environ.LD_PRELOAD") == IDENTITY
     assert classify("environ.OMP_NUM_THREADS") == IDENTITY

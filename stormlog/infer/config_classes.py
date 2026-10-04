@@ -110,6 +110,8 @@ VLLM_ENV_CLASSES_V1: Mapping[str, str] = {
     "VLLM_TRACE_FUNCTION": OBSERVATION,
     "VLLM_TORCH_PROFILER_DIR": OBSERVATION,
     "VLLM_PROCESS_NAME_PREFIX": LABEL,
+    # A name each launch draws at random by default.
+    "VLLM_OBJECT_STORAGE_SHM_BUFFER_NAME": LABEL,
 }
 
 # Canonical fields: exact names, and prefixes ending in "." or "_".
