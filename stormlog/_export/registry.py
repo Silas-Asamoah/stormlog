@@ -7,10 +7,12 @@ known series is created at 0 and its text prefix rendered once, so the exact
 number of samples and the largest possible exposition are known before
 anything is sent, and a run over its budget is refused.
 
-Past a family's cap, a counter or histogram keeps its enum labels and has
-its configuration-bounded labels replaced by ``__overflow__``, so totals over
-the enums stay exact; a gauge's extra label set is rejected. Every redirect
-and rejection is counted.
+A label set the configuration named always gets its own series. One it did
+not name gets one of the family's ``headroom`` series while they last; past
+them, a counter or histogram keeps its enum labels and has its
+configuration-bounded labels replaced by ``__overflow__``, so totals over
+the enums stay exact, and a gauge's extra label set is rejected. Every
+redirect and rejection is counted.
 
 Updates run under one lock, which ``apply`` holds for a whole record so it
 lands atomically, undone if it fails part-way, and which a scrape holds
@@ -102,6 +104,8 @@ class Budget:
 @dataclass
 class FamilyStats:
     series: int = 0
+    # Series for label sets the configuration did not name.
+    unnamed: int = 0
     overflow_redirects: int = 0
     rejected: int = 0
 
@@ -139,10 +143,14 @@ class Family:
         # Series other than overflow ones; the cap applies to these.
         self._regular = 0
         expected = _known_label_sets(spec, known)
+        self._expected = frozenset(expected)
+        # Only label sets the configuration did not name use the headroom,
+        # so a named one always has its series, created or not yet.
+        self.headroom = headroom if spec.bounded else 0
         if precreate:
             for values in expected:
                 self._create(values)
-        self.cap = len(expected) + (headroom if spec.bounded else 0)
+        self.cap = len(expected) + self.headroom
 
     # ------------------------------------------------------------- updates
     # Each update takes the registry's lock itself; inside Registry.apply the
@@ -229,7 +237,7 @@ class Family:
         series = self._series.get(values)
         if series is not None:
             return series
-        if self._regular < self.cap:
+        if values in self._expected or self.stats.unnamed < self.headroom:
             return self._create(values)
         return self._overflow(values)
 
@@ -270,6 +278,8 @@ class Family:
             self._overflow_keys.add(values)
         else:
             self._regular += 1
+            if values not in self._expected:
+                self.stats.unnamed += 1
         self.stats.series = len(self._series)
         return series
 

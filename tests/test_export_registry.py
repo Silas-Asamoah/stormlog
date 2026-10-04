@@ -410,6 +410,55 @@ def test_a_family_can_wait_for_values_instead_of_reading_zero() -> None:
     assert budget.samples == 2
 
 
+def _waiting(registry: Registry, kind: str, cases: list[str]) -> Any:
+    return registry.add(
+        FamilySpec(
+            "stormlog_a_total" if kind == "counter" else "stormlog_a",
+            kind,  # type: ignore[arg-type]
+            "h",
+            labels=("case",),
+        ),
+        known=[{"case": case} for case in cases],
+        precreate=False,
+    )
+
+
+def test_a_waiting_counter_keeps_its_configured_series_after_strays() -> None:
+    # Fable's case: label sets the configuration never named used up the
+    # cap, so a configured one arriving later overflowed.
+    registry = Registry(headroom=1)
+    family = _waiting(registry, "counter", ["c0", "c1", "c2"])
+    budget = registry.budget()
+    for stray in ("u1", "u2", "u3", "u4"):
+        family.inc((stray,), 1)
+    family.inc(("c1",), 5)
+    text = _text(registry)
+    exposition = check_exposition(text)
+    assert exposition.value("stormlog_a_total", case="c1") == 5
+    assert exposition.value("stormlog_a_total", case="u1") == 1
+    assert exposition.value("stormlog_a_total", case=OVERFLOW) == 3
+    assert family.stats.overflow_redirects == 3
+    # Every configured series too, and the budget still holds.
+    for case in ("c0", "c2"):
+        family.inc((case,), 1)
+    assert len(_text(registry).encode()) <= budget.size
+    assert _text(registry).count("stormlog_a_total{") <= budget.samples
+
+
+def test_a_waiting_gauge_keeps_its_configured_series_after_strays() -> None:
+    registry = Registry(headroom=1)
+    family = _waiting(registry, "gauge", ["t1"])
+    budget = registry.budget()
+    family.set(("x1",), 1.0)
+    family.set(("x2",), 2.0)
+    family.set(("t1",), 3.0)
+    exposition = check_exposition(_text(registry))
+    assert exposition.value("stormlog_a", case="t1") == 3
+    assert exposition.value("stormlog_a", case="x1") == 1
+    assert family.stats.rejected == 1
+    assert _text(registry).count("stormlog_a{") <= budget.samples
+
+
 # ------------------------------------------------------------------ numbers
 def _gauge(registry: Registry) -> Any:
     return registry.add(FamilySpec("stormlog_level", "gauge", "A level."))
