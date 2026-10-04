@@ -477,7 +477,11 @@ reader:
   read again; both are noted in `probes/hook-problems.jsonl`. At the end of
   the run every epoch it read is copied into `truth/reference/hook`, before
   the run is hashed, so the replay has the records its first-seen notes
-  describe. The harness's
+  describe. Each epoch's pseudonym `key` is left behind: with it, anyone
+  holding the published truth could turn an import's pseudonyms back into
+  other clients' request IDs. Every client of a qualification run is
+  Stormlog's own, so a re-import of the copy uses `--raw-foreign-ids` (or
+  leaves the neighbors' IDs withheld). The harness's
   poller records a poll that fails in `probes/poll-errors.jsonl` and polls
   on; it stops, a poll in progress waited out, before the run is hashed. The replay uses these times to cut the
   hook log to what an online analyzer could have read.
