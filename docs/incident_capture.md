@@ -376,9 +376,13 @@ directory is older than `max_age_hours`.
 
 The budget counts bytes, not the disk: a disk with less free space than
 `max_total_bytes` fills first. The watcher says so when it starts (in its
-session record, and on stderr), and a seal the disk refuses (ENOSPC)
-removes the oldest sealed bundle not still open, recorded with the reason
-`disk_full`, and is tried again, so the newest incidents are the ones kept.
+session record, and on stderr). A seal the disk refuses (ENOSPC) removes
+the oldest sealed bundles not still open or being read, each recorded with
+the reason `disk_full`, until the disk has the seal's bytes free, and is
+tried again once, so the newest incidents are the ones kept. When removing
+them all could not free that much, or the seal still fails once room is
+made, something else is filling the disk: no bundle is removed for it, or
+no more, and the incident is recorded without its bundle.
 
 These limits apply only to what the watcher keeps under its root. vLLM
 writes each profiler trace into its own trace directory before the watcher
