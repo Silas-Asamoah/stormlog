@@ -271,6 +271,13 @@ def test_an_after_closer_to_the_before_than_the_run_lasted_is_refused() -> None:
     assert after_refusals(_skewed_run(before), late, run_id="r") == []
 
 
+def test_other_weights_after_the_run_are_an_identity_change() -> None:
+    before = _description()
+    after = _later(before, model__weights_digest="v" * 64)
+    changes = compare_descriptions(before, after)["identity_changes"]
+    assert [change["field"] for change in changes] == ["model.weights_digest"]
+
+
 def test_settings_that_drift_are_not_identity() -> None:
     before = _description()
     after = _later(

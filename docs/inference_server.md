@@ -26,7 +26,7 @@ stormlog infer describe-server --pid "$(pgrep -f 'vllm serve' | head -1)" \
 | `--run-id ID` | The run the description belongs to, as passed to `infer profile`. `attach-manifest` refuses a description of another run. |
 | `--output FILE` | Where to write the description. |
 | `--server-log FILE` | The server's log, for the choices it made at start-up. |
-| `--python auto\|PATH\|none` | The interpreter asked for the Python and package versions (torch, triton, flashinfer, transformers, vllm). `auto` (the default) is the interpreter on the server's command line. |
+| `--python auto\|PATH\|none` | The interpreter asked for the Python and package versions (torch, triton, flashinfer, transformers, vllm). `auto` (the default) is the interpreter on the server's command line: a bare `python` is found on the server's own `PATH`, and a relative path from its working directory; one that cannot be found is not run. `auto` runs that interpreter as the describing user, so describing as root a server you do not trust, pass `--python none` or a path you chose. |
 | `--hash-weights` | Hash every file of a local model directory. |
 | `--verify-model-files` | Hash every hub-cache blob to check it against its name. |
 | `--digest-cache FILE` | Where `--hash-weights` keeps digests between runs. |
@@ -274,15 +274,21 @@ The server's command line names the model and its revision
 on the model:
 
 - **A Hugging Face repository.** The server's hub cache (`--download-dir`,
-  else its `HF_HUB_CACHE`, `HF_HOME` or home directory) links each file of a
-  snapshot to a blob named by a digest of the file: SHA-256 for a file stored
-  in LFS, such as the weights, and git's SHA-1 for a small one, such as
-  `config.json`. The description records each file's algorithm, digest and
-  size. With blob verification, it hashes each blob to check its name.
+  else its `HF_HUB_CACHE`, `HUGGINGFACE_HUB_CACHE`, `HF_HOME`,
+  `XDG_CACHE_HOME` or home directory, as huggingface_hub looks) links each
+  file of a snapshot to a blob named by a digest of the file: SHA-256 for a
+  file stored in LFS, such as the weights, and git's SHA-1 for a small one,
+  such as `config.json`. The description records each file's algorithm,
+  digest and size. With blob verification, it hashes each blob, and records
+  what the blob holds. A snapshot of copies rather than links (where links
+  are unsupported) has no digests by name, so its files have none, and no
+  `weights_digest`, unless verification hashes them. A link that leads
+  nowhere, or in a loop, has no digest either.
 - **A local directory.** Files have no digest of their own. With weight
   hashing, each file's SHA-256 is computed, and cached by path, size,
-  `mtime_ns` and inode so the next description does not read the weights
-  again. Without it, only sizes are known.
+  `mtime_ns`, `ctime_ns` and inode so the next description does not read the
+  weights again. The change time catches a rewrite that kept the size and
+  modification time. Without hashing, only sizes are known.
 
 `weights_digest` is a SHA-256 over the sorted list of files, each with its
 algorithm, digest and size. The description also keeps the digest of the

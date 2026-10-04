@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import time
@@ -108,7 +109,9 @@ def describe_server(
         "gpus": _gpus(options, gpu_reader, tree),
         "model": _model(root, environ, options),
         "log": _log(options.server_log),
-        "runtime": _runtime(options.python, root, run),
+        "runtime": _runtime(
+            _interpreter(options.python, root, environ, options.proc), run
+        ),
         "nvidia_smi": _nvidia_smi(run, options.no_gpu),
         "issues": issues,
     }
@@ -242,12 +245,9 @@ def _log(path: Path | None) -> dict[str, Any] | None:
 
 
 def _runtime(
-    python: str | None,
-    root: ProcessInfo,
-    run: Callable[..., subprocess.CompletedProcess[str]],
+    interpreter: str | None, run: Callable[..., subprocess.CompletedProcess[str]]
 ) -> dict[str, Any] | None:
     """Python and package versions, as the server's interpreter reports them."""
-    interpreter = _interpreter(python, root)
     if interpreter is None:
         return None
     script = _PYTHON_PROBE.format(names=list(PYTHON_PACKAGES))
@@ -268,14 +268,30 @@ def _runtime(
     return {"interpreter": interpreter, **reported}
 
 
-def _interpreter(python: str | None, root: ProcessInfo) -> str | None:
-    """``auto`` is the interpreter on the server's command line, if it shows one."""
+def _interpreter(
+    python: str | None, root: ProcessInfo, environ: Mapping[str, str], proc: Path
+) -> str | None:
+    """``auto`` is the interpreter on the server's command line, if it shows one.
+
+    A bare name such as ``python`` (``python -m vllm...`` from an activated
+    environment) is found on the server's own ``PATH``, and a relative path
+    from its working directory. One that cannot be found is not run: the
+    describer's own interpreter would report another environment.
+    """
     if python in (None, "none"):
         return None
     if python != "auto":
         return python
     first = root.cmdline[0] if root.cmdline else ""
-    return first if Path(first).name.startswith("python") else None
+    if not Path(first).name.startswith("python"):
+        return None
+    if os.path.isabs(first):
+        return first
+    if "/" in first:
+        cwd = _cwd(root.pid, proc)
+        return str(cwd / first) if cwd is not None else None
+    path = environ.get("PATH")
+    return shutil.which(first, path=path) if path else None
 
 
 def _nvidia_smi(

@@ -169,6 +169,35 @@ def test_without_gpus_or_python_those_parts_are_null(proc: Path) -> None:
     assert document["runtime"] is None
 
 
+def test_auto_finds_a_bare_python_on_the_servers_own_path(tmp_path: Path) -> None:
+    # `python -m vllm...` from an activated venv: the bare name resolves on
+    # the server's PATH, not on the describer's.
+    venv = tmp_path / "server-venv" / "bin"
+    venv.mkdir(parents=True)
+    (venv / "python").write_text("#!/bin/sh\n")
+    (venv / "python").chmod(0o755)
+    proc = tmp_path / "proc"
+    module = ("python", "-m", "vllm.entrypoints.openai.api_server", "--model", "m")
+    fake_process(proc, 7, cmdline=module, environ={"PATH": f"{venv}:/usr/bin"})
+    asked: list[str] = []
+
+    def run(arguments: list[str], **kwargs: Any) -> Any:
+        asked.append(arguments[0])
+        return _run(arguments, **kwargs)
+
+    document = describe_server(DescribeOptions(pid=7, proc=proc, no_gpu=True), run=run)
+    assert document["runtime"]["interpreter"] == str(venv / "python")
+    assert asked == [str(venv / "python")]
+
+
+def test_auto_runs_nothing_it_cannot_find_on_the_servers_path(tmp_path: Path) -> None:
+    proc = tmp_path / "proc"
+    module = ("python", "-m", "vllm.entrypoints.openai.api_server")
+    fake_process(proc, 8, cmdline=module, environ={"PATH": str(tmp_path / "none")})
+    document = describe_server(DescribeOptions(pid=8, proc=proc, no_gpu=True), run=_run)
+    assert document["runtime"] is None
+
+
 def test_a_retitled_root_shows_no_interpreter(tmp_path: Path) -> None:
     proc = tmp_path / "proc"
     fake_process(proc, 5, comm="VLLM::EngineCor", cmdline=("VLLM::EngineCore",))
