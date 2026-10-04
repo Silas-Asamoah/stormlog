@@ -261,7 +261,9 @@ class NoEvents:
 
 
 class MedianWithin:
-    """The interval's median sample lies in [low, high]."""
+    """The interval's first sample and its median lie in [low, high]. A
+    hold that began with an outside sample would end the effect while it
+    was still under way: a short dip is a minority of a long hold."""
 
     def __init__(
         self,
@@ -278,7 +280,9 @@ class MedianWithin:
         first = bisect.bisect_left(self.times, start_ns)
         last = bisect.bisect_right(self.times, end_ns)
         values = self.values[first:last]
-        return bool(values) and self.low <= statistics.median(values) <= self.high
+        if not values or not self.low <= values[0] <= self.high:
+            return False
+        return self.low <= statistics.median(values) <= self.high
 
     def change_points(self) -> Sequence[int]:
         return self.times
