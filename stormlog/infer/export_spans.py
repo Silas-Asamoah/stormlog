@@ -47,6 +47,19 @@ from .trace_context import derived_ids, keeps
 SCOPE_NAME = "stormlog.infer"
 # The semantic-conventions version the attribute names were checked against.
 SCHEMA_URL = "https://opentelemetry.io/schemas/1.44.0"
+# 1.44.0 marks the gen_ai.* attributes deprecated: they moved to the GenAI
+# conventions repository. These are checked against its model/gen-ai
+# registry at this commit (2026-10-02), where each is in development.
+GENAI_CONVENTIONS = (
+    "https://github.com/open-telemetry/semantic-conventions-genai/tree/"
+    "e07f4ebacb08f56db8c4c882d117720333fbca04"
+)
+GENAI_ATTRIBUTES = (
+    "gen_ai.operation.name",
+    "gen_ai.request.model",
+    "gen_ai.request.max_tokens",
+    "gen_ai.response.time_to_first_chunk",
+)
 CAPTURE_SPAN = "stormlog.infer.capture"
 PHASE_SPAN = "stormlog.infer.phase"
 TRACE_WINDOW_SPAN = "stormlog.infer.trace_window"
