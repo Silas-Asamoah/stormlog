@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Optional, TextIO
 
 INFER_SCHEMA_VERSION = 1
 
@@ -134,13 +135,27 @@ class InferenceSummaryEvent:
         }
 
 
-class JsonlEventWriter:
-    """Append inference profiling records to a JSONL artifact."""
+# Told about each record after it is written, with anything the record does
+# not hold that the observer may use, such as a summary computed elsewhere.
+RecordObserver = Callable[[dict[str, Any], Optional[Mapping[str, Any]]], None]
 
-    def __init__(self, path: str | Path) -> None:
+
+class JsonlEventWriter:
+    """Append inference profiling records to a JSONL artifact.
+
+    An ``observer``, such as an exporter, sees each record once it is
+    written. Its failures are counted in ``observer_errors`` and never
+    reach the artifact or the run.
+    """
+
+    def __init__(
+        self, path: str | Path, *, observer: RecordObserver | None = None
+    ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle: TextIO | None = None
+        self._observer = observer
+        self.observer_errors = 0
 
     def __enter__(self) -> "JsonlEventWriter":
         self._handle = self.path.open("w", encoding="utf-8")
@@ -151,8 +166,15 @@ class JsonlEventWriter:
             self._handle.close()
             self._handle = None
 
-    def append(self, record: dict[str, Any]) -> None:
+    def append(
+        self, record: dict[str, Any], extras: Mapping[str, Any] | None = None
+    ) -> None:
         if self._handle is None:
             raise RuntimeError("JsonlEventWriter is not open")
         self._handle.write(json.dumps(record, sort_keys=True) + "\n")
         self._handle.flush()
+        if self._observer is not None:
+            try:
+                self._observer(record, extras)
+            except Exception:
+                self.observer_errors += 1
