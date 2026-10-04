@@ -478,6 +478,75 @@ def test_any_regression_needs_the_significant_rule_and_uses_holm() -> None:
     assert (CASE, "client.e2e.p95") in comparison.failed
 
 
+def _blocks_of(values: list[float], arm: str) -> list[RunSummary]:
+    return [_run(arm, i, value, started=i) for i, value in enumerate(values)]
+
+
+# Each block about 5% slower; a one-sided p of about 0.008 per test. Four
+# identical tests (p50..p99 share the fixture's value): Holm at one-sided
+# 0.025 needs p <= 0.00625 for the first, so none is rejected; unadjusted,
+# or Holm at a two-sided 0.05 (0.0125), would reject all four.
+HOLM_CANDIDATE = [108.2176, 102.1249, 106.6611, 103.6151, 109.7967, 100.6561]
+
+
+def test_holm_adjusts_the_family_at_the_one_sided_level() -> None:
+    gates = (("client.e2e.*", GateRule("significant", 0.0, "relative")),)
+    comparison = compare_runs(
+        _blocks_of([100.0] * 6, "baseline"),
+        _blocks_of(HOLM_CANDIDATE, "candidate"),
+        ComparisonSpec(gates=gates, family="any_regression"),
+    )
+    assert comparison.family is not None and comparison.family["tests"] == 4
+    assert comparison.family["rejected"] == []
+    assert comparison.exit_code == 0
+    plain = compare_runs(
+        _blocks_of([100.0] * 6, "baseline"),
+        _blocks_of(HOLM_CANDIDATE, "candidate"),
+        ComparisonSpec(gates=gates),
+    )
+    assert plain.exit_code == 4  # each alone is a significant regression
+
+
+def test_holm_still_needs_the_estimate_beyond_the_budget() -> None:
+    # Overwhelming evidence of a 5% slowdown, against a 10% budget.
+    gates = (("client.e2e.*", GateRule("significant", 0.10, "relative")),)
+    comparison = compare_runs(
+        _blocks_of([100.0] * 6, "baseline"),
+        _blocks_of([105.0, 105.1, 104.9, 105.05, 104.95, 105.0], "candidate"),
+        ComparisonSpec(gates=gates, family="any_regression"),
+    )
+    assert comparison.family is not None and comparison.family["rejected"]
+    assert comparison.exit_code == 0
+
+
+def test_an_insufficient_tail_cannot_be_gated() -> None:
+    baseline, candidate = _arms(SLOWER)
+    for run in candidate:
+        levels = run.report["cases"][CASE]["latency"]["metrics"]["client.e2e"]
+        levels["failure_penalized"]["p95"]["sufficient"] = False
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None
+    assert (gate.status, gate.reason) == ("not_evaluable", "insufficient_tail_samples")
+
+
+def test_more_failures_in_the_candidate_is_worse() -> None:
+    gates = (("failure_fraction", GateRule("non-inferiority", 0.01, "fraction")),)
+    baseline, candidate = _arms(SAME)
+    for i, run in enumerate(candidate):
+        run.report["cases"][CASE]["population"]["successful"] = 90 + i % 2
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=gates))
+    metric = comparison.cases[CASE]["metrics"]["failure_fraction"]
+    assert metric.direction == "lower_is_better" and metric.unit == "fraction"
+    assert metric.gate is not None and metric.gate.status == "fail"
+
+
+def test_shares_are_compared_in_fraction_units() -> None:
+    metrics = {metric.name: metric for metric in default_metrics(_case(100.0))}
+    assert metrics["attainment"].unit == metrics["failure_fraction"].unit == "fraction"
+    assert metrics["goodput_rps"].unit == "relative"
+
+
 def test_arms_run_one_after_the_other_are_flagged() -> None:
     baseline, candidate = _arms(SAME)
     candidate = [_run("candidate", i, e, started=100 + i) for i, e in enumerate(SAME)]
