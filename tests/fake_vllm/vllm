@@ -1,0 +1,16 @@
+"""The stand-in vLLM server, launched the way vLLM's own console script is.
+
+Run as ``python tests/fake_vllm/vllm serve <model> --port N``, its command
+line is a real ``vllm serve``'s: the interpreter, a script named ``vllm``,
+then ``serve``. So the runner's role check (``classify_role``) takes it for
+vLLM's API server, as it would the real one, and the end-to-end tests run
+that check on Linux as it is. It serves ``tests/fake_vllm_server.py``.
+"""
+
+import runpy
+from pathlib import Path
+
+runpy.run_path(
+    str(Path(__file__).resolve().parent.parent / "fake_vllm_server.py"),
+    run_name="__main__",
+)
