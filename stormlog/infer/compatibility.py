@@ -635,7 +635,7 @@ def _observer_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, RunField
     session = next((r for r in records if r.get("event_type") == "infer.session"), None)
     config = (session or {}).get("config") or {}
     source = "infer.session"
-    return {
+    fields = {
         f"observer.{name}": RunField(config.get(key), source, OBSERVED)
         for name, key in (
             ("system_sampler", "system_sampler"),
@@ -645,6 +645,20 @@ def _observer_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, RunField
             ("execution", "vllm_execution_dir"),
         )
         if key in config
+    }
+    fields.update(_treatment_fields(records))
+    return fields
+
+
+def _treatment_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, RunField]:
+    """The experiment runner's treatments, as observers, by their command's digest."""
+    return {
+        f"observer.treatment:{item.get('name')}": RunField(
+            item.get("command_sha256"), "experiment runner", OBSERVED
+        )
+        for record in records
+        if record.get("event_type") == "infer.treatments"
+        for item in record.get("treatments") or []
     }
 
 
