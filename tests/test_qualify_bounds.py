@@ -4,6 +4,7 @@ claims, and the victim-impact test."""
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import pytest
 
@@ -90,3 +91,29 @@ def test_exploratory_claims_get_the_two_sided_interval() -> None:
     lower, upper = clopper_pearson_interval(3, 10)
     assert _binomial_tail_at_least(3, 10, lower) == pytest.approx(0.025, rel=1e-6)
     assert _binomial_tail_at_most(3, 10, upper) == pytest.approx(0.025, rel=1e-6)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: clopper_pearson_lower(14.5, 15),  # type: ignore[arg-type]
+        lambda: clopper_pearson_upper(True, 15),
+        lambda: clopper_pearson_lower(14, 15, confidence=95),
+        lambda: clopper_pearson_upper(0, 60, confidence=0.0),
+        lambda: poisson_rate_upper(0, math.inf),
+        lambda: poisson_rate_upper(0.5, 4.9),  # type: ignore[arg-type]
+        lambda: poisson_rate_upper(0, 4.9, confidence=1.0),
+    ],
+    ids=[
+        "fractional successes",
+        "a bool as a count",
+        "confidence as a percentage",
+        "zero confidence",
+        "infinite exposure",
+        "fractional events",
+        "certainty",
+    ],
+)
+def test_inputs_that_would_give_a_meaningless_bound_are_refused(call: Any) -> None:
+    with pytest.raises(ValueError):
+        call()

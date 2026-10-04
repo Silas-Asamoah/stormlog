@@ -9,6 +9,8 @@ violations in an effect window against a baseline.
 
 from __future__ import annotations
 
+import math
+
 from scipy import stats
 
 CONFIDENCE = 0.95
@@ -20,6 +22,7 @@ def clopper_pearson_lower(
     """The one-sided lower bound on a binomial proportion: the p at which
     seeing ``successes`` or more has probability 1 − ``confidence``."""
     _check_counts(successes, trials)
+    _check_confidence(confidence)
     if successes == 0:
         return 0.0
     alpha = 1.0 - confidence
@@ -32,6 +35,7 @@ def clopper_pearson_upper(
     """The one-sided upper bound: the p at which seeing ``successes`` or
     fewer has probability 1 − ``confidence``."""
     _check_counts(successes, trials)
+    _check_confidence(confidence)
     if successes == trials:
         return 1.0
     return float(stats.beta.ppf(confidence, successes + 1, trials - successes))
@@ -54,10 +58,11 @@ def poisson_rate_upper(
 ) -> float:
     """The exact upper bound on an event rate per unit of ``exposure``: the
     rate at which seeing ``events`` or fewer has probability 1 − ``confidence``."""
-    if events < 0:
-        raise ValueError("events must be non-negative")
-    if not exposure > 0:
-        raise ValueError("exposure must be positive")
+    if not _is_count(events) or events < 0:
+        raise ValueError("events must be a non-negative integer")
+    if not (exposure > 0 and math.isfinite(exposure)):
+        raise ValueError("exposure must be positive and finite")
+    _check_confidence(confidence)
     mean = float(stats.chi2.ppf(confidence, 2 * events + 2)) / 2.0
     return mean / exposure
 
@@ -75,10 +80,22 @@ def fisher_greater(
 
 
 def _check_counts(successes: int, trials: int) -> None:
+    if not (_is_count(successes) and _is_count(trials)):
+        raise ValueError("successes and trials must be integers")
     if trials < 1:
         raise ValueError("trials must be positive")
     if not 0 <= successes <= trials:
         raise ValueError("successes must lie between 0 and trials")
+
+
+def _check_confidence(confidence: float) -> None:
+    """A probability strictly between 0 and 1: 95 is not 0.95."""
+    if not 0.0 < confidence < 1.0:
+        raise ValueError(f"confidence must lie in (0, 1), not {confidence!r}")
+
+
+def _is_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 __all__ = [
