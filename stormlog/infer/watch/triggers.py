@@ -119,7 +119,8 @@ class Sustain:
 
         The first violating evaluation comes within ``Δ + j``; accumulation
         is measured between evaluations, so a late first tick shortens it by
-        up to ``j``, and the firing tick can itself run ``j`` late.
+        up to ``j``, and the firing tick can itself run ``j`` late. A tick
+        that can run early counts too: ``j`` is how early plus how late.
         """
         ticks = math.ceil((self.hold + late) / tick - 1e-9)
         return tick + ticks * tick + late
