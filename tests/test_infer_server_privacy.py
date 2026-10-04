@@ -68,7 +68,7 @@ def test_credential_fields_go_and_lookalike_names_stay() -> None:
     draft = redacted_config["speculative_config"]["draft_model_config"]
     assert is_redacted(draft["hf_token"]) and draft["model"] == "draft"
     endpoint = redacted_config["observability_config"]["otlp_traces_endpoint"]
-    assert endpoint == "https://collector:4318/v1?<redacted>"
+    assert endpoint == "https://collector:4318/<sha256:2d234c97703c>?<redacted>"
 
 
 def test_plugin_configs_and_the_ray_runtime_env_are_credential_paths() -> None:
@@ -103,7 +103,9 @@ def test_an_unset_credential_field_is_kept_as_it_is(value: Any) -> None:
 
 def test_json_pointer_tokens_are_escaped() -> None:
     config = {"a/b": {"c~d": f"http://u:{PLANTED}@h:1/x"}}
-    assert redact_vllm_config(config) == {"a/b": {"c~d": "http://h:1/x"}}
+    assert redact_vllm_config(config) == {
+        "a/b": {"c~d": "http://h:1/<sha256:b3d1db318671>"}
+    }
 
 
 @pytest.mark.parametrize(
@@ -145,6 +147,42 @@ def test_secret_names_match_whole_words(name: str) -> None:
 )
 def test_names_that_only_contain_a_secret_word_are_not_secrets(name: str) -> None:
     assert not secret_name(name)
+
+
+def test_free_form_model_overrides_are_credential_paths() -> None:
+    # hf_overrides and override_generation_config take any key a user gives.
+    config = {
+        "model_config": {
+            "hf_overrides": {"token": PLANTED},
+            "override_generation_config": {"api_key": PLANTED},
+            "max_model_len": 2048,
+        }
+    }
+    redacted_config = redact_vllm_config(config)
+    assert PLANTED not in json.dumps(redacted_config)
+    model = redacted_config["model_config"]
+    assert is_redacted(model["hf_overrides"])
+    assert is_redacted(model["override_generation_config"])
+    assert model["max_model_len"] == 2048
+
+
+def test_a_url_keeps_its_origin_and_a_digest_of_its_path() -> None:
+    # A token can sit in a path as easily as in a query: the path is
+    # replaced by a short digest, so a changed path still compares apart.
+    def endpoint(path: str) -> str:
+        environ = {
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": f"https://collector:4318{path}"
+        }
+        return str(redact_environ(environ)["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"])
+
+    secret = endpoint(f"/v1/{PLANTED}/traces")
+    assert PLANTED not in secret
+    assert secret.startswith("https://collector:4318/<sha256:")
+    assert endpoint("/v1/traces") == endpoint("/v1/traces")
+    assert endpoint("/v1/traces") != endpoint("/v2/traces")
+    assert endpoint("") == "https://collector:4318"
+    config = redact_vllm_config({"otlp_traces_endpoint": f"http://c/{PLANTED}"})
+    assert PLANTED not in json.dumps(config)
 
 
 def test_settings_that_change_performance_are_kept_outside_the_prefixes() -> None:
@@ -210,7 +248,7 @@ def test_other_otel_settings_are_redacted() -> None:
     assert kept["OTEL_SERVICE_NAME"] == "vllm"
     assert kept["OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"] == "http/protobuf"
     assert kept["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] == (
-        "http://127.0.0.1:4318/v1/traces"
+        "http://127.0.0.1:4318/<sha256:44d5d4d63522>"
     )
 
 
@@ -236,7 +274,7 @@ def test_urls_nested_in_vllm_env_values_are_stripped() -> None:
         }
     )
     assert PLANTED not in json.dumps(kept)
-    assert kept["VLLM_LIST"] == ["http://h:1/x"]
+    assert kept["VLLM_LIST"] == ["http://h:1/<sha256:b3d1db318671>"]
 
 
 def test_vllms_token_thresholds_are_kept() -> None:

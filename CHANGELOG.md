@@ -145,11 +145,13 @@ the flaky benchmark memory gates
 - `stormlog.infer.server_privacy`: schema-aware redaction for server
   descriptions. Credential fields of vLLM 0.30.0's configuration
   (`credential_paths_v1`) and environment names with a secret word are
-  replaced by a `{"redacted": true, "path": ...}` marker, URLs lose their
-  credentials and query, and `system_env` keeps only allowlisted scalars and
-  four runtime package versions. The credential fields include the free-form
-  plugin configs and Ray's runtime environment, and free-form `OTEL_`
-  settings such as resource attributes are removed.
+  replaced by a `{"redacted": true, "path": ...}` marker, URLs keep only
+  their scheme, host and port and a short digest of their path (a token can
+  sit in a path), and `system_env` keeps only allowlisted scalars and four
+  runtime package versions. The credential fields include the free-form
+  plugin configs, the model's `hf_overrides` and
+  `override_generation_config`, and Ray's runtime environment, and
+  free-form `OTEL_` settings such as resource attributes are removed.
   `max_num_batched_tokens`, `long_prefill_token_threshold` and vLLM's
   `*_TOKEN_THRESHOLD` knobs survive. (#213)
 - `--slo KEY:MS` (repeatable) and `--slo-file FILE` on `stormlog infer

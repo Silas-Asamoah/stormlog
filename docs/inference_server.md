@@ -379,7 +379,10 @@ environment collector may still be running, so `profile` exits `5` before
 it measures.
 
 A URL anywhere in the `/version` and `/v1/models` answers, such as a
-model's `root`, loses its credentials and query. `/server_info`'s answer is
+model's `root`, is recorded as its scheme, host and port: its credentials and
+query go, and its path becomes a short digest (`/<sha256:…>`), since a token
+can sit in a path as easily as in a query; a changed path still compares
+different. Every URL a description keeps follows this rule. `/server_info`'s answer is
 kept redacted, by the rules below: its
 `vllm_config`, its `vllm_env`, and a summary of `system_env`. vLLM caches
 `system_env`, so after the run it is labelled `cached` and says nothing new.
@@ -396,8 +399,8 @@ because its name contains "token": `max_num_batched_tokens`,
 
 | Source | Kept | Removed |
 | --- | --- | --- |
-| `vllm_config` | Every field, with URLs stripped of credentials and query | The fields in `credential_paths_v1` that hold a value: `hf_token` (of the model, and of a speculative target or draft model); the free-form `model_loader_extra_config`, `kv_connector_extra_config`, `ec_connector_extra_config`, the cache manager's `manager_config` and the platform plugins' `additional_config`; and Ray's `ray_runtime_env`, whose `env_vars` can carry any secret of the job |
-| Process environment | Names starting `VLLM_`, `NCCL_`, `OTEL_`, `STORMLOG_`, `CUDA_` or `PYTORCH_`, and the settings that change what a run measures: `TORCHINDUCTOR_`, `TRITON_` and `CUBLAS_`, `TORCH_COMPILE_DISABLE`, `OMP_NUM_THREADS` and `LD_PRELOAD` (a library preloaded into one arm, such as a profiler or an allocator); plus `HF_HOME`, `HF_HUB_CACHE`, `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE`. A URL loses its credentials and query, whatever space surrounds it, and `user:password@host` without a scheme loses its credentials. An `LD_PRELOAD` path is kept unless a segment looks like a credential | Everything else, any kept name with a secret word in it, and `OTEL_` settings other than the exporter's endpoint, protocol, timeout, compression and batching, and the sampler and service name: resource attributes are free-form |
+| `vllm_config` | Every field, with each URL recorded as its scheme, host, port and a digest of its path | The fields in `credential_paths_v1` that hold a value: `hf_token` (of the model, and of a speculative target or draft model); the model's free-form `hf_overrides` and `override_generation_config`; the free-form `model_loader_extra_config`, `kv_connector_extra_config`, `ec_connector_extra_config`, the cache manager's `manager_config` and the platform plugins' `additional_config`; and Ray's `ray_runtime_env`, whose `env_vars` can carry any secret of the job |
+| Process environment | Names starting `VLLM_`, `NCCL_`, `OTEL_`, `STORMLOG_`, `CUDA_` or `PYTORCH_`, and the settings that change what a run measures: `TORCHINDUCTOR_`, `TRITON_` and `CUBLAS_`, `TORCH_COMPILE_DISABLE`, `OMP_NUM_THREADS` and `LD_PRELOAD` (a library preloaded into one arm, such as a profiler or an allocator); plus `HF_HOME`, `HF_HUB_CACHE`, `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE`. A URL keeps its scheme, host and port and a digest of its path, whatever space surrounds it, and `user:password@host` without a scheme loses its credentials. An `LD_PRELOAD` path is kept unless a segment looks like a credential | Everything else, any kept name with a secret word in it, and `OTEL_` settings other than the exporter's endpoint, protocol, timeout, compression and batching, and the sampler and service name: resource attributes are free-form |
 | vLLM's `vllm_env` | Every variable, URLs stripped wherever they sit in its value | Any name with a secret word in it, and free-form `OTEL_` settings |
 | vLLM's `system_env` | Allowlisted scalars (torch, CUDA, cuDNN, driver, Python, OS and vLLM versions, among others), and the versions of torch, triton, flashinfer and transformers read from its package listing | `env_vars`, the package listing itself, `cpu_info`, `gpu_topo`, and anything that is not a scalar |
 
@@ -414,8 +417,8 @@ them from every comparison.
 
 The server's command line is never kept. Of its loading options
 (`--model`, `--revision`, `--tokenizer` and the rest), the recorded copy of a
-URL loses its credentials and query, as does a scheme-less one
-(`host/path?token=...`); a value with spaces or template braces, such as an
+URL keeps its scheme, host and port and a digest of its path, and a
+scheme-less one (`host/path?token=...`) loses its query; a value with spaces or template braces, such as an
 inline `--chat-template`, is no URL and is kept whole. Files are resolved and
 the chat template digested from the values as given, never from the scrubbed
 copy. When the Python
