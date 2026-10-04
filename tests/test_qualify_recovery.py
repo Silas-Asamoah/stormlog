@@ -135,6 +135,24 @@ def test_prefix_loss_follows_the_victims_cached_fraction() -> None:
     assert not realization("T3", context(signals), twin_timing)[0]
 
 
+def test_a_cache_dip_just_after_the_holds_first_sample_is_seen() -> None:
+    # Found rerunning the full-catalog e2e on #276: F3's victim kept one
+    # cached request at the onset, then missed for 2.8 s; its 6 s hold had
+    # a recovered first sample and a recovered median, so the effect ended
+    # at its onset. Here: 10 samples a second, one cached at 60 s, a dip to
+    # 64 s, then cached again. The onset's 5 s window must look recovered
+    # too, so the effect ends where the dip does, just after its last
+    # dipped sample at 63.9 s.
+    def cached_at(tenth: int) -> float:
+        return 0.0 if 601 <= tenth < 640 else 0.95
+
+    cached = [(tenth * S // 10, cached_at(tenth)) for tenth in range(2000)]
+    signals = Signals(in_flight=None, cached_fraction=cached)
+    timing = effect_timing("F3", context(signals))
+    assert timing.onset_ns == 60 * S
+    assert timing.end_ns == 639 * S // 10 + 1
+
+
 def stalled_steps(pulses: list[tuple[int, int]], keep_stepping: bool) -> list[int]:
     steps = []
     for tick in range(0, 200_000, 20):
