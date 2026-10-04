@@ -155,6 +155,24 @@ def test_the_endpoint_serves_during_the_run_and_lingers_after(tmp_path: Path) ->
     assert _capability(_records(output))["collected"] == ["endpoint"]
 
 
+def test_the_cli_says_where_it_lingers_before_it_waits(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    port = _free_port()
+    with _fake_server() as endpoint:
+        code = _cli(
+            endpoint,
+            tmp_path / "infer.jsonl",
+            "--prometheus-listen",
+            f"127.0.0.1:{port}",
+            "--prometheus-linger",
+            "1",
+        )
+    assert code == 0
+    err = capsys.readouterr().err
+    assert f"http://127.0.0.1:{port}/metrics" in err and "1 s" in err
+
+
 def test_a_busy_port_warns_and_the_run_completes(tmp_path: Path) -> None:
     output = tmp_path / "infer.jsonl"
     with socket.socket() as busy:
