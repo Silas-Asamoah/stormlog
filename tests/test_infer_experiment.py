@@ -242,3 +242,24 @@ def test_secrets_reach_the_commands_but_never_the_record(
     assert (run_dir / "length.txt").read_text() == str(len(secret))
     commands = (run_dir / "commands.sh").read_text()
     assert "PLANT_TOKEN=${PLANT_TOKEN}" in commands and secret not in commands
+
+
+def test_a_staged_model_is_fixed_before_launch_and_recorded(tmp_path: Path) -> None:
+    source = tmp_path / "model"
+    source.mkdir()
+    (source / "config.json").write_text("{}")
+    document = _plan(_port(), blocks=1)
+    document["arms"] = {"off": document["arms"]["off"]}
+    document["order"] = {"kind": "explicit", "blocks": [["off"]]}
+    document["server"]["command"] += ["--model", "{model}"]
+    document["server"]["model"] = {
+        "route": "staged",
+        "source": str(source),
+        "store": str(tmp_path / "store"),
+    }
+    (record,) = _run(tmp_path, document)
+    assert record["state"] == "completed", record
+    run_dir = Path(record["run_dir"])
+    identity = json.loads((run_dir / "model_identity.json").read_text())
+    assert identity["identity_evidence"] == "staged_snapshot_verified"
+    assert identity["directory"] in (run_dir / "commands.sh").read_text()
