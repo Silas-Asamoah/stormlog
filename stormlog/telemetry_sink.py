@@ -319,17 +319,22 @@ class AppendOnlyTelemetrySink:
         """Append every byte and fsync, or cut the segment back as it was.
 
         A failed write would otherwise leave a partial line that the next
-        successful write extends into a corrupt record.
+        successful write extends into a corrupt record. The cut-back goes to
+        the file's own size before the write, never to a remembered one, and
+        the descriptor is then closed: the next write reopens the segment and
+        trims any partial line a failed cut-back left, from the file itself.
         """
         fd = self._ensure_fd_locked(current)
+        before = os.fstat(fd).st_size
         try:
             _write_all(fd, payload)
             os.fsync(fd)
         except OSError:
             try:
-                os.ftruncate(fd, current.size_bytes)
+                os.ftruncate(fd, before)
             except OSError:
                 pass
+            self._close_fd_locked()
             raise
 
     def _record_flush_failure_locked(self, exc: OSError, now: float) -> None:
@@ -614,7 +619,8 @@ class AppendOnlyTelemetrySink:
         if payload and not payload.endswith(b"\n"):
             last_newline = payload.rfind(b"\n")
             payload = payload[: last_newline + 1] if last_newline >= 0 else b""
-            segment_path.write_bytes(payload)
+            # In place: rewriting the file would risk the whole lines too.
+            os.truncate(segment_path, len(payload))
 
         current.size_bytes = len(payload)
         current.event_count = self._count_records(segment_path)

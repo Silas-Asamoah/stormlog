@@ -748,6 +748,50 @@ def test_a_bounded_sink_retries_a_segment_it_could_not_prune(
     sink.close()
 
 
+def test_a_failed_cut_back_is_repaired_from_the_file_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partial line the cut-back could not remove, and the sink's size that
+    no longer matched the file, used to truncate fsynced records later."""
+    import errno
+    import os
+
+    from stormlog import telemetry_sink
+
+    sink = _bounded_sink(tmp_path, max_buffer_bytes=1 << 20)
+    sink.append({"seq": 1})
+    real_write, real_ftruncate = os.write, os.ftruncate
+    state = {"half": True, "truncate_fails": True}
+
+    def write(fd: int, data: bytes | memoryview) -> int:
+        if state["half"]:
+            state["half"] = False
+            real_write(fd, bytes(data[: len(data) // 2]))
+            raise OSError(errno.EIO, "Input/output error")
+        return real_write(fd, data)
+
+    def ftruncate(fd: int, length: int) -> None:
+        if state["truncate_fails"]:
+            state["truncate_fails"] = False
+            raise OSError(errno.EIO, "Input/output error")
+        real_ftruncate(fd, length)
+
+    monkeypatch.setattr(telemetry_sink.os, "write", write)
+    monkeypatch.setattr(telemetry_sink.os, "ftruncate", ftruncate)
+    sink.append({"seq": 2, "pad": "x" * 100})  # half written, not cut back
+    time.sleep(0.02)
+    sink.append({"seq": 3})
+    time.sleep(0.02)
+    state["half"] = True  # a later failure, whose cut-back works
+    sink.append({"seq": 4, "pad": "z" * 100})
+    time.sleep(0.06)
+    sink.append({"seq": 5})
+    sink.close()
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    lines = segment.read_bytes().splitlines()
+    assert [json.loads(line)["seq"] for line in lines] == [1, 2, 3, 4, 5]
+
+
 def test_bounded_mode_settings_are_validated(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_buffer_bytes"):
         TelemetrySinkConfig(root_dir=tmp_path, max_buffer_bytes=0)
