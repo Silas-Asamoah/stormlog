@@ -53,7 +53,7 @@ from .server_probe import NONE as NONE_PROBE
 from .server_probe import SERVER_INFO_DEADLINE_SECONDS, ServerProbe, probe_server
 from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
-from .trace_capture import TraceWindows
+from .trace_capture import TraceCaptureConfig, TraceWindows
 from .vllm_execution_devices import WorkerIndex
 from .vllm_execution_import import (
     flush_execution_log,
@@ -297,58 +297,7 @@ class InferenceProfiler:
         self._start_span_receiver()
         with JsonlEventWriter(output_path) as writer:
             self._opened_artifact = True
-            writer.append(
-                {
-                    "schema_version": 1,
-                    "event_type": "infer.session",
-                    "session_id": self.session.session_id,
-                    "timestamp_ns": self.session.started_at_ns,
-                    "status": "running",
-                    "config": {
-                        "endpoint": self.config.endpoint,
-                        "model": self.config.model,
-                        "concurrency": list(self.config.concurrency),
-                        "input_tokens": list(self.config.input_tokens),
-                        "output_tokens": list(self.config.output_tokens),
-                        "duration_seconds": self.config.duration_seconds,
-                        "request_count": self.config.request_count,
-                        "stream": self.config.stream,
-                        "stream_include_usage": self.config.stream_include_usage,
-                        "tokenizer": self.config.tokenizer,
-                        "system_sampler": self.sampler.name,
-                        "arrivals": [
-                            spec.to_record() for spec in self.config.arrival_specs()
-                        ],
-                        "max_in_flight": self.config.max_in_flight,
-                        "overflow": self.config.overflow,
-                        "prompts": self.prompt_spec.to_record(),
-                        "cache_state": self.config.cache_state,
-                        "cache_reset_url": redact_url(self.config.cache_reset_url),
-                        "cache_reset_timeout_seconds": (
-                            self.config.cache_reset_timeout_seconds
-                        ),
-                        "vllm_metrics": (
-                            self.vllm_scraper.config_record()
-                            if self.vllm_scraper is not None
-                            else None
-                        ),
-                        "vllm_spans": (
-                            {
-                                **self.span_receiver.config_record(),
-                                "drain_seconds": self.config.vllm_spans_drain_seconds,
-                            }
-                            if self.span_receiver is not None
-                            else None
-                        ),
-                        "vllm_execution_dir": (
-                            str(self.execution_dir)
-                            if self.execution_dir is not None
-                            else None
-                        ),
-                        "environment_proxies": ignored_proxies(),
-                    },
-                }
-            )
+            writer.append(self._session_record())
             self._write_run_records(writer)
             stop_sampling = asyncio.Event()
             sample_task = asyncio.create_task(
@@ -387,6 +336,57 @@ class InferenceProfiler:
                     # the artifact says what the engine exposed before it
                     # says why the run stopped.
                     self._write_capabilities(writer)
+
+    def _session_record(self) -> dict[str, Any]:
+        """The running session and its settings, observers included."""
+        return {
+            "schema_version": 1,
+            "event_type": "infer.session",
+            "session_id": self.session.session_id,
+            "timestamp_ns": self.session.started_at_ns,
+            "status": "running",
+            "config": {
+                "endpoint": self.config.endpoint,
+                "model": self.config.model,
+                "concurrency": list(self.config.concurrency),
+                "input_tokens": list(self.config.input_tokens),
+                "output_tokens": list(self.config.output_tokens),
+                "duration_seconds": self.config.duration_seconds,
+                "request_count": self.config.request_count,
+                "stream": self.config.stream,
+                "stream_include_usage": self.config.stream_include_usage,
+                "tokenizer": self.config.tokenizer,
+                "system_sampler": self.sampler.name,
+                "sample_interval_seconds": self.config.sample_interval_seconds,
+                "trace": _trace_settings(self.config.trace),
+                "arrivals": [spec.to_record() for spec in self.config.arrival_specs()],
+                "max_in_flight": self.config.max_in_flight,
+                "overflow": self.config.overflow,
+                "prompts": self.prompt_spec.to_record(),
+                "cache_state": self.config.cache_state,
+                "cache_reset_url": redact_url(self.config.cache_reset_url),
+                "cache_reset_timeout_seconds": (
+                    self.config.cache_reset_timeout_seconds
+                ),
+                "vllm_metrics": (
+                    self.vllm_scraper.config_record()
+                    if self.vllm_scraper is not None
+                    else None
+                ),
+                "vllm_spans": (
+                    {
+                        **self.span_receiver.config_record(),
+                        "drain_seconds": self.config.vllm_spans_drain_seconds,
+                    }
+                    if self.span_receiver is not None
+                    else None
+                ),
+                "vllm_execution_dir": (
+                    str(self.execution_dir) if self.execution_dir is not None else None
+                ),
+                "environment_proxies": ignored_proxies(),
+            },
+        }
 
     def _write_run_records(self, writer: JsonlEventWriter) -> None:
         """What the run is: its identity, workload, SLO policy and server probe."""
@@ -1396,6 +1396,20 @@ async def _drain(tasks: list[asyncio.Task[None]], *, timeout: float | None) -> N
     for result in await asyncio.gather(*tasks, return_exceptions=True):
         if isinstance(result, Exception):
             raise result
+
+
+def _trace_settings(trace: TraceCaptureConfig | None) -> dict[str, Any] | None:
+    """What the profiler-trace observer was asked to capture, or None."""
+    if trace is None:
+        return None
+    return {
+        "mode": trace.mode,
+        "phase": trace.phase,
+        "control_url": redact_url(trace.control_url),
+        "max_seconds": trace.max_seconds,
+        "max_bytes": trace.max_bytes,
+        "detail": trace.detail,
+    }
 
 
 def _stop_status(exc: BaseException) -> str:

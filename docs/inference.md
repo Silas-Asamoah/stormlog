@@ -396,6 +396,9 @@ The report includes:
   `manifest` block: the descriptions, declared fields, and what changed or
   drifted between before and after (see
   [Inference server descriptions](inference_server.md))
+- an `observers` block: whether each observer the run asked for was active
+  and healthy in every measured phase (see
+  [Inference server descriptions](inference_server.md))
 - failure rate
 - highest recorded client-local device memory when system telemetry is available
 - scoped server memory observations when a matching on-host collector artifact is supplied
