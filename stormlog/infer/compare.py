@@ -98,6 +98,10 @@ class ComparisonSpec:
             (self.attainment_model in ("runs", "bernoulli"), "attainment_model"),
             (self.family in FAMILIES, "family"),
             (0 < self.confidence < 1, "confidence"),
+            # Shares that cannot be met or cannot fail mean nothing.
+            (_share(self.min_attainment, low_open=True), "min_attainment"),
+            (_share(self.min_run_pass, low_open=True), "min_run_pass"),
+            (_share(self.evidence_floor, low_open=False), "evidence_floor"),
         )
         for ok, name in checks:
             if not ok:
@@ -137,6 +141,15 @@ class ComparisonSpec:
             "cases": None if self.cases is None else list(self.cases),
             "seed": self.seed,
         }
+
+
+def _share(value: float | None, *, low_open: bool) -> bool:
+    """None, or a share in (0, 1] (``low_open``) or [0, 1]."""
+    if value is None:
+        return True
+    if not math.isfinite(value) or value > 1:
+        return False
+    return value > 0 if low_open else value >= 0
 
 
 @dataclass(frozen=True)
