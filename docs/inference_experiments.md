@@ -269,11 +269,15 @@ exactly them. The plan's `server.model` says how:
   blob on to a shared store under another name. A link into any other
   directory, or whose blob is missing, is refused (exit 5), as is a
   `staged` file that cannot be read. The snapshot must also hold what a
-  load reads: `config.json`, weights, and every shard a `*.index.json`
-  names. The cache keeps no list of a commit's files, so a file that no
-  load reads (a README, say) cannot be told missing offline:
-  `pinned_commit_verified` says every file present is the commit's and
-  nothing a load reads is missing. Each server gets
+  load reads: `config.json`, a tokenizer (`tokenizer.json`,
+  `tokenizer.model` or `vocab.json`), weights, and every shard a
+  `*.index.json` names. The cache keeps no list of a commit's files, so a
+  pin may give one, recorded when the revision was pinned (`"files": [...]`,
+  say from `huggingface_hub.list_repo_files`), and every file it lists must
+  be present. The evidence says which: `pinned_commit_verified` when the
+  pin's file list was checked, and `pinned_snapshot_verified` without one,
+  which says every file present is the commit's and nothing a load reads is
+  missing. Both name the bytes the server loaded. Each server gets
   `--revision <commit> --tokenizer-revision <commit>` and `HF_HUB_OFFLINE=1`,
   so it cannot load anything else. `{model}` is the repository.
 - **`staged`**: every file of a local directory is hashed, and each file
@@ -291,8 +295,9 @@ and inode compared; a file changed, added or gone makes the run
 per run: 0.7 s for Qwen2.5-0.5B's 1.0 GB on the A30 box. Each run's
 `model_identity.json` records the files and their digests, and the runner
 appends an `infer.model_identity` record to each artifact: the verified
-model, with its evidence (`pinned_commit_verified` or
-`staged_snapshot_verified`), bound to the API server it launched by boot,
+model, with its evidence (`pinned_commit_verified`,
+`pinned_snapshot_verified` or `staged_snapshot_verified`), bound to the API
+server it launched by boot,
 PID and start ticks, read as it started. Only this record verifies a model's
 identity in a comparison, and only for the server the run's `before`
 description shows; a description file alone never does, whatever evidence

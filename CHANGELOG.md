@@ -106,7 +106,9 @@ the flaky benchmark memory gates
   snapshot included, is hashed into a read-only, content-addressed copy of
   its files. Files are hashed again after each run
   (`model_changed`), and the runner's server descriptions carry
-  `pinned_commit_verified` or `staged_snapshot_verified`, the only evidence
+  `pinned_commit_verified` (or `pinned_snapshot_verified`, when the pin
+  gives no file list of the commit) or `staged_snapshot_verified`, the only
+  evidence
   that verifies a model's identity in a comparison. (#213)
 - `stormlog.infer.experiment.run_plan`: the experiment runner. Each run
   starts the arm's server in a process group of its own, checks it holds
