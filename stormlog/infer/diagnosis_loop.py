@@ -64,6 +64,7 @@ REASON_CAPPED = "hook_capped"
 REASON_WRITER_ERRORS = "hook_writer_errors"
 REASON_EPOCH_CHANGED = "epoch_changed"
 REASON_COVERAGE_UNKNOWN = "hook_coverage_unknown"
+REASON_PAUSE_UNKNOWN = "pause_state_unknown"
 OBSERVES_PAUSE = "pause"
 # vLLM's pause states: only PAUSED_ALL stops steps; PAUSED_NEW stops admissions
 # and keeps running requests stepping.
@@ -556,9 +557,8 @@ def _verdict(
 ) -> SignalValue:
     overridden = any(key in config.thresholds for key in _LOOP_KEYS)
     worst, covered = _judged(stalls, steps, records, config)
-    if worst is not None and not covered and worst[0].duration_ns >= worst[1]:
-        # Over its limit, but where a record may be missing: no verdict.
-        reasons = [*reasons, REASON_COVERAGE_UNKNOWN]
+    if worst is not None and worst[0].duration_ns >= worst[1]:
+        reasons = [*reasons, *_doubts(covered, observes_pauses(records))]
     detail: dict[str, Any] = {
         "steps": len(steps),
         "pause_capability": observes_pauses(records),
@@ -581,6 +581,13 @@ def _verdict(
     return _result(
         float(stall.duration_ns), limit, exceeds, reasons, overridden, detail
     )
+
+
+def _doubts(covered: bool, pauses_observed: bool) -> list[str]:
+    """Why a stall over its limit is still no verdict: a record may be
+    missing around it, or the hook cannot say the scheduler was not paused."""
+    doubts = [] if covered else [REASON_COVERAGE_UNKNOWN]
+    return doubts if pauses_observed else [*doubts, REASON_PAUSE_UNKNOWN]
 
 
 Judged = tuple[Stall, float, str, float | None]
@@ -672,6 +679,7 @@ __all__ = [
     "REASON_CAPPED",
     "REASON_COVERAGE_UNKNOWN",
     "REASON_EPOCH_CHANGED",
+    "REASON_PAUSE_UNKNOWN",
     "REASON_RECORDS_DROPPED",
     "REASON_REQUIRES_HOOK",
     "REASON_TOO_FEW_STEPS",
