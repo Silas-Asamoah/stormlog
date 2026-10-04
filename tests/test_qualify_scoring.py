@@ -600,6 +600,28 @@ def test_an_episode_whose_effect_never_ended_takes_the_rest_of_the_run() -> None
     assert negative_exposure(run, members, CONFIG) == (Interval(30 * S, 100 * S),)
 
 
+def test_an_episodes_span_covers_every_kinds_grace() -> None:
+    # An I1 capture whose label is capture_pause, with host_stall given a
+    # 60 s grace: a host_stall finding up to 60 s after the effect ends is
+    # assigned to the capture, so that time isn't negative exposure either.
+    config = replace(CONFIG, grace_ns={"host_stall": 60 * S})
+    capture = replace(
+        episode(
+            "I1",
+            expects=(
+                Expectation("capture_pause", "profiler", cause="instrumentation"),
+            ),
+            cause_class="instrumentation",
+        ),
+        run_id="r",
+    )
+    run = run_record("r")
+    assert negative_exposure(run, [capture], config) == (
+        Interval(30 * S, 100 * S),
+        Interval(210 * S, 324 * S),
+    )
+
+
 def test_one_finding_is_credited_to_one_episode() -> None:
     # Two F2 episodes 60 s apart; one late KV finding qualifies for both
     # (its uncertainty is 40 s). It goes to the one whose effect began
