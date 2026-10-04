@@ -1048,13 +1048,78 @@ def _unhealthy_on(monkeypatch: pytest.MonkeyPatch, *calls: int) -> None:
     monkeypatch.setattr(experiment, "_wait_healthy", wait)
 
 
-def _against_control(order: list[str], *, args: bool) -> dict[str, Any]:
+def _against_control(
+    order: list[str], *, args: bool, env: bool = False
+) -> dict[str, Any]:
     document = _plan(_port(), blocks=1, control_arm="off")
     document["order"] = {"kind": "explicit", "blocks": [order]}
     if args:
         # The treatment is the arm's own launch.
         document["arms"]["watch"]["server"] = {"args": ["--latency", "0"]}
+    if env:
+        document["arms"]["watch"]["server"] = {"env": {"VLLM_PLUGINS": "stormlog"}}
     return document
+
+
+def test_a_launch_that_differs_only_in_its_environment_differs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rev-213-a's N9 (mutant e7_env_ignored): a hook plugin is enabled by
+    # environment alone.
+    _unhealthy_on(monkeypatch, 2)
+    records = _run(tmp_path, _against_control(["off", "watch"], args=False, env=True))
+    watch = records[-1]
+    assert (watch["state"], watch["decided_by"]) == (
+        "outcome_failure",
+        "arm_launch_differs",
+    )
+
+
+def test_a_decision_the_runner_died_before_is_made_on_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rev-213-a's N3: the runner died after the control ran but before the
+    # block ended, so the never-healthy attempt stayed a protocol failure,
+    # was never indexed, and --retry-incomplete retried it away.
+    from stormlog.infer import experiment
+
+    _unhealthy_on(monkeypatch, 1)
+
+    def die(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("the runner died")
+
+    monkeypatch.setattr(experiment, "_decide_unhealthy", die)
+    document = _against_control(["watch", "off"], args=True)
+    with pytest.raises(RuntimeError):
+        _run(tmp_path, document)
+    exp = tmp_path / "exp"
+    (watch_dir,) = exp.glob("runs/*-watch-a1")
+    assert json.loads((watch_dir / "run.json").read_text())["decided_by"] == "pending"
+    monkeypatch.undo()
+    resumed = _run(tmp_path, document, resume=True, retry_incomplete=True)
+    assert [(r["label"], r["state"], r["decided_by"]) for r in resumed] == [
+        (watch_dir.name, "outcome_failure", "arm_launch_differs")
+    ]
+    index = [json.loads(line) for line in (exp / "index.jsonl").open()]
+    assert [r["label"] for r in index].count(watch_dir.name) == 1
+
+
+def test_a_control_seen_before_a_stop_decides_nothing_after_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rev-213-a's N5: the control came up, then its cleanup did not verify
+    # and the experiment stopped; after the resume the arm's server never
+    # came up, and the old evidence made it the arm's outcome.
+    _survivor_on_calls(monkeypatch, 1)
+    document = _against_control(["off", "watch"], args=True)
+    _run(tmp_path, document)
+    monkeypatch.undo()
+    _unhealthy_on(monkeypatch, 1)
+    (watch,) = _run(tmp_path, document, resume=True)
+    assert (watch["state"], watch["decided_by"]) == (
+        "protocol_failure",
+        "control_not_launched",
+    )
 
 
 @pytest.mark.parametrize("order", [["off", "watch"], ["watch", "off"]])
