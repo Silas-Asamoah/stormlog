@@ -659,6 +659,25 @@ class _RecordingLock:
         return self.inner.__exit__(*exc)
 
 
+@pytest.mark.parametrize(
+    "setting",
+    [
+        {"prometheus_case_label": "off"},  # a truthy string, not False
+        {"prometheus_max_series": "100"},
+        {"prometheus_max_series": True},
+        {"prometheus_listen": 9999},
+        {"prometheus_series_headroom": 2.5},
+        {"prometheus_linger_seconds": "30"},
+        {"prometheus_textfile_dir": 5},
+        {"prometheus_textfile_remove_on_exit": 1},
+    ],
+)
+def test_the_watch_json_section_checks_each_type(setting: dict[str, Any]) -> None:
+    mapping = {"prometheus_listen": "127.0.0.1:9900", **setting}
+    with pytest.raises(ValueError, match=next(iter(setting))):
+        ExportConfig.from_mapping(mapping)
+
+
 # Audit events that are I/O, from the thread under test while it records.
 _IO_EVENTS = ("open", "os.", "socket.", "subprocess.", "shutil.", "time.sleep")
 _audited: dict[str, Any] = {"thread": None, "events": []}
