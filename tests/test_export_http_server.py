@@ -223,6 +223,33 @@ def test_header_floods_from_every_slot_hold_little_memory() -> None:
     assert metrics.stats.bad_request == 4
 
 
+def test_a_handler_thread_that_cannot_start_gives_its_slot_back(
+    server: MetricsServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_start = threading.Thread.start
+    failures = [1, 1]
+
+    def failing_start(thread: threading.Thread) -> None:
+        if failures and "process_request_thread" in repr(getattr(thread, "_target")):
+            failures.pop()
+            raise RuntimeError("can't start new thread")
+        real_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", failing_start)
+    for _ in range(2):  # as many as the server has slots
+        sock = _idle(server)
+        sock.sendall(b"GET /metrics HTTP/1.1\r\nHost: x\r\n\r\n")
+        try:
+            _read_all(sock)  # closed unanswered
+        except OSError:
+            pass
+        sock.close()
+    assert _wait_for(lambda: server.stats.errors == 2)
+    assert _get(server).status == 200
+    assert _wait_for(lambda: server.stats.active == 0)
+    assert server.stats.rejected_busy == 0
+
+
 def test_a_busy_port_raises_for_the_caller_to_record() -> None:
     first = MetricsServer("127.0.0.1:0", RenderCache(lambda: BODY))
     first.start()

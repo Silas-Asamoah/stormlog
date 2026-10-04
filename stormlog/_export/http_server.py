@@ -154,19 +154,29 @@ class _Server(ThreadingHTTPServer):
             self._tokens[id(request)] = token
             self._connections.add(request)
         self.owner.count("active")
-        super().process_request(request, client_address)
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            # No thread started, so none will give the slot back; the caller
+            # counts the error and closes the connection.
+            self._finished(request)
+            raise
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
         try:
             super().process_request_thread(request, client_address)
         finally:
-            with self._lock:
-                token = self._tokens.pop(id(request), None)
-                self._connections.discard(request)
-            if token is not None and not self.owner.watchdog.disarm(token):
-                self.owner.count("timeout")
-            self.owner.count("active", -1)
-            self._slots.release()
+            self._finished(request)
+
+    def _finished(self, request: Any) -> None:
+        """Disarm the connection's deadline and give its slot back."""
+        with self._lock:
+            token = self._tokens.pop(id(request), None)
+            self._connections.discard(request)
+        if token is not None and not self.owner.watchdog.disarm(token):
+            self.owner.count("timeout")
+        self.owner.count("active", -1)
+        self._slots.release()
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         self.owner.count("errors")
