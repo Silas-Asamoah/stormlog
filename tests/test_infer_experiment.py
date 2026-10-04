@@ -716,6 +716,45 @@ def test_a_resume_waits_until_what_a_cleanup_left_is_gone(
     assert {r["state"] for r in resumed} == {"completed"}
 
 
+def test_a_prelude_server_loads_the_verified_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A warm-up must warm the snapshot the runs measure, offline.
+    from stormlog.infer import experiment
+    from stormlog.infer.model_identity import VerifiedModel
+
+    launched: list[tuple[list[str], dict[str, str]]] = []
+
+    class _Stop(Exception):
+        pass
+
+    def launch(_name: str, command: list[str], *, env: dict[str, str], **_: Any) -> Any:
+        launched.append((command, env))
+        raise _Stop
+
+    monkeypatch.setattr(experiment, "launch", launch)
+    document = _plan(_port(), blocks=1)
+    document["block_prelude"] = [
+        {"name": "warm", "server_arm": "off", "command": ["{python}", "-c", "pass"]}
+    ]
+    plan = plan_from_document(document)
+    commit = "c" * 40
+    model = VerifiedModel(
+        route="pinned_hub",
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        server_args=("--revision", commit, "--tokenizer-revision", commit),
+        env={"HF_HUB_OFFLINE": "1", "HF_HUB_CACHE": "/hub"},
+        directory=tmp_path,
+        files=(),
+    )
+    env = Environment(python=sys.executable, model=model)
+    with pytest.raises(_Stop):
+        experiment._prelude(plan, plan.preludes[0], 0, tmp_path / "exp", env)
+    ((command, server_env),) = launched
+    assert command[-4:] == ["--revision", commit, "--tokenizer-revision", commit]
+    assert (server_env["HF_HUB_OFFLINE"], server_env["HF_HUB_CACHE"]) == ("1", "/hub")
+
+
 def test_a_treatment_left_running_stops_the_experiment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
