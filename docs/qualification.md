@@ -648,7 +648,17 @@ One run goes:
    - its effect timing and realization checks;
    - its impact on the victim's SLO (when the plan sets one), counted by
      arrival in the effect window against the baseline;
+   - its run's label (`run_id`) and the victim artifact's clock domain. The
+     status is `incomparable` when that isn't this host's clock;
+   - its actions: when the injector's action started and ended, on the wall
+     and monotonic clocks, and how it ended;
    - its status.
+
+   Beside them, `truth/run.json` (`stormlog.qualify.run/1`) holds the run's
+   measured, priming, baseline and final-recovery windows, and a failed
+   priming check as the run's protocol failure. The victim runs under the
+   run's label as its `--run-id`, so its artifact names the run its truth
+   belongs to.
 
 The run is published atomically (see below).
 
@@ -658,7 +668,8 @@ nothing about its episodes:
 ```text
 <root>/<label>/
   run/      victim.jsonl            the only path handed to the diagnoser
-  truth/    injections.jsonl, episodes.json, plan.json, neighbor-<n>.jsonl, reference/
+  truth/    run.json, injections.jsonl, episodes.json, plan.json, neighbor-<n>.jsonl,
+            reference/
   probes/   markers/, append-times.jsonl, client-idle.jsonl, hook-firstseen.jsonl,
             seal-observations.jsonl, victim.log
   SHA256SUMS
