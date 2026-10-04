@@ -344,21 +344,28 @@ def _segment_report(
     segment: SegmentPopulation,
     context: _CaseContext,
 ) -> dict[str, Any]:
-    """One segment of a case: its cohort, rates, latency and SLO, on its own."""
+    """One segment of a case: its cohort, rates, latency and SLO, on its own.
+
+    Under ``overlap`` membership a segment has no rates: requests in flight
+    during it, per second of it, grow with their latency, so a slower
+    server would look faster. Its shares and latency stay.
+    """
     ids = set(segment.request_ids)
     members = [r for r in case_requests if str(r.get("request_id")) in ids]
     ok = [r for r in members if r.get("status") == "ok"]
+    rate_interval = segment.interval if segment.membership == "arrival" else None
     report: dict[str, Any] = {
         "population": segment.population.to_record(),
         "intervals": {
             "rate": segment.interval.to_record(),
             "membership": segment.membership,
+            "rate_reason": None if rate_interval else "overlapping_cohort",
         },
         "throughput": _throughput(
             len(ok),
             sum(_int_value(r.get("output_tokens")) for r in ok),
             sum(_int_value(r.get("total_tokens")) for r in ok),
-            segment.interval,
+            rate_interval,
         ),
         "latency": latency_summary(members, spans=context.spans),
     }
@@ -366,7 +373,7 @@ def _segment_report(
         report["slo"] = goodput(
             members,
             context.policy.spec,
-            segment.interval,
+            rate_interval,
             spans=context.spans,
             slo_source=context.policy.source,
         ).to_record()

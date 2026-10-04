@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from stormlog.infer.compare import ComparisonSpec, compare_runs
+from stormlog.infer.compare_metrics import default_metrics
 from stormlog.infer.comparison_stats import GateRule
 from stormlog.infer.compatibility import RunField
 from stormlog.infer.errors import InferInputError, InferUsageError
@@ -160,6 +161,18 @@ def test_a_gate_that_matches_no_metric_cannot_be_evaluated() -> None:
 def test_a_case_no_run_has_is_invalid_input() -> None:
     with pytest.raises(InferInputError, match="case typo is in no run"):
         compare_runs(*_arms(SLOWER), ComparisonSpec(gates=E2E_GATE, cases=("typo",)))
+
+
+def test_a_rate_without_an_interval_says_why() -> None:
+    case = _case(100.0)
+    case["throughput"]["requests_per_second"] = None
+    case["slo"]["goodput_lower_rps"] = case["slo"]["goodput_upper_rps"] = None
+    case["intervals"] = {"rate_reason": "overlapping_cohort"}
+    metrics = {metric.name: metric for metric in default_metrics(case)}
+    assert metrics["throughput_rps"].read(case) == (None, "overlapping_cohort")
+    assert metrics["goodput_rps"].read(case) == (None, "overlapping_cohort")
+    del case["intervals"]
+    assert metrics["throughput_rps"].read(case) == (None, "rate_unavailable")
 
 
 def test_unlabelled_runs_are_independent_samples() -> None:

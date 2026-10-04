@@ -659,3 +659,29 @@ def test_each_segment_is_reported_on_its_own(tmp_path: Path) -> None:
     assert segment["throughput"]["requests_per_second"] == pytest.approx(10.0)
     assert segment["slo"]["offered"] == 5
     assert "client.e2e" in segment["latency"]["metrics"]
+
+
+def test_an_overlap_segment_has_no_rates(tmp_path: Path) -> None:
+    # Requests in flight during a segment, per second of it, grow with their
+    # latency (Little's law): a slower server would look faster. Shares and
+    # latency stay; rates go.
+    records = [
+        _request(i, total_tokens=12, output_tokens=4, e2e_latency_ms=100.0)
+        for i in range(10)
+    ]
+    path = tmp_path / "infer.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(r) for r in [*records, _window(), _workload()])
+    )
+    report = analyze_inference_events(
+        path,
+        slo=parse_slo_flags(["e2e:1000"]),
+        segments=[Segment("late", SECOND // 2, SECOND)],
+        segment_membership="overlap",
+    )
+    segment = report["cases"]["c1"]["segments"]["late"]
+    assert segment["intervals"]["rate_reason"] == "overlapping_cohort"
+    assert segment["throughput"]["requests_per_second"] is None
+    assert segment["slo"]["goodput_lower_rps"] is None
+    assert segment["slo"]["attainment_lower"] == 1.0
+    assert "client.e2e" in segment["latency"]["metrics"]

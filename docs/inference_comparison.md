@@ -60,6 +60,14 @@ case of its own, named `<case>/<segment>`, with the same metrics: its
 requests (by arrival, or by overlap), and its rates per second of the
 segment, clipped to the phase. A segment fails with its case.
 
+Under `--segment-membership overlap`, a segment has no rates (goodput,
+throughput, output tokens): its requests are those in flight during it,
+and their count per second grows with their latency, so a slower candidate
+would look faster. Those metrics read `overlapping_cohort`; its shares
+(attainment, failure fraction) and latency are compared as usual. Any rate
+a run cannot give is read with its interval's reason (`rate_reason`), or
+`rate_unavailable`.
+
 ### Modes
 
 - `config`: only allowed fields may differ; observers must match.
