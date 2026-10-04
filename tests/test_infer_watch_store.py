@@ -1137,6 +1137,34 @@ def test_a_full_disk_removes_bundles_only_when_that_can_make_room(
     store.close()
 
 
+def test_a_reader_arriving_after_the_count_stops_room_making(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader took the oldest bundle after the count said removal could
+    make room: the newer ones were removed anyway, and the seal still did
+    not fit."""
+    store = IncidentStore(tmp_path)
+    ids = _three_small_bundles(store)
+    monkeypatch.setattr(store_module, "_free_bytes", lambda path: 0)
+    pins: list[int] = []
+    real_removable = store._removable
+
+    def reader_arrives(protected: frozenset[str]) -> Any:
+        chosen = real_removable(protected)
+        pins.append(store_module._pin(chosen[0][0]))
+        return chosen
+
+    monkeypatch.setattr(store, "_removable", reader_arrives)
+    try:
+        assert not store.make_room_on_disk(9)  # all three bundles' bytes
+    finally:
+        for fd in pins:
+            os.close(fd)
+    assert store.take_pruned() == []
+    assert [m.incident_id for _p, m in store.bundles()] == ids
+    store.close()
+
+
 def test_a_full_disk_removes_the_oldest_bundle_not_protected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

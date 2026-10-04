@@ -550,14 +550,20 @@ class IncidentStore:
         deferred, as for the budget."""
         free = _free_bytes(self.root)
         removable = self._removable(protected)
-        if free >= need_bytes or free + sum(f for *_, f in removable) < need_bytes:
+        left = sum(f for *_, f in removable)
+        if free >= need_bytes or free + left < need_bytes:
             return False
         for path, incident_id, freed in removable:  # oldest seal first
+            left -= freed
             if self._try_delete(path, path, defer=False):
                 self._room_pruned.append(PrunedBundle(incident_id, "disk_full", freed))
                 free += freed
                 if free >= need_bytes:
                     return True
+            elif free + left < need_bytes:
+                # A reader took this one since the count: the rest can no
+                # longer make room, so no more are removed for it.
+                return False
         return False
 
     def take_pruned(self) -> list[PrunedBundle]:
