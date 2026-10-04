@@ -289,9 +289,10 @@ model); more requests per run do not help.
   bad direction (`mean_change`). A claim about runs can pass while one run
   moves the mean: nine runs at 0% failures and one at 50% pass at a 1-point
   budget, with the mean 5 points up. When the mean change is beyond the
-  budget, the claim carries `warning: mean_exceeds_budget`, and the report
-  says so. The gate does not change: it is a claim about runs, not about
-  the mean.
+  budget, the claim records `mean_exceeds_budget: true`, and the text
+  verdict says so: `gate pass (run-level claim): ...; warning: mean failure
+  fraction rose 5.0 pp against a 1 pp budget`. The gate and the exit code
+  do not change: it is a claim about runs, not about the mean.
 - **The thresholds.** 6 runs need 6 of 6 (lower bound 0.541; 5 of 6 gives
   0.359), 8 need 8 of 8 (0.631; 7 of 8 gives 0.474), 10 need 9 of 10
   (0.555). Fewer than 6 runs can never make the claim: the gate is
