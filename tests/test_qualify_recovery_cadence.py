@@ -385,3 +385,58 @@ def test_an_engine_that_stalls_after_resuming_has_not_recovered(runs_s: float) -
         timing = run(seed, resume_then_hang())
         assert timing.end_ns is not None
         assert timing.end_ns - LAST >= (runs_s + 29) * S, seed
+
+
+def with_prefill(share: float) -> Gap:
+    """20 ms decode steps, with ``share`` of them 250 ms prefill steps."""
+
+    def gap(rng: random.Random, _t: float) -> float:
+        prefill = rng.random() < share
+        return (0.25 if prefill else 0.020) * rng.lognormvariate(0, 0.2)
+
+    return gap
+
+
+def prefill_run(seed: int, share: float, stalls: list[tuple[int, int]]) -> Timing:
+    """F4a on an engine with prefill steps all along: baseline, ten pulses,
+    and ``stalls`` that nobody recorded."""
+    rng, gap, steps, at = random.Random(seed), with_prefill(share), [], 0
+    while at < LAST + 200 * S:
+        steps.append(at)
+        at += int(gap(rng, 0.0) * S)
+        for stop, cont in PULSES + stalls:
+            if stop < at < cont:
+                at = cont
+    signals = Signals(step_starts=steps, in_flight=ALWAYS)
+    actions = Actions(
+        first_stop_confirmed_ns=FIRST_PULSE, last_continue_ns=LAST, pulses=PULSES
+    )
+    context = Context(
+        signals,
+        Baseline.measure(signals, 0, BASELINE_END),
+        actions,
+        start_ns=FIRST_PULSE,
+        until_ns=LAST + Thresholds().recovery_timeout_ns,
+    )
+    return effect_timing("F4a", context)
+
+
+@pytest.mark.parametrize("share", [0.006, 0.008, 0.010])
+def test_an_engine_with_rare_prefill_steps_recovers(share: float) -> None:
+    # rev-220-b's delta 2, E5: with under 1% of steps prefill, the p99 is a
+    # decode step's, so every prefill step was a long gap. A hold needed
+    # 10 s without one, and a healthy engine took a median of 19-35 s to
+    # recover, or timed out (12 of 20 recovered at 0.8%). Long gaps up to
+    # the baseline's own share of them are now normal.
+    for seed in range(20):
+        assert recovered_by(prefill_run(seed, share, []), 1.0), seed
+
+
+def test_stalls_longer_than_any_prefill_step_still_hold_recovery_off() -> None:
+    # The allowance is for gaps like the baseline's: a 1 s stall every 2 s
+    # for 40 s after the last SIGCONT is over twice the baseline's p99.9,
+    # so no hold can start until the last one ends.
+    stalls = [(LAST + k * 2 * S, LAST + k * 2 * S + S) for k in range(1, 20)]
+    for seed in range(20):
+        timing = prefill_run(seed, 0.008, stalls)
+        assert timing.end_ns is not None and timing.end_ns >= stalls[-1][1], seed

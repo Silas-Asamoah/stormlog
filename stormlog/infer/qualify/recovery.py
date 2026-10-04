@@ -50,7 +50,9 @@ class Thresholds:
     # Cadence recovery (F4a, F4b, H0, P): over the hold, the busy gaps'
     # mean may exceed the baseline's by at most this share of the rate...
     rate_tolerance: float = 0.2
-    # ...no gap may be longer than this many times the baseline's p99...
+    # ...no more gaps may be longer than this many times the baseline's p99
+    # than the baseline's own share of them allows by chance, and none this
+    # many times its p99.9...
     long_gap_factor: float = 2.0
     # ...and no more gaps may lie above the baseline's p95 than chance
     # allows: this quantile of Binomial(n, exceedance_share).
@@ -335,8 +337,12 @@ class MostlyWithin:
 class CadenceWithin:
     """A gap series is back to its baseline over the interval: at least
     ``min_cadence_samples`` gaps; their mean within ``rate_tolerance`` of
-    the baseline's rate; none longer than ``long_gap_factor`` times the
-    baseline's p99; and no more above the baseline's p95 than chance allows.
+    the baseline's rate; no more longer than ``long_gap_factor`` times the
+    baseline's p99 than the baseline's own share of such gaps allows by
+    chance (none, when it had none: a healthy engine's prefill steps, under
+    1% of its gaps, are normal, not a stall), and none longer than
+    ``long_gap_factor`` times its p99.9; and no more above the baseline's
+    p95 than chance allows.
     The mean weighs a long gap by its length, so a slow minority shows. A
     baseline of fewer than ``min_cadence_samples`` gaps can't be compared
     with, so it never holds.
@@ -361,6 +367,9 @@ class CadenceWithin:
         self.above = _prefix(float(value > baseline.p95) for value in values)
         self.longest = thresholds.long_gap_factor * baseline.p99
         self.long = _prefix(float(value > self.longest) for value in values)
+        self.long_share = baseline.long_count / baseline.count if baseline.count else 0
+        never = thresholds.long_gap_factor * baseline.p999
+        self.too_long = _prefix(float(value > never) for value in values)
         self.mean_ceiling = baseline.mean / (1 - thresholds.rate_tolerance)
         self.thresholds = thresholds
         self.comparable = baseline.count >= thresholds.min_cadence_samples
@@ -382,7 +391,7 @@ class CadenceWithin:
         if not self.comparable or count < self.thresholds.min_cadence_samples:
             return False
         tail = self.open_gap(self.times[last - 1], end_ns)
-        if self.long[last] > self.long[first] or tail > self.longest:
+        if tail > self.longest or not self._long_gaps_fit(first, last, count):
             return False
         total = self.sums[last] - self.sums[first] + tail
         if total / (count + (tail > 0)) > self.mean_ceiling:
@@ -396,6 +405,18 @@ class CadenceWithin:
 
     def change_points(self) -> Sequence[int]:
         return self.times
+
+    def _long_gaps_fit(self, first: int, last: int, count: int) -> bool:
+        """None far longer than any the baseline had, and no more long ones
+        than its share of them allows (the open gap is never one of those:
+        a stall may be under way)."""
+        if self.too_long[last] > self.too_long[first]:
+            return False
+        long = self.long[last] - self.long[first]
+        if long == 0 or self.long_share <= 0:
+            return long == 0
+        quantile = self.thresholds.exceedance_quantile
+        return long <= allowed_exceedances(count, self.long_share, quantile)
 
 
 def _prefix(values: Iterable[float]) -> list[float]:
@@ -455,23 +476,29 @@ def held_from(
 
 @dataclass(frozen=True)
 class GapStats:
-    """A gap series in the baseline: how many gaps, their mean, p95 and
-    p99, in seconds. With no gaps nothing can be compared with it."""
+    """A gap series in the baseline: how many gaps, their mean, p95, p99
+    and p99.9, in seconds, and how many were long (over ``long_gap_factor``
+    times the p99). With no gaps nothing can be compared with it."""
 
     count: int = 0
     mean: float = math.inf
     p95: float = math.inf
     p99: float = math.inf
+    long_count: int = 0
+    p999: float = math.inf
 
     @classmethod
-    def of(cls, values: Sequence[float]) -> GapStats:
+    def of(cls, values: Sequence[float], long_gap_factor: float = 2.0) -> GapStats:
         if not values:
             return cls()
+        p99 = quantile(values, 0.99) or math.inf
         return cls(
             count=len(values),
             mean=statistics.fmean(values),
             p95=_q95(values),
-            p99=quantile(values, 0.99) or math.inf,
+            p99=p99,
+            long_count=sum(1 for value in values if value > long_gap_factor * p99),
+            p999=quantile(values, 0.999) or math.inf,
         )
 
 
@@ -495,7 +522,14 @@ class Baseline:
     hit_ratio_count: int = 0
 
     @classmethod
-    def measure(cls, signals: Signals, start_ns: int, end_ns: int) -> Baseline:
+    def measure(
+        cls,
+        signals: Signals,
+        start_ns: int,
+        end_ns: int,
+        thresholds: Thresholds | None = None,
+    ) -> Baseline:
+        factor = (thresholds or Thresholds()).long_gap_factor
         waits = between(signals.waits, start_ns, end_ns)
         gauge = between(signals.waiting, start_ns, end_ns)
         ratios = between(signals.engine_hit_ratio, start_ns, end_ns)
@@ -506,8 +540,10 @@ class Baseline:
             waiting_low=min(waiting),
             waiting_high=max(waiting),
             kv_max=max(between(signals.kv_usage, start_ns, end_ns) or [0.0]),
-            steps=GapStats.of(between(signals.busy_step_gaps(), start_ns, end_ns)),
-            chunks=GapStats.of(between(signals.chunk_gaps, start_ns, end_ns)),
+            steps=GapStats.of(
+                between(signals.busy_step_gaps(), start_ns, end_ns), factor
+            ),
+            chunks=GapStats.of(between(signals.chunk_gaps, start_ns, end_ns), factor),
             cached_median=_median(between(signals.cached_fraction, start_ns, end_ns)),
             hit_ratio_median=_median(ratios),
             wait_count=len(waits),

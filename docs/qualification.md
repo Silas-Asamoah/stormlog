@@ -157,7 +157,8 @@ configuration's capture.
 - the p95 wait;
 - the range of the waiting count;
 - the maximum KV usage;
-- the busy step gaps' and the chunk gaps' count, mean, p95 and p99. A step
+- the busy step gaps' and the chunk gaps' count, mean, p95, p99 and p99.9,
+  and how many were over twice the p99. A step
   gap counts only its busy part: from the later of its first step and the
   moment the victim's current in-flight interval opened, to its second step.
   Idle time measures the traffic, not the engine, but a request that arrived
@@ -193,7 +194,10 @@ N's slot does, so its scoring window is not just the grace.
 busy gaps in the hold:
 - their mean is within 20% of the baseline's rate (a long gap weighs by its
   length, so a slow minority shows);
-- none is longer than twice the baseline's p99;
+- no more of them are longer than twice the baseline's p99 than the
+  baseline's own share of such gaps allows by chance (the 99% point of
+  Binomial(n, share); none when the baseline had none), and none is longer
+  than twice its p99.9;
 - no more of them lie above the baseline's p95 than chance allows: the 99%
   point of Binomial(n, 0.05).
 
@@ -233,10 +237,20 @@ hold need about 2 busy steps a second: a victim busy 5% of the time with
 as `recovery_incomplete` (rev-220-b measured 2 of 20 recovering at a 5%
 busy share against a 5 s hold). #221's victims keep a request in flight
 nearly all the time, and G0 records each victim's busy share so a light one
-is caught before a campaign. Rare long steps also cost time: when fewer than
-1% of steps are prefill steps, twice the p99 can fall below one, so each
-ends a hold and recovery waits for a stretch without one (a median of up to
-9 s in the same probe).
+is caught before a campaign.
+
+**Rare long steps are normal.** When fewer than 1% of steps are prefill
+steps, twice the p99 falls below one, so a hold allows as many long gaps
+as the baseline's own share of them predicts. In 20 seeds each, an engine
+with 0.4–1.5% prefill steps of 250 ms among 20 ms decode steps recovers at
+the last `SIGCONT`. Without the allowance, 12–17 of 20 recovered within
+150 s at 0.6–1.0%, after a median of 19–35 s. The cost is that a stall no
+longer than the engine's own long steps is judged only by how many there
+are. On an engine with 0.8% prefill steps, 300 ms stalls that go on after
+the last pulse are missed when they come every 2 s or 5 s (the effect
+ends at the last `SIGCONT`, in median). Every 1 s, they end it about 4 s
+early. A 1 s stall, over twice the p99.9, holds recovery off until the
+last one.
 
 **Cadence is blind while the victim is idle.** Only busy gaps count, so a
 stall that falls wholly in victim idle time (about a fifth of the time at
