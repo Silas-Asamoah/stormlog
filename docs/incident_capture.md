@@ -219,12 +219,24 @@ counters, null when their source was not running. One record of each type is
 in `tests/fixtures/watch/records_v1.jsonl`, which a test keeps equal to what
 the code writes.
 
+An exporter (#220) observes every record as it is queued for the ledger,
+the ones the ledger then drops included, so an exported record may be
+missing from the ledger; the ledger's own drops are counted in
+`ledger_dropped`. `infer.watch_session` records begin and end each watch,
+with its resolved configuration.
+
 The watcher's own health is held in memory as `stormlog_watch_*` gauges and
 counters (`tests/fixtures/watch/watch_stats_v1.json`): history bytes and
 age, scrapes by outcome, missed and frozen ticks, incidents by trigger kind
 and capture status, windows by fidelity, suppressions, retention, and
 records each sink dropped. `report.json` carries a copy at the end of the
-watch.
+watch. The families grow with the commands that fill them (deep capture,
+the span ring, finalization), so a newer fixture has more; none is renamed
+or removed within version 1.
+
+The incident limits' trailing hour is kept in memory: a restarted watch
+starts a new hour. Keeping it across restarts comes with deep capture,
+which keeps its own state under the root.
 
 ### Exit codes
 
