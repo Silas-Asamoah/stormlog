@@ -115,8 +115,19 @@ def test_queue_saturation_starts_when_the_median_wait_passes_the_baseline_p95() 
     realized, checks = realization("F1", context(signals), timing)
     assert realized
     assert [check.name for check in checks] == ["onset_reached", "no_victim_preemption"]
-    # The same waits are no workload twin: they left the baseline.
-    assert realization("T1", context(signals), timing)[0] is False
+    # The same waits are no workload twin: they left the baseline, and the
+    # check says how far: the highest window median over the baseline p95.
+    twin, (check,) = realization("T1", context(signals), timing)
+    assert twin is False
+    assert check.value is not None and check.value > 20
+    calm = Signals(
+        in_flight=None,
+        waits=[(t, 0.02) for t, _v in signals.waits],
+        waiting=signals.waiting,
+    )
+    assert realization("T1", context(calm), timing)[1][0].value == pytest.approx(
+        0.02 / context(calm).baseline.wait_p95, abs=0.001
+    )
 
 
 def test_prefix_loss_follows_the_victims_cached_fraction() -> None:

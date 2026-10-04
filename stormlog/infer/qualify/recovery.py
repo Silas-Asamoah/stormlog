@@ -949,8 +949,29 @@ def _realized_queue(context: Context, timing: Timing) -> list[Check]:
 
 
 def _waits_in_baseline(context: Context, timing: Timing) -> list[Check]:
+    """No onset window, with the highest window median over the baseline's
+    p95 as the value: a reader can tell a twin that just crossed the p95
+    (host noise) from one whose waits saturated."""
     onset, _basis = _queue_onset(context)
-    return [Check("waits_within_baseline", onset is None)]
+    return [Check("waits_within_baseline", onset is None, _peak_wait_ratio(context))]
+
+
+def _peak_wait_ratio(context: Context) -> float | None:
+    p95, width = context.baseline.wait_p95, context.thresholds.window_ns
+    medians = [
+        statistics.median(values)
+        for window in range(context.start_ns, context.until_ns, width)
+        if (
+            values := between(
+                context.signals.waits,
+                window,
+                min(window + width, context.until_ns) - 1,
+            )
+        )
+    ]
+    if not medians or not 0 < p95 < math.inf:
+        return None
+    return round(max(medians) / p95, 3)
 
 
 def _realized_kv(context: Context, timing: Timing) -> list[Check]:

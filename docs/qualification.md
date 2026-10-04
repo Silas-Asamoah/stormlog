@@ -294,7 +294,7 @@ confirmed, and pulses the injector never recorded are among the tests.
 | F4a | no hook step started during a pulse |
 | F4b | the stopped state was confirmed. Whether the engine kept stepping in every pulse with a victim request in flight is recorded but doesn't gate: if it didn't, `added_mechanisms` adds `host_stall@engine_core` to the realized set, as A.4 says |
 | F5 | the stopped state was confirmed, and the peer rank's NCCL wait lengthened (`Actions.peer_wait_extended`, from Nsight) |
-| T1 | the waits stayed within the baseline |
+| T1 | the waits stayed within the baseline (no window's median wait above its p95; the check's value is the highest window median over the p95, so a twin that just crossed it is told from one that saturated) |
 | T2 | nothing was preempted |
 | T3 | the cached fraction stayed at 0.9 or more |
 | T3b | as T3, and the engine-wide prefix hit ratio fell at least 0.05 below the baseline's median |
