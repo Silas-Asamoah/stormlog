@@ -198,8 +198,11 @@ much longer.
   can itself be late. With ticks on time and `F` a multiple of `Δ`, that is
   `a + Δ + F`. For a persistent change that a predicate sees only once its
   window is full, `a` is at most the onset plus `W`, so detection takes at
-  most `W` more. The session record states each trigger's bound, with `j`
-  the scrape timeout, since the watcher evaluates as each scrape returns.
+  most `W` more. A tick that runs early counts in `j` too: with ticks up to
+  `e` early and `l` late, `j` is `e + l`; on time to the millisecond with
+  `j` = 0, one tick 2 ms early can fire a tick later than the bound. The
+  session record states each trigger's bound, with `j` the scrape timeout,
+  since the watcher evaluates as each scrape returns.
 - **Resets restart the count.** After a reset, the bound counts again from
   the next violating tick. Data gaps longer than `G` that keep coming back
   leave no bound at all. A scrape-health trigger reports them: consecutive
