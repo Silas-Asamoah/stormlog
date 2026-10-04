@@ -329,20 +329,41 @@ class CadenceWithin:
     baseline's p99; and no more above the baseline's p95 than chance allows.
     The mean weighs a long gap by its length, so a slow minority shows. A
     baseline of fewer than ``min_cadence_samples`` gaps can't be compared
-    with, so it never holds."""
+    with, so it never holds.
+
+    A gap is known when its later event arrives, so the time from the
+    hold's last event to its end is a gap still open: its busy part (the
+    time since the last event or since ``busy`` intervals last opened,
+    whichever is later; all of it when ``busy`` is None) counts as one
+    more gap. A stall still under way at the hold's end, an engine hung
+    since its last step, is then a long gap, not an unseen one."""
 
     def __init__(
-        self, points: Sequence[Point], baseline: GapStats, thresholds: Thresholds
+        self,
+        points: Sequence[Point],
+        baseline: GapStats,
+        thresholds: Thresholds,
+        busy: Sequence[tuple[int, int]] | None = None,
     ) -> None:
         self.times = [time for time, _value in points]
         values = [value for _time, value in points]
         self.sums = _prefix(values)
         self.above = _prefix(float(value > baseline.p95) for value in values)
-        longest = thresholds.long_gap_factor * baseline.p99
-        self.long = _prefix(float(value > longest) for value in values)
+        self.longest = thresholds.long_gap_factor * baseline.p99
+        self.long = _prefix(float(value > self.longest) for value in values)
         self.mean_ceiling = baseline.mean / (1 - thresholds.rate_tolerance)
         self.thresholds = thresholds
         self.comparable = baseline.count >= thresholds.min_cadence_samples
+        self.busy = busy
+        self.opens = None if busy is None else [start for start, _end in busy]
+
+    def open_gap(self, last_event_ns: int, end_ns: int) -> float:
+        """The busy part, in seconds, of the gap still open at ``end_ns``."""
+        since: int | None = last_event_ns
+        if self.busy is not None and self.opens is not None:
+            opened = busy_since(self.busy, self.opens, end_ns)
+            since = None if opened is None else max(last_event_ns, opened)
+        return 0.0 if since is None else max(0, end_ns - since) / SECOND
 
     def holds(self, start_ns: int, end_ns: int) -> bool:
         first = bisect.bisect_left(self.times, start_ns)
@@ -350,9 +371,11 @@ class CadenceWithin:
         count = last - first
         if not self.comparable or count < self.thresholds.min_cadence_samples:
             return False
-        if self.long[last] > self.long[first]:
+        tail = self.open_gap(self.times[last - 1], end_ns)
+        if self.long[last] > self.long[first] or tail > self.longest:
             return False
-        if (self.sums[last] - self.sums[first]) / count > self.mean_ceiling:
+        total = self.sums[last] - self.sums[first] + tail
+        if total / (count + (tail > 0)) > self.mean_ceiling:
             return False
         above = self.above[last] - self.above[first]
         return above <= allowed_exceedances(
@@ -560,11 +583,14 @@ def _cadence_criteria(context: Context, *, chunks: bool) -> list[Criterion]:
     since idle gaps measure the traffic, not the engine."""
     signals, baseline = context.signals, context.baseline
     thresholds = context.thresholds
+    busy = signals.in_flight
     criteria: list[Criterion] = [
-        CadenceWithin(signals.busy_step_gaps(), baseline.steps, thresholds)
+        CadenceWithin(signals.busy_step_gaps(), baseline.steps, thresholds, busy)
     ]
     if chunks:
-        criteria.append(CadenceWithin(signals.chunk_gaps, baseline.chunks, thresholds))
+        criteria.append(
+            CadenceWithin(signals.chunk_gaps, baseline.chunks, thresholds, busy)
+        )
     return criteria
 
 

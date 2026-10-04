@@ -15,10 +15,13 @@ from stormlog.infer.qualify.recovery import (
     Actions,
     AllWithin,
     Baseline,
+    CadenceWithin,
     Context,
     Criterion,
+    GapStats,
     NoEvents,
     Signals,
+    Thresholds,
     Timing,
     added_mechanisms,
     effect_timing,
@@ -518,3 +521,24 @@ def test_a_gap_that_begins_in_idle_time_keeps_its_busy_part() -> None:
     # And a gap whose later step lies in idle time is no busy gap at all.
     idle = Signals(in_flight=[(0, 500 * MS)], step_starts=[400 * MS, 900 * MS])
     assert idle.busy_step_gaps() == []
+
+
+def test_a_stall_still_open_at_a_holds_end_is_a_long_gap() -> None:
+    # rev-220-b's D1: steps every 20 ms for 0.5 s, then none until 30.5 s.
+    # The 25 gaps in [0, 5 s] all look normal, but the engine hasn't stepped
+    # for the hold's last 4.5 s: that open gap is counted, so it can't hold.
+    baseline = GapStats(count=250, mean=0.020, p95=0.026, p99=0.030)
+    steps = [tick * 20 * MS for tick in range(26)] + [30_500 * MS]
+    steps += [30_500 * MS + tick * 20 * MS for tick in range(1, 400)]
+    gaps = Signals(in_flight=ALWAYS, step_starts=steps).busy_step_gaps()
+    cadence = CadenceWithin(gaps, baseline, Thresholds(), ALWAYS)
+    assert not cadence.holds(0, 5 * S)
+    # Recovery is found only once the engine steps again.
+    start = held_from([cadence], 0, 40 * S, 5 * S)
+    assert start is not None and start >= 30_500 * MS
+    # A live poll during the hang, at 5.5 s, finds no recovery at all.
+    assert held_from([cadence], 0, 5_500 * MS, 5 * S) is None
+    # With no victim request in flight at the hold's end, the quiet tail is
+    # idle time, not a stall.
+    idle = CadenceWithin(gaps, baseline, Thresholds(), [(0, 520 * MS)])
+    assert idle.holds(0, 5 * S)
