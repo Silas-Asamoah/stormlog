@@ -1024,6 +1024,10 @@ def cmd_collect_server(args: argparse.Namespace) -> int:
         ) from exc
     finally:
         _restore_signal_handlers(previous_handlers)
+        if export is not None:
+            # A no-op after the collector closed it; a start that failed
+            # before then still frees the slot it took.
+            export.close("error")
     print(
         f"Collected {result.polls} server polls to: {Path(args.output)} "
         f"(stopped: {result.stop_reason})"

@@ -108,6 +108,7 @@ class CollectorExport:
         self._families: dict[str, Family] = {}
         self._identity_values: tuple[str, ...] = ()
         self.polls = 0
+        self._closed = False
 
     def prepare(self) -> None:
         """Take the textfile's slot; a clash is a usage error, before collecting."""
@@ -141,7 +142,14 @@ class CollectorExport:
             pass
 
     def close(self, stop_reason: str) -> None:
-        """Freeze with the reason the collector stopped; write the final textfile."""
+        """Freeze with the reason the collector stopped; write the final textfile.
+
+        Only the first call acts. Before ``identify``, it frees the slot
+        ``prepare`` took, and writes nothing.
+        """
+        if self._closed:
+            return
+        self._closed = True
         reason = stop_reason if stop_reason in STOP_REASONS else "error"
 
         def final() -> None:

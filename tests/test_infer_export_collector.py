@@ -220,6 +220,31 @@ def test_the_cli_exports_and_keeps_its_exit_code(tmp_path: Path) -> None:
     assert producers == {"collector-0"}
 
 
+def test_a_collection_that_fails_to_start_frees_its_slot(tmp_path: Path) -> None:
+    # The slot is taken before the process is looked up; a --pid that has
+    # exited must not leave the lock behind.
+    exited = subprocess.Popen([sys.executable, "-c", "pass"])
+    exited.wait(10)
+    metrics = tmp_path / "metrics"
+    metrics.mkdir()
+    code = infer_main(
+        [
+            "collect-server",
+            "--run-id",
+            "run-c",
+            "--pid",
+            str(exited.pid),
+            "--no-gpu",
+            "--output",
+            str(tmp_path / "server.jsonl"),
+            "--prometheus-textfile-dir",
+            str(metrics),
+        ]
+    )
+    assert code == ExitCode.USAGE
+    assert not list(metrics.glob("*.lock"))
+
+
 def test_settings_it_cannot_use_exit_2_before_collecting(tmp_path: Path) -> None:
     metrics = tmp_path / "metrics"
     metrics.mkdir()
