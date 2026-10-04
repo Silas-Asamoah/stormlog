@@ -96,6 +96,11 @@ def _kept_by_filter(span: RawSpan) -> bool:
 
 
 def test_t21_the_filter_gives_the_analysis_what_a_direct_receiver_would() -> None:
+    # What this checks: if the filter keeps exactly the spans whose resource
+    # has vLLM's attribute, #215's join gives what a direct receiver would.
+    # The filter is simulated here; a real collector evaluates it only in
+    # test_export_otelcol.py (opt-in, STORMLOG_OTELCOL) and the GPU
+    # validation, which also runs the backend's tail sampling on and off.
     vllm_resource = {"service.name": "vllm", VLLM_MODULE: "vllm.v1.engine"}
     vllm = [
         _raw(
