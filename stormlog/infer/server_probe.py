@@ -155,7 +155,9 @@ def probe_server(
         if route == SERVER_INFO:
             answers[route] = _server_info(send, origin, api_key, allow_remote, phase)
         else:
-            answers[route] = _ask(send, origin, route, api_key, BASIC_DEADLINE_SECONDS)
+            answer = _ask(send, origin, route, api_key, BASIC_DEADLINE_SECONDS)
+            # A model's root can be a URL with credentials in it.
+            answers[route] = replace(answer, body=_stripped(answer.body))
         down = answers[route].status == UNREACHABLE
     return ServerProbe(phase, mode, origin, probe.started_at_ns, answers)
 
@@ -200,6 +202,11 @@ def _server_info(
             return replace(answer, detail=detail)
         return answer
     return replace(answer, body=_redacted_server_info(answer.body, phase))
+
+
+def _stripped(body: Any) -> Any:
+    """An answer whose URLs, wherever they sit, lose credentials and query."""
+    return redact_vllm_config(body) if isinstance(body, dict) else body
 
 
 def _redacted_server_info(body: Any, phase: str) -> Any:

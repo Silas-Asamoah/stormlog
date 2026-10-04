@@ -82,6 +82,25 @@ def test_the_command_line_names_the_model_and_its_revision() -> None:
     assert module.model == "/m"
 
 
+def test_launch_values_lose_credentials_and_queries() -> None:
+    secret = "hf_plantedSecret0123456789"
+    launch = launch_arguments(
+        [
+            "vllm",
+            "serve",
+            f"https://user:{secret}@models.example/m",
+            f"--revision=main?token={secret}",
+            "--tokenizer",
+            f" https://u:{secret}@h/t",
+        ]
+    )
+    record = launch.to_record()
+    assert secret not in str(record)
+    assert record["model"] == "https://models.example/m"
+    assert record["revision"] == "main?<redacted>"
+    assert record["tokenizer"] == "https://h/t"
+
+
 def test_the_hub_cache_follows_the_servers_own_settings() -> None:
     assert hub_cache_dir({"HF_HUB_CACHE": "/c"}, None) == Path("/c")
     assert hub_cache_dir({"HF_HOME": "/h", "HOME": "/root"}, None) == Path("/h/hub")
