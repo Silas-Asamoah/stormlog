@@ -281,7 +281,7 @@ def test_a_bad_record_changes_nothing() -> None:
     for at, external in admitted:
         view.add({"epoch": "engine-1", "kind": "alias", "wall_ns": at,
                   "internal": f"i{external[-1]}", "external": external})  # fmt: skip
-    bad = [
+    bad: list[dict[str, Any]] = [
         {"epoch": "engine-1", "kind": "alias", "external": f"{VICTIM}0",
          "wall_ns": 100},
         {"epoch": "engine-1", "kind": "scheduled", "iteration": 7,
@@ -292,12 +292,16 @@ def test_a_bad_record_changes_nothing() -> None:
          "members": [{"internal": "i1", "sighting": "first"},
                      {"internal": "i2", "sighting": "first",
                       "cached_at_admission": "four"}]},
+        # A hello whose clock isn't an object raised AttributeError, which
+        # the poll didn't catch, so the rest of the poll was lost.
+        {"epoch": "engine-1", "kind": "hello", "producer": "p", "clock": "now"},
     ]  # fmt: skip
     for record in bad:
         with pytest.raises((KeyError, TypeError, ValueError)):
             view.add(record)
     assert view.admissions == admitted
     assert (view.step_starts, view.schedules, view.waits) == ([], {}, [])
+    assert view.producers == []
 
 
 def test_a_segment_rewritten_shorter_is_read_again(tmp_path: Path) -> None:
