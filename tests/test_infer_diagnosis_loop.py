@@ -624,13 +624,32 @@ def test_an_empty_step_does_not_hide_a_stall_between_two_steps() -> None:
 
 def test_a_streaming_request_waiting_for_input_is_not_ready() -> None:
     """A streaming-input request that ran out of input waits for more without
-    being scheduled: its gap is the client's, not a stall."""
+    being scheduled: its gap is the client's, not a stall. Its next turn
+    starts with a longer prompt."""
     records = _two_runs_of(
-        lambda index: member("s", scheduled=1, sighting="repeat", resumable=True),
+        lambda index: member(
+            "s",
+            scheduled=1,
+            sighting="repeat",
+            resumable=True,
+            prompt_tokens=8 if index < 30 else 16,
+        ),
         2_000 * MS,
     )
     signal = engine_loop_gap(records)
     assert signal.exceeds is False
+
+
+def test_a_streaming_request_mid_turn_is_ready() -> None:
+    """Within one turn a streaming-input request decodes like any other: a
+    host gap while it runs, its prompt unchanged, is a stall."""
+    records = _two_runs_of(
+        lambda index: member("s", scheduled=1, sighting="repeat", resumable=True),
+        1_300 * MS,
+    )
+    signal = engine_loop_gap(records)
+    assert signal.exceeds is True
+    assert signal.detail["locus"] == LOCUS_BETWEEN_STEPS
 
 
 def test_a_prefill_split_across_steps_is_ready_between_them() -> None:
