@@ -29,7 +29,7 @@ from __future__ import annotations
 import math
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from statistics import median
 from types import MappingProxyType
 from typing import Any
@@ -351,7 +351,7 @@ def find_stalls(
     ongoing = _ongoing(steps, now_wall_ns)
     if ongoing is not None:
         stalls.append(ongoing)
-    return [stall for stall in stalls if not _overlaps(stall, blocked)]
+    return [piece for stall in stalls for piece in _uncovered(stall, blocked)]
 
 
 class _Completions:
@@ -485,11 +485,31 @@ def _work_continues(last: Step, pending: Sequence[Step]) -> bool:
     return bool(ready(last))
 
 
-def _overlaps(stall: Stall, blocked: Sequence[Interval]) -> bool:
-    return any(
-        start < stall.end_wall_ns and stall.start_wall_ns < end
-        for start, end in blocked
-    )
+def _uncovered(stall: Stall, blocked: Sequence[Interval]) -> list[Stall]:
+    """What remains of a stall outside the blocked intervals, each remaining
+    stretch a stall of its own: work was ready there, whatever covered the
+    rest."""
+    pieces = [(stall.start_wall_ns, stall.end_wall_ns)]
+    for start, end in sorted(blocked):
+        pieces = [
+            part
+            for low, high in pieces
+            for part in ((low, min(high, start)), (max(low, end), high))
+            if part[1] > part[0]
+        ]
+    if pieces == [(stall.start_wall_ns, stall.end_wall_ns)]:
+        return [stall]
+    shift = stall.start_mono_ns - stall.start_wall_ns
+    return [
+        replace(
+            stall,
+            duration_ns=high - low,
+            start_mono_ns=low + shift,
+            start_wall_ns=low,
+            end_wall_ns=high,
+        )
+        for low, high in pieces
+    ]
 
 
 # ----------------------------------------------------------------- baseline
