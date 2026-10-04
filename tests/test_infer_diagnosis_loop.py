@@ -548,6 +548,50 @@ def test_a_long_prefill_step_is_not_measured_against_decode_steps() -> None:
     assert signal.detail["baseline"] == BASELINE_FLOOR
 
 
+def _prefills_in_decode(
+    steps: int, prefills: dict[int, tuple[int, int]]
+) -> list[dict[str, Any]]:
+    """A 5 ms decode loop in which the steps of ``prefills`` also schedule
+    (tokens, duration ns) of prefill."""
+    records: list[dict[str, Any]] = [hello("engine", 2600, 1)]
+    clock = T
+    for index in range(steps):
+        members = _decode("a", "b")
+        tokens, run = prefills.get(index, (0, CADENCE))
+        if tokens:
+            members[0]["scheduled"] = tokens - 1
+        records.append(scheduled(index, clock, members))
+        clock += run
+        records.append(completed(index, clock, [done("a"), done("b")]))
+    return _sequenced(records)
+
+
+@pytest.mark.parametrize("prefill_ms", [150, 60])
+def test_a_second_long_prefill_is_not_measured_against_decode_steps(
+    prefill_ms: int,
+) -> None:
+    """Two 2,048-token steps 2 s apart: the second finds the first, larger
+    than every decode step, in its window, but one step is no cadence. Only
+    enough earlier steps at least its size may set its limit."""
+    long = (2_048, prefill_ms * MS)
+    signal = engine_loop_gap(_prefills_in_decode(800, {100: long, 500: long}))
+    assert signal.exceeds is False
+    assert signal.detail["baseline"] == BASELINE_FLOOR
+
+
+@pytest.mark.parametrize(("slow_ms", "exceeds"), [(300, False), (700, True)])
+def test_larger_earlier_steps_set_the_limit_of_a_rarer_size(
+    slow_ms: int, exceeds: bool
+) -> None:
+    """Thirty 4,096-token steps of 60 ms, then one 2,048-token step: too few
+    of its own size, so the larger steps' cadence, 60 ms, sets its limit."""
+    prefills = {index: (4_096, 60 * MS) for index in range(10, 310, 10)}
+    prefills[330] = (2_048, slow_ms * MS)
+    signal = engine_loop_gap(_prefills_in_decode(400, prefills))
+    assert signal.exceeds is exceeds
+    assert signal.detail["baseline"] == "unmatched"
+
+
 def test_writer_errors_rising_between_heartbeats_give_no_verdict() -> None:
     """A failed write is cut back and counted as an error, not always as a
     drop, so rising errors also mean the records may be incomplete."""

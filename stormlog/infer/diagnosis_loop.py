@@ -499,8 +499,10 @@ def cadence_baseline(
 ) -> tuple[float | None, str]:
     """The median completion cadence of the busy steps that completed in the
     window before a stall: those of the stall's own work bucket when there
-    are enough, else all of them provided none is smaller than the stall's
-    bucket would need. Only earlier steps count, so the baseline is causal."""
+    are enough, else those of its bucket or larger when there are enough,
+    else none (the floor applies). A step is never measured against smaller
+    ones, so a long prefill is not judged by the decode cadence. Only
+    earlier steps count, so the baseline is causal."""
     window, _ = resolve_threshold(LOOP_BASELINE_WINDOW_NS, config.thresholds)
     matched_min, _ = resolve_threshold(LOOP_MATCHED_BIN_MIN_STEPS, config.thresholds)
     busy_min, _ = resolve_threshold(LOOP_MIN_BUSY_STEPS, config.thresholds)
@@ -511,9 +513,9 @@ def cadence_baseline(
     matched = [value for _end, size, value in recent if size == bucket]
     if len(matched) >= matched_min:
         return median(matched), BASELINE_MATCHED
-    supported = any(size >= bucket for _end, size, _value in recent)
-    if len(recent) >= busy_min and supported:
-        return median(value for _end, _size, value in recent), BASELINE_UNMATCHED
+    larger = [value for _end, size, value in recent if size >= bucket]
+    if len(larger) >= busy_min:
+        return median(larger), BASELINE_UNMATCHED
     return None, BASELINE_FLOOR
 
 
