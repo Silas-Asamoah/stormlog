@@ -198,6 +198,7 @@ def test_the_span_queue_holds_its_byte_bound_at_maximum_payloads() -> None:
     otlp = _otlp(content)
     tracemalloc.start()
     try:
+        baseline = tracemalloc.get_traced_memory()[0]
         for index in range(3000):
             text = f"{index}:" + "é" * 32_768
             record = {
@@ -209,11 +210,13 @@ def test_the_span_queue_holds_its_byte_bound_at_maximum_payloads() -> None:
                 "error_message": text,
             }
             otlp.observe(record, otlp.request_extras(text, text, RuntimeError(text)))
-        _current, peak = tracemalloc.get_traced_memory()
+        current, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
     stats = otlp.exporter.queue.stats()
     assert stats.dropped_full > 0 and stats.depth_bytes <= SPAN_QUEUE_BYTES
-    # The documented overhead factor for Python objects over the estimate.
-    assert peak < 3 * SPAN_QUEUE_BYTES
+    # The queue charges the memory its spans hold, so its byte bound is a
+    # bound on memory: what it holds, and the peak while it filled.
+    assert current - baseline <= 1.05 * stats.depth_bytes
+    assert peak - baseline < 1.1 * SPAN_QUEUE_BYTES
     otlp.close(0.1)

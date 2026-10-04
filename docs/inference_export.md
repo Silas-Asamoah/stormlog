@@ -587,9 +587,12 @@ samples:
 | Renders | at most 3 alive, so 3 M, and 3.25 M at the peak while the next is built |
 | Textfile | shares the render it writes; one write at a time |
 | Endpoint | 4 connections, each holding at most 16 KiB of request head |
+| Span queue | 2,048 spans or 8 MiB, counted as the memory each queued span holds |
+| Span batch | its spans encoded, at most 4 MiB; the request built from them; a gzip copy of it while it is sent; a response read up to 64 KiB |
 
 That is at most about 8 MiB + 4.25 M + 350 B × S: about 15 MiB for 20 cases,
-and about 93 MiB at the default limits (16 MiB, 50,000 samples).
+and about 93 MiB at the default limits (16 MiB, 50,000 samples). Span
+export adds at most about 20 MiB for the queue and the batch being sent.
 
 `scripts/benchmark_export_observe.py` reports the per-record cost on your
 machine. Its numbers depend heavily on machine load, and they are not a
