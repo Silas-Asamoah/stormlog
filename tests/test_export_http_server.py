@@ -79,21 +79,26 @@ def test_other_paths_are_not_found(server: MetricsServer) -> None:
     assert server.stats.not_found == 1
 
 
-def test_connections_past_the_limit_are_refused_before_a_thread_starts(
-    server: MetricsServer,
-) -> None:
-    idle = [_idle(server), _idle(server)]  # send nothing, hold both slots
+def test_connections_past_the_limit_are_refused_before_a_thread_starts() -> None:
+    # A long deadline, so the idle pair still holds both slots however late
+    # the third connection comes on a loaded machine.
+    metrics = MetricsServer(
+        "127.0.0.1:0", RenderCache(lambda: BODY), max_connections=2, deadline=30
+    )
+    metrics.start()
+    idle = [_idle(metrics), _idle(metrics)]  # send nothing, hold both slots
     try:
-        assert _wait_for(lambda: server.stats.active == 2)
+        assert _wait_for(lambda: metrics.stats.active == 2)
         threads_before = threading.active_count()
-        refused = _idle(server)
+        refused = _idle(metrics)
         assert refused.recv(1024).startswith(b"HTTP/1.1 503")
         refused.close()
-        assert server.stats.rejected_busy == 1
+        assert metrics.stats.rejected_busy == 1
         assert threading.active_count() == threads_before
     finally:
         for sock in idle:
             sock.close()
+        metrics.stop()
 
 
 def test_idle_connections_are_cut_at_the_deadline_and_free_their_slots(
@@ -276,8 +281,10 @@ def test_a_stopped_watchdog_costs_no_slot(server: MetricsServer) -> None:
         except OSError:
             pass
         sock.close()
-    assert _wait_for(lambda: server.stats.errors == 4)
-    assert server.stats.rejected_busy == 0 and server.stats.active == 0
+    # The first request's handler ends on its own thread, when it sees the
+    # client close, so its slot comes back in its own time.
+    assert _wait_for(lambda: server.stats.errors == 4 and server.stats.active == 0)
+    assert server.stats.rejected_busy == 0
 
 
 class _NeverFires:
