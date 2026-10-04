@@ -285,8 +285,8 @@ class IncidentStore:
         self.limits = limits or StoreLimits()
         self.budget = DiskBudget(self.limits, used_bytes=self._scan_bytes())
         self._sequence = 0
-        # Deletions a reader held back: path -> (its bundle, bytes it frees).
-        self._deferred: dict[Path, tuple[Path, int]] = {}
+        # Deletions a reader held back: the path, and the bundle it is in.
+        self._deferred: dict[Path, Path] = {}
 
     # -------------------------------------------------------------- creation
 
@@ -407,7 +407,7 @@ class IncidentStore:
     def _remove_unnamed(self, bundle: Path, manifest: BundleManifest) -> int:
         removed = 0
         for stale in _generation_dirs(bundle):
-            if stale.name != manifest.current and self._try_delete(stale, bundle, 0):
+            if stale.name != manifest.current and self._try_delete(stale, bundle):
                 removed += 1
         return removed
 
@@ -436,7 +436,7 @@ class IncidentStore:
                 continue
             size = _payload_bytes(path, seen=set())
             count -= 1  # deferred or not, it is on its way out
-            if self._try_delete(path, path, size):
+            if self._try_delete(path, path):
                 pruned.append(PrunedBundle(manifest.incident_id, reason, size))
         return pruned
 
@@ -448,7 +448,9 @@ class IncidentStore:
         if count > self.limits.max_incidents:
             return "max_incidents"
         # Bytes a deferred deletion will free are already on their way out.
-        pending = sum(size for _bundle, size in self._deferred.values())
+        pending = sum(
+            _freed_by(path, bundle) for path, bundle in self._deferred.items()
+        )
         if self.budget.used_bytes - pending > self.limits.max_total_bytes:
             return "max_total_bytes"
         return None
@@ -456,8 +458,8 @@ class IncidentStore:
     def reclaim_deferred(self) -> int:
         """Retry deletions a reader held back; return how many succeeded."""
         done = 0
-        for path, (bundle, size) in sorted(self._deferred.items()):
-            if self._try_delete(path, bundle, size):
+        for path, bundle in sorted(self._deferred.items()):
+            if path in self._deferred and self._try_delete(path, bundle):
                 done += 1
         return done
 
@@ -468,27 +470,33 @@ class IncidentStore:
     # --------------------------------------------------------------- helpers
 
     def _reclaim_old_generations(self, bundle: Path, *, keep: int) -> None:
-        kept = _inodes(bundle / f"gen-{keep}")
         for stale in _generation_dirs(bundle):
             if stale.name != f"gen-{keep}":
-                # Hard links into the kept generation free nothing.
-                size = bytes_on_disk([stale], seen=set(kept))
-                self._try_delete(stale, bundle, size)
+                self._try_delete(stale, bundle)
 
-    def _try_delete(self, path: Path, bundle: Path, size: int) -> bool:
-        """Delete ``path`` under the bundle's exclusive lock, freeing ``size``.
+    def _try_delete(self, path: Path, bundle: Path) -> bool:
+        """Delete ``path`` (a generation, or the whole bundle) under the
+        bundle's exclusive lock, and forget exactly the bytes that freed.
 
         While a reader holds the lock the deletion is deferred, and the bytes
-        stay charged until :meth:`reclaim_deferred` succeeds.
+        stay charged until :meth:`reclaim_deferred` succeeds. What was freed
+        is measured under the lock, just before the deletion: a hard link
+        another generation keeps frees nothing, and a path already gone
+        frees nothing, so no byte is ever forgotten twice.
         """
         try:
             with _exclusive(bundle):
+                freed = _freed_by(path, bundle)
                 shutil.rmtree(path, ignore_errors=True)
         except BlockingIOError:
-            self._deferred[path] = (bundle, size)
+            self._deferred[path] = bundle
             return False
         self._deferred.pop(path, None)
-        self.budget.forget(size)
+        if path == bundle:
+            # Anything deferred inside the bundle went with it.
+            for inside in [p for p in self._deferred if bundle in p.parents]:
+                del self._deferred[inside]
+        self.budget.forget(freed)
         return True
 
     def _bundle_dirs(self) -> list[Path]:
@@ -635,14 +643,20 @@ def _payload_bytes(bundle: Path, *, seen: set[tuple[int, int]]) -> int:
     return bytes_on_disk(_generation_dirs(bundle), seen=seen)
 
 
+def _freed_by(path: Path, bundle: Path) -> int:
+    """The bytes deleting ``path`` would free: its files no other generation
+    of the bundle links to; nothing when it is already gone."""
+    if not path.exists():
+        return 0
+    if path == bundle:
+        return _payload_bytes(bundle, seen=set())
+    seen: set[tuple[int, int]] = set()
+    bytes_on_disk([g for g in _generation_dirs(bundle) if g != path], seen=seen)
+    return bytes_on_disk([path], seen=seen)
+
+
 def _same_filesystem(source: Path, directory: Path) -> bool:
     return source.stat().st_dev == directory.stat().st_dev
-
-
-def _inodes(directory: Path) -> set[tuple[int, int]]:
-    seen: set[tuple[int, int]] = set()
-    bytes_on_disk([directory], seen=seen)
-    return seen
 
 
 @contextlib.contextmanager

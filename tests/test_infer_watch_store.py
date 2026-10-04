@@ -349,6 +349,58 @@ def test_a_bundle_being_read_is_pruned_once_the_reader_leaves(
     assert not bundle.exists()
 
 
+def _assert_charged_as_held(store: IncidentStore) -> None:
+    assert store.budget.used_bytes == store._scan_bytes()
+
+
+@pytest.mark.parametrize("reader_at_prune", [False, True])
+def test_a_deferred_generation_is_never_forgotten_twice(
+    tmp_path: Path, reader_at_prune: bool
+) -> None:
+    """A reader pins A while its finalizer publishes gen-1, so gen-0's
+    deletion is deferred; retention then removes all of A. Before, the
+    deferred gen-0 was forgotten again, and the store held more than its cap."""
+    store = IncidentStore(tmp_path, _limits(max_incidents=4))
+    base = time.time_ns()
+    first = _gen0(store, b"A" * 20_000, now_ns=base)
+    bundle = tmp_path / "incidents" / first
+    entered, leave = threading.Event(), threading.Event()
+
+    def reader() -> None:
+        with open_incident_bundle(bundle):
+            entered.set()
+            leave.wait(5)
+
+    thread = threading.Thread(target=reader)
+    thread.start()
+    entered.wait(5)
+    try:
+        writer = store.next_generation(first, 2 * KIB)
+        assert writer is not None
+        with writer.file("incident.jsonl") as out:
+            out.write(b"a" * 1000)
+        writer.publish(finalized=True)
+        assert store.deferred == 1
+        _assert_charged_as_held(store)
+        if not reader_at_prune:
+            leave.set()
+            thread.join(5)
+        for offset in range(4):
+            _gen0(store, b"o" * 5_000, now_ns=base + 1 + offset)
+        _assert_charged_as_held(store)
+        pruned = store.prune(now_ns=base + 10)
+        assert [p.incident_id for p in pruned] == ([] if reader_at_prune else [first])
+        _assert_charged_as_held(store)
+    finally:
+        leave.set()
+        thread.join(5)
+    store.reclaim_deferred()
+    _assert_charged_as_held(store)
+    assert not bundle.exists() and store.deferred == 0
+    store.reclaim_deferred()  # again: nothing left to forget
+    _assert_charged_as_held(store)
+
+
 def test_manifest_parsing_rejects_foreign_and_malformed_documents() -> None:
     with pytest.raises(ValueError, match="not an incident bundle"):
         BundleManifest.from_dict({"format": "other"})
