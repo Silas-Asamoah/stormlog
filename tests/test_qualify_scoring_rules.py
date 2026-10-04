@@ -359,8 +359,8 @@ def test_a_finding_off_the_clock_never_takes_a_flagged_run_out() -> None:
 
 def test_a_fault_claim_without_a_window_in_a_negative_run() -> None:
     # A claim the scorer can't place in time counts as false in a negative
-    # run that injected nothing it could be about; in one that also held a
-    # fault or capture, it is reported as unplaced instead.
+    # run, unless an injected episode of the run names its kind: then it
+    # may be about that episode, and it is reported as unplaced instead.
     from tests.test_qualify_scoring import null_run
 
     windowless = finding("s", "host_stall", 1, component="engine_core", window=None)
@@ -372,9 +372,35 @@ def test_a_fault_claim_without_a_window_in_a_negative_run() -> None:
             action_onset_ns=220 * S, effect_onset_ns=220 * S, effect_end_ns=260 * S
         ),
     )
-    mixed = run_of([episode(), late_null], diagnosis(windowless))
-    assert mixed.false_claims == ()
-    assert mixed.problems == ("run q221-run: 1 fault claims without a window",)
+    named = finding("k", KV, 1, window=None)
+    mixed = run_of([episode(), late_null], diagnosis(windowless, named))
+    assert mixed.false_claims == (windowless["id"],)
+    assert mixed.problems == (
+        "run q221-run: 1 fault claims without a window,"
+        " of kinds its injected episodes name",
+    )
+
+
+def test_windowless_claims_count_in_the_planned_negative_runs() -> None:
+    # rev-220-b's delta 2, E4: every planned negative run also injects a
+    # fault, so a windowless claim was never placed: 60 runs, each with a
+    # windowless host-stall claim that no F2 label names, passed 0 of 60.
+    from tests.test_qualify_scoring import null_run
+
+    claim = finding("s", "host_stall", 1, component="engine_core", window=None)
+    late_null = replace(
+        null_run(),
+        times=Times(
+            action_onset_ns=220 * S, effect_onset_ns=220 * S, effect_end_ns=260 * S
+        ),
+    )
+    runs = [
+        run_of([episode(), late_null], diagnosis(claim), run_id=f"p{i}")
+        for i in range(60)
+    ]
+    summary = summarize(runs, CONFIG)
+    assert summary.negative_runs == 60 and summary.false_positive_runs == 60
+    assert not summary.fpr_passes
 
 
 # ------------------------------------------------------------------ pinned by mutation

@@ -618,12 +618,7 @@ def score_run(
         for finding in assigned[injection.episode_id]
     }
     placement = _Placement(
-        exposure,
-        run.measured,
-        run.clock_domain,
-        unplaceable_counts=not any(
-            i.cause_class in INJECTED_CLASSES for i in injections
-        ),
+        exposure, run.measured, run.clock_domain, _injected_kinds(injections)
     )
     claims = _negative_claims(findings, elsewhere, placement, unit, config)
     problems += placement.unplaced_problem(run.run_id, findings, elsewhere)
@@ -804,7 +799,7 @@ def _negative_claims(
         for finding in findings
         if finding.scored_fault_claim
         and finding.id not in elsewhere
-        and placement.placed(finding.window)
+        and placement.placed(finding)
         and not _allowed(finding, unit)
         and not (
             finding.id in qualifying and is_neutral(finding, qualifying, unit, config)
@@ -818,19 +813,21 @@ class _Placement:
     run's measured window and placed when at least half of what is left
     lies in the exposure, wherever it starts: a claim over the whole run,
     from its priming on, is the plainest false positive there is. A claim
-    with no window is placed only when the run injected nothing it could be
-    about; otherwise it is reported as unplaced. A window on another clock
-    than the run's can't be compared with the exposure, so it is placed:
-    failing closed, it counts."""
+    with no window is placed unless one of the run's injected episodes
+    names its kind (expects it, declares it secondary or allows it), when
+    it is reported as unplaced. A window on another clock than the run's
+    can't be compared with the exposure, so it is placed: failing closed,
+    it counts."""
 
     exposure: Sequence[Interval]
     measured: Interval
     clock_domain: str | None
-    unplaceable_counts: bool = False
+    named_kinds: frozenset[str] = frozenset()
 
-    def placed(self, window: Window | None) -> bool:
+    def placed(self, finding: FindingView) -> bool:
+        window = finding.window
         if window is None:
-            return self.unplaceable_counts
+            return finding.kind not in self.named_kinds
         if not window.on_clock(self.clock_domain):
             return True
         if not self.exposure:
@@ -852,16 +849,33 @@ class _Placement:
         self, run_id: str, findings: Sequence[FindingView], elsewhere: set[str]
     ) -> tuple[str, ...]:
         """How many fault claims with no window this run can't place."""
-        if self.unplaceable_counts:
-            return ()
         count = sum(
             1
             for f in findings
-            if f.scored_fault_claim and f.window is None and f.id not in elsewhere
+            if f.scored_fault_claim
+            and f.window is None
+            and f.id not in elsewhere
+            and f.kind in self.named_kinds
         )
         return (
-            (f"run {run_id}: {count} fault claims without a window",) if count else ()
+            (
+                f"run {run_id}: {count} fault claims without a window,"
+                " of kinds its injected episodes name",
+            )
+            if count
+            else ()
         )
+
+
+def _injected_kinds(injections: Sequence[Injection]) -> frozenset[str]:
+    """The kinds the run's injected episodes name: what they expect, their
+    declared secondaries and what they allow."""
+    return frozenset(
+        label.kind
+        for injection in injections
+        if injection.cause_class in INJECTED_CLASSES
+        for label in (*injection.expects, *injection.secondary, *injection.allows)
+    )
 
 
 # ------------------------------------------------------------------ a campaign
