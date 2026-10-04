@@ -59,6 +59,12 @@ the flaky benchmark memory gates
   `fake_collector.py`, which stores spans durably before answering and
   reports raw and unique counts. See "Deployment examples" in
   `docs/inference_export.md`.
+- `stormlog infer collect-server` reports its own health to Prometheus with
+  the same `--prometheus-*` flags (#220): polls, sample states, whether it is
+  running and why it stopped, with the identity it confirmed (host, boot,
+  process, GPU or MIG instance, replica, group, rank) as labels on
+  `stormlog_collector_info`. Memory values stay in its output. Exit codes are
+  unchanged.
 - `--trace-context {off,preserve-engine,follow-sampling}` on `stormlog infer
   profile` sends a W3C `traceparent` with each request and records its
   `trace_id` and `span_id` on `infer.request`; off by default.
