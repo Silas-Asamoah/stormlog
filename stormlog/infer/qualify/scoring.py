@@ -59,6 +59,7 @@ from .vocabulary import (
     CLAIM_OBSERVATION,
     EDGE_TABLE_VERSION,
     EDGES,
+    NOT_ASSESSED_COMPONENTS,
     PRIMARY,
     SECONDARY,
     Edge,
@@ -472,18 +473,44 @@ def _miss(
     same = [f for f in ranked if f.kind == expectation.kind]
     if same:
         return _wrong_finding(same)
-    status = (coverage.get(expectation.kind) or {}).get("status")
-    return MISS_NO_FINDING if status == "assessed" else MISS_COVERAGE_GAP
+    entry = coverage.get(expectation.kind) or {}
+    covered = assessed_at(entry, expectation.component)
+    return MISS_NO_FINDING if covered else MISS_COVERAGE_GAP
+
+
+def assessed_at(entry: Mapping[str, Any], component: str) -> bool:
+    """Whether #218 assessed a kind at ``component``: fully, or partly only
+    for reasons that exclude other components, with every subject assessed."""
+    status = entry.get("status")
+    if status == "assessed":
+        return True
+    if status != "partial" or not _subjects_assessed(entry):
+        return False
+    return _excluded_elsewhere(entry.get("reasons") or (), component)
+
+
+def _subjects_assessed(entry: Mapping[str, Any]) -> bool:
+    subjects = (entry.get("by_subject") or {}).values()
+    return all(subject.get("status") == "assessed" for subject in subjects)
+
+
+def _excluded_elsewhere(reasons: Sequence[str], component: str) -> bool:
+    """Some reason excludes components, and none excludes ``component``."""
+    known = [
+        NOT_ASSESSED_COMPONENTS[r] for r in reasons if r in NOT_ASSESSED_COMPONENTS
+    ]
+    return bool(known) and not any(component in excluded for excluded in known)
 
 
 def _wrong_finding(same: Sequence[FindingView]) -> str:
-    """Why findings of the label's kind did not match: ineligible, a
-    secondary, or a mismatched cause, severity or location."""
-    if any(not finding.eligible for finding in same):
-        return MISS_INELIGIBLE
-    if any(finding.role == SECONDARY for finding in same):
+    """Why findings of the label's kind did not match: an eligible primary
+    with the wrong cause, severity or location; else only secondaries; else
+    #218 made them ineligible."""
+    if any(f.role == PRIMARY and f.eligible for f in same):
+        return MISS_MISMATCH
+    if all(f.role == SECONDARY for f in same):
         return MISS_SECONDARY_ONLY
-    return MISS_MISMATCH
+    return MISS_INELIGIBLE
 
 
 # ------------------------------------------------------------------ a run
@@ -937,6 +964,7 @@ __all__ = [
     "Stratum",
     "Summary",
     "Window",
+    "assessed_at",
     "assign_findings",
     "coverage_of",
     "findings_of",

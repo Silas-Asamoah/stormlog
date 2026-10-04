@@ -364,6 +364,32 @@ def test_no_finding_is_a_coverage_gap_when_the_kind_was_not_assessed() -> None:
     assert (assessed.miss, unsupported.miss) == (MISS_NO_FINDING, MISS_COVERAGE_GAP)
 
 
+def test_a_mismatched_primary_outweighs_a_secondary_in_the_miss_label() -> None:
+    # A primary of the label's kind at the wrong severity, plus the same kind
+    # as a secondary: the label is mismatch, since the episode doesn't have
+    # the kind only as a secondary.
+    weak = finding("a", KV, 1, severity="info")
+    secondary = finding("b", KV, 2, role="secondary")
+    score = score_episode(episode(), diagnosis(weak, secondary), CONFIG)
+    assert score.miss == MISS_MISMATCH
+
+
+def _real_coverage(label: Expectation) -> str | None:
+    real = json.loads(REAL_218.read_text(encoding="utf-8"))
+    nothing = {
+        "payload": {"findings_detail": {}, "coverage": real["payload"]["coverage"]}
+    }
+    return score_episode(replace(episode(), expects=(label,)), nothing, CONFIG).miss
+
+
+def test_a_kind_assessed_at_the_labels_component_is_no_coverage_gap() -> None:
+    # #218 PR 1b reports host_stall as partial: engine_core and worker aren't
+    # assessed by this version, but api_server is. An F4b miss is then
+    # no_finding; an F4a miss is a coverage gap.
+    assert _real_coverage(Expectation("host_stall", "api_server")) == MISS_NO_FINDING
+    assert _real_coverage(Expectation("host_stall", "engine_core")) == MISS_COVERAGE_GAP
+
+
 @pytest.mark.parametrize(
     ("window", "resolution", "qualifies"),
     [
