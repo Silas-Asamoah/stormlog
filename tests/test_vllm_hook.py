@@ -871,6 +871,51 @@ def test_the_queue_bytes_bound_its_memory(tmp_path: Path) -> None:
     assert held <= limits.queue_bytes + 200 * queued
 
 
+def _counting_bodies(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Record every set of fields the writer serializes."""
+    serialized: list[object] = []
+    body = EpochWriter._body
+
+    def counting(writer: EpochWriter, fields: dict[str, Any]) -> str | None:
+        serialized.append(fields)
+        return body(writer, fields)
+
+    monkeypatch.setattr(EpochWriter, "_body", counting)
+    return serialized
+
+
+def test_a_record_the_queue_cannot_take_is_never_serialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serialized = _counting_bodies(monkeypatch)
+    limits = WriterLimits(queue_records=2, heartbeat_seconds=3600)
+    writer = EpochWriter(tmp_path, "engine", limits=limits)
+    with writer._condition:  # the writer thread cannot take any
+        for index in range(5):
+            writer.emit("alias", {"internal": f"r{index}"})
+    writer.close()
+    writer.emit("alias", {"internal": "after close"})
+
+    # Only the two records that fit were serialized; the rest cost nothing.
+    assert serialized == [{"internal": "r0"}, {"internal": "r1"}]
+    assert writer._status()["dropped"] == {"alias": 4}
+
+
+def test_a_record_after_the_disk_cap_is_never_serialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serialized = _counting_bodies(monkeypatch)
+    writer = EpochWriter(tmp_path, "engine", limits=WriterLimits(max_bytes=100))
+    writer.emit("alias", {"internal": "x" * 200})  # its line passes the cap
+    _wait(lambda: writer._status()["capped"])
+    writer.emit("alias", {"internal": "y"})
+    writer.close()
+
+    assert serialized == [{"internal": "x" * 200}]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert status["dropped"]["alias"] == 2
+
+
 def _engine_step(writer: EpochWriter, members: int) -> Callable[[], None]:
     """One scheduler step of ``members`` decoding requests, through the recorder."""
     ids = [

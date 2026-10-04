@@ -105,9 +105,13 @@ class EpochWriter:
     def emit(self, kind: str, fields: dict[str, Any]) -> None:
         """Queue one record; drop and count it when it does not fit.
 
-        ``fields`` are serialized now. They must not reuse the common fields'
-        names, which the writer thread adds with the record's sequence number.
+        A record the queue cannot take at any size is dropped unserialized, so
+        a backlog costs the caller no encoding. The rest are serialized now.
+        ``fields`` must not reuse the common fields' names, which the writer
+        thread adds with the record's sequence number.
         """
+        if self._refused(kind):
+            return
         body = self._body(fields)
         if body is None:
             return
@@ -186,6 +190,18 @@ class EpochWriter:
                 batch.append(self._queue.popleft())
             closing = self._closing and not self._queue
             return batch, closing
+
+    def _refused(self, kind: str) -> bool:
+        """Drop and count a record that no size would let into the queue."""
+        with self._condition:
+            refused = (
+                self._closing
+                or self._counters.capped
+                or len(self._queue) >= self.limits.queue_records
+            )
+            if refused:
+                self._counters.dropped[kind] += 1
+            return refused
 
     def _body(self, fields: dict[str, Any]) -> str | None:
         """The fields as one JSON object, or None and an error counted."""
