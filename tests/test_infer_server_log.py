@@ -92,3 +92,36 @@ def test_a_log_without_a_start_up_says_so() -> None:
     assert facts["startups"] == 0
     assert facts["attention_backend"] is None
     assert facts["issues"] == ["no vLLM V1 engine start-up in the log"]
+
+
+# As vLLM 0.30.0's Model Runner V2 logged a start-up on the A30 box: the
+# capture progress bars name only the mode, and a first capture for memory
+# profiling comes before the KV cache is sized.
+MODEL_RUNNER_V2 = [
+    "(EngineCore pid=739) INFO 10-03 22:00:51 [core.py:123] Initializing a V1 LLM "
+    "engine (v0.30.0) with config: model='/home/.cache/huggingface/hub/x'",
+    "(EngineCore pid=739) INFO 10-03 22:00:55 [cuda.py:538] Using FLASH_ATTN "
+    "attention backend out of potential backends: ['FLASH_ATTN', 'FLASHINFER', "
+    "'TRITON_ATTN', 'FLEX_ATTENTION'].",
+    "(EngineCore pid=739) Capturing CUDA graphs (PIECEWISE):   0%|          | 0/51 "
+    "[00:00<?, ?it/s]\rCapturing CUDA graphs (PIECEWISE):   4%|▍         | 2/51",
+    "(EngineCore pid=739) Capturing CUDA graphs (FULL):   0%|          | 0/2 "
+    "[00:00<?, ?it/s]\rCapturing CUDA graphs (FULL): 100%|██████████| 2/2",
+    "(EngineCore pid=739) INFO 10-03 22:01:04 [model_runner.py:1066] Graph "
+    "capturing finished in 2 secs, took 0.25 GiB",
+    "(EngineCore pid=739) INFO 10-03 22:01:04 [kv_cache_utils.py:2395] GPU KV cache "
+    "size: 890,960 tokens, Maximum concurrency for 4,096 tokens per request: 217.52x",
+    "(EngineCore pid=739) Capturing CUDA graphs (PIECEWISE):   0%|          | 0/51",
+    "(EngineCore pid=739) Capturing CUDA graphs (FULL):   0%|          | 0/35",
+    "(EngineCore pid=739) INFO 10-03 22:01:09 [model_runner.py:1066] Graph "
+    "capturing finished in 3 secs, took 0.18 GiB",
+]
+
+
+def test_model_runner_v2_captures_are_read_and_the_last_one_counts() -> None:
+    facts = parse_server_log(MODEL_RUNNER_V2)
+    assert facts["attention_backend"] == "FLASH_ATTN"
+    assert facts["kv_cache_size_tokens"] == 890_960
+    assert facts["cudagraph_captures"] == ["FULL", "PIECEWISE"]
+    # The first capture only measured memory; the second is the one kept.
+    assert facts["graph_capture_gib"] == 0.18

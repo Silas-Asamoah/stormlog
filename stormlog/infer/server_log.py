@@ -35,7 +35,10 @@ _KV_CACHE = re.compile(
 _BLOCKS_OVERRIDE = re.compile(
     r"Overriding num_gpu_blocks=(\d+) with num_gpu_blocks_override=(\d+)"
 )
-_CAPTURE = re.compile(r"Capturing CUDA graphs \((decode|mixed prefill-decode), (\w+)\)")
+# gpu_model_runner.py names the batch kind; Model Runner V2 only the mode.
+_CAPTURE = re.compile(
+    r"Capturing CUDA graphs \((?:(decode|mixed prefill-decode), )?(\w+)\)"
+)
 _CAPTURED = re.compile(r"Graph capturing finished in (\d+) secs, took ([\d.]+) GiB")
 
 
@@ -86,7 +89,8 @@ def _read_line(startup: _Startup, line: str) -> None:
     elif match := _BLOCKS_OVERRIDE.search(line):
         startup.blocks_override.append(int(match.group(2)))
     elif match := _CAPTURE.search(line):
-        startup.captures.append(f"{match.group(1)}:{match.group(2)}")
+        kind, mode = match.group(1), match.group(2)
+        startup.captures.append(f"{kind}:{mode}" if kind else mode)
     elif match := _CAPTURED.search(line):
         startup.capture_seconds.append(int(match.group(1)))
         startup.capture_gib.append(float(match.group(2)))
@@ -104,7 +108,9 @@ def _record(startup: _Startup, startups: int) -> dict[str, Any]:
         "max_concurrency": _one(startup.max_concurrency, "max_concurrency", issues),
         "num_gpu_blocks_override": _one(startup.blocks_override, "override", issues),
         "cudagraph_captures": sorted(set(startup.captures)),
-        "graph_capture_gib": max(startup.capture_gib, default=None),
+        # With CUDA graph memory profiling on (vLLM's default), a first
+        # capture only measures memory; the last one is what the engine kept.
+        "graph_capture_gib": startup.capture_gib[-1] if startup.capture_gib else None,
     }
     if startups == 0:
         issues.append("no vLLM V1 engine start-up in the log")

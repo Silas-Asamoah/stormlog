@@ -278,8 +278,8 @@ can read the server's log:
 | `attention_backend`, `attention_candidates` | `Using FLASH_ATTN attention backend out of potential backends: [...]`, or `Using ... backend.` for a backend chosen by name |
 | `kv_cache_size_tokens`, `max_concurrency` | `GPU KV cache size: N tokens, Maximum concurrency for M tokens per request: Xx` |
 | `num_gpu_blocks_override` | `Overriding num_gpu_blocks=... with num_gpu_blocks_override=N` |
-| `cudagraph_captures` | `Capturing CUDA graphs (decode, FULL)` and the like, as `decode:FULL` |
-| `graph_capture_gib` | `Graph capturing finished in N secs, took X GiB` |
+| `cudagraph_captures` | `Capturing CUDA graphs (decode, FULL)` and the like, as `decode:FULL`; Model Runner V2 names only the mode, `Capturing CUDA graphs (FULL)`, kept as `FULL` |
+| `graph_capture_gib` | `Graph capturing finished in N secs, took X GiB`, from the last capture: with CUDA graph memory profiling on (vLLM's default) a first capture only measures memory |
 
 The patterns are vLLM 0.30.0's own log statements (`patterns:
 vllm_0_30_0`); another version may word them differently, and then a field
