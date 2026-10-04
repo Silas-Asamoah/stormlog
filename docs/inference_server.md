@@ -176,7 +176,7 @@ Every field has a class:
 | `identity` | Makes the runs incompatible, unless it is allowed |
 | `launch` | Is a covariate: ports, instance IDs, cache directories, which GPU, the workload's seed |
 | `observation` | Which observers ran: allowed in `overhead` and `incremental` comparisons only |
-| `label` | Is ignored: names, and credentials such as `hf_token`, which say who fetched the weights, not what ran |
+| `label` | Is ignored: names, such as the shared-memory buffer name vLLM draws at random for each launch (`VLLM_OBJECT_STORAGE_SHM_BUFFER_NAME`), and credentials such as `hf_token`, which say who fetched the weights, not what ran |
 
 The classes of vLLM's configuration are a versioned table,
 `config_classes_v1`, keyed by JSON pointer into `/server_info`'s
