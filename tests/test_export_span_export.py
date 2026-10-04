@@ -122,8 +122,8 @@ def test_retryable_answers_are_retried_and_counted() -> None:
     replies = [Reply(503), Reply(502), Reply()]
     with running(replies) as collector:
         exporter = _exporter(collector.url)
-        exporter.start()
         _offer(exporter, 3)
+        exporter.start()
         assert _wait(lambda: len(collector.received) == 3)
         exporter.close(2.0)
     summary = exporter.summary()
@@ -143,8 +143,8 @@ def test_a_retry_after_beyond_the_budget_ends_the_batch() -> None:
     replies = [Reply(429, headers=(("Retry-After", "3600"),))]
     with running(replies) as collector:
         exporter = _exporter(collector.url)
-        exporter.start()
         _offer(exporter, 2)
+        exporter.start()
         assert _wait(lambda: exporter.accounting()["refused"] == {"throttled": 2})
         exporter.close(1.0)
     assert len(collector.received) == 1
@@ -262,8 +262,10 @@ def test_the_breaker_opens_probes_and_closes() -> None:
 def test_close_cuts_a_stuck_send_and_counts_it_unknown() -> None:
     with running([Reply(action=SILENT)]) as collector:
         exporter = _exporter(collector.url, attempt_seconds=30.0)
-        exporter.start()
+        # Offered before the worker starts, so all five go in one batch
+        # however long this thread is held up between offers.
         _offer(exporter, 5)
+        exporter.start()
         assert _wait(lambda: bool(collector.received))
         _offer(exporter, 2, start=5)
         started = time.monotonic()
@@ -410,8 +412,8 @@ def test_a_sink_that_raises_leaves_its_batch_unknown() -> None:
         to_span=_span,
         schedule_delay=0.0,
     )
-    exporter.start()
     _offer(exporter, 2)
+    exporter.start()
     assert _wait(lambda: exporter.accounting()["unknown"] == {"send_failed": 2})
     exporter.close(0.5)
     assert exporter.summary()["internal_errors"] == {"send": 1}
@@ -432,8 +434,8 @@ def _file_exporter(path: Path) -> SpanExporter[int]:
 def test_the_file_sink_writes_otlp_json_lines(tmp_path: Path) -> None:
     path = tmp_path / "spans.jsonl"
     exporter = _file_exporter(path)
-    exporter.start()
     _offer(exporter, 10)
+    exporter.start()
     exporter.close(2.0)
     assert exporter.accounting()["exported"] == 10
     lines = path.read_text().splitlines()
@@ -476,8 +478,8 @@ def test_a_line_left_half_written_is_unknown_not_dropped(
     monkeypatch.setattr(filesink, "_write", half_then_full)
     monkeypatch.setattr(filesink, "_truncate", no_truncate)
     exporter = _file_exporter(tmp_path / "spans.jsonl")
-    exporter.start()
     _offer(exporter, 4)
+    exporter.start()
     exporter.close(2.0)
     accounting = exporter.accounting()
     assert accounting["unknown"] == {"file_partial": 4} and _balanced(accounting)
