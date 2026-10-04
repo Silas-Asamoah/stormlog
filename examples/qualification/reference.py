@@ -33,6 +33,8 @@ from stormlog.infer.vllm_metrics import (
 )
 
 SEGMENT = re.compile(r"^(\d{6})\.jsonl(\.part)?$")
+# The hook's per-epoch HMAC key behind the import's foreign-ID pseudonyms.
+PSEUDONYM_KEY = "key"
 WAITING = "vllm:num_requests_waiting"
 KV_USAGE = "vllm:kv_cache_usage_perc"
 # vLLM 0.30's engine-wide prefix-cache counters, in tokens.
@@ -105,13 +107,15 @@ class HookTailer:
     def copy_to(self, destination: Path) -> int:
         """Copy every epoch this tailer read, as it stands now, under
         ``destination`` with the same ``<host>/<epoch>`` layout; returns
-        how many files were copied."""
+        how many files were copied. An epoch's pseudonym ``key`` stays
+        behind: with it, anyone holding the copy could turn the import's
+        pseudonyms back into other clients' request IDs."""
         copied = 0
         for epoch in sorted({directory for directory, _number in self._segments}):
             target = destination / epoch.relative_to(self.root)
             target.mkdir(parents=True, exist_ok=True)
             for path in sorted(epoch.iterdir()):
-                if path.is_file():
+                if path.is_file() and path.name != PSEUDONYM_KEY:
                     shutil.copy2(path, target / path.name)
                     copied += 1
         return copied

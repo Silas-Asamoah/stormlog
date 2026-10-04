@@ -281,10 +281,12 @@ def test_the_tailer_copies_the_epochs_it_read(tmp_path: Path) -> None:
     (other / "000001.jsonl").write_bytes(_hook_line(9))
     tailer = HookTailer(tmp_path / "hook")
     tailer.poll()
-    # Both epochs were read: every file of each, the key and a segment still
-    # being written included, is copied with its layout.
+    # Both epochs were read: every file of each, a segment still being
+    # written included, is copied with its layout. The pseudonym key isn't:
+    # it would turn the import's pseudonyms back into foreign request IDs.
     copied = tailer.copy_to(tmp_path / "truth" / "hook")
-    assert copied == 4
+    assert copied == 3
+    assert not (tmp_path / "truth" / "hook" / "host-a" / "engine-1" / "key").exists()
     assert (
         tmp_path / "truth" / "hook" / "host-a" / "engine-1" / "000002.jsonl.part"
     ).read_bytes() == _hook_line(2)
