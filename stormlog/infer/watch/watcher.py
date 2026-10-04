@@ -135,7 +135,13 @@ class Watcher:
             max_bytes=config.history_bytes,
             parsed_count=self._parsed_count(),
         )
-        self.engine = TriggerEngine(config.triggers, tick_seconds=config.tick_seconds)
+        # Ticks run as each scrape returns, up to its timeout late: windows
+        # and health tails are fresh within a tick plus that timeout.
+        self.engine = TriggerEngine(
+            config.triggers,
+            tick_seconds=config.tick_seconds,
+            scrape_timeout_seconds=config.scrape_timeout_seconds,
+        )
         self.scraper = scraper or self._scraper()
         self._store_worker = SerialWorker("stormlog-watch-store", max_queued=8)
         self._loop: asyncio.AbstractEventLoop | None = None
