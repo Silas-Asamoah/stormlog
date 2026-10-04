@@ -112,6 +112,18 @@ def test_a_dev_mode_server_answers_every_route_redacted() -> None:
     assert {auth for _path, auth in _Handler.seen} == {"Bearer sk-local"}
 
 
+def test_urls_in_the_basic_answers_lose_their_credentials() -> None:
+    routes = _dev_routes()
+    routes[MODELS] = {
+        "data": [{"id": "m", "root": f"https://user:{SECRET}@models.example/m"}]
+    }
+    with _server(routes) as endpoint:
+        probe = probe_server(endpoint, mode="basic")
+    body = probe.answers[MODELS].body
+    assert SECRET not in json.dumps(body)
+    assert body["data"][0]["root"] == "https://models.example/m"
+
+
 def test_a_server_without_dev_mode_says_why_server_info_is_missing() -> None:
     routes = _dev_routes()
     del routes[SERVER_INFO]

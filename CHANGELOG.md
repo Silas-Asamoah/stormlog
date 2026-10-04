@@ -125,8 +125,11 @@ the flaky benchmark memory gates
   (`credential_paths_v1`) and environment names with a secret word are
   replaced by a `{"redacted": true, "path": ...}` marker, URLs lose their
   credentials and query, and `system_env` keeps only allowlisted scalars and
-  four runtime package versions. `max_num_batched_tokens` and
-  `long_prefill_token_threshold` survive. (#213)
+  four runtime package versions. The credential fields include the free-form
+  plugin configs and Ray's runtime environment, and free-form `OTEL_`
+  settings such as resource attributes are removed.
+  `max_num_batched_tokens`, `long_prefill_token_threshold` and vLLM's
+  `*_TOKEN_THRESHOLD` knobs survive. (#213)
 - `--slo KEY:MS` (repeatable) and `--slo-file FILE` on `stormlog infer
   profile` and `stormlog infer analyze`. `profile` records the policy in the
   artifact as `infer.slo`; `analyze` judges by the flags, or else by the

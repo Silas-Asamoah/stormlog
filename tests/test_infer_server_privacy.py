@@ -71,6 +71,29 @@ def test_credential_fields_go_and_lookalike_names_stay() -> None:
     assert endpoint == "https://collector:4318/v1?<redacted>"
 
 
+def test_plugin_configs_and_the_ray_runtime_env_are_credential_paths() -> None:
+    # Free-form dicts handed to plugins and to Ray, any of which can carry a
+    # token or an environment of secrets.
+    config = {
+        "additional_config": {"remote_cache": {"auth_token": PLANTED}},
+        "ec_manager_config": {
+            "encoder_cache_manager_cls": None,
+            "manager_config": {"password": PLANTED},
+        },
+        "parallel_config": {
+            "ray_runtime_env": {"env_vars": {"HF_TOKEN": PLANTED}},
+            "tensor_parallel_size": 1,
+        },
+    }
+    kept = redact_vllm_config(config)
+    assert PLANTED not in json.dumps(kept)
+    assert is_redacted(kept["additional_config"])
+    assert is_redacted(kept["ec_manager_config"]["manager_config"])
+    assert kept["ec_manager_config"]["encoder_cache_manager_cls"] is None
+    assert is_redacted(kept["parallel_config"]["ray_runtime_env"])
+    assert kept["parallel_config"]["tensor_parallel_size"] == 1
+
+
 @pytest.mark.parametrize("value", [None, False, True, {}, ""])
 def test_an_unset_credential_field_is_kept_as_it_is(value: Any) -> None:
     # Redacting an empty field would make every comparison on it unverified.
@@ -93,6 +116,12 @@ def test_json_pointer_tokens_are_escaped() -> None:
         "NCCL_SECRET",
         "CUDA_CREDENTIALS_FILE",
         "PYTORCH_PASSWORD",
+        "VLLM_APIKEY",
+        "VLLM_API_KEYS",
+        "VLLM_ACCESS_TOKENS",
+        "STORMLOG_OTLP_BEARER",
+        "VLLM_PASS",
+        "NCCL_SECRETS",
     ],
 )
 def test_secret_names_match_whole_words(name: str) -> None:
@@ -107,6 +136,11 @@ def test_secret_names_match_whole_words(name: str) -> None:
         "NCCL_SOCKET_IFNAME",
         "VLLM_KEYEPOCH",
         "PYTORCH_CUDA_ALLOC_CONF",
+        # vLLM 0.30.0's own knobs: thresholds and counts, not secrets.
+        "VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD",
+        "VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD",
+        "VLLM_MAX_BAD_WORDS_TOTAL_TOKENS",
+        "VLLM_ENABLE_PREGRAD_PASSES",
     ],
 )
 def test_names_that_only_contain_a_secret_word_are_not_secrets(name: str) -> None:
@@ -139,6 +173,59 @@ def test_an_environment_keeps_only_its_settings_without_secrets() -> None:
     assert kept["VLLM_API_KEY"] == redacted("/environ/VLLM_API_KEY")
     assert kept["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] == "http://127.0.0.1:4318"
     assert kept["VLLM_WORKER_MULTIPROC_METHOD"] == "spawn"
+
+
+def test_other_otel_settings_are_redacted() -> None:
+    # Resource attributes are free-form, and can carry a token.
+    environ = {
+        "OTEL_RESOURCE_ATTRIBUTES": f"service.name=x,api.token={PLANTED}",
+        "OTEL_SERVICE_NAME": "vllm",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://127.0.0.1:4318/v1/traces",
+        "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "http/protobuf",
+    }
+    kept = redact_environ(environ)
+    assert PLANTED not in json.dumps(kept)
+    assert is_redacted(kept["OTEL_RESOURCE_ATTRIBUTES"])
+    assert kept["OTEL_SERVICE_NAME"] == "vllm"
+    assert kept["OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"] == "http/protobuf"
+    assert kept["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] == (
+        "http://127.0.0.1:4318/v1/traces"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        f" http://user:{PLANTED}@collector:4317/v1",
+        f"user:{PLANTED}@collector:4317",
+    ],
+    ids=["leading_space", "no_scheme"],
+)
+def test_credentials_in_a_url_of_any_spelling_go(value: str) -> None:
+    kept = redact_environ({"VLLM_ENDPOINT": value})
+    assert PLANTED not in json.dumps(kept)
+    assert "collector:4317" in json.dumps(kept)
+
+
+def test_urls_nested_in_vllm_env_values_are_stripped() -> None:
+    kept = redact_vllm_env(
+        {
+            "VLLM_LIST": [f"http://u:{PLANTED}@h:1/x"],
+            "VLLM_DICT": {"a": f"http://u:{PLANTED}@h:2"},
+        }
+    )
+    assert PLANTED not in json.dumps(kept)
+    assert kept["VLLM_LIST"] == ["http://h:1/x"]
+
+
+def test_vllms_token_thresholds_are_kept() -> None:
+    values = {
+        "VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD": 1024,
+        "VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD": 256,
+    }
+    assert redact_vllm_env(values) == values
+    environ = {name: str(value) for name, value in values.items()}
+    assert redact_environ(environ) == environ
 
 
 def test_vllm_env_follows_the_same_rules() -> None:

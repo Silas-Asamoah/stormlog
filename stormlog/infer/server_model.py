@@ -25,6 +25,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from .server_privacy import scrub_argument
+
 SHA256 = "sha256"
 GIT_SHA1 = "git-sha1"
 PINNED_COMMIT = "pinned_commit"
@@ -100,7 +102,7 @@ def launch_arguments(cmdline: Sequence[str]) -> LaunchArguments:
             value = arguments[index + 1]
         if value:
             values.setdefault(key, value)
-    return LaunchArguments(**values)
+    return LaunchArguments(**{key: scrub_argument(v) for key, v in values.items()})
 
 
 def hub_cache_dir(environ: Mapping[str, str], download_dir: str | None) -> Path | None:

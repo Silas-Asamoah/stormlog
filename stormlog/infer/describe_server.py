@@ -263,7 +263,8 @@ def _runtime(
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         return {"interpreter": interpreter, "unavailable": str(exc)}
     if not isinstance(reported, dict):
-        return {"interpreter": interpreter, "unavailable": result.stderr[-500:]}
+        # Its output can echo anything of the server's; only the code is kept.
+        return {"interpreter": interpreter, "unavailable": f"exit {result.returncode}"}
     return {"interpreter": interpreter, **reported}
 
 

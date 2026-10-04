@@ -5,7 +5,9 @@
 Two runs can only be compared when they measured the same server, so
 Stormlog describes the server a run measured: its vLLM configuration, its
 environment, its runtime and its GPUs. A description is meant to be shared
-with the run's results, so it never keeps a credential.
+with the run's results, so it never keeps a credential in a field vLLM
+0.30.0 defines to hold one, in an environment variable named as a secret,
+or in a URL; the rules are below.
 
 ## Describing a server
 
@@ -302,7 +304,9 @@ Each route's answer is recorded with its status (`ok`, `http_error`,
 - `/version` and `/v1/models` get 60 seconds each, `/server_info` one 120-second deadline;
 - when the server cannot be reached, the other routes are skipped instead of each waiting out its deadline.
 
-`/server_info`'s answer is kept redacted, by the rules below: its
+A URL anywhere in the `/version` and `/v1/models` answers, such as a
+model's `root`, loses its credentials and query. `/server_info`'s answer is
+kept redacted, by the rules below: its
 `vllm_config`, its `vllm_env`, and a summary of `system_env`. vLLM caches
 `system_env`, so after the run it is labelled `cached` and says nothing new.
 Its package listing comes from `pip` in vLLM's environment and is empty
@@ -318,16 +322,27 @@ because its name contains "token": `max_num_batched_tokens`,
 
 | Source | Kept | Removed |
 | --- | --- | --- |
-| `vllm_config` | Every field, with URLs stripped of credentials and query | The fields in `credential_paths_v1` that hold a value: `hf_token` (of the model, and of a speculative target or draft model), and the free-form `model_loader_extra_config`, `kv_connector_extra_config` and `ec_connector_extra_config` |
-| Process environment | Names starting `VLLM_`, `NCCL_`, `OTEL_`, `STORMLOG_`, `CUDA_` or `PYTORCH_`, plus `HF_HOME`, `HF_HUB_CACHE`, `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE`; URL values are stripped | Everything else, and any kept name with a secret word in it |
-| vLLM's `vllm_env` | Every variable, URL values stripped | Any name with a secret word in it |
+| `vllm_config` | Every field, with URLs stripped of credentials and query | The fields in `credential_paths_v1` that hold a value: `hf_token` (of the model, and of a speculative target or draft model); the free-form `model_loader_extra_config`, `kv_connector_extra_config`, `ec_connector_extra_config`, the cache manager's `manager_config` and the platform plugins' `additional_config`; and Ray's `ray_runtime_env`, whose `env_vars` can carry any secret of the job |
+| Process environment | Names starting `VLLM_`, `NCCL_`, `OTEL_`, `STORMLOG_`, `CUDA_` or `PYTORCH_`, plus `HF_HOME`, `HF_HUB_CACHE`, `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE`. A URL loses its credentials and query, whatever space surrounds it, and `user:password@host` without a scheme loses its credentials | Everything else, any kept name with a secret word in it, and `OTEL_` settings other than the exporter's endpoint, protocol, timeout, compression and batching, and the sampler and service name: resource attributes are free-form |
+| vLLM's `vllm_env` | Every variable, URLs stripped wherever they sit in its value | Any name with a secret word in it, and free-form `OTEL_` settings |
 | vLLM's `system_env` | Allowlisted scalars (torch, CUDA, cuDNN, driver, Python, OS and vLLM versions, among others), and the versions of torch, triton, flashinfer and transformers read from its package listing | `env_vars`, the package listing itself, `cpu_info`, `gpu_topo`, and anything that is not a scalar |
 
-A secret word is a whole `_`-separated word of the name: `TOKEN`, `SECRET`,
-`PASSWORD`, `PASSWD`, `KEY`, `CREDENTIAL(S)`, `HEADER(S)`, `AUTH`,
-`AUTHORIZATION` or `COOKIE`. So `VLLM_API_KEY` and
+A secret word is a whole `_`-separated word of the name: `TOKEN`,
+`ACCESS_TOKENS`, `SECRET(S)`, `PASSWORD(S)`, `PASSWD`, `PASS`, `KEY`,
+`APIKEY(S)`, `API_KEYS`, `CREDENTIAL(S)`, `HEADER(S)`, `AUTH`,
+`AUTHORIZATION`, `COOKIE` or `BEARER`. So `VLLM_API_KEY` and
 `OTEL_EXPORTER_OTLP_HEADERS` (which carries the exporter's `Authorization`)
-are removed, and `VLLM_MAX_TOKENS_PER_EXPERT` is kept.
+are removed, and `VLLM_MAX_TOKENS_PER_EXPERT` is kept. vLLM 0.30.0's
+`VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD` and
+`VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD` are integer thresholds, named
+in `NOT_SECRET_NAMES_V1`, and kept: removing them would hide a change in
+them from every comparison.
+
+The server's command line is never kept. Of its loading options
+(`--model`, `--revision`, `--tokenizer` and the rest), a URL loses its
+credentials and query, and any other value its query. When the Python
+probe of `--python` fails, the description keeps its exit code, not its
+output.
 
 An unset credential field (`null`, `false`, or empty) holds no secret and is
 kept. A removed value is replaced by a marker:

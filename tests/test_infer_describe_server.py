@@ -106,6 +106,20 @@ def test_a_description_covers_the_server_tree_and_its_gpus(proc: Path) -> None:
     assert SECRET not in json.dumps(document)
 
 
+def test_a_failed_python_probe_keeps_its_exit_code_not_its_output(proc: Path) -> None:
+    def failing(arguments: list[str], **kwargs: Any) -> Any:
+        if arguments[0] == "nvidia-smi":
+            return _run(arguments, **kwargs)
+        return subprocess.CompletedProcess(arguments, 1, "", f"token={SECRET}\n")
+
+    gpus = _Gpus()
+    document = describe_server(
+        DescribeOptions(pid=100, proc=proc), gpu_reader=lambda: gpus, run=failing
+    )
+    assert document["runtime"]["unavailable"] == "exit 1"
+    assert SECRET not in json.dumps(document)
+
+
 def test_a_written_description_loads_back_and_a_changed_one_does_not(
     proc: Path, tmp_path: Path
 ) -> None:
