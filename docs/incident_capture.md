@@ -5,8 +5,181 @@
 `stormlog infer watch` keeps a bounded record of a vLLM server's recent past
 beside it. When a condition has been bad for long enough, it seals what it has
 into an incident bundle, and can open one bounded profiler window. This page
-grows with the command (#219). It starts with the bundle format, which the
-rest builds on.
+grows with the command (#219). Today the watcher scrapes `/metrics`, evaluates
+metric, signal and health triggers, and seals metrics-only incidents. Deep
+capture, SLO triggers and OTLP spans come in later steps.
+
+## Running the watcher
+
+```bash
+stormlog infer watch --root ./watch --base-url http://127.0.0.1:8000
+```
+
+The watcher runs beside the server until Ctrl+C or SIGTERM, or for
+`--duration` seconds. vLLM only sees `GET /metrics`, once per tick. Nothing
+the watcher does can block it: the ledger and the incident store write on
+their own threads, and a stalled disk makes them drop and count records
+instead of piling them up.
+
+| Option | Meaning |
+| --- | --- |
+| `--root DIR` | Where the watcher keeps everything (required). |
+| `--config FILE` | A `stormlog.infer.watch_config` file; see below. |
+| `--base-url URL` | The server. Overrides `server.base_url`. |
+| `--metrics-url URL` | Its `/metrics`, when that is not at the server's origin. |
+| `--interval SECONDS` | The tick Δ. Overrides `tick_seconds` (default 1). |
+| `--duration SECONDS` | Stop after this long. |
+| `--ready-file FILE` | Written, with the session id, after the first successful scrape. |
+| `--api-key-env NAME` | An environment variable holding the server's bearer token. |
+| `--test-trigger every=SECONDS` or `file` | For qualification only; see below. |
+
+Under the root:
+
+```text
+watch/
+  ledger/        every record the watcher wrote, as an append-only sink
+  incidents/     one bundle per incident (see "Incident bundles")
+  report.json    the stormlog.report written when the watch ends
+  test-trigger   with --test-trigger file: create it to fire a test incident
+```
+
+### Each tick
+
+1. Scrape `/metrics`. One scrape is in flight at a time; a tick that comes
+   due during a slow scrape is skipped and counted. A response over 8 MiB or
+   20,000 series is refused and counted as oversized.
+2. Keep the scrape in the bounded history (`history.seconds`, 600 by
+   default, and `history.bytes`, 32 MiB of compressed scrapes).
+3. Evaluate every trigger (see "Triggers and what "sustained" means").
+4. Open an incident for a trigger that fires, or join it to one still
+   collecting its post-window.
+5. Seal incidents whose post-window has ended.
+6. Append an `infer.watch_health` record.
+
+At start, and then every 60 ticks, retention removes the bundles over the
+store's limits, and records each in an `infer.incident_pruned` record.
+
+An exporter restart between two scrapes is recorded as a health incident at
+once, without a sustain.
+
+### Configuration
+
+Every key is optional except `server.base_url`, which the command line can
+give instead. An unknown key, a wrong type or contradictory settings are
+refused with exit 2; a file that cannot be read, or is not a version-1 watch
+config, exits 5.
+
+```json
+{
+  "format": "stormlog.infer.watch_config",
+  "version": 1,
+  "server": {"base_url": "http://127.0.0.1:8000", "metrics_url": "auto"},
+  "tick_seconds": 1,
+  "scrape_timeout_seconds": 1,
+  "history": {"seconds": 600, "bytes": 33554432},
+  "incident": {
+    "pre_seconds": 120,
+    "post_seconds": 60,
+    "max_open_incidents": 2,
+    "max_incidents_per_hour": 30
+  },
+  "store": {
+    "max_total_bytes": 4294967296,
+    "max_incident_bytes": 1073741824,
+    "max_incidents": 50,
+    "max_age_hours": 72
+  },
+  "triggers": [
+    {
+      "id": "waiting",
+      "kind": "metric",
+      "window_seconds": 30,
+      "hold_seconds": 60,
+      "gauge": {"family": "vllm:num_requests_waiting", "at_least": 32}
+    }
+  ]
+}
+```
+
+A trigger has an `id`, a `kind` (`metric`, `signal` or `health`), optional
+`window_seconds` (`W`), `hold_seconds` (`F`), `clear_seconds` (`C`) and
+`counts_toward_exit` (true except for health triggers), and exactly one
+predicate:
+
+| Key | Settings |
+| --- | --- |
+| `gauge` | `family`, `at_least`, optional `share` (1.0) and `min_samples` (2) |
+| `counter_rate` | `family`, `at_least_per_s` |
+| `histogram_share` | `family`, `above`, `share`, optional `min_samples` (20) |
+| `signal` | one of `queue_saturation`, `kv_preemption_pressure`, `prefix_cache_loss` |
+| `scrape_failures` | optional `consecutive` (3) |
+| `frozen_exporter` | optional `ticks` (5) |
+
+Without `triggers`, the defaults (`watch_defaults/1`) watch the
+`queue_saturation` and `kv_preemption_pressure` signals, three consecutive
+failed scrapes, and a frozen exporter. The `export` section belongs to the
+exporter (#220) and is passed through.
+
+The session record in the ledger holds the resolved configuration, its
+SHA-256 digest, and for each trigger the shortest violation that can fire it
+and its detection bound in seconds.
+
+### Incidents
+
+An incident's pre-window reaches back from the firing to the start of the
+trigger's first violating window, at most `pre_seconds`; its post-window
+runs `post_seconds` past the firing. Firings within the post-window join it:
+at most 16 triggers in one incident. When the post-window ends, the incident
+is sealed: its windows, the scrapes inside them and its `infer.incident`
+record go into `gen-0/incident.jsonl` of its bundle, an inference artifact
+that `stormlog.infer.correlation_events.load_inference_artifact` reads. Each
+window says how complete it is: `complete`, `partial` (a failed scrape, or
+history that began late) or `missing` (no successful scrape).
+
+At most `max_open_incidents` collect at once, and at most
+`max_incidents_per_hour` open in any trailing hour. A firing turned away is
+counted by reason in `stormlog_watch_suppressed_total`. When the watch
+stops, open incidents are sealed as `interrupted`.
+
+### Records and health
+
+The ledger holds the frozen `stormlog.infer.watch/1` records:
+`infer.watch_session` (`started`, `ended`), `infer.trigger_state`,
+`infer.incident_event`, `infer.incident`, `infer.incident_association`,
+`infer.incident_finalized`, `infer.incident_pruned` and
+`infer.watch_health`. Every value that can become a metric label comes from
+a closed vocabulary, and an incident's `loss` holds a fixed set of integer
+counters, null when their source was not running. One record of each type is
+in `tests/fixtures/watch/records_v1.jsonl`, which a test keeps equal to what
+the code writes.
+
+The watcher's own health is held in memory as `stormlog_watch_*` gauges and
+counters (`tests/fixtures/watch/watch_stats_v1.json`): history bytes and
+age, scrapes by outcome, missed and frozen ticks, incidents by trigger kind
+and capture status, windows by fidelity, suppressions, retention, and
+records each sink dropped. `report.json` carries a copy at the end of the
+watch.
+
+### Exit codes
+
+| Code | When |
+| --- | --- |
+| 0 | The watch ended and no incident counted toward the exit code. |
+| 3 | At least one incident from a counting trigger (`metric` or `signal` by default) was detected. |
+| 1 | The watch was unsound: no scrape ever succeeded, the ledger lost records, every incident write failed, the store or ledger did not finish within the shutdown deadline, or the report could not be written. `report.json`, when written, lists the reasons under `payload.unsound`. |
+| 2 | A setting it cannot use. |
+| 5 | A config file it cannot read. |
+
+Ctrl+C and SIGTERM are the documented way to end a watch: the exit code is
+still one of the above, never 130.
+
+### Test triggers
+
+`--test-trigger every=SECONDS` fires a `test` incident on that period;
+`--test-trigger file` fires one whenever `<root>/test-trigger` appears,
+records the file's mtime as `requested_at_ns`, and deletes it. Test
+incidents follow the same limits as any other and never count toward the
+exit code. They exist to qualify the capture path, not to watch a server.
 
 ## Incident bundles
 

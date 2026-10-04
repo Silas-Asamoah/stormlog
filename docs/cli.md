@@ -107,6 +107,17 @@ pass the same `--run-id` to `infer profile`, and import the collector JSONL with
 `infer analyze --server-telemetry`. The guide explains the direct-route and
 clock evidence required before a server sample enters a case report.
 
+### Watch a vLLM server for incidents
+
+```bash
+stormlog infer watch --root ./watch --base-url http://127.0.0.1:8000
+```
+
+`infer watch` runs beside the server until Ctrl+C or SIGTERM, scrapes its
+`/metrics`, and seals an incident bundle when a trigger's condition is
+sustained. It exits 3 when a counting incident was detected. See
+[Inference incident capture](incident_capture.md).
+
 ## `gpumemprof`
 
 The current command groups are:

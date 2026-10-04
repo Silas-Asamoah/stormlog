@@ -51,7 +51,8 @@ heuristic detection by the tool. CI policy usually differs between the two.
   meaning.
 - Ctrl+C during `monitor`, `track`, or `stormlog infer collect-server` is the
   documented way to end a capture: the artifact is finalised and the process
-  exits 0. An interrupt anywhere else exits 130.
+  exits 0. Ctrl+C or SIGTERM ends `stormlog infer watch` the same way, and it
+  exits with the watch's own code. An interrupt anywhere else exits 130.
 - `analyze` commands are read-only investigations. They exit 0 even when
   they surface findings; verdicts come from `diagnose` and from the gates.
   Read the analysis report for findings instead of the exit code.
@@ -72,6 +73,7 @@ heuristic detection by the tool. CI policy usually differs between the two.
 | `stormlog infer collect-server` | duration elapsed, Ctrl+C or SIGTERM, or the server process ended | argparse error; options it cannot use; a `--pid` with no running process; a `--device-index` or `--device-uuid` the host does not have; no NVML library without `--no-gpu` | the GPU identity changed mid-run | - | - | unexpected error | - |
 | `stormlog infer import-trace` | traces imported, including GPU activity left unresolved or unmeasured (the summary says how much) | argparse error; a `--device-uuid` that is not `INDEX=UUID` or names one device twice | - | - | artifact without an `infer.artifact` record, or from another run or session; a trace file missing, unparsable, or not a Kineto trace | unexpected error; artifact or envelope not writable | Ctrl+C |
 | `stormlog infer import-execution` | the log's final steps imported, including none new since the last import (the summary says what still waits) | argparse error | - | - | artifact without an `infer.artifact` record, or from another run or session; the directory missing, unreadable, or holding no hook epoch; an epoch already imported with the other of pseudonyms and `--raw-foreign-ids` | unexpected error; artifact or envelope not writable | Ctrl+C |
+| `stormlog infer watch` | duration elapsed, or Ctrl+C or SIGTERM, with no incident from a counting trigger | argparse error; a config setting it cannot use; no `--base-url`; an `--api-key-env` that is not set; a bad `--test-trigger` or `--duration` | an incident from a counting trigger was detected | - | a `--config` file missing, unparsable, or not a version-1 watch config | no scrape succeeded; the ledger lost records; every incident write failed; the store or ledger did not finish within the shutdown deadline; `report.json` not writable; unexpected error | - |
 
 ### Changes from earlier releases
 
@@ -130,7 +132,7 @@ strict (`additionalProperties: false` at the top level).
 | --- | --- | --- |
 | `schema_version` | yes | `1` |
 | `format` | yes | `stormlog.report` |
-| `report_kind` | yes | Payload family, documented per command. Today: `diagnose`. |
+| `report_kind` | yes | Payload family, documented per command. Today: `diagnose` and `inference_watch`. |
 | `generated_at_utc` | yes | ISO 8601 timestamp in UTC. |
 | `tool` | yes | `name` (console script), `command` (subcommand), optional `version` and `argv`. |
 | `verdict` | yes | `status`, `exit_code`, and a one-line `summary`. `status` and `exit_code` must pair as in the table above; the schema enforces it. |

@@ -54,6 +54,7 @@ from .trace_import import import_traces_into_artifact, parse_device_uuids
 from .vllm_execution_import import import_execution_into_artifact
 from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
 from .vllm_spans import DEFAULT_SPANS_LISTEN, parse_listen_address
+from .watch.cli import add_watch_parser, cmd_watch
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -86,6 +87,8 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         return cmd_import_trace(args)
     if args.infer_command == "import-execution":
         return cmd_import_execution(args)
+    if args.infer_command == "watch":
+        return cmd_watch(args)
     parser.error(f"Unsupported infer command: {args.infer_command}")
 
 
@@ -425,6 +428,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
+    add_watch_parser(subparsers)
     return parser
 
 
