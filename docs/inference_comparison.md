@@ -615,6 +615,13 @@ result = compare_values(
 result.to_record()
 ```
 
+`compare_values` judges values alone. For a fraction's run-level claim, a
+candidate run whose block has no baseline value is a miss, since values
+cannot tell a lost baseline outcome from a value never measured. A caller
+that knows the baseline run failed as an outcome passes
+`unavailable="control_failed"`, as `compare_runs` does, and the contrast
+is `not_evaluable: control_failed`.
+
 ## Related pages
 
 - [Inference Profiling](inference.md)

@@ -193,6 +193,35 @@ def test_an_unmeasurable_candidate_run_is_a_miss() -> None:
     assert result.gate.claim["runs_unmeasurable"] == 1
 
 
+def test_a_block_without_its_baseline_value_is_a_miss_unless_the_caller_says_why() -> (
+    None
+):
+    # rev-213-a's D5 (mutant c3, a missing baseline counted as within) and
+    # D6: compare_values judges values alone, so a block whose baseline value
+    # is missing is a miss; a caller that knows the baseline's outcome was
+    # lost says so, as compare_runs does, and the contrast is not evaluable.
+    baseline: list[float | None] = [0.0] * 7 + [None]
+    result = _fractions([0.0] * 8, baseline=baseline)
+    assert result.gate is not None and result.gate.status == "fail"
+    assert result.gate.claim is not None
+    assert result.gate.claim["runs_within_budget"] == 7
+    told = _fractions([0.0] * 8, baseline=baseline, unavailable="control_failed")
+    assert told.gate is not None
+    assert (told.gate.status, told.gate.reason) == ("not_evaluable", "control_failed")
+
+
+def test_a_fraction_gate_honours_its_preregistered_block_count() -> None:
+    # rev-213-a's D5 (mutant c13): eight runs, all within, against ten
+    # pre-registered blocks.
+    gate = GateRule("non-inferiority", 0.01, "fraction", min_complete_blocks=10)
+    result = _fractions([0.0] * 8, gate=gate)
+    assert result.gate is not None
+    assert (result.gate.status, result.gate.reason) == (
+        "not_evaluable",
+        "blocks_below_preregistered",
+    )
+
+
 def test_all_zero_fractions_pass_as_a_claim_about_runs_not_a_bound() -> None:
     # No failure anywhere: the claim is that runs stay within the budget, not
     # that the failure rate is bounded; the interval is floored, not [0, 0].
