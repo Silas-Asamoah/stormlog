@@ -171,9 +171,10 @@ its arm's first run, and every run against the other arm's first, because
 comparability is not transitive once a value is unknown. A field `--allow`
 names may differ between the arms, the treatment difference; within an
 arm, it must still match. A field `--allow-within-arm` names may differ
-between the runs of one arm, and so across the arms too, and every pair of
-one arm's runs that differs in it is named in
-`diagnostics.within_arm_allowed` and in the text report. On an A30, the
+between the runs of one arm, and so across the arms too. Each such field
+an arm's runs differ in is named, with every run's value, in
+`diagnostics.allowed_within_arm` and in a line of the text report. On an
+A30, the
 first launch of each model after the box resumed had a 4% smaller KV cache
 (`effective.kv_cache_size_tokens`, 855,088 against 890,960 tokens) than
 every launch after it; a warm-up launch before the first block avoids
