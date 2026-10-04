@@ -58,6 +58,16 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `stormlog.infer.compatibility`: whether two runs measured the same
+  thing. Each run's fields (from its descriptions, probe, workload,
+  observers and declarations) keep their value, source and provenance;
+  every field is `identity`, `launch`, `observation` or `label`, with vLLM
+  0.30.0's configuration classified by JSON pointer (`config_classes_v1`)
+  and an unclassified difference blocking. `compatible(a, b)` gives
+  `incompatible`, `unverified` (a required field unknown on either side;
+  redacted, inferred and declared values never verify one) or
+  `compatible`. The `infer.workload` record gains `spec_digest`, its digest
+  without the seed. (#213)
 - The run manifest: `infer profile --describe-server FILE` records a
   description taken before the run and `--declare FILE` the operator's
   declarations, as append-only `infer.manifest` records. `stormlog infer

@@ -313,7 +313,9 @@ requested cache state. For open-loop arrivals it also covers
 `--max-in-flight` and `--overflow`. It leaves out the endpoint, model,
 timeouts and reset URL, so the same workload sent to two engine
 configurations has the same digest. `--extra-body` numbers are compared by
-value, so `0` and `0.0` count as the same.
+value, so `0` and `0.0` count as the same. `spec_digest` covers the same
+but the seed: runs of one workload with different seeds share it, while
+their `workload_digest`s differ.
 
 The API key is never recorded, and the reset URL is recorded without its
 credentials or query string. The server applies the chat template, and the

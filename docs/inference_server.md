@@ -105,6 +105,61 @@ descriptions, it compares them:
 - `drift`: for each of the server's GPUs, the SM clock, temperature and
   clock event reasons, before and after. Drift is reported, not a failure.
 
+## Comparing two runs
+
+`stormlog.infer.compatibility.compatible(a, b)` says whether two runs
+measured the same thing. Each run's fields come from its artifact
+(`run_fields(records)`): the `before` description, what the server reported
+to the probe, the workload record, the observers the session configured,
+and the declarations. Each field keeps its value, its source and its
+provenance:
+
+| Provenance | Meaning |
+| --- | --- |
+| `observed` | Stormlog saw it: the description, the workload record |
+| `reported` | The server said so: `/version`, `/server_info` |
+| `inferred` | Evidence that cannot show it, such as a model digest not bound to the launch |
+| `declared` | The operator said so |
+
+Observed outranks reported, and a declaration only fills a field nothing
+observed or reported. An inferred or declared value, a redacted one and an
+NVML field that could not be read are all unknown: they never verify a
+required field, and two of them are never equal.
+
+Every field has a class:
+
+| Class | A difference |
+| --- | --- |
+| `identity` | Makes the runs incompatible, unless it is allowed |
+| `launch` | Is a covariate: ports, instance IDs, cache directories, which GPU, the workload's seed |
+| `observation` | Which observers ran: allowed in `overhead` and `incremental` comparisons only |
+| `label` | Is ignored |
+
+The classes of vLLM's configuration are a versioned table,
+`config_classes_v1`, keyed by JSON pointer into `/server_info`'s
+`vllm_config`; the longest pointer that covers a leaf decides. A leaf no
+pointer covers is `unclassified`, and a difference in it blocks. The
+table's launch entries come from vLLM 0.30.0's source.
+
+The result is one of:
+
+| Status | When |
+| --- | --- |
+| `incompatible` | An identity or unclassified field differs and is not allowed |
+| `unverified` | A required field is unknown on either or both sides: the model's weights digest, the vLLM version, the GPU name, the driver version, the workload's spec digest, or `vllm_config` itself |
+| `compatible` | Otherwise |
+
+`allowed` takes canonical names (`engine.max_num_seqs`), or JSON pointers
+into `vllm_config` (`/scheduler_config`), which cover their subtree. The
+result lists each difference with its class and reason: blocking,
+unverified (`unknown`, or `differs_unverified` when two unverified values
+disagree), allowed, covariates and observation.
+
+The workload record carries two digests: `workload_digest`, the
+realization, which includes the seed, and `spec_digest`, which leaves it
+out. Runs of one workload with different seeds share a spec digest, which
+must be equal for a comparison; the realization is a covariate.
+
 ## The server's processes
 
 A description reads the server's processes from Linux `/proc`, so it runs on
@@ -302,6 +357,8 @@ from stormlog.infer.server_model import describe_model, launch_arguments
 | `describe_model(launch, hub_cache=..., cwd=..., hash_weights=False, verify_blobs=False)` | The files, digests and `identity_evidence` above |
 | `stormlog.infer.server_log.read_server_log(path)` | The last start-up's choices from a server log |
 | `stormlog.infer.server_probe.probe_server(endpoint, mode="auto", ...)` | What the server reports about itself, as a `ServerProbe` |
+| `stormlog.infer.compatibility.run_fields(records)` | One run's comparable fields |
+| `stormlog.infer.compatibility.compatible(a, b, allowed=(), mode="config")` | `compatible`, `unverified` or `incompatible`, with every difference |
 
 ## Related pages
 
