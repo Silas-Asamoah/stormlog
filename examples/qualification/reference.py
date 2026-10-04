@@ -32,6 +32,8 @@ from stormlog.infer.vllm_metrics import (
     parse_prometheus_text,
 )
 
+from .victim import SENDS
+
 SEGMENT = re.compile(r"^(\d{6})\.jsonl(\.part)?$")
 # The hook's per-epoch HMAC key behind the import's foreign-ID pseudonyms.
 PSEUDONYM_KEY = "key"
@@ -490,7 +492,11 @@ class ReferenceChannel:
         self.scrapes: list[Scrape] = []
         self.victim_artifact = victim_artifact
         self.victim_prefix = victim_prefix
+        self.sends = probes_dir / SENDS
         self._victim_offset = 0
+        self._sends_offset = 0
+        # Each victim request the victim sent, as the engine names it: when.
+        self._victim_sent: dict[str, int] = {}
         self._victim_gaps: list[Point] = []
         self._victim_spans: list[tuple[int, int]] = []
         self._victim_finished: set[str] = set()
@@ -517,12 +523,15 @@ class ReferenceChannel:
 
     def signals(self) -> Signals:
         """The series so far. ``in_flight`` comes from the victim's finished
-        requests, from send to end, and from each victim request the engine
-        admitted that hasn't finished yet, from its admission to now: a
-        request stuck in a stall is in flight, so the stall still open at
-        the latest poll is busy time, not idle."""
+        requests, from send to end, and from each victim request sent (by
+        the victim's send probe) or admitted (by the engine) that hasn't
+        finished yet, from then to now: a request stuck in a stall is in
+        flight, even one sent while the engine was hung and admitting
+        nothing, so the stall still open at the latest poll is busy time,
+        not idle."""
         ok = [taken for taken in self.scrapes if taken.error is None]
         self._read_victim()
+        self._read_sends()
         return Signals(
             waits=sorted(self.view.waits),
             cached_fraction=sorted(self.view.cached_fraction),
@@ -537,33 +546,51 @@ class ReferenceChannel:
 
     def _in_flight(self) -> list[tuple[int, int]]:
         now = time.time_ns()
+        sent = [(at, external) for external, at in self._victim_sent.items()]
         open_requests = [
             (at, now)
-            for at, external in self.view.admissions
+            for at, external in self.view.admissions + sent
             if external.startswith(self.victim_prefix)
             and external not in self._victim_finished
         ]
         return merge_spans(self._victim_spans + open_requests)
 
+    def _read_sends(self) -> None:
+        """The victim's sends, reading only what was appended since."""
+        records, self._sends_offset = _read_appended(self.sends, self._sends_offset)
+        for record in records:
+            external = f"chatcmpl-{record.get('x_request_id')}"
+            sent = record.get("sent_ns")
+            if isinstance(sent, int) and external.startswith(self.victim_prefix):
+                self._victim_sent.setdefault(external, sent)
+
     def _read_victim(self) -> None:
         """The victim's chunk gaps and request spans, reading only what was
         appended since the last call: this runs every quarter second on the
         host under test."""
-        path = self.victim_artifact
-        if path is None or not path.exists():
+        if self.victim_artifact is None:
             return
-        with path.open("rb") as handle:
-            handle.seek(self._victim_offset)
-            data = handle.read()
-        complete = data[: data.rfind(b"\n") + 1]  # a line being written waits
-        self._victim_offset += len(complete)
-        parsed = [_parse(line) for line in complete.splitlines() if line.strip()]
-        records = [record for record in parsed if record is not None]
+        records, self._victim_offset = _read_appended(
+            self.victim_artifact, self._victim_offset
+        )
         fresh = chunk_gaps(records, self.victim_prefix)
         if fresh:
             self._victim_gaps = sorted(self._victim_gaps + fresh)
         self._victim_spans += request_spans(records, self.victim_prefix)
         self._victim_finished |= finished_requests(records, self.victim_prefix)
+
+
+def _read_appended(path: Path, offset: int) -> tuple[list[dict[str, Any]], int]:
+    """The records of the whole lines appended to ``path`` since ``offset``,
+    and the offset after them: a line still being written waits."""
+    if not path.exists():
+        return [], offset
+    with path.open("rb") as handle:
+        handle.seek(offset)
+        data = handle.read()
+    complete = data[: data.rfind(b"\n") + 1]
+    parsed = [_parse(line) for line in complete.splitlines() if line.strip()]
+    return [record for record in parsed if record is not None], offset + len(complete)
 
 
 __all__ = [

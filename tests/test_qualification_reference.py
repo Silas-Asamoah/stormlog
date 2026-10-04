@@ -349,6 +349,40 @@ def test_a_request_admitted_but_unfinished_is_in_flight_until_now(
     assert channel.signals().in_flight == [(900, 2_000)]
 
 
+def test_a_request_sent_during_a_hang_is_in_flight_until_now(tmp_path: Path) -> None:
+    # rev-220-b's second A1 delta, E1: the engine hangs in the gap between
+    # two victim requests. The next one is sent but never admitted, so an
+    # admission-based in-flight interval missed it, the hang read as idle
+    # time, and a live poll found the engine recovered. The victim's send
+    # probe makes it in flight from its send.
+    steps = b"".join(_hook_line(seq) for seq in range(0, 500, 20))
+    (_epoch_dir(tmp_path) / "000001.jsonl.part").write_bytes(steps)
+    artifact = tmp_path / "victim.jsonl"
+    finished = {"event_type": "infer.request", "x_request_id": "stormlog-victim-1",
+                "started_at_ns": 0, "ended_at_ns": 500}  # fmt: skip
+    artifact.write_text(json.dumps(finished) + "\n")
+    probes = tmp_path / "probes"
+    probes.mkdir()
+    sends = [{"x_request_id": "stormlog-victim-1", "sent_ns": 0},
+             {"x_request_id": "stormlog-victim-2", "sent_ns": 600}]  # fmt: skip
+    (probes / "victim-sends.jsonl").write_text(
+        "".join(json.dumps(send) + "\n" for send in sends)
+    )
+    channel = ReferenceChannel(
+        hook_root=tmp_path / "hook",
+        metrics_url="http://127.0.0.1:9/metrics",
+        victim_prefix=VICTIM,
+        shared_prefix_tokens=4,
+        reference_dir=tmp_path / "reference",
+        probes_dir=probes,
+        victim_artifact=artifact,
+    )
+    channel.poll(scrape=False)
+    before = time.time_ns()
+    (done, (start, end)) = channel.signals().in_flight or []
+    assert done == (0, 500) and start == 600 and end >= before
+
+
 def test_in_flight_intervals_merge_overlapping_requests() -> None:
     victim = [
         {"event_type": "infer.request", "x_request_id": f"{VICTIM[9:]}-{i}",
