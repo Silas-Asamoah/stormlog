@@ -53,7 +53,15 @@ from .bounds import (
     clopper_pearson_upper,
     poisson_rate_upper,
 )
-from .ground_truth import VALID, Expectation, Injection, Interval, Location, RunRecord
+from .ground_truth import (
+    VALID,
+    Expectation,
+    GroundTruthError,
+    Injection,
+    Interval,
+    Location,
+    RunRecord,
+)
 from .vocabulary import (
     CAUSE_FAULT,
     CLAIM_OBSERVATION,
@@ -570,6 +578,7 @@ def score_run(
     run's whole negative exposure (C.2, C.5).
 
     Raises:
+        GroundTruthError: for a run record or an episode that is malformed.
         ValueError: for an episode of another run, or one given twice.
     """
     _check_run(run, injections)
@@ -597,9 +606,19 @@ def score_run(
     return RunScore(run.run_id, episodes, unit.episode_id, exposure, claims, problems)
 
 
+def _check_truth(run: RunRecord, injections: Sequence[Injection]) -> None:
+    problems = run.problems()
+    for injection in injections:
+        problems += [f"{injection.episode_id}: {p}" for p in injection.problems()]
+    if problems:
+        raise GroundTruthError(problems)
+
+
 def _check_run(run: RunRecord, injections: Sequence[Injection]) -> None:
-    """The run's episodes: each once, all of this run, and all on the run's
-    clock, since its windows and theirs are compared."""
+    """The run and its episodes, as ground truth must be: well formed (as
+    if read from disk), each episode once, all of this run, and all on the
+    run's clock, since its windows and theirs are compared."""
+    _check_truth(run, injections)
     ids = [injection.episode_id for injection in injections]
     if len(set(ids)) != len(ids):
         raise ValueError(f"run {run.run_id}: an episode is given twice")
