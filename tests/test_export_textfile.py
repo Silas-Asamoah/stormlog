@@ -304,6 +304,20 @@ def test_a_lock_file_this_user_cannot_open_is_a_slot_in_use(tmp_path: Path) -> N
         lock.chmod(0o644)
 
 
+def test_a_directory_this_user_cannot_write_is_refused_as_such(
+    tmp_path: Path,
+) -> None:
+    # No lock file to name a holder: the directory itself is the problem.
+    directory = tmp_path / "read-only"
+    directory.mkdir()
+    directory.chmod(0o555)
+    try:
+        with pytest.raises(ValueError, match="cannot write"):
+            _writer(directory).acquire()
+    finally:
+        directory.chmod(0o755)
+
+
 _HOLD_THE_SLOT = """
 import sys, time
 from pathlib import Path

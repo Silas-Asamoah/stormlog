@@ -129,8 +129,9 @@ class TextfileWriter:
     def acquire(self) -> None:
         """Check the directory and take the slot's lock, before the run starts.
 
-        ``ValueError`` for a directory that is missing or holds a forbidden
-        file; ``SlotInUse`` when another live writer has the slot.
+        ``ValueError`` for a directory that is missing, holds a forbidden
+        file, or cannot be written; ``SlotInUse`` when another live writer
+        has the slot.
         """
         if self._lock_owned:
             return
@@ -280,7 +281,11 @@ def _take_lock(path: Path) -> int | None:
     for _ in range(3):
         try:
             descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
-        except PermissionError:
+        except PermissionError as exc:
+            if not path.exists():
+                raise ValueError(
+                    f"cannot write {path.name} in {path.parent}: {exc.strerror}"
+                ) from None
             # Another user's lock, or a read-only one: some other writer's.
             raise _in_use(path, _read_lock(path)) from None
         try:
