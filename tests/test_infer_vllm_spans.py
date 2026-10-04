@@ -747,6 +747,27 @@ class TestReceiverAdmission:
         assert 0.2 < elapsed < 1.5
         assert metadata["header_timeouts"] == 0
 
+    @pytest.mark.parametrize(
+        "framing",
+        [
+            b"Transfer-Encoding: chunked\r\n\r\n4\r\n{}  \r\n0\r\n\r\n",
+            b"\r\n",  # no length at all
+        ],
+    )
+    def test_a_body_without_a_content_length_gets_411(self, framing: bytes) -> None:
+        """Before, it read as an empty body: 200 with no span, or a decode
+        failure, for an export that was never read."""
+        with _receiver() as receiver:
+            reply = _raw_post(
+                receiver.listen,
+                b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n"
+                b"Content-Type: application/json\r\n" + framing,
+            )
+            metadata = receiver.capability_metadata()
+        assert reply.startswith(b"HTTP/1.1 411")
+        assert metadata["bad_requests"] == 1
+        assert metadata["decode_failures"] == 0
+
     def test_bodies_over_the_in_flight_budget_get_503(self) -> None:
         """Bodies still arriving hold their reservations; an export that does
         not fit beside them is answered 503 until one finishes."""

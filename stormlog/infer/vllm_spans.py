@@ -811,8 +811,17 @@ class OtlpSpanReceiver:
         # An empty ExportTraceServiceResponse is valid in either encoding.
         _respond(handler, 200, b"" if media == PROTOBUF_MEDIA else b"{}", media)
 
-    def _read_body(self, handler: BaseHTTPRequestHandler) -> bytes | None:
-        """The decoded body, or None after answering a request we cannot take."""
+    def _body_length(self, handler: BaseHTTPRequestHandler) -> int | None:
+        """The announced length, or None after answering one we cannot take."""
+        if "Transfer-Encoding" in handler.headers or (
+            "Content-Length" not in handler.headers
+        ):
+            # A chunked body, or none announced: not read, so the
+            # connection cannot carry another request.
+            self._count("bad_requests")
+            handler.close_connection = True
+            _respond(handler, 411, b"Content-Length required", "text/plain")
+            return None
         try:
             length = int(handler.headers.get("Content-Length") or 0)
             if length < 0:
@@ -824,6 +833,13 @@ class OtlpSpanReceiver:
         if length > MAX_BODY_BYTES:
             self._count("oversized")
             _respond(handler, 413, b"", "text/plain")
+            return None
+        return length
+
+    def _read_body(self, handler: BaseHTTPRequestHandler) -> bytes | None:
+        """The decoded body, or None after answering a request we cannot take."""
+        length = self._body_length(handler)
+        if length is None:
             return None
         try:
             body = self._read_within_deadline(handler, length)

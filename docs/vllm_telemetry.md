@@ -110,6 +110,10 @@ applied before the data is held whole, and each refusal is counted:
 | span receiver | spans in one body | 10,000 | 413 (`too_many_spans`) |
 | span receiver | spans waiting in the queue | 100,000 spans and 64 MiB | 503 with `Retry-After: 1`, and none of the body's spans is kept (`dropped_queue_full`, which counts spans the exporter may resend) |
 
+An export must say how long it is: a chunked body, or one with no
+`Content-Length`, is answered 411 and counted in `bad_requests` (OTLP/HTTP
+exporters, vLLM's included, send the length).
+
 A vLLM 0.30.0 response for one model is about 90 KB and 360 series, and a
 profile drains the queue every 0.25 s, so these limits bind only on a
 misbehaving or hostile endpoint. The receiver's limits are in its config
