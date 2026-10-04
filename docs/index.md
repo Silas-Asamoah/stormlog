@@ -36,6 +36,7 @@ scrubbing
 inference
 inference_slo
 inference_server
+inference_comparison
 inference_correlation
 vllm_telemetry
 vllm_execution
@@ -88,12 +89,13 @@ examples/test_guides/README
 2. [Inference Profiling](inference.md)
 3. [Inference SLOs and goodput](inference_slo.md)
 4. [Inference server descriptions](inference_server.md)
-5. [Inference execution correlation](inference_correlation.md)
-6. [vLLM native telemetry](vllm_telemetry.md)
-7. [Exporting inference metrics and spans](inference_export.md)
-8. [TUI](tui.md)
-9. [Production Cookbook](cookbook/index.md)
-10. [Troubleshooting](troubleshooting.md)
+5. [Comparing inference runs](inference_comparison.md)
+6. [Inference execution correlation](inference_correlation.md)
+7. [vLLM native telemetry](vllm_telemetry.md)
+8. [Exporting inference metrics and spans](inference_export.md)
+9. [TUI](tui.md)
+10. [Production Cookbook](cookbook/index.md)
+11. [Troubleshooting](troubleshooting.md)
 
 ### Release or CI validation
 
