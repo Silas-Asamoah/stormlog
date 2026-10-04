@@ -159,8 +159,11 @@ word from `SECRET_KEY_WORDS` appears anywhere in it, so `max_tokens="128"`,
 word before it is still removed. A bare value runs to whitespace, `&`, `,`,
 `;` or a quote, so a bracket after it goes with it: `cfg:(password=x)`
 becomes `cfg:(password=<redacted>`, since a password may hold a bracket. A
-bare value containing spaces loses only its first word, which is one reason
-consent is needed.
+value that starts with `[` or `{` runs to its closing bracket or to the end
+of that bare run, whichever is later, so a hash format's prefix does not end
+it: `password={noop}hunter2` becomes `password=<redacted>`. A bare value
+containing spaces loses only its first word, which is one reason consent is
+needed.
 
 Keys and values in escaped quotes, as JSON written inside a JSON string
 spells them (`{\"api_key\": \"...\"}`), are read too.

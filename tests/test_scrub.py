@@ -507,6 +507,32 @@ def test_values_in_escaped_quotes_are_read(text: str, scrubbed: str) -> None:
 @pytest.mark.parametrize(
     ("text", "scrubbed"),
     [
+        (
+            "spring.security.user.password={noop}hunter2-secret",
+            "spring.security.user.password=<redacted>",
+        ),
+        (
+            "password={bcrypt}$2a$10$abcdefghijklmnopqrstuv",
+            "password=<redacted>",
+        ),
+        ("userPassword: {SSHA}c2VjcmV0c2FsdA==", "userPassword: <redacted>"),
+        ("password=[abc]xyz-secret next", "password=<redacted> next"),
+        ("password={abc]xyz-secret next", "password=<redacted> next"),
+        ("--password {noop}opaque-x", "--password <redacted>"),
+        ("PASSWORD {noop}opaque-x", "PASSWORD <redacted>"),
+    ],
+)
+def test_a_value_with_a_bracketed_prefix_is_redacted_whole(
+    text: str, scrubbed: str
+) -> None:
+    # The re-check's NEW-3: a value starting with a bracket was read as an
+    # array or object, so only its {noop} or {bcrypt} prefix was redacted.
+    assert scrub_text(text) == scrubbed
+
+
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
         ('{"api_keys": ["opaque-one", "two"]}', '{"api_keys": <redacted>}'),
         (
             '{"credentials": {"user": "a", "pass": "b"}, "n": 1}',

@@ -274,7 +274,10 @@ class _Values:
             return None
         text = self.text
         if text[position : position + 1] in ("[", "{"):
-            end = _bracket_end(text, position)
+            # An array or object to its closing bracket, or a bare value that
+            # only starts with a bracketed prefix ({noop}secret): whichever
+            # runs further, so the secret after the prefix goes too.
+            end = max(_bracket_end(text, position), self._bare_end(position))
             self.covered = end
             return position, end
         for quoted in (_DOUBLE_QUOTED, _SINGLE_QUOTED, _ESCAPED_QUOTED):
