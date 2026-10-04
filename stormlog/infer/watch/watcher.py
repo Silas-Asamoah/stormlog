@@ -202,13 +202,25 @@ class Watcher:
         self._hurried: asyncio.Event | None = None
         self._hurried_at: float | None = None
         self._ending: asyncio.Event | None = None
+        self._before_report: Callable[[], None] | None = None
         # The ring's evictions already added to history_evictions_total.
         self._evictions_counted: dict[str, int] = dict.fromkeys(EVICTION_CAUSES, 0)
 
     # ----------------------------------------------------------------- run
 
-    async def run(self, stop: asyncio.Event) -> WatchOutcome:
-        """Watch until the duration elapses or ``stop`` is set."""
+    async def run(
+        self,
+        stop: asyncio.Event,
+        *,
+        before_report: Callable[[], None] | None = None,
+    ) -> WatchOutcome:
+        """Watch until the duration elapses or ``stop`` is set.
+
+        ``before_report`` runs once the exit code is settled, just before
+        the report is written: the CLI stops taking signals there, so none
+        can change the code the report holds.
+        """
+        self._before_report = before_report
         self._loop = asyncio.get_running_loop()
         self._hurried = asyncio.Event()
         recovery = self.store.recover()
@@ -548,6 +560,8 @@ class Watcher:
         if late:
             unsound.extend(late)
             exit_code = int(ExitCode.ERROR)
+        if self._before_report is not None:
+            self._before_report()
         try:
             report = self._report(exit_code, unsound)
             path = self.root / REPORT_FILENAME
