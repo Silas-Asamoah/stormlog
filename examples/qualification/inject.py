@@ -67,6 +67,7 @@ from stormlog.infer.qualify.recovery import (
     observation_of,
     priming_check,
     realization,
+    recovery_blocked,
 )
 from stormlog.infer.server_clock import client_clock_domain
 
@@ -342,6 +343,10 @@ class InjectionRun:
             self._signals(), baseline, actions, onset, self.clock(), self.thresholds
         )
         realized, checks = realization(episode.type, context, timing)
+        blocked = recovery_blocked(episode.type, context) if decision == TIMEOUT else ()
+        if blocked:
+            # Not just a timeout: recovery could never hold (N0).
+            injected = {**injected, "recovery_blocked": list(blocked)}
         return _Attempt(
             index, episode, actions, onset, ended, actuated, injected, timing,
             decision, realized, [check.to_record() for check in checks], clean_since,
@@ -552,7 +557,7 @@ class InjectionRun:
         what was done, or skipped, after a recovery timeout or the run's end."""
         if self._interrupted is not None and self._interrupted[0] == index:
             return _skipped(truth, index, episode, self._interrupted[1], "interrupted")
-        reason = "run_ended" if progress.failure else "recovery_timeout"
+        reason = "run_ended" if progress.failure else _timeout_reason(progress)
         injected = {"method": episode.row.method, "skipped": reason}
         return _skipped(truth, index, episode, injected, "skipped")
 
@@ -874,6 +879,15 @@ def _measured_end(records: list[dict[str, Any]]) -> int | None:
         and record.get("window_ended_at_ns") is not None
     ]
     return ends[-1] if ends else None
+
+
+def _timeout_reason(progress: _Progress) -> str:
+    """Why a run stopped attempting episodes early: a recovery timeout, or
+    one that could never hold because a baseline series was too thin."""
+    last = progress.attempts[-1] if progress.attempts else None
+    if last is not None and last.injected.get("recovery_blocked"):
+        return "baseline_too_thin"
+    return "recovery_timeout"
 
 
 def _victim_clock(records: list[dict[str, Any]]) -> str | None:
