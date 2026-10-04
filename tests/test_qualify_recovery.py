@@ -404,3 +404,23 @@ def test_an_api_server_pulse_that_also_stalled_the_engine_adds_that_mechanism() 
     busy = context(Signals(step_starts=stalled_steps(PULSES, True)), actions)
     realized, checks = realization("F4b", busy, effect_timing("F4b", busy))
     assert realized and added_mechanisms("F4b", checks) == ()
+
+
+def test_a_twin_that_leaves_the_signals_alone_is_realized() -> None:
+    # A twin's recovery already holds at its onset, so its effect window is
+    # empty; its realization is judged over its whole action instead (the
+    # neighbor ran from 60 s to 90 s).
+    cached = every_second(0, 200, lambda s: 0.95)
+    falling = every_second(0, 200, lambda s: 0.4 if 60 <= s < 90 else 0.7)
+    actions = Actions(
+        first_send_ns=60 * S, first_admission_ns=60 * S, action_end_ns=90 * S
+    )
+    t3b = context(Signals(cached_fraction=cached, engine_hit_ratio=falling), actions)
+    timing = effect_timing("T3b", t3b)
+    assert timing.end_ns == timing.onset_ns == 60 * S
+    assert realization("T3b", t3b, timing)[0]
+    # T2's no-preemption check covers the whole neighbor run: a preemption
+    # at 85 s, late in the action, fails it.
+    flat = every_second(0, 200, lambda s: 0.45)
+    late = context(Signals(victim_preemptions=[85 * S], kv_usage=flat), actions)
+    assert not realization("T2", late, effect_timing("T2", late))[0]
