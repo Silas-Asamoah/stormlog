@@ -121,6 +121,7 @@ PROTOCOL_FAILURE = "protocol_failure"
 # A planned run the runner never started: an earlier cleanup left processes.
 NOT_RUN = "not_run"
 NEVER_HEALTHY = "server_never_healthy"
+PENDING = "pending"
 INDEX = "index.jsonl"
 # Written when an attempt starts: the slot it runs in.
 ATTEMPT = "attempt.json"
@@ -164,8 +165,14 @@ class RunRecord:
     external_cause: dict[str, str] | None = None
     # Whether its server came up; None when none was launched.
     server_healthy: bool | None = None
-    # For a server that never came up: which rule made it an outcome or not.
+    # For a server that never came up: which rule made it an outcome or not
+    # ("pending" until its block's control has run).
     decided_by: str | None = None
+    # Where it ran: the host's boot, and how many times the experiment had
+    # stopped for a host that was not clean. A control's health speaks for
+    # another run only from the same boot and epoch.
+    boot_id: str | None = None
+    epoch: int = 0
 
     def outcome(self, reason: str) -> None:
         self.reasons.append(reason)
@@ -245,6 +252,7 @@ def run_plan(
     model = _verified_model(plan)
     if model is not None:
         env = replace(env, model=model)
+    epoch = _stops_so_far(output_dir)
     written: list[dict[str, Any]] = []
     for block, arms in enumerate(order.blocks):
         records = _run_block(
@@ -253,7 +261,7 @@ def run_plan(
             arms,
             output_dir,
             env,
-            _Resume(resume, retry_incomplete, causes),
+            _Resume(resume, retry_incomplete, causes, epoch),
             on_event,
         )
         written += records
@@ -272,6 +280,7 @@ class _Resume:
     resume: bool
     retry: bool
     causes: Mapping[str, ExternalCause]
+    epoch: int = 0
 
 
 def _check_interrupted(
@@ -505,7 +514,7 @@ def _unhealthy_ruling(
         return PROTOCOL_FAILURE, "no_control_arm"
     if _same_launch(plan.arms[record["arm"]], plan.arms[control]):
         return PROTOCOL_FAILURE, "identical_launch"
-    healthy = _control_health(plan, control, record["block"], output)
+    healthy = _control_health(plan, control, record, output)
     if True in healthy:
         return OUTCOME_FAILURE, "arm_launch_differs"
     if False in healthy:
@@ -520,21 +529,48 @@ def _same_launch(arm: Arm, control: Arm) -> bool:
 
 
 def _control_health(
-    plan: ExperimentPlan, control: str, block: int, output: Path
+    plan: ExperimentPlan, control: str, record: Mapping[str, Any], output: Path
 ) -> list[bool | None]:
-    """Whether each attempt of the control in the block, in this invocation
-    or an earlier one, got its server up."""
+    """Whether each attempt of the control in the record's block got its
+    server up, counting only those from the same boot and epoch: evidence
+    from before a stop for a host that was not clean, or from another boot,
+    says nothing about the host the record ran on."""
     pattern = re.compile(
-        rf"{re.escape(plan.experiment_id)}-b{block:02d}-p\d+-"
+        rf"{re.escape(plan.experiment_id)}-b{record['block']:02d}-p\d+-"
         rf"{re.escape(control)}-a\d+$"
     )
     found = []
     for path in sorted((output / "runs").iterdir()):
-        if pattern.match(path.name) and (path / "run.json").is_file():
-            found.append(
-                json.loads((path / "run.json").read_text()).get("server_healthy")
-            )
+        if not (pattern.match(path.name) and (path / "run.json").is_file()):
+            continue
+        attempt = json.loads((path / "run.json").read_text())
+        same = (attempt.get("boot_id"), attempt.get("epoch")) == (
+            record.get("boot_id"),
+            record.get("epoch"),
+        )
+        if same:
+            found.append(attempt.get("server_healthy"))
     return found
+
+
+def _stops_so_far(output: Path) -> int:
+    """How many times the experiment stopped for a host that was not clean:
+    attempts that stopped it, and preludes whose cleanup did not verify."""
+    stops = 0
+    for path in (output / "runs").glob("*/run.json"):
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict) and _stop_reason(record) is not None:
+            stops += 1
+    for name in ("cleanup.json", "step-cleanup.json"):
+        for path in (output / "preludes").glob(f"*/{name}"):
+            try:
+                stops += json.loads(path.read_text()).get("verified") is False
+            except (OSError, ValueError, AttributeError):
+                continue
+    return stops
 
 
 def _not_run(
@@ -589,6 +625,10 @@ def _attempts(
         _finish_leftover(leftover, arm, block, position, resuming.causes)
         for leftover in _leftovers(output / "runs", base)
     ]
+    pending = _pending_decision(output / "runs", base)
+    if pending is not None:
+        # Decided with its block, never retried: its arm's outcome, perhaps.
+        return [*interrupted, pending]
     first = _attempt(
         plan,
         arm,
@@ -599,15 +639,40 @@ def _attempts(
         resuming.resume,
         resuming.retry,
         prelude_failures,
+        resuming.epoch,
     )
     if first is None:
         return interrupted
     if "probe_incomplete" not in first["reasons"] or _left_running(first):
         return [*interrupted, first]
     again = _attempt(
-        plan, arm, block, position, output, env, False, True, prelude_failures
+        plan,
+        arm,
+        block,
+        position,
+        output,
+        env,
+        False,
+        True,
+        prelude_failures,
+        resuming.epoch,
     )
     return [*interrupted, first] + ([again] if again is not None else [])
+
+
+def _pending_decision(runs: Path, base: str) -> dict[str, Any] | None:
+    """The run's last attempt, if a runner died before deciding whether its
+    server that never came up was its arm's outcome."""
+    finished = _finished_attempts(runs, base)
+    if not finished:
+        return None
+    try:
+        record = json.loads((finished[-1] / "run.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if isinstance(record, dict) and record.get("decided_by") == PENDING:
+        return record
+    return None
 
 
 def _left_running(record: Mapping[str, Any]) -> bool:
@@ -805,6 +870,7 @@ def _attempt(
     resume: bool,
     retry: bool,
     prelude_failures: list[str],
+    epoch: int = 0,
 ) -> dict[str, Any] | None:
     """Run one planned run, unless a kept attempt already stands for it.
 
@@ -818,6 +884,7 @@ def _attempt(
     if resume and finished and not _retry_wanted(finished[-1], retry):
         return None
     run = _Run(plan, arm, block, position, len(finished) + 1, runs, env)
+    run.record.boot_id, run.record.epoch = host_boot_id(), epoch
     if prelude_failures:
         run.record.protocol(
             "prelude_failed:" + ",".join(prelude_failures), before_treatment=True
@@ -1011,8 +1078,10 @@ class _Run:
         healthy = _wait_healthy(server.base_url, self.server, server.start_timeout_s)
         self.record.server_healthy = healthy
         if not healthy:
-            # Decided once the block is done (_decide_unhealthy).
+            # Decided once the block is done (_decide_unhealthy), and on
+            # resume should the runner die first.
             self.record.protocol(NEVER_HEALTHY, before_treatment=True)
+            self.record.decided_by = PENDING
             return False
         if not self._probe():
             return False
