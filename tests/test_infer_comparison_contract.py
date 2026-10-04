@@ -39,6 +39,7 @@ def _run(case: dict[str, Any]) -> Any:
         confidence=CONTRACT["confidence"],
         gate=GateRule(**given["gate"]) if given["gate"] else None,
         unavailable=given["unavailable"],
+        trials=None if given["trials"] is None else tuple(given["trials"]),
     )
 
 
@@ -93,6 +94,10 @@ def test_every_contract_case_holds(case: dict[str, Any]) -> None:
         assert result.gate is not None and result.gate.reason == expect["reason"]
     if "case" in expect:
         assert result.gate is not None and result.gate.case == expect["case"]
+    if "claim" in expect:
+        assert result.gate is not None and result.gate.claim is not None
+        for key, value in expect["claim"].items():
+            assert _close(result.gate.claim[key], value), key
 
 
 def test_the_fixture_is_what_its_generator_writes() -> None:

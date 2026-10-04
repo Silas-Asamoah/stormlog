@@ -55,7 +55,8 @@
      "budget": 0.05,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": 0.39998862104283717,
@@ -113,7 +114,8 @@
      "budget": 0.05,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": 0.0008733146013070412,
@@ -159,7 +161,8 @@
      "budget": 0.05042956314408593,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": 0.0399383178241547,
@@ -205,7 +208,8 @@
      "budget": 0.05042956114408593,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": 0.0399383178241547,
@@ -251,7 +255,8 @@
      "budget": 0.04704998967841484,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": -0.04164631239124877,
@@ -297,7 +302,8 @@
      "budget": 0.04704998767841484,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": -0.04164631239124877,
@@ -355,7 +361,8 @@
      "budget": 0.0441985591660095,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": 0.04079420672487687,
@@ -367,7 +374,7 @@
   },
   {
    "id": "attainment_budget_in_fraction_units",
-   "note": "a 0.6-point drop passes a 1-point (0.01) budget",
+   "note": "a 0.6-point drop in every run passes a 1-point (0.01) budget: 6 of 6 runs within it",
    "input": {
     "baseline": [
      0.99,
@@ -412,41 +419,84 @@
      "budget": 0.01,
      "unit": "fraction"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": [
+     [
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000
+     ],
+     [
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000
+     ]
+    ]
    },
    "expect": {
     "effect": -0.005500000000000005,
-    "lower": -0.006378020850321185,
-    "upper": -0.004621979149678825,
+    "lower": -0.010796911593257266,
+    "upper": -0.00020308840674274423,
     "gate": "pass",
     "reason": null,
-    "case": "worst_case"
+    "case": "run_level",
+    "claim": {
+     "runs_within_budget": 6,
+     "runs": 6,
+     "run_pass_lower": 0.5407418735600995
+    }
    }
   },
   {
    "id": "attainment_boundary_just_above",
-   "note": "higher_is_better, difference in fractions: non-inferiority compares the lower bound with -b",
+   "note": "higher_is_better, fractions: a run is within budget iff its drop from its block's baseline is at most b; 8 of 8 pass, 7 of 8 fail at q = 0.5",
    "input": {
     "baseline": [
      0.99,
      0.988,
+     0.991,
+     0.989,
+     0.992,
+     0.99,
+     0.987,
      0.991
     ],
     "candidate": [
      0.984,
      0.983,
-     0.986
+     0.986,
+     0.982,
+     0.987,
+     0.985,
+     0.981,
+     0.985
     ],
     "blocks": [
      [
       "b1",
       "b2",
-      "b3"
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
      ],
      [
       "b1",
       "b2",
-      "b3"
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
      ]
     ],
     "direction": "higher_is_better",
@@ -455,44 +505,91 @@
     "value_unit": null,
     "gate": {
      "rule": "non-inferiority",
-     "budget": 0.006767551909898721,
+     "budget": 0.0070000010000000066,
      "unit": "fraction"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": [
+     [
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000
+     ],
+     [
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000
+     ]
+    ]
    },
    "expect": {
-    "effect": -0.005333333333333338,
-    "lower": -0.00676755090989872,
-    "upper": -0.0038991157567679563,
+    "effect": -0.005625000000000005,
+    "lower": -0.009888292687992718,
+    "upper": -0.0013617073120072926,
     "gate": "pass",
     "reason": null,
-    "case": "worst_case"
+    "case": "run_level",
+    "claim": {
+     "runs_within_budget": 8,
+     "runs": 8,
+     "run_pass_lower": 0.6305833524471807
+    }
    }
   },
   {
    "id": "attainment_boundary_just_below",
-   "note": "higher_is_better, difference in fractions: non-inferiority compares the lower bound with -b",
+   "note": "higher_is_better, fractions: a run is within budget iff its drop from its block's baseline is at most b; 8 of 8 pass, 7 of 8 fail at q = 0.5",
    "input": {
     "baseline": [
      0.99,
      0.988,
+     0.991,
+     0.989,
+     0.992,
+     0.99,
+     0.987,
      0.991
     ],
     "candidate": [
      0.984,
      0.983,
-     0.986
+     0.986,
+     0.982,
+     0.987,
+     0.985,
+     0.981,
+     0.985
     ],
     "blocks": [
      [
       "b1",
       "b2",
-      "b3"
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
      ],
      [
       "b1",
       "b2",
-      "b3"
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
      ]
     ],
     "direction": "higher_is_better",
@@ -501,18 +598,45 @@
     "value_unit": null,
     "gate": {
      "rule": "non-inferiority",
-     "budget": 0.00676754990989872,
+     "budget": 0.006999999000000006,
      "unit": "fraction"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": [
+     [
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000
+     ],
+     [
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000
+     ]
+    ]
    },
    "expect": {
-    "effect": -0.005333333333333338,
-    "lower": -0.00676755090989872,
-    "upper": -0.0038991157567679563,
+    "effect": -0.005625000000000005,
+    "lower": -0.009888292687992718,
+    "upper": -0.0013617073120072926,
     "gate": "fail",
-    "reason": "exceeds_budget",
-    "case": "worst_case"
+    "reason": "too_few_runs_within_budget",
+    "case": "run_level",
+    "claim": {
+     "runs_within_budget": 7,
+     "runs": 8,
+     "run_pass_lower": 0.47349032912479344
+    }
    }
   },
   {
@@ -564,7 +688,8 @@
      "fallback_budget": 0.2,
      "fallback_unit": "requests_per_second"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": null,
@@ -627,7 +752,8 @@
      "fallback_budget": 12.0,
      "fallback_unit": "requests_per_minute"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": null,
@@ -688,7 +814,8 @@
      "budget": 0.5,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": null,
@@ -735,7 +862,8 @@
      "budget": 0.05,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": null,
@@ -791,7 +919,8 @@
      "unit": "relative",
      "min_complete_blocks": 6
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": 0.04095312083553492,
@@ -833,7 +962,8 @@
      "budget": 0.5,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": 0.04205678969103048,
@@ -890,7 +1020,8 @@
      "budget": 0.5,
      "unit": "relative"
     },
-    "unavailable": "censored"
+    "unavailable": "censored",
+    "trials": null
    },
    "expect": {
     "effect": 0.04079420672487687,
@@ -902,58 +1033,58 @@
   },
   {
    "id": "missing_outcomes_non-inferiority",
-   "note": "unknown SLO outcomes: non-inferiority uses the worst case, regression claims the best",
+   "note": "unknown SLO outcomes widen goodput: non-inferiority uses the worst case, regression claims the best",
    "input": {
     "baseline": [
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ],
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ],
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ],
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ],
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ],
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ]
     ],
     "candidate": [
      [
-      0.975,
-      0.995
+      9.7,
+      10.3
      ],
      [
-      0.976,
-      0.994
+      9.75,
+      10.25
      ],
      [
-      0.974,
-      0.996
+      9.72,
+      10.32
      ],
      [
-      0.975,
-      0.995
+      9.7,
+      10.3
      ],
      [
-      0.976,
-      0.994
+      9.75,
+      10.25
      ],
      [
-      0.974,
-      0.996
+      9.72,
+      10.32
      ]
     ],
     "blocks": [
@@ -975,24 +1106,25 @@
      ]
     ],
     "direction": "higher_is_better",
-    "scale": "difference",
-    "unit": "fraction",
+    "scale": "log_ratio",
+    "unit": "relative",
     "value_unit": null,
     "gate": {
      "rule": "non-inferiority",
-     "budget": 0.005,
-     "unit": "fraction"
+     "budget": 0.01,
+     "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
-    "effect": -0.017000000000000015,
-    "lower": -0.01793864377152738,
-    "upper": -0.01606135622847265,
+    "effect": -0.046734154039888766,
+    "lower": -0.04904664418921738,
+    "upper": -0.044416040469960116,
     "best": {
-     "effect": 0.0050000000000000044,
-     "lower": 0.00406135622847264,
-     "upper": 0.005938643771527369
+     "effect": 0.02899578499672594,
+     "lower": 0.02561474566790856,
+     "upper": 0.03238797025240455
     },
     "gate": "fail",
     "reason": "exceeds_budget",
@@ -1001,58 +1133,58 @@
   },
   {
    "id": "missing_outcomes_significant",
-   "note": "unknown SLO outcomes: non-inferiority uses the worst case, regression claims the best",
+   "note": "unknown SLO outcomes widen goodput: non-inferiority uses the worst case, regression claims the best",
    "input": {
     "baseline": [
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ],
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ],
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ],
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ],
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ],
      [
-      0.99,
-      0.992
+      10.0,
+      10.2
      ]
     ],
     "candidate": [
      [
-      0.975,
-      0.995
+      9.7,
+      10.3
      ],
      [
-      0.976,
-      0.994
+      9.75,
+      10.25
      ],
      [
-      0.974,
-      0.996
+      9.72,
+      10.32
      ],
      [
-      0.975,
-      0.995
+      9.7,
+      10.3
      ],
      [
-      0.976,
-      0.994
+      9.75,
+      10.25
      ],
      [
-      0.974,
-      0.996
+      9.72,
+      10.32
      ]
     ],
     "blocks": [
@@ -1074,24 +1206,25 @@
      ]
     ],
     "direction": "higher_is_better",
-    "scale": "difference",
-    "unit": "fraction",
+    "scale": "log_ratio",
+    "unit": "relative",
     "value_unit": null,
     "gate": {
      "rule": "significant",
-     "budget": 0.005,
-     "unit": "fraction"
+     "budget": 0.01,
+     "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
-    "effect": -0.017000000000000015,
-    "lower": -0.01793864377152738,
-    "upper": -0.01606135622847265,
+    "effect": -0.046734154039888766,
+    "lower": -0.04904664418921738,
+    "upper": -0.044416040469960116,
     "best": {
-     "effect": 0.0050000000000000044,
-     "lower": 0.00406135622847264,
-     "upper": 0.005938643771527369
+     "effect": 0.02899578499672594,
+     "lower": 0.02561474566790856,
+     "upper": 0.03238797025240455
     },
     "gate": "pass",
     "reason": null,
@@ -1099,10 +1232,153 @@
    }
   },
   {
-   "id": "all_zero_failure_rate_is_degenerate",
-   "note": "no failures anywhere: no [0, 0] interval, a run-level bound instead",
+   "id": "attainment_unknown_outcomes_judged_per_run_worst_case",
+   "note": "a run is within budget only if its lower bound is, against its block baseline's upper bound: 7 of 8 fail",
    "input": {
     "baseline": [
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ]
+    ],
+    "candidate": [
+     [
+      0.985,
+      0.995
+     ],
+     [
+      0.985,
+      0.995
+     ],
+     [
+      0.985,
+      0.995
+     ],
+     [
+      0.985,
+      0.995
+     ],
+     [
+      0.985,
+      0.995
+     ],
+     [
+      0.985,
+      0.995
+     ],
+     [
+      0.985,
+      0.995
+     ],
+     [
+      0.975,
+      0.995
+     ]
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.01,
+     "unit": "fraction"
+    },
+    "unavailable": null,
+    "trials": [
+     [
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000
+     ],
+     [
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000
+     ]
+    ]
+   },
+   "expect": {
+    "effect": -0.008250000000000007,
+    "lower": -0.012359269246304042,
+    "upper": -0.0041407307536959715,
+    "gate": "fail",
+    "reason": "too_few_runs_within_budget",
+    "case": "run_level",
+    "claim": {
+     "runs_within_budget": 7,
+     "runs": 8,
+     "run_pass_lower": 0.47349032912479344
+    }
+   }
+  },
+  {
+   "id": "failure_fraction_all_zero_8_of_8_passes",
+   "note": "lower_is_better: a run is within budget iff its failure fraction exceeds its block baseline's by at most b",
+   "input": {
+    "baseline": [
+     0.0,
+     0.0,
      0.0,
      0.0,
      0.0,
@@ -1116,7 +1392,191 @@
      0.0,
      0.0,
      0.0,
+     0.0,
+     0.0,
      0.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.01,
+     "unit": "fraction"
+    },
+    "unavailable": null,
+    "trials": [
+     [
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300
+     ],
+     [
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300
+     ]
+    ]
+   },
+   "expect": {
+    "effect": 0.0,
+    "lower": -0.0013924980424912816,
+    "upper": 0.0013924980424912816,
+    "gate": "pass",
+    "reason": null,
+    "case": "run_level",
+    "claim": {
+     "runs_within_budget": 8,
+     "runs": 8,
+     "run_pass_lower": 0.6305833524471807
+    }
+   }
+  },
+  {
+   "id": "failure_fraction_7_of_8_fails",
+   "note": "lower_is_better: a run is within budget iff its failure fraction exceeds its block baseline's by at most b",
+   "input": {
+    "baseline": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "candidate": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.02
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.01,
+     "unit": "fraction"
+    },
+    "unavailable": null,
+    "trials": [
+     [
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300
+     ],
+     [
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300
+     ]
+    ]
+   },
+   "expect": {
+    "effect": 0.0025,
+    "lower": -0.003411560628981961,
+    "upper": 0.00841156062898196,
+    "gate": "fail",
+    "reason": "too_few_runs_within_budget",
+    "case": "run_level",
+    "claim": {
+     "runs_within_budget": 7,
+     "runs": 8,
+     "run_pass_lower": 0.47349032912479344
+    }
+   }
+  },
+  {
+   "id": "failure_fraction_6_of_6_passes",
+   "note": "lower_is_better: a run is within budget iff its failure fraction exceeds its block baseline's by at most b",
+   "input": {
+    "baseline": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "candidate": [
+     0.0,
+     0.0033333333333333335,
+     0.0,
+     0.006666666666666667,
+     0.0,
+     0.0033333333333333335
     ],
     "blocks": [
      [
@@ -1145,13 +1605,227 @@
      "budget": 0.01,
      "unit": "fraction"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": [
+     [
+      300,
+      300,
+      300,
+      300,
+      300,
+      300
+     ],
+     [
+      300,
+      300,
+      300,
+      300,
+      300,
+      300
+     ]
+    ]
    },
    "expect": {
-    "effect": null,
-    "run_departs_upper": 0.4592581264399005,
+    "effect": 0.0022222222222222222,
+    "lower": -0.0012697485754066158,
+    "upper": 0.00571419301985106,
     "gate": "pass",
-    "reason": "degenerate_zero"
+    "reason": null,
+    "case": "run_level",
+    "claim": {
+     "runs_within_budget": 6,
+     "runs": 6,
+     "run_pass_lower": 0.5407418735600995
+    }
+   }
+  },
+  {
+   "id": "failure_fraction_9_of_10_passes",
+   "note": "lower_is_better: a run is within budget iff its failure fraction exceeds its block baseline's by at most b",
+   "input": {
+    "baseline": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "candidate": [
+     0.0,
+     0.0033333333333333335,
+     0.0,
+     0.006666666666666667,
+     0.0,
+     0.0033333333333333335,
+     0.0,
+     0.0,
+     0.01,
+     0.02
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8",
+      "b9",
+      "b10"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8",
+      "b9",
+      "b10"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.01,
+     "unit": "fraction"
+    },
+    "unavailable": null,
+    "trials": [
+     [
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300
+     ],
+     [
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300
+     ]
+    ]
+   },
+   "expect": {
+    "effect": 0.004333333333333333,
+    "lower": -0.0003081570417259004,
+    "upper": 0.008974823708392567,
+    "gate": "pass",
+    "reason": null,
+    "case": "run_level",
+    "claim": {
+     "runs_within_budget": 9,
+     "runs": 10,
+     "run_pass_lower": 0.5549838829718047
+    }
+   }
+  },
+  {
+   "id": "failure_fraction_needs_three_over_b_requests_per_run",
+   "note": "200 requests a run at a 1% budget: one failure would breach it",
+   "input": {
+    "baseline": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "candidate": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6",
+      "b7",
+      "b8"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.01,
+     "unit": "fraction"
+    },
+    "unavailable": null,
+    "trials": [
+     [
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200
+     ],
+     [
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200
+     ]
+    ]
+   },
+   "expect": {
+    "gate": "not_evaluable",
+    "reason": "too_few_requests_per_run"
    }
   },
   {
@@ -1183,7 +1857,8 @@
      "budget": 0.01,
      "unit": "relative"
     },
-    "unavailable": null
+    "unavailable": null,
+    "trials": null
    },
    "expect": {
     "effect": 0.04095747983714565,

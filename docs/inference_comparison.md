@@ -32,7 +32,7 @@ stormlog infer compare \
 | `--design auto\|paired_blocks\|independent` | `auto` pairs runs by block when every run is labelled |
 | `--allow FIELD` | A field (`engine.max_num_seqs`) or `vllm_config` JSON pointer (`/scheduler_config`) that may differ |
 | `--added-observers NAME,...` | The observers an `incremental` candidate adds |
-| `--gate METRIC=RULE:BUDGET` | Gate a metric, or every metric a pattern names (`client.*.p99`). A latency, goodput or throughput budget is relative (0.05 is 5%); an attainment or failure-fraction budget is a fraction (0.01 is one point). A budget that can never fail is a usage error: a fraction above 1, or a fall of 100% or more in a rate |
+| `--gate METRIC=RULE:BUDGET` | Gate a metric, or every metric a pattern names (`client.*.p99`). A latency, goodput or throughput budget is relative (0.05 is 5%); an attainment or failure-fraction budget is a fraction (0.01 is one point), gated as a claim about runs (see Fractions) and only with `non-inferiority`. A budget that can never fail is a usage error: a fraction above 1, or a fall of 100% or more in a rate |
 | `--fallback METRIC=BUDGET:UNIT` | A pre-registered budget on the difference, for when a zero leaves the log ratio undefined. `METRIC` is a name or pattern, and the budget applies to every gated metric it matches, whichever gate pattern named it; one that matches no gated metric is a usage error |
 | `--min-complete-blocks N` | Every gate needs at least N complete pairs |
 | `--min-attainment X`, `--min-run-pass Q` | At least a share Q (0.5) of candidate runs reach attainment X: a claim about runs. Both are in (0, 1]. A candidate run whose SLO could not be judged counts as not reaching X, and the gate obeys the same blockers as the metric gates (unverified comparability, observers, `--on-incomplete fail`); when it cannot be evaluated, it exits 4 like they do. `--attainment-model bernoulli` pools requests instead, labelled model-based |
@@ -227,12 +227,52 @@ The difference is always reported, in its own unit, and never gated with the
 relative budget. A fallback in requests per minute gives the same decision
 as the same fallback in requests per second.
 
-When every run of both arms has the same value (a failure rate of 0, an
-attainment of 1), a t interval would be a falsely certain [0, 0]. The result
-is `degenerate_zero` (or `degenerate_constant`) with no interval, and the
-bound that the runs do support: a run departs from that value with
-probability at most `1 − (α/2)^(1/n)`, per arm. Such a metric's gate passes,
-with that reason.
+When every run of both arms has the same value, and the metric is not a
+fraction with its request counts, a t interval would be a falsely certain
+[0, 0]. The result is `degenerate_zero` (or `degenerate_constant`) with no
+interval, and the bound that the runs do support: a run departs from that
+value with probability at most `1 − (α/2)^(1/n)`, per arm. That bound alone
+shows nothing within a budget, so the gate is `not_evaluable` with that
+reason.
+
+## Fractions
+
+A failure fraction or an SLO attainment is gated on a **claim about runs**,
+never on an interval, whatever its values (the lead's final ruling, with
+fable-213's second opinion and opus-221's D32). Under failures correlated
+within a run (a server that stalls for a few seconds), every interval on the
+fraction passes a breach of the budget 10–25% of the time at 6–10 blocks,
+and pooling requests as if independent passes it up to 55% (78% in a burst
+model); more requests per run do not help.
+
+- **The claim.** Each candidate run is within the budget `b` when its value
+  is no worse than its block's baseline run by more than `b` (without
+  blocks, than the baseline arm's mean), on its worst case when outcomes
+  are unknown. A run with no value, or no baseline to judge it by, is a
+  miss. With k of n runs within, the gate passes iff the one-sided 97.5%
+  Clopper–Pearson lower bound of k/n is at least 0.5. That is exact when
+  runs are independent (a fresh server each), however failures cluster
+  inside a run.
+- **The thresholds.** 6 runs need 6 of 6 (lower bound 0.541; 5 of 6 gives
+  0.359), 8 need 8 of 8 (0.631; 7 of 8 gives 0.474), 10 need 9 of 10
+  (0.555). Fewer than 6 runs can never make the claim: the gate is
+  `not_evaluable: too_few_runs_for_claim`.
+- **Requests per run.** Each run needs at least `3 / b` requests (300 at
+  1%), so that a single failure cannot breach the budget; with fewer, the
+  gate is `not_evaluable: too_few_requests_per_run`, and without counts
+  `requests_per_run_unrecorded`. Pre-register `m` accordingly.
+- **What it says.** The gate's `claim` reads, for example, "8 of 8
+  candidate runs within 0.01 of the block baseline; run-pass rate at least
+  0.631 with 97.5% confidence". It is never a bound on the fraction.
+- **Only non-inferiority.** `significant` and `demonstrated` are not defined
+  for a fraction: a usage error.
+- **Alongside it,** never gated: the paired t on the fractions with its
+  standard error floored at the pooled binomial one (`p = (x + 1)/(N + 2)`
+  per arm; nominal under independent requests, under-covering when failures
+  cluster), shown as `(descriptive)`; and each arm's pooled requests'
+  Clopper–Pearson bounds (`pooled`, `model: independent_requests`), with
+  the effective sample a zero-event bound of `b` needs (368 at 1%, against
+  `N / (1 + (m − 1)ρ)` under correlation ρ).
 
 ## Missing evidence
 
@@ -329,10 +369,12 @@ give. The cases cover:
 - a 40% latency regression against a 5% non-inferiority budget;
 - the gate at its budget boundary, for latency, throughput and attainment;
 - attainment budgets in fraction units;
+- the run-level claim on fractions: 6 of 6, 8 of 8 and 9 of 10 pass, 7 of 8
+  fails, an all-zero fraction passes, and fewer than `3 / b` requests a run
+  cannot be judged;
 - the zero rules and their fallback in two units;
-- missing-outcome bounds;
+- missing-outcome bounds, for goodput and per run for attainment;
 - pre-registered block counts;
-- degenerate metrics;
 - the independent design's df.
 
 The expected numbers come from the formulas themselves, in
@@ -340,7 +382,8 @@ The expected numbers come from the formulas themselves, in
 test checks the fixture is what that script writes. So do the gate
 outcomes: the script applies each rule to its own interval, after the
 blockers (too few or fewer than pre-registered pairs) and the leave-one-out
-screen, rather than assigning them by hand.
+screen, and the run-level claim to each run, rather than assigning them by
+hand.
 
 ## Other tools
 

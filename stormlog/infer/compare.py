@@ -860,6 +860,7 @@ def _metric(
         bootstrap_min_n=spec.bootstrap_min_n,
         seed=spec.seed,
         unavailable=unavailable,
+        trials=_trials(metric, case_id, kept),
     )
     if unavailable is not None and (compared.reason is None or unavailable in _LOST):
         # Why it was not compared, gated or not.
@@ -902,6 +903,27 @@ def _readings(
             if value is None and (case is None or run.outcome_failures):
                 lost.add(arm)
     return values[BASELINE], values[CANDIDATE], reasons, lost
+
+
+def _trials(
+    metric: MetricSpec, case_id: str, kept: Mapping[str, list[RunSummary]]
+) -> tuple[list[int | None], list[int | None]] | None:
+    """A fraction's requests in each run, aligned with its readings."""
+    if metric.trials is None:
+        return None
+    count = metric.trials
+    counts = {
+        arm: [
+            (
+                count(run.comparable_cases[case_id])
+                if case_id in run.comparable_cases
+                else None
+            )
+            for run in runs
+        ]
+        for arm, runs in kept.items()
+    }
+    return counts[BASELINE], counts[CANDIDATE]
 
 
 def _metric_blocker(
