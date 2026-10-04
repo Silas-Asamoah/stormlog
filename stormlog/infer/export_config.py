@@ -71,6 +71,8 @@ class ExportConfig:
     otlp_file_fsync: bool = False
     # NAME=VALUE pairs; the values are credentials, never recorded.
     otlp_headers: tuple[str, ...] = ()
+    # Send headers over plain http to a host other than this one.
+    otlp_allow_insecure_headers: bool = False
     otlp_resource_attributes: tuple[str, ...] = ()
     otlp_resource_attribute_allow: tuple[str, ...] = ()
     otlp_flush_timeout_seconds: float = DEFAULT_FLUSH_SECONDS
@@ -169,6 +171,7 @@ _SETTING_TYPES = {
     "otlp_endpoint": _TEXT,
     "otlp_file": _TEXT,
     "otlp_file_fsync": _FLAG,
+    "otlp_allow_insecure_headers": _FLAG,
     "otlp_headers": _TEXTS,
     "otlp_resource_attributes": _TEXTS,
     "otlp_resource_attribute_allow": _TEXTS,
@@ -386,6 +389,7 @@ def _check_otlp_dependent(config: ExportConfig) -> None:
     for name, flag in (
         ("otlp_file_fsync", "--otlp-file-fsync"),
         ("otlp_headers", "--otlp-header"),
+        ("otlp_allow_insecure_headers", "--otlp-allow-insecure-headers"),
         ("otlp_resource_attributes", "--otlp-resource-attribute"),
         ("otlp_resource_attribute_allow", "--otlp-resource-attribute-allow"),
         ("otlp_flush_timeout_seconds", "--otlp-flush-timeout"),
@@ -553,6 +557,12 @@ def _add_otlp_arguments(parser: argparse.ArgumentParser) -> None:
         help="fsync the file after each line.",
     )
     group.add_argument(
+        "--otlp-allow-insecure-headers",
+        action="store_true",
+        help="Send the OTLP headers, which hold credentials, over plain http "
+        "to a host other than this one. Without it such a run is refused.",
+    )
+    group.add_argument(
         "--otlp-header",
         action="append",
         metavar="NAME=VALUE",
@@ -660,6 +670,9 @@ def _otlp_from_args(args: argparse.Namespace, defaults: ExportConfig) -> dict[st
         "otlp_endpoint": getattr(args, "otlp_endpoint", None),
         "otlp_file": Path(otlp_file) if otlp_file else None,
         "otlp_file_fsync": bool(getattr(args, "otlp_file_fsync", False)),
+        "otlp_allow_insecure_headers": bool(
+            getattr(args, "otlp_allow_insecure_headers", False)
+        ),
         "otlp_headers": tuple(getattr(args, "otlp_header", None) or ()),
         "otlp_resource_attributes": tuple(
             getattr(args, "otlp_resource_attribute", None) or ()
