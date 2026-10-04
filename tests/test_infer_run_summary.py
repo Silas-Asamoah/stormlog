@@ -10,7 +10,7 @@ from typing import Any
 
 from stormlog.exit_codes import ExitCode
 from stormlog.infer.cli import main as infer_main
-from stormlog.infer.run_summary import summarize_run
+from stormlog.infer.run_summary import summarize_run, summary_from_records
 from tests.infer_workload_helpers import run_profile_with_fake_client
 
 LABELS = {
@@ -89,3 +89,17 @@ def test_a_labelled_profile_records_its_labels(tmp_path: Path) -> None:
     path = _run(tmp_path, labels=LABELS)
     session = json.loads(path.read_text().splitlines()[0])
     assert session["config"]["labels"] == LABELS
+
+
+def _summary(report: dict[str, Any], *extra: dict[str, Any]) -> Any:
+    session = {"event_type": "infer.session", "session_id": "s", "status": "completed"}
+    return summary_from_records([session, *extra], report)
+
+
+def test_each_protocol_failure_sets_its_run_or_case_aside() -> None:
+    cases = {"c1": {"population": {"cohort_valid": False}}}
+    assert _summary({"cases": cases}).failures_for("c1") == ("cohort_invalid",)
+    changed = _summary({"manifest": {"protocol_failure": "identity_changed"}})
+    assert changed.protocol_failures == ("identity_changed",)
+    probe = {"event_type": "infer.server_probe", "phase": "before", "incomplete": True}
+    assert _summary({}, probe).protocol_failures == ("probe_incomplete",)

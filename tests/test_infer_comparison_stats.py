@@ -502,3 +502,11 @@ def test_a_value_that_is_not_finite_blocks_the_gate() -> None:
         "not_evaluable",
         "non_finite_value",
     )
+
+
+def test_the_run_gate_is_one_sided_at_97_5_percent() -> None:
+    # 6 of 6 runs: the one-sided 97.5% lower bound is 0.025^(1/6) = 0.541,
+    # below a required 0.58; at 95% it would be 0.607, above it.
+    gate = run_pass_gate(6, 6, 0.58)
+    assert gate["lower_bound"] == pytest.approx(0.025 ** (1 / 6))
+    assert gate["status"] == "fail"
