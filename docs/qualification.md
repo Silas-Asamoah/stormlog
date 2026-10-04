@@ -750,8 +750,11 @@ reports any file changed, missing or unlisted, a `SHA256SUMS` truncated or
 edited, and one that differs from the digest beside the run.
 
 **The victim's outcomes** for impact are a stand-in for #213's
-`evaluate_request`, used until #213 lands, and the rule is the same:
-- **Met:** a request that met the SLO.
-- **Violation:** one that missed it, or failed, being timed out, rejected,
-  in error, or never sent.
-- **Unknown:** one that was cancelled.
+`evaluate_request` on the client criteria, used until #213 lands, and the
+rule is the same:
+- **Violation:** a request that did not succeed (timed out, rejected, in
+  error, never sent, or cancelled), or a successful one with a criterion
+  above its limit.
+- **Unknown:** a successful one with no failed criterion but a value missing,
+  not finite or negative, which no latency can be.
+- **Met:** every criterion within its limit.

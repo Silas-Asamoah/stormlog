@@ -54,13 +54,18 @@ def _request(
 
 
 def test_outcomes_follow_213s_rule() -> None:
+    # #213's evaluate_request: anything but ok is missed, cancelled
+    # included; a successful request misses on any failed criterion, else is
+    # unknown on any value no latency can have.
     slo = Slo(ttft_ms=200, e2e_ms=1000)
     assert outcome(_request(), slo) == "met"
+    assert outcome(_request(ttft=200), slo) == "met"
     assert outcome(_request(ttft=300), slo) == "violation"
-    assert outcome(_request(e2e=None), slo) == "violation"  # type: ignore[arg-type]
-    for failed in ("timeout", "rejected", "error", "dropped"):
+    for failed in ("timeout", "rejected", "error", "dropped", "cancelled"):
         assert outcome(_request(failed), slo) == "violation"
-    assert outcome(_request("cancelled"), slo) == "unknown"
+    for unjudged in (None, float("nan"), float("inf"), -5.0):
+        assert outcome(_request(e2e=unjudged), slo) == "unknown"  # type: ignore[arg-type]
+    assert outcome(_request(ttft=300, e2e=None), slo) == "violation"  # type: ignore[arg-type]
 
 
 def test_outcomes_are_counted_by_arrival() -> None:
@@ -68,7 +73,7 @@ def test_outcomes_are_counted_by_arrival() -> None:
     records = [
         _request(at=5),
         _request(ttft=900, at=10),
-        _request("cancelled", at=15),
+        _request(ttft=-1, at=15),
         {**_request(at=99), "intended_at_ns": 20},  # arrived at 20, sent at 99
         _request(at=30),
         {"event_type": "infer.phase_window"},
