@@ -684,9 +684,20 @@ def _victims_of(label: str) -> list[psutil.Process]:
     return found
 
 
-@pytest.mark.parametrize("second", [signal.SIGTERM, signal.SIGINT])
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (signal.SIGTERM, signal.SIGTERM),
+        (signal.SIGTERM, signal.SIGINT),
+        # rev-220-a's final note: a job runner's SIGHUP, and an operator's
+        # second Ctrl+C, pinned as well.
+        (signal.SIGHUP, signal.SIGHUP),
+        (signal.SIGINT, signal.SIGINT),
+    ],
+    ids=["term-term", "term-int", "hup-hup", "int-int"],
+)
 def test_a_second_signal_while_the_run_finishes_still_publishes_it(
-    tmp_path: Path, second: int
+    tmp_path: Path, first: int, second: int
 ) -> None:
     # rev-220-a's second A2 delta, D1: SIGTERM to the harness alone, then
     # another signal while it waited for its victim to drain. The second
@@ -698,7 +709,7 @@ def test_a_second_signal_while_the_run_finishes_still_publishes_it(
     plan["timeline"]["episode"] = 6
     plan["episodes"] = [{"type": "N"}, {"type": "N"}]
     (tmp_path / "plan.json").write_text(json.dumps(plan))
-    label = f"q221-{0xDD00 + second:016x}"  # one per case: they may run at once
+    label = f"q221-{0xDD00 + 64 * first + second:016x}"  # cases may run at once
     engine = ["--step-seconds", "0.002", "--hook-dir", str(hook)]
     try:
         with FakeEngineProcess(engine) as server:
@@ -729,7 +740,7 @@ def test_a_second_signal_while_the_run_finishes_still_publishes_it(
             # long as a real victim's long outputs would.
             assert post(f"{server.base_url}/_fault/pause?target=engine")[0] == 200
             time.sleep(1)
-            os.kill(harness.pid, signal.SIGTERM)  # the harness alone
+            os.kill(harness.pid, first)  # the harness alone
             time.sleep(1)
             assert harness.poll() is None  # still waiting for the victim
             os.kill(harness.pid, second)
@@ -739,7 +750,7 @@ def test_a_second_signal_while_the_run_finishes_still_publishes_it(
     finally:
         for process in _victims_of(label):
             process.kill()
-    assert code == 128 + signal.SIGTERM
+    assert code == 128 + first  # it exits as the first signal would have
     assert left == []
     run = tmp_path / "runs" / label
     assert not partial.exists() and verify(run) == []
