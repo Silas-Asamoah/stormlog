@@ -215,7 +215,12 @@ These series sit beside the exported metrics:
     bug, counted in `stormlog_exporter_internal_errors_total` too;
   - `closed`: offered after it closed.
 
-  While every reason is 0, the exported totals are exact.
+  While every reason is 0, and no record failed to be read
+  (`stormlog_exporter_internal_errors_total{entry="observe"}`), the exported
+  totals are exact: the capability record's `exact` says so. They are
+  exact for the records offered to the exporter, which it is handed as
+  each is written; a record written just as a second Ctrl+C lands may not
+  be.
 - `stormlog_metrics_scrapes_total{outcome}`, with `outcome` one of `ok`,
   `rejected_busy`, `timeout`, `not_found`, `bad_request` and `error`, and
   `stormlog_metrics_textfile_writes_total{outcome}`.
