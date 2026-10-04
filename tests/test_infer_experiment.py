@@ -365,6 +365,59 @@ def test_an_interrupted_attempt_marked_as_an_outcome_is_kept(tmp_path: Path) -> 
     assert "runner:runner_interrupted" in summary.outcome_failures
 
 
+def _unrenamed(exp: Path, label: str, *, run_json: bool) -> None:
+    """Leave an attempt as a runner killed inside finish() would: its state
+    appended to its artifacts (and run.json written, or not), still
+    ``.partial``, with no line in the index."""
+    run_dir = exp / "runs" / label
+    if not run_json:
+        for name in ("run.json", "SHA256SUMS"):
+            (run_dir / name).unlink()
+    run_dir.rename(run_dir.with_name(label + ".partial"))
+    index = exp / "index.jsonl"
+    kept = [
+        line
+        for line in index.read_text().splitlines()
+        if json.loads(line)["label"] != label
+    ]
+    index.write_text("\n".join(kept) + "\n")
+
+
+@pytest.mark.parametrize("run_json", [True, False])
+def test_an_attempt_that_recorded_its_state_keeps_it_on_resume(
+    tmp_path: Path, run_json: bool
+) -> None:
+    # rev-213-a's E2: an outcome recorded before the rename could be named
+    # an external cause on resume, and so set aside.
+    from stormlog.infer.experiment import _sums_verify
+
+    document = _plan(_port(), blocks=1)
+    records = _run(tmp_path, document)
+    exp = tmp_path / "exp"
+    label = next(r["label"] for r in records if r["arm"] == "watch")
+    _unrenamed(exp, label, run_json=run_json)
+    with pytest.raises(InferUsageError, match=f"{label} is not an interrupted"):
+        _run(tmp_path, document, resume=True, external_causes={label: PREEMPTED})
+    with pytest.raises(InferUsageError, match=f"{label} is not an interrupted"):
+        _run(tmp_path, document, resume=True, interrupted_as_outcome={label})
+    (only,) = _run(tmp_path, document, resume=True, retry_incomplete=True)
+    assert (only["label"], only["state"], only["interrupted"]) == (
+        label,
+        "completed",
+        False,
+    )
+    run_dir = exp / "runs" / label
+    assert _sums_verify(run_dir)
+    states = [
+        line
+        for line in (run_dir / "c1.jsonl").read_text().splitlines()
+        if json.loads(line).get("event_type") == "infer.run_state"
+    ]
+    assert len(states) == 1
+    index = (exp / "index.jsonl").read_text()
+    assert index.count(f'"{label}"') == 1
+
+
 def test_a_cause_or_an_outcome_must_name_an_interrupted_attempt(
     tmp_path: Path,
 ) -> None:

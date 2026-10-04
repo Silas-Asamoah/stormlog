@@ -42,7 +42,8 @@ go on until each such attempt is explained: by an external cause with its
 evidence (``external_causes``), which makes it a ``protocol_failure`` that
 may be retried, or by marking it an outcome (``interrupted_as_outcome``),
 an ``outcome_failure`` (``runner_interrupted``) that is kept. It then
-finishes the attempt in place and indexes it.
+finishes the attempt in place and indexes it. An attempt killed after it
+recorded its state keeps that state, and no cause can be named for it.
 """
 
 from __future__ import annotations
@@ -331,7 +332,9 @@ def _interrupted_labels(runs: Path) -> set[str]:
     return {
         path.name[: -len(".partial")]
         for path in runs.iterdir()
-        if path.name.endswith(".partial") and path.is_dir()
+        if path.name.endswith(".partial")
+        and path.is_dir()
+        and _recorded_state(path) is None
     }
 
 
@@ -464,7 +467,7 @@ def _attempts(
     verified, so the fresh server never starts beside a survivor."""
     base = f"{plan.experiment_id}-b{block:02d}-p{position}-{arm.name}"
     interrupted = [
-        _finish_interrupted(leftover, arm, block, position, resuming.causes)
+        _finish_leftover(leftover, arm, block, position, resuming.causes)
         for leftover in _leftovers(output / "runs", base)
     ]
     first = _attempt(
@@ -503,6 +506,78 @@ def _leftovers(runs: Path, base: str) -> list[Path]:
         if (match := pattern.match(path.name)) is not None
     ]
     return [path for _, path in sorted(found)]
+
+
+def _finish_leftover(
+    leftover: Path,
+    arm: Arm,
+    block: int,
+    position: int,
+    causes: Mapping[str, ExternalCause],
+) -> dict[str, Any]:
+    recorded = _recorded_state(leftover)
+    if recorded is None:
+        return _finish_interrupted(leftover, arm, block, position, causes)
+    return _finish_recorded(leftover, recorded, arm, block, position)
+
+
+def _recorded_state(leftover: Path) -> dict[str, Any] | None:
+    """The state an attempt recorded before its runner was killed, if any:
+    its run.json, or else the run state it appended to its artifacts."""
+    try:
+        record = json.loads((leftover / "run.json").read_text())
+    except (OSError, ValueError):
+        record = None
+    if isinstance(record, dict) and record.get("state"):
+        return record
+    for path in _session_artifacts(leftover):
+        states = [
+            item
+            for item in _artifact_records(path)
+            if item.get("event_type") == RUN_STATE_EVENT
+        ]
+        if states:
+            return states[-1]
+    return None
+
+
+def _finish_recorded(
+    leftover: Path,
+    recorded: Mapping[str, Any],
+    arm: Arm,
+    block: int,
+    position: int,
+) -> dict[str, Any]:
+    """An attempt killed after it recorded its state: kept in that state,
+    which no cause named on resume can change."""
+    label = leftover.name[: -len(".partial")]
+    final = leftover.with_name(label)
+    if recorded.get("type") == "run":
+        record = dict(recorded)
+    else:
+        attempt = int(label.rsplit("-a", 1)[1])
+        rebuilt = RunRecord(
+            label=label,
+            arm=arm.name,
+            block=block,
+            position_planned=position,
+            position_actual=_slot(leftover, position),
+            attempt=attempt,
+            run_dir=str(final),
+            state=recorded["state"],
+            reasons=list(recorded.get("reasons", [])),
+            before_treatment=list(recorded.get("before_treatment", [])),
+            order_broken=attempt > 1,
+            external_cause=recorded.get("external_cause"),
+        )
+        rebuilt.notes.append("the runner was stopped after this attempt's state")
+        record = rebuilt.to_record()
+        (leftover / "run.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n"
+        )
+    _write_sums(leftover)
+    leftover.rename(final)
+    return record
 
 
 def _finish_interrupted(
