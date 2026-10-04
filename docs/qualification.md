@@ -696,7 +696,10 @@ One run goes:
    takes more than 180 s). Then each episode's
    `stormlog.qualify.injection/1` record is written to
    `truth/injections.jsonl` with:
-   - its effect timing and realization checks;
+   - its effect timing and realization checks, and its realized
+     mechanisms: the label's when realized, plus any A.4 adds (an F4b whose
+     engine stopped stepping adds `host_stall@engine_core`, which its label
+     then also allows);
    - its impact on the victim's SLO (when the plan sets one), counted by
      arrival in the effect window against the baseline;
    - its run's label (`run_id`) and the victim artifact's clock domain. The
