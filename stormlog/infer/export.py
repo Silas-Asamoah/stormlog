@@ -1,15 +1,18 @@
-"""The export pipeline: records in, Prometheus out, never in the run's way.
+"""The export pipeline: records in, Prometheus and spans out, never in the run's way.
 
 The pipeline is told about each record the run writes (``observe``) and
-copies the fields it needs into a bounded queue; a worker thread applies them
-to the registry, a health thread reads the health sources once a second,
-and the ``/metrics`` server and the textfile writer render the registry.
-None of them can block the producer or change the run's exit code:
-every entry point catches its own failures and counts them.
+copies the fields each exporter needs into its own bounded queue. For
+Prometheus, a worker thread applies them to the registry, a health thread
+reads the health sources once a second, and the ``/metrics`` server and the
+textfile writer render the registry. For spans, the OTLP exporter's worker
+batches and delivers them (``export_otlp``). None of them can block the
+producer or change the run's exit code: every entry point catches its own
+failures and counts them.
 
-``close`` ends it in a fixed order: stop taking records, let the worker
-finish within the deadline, then freeze the registry, with any record still
-unapplied counted as dropped at shutdown, so the counts written to the
+``close`` ends it in a fixed order: stop taking records, let the workers
+finish within the deadline, then freeze: the span ledger, with every span
+still queued or in flight settled, and then the registry, with any record
+still unapplied counted as dropped at shutdown, so the counts written to the
 artifact are final. The ``/metrics`` endpoint keeps serving the frozen values
 until ``stop_serving``.
 """
@@ -24,15 +27,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Protocol, Union
 
+from .._export.delivery import (
+    DROPPED_REASONS,
+    REFUSED_REASONS,
+    TRANSMISSION_KINDS,
+    UNKNOWN_REASONS,
+)
 from .._export.envelope import Envelope
 from .._export.http_server import MetricsServer
 from .._export.queue import BoundedQueue, QueueStats
 from .._export.registry import Family, FamilySpec, Registry, render
 from .._export.renders import RenderCache
 from .._export.textfile import PRODUCER_LABEL, SlotInUse, TextfileWriter
+from ..scrub import KnownSecrets
 from .correlation_events import CapabilityEvent, CorrelationContext
 from .export_config import Command, ExportConfig
-from .export_metrics import ProfileLabels, ProfileMetrics
+from .export_metrics import ProfileLabels, ProfileMetrics, summarize_chunk_gaps
+from .export_otlp import OtlpExport
+from .export_spans import SpanIdentity
 
 COMPONENT_PROMETHEUS = "export.prometheus"
 # Whichever binds first; a request record is charged about 1.8-2.5 KiB, so
@@ -48,6 +60,7 @@ TEXTFILE_CLOSE_FLOOR_SECONDS = 0.5
 _CLOSE_STEPS = (
     "_close_queue",
     "_join_worker",
+    "_close_otlp",
     "_stop_poller",
     "_freeze",
     "_invalidate",
@@ -116,9 +129,17 @@ class ExportPipeline:
         health: Sequence[tuple[str, Sequence[HealthMetric]]] = (),
         forbidden_paths: Sequence[Path] = (),
         on_warning: Callable[[str], None] | None = None,
+        spans: SpanIdentity | None = None,
+        secrets: KnownSecrets | None = None,
+        environ: Mapping[str, str] | None = None,
+        host: str = "",
     ) -> None:
         self.config = config
         self.on_warning = on_warning
+        self.metrics_on = config.prometheus_enabled
+        self.otlp = self._otlp(
+            config, labels.version, host, spans, secrets, environ or {}
+        )
         self.registry = Registry(
             const_labels={PRODUCER_LABEL: config.prometheus_slot},
             max_samples=config.prometheus_max_series,
@@ -129,10 +150,14 @@ class ExportPipeline:
         self._health: dict[str, tuple[list[tuple[HealthMetric, Family]], Any]] = {}
         for name, metrics in health:
             self.declare_health(name, metrics)
+        if self.otlp is not None and self.metrics_on:
+            self.declare_health(OTLP_HEALTH, OtlpHealth.health_metrics())
         self._own = _OwnMetrics(
             self.registry, textfile=bool(config.prometheus_textfile_dir)
         )
-        self.budget = self.registry.check_budget()
+        self.budget = (
+            self.registry.check_budget() if self.metrics_on else self.registry.budget()
+        )
         self.queue: BoundedQueue[Envelope] = BoundedQueue(
             max_items=METRIC_QUEUE_ITEMS, max_bytes=METRIC_QUEUE_BYTES
         )
@@ -163,6 +188,32 @@ class ExportPipeline:
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------- set-up
+    def _otlp(
+        self,
+        config: ExportConfig,
+        version: str,
+        host: str,
+        identity: SpanIdentity | None,
+        secrets: KnownSecrets | None,
+        environ: Mapping[str, str],
+    ) -> OtlpExport | None:
+        if not config.otlp_enabled:
+            return None
+        if identity is None:
+            raise ExportUsageError("span export needs the run's identity")
+        try:
+            return OtlpExport(
+                config,
+                identity,
+                host=host,
+                version=version,
+                secrets=secrets if secrets is not None else KnownSecrets(),
+                environ=environ,
+                on_warning=self.on_warning,
+            )
+        except ValueError as exc:
+            raise ExportUsageError(str(exc)) from exc
+
     def declare_health(self, name: str, metrics: Sequence[HealthMetric]) -> None:
         """Declare a health source's families; before the budget is checked."""
         families = [
@@ -188,6 +239,12 @@ class ExportPipeline:
     def start(self, started_at: float) -> None:
         """Start the threads and outputs. A port that cannot be bound warns."""
         self.prepare()
+        if self.otlp is not None:
+            self.otlp.start()
+            if self.metrics_on:
+                self.attach_health(OTLP_HEALTH, OtlpHealth(self.otlp))
+        if not self.metrics_on:
+            return
         self.registry.apply(lambda: self.metrics.set_run_info(started_at))
         self._worker = threading.Thread(
             target=self._apply_loop, name="stormlog-export-metrics", daemon=True
@@ -234,10 +291,57 @@ class ExportPipeline:
         """
         if self._closed:
             return
+        if self.metrics_on:
+            try:
+                envelope = self.metrics.envelope(record, extras)
+                if envelope is not None:
+                    self.queue.offer(envelope, envelope.size)
+            except Exception:
+                self._error("observe")
+        if self.otlp is not None:
+            try:
+                self.otlp.observe(record, extras)
+            except Exception:
+                self._error("observe")
+
+    def request_extras(
+        self,
+        *,
+        prompt: str,
+        output: str | None,
+        chunk_gaps_ms: Sequence[float] | None,
+        error: BaseException | None,
+    ) -> dict[str, Any] | None:
+        """What the exporters need from a request beyond its record.
+
+        Called on the request's pool thread, where the response is, so the
+        producer only copies a fixed-size result: the chunk-gap summary for
+        the metrics, and for the spans the server's mapped error type and
+        any consented content.
+        """
+        extras: dict[str, Any] = {}
         try:
-            envelope = self.metrics.envelope(record, extras)
-            if envelope is not None:
-                self.queue.offer(envelope, envelope.size)
+            if self.metrics_on and chunk_gaps_ms is not None:
+                extras["chunk_summary"] = summarize_chunk_gaps(chunk_gaps_ms)
+            if self.otlp is not None:
+                extras.update(self.otlp.request_extras(prompt, output, error))
+        except Exception:
+            self._error("observe")
+        return extras or None
+
+    def offer_capture(
+        self, *, started_ns: int, outcome: str, error_type: str | None
+    ) -> None:
+        """Offer the capture's root span, just before the pipeline closes."""
+        if self.otlp is None or self._closed:
+            return
+        try:
+            self.otlp.offer_capture(
+                started_ns=started_ns,
+                ended_ns=time.time_ns(),
+                outcome=outcome,
+                error_type=error_type,
+            )
         except Exception:
             self._error("observe")
 
@@ -342,6 +446,12 @@ class ExportPipeline:
         finally:
             self._stop_applying.set()
 
+    def _close_otlp(self, until: float) -> None:
+        if self.otlp is not None:
+            # Frozen before the last health read, so the metrics show its
+            # final counts too.
+            self.otlp.close(max(0.0, until - time.monotonic()))
+
     def _stop_poller(self, until: float) -> None:
         self._stop_health.set()
         poller = self._poller
@@ -442,7 +552,14 @@ class ExportPipeline:
         }
 
     def capability_events(self, context: CorrelationContext) -> list[CapabilityEvent]:
-        """The ``export.prometheus`` record: what was asked for and what worked."""
+        """The ``export.prometheus`` and ``export.otlp`` records, as enabled."""
+        events = [self._prometheus_event(context)] if self.metrics_on else []
+        if self.otlp is not None:
+            events.append(self.otlp.capability_event(context))
+        return events
+
+    def _prometheus_event(self, context: CorrelationContext) -> CapabilityEvent:
+        """What was asked of Prometheus, and what worked."""
         enabled = []
         collected = []
         if self.config.prometheus_listen is not None:
@@ -454,18 +571,16 @@ class ExportPipeline:
             if self.textfile.stats.writes_ok:
                 collected.append("textfile")
         available = bool(collected) or self.server is not None
-        return [
-            CapabilityEvent(
-                context=context,
-                event_id=f"capability:{COMPONENT_PROMETHEUS}",
-                component=COMPONENT_PROMETHEUS,
-                available=available,
-                supported=["endpoint", "textfile"] if available else [],
-                enabled=enabled if available else [],
-                collected=collected if available else [],
-                metadata={"summary": self.summary()},
-            )
-        ]
+        return CapabilityEvent(
+            context=context,
+            event_id=f"capability:{COMPONENT_PROMETHEUS}",
+            component=COMPONENT_PROMETHEUS,
+            available=available,
+            supported=["endpoint", "textfile"] if available else [],
+            enabled=enabled if available else [],
+            collected=collected if available else [],
+            metadata={"summary": self.summary()},
+        )
 
     # ------------------------------------------------------------- helpers
     def _drop_counts(self, queue: QueueStats) -> dict[str, int]:
@@ -753,3 +868,149 @@ class ReceiverHealth:
             },
             "spans": metadata.get("spans"),
         }
+
+
+# ------------------------------------------------------------------ spans
+OTLP_HEALTH = "otlp_spans"
+
+
+class OtlpHealth:
+    """The span exporter's accounting and destination, as metrics."""
+
+    def __init__(self, otlp: OtlpExport) -> None:
+        self.otlp = otlp
+
+    @staticmethod
+    def health_metrics() -> Sequence[HealthMetric]:
+        def spans(key: str, help_text: str, label: str = "", enums: Any = ()) -> Any:
+            return HealthMetric(
+                key=key,
+                name=f"stormlog_export_spans_{key}_total",
+                kind="counter",
+                unit="",
+                help=help_text,
+                labels=(label,) if label else (),
+                enums={label: enums} if label else {},
+            )
+
+        return (
+            spans("offered", "Spans the exporter decided to send, after sampling."),
+            spans("exported", "Spans a collector confirmed, or written whole."),
+            spans("rejected", "Spans a collector confirmed it rejected."),
+            spans(
+                "refused",
+                "Spans a collector definitely did not take, by why.",
+                "status_class",
+                REFUSED_REASONS,
+            ),
+            spans("dropped", "Spans never sent, by why.", "reason", DROPPED_REASONS),
+            spans(
+                "unknown",
+                "Spans sent whose fate is unknown: they may have been stored.",
+                "reason",
+                UNKNOWN_REASONS,
+            ),
+            spans("sampled_out", "Successful request spans left out by sampling."),
+            spans(
+                "possibly_duplicated",
+                "The most extra copies lost answers can have made a collector store.",
+            ),
+            HealthMetric(
+                "in_flight",
+                "stormlog_export_in_flight_spans",
+                "gauge",
+                "",
+                "Spans taken from the queue and not yet settled.",
+            ),
+            HealthMetric(
+                "queued",
+                "stormlog_export_queue_spans",
+                "gauge",
+                "",
+                "Spans waiting in the exporter's queue.",
+            ),
+            HealthMetric(
+                "capacity",
+                "stormlog_export_queue_capacity_spans",
+                "gauge",
+                "",
+                "The most spans the queue holds; past it, spans are dropped.",
+            ),
+            HealthMetric(
+                "requests",
+                "stormlog_export_requests_total",
+                "counter",
+                "",
+                "Export attempts by what is known to have happened.",
+                labels=("outcome",),
+                enums={"outcome": TRANSMISSION_KINDS},
+            ),
+            HealthMetric(
+                "retries",
+                "stormlog_export_retries_total",
+                "counter",
+                "",
+                "Attempts after a batch's first.",
+            ),
+            HealthMetric(
+                "up",
+                "stormlog_export_destination_up",
+                "gauge",
+                "",
+                "1 while the destination is up, 0 while the breaker is open.",
+            ),
+            HealthMetric(
+                "last_success",
+                "stormlog_export_last_success_timestamp_seconds",
+                "gauge",
+                "seconds",
+                "When an export was last confirmed.",
+            ),
+            HealthMetric(
+                "sent_bytes",
+                "stormlog_export_sent_bytes_total",
+                "counter",
+                "bytes",
+                "Compressed request bytes sent.",
+            ),
+            HealthMetric(
+                "late",
+                "stormlog_export_late_results_total",
+                "counter",
+                "",
+                "Answers that arrived after the exporter froze its counts.",
+                labels=("outcome",),
+                enums={"outcome": TRANSMISSION_KINDS},
+            ),
+        )
+
+    def health(self) -> Mapping[str, HealthValue]:
+        accounting = self.otlp.accounting()
+        summary = self.otlp.exporter.summary()
+        destination = summary["destination"]
+        last = destination["last_success_ns"]
+        return {
+            "offered": accounting["offered"],
+            "exported": accounting["exported"],
+            "rejected": accounting["rejected"],
+            "refused": _by_reason(accounting["refused"], REFUSED_REASONS),
+            "dropped": _by_reason(accounting["dropped"], DROPPED_REASONS),
+            "unknown": _by_reason(accounting["unknown"], UNKNOWN_REASONS),
+            "sampled_out": accounting["sampled_out"],
+            "possibly_duplicated": accounting["max_extra_copies"],
+            "in_flight": accounting["in_flight"],
+            "queued": accounting["queued"],
+            "capacity": summary["queue"]["capacity_spans"],
+            "requests": _by_reason(summary["transmissions"], TRANSMISSION_KINDS),
+            "retries": summary["retries"],
+            "up": 1 if destination["up"] else 0,
+            "last_success": None if last is None else last / 1e9,
+            "sent_bytes": summary["sent_bytes"],
+            "late": _by_reason(accounting["late_results"], TRANSMISSION_KINDS),
+        }
+
+
+def _by_reason(
+    counts: Mapping[str, int], reasons: Sequence[str]
+) -> dict[tuple[str, ...], HealthScalar]:
+    return {(reason,): counts.get(reason, 0) for reason in reasons}

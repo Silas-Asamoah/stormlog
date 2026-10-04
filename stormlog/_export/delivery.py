@@ -27,7 +27,27 @@ from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from .otlp_http import AMBIGUOUS, CONFIRMED, NOT_SENT, REFUSED, Transmission
+from .filesink import FILE_DISABLED, FILE_ERROR, FILE_FULL, FILE_PARTIAL
+from .otlp_http import (
+    AMBIGUOUS,
+    CONFIRMED,
+    CONNECT_REFUSED,
+    CONNECT_TIMEOUT,
+    DNS,
+    HTTP_4XX,
+    HTTP_5XX,
+    NONCONFORMANT_RESPONSE,
+    NOT_SENT,
+    REDIRECT,
+    REFUSED,
+    RESET_AFTER_SEND,
+    SEND_FAILED,
+    THROTTLED,
+    TIMEOUT_AFTER_SEND,
+    TLS,
+    UNREADABLE_RESPONSE,
+    Transmission,
+)
 
 # Settlement reasons beyond a transmission's own category.
 QUEUE_FULL = "queue_full"
@@ -37,6 +57,37 @@ SHUTDOWN_IN_FLIGHT = "shutdown_in_flight"
 ENCODE_ERROR = "encode_error"
 REJECTED_AFTER_AMBIGUOUS = "rejected_after_ambiguous"
 REFUSED_AFTER_AMBIGUOUS = "refused_after_ambiguous"
+
+# Every reason a settlement can give, by disposition: closed sets, so each
+# is a fixed metric series.
+TRANSMISSION_KINDS = (CONFIRMED, REFUSED, AMBIGUOUS, NOT_SENT)
+REFUSED_REASONS = (HTTP_4XX, THROTTLED, REDIRECT)
+DROPPED_REASONS = (
+    QUEUE_FULL,
+    CLOSED,
+    SHUTDOWN,
+    ENCODE_ERROR,
+    CONNECT_REFUSED,
+    CONNECT_TIMEOUT,
+    DNS,
+    TLS,
+    SEND_FAILED,
+    FILE_FULL,
+    FILE_ERROR,
+    FILE_DISABLED,
+)
+UNKNOWN_REASONS = (
+    TIMEOUT_AFTER_SEND,
+    RESET_AFTER_SEND,
+    HTTP_5XX,
+    UNREADABLE_RESPONSE,
+    NONCONFORMANT_RESPONSE,
+    REJECTED_AFTER_AMBIGUOUS,
+    REFUSED_AFTER_AMBIGUOUS,
+    SHUTDOWN_IN_FLIGHT,
+    FILE_PARTIAL,
+    SEND_FAILED,
+)
 
 # Breaker transitions.
 FIRST_FAILURE = "first_failure"
