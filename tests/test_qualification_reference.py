@@ -162,3 +162,45 @@ def test_the_channel_polls_into_signals(tmp_path: Path) -> None:
     assert len(signals.waiting) == 2
     assert (tmp_path / "truth" / "reference" / "scrapes.jsonl").exists()
     assert (tmp_path / "probes" / "hook-firstseen.jsonl").exists()
+
+
+def _hook_line(seq: int) -> bytes:
+    record = {
+        "epoch": "engine-1",
+        "seq": seq,
+        "kind": "scheduled",
+        "start_wall_ns": seq,
+    }
+    return (json.dumps(record) + "\n").encode()
+
+
+def _epoch_dir(tmp_path: Path) -> Path:
+    directory = tmp_path / "hook" / "host-a" / "engine-1"
+    directory.mkdir(parents=True)
+    return directory
+
+
+def test_a_damaged_line_is_skipped_and_counted(tmp_path: Path) -> None:
+    # A torn write after a crash: NULs between good records. The tailer
+    # reads on, as vLLM's own log reader does, and notes the bad line.
+    part = _epoch_dir(tmp_path) / "000001.jsonl.part"
+    problems = tmp_path / "hook-problems.jsonl"
+    tailer = HookTailer(tmp_path / "hook", problems=problems)
+    part.write_bytes(_hook_line(1) + b"\x00\x00\x00\x00\n" + _hook_line(2) + b"[1]\n")
+    assert [record["seq"] for record in tailer.poll()] == [1, 2]
+    noted = [json.loads(line) for line in problems.read_text().splitlines()]
+    assert [note["kind"] for note in noted] == ["bad_line", "bad_line"]
+    assert tailer.bad_lines == 2
+
+
+def test_a_segment_rewritten_shorter_is_read_again(tmp_path: Path) -> None:
+    part = _epoch_dir(tmp_path) / "000001.jsonl.part"
+    problems = tmp_path / "hook-problems.jsonl"
+    tailer = HookTailer(tmp_path / "hook", problems=problems)
+    part.write_bytes(_hook_line(1) + _hook_line(2) + _hook_line(3))
+    assert len(tailer.poll()) == 3
+    part.write_bytes(_hook_line(4))  # a writer that reopened it truncated
+    assert [record["seq"] for record in tailer.poll()] == [4]
+    assert (
+        json.loads(problems.read_text().splitlines()[-1])["kind"] == "rewritten_shorter"
+    )

@@ -48,7 +48,10 @@ class HookTailer:
     ``firstseen`` (one JSON line per record: epoch, seq, segment, first
     seen); each segment's seal, when the poller first sees the ``.part``
     renamed, in ``seals``. A sealed segment continues from where its
-    ``.part`` was read, so no record is read twice.
+    ``.part`` was read, so no record is read twice. A damaged line (a torn
+    write) is skipped and counted, as Stormlog's own hook-log reader does,
+    and a segment found shorter than what was read is read again from its
+    start; both are noted in ``problems``.
     """
 
     def __init__(
@@ -57,10 +60,13 @@ class HookTailer:
         *,
         firstseen: Path | None = None,
         seals: Path | None = None,
+        problems: Path | None = None,
     ) -> None:
         self.root = root
         self.firstseen = firstseen
         self.seals = seals
+        self.problems = problems
+        self.bad_lines = 0
         self._segments: dict[tuple[Path, int], _Segment] = {}
 
     def poll(self, now_ns: int | None = None) -> list[dict[str, Any]]:
@@ -99,21 +105,42 @@ class HookTailer:
             if epoch.is_dir()
         )
 
-    @staticmethod
-    def _read(path: Path, segment: _Segment) -> list[dict[str, Any]]:
+    def _read(self, path: Path, segment: _Segment) -> list[dict[str, Any]]:
         try:
             with path.open("rb") as handle:
+                if handle.seek(0, 2) < segment.offset:
+                    self._note(path, segment.offset, "rewritten_shorter")
+                    segment.offset = 0
                 handle.seek(segment.offset)
                 data = handle.read()
         except FileNotFoundError:
             return []  # sealed between listing and reading; next poll
         end = data.rfind(b"\n") + 1
-        segment.offset += end
         records = []
-        for line in data[:end].splitlines():
-            if line.strip():
-                records.append(json.loads(line))
+        position = segment.offset
+        for line in data[:end].split(b"\n")[:-1]:
+            record = _parse(line) if line.strip() else {}
+            if record is None:
+                self.bad_lines += 1
+                self._note(path, position, "bad_line")
+            elif record:
+                records.append(record)
+            position += len(line) + 1
+        segment.offset += end
         return records
+
+    def _note(self, path: Path, offset: int, kind: str) -> None:
+        note = {"segment": path.name, "offset": offset, "kind": kind}
+        _append_lines(self.problems, [{**note, "seen_ns": time.time_ns()}])
+
+
+def _parse(line: bytes) -> dict[str, Any] | None:
+    """A record, or None for a line that isn't one."""
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return None
+    return record if isinstance(record, dict) else None
 
 
 def _segments(directory: Path) -> list[tuple[int, Path]]:
@@ -304,6 +331,7 @@ class ReferenceChannel:
             hook_root,
             firstseen=probes_dir / "hook-firstseen.jsonl",
             seals=probes_dir / "seal-observations.jsonl",
+            problems=probes_dir / "hook-problems.jsonl",
         )
         self.view = VictimView(victim_prefix, shared_prefix_tokens)
         self.metrics_url = metrics_url
