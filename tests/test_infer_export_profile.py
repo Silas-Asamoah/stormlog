@@ -204,7 +204,10 @@ def test_without_export_flags_nothing_is_exported(tmp_path: Path) -> None:
     assert "export.prometheus" not in components
 
 
-def test_ctrl_c_still_freezes_and_records_final_counts(tmp_path: Path) -> None:
+def test_ctrl_c_still_freezes_and_records_final_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _press_ctrl_c_after(monkeypatch, 2)
     output = tmp_path / "infer.jsonl"
     metrics_dir = tmp_path / "metrics"
     metrics_dir.mkdir()
@@ -219,14 +222,9 @@ def test_ctrl_c_still_freezes_and_records_final_counts(tmp_path: Path) -> None:
             stream=False,
         )
         profiler = InferenceProfiler(config)
-        timer = threading.Timer(0.8, signal.raise_signal, (signal.SIGINT,))
-        timer.start()
         started = time.perf_counter()
-        try:
-            with pytest.raises(KeyboardInterrupt):
-                profiler.run()
-        finally:
-            timer.cancel()
+        with pytest.raises(KeyboardInterrupt):
+            profiler.run()
         assert time.perf_counter() - started < 8
     records = _records(output)
     assert records[-1]["status"] == "interrupted"
@@ -237,6 +235,25 @@ def test_ctrl_c_still_freezes_and_records_final_counts(tmp_path: Path) -> None:
     assert exposition.value("stormlog_run_active") == 0
     sent = [r for r in records if r["event_type"] == "infer.request"]
     assert sum(exposition.matching("stormlog_infer_requests_total")) == len(sent)
+
+
+def _press_ctrl_c_after(monkeypatch: pytest.MonkeyPatch, records: int) -> None:
+    """Ctrl+C once the exporter has applied ``records`` records.
+
+    The run is then under way with its export open, however slowly it
+    started; a timer could fire before either on a loaded machine.
+    """
+    real_apply = ProfileMetrics.apply
+    applied = 0
+
+    def apply_then_press(self: ProfileMetrics, envelope: Any) -> None:
+        nonlocal applied
+        real_apply(self, envelope)
+        applied += 1
+        if applied == records:
+            signal.raise_signal(signal.SIGINT)
+
+    monkeypatch.setattr(ProfileMetrics, "apply", apply_then_press)
 
 
 def _slow_worker(monkeypatch: pytest.MonkeyPatch, delay: float = 0.05) -> None:
@@ -283,6 +300,7 @@ def test_a_ctrl_c_ends_a_lingering_run_within_the_close_deadline(
     # The interrupted close has 2 s, though the exporter is far behind, and
     # the 30 s linger is skipped.
     _slow_worker(monkeypatch, delay=0.2)
+    _press_ctrl_c_after(monkeypatch, 3)
     closes: list[float] = []
     real_close = ExportPipeline.close
 
@@ -309,14 +327,9 @@ def test_a_ctrl_c_ends_a_lingering_run_within_the_close_deadline(
             stream=False,
         )
         profiler = InferenceProfiler(config)
-        timer = threading.Timer(1.0, signal.raise_signal, (signal.SIGINT,))
-        timer.start()
         started = time.perf_counter()
-        try:
-            with pytest.raises(KeyboardInterrupt):
-                profiler.run()
-        finally:
-            timer.cancel()
+        with pytest.raises(KeyboardInterrupt):
+            profiler.run()
         assert time.perf_counter() - started < 20  # no 30 s linger
     # The capture's close, then the run's, which has nothing left to do.
     assert closes and closes[0] < 3.5 and sum(closes[1:]) < 0.5
@@ -333,13 +346,16 @@ def test_a_ctrl_c_inside_the_close_still_finishes_it(
     metrics_dir = tmp_path / "metrics"
     metrics_dir.mkdir()
     real_apply = ProfileMetrics.apply
+    closing = threading.Event()
 
     def slow_apply(self: ProfileMetrics, envelope: Any) -> None:
+        # Nothing is applied before the close starts, so the exporter is
+        # seconds behind when the Ctrl+C comes, however fast the run was.
+        closing.wait(60)
         time.sleep(0.05)
         real_apply(self, envelope)
 
     monkeypatch.setattr(ProfileMetrics, "apply", slow_apply)
-    closing = threading.Event()
     real_close = ExportPipeline.close
 
     def noting_close(self: ExportPipeline, deadline: float) -> None:
