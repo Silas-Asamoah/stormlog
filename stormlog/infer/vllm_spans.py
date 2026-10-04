@@ -17,6 +17,7 @@ marks the derived stage windows as estimates.
 
 from __future__ import annotations
 
+import io
 import json
 import socket
 import threading
@@ -429,6 +430,7 @@ class ReceiverStats:
     after_stop: int = 0
     refused_connections: int = 0
     busy: int = 0
+    header_timeouts: int = 0
     body_timeouts: int = 0
     too_many_spans: int = 0
     dropped_queue_full: int = 0
@@ -443,7 +445,9 @@ class ReceiverLimits:
     """Admission bounds, applied before a body is read, decoded or queued.
 
     A connection over ``max_connections`` is answered 503 and closed without a
-    handler thread. A body must arrive within ``body_deadline_seconds``. The
+    handler thread. Each request, its request line, headers and body, must
+    arrive within ``request_deadline_seconds`` of when the receiver starts
+    waiting for it; a kept-alive connection idle that long is closed. The
     bodies being read and decoded at once may hold at most
     ``max_inflight_bytes``, a gzip body counted at its inflation cap. A body
     with more than ``max_spans_per_body`` spans is refused, and one that does
@@ -452,7 +456,7 @@ class ReceiverLimits:
     """
 
     max_connections: int = 8
-    body_deadline_seconds: float = 10.0
+    request_deadline_seconds: float = 10.0
     max_inflight_bytes: int = 64 * 1024 * 1024
     max_spans_per_body: int = 10_000
     max_queued_spans: int = 100_000
@@ -499,6 +503,59 @@ GRPC_HINT = (
 )
 
 
+class _DeadlineReader(io.RawIOBase):
+    """A connection's reads, each bounded by what is left of one deadline.
+
+    A socket timeout applies to each read, so a sender trickling a byte just
+    within it can hold a request open for as long as it likes, in the
+    request line and headers as well as the body. Before each read this sets
+    the socket's timeout to the time left, and once the deadline has passed
+    it raises ``TimeoutError``, however the bytes arrive. Writes get the
+    connection's own timeout back.
+    """
+
+    def __init__(self, sock: socket.socket, timeout: float) -> None:
+        super().__init__()
+        self._raw = sock.makefile("rb", buffering=0)
+        self._sock = sock
+        self._timeout = timeout
+        self.deadline: float | None = None
+        self.received = 0
+        self.timed_out = False
+
+    def start(self, seconds: float) -> None:
+        """A new request: the deadline is ``seconds`` from now."""
+        self.deadline = time.monotonic() + seconds
+        self.received = 0
+        self.timed_out = False
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int | None:
+        if self.deadline is not None:
+            left = self.deadline - time.monotonic()
+            if left <= 0:
+                self.timed_out = True
+                raise TimeoutError("request deadline passed")
+            self._sock.settimeout(left)
+        try:
+            count = self._raw.readinto(buffer)
+        except TimeoutError:
+            self.timed_out = True
+            raise
+        finally:
+            self._sock.settimeout(self._timeout)
+        self.received += count or 0
+        return count
+
+    def close(self) -> None:
+        try:
+            self._raw.close()
+        finally:
+            super().close()
+
+
 class OtlpSpanReceiver:
     """Accept OTLP/HTTP trace exports on a local port while a profile runs."""
 
@@ -526,8 +583,25 @@ class OtlpSpanReceiver:
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
-            # Also closes a kept-alive connection that stays idle this long.
-            timeout = self.limits.body_deadline_seconds
+            timeout = self.limits.request_deadline_seconds
+
+            def setup(self) -> None:
+                super().setup()
+                self.rfile.close()
+                self.reader = _DeadlineReader(self.connection, self.timeout)
+                self.rfile = io.BufferedReader(self.reader)
+                self.reading_body = False
+
+            def handle_one_request(self) -> None:
+                # One deadline from the wait for the request line to the
+                # body's last byte; the base class closes the connection when
+                # a read raises TimeoutError.
+                self.reader.start(receiver.limits.request_deadline_seconds)
+                self.reading_body = False
+                super().handle_one_request()
+                timed_out_in_head = self.reader.timed_out and not self.reading_body
+                if timed_out_in_head and self.reader.received:
+                    receiver._count("header_timeouts")
 
             def parse_request(self) -> bool:
                 # vLLM's default exporter is gRPC: its HTTP/2 connection
@@ -541,6 +615,7 @@ class OtlpSpanReceiver:
                 return bool(super().parse_request())
 
             def do_POST(self) -> None:  # noqa: N802
+                self.reading_body = True
                 if receiver.stopped:
                     # A request on a connection accepted before the stop:
                     # refused and counted, never queued behind the final
@@ -764,29 +839,20 @@ class OtlpSpanReceiver:
     def _read_within_deadline(
         self, handler: BaseHTTPRequestHandler, length: int
     ) -> bytes:
-        """The body, or ``TimeoutError`` once ``body_deadline_seconds`` passed.
+        """The body, or ``TimeoutError`` once the request's deadline passed.
 
-        The deadline covers the whole body, so a sender trickling bytes cannot
-        hold a connection and its reserved bytes open by meeting a per-read
-        timeout.
+        The handler's reader holds the deadline, so a sender trickling bytes
+        cannot hold a connection and its reserved bytes open by meeting a
+        per-read timeout.
         """
-        deadline = time.monotonic() + self.limits.body_deadline_seconds
         chunks: list[bytes] = []
         remaining = length
-        try:
-            while remaining:
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    raise TimeoutError("body deadline passed")
-                handler.connection.settimeout(left)
-                chunk = handler.rfile.read1(min(remaining, 64 * 1024))  # type: ignore[attr-defined]
-                if not chunk:
-                    break  # a short body fails to decode and is answered 400
-                chunks.append(chunk)
-                remaining -= len(chunk)
-        finally:
-            # The next request on a kept-alive connection gets the full wait.
-            handler.connection.settimeout(self.limits.body_deadline_seconds)
+        while remaining:
+            chunk = handler.rfile.read1(min(remaining, 64 * 1024))  # type: ignore[attr-defined]
+            if not chunk:
+                break  # a short body fails to decode and is answered 400
+            chunks.append(chunk)
+            remaining -= len(chunk)
         return b"".join(chunks)
 
     def _gunzip(self, handler: BaseHTTPRequestHandler, body: bytes) -> bytes | None:
@@ -866,6 +932,7 @@ class OtlpSpanReceiver:
                 "after_stop": self.stats.after_stop,
                 "refused_connections": self.stats.refused_connections,
                 "busy": self.stats.busy,
+                "header_timeouts": self.stats.header_timeouts,
                 "body_timeouts": self.stats.body_timeouts,
                 "too_many_spans": self.stats.too_many_spans,
                 "dropped_queue_full": self.stats.dropped_queue_full,

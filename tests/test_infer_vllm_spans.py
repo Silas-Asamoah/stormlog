@@ -669,7 +669,7 @@ class TestReceiverAdmission:
         assert metadata["requests"] == 0
 
     def test_a_body_that_trickles_past_the_deadline_is_dropped(self) -> None:
-        limits = ReceiverLimits(body_deadline_seconds=0.5)
+        limits = ReceiverLimits(request_deadline_seconds=0.5)
         with _receiver(limits=limits) as receiver:
             with _connect(receiver.listen) as sock:
                 sock.sendall(
@@ -691,6 +691,58 @@ class TestReceiverAdmission:
         assert metadata["spans"] == 0
         assert reply == b"" or reply.startswith(b"HTTP/1.1 408")
         assert elapsed < 1.9  # cut off at the deadline, not at the end of the body
+
+    @pytest.mark.parametrize(
+        "opening",
+        [
+            b"POST /v1/tra",  # the request line itself
+            b"POST /v1/traces HTTP/1.1\r\nHost: x\r\nX-Slow: ",  # a header
+        ],
+    )
+    def test_a_request_head_that_trickles_cannot_hold_the_slots(
+        self, opening: bytes
+    ) -> None:
+        """The deadline covers the request line and headers, not only the body."""
+        limits = ReceiverLimits(max_connections=2, request_deadline_seconds=0.5)
+        with _receiver(limits=limits) as receiver:
+            tricklers = [_connect(receiver.listen) for _ in range(2)]
+            for sock in tricklers:
+                sock.sendall(opening)
+            started = time.monotonic()
+            closed_at: list[float] = []
+            # One byte every 0.1 s keeps every single read under its timeout.
+            for _ in range(20):
+                time.sleep(0.1)
+                for sock in list(tricklers):
+                    try:
+                        sock.sendall(b"x")
+                    except OSError:
+                        closed_at.append(time.monotonic() - started)
+                        tricklers.remove(sock)
+                        sock.close()
+                if not tricklers:
+                    break
+            url = f"http://{receiver.listen}/v1/traces"
+            status = _post(url, JSON_EXPORT, "application/json")
+            for sock in tricklers:
+                sock.close()
+            metadata = receiver.capability_metadata()
+        assert status == 200
+        assert len(closed_at) == 2 and max(closed_at) < 1.5
+        assert metadata["header_timeouts"] == 2
+        assert metadata["body_timeouts"] == 0
+
+    def test_an_idle_kept_alive_connection_is_closed_without_a_count(self) -> None:
+        limits = ReceiverLimits(request_deadline_seconds=0.3)
+        with _receiver(limits=limits) as receiver:
+            with _connect(receiver.listen) as sock:
+                sock.settimeout(3)
+                started = time.monotonic()
+                assert sock.recv(4096) == b""  # closed by the receiver
+                elapsed = time.monotonic() - started
+            metadata = receiver.capability_metadata()
+        assert 0.2 < elapsed < 1.5
+        assert metadata["header_timeouts"] == 0
 
     def test_bodies_over_the_in_flight_budget_get_503(self) -> None:
         import gzip
