@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 from ..exit_codes import ExitCode
+from ..report import write_report
 from .analysis import (
     analyze_inference_events,
     format_analysis_text,
@@ -30,6 +31,18 @@ from .arrivals import (
     load_arrival_trace,
 )
 from .cache_state import CACHE_STATES, COLD, RESET_RETRY_SECONDS, UNSPECIFIED
+from .compare import (
+    ALL_BUDGETS,
+    EXCLUDE,
+    FAIL_INCOMPLETE,
+    FAMILIES,
+    ComparisonSpec,
+    compare_runs,
+)
+from .compare_metrics import metric_unit
+from .compare_report import comparison_lines, comparison_report, error_report
+from .comparison_stats import INDEPENDENT, PAIRED, GateRule
+from .compatibility import CONFIG, MODES
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
 from .describe_server import (
     DescribeOptions,
@@ -42,6 +55,7 @@ from .manifest import AFTER as MANIFEST_AFTER
 from .manifest import attach_manifest, load_declarations
 from .profile import InferenceProfiler
 from .prompts import MIN_CONTROLLED_TOKENS, PROMPT_MODES, REPEAT, SHARED_PREFIX
+from .run_summary import RunSummary, summarize_run
 from .server_collector import (
     STOP_GPU_IDENTITY_CHANGED,
     STOP_SERVER_PROCESS_ENDED,
@@ -102,6 +116,8 @@ def _run_command(
         return cmd_describe_server(args)
     if args.infer_command == "attach-manifest":
         return cmd_attach_manifest(args)
+    if args.infer_command == "compare":
+        return cmd_compare(args)
     if args.infer_command == "import-trace":
         return cmd_import_trace(args)
     if args.infer_command == "import-execution":
@@ -475,6 +491,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_describe_server_parser(subparsers)
     _add_attach_manifest_parser(subparsers)
+    _add_compare_parser(subparsers)
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
     add_watch_parser(subparsers)
@@ -1116,6 +1133,206 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     else:
         print(payload, end="")
     return int(ExitCode.OK)
+
+
+def _add_compare_parser(subparsers: Any) -> None:
+    parser = subparsers.add_parser(
+        "compare",
+        help="Compare a baseline arm of inference runs with a candidate arm",
+    )
+    parser.add_argument("--baseline", nargs="+", required=True, metavar="ARTIFACT")
+    parser.add_argument("--candidate", nargs="+", required=True, metavar="ARTIFACT")
+    parser.add_argument("--case", action="append", default=None, help="Only this case")
+    _add_slo_arguments(parser, "judge both arms by, instead of each run's own")
+    parser.add_argument(
+        "--mode",
+        choices=MODES,
+        default=CONFIG,
+        help="config: only allowed fields differ; overhead: the candidate adds "
+        "observers to an observer-free baseline; incremental: it adds declared "
+        "observers to shared ones",
+    )
+    parser.add_argument(
+        "--design",
+        choices=("auto", PAIRED, INDEPENDENT),
+        default="auto",
+        help="auto pairs runs by block when every run has one",
+    )
+    parser.add_argument(
+        "--allow",
+        action="append",
+        default=[],
+        metavar="FIELD",
+        help="A field or vllm_config JSON pointer that may differ between arms",
+    )
+    parser.add_argument(
+        "--added-observers",
+        default="",
+        metavar="NAME,...",
+        help="Observers the candidate adds, in incremental mode",
+    )
+    parser.add_argument(
+        "--gate",
+        action="append",
+        default=[],
+        metavar="METRIC=RULE:BUDGET",
+        help="Gate a metric (or pattern), e.g. client.e2e.p95=non-inferiority:0.05; "
+        "budgets are fractions: 0.05 is 5%%, or 5 points for attainment",
+    )
+    parser.add_argument(
+        "--fallback",
+        action="append",
+        default=[],
+        metavar="METRIC=BUDGET:UNIT",
+        help="A pre-registered budget on the difference, for a log ratio left "
+        "undefined by a zero",
+    )
+    parser.add_argument("--min-complete-blocks", type=int, default=None)
+    parser.add_argument("--min-attainment", type=float, default=None)
+    parser.add_argument("--min-run-pass", type=float, default=0.5)
+    parser.add_argument(
+        "--attainment-model",
+        choices=("runs", "bernoulli"),
+        default="runs",
+        help="bernoulli pools requests as independent trials: model-based",
+    )
+    parser.add_argument("--family", choices=FAMILIES, default=ALL_BUDGETS)
+    parser.add_argument(
+        "--on-incomplete", choices=(EXCLUDE, FAIL_INCOMPLETE), default=EXCLUDE
+    )
+    parser.add_argument(
+        "--allow-not-evaluable",
+        action="store_true",
+        help="Exit 0 when a gate cannot be evaluated: for exploration, recorded",
+    )
+    parser.add_argument("--evidence-floor", type=float, default=1.0)
+    parser.add_argument("--confidence", type=float, default=0.95)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--vllm-spans",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="vLLM spans collected elsewhere, for every run",
+    )
+    parser.add_argument("--format", choices=("txt", "json"), default="txt")
+    parser.add_argument("--report", default=None, metavar="FILE")
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    """Compare two arms of runs; the report is written even for exit 5."""
+    spec = _comparison_spec(args)
+    slo, slo_source = _slo_policy(args)
+    argv = sys.argv[1:]
+    try:
+        comparison = compare_runs(
+            [_summary(path, slo, slo_source, args) for path in args.baseline],
+            [_summary(path, slo, slo_source, args) for path in args.candidate],
+            spec,
+        )
+    except InferInputError as exc:
+        _emit_report(
+            error_report(str(exc), exit_code=int(ExitCode.INVALID_INPUT), argv=argv),
+            args,
+        )
+        raise
+    exit_code = comparison.exit_code
+    report_path = Path(args.report) if args.report else None
+    if args.format == "json" or report_path is not None:
+        report = comparison_report(comparison, exit_code=exit_code, argv=argv)
+        if report_path is not None:
+            on_file = comparison_report(
+                comparison, exit_code=exit_code, argv=argv, report_path=report_path
+            )
+            write_report(report_path, on_file)
+        if args.format == "json":
+            print(json.dumps(report, indent=2, allow_nan=False))
+    if args.format == "txt":
+        print("\n".join(comparison_lines(comparison)))
+    return exit_code
+
+
+def _summary(
+    path: str, slo: SloSpec | None, slo_source: str, args: argparse.Namespace
+) -> RunSummary:
+    if not Path(path).exists():
+        raise InferInputError(f"artifact {path} not found")
+    return summarize_run(
+        path, slo=slo, slo_source=slo_source, span_paths=args.vllm_spans
+    )
+
+
+def _emit_report(report: dict[str, Any], args: argparse.Namespace) -> None:
+    if args.report:
+        write_report(Path(args.report), report)
+    if args.format == "json":
+        print(json.dumps(report, indent=2, allow_nan=False))
+
+
+def _comparison_spec(args: argparse.Namespace) -> ComparisonSpec:
+    fallbacks = dict(_fallback(item) for item in args.fallback)
+    gates = tuple(
+        _gate(item, args.min_complete_blocks, fallbacks) for item in args.gate
+    )
+    return ComparisonSpec(
+        confidence=args.confidence,
+        design=args.design,
+        mode=args.mode,
+        allow=tuple(args.allow),
+        on_incomplete=args.on_incomplete,
+        gates=gates,
+        allow_not_evaluable=args.allow_not_evaluable,
+        min_attainment=args.min_attainment,
+        min_run_pass=args.min_run_pass,
+        attainment_model=args.attainment_model,
+        family=args.family,
+        added_observers=tuple(n for n in args.added_observers.split(",") if n),
+        evidence_floor=args.evidence_floor,
+        cases=tuple(args.case) if args.case else None,
+        seed=args.seed,
+    )
+
+
+def _gate(
+    text: str, min_blocks: int | None, fallbacks: dict[str, tuple[float, str]]
+) -> tuple[str, GateRule]:
+    """``METRIC=RULE:BUDGET`` with the metric's own unit."""
+    metric, _, rest = text.partition("=")
+    rule, _, budget = rest.partition(":")
+    unit = metric_unit(metric)
+    if not metric or not rule or not budget:
+        raise InferUsageError(f"--gate {text!r}: use METRIC=RULE:BUDGET")
+    if unit is None:
+        raise InferUsageError(
+            f"--gate {text!r}: {metric!r} names no metric, or metrics in different units"
+        )
+    fallback_budget, fallback_unit = fallbacks.get(metric, (None, None))
+    return metric, GateRule(
+        rule,
+        _number(budget, f"--gate {text!r}"),
+        unit,
+        min_complete_blocks=min_blocks,
+        fallback_budget=fallback_budget,
+        fallback_unit=fallback_unit,
+    )
+
+
+def _fallback(text: str) -> tuple[str, tuple[float, str]]:
+    metric, _, rest = text.partition("=")
+    budget, _, unit = rest.partition(":")
+    if not metric or not budget or not unit:
+        raise InferUsageError(f"--fallback {text!r}: use METRIC=BUDGET:UNIT")
+    return metric, (_number(budget, f"--fallback {text!r}"), unit)
+
+
+def _number(text: str, flag: str) -> float:
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise InferUsageError(f"{flag}: {text!r} is not a number") from exc
+    if not math.isfinite(value):
+        raise InferUsageError(f"{flag}: {text!r} is not a finite number")
+    return value
 
 
 def _add_attach_manifest_parser(subparsers: Any) -> None:

@@ -48,6 +48,7 @@ class RunSummary:
     report: Mapping[str, Any]
     protocol_failures: tuple[str, ...] = ()
     case_failures: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    started_at_ns: int | None = None
 
     @property
     def cases(self) -> Mapping[str, Mapping[str, Any]]:
@@ -119,6 +120,7 @@ def summary_from_records(
         report=report,
         protocol_failures=tuple(_run_failures(records, report, status)),
         case_failures=_case_failures(report),
+        started_at_ns=_started_at(records),
     )
 
 
@@ -142,6 +144,15 @@ def _session_status(records: Sequence[Mapping[str, Any]]) -> str | None:
         r.get("status") for r in records if r.get("event_type") == "infer.session"
     ]
     return str(statuses[-1]) if statuses else None
+
+
+def _started_at(records: Sequence[Mapping[str, Any]]) -> int | None:
+    """When the run started: its first session record's wall time."""
+    for record in records:
+        value = record.get("timestamp_ns")
+        if record.get("event_type") == "infer.session" and isinstance(value, int):
+            return value
+    return None
 
 
 def _labels(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
