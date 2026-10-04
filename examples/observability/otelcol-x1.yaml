@@ -24,6 +24,11 @@ exporters:
       max_megabytes: 1000
 
 service:
+  # Jaeger v2, built on the collector too, serves its own metrics on 8888;
+  # with this collector's off, the two can run on one host.
+  telemetry:
+    metrics:
+      level: none
   pipelines:
     traces:
       receivers: [otlp]
