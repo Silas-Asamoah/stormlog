@@ -1,0 +1,302 @@
+"""Window selection, the predicates, and the per-tick trigger engine."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+import pytest
+
+from stormlog.infer.diagnosis_signals import SignalConfig
+from stormlog.infer.diagnosis_vocabulary import QUEUE_SATURATION
+from stormlog.infer.vllm_telemetry import VllmScrapeRecord
+from stormlog.infer.watch.evaluate import (
+    ACTION_DEEP_CAPTURE,
+    KIND_HEALTH,
+    KIND_METRIC,
+    TriggerEngine,
+    TriggerSpec,
+)
+from stormlog.infer.watch.history import Stamped
+from stormlog.infer.watch.predicates import (
+    REASON_END_FAILED,
+    REASON_END_STALE,
+    REASON_START_MISSING,
+    REASON_TOO_FEW_SAMPLES,
+    CounterRateAtLeast,
+    FrozenExporter,
+    GaugeAtLeast,
+    HistogramShareAbove,
+    ScrapeFailures,
+    SignalExceeds,
+    exporter_restarted,
+    overlaps,
+    select_window,
+)
+from stormlog.infer.watch.triggers import (
+    CLEAR,
+    DATA_GAP,
+    EVENT_FIRED,
+    EVENT_RESET,
+    MASKED,
+    VIOLATING,
+    Sustain,
+)
+from tests.vllm_scrape_helpers import exposition, scrape
+
+S = 1_000_000_000
+WAITING = "vllm:num_requests_waiting"
+RUNNING = "vllm:num_requests_running"
+TTFT = "vllm:time_to_first_token_seconds"
+PREEMPTIONS = "vllm:num_preemptions_total"
+
+
+def _entries(
+    texts: Sequence[str | None], *, start_s: float = 0.0, step_s: float = 1.0
+) -> list[tuple[Stamped, VllmScrapeRecord]]:
+    """Scrapes one ``step_s`` apart; each finishes 4 ms after it starts."""
+    entries = []
+    for index, text in enumerate(texts):
+        at = start_s + index * step_s
+        mono = round(at * S)
+        entries.append((Stamped(mono, mono + 4_000_000, mono), scrape(text, at)))
+    return entries
+
+
+def _waiting(value: float, *, running: float = 1.0, tokens: float = 0.0) -> str:
+    return exposition(
+        gauges={WAITING: value, RUNNING: running},
+        counters={
+            "vllm:generation_tokens_total": tokens,
+            "vllm:prompt_tokens_total": tokens,
+        },
+    )
+
+
+# ------------------------------------------------------------------ selection
+
+
+def test_a_window_spans_its_start_and_end_scrapes() -> None:
+    history = _entries([_waiting(1)] * 40)
+    selection = select_window(history, at_ns=35 * S, window_ns=30 * S, tick_ns=S)
+    assert selection.reason is None
+    assert len(selection.scrapes) == 30  # the scrapes finished at 5.004 .. 34.004
+    assert selection.start_ns == 5 * S + 4_000_000
+
+
+def test_a_stale_or_failed_end_or_a_missing_start_is_a_data_gap() -> None:
+    history = _entries([_waiting(1)] * 10)
+    stale = select_window(history, at_ns=20 * S, window_ns=5 * S, tick_ns=S)
+    assert stale.reason == REASON_END_STALE
+    failed = _entries([_waiting(1)] * 9 + [None])
+    end = select_window(failed, at_ns=9 * S + 5_000_000, window_ns=5 * S, tick_ns=S)
+    assert end.reason == REASON_END_FAILED
+    outage = _entries([None] * 8 + [_waiting(1)] * 3)
+    start = select_window(outage, at_ns=10 * S + 5_000_000, window_ns=5 * S, tick_ns=S)
+    assert start.reason == REASON_START_MISSING
+
+
+# ----------------------------------------------------------------- predicates
+
+
+def _scrapes(texts: Sequence[str | None]) -> list[VllmScrapeRecord]:
+    return [record for _stamp, record in _entries(texts)]
+
+
+def test_gauge_at_least_in_every_sample_or_in_a_share() -> None:
+    every = GaugeAtLeast(WAITING, threshold=8)
+    assert every.evaluate(_scrapes([_waiting(9)] * 5)).classification == VIOLATING
+    dipped = _scrapes([_waiting(9), _waiting(2), _waiting(9)])
+    result = every.evaluate(dipped)
+    assert result.classification == CLEAR and result.observed == 2
+    share = GaugeAtLeast(WAITING, threshold=8, share=0.6)
+    assert share.evaluate(dipped).classification == VIOLATING
+    too_few = GaugeAtLeast(WAITING, threshold=8, min_samples=4)
+    assert too_few.evaluate(_scrapes([_waiting(9)] * 3)).reasons == (
+        REASON_TOO_FEW_SAMPLES,
+    )
+
+
+def test_counter_rate_fires_on_its_lower_bound_and_not_across_a_reset() -> None:
+    def preempted(total: float) -> str:
+        return exposition(counters={PREEMPTIONS: total})
+
+    rate = CounterRateAtLeast(PREEMPTIONS, rate_per_s=1.0)
+    rising = rate.evaluate(_scrapes([preempted(v) for v in (0, 2, 4, 6)]))
+    assert rising.classification == VIOLATING
+    assert rising.observed_bounds is not None
+    assert rising.observed == rising.observed_bounds[0] <= 2.0
+    # 100 -> 0 -> 150: the endpoints look consistent, the interior reset is not.
+    reset = rate.evaluate(_scrapes([preempted(v) for v in (100, 0, 150)]))
+    assert reset.classification == DATA_GAP
+    assert "counter_reset" in reset.reasons
+
+
+def _ttft(cumulative: Sequence[tuple[str, float]]) -> str:
+    return exposition(histograms={TTFT: (cumulative, 10.0)})
+
+
+def test_a_histogram_share_fires_only_on_its_lower_bucket_bound() -> None:
+    before = _ttft([("0.1", 0), ("0.25", 0), ("+Inf", 0)])
+    # 40 new requests: 20 under 0.1 s, 10 between 0.1 and 0.25, 10 over.
+    after = _ttft([("0.1", 20), ("0.25", 30), ("+Inf", 40)])
+    over_200ms = HistogramShareAbove(TTFT, value=0.2, share=0.2)
+    result = over_200ms.evaluate(_scrapes([before, after]))
+    assert result.observed_bounds == (0.25, 0.5)  # the threshold is between bounds
+    assert result.classification == VIOLATING  # lo = 0.25 > 0.2
+    cautious = HistogramShareAbove(TTFT, value=0.2, share=0.3)
+    assert cautious.evaluate(_scrapes([before, after])).classification == CLEAR
+    few = HistogramShareAbove(TTFT, value=0.2, share=0.2, min_samples=50)
+    assert few.evaluate(_scrapes([before, after])).classification == DATA_GAP
+
+
+def test_a_signal_predicate_uses_218s_threshold_and_says_suspected() -> None:
+    queue = SignalExceeds(QUEUE_SATURATION, SignalConfig(engine="0"))
+    saturated = queue.evaluate(_scrapes([_waiting(500)] * 5))
+    assert saturated.classification == VIOLATING
+    assert saturated.detail["status"] == "suspected"
+    assert saturated.detail["thresholds_version"]
+    idle = queue.evaluate(_scrapes([_waiting(0)] * 5))
+    assert idle.classification == CLEAR
+    one = queue.evaluate(_scrapes([_waiting(500)]))
+    assert one.classification == DATA_GAP
+
+
+def test_scrape_failures_count_failed_scrapes_as_evidence() -> None:
+    failures = ScrapeFailures(consecutive=3)
+    assert (
+        failures.evaluate_history(_entries([_waiting(1)] + [None] * 3)).classification
+        == VIOLATING
+    )
+    assert (
+        failures.evaluate_history(_entries([None, _waiting(1), None])).classification
+        == CLEAR
+    )
+
+
+def test_a_frozen_exporter_is_busy_without_progress() -> None:
+    frozen = FrozenExporter(ticks=3)
+    stuck = [_waiting(4, running=8, tokens=100)] * 4
+    assert frozen.evaluate_history(_entries(stuck)).classification == VIOLATING
+    moving = [_waiting(4, running=8, tokens=100 + i) for i in range(4)]
+    assert frozen.evaluate_history(_entries(moving)).classification == CLEAR
+    idle = [_waiting(0, running=0, tokens=100)] * 4
+    assert frozen.evaluate_history(_entries(idle)).classification == CLEAR
+
+
+def test_an_exporter_restart_is_a_change_of_process_start() -> None:
+    first = scrape(exposition(gauges={WAITING: 0}, start=1000.0), 0)
+    same = scrape(exposition(gauges={WAITING: 0}, start=1000.0), 1)
+    again = scrape(exposition(gauges={WAITING: 0}, start=2000.0), 2)
+    assert not exporter_restarted(first, same)
+    assert exporter_restarted(same, again)
+
+
+def test_intervals_overlap_when_closed_ranges_meet() -> None:
+    assert overlaps(10, 20, [(20, 30)])
+    assert not overlaps(10, 19, [(20, 30)])
+    assert overlaps(10, 20, [(0, 5), (15, 16)])
+
+
+# --------------------------------------------------------------------- engine
+
+
+def _queue_trigger(**overrides: object) -> TriggerSpec:
+    values: dict[str, object] = {
+        "trigger_id": "queue",
+        "kind": KIND_METRIC,
+        "sustain": Sustain.with_defaults(window=30, hold=60, clear=None, tick=1),
+        "predicate": GaugeAtLeast(WAITING, threshold=8),
+    }
+    values.update(overrides)
+    return TriggerSpec(**values)  # type: ignore[arg-type]
+
+
+def test_spec_validation() -> None:
+    with pytest.raises(ValueError, match="only record"):
+        TriggerSpec(
+            "h",
+            KIND_HEALTH,
+            Sustain.with_defaults(window=5, hold=5, clear=None, tick=1),
+            ScrapeFailures(),
+            action=ACTION_DEEP_CAPTURE,
+        )
+    with pytest.raises(ValueError, match="not evaluated here"):
+        _queue_trigger(kind="test")
+    with pytest.raises(ValueError, match="unique"):
+        TriggerEngine([_queue_trigger(), _queue_trigger()], tick_seconds=1)
+
+
+def test_the_engine_resets_on_an_outage_and_fires_after_it_from_scrapes() -> None:
+    """Saturated from 0 s; scrapes fail over 89-121 s; W=30, F=60, G=30.
+
+    The worked example in the docs, on real window selection: a start scrape
+    may finish up to one tick after ``t - W``, so the first full window is in
+    at 29 s, one tick earlier than the docs' idealized 30 s.
+    """
+    texts: list[str | None] = []
+    for second in range(262):
+        texts.append(None if 89 <= second <= 121 else _waiting(9))
+    history = _entries(texts)
+    engine = TriggerEngine([_queue_trigger()], tick_seconds=1)
+    events = []
+    for second in range(260):
+        at = second * S + 5_000_000  # just after the scrape of that second
+        done = [entry for entry in history if entry[0].done_mono_ns <= at]
+        for result in engine.tick(at, done):
+            if result.transition is not None:
+                events.append((second, result.transition.event))
+    # 59 s accumulated by 88, so the outage at 89 stops it short of F; 31 s
+    # of data gap reset it at 119; windows are informative again once their
+    # start scrape (122) follows the outage, at 151; fired 60 s later.
+    assert events == [
+        (29, "pending"),
+        (119, EVENT_RESET),
+        (151, "pending"),
+        (211, EVENT_FIRED),
+    ]
+
+
+def test_a_window_overlapping_a_perturbation_is_masked() -> None:
+    history = _entries([_waiting(9)] * 100)
+    engine = TriggerEngine([_queue_trigger()], tick_seconds=1)
+    pause = [(60 * S, 70 * S)]
+    at = 90 * S + 5_000_000
+    result = engine.tick(at, history, perturbations=pause)[0]
+    assert result.evaluation.classification == MASKED
+    assert result.evaluation.observed == 9  # the value is still recorded
+    assert "perturbation" in result.evaluation.reasons
+    later = engine.tick(101 * S, history, perturbations=pause)[0]
+    assert later.evaluation.classification != MASKED  # [71, 101] misses it
+
+
+def test_a_completion_recorded_trigger_is_masked_for_the_horizon_too() -> None:
+    history = _entries([_waiting(9)] * 200)
+    spec = _queue_trigger(completion_recorded=True)
+    engine = TriggerEngine([spec], tick_seconds=1)
+    pause = [(60 * S, 70 * S)]
+    at = 150 * S
+    plain = engine.tick(at, history, perturbations=pause)[0]
+    assert plain.evaluation.classification != MASKED
+    engine = TriggerEngine([spec], tick_seconds=1)
+    widened = engine.tick(
+        at, history, perturbations=pause, completion_horizon_ns=60 * S
+    )[0]
+    assert widened.evaluation.classification == MASKED
+
+
+def test_health_predicates_are_asked_about_the_history_tail() -> None:
+    spec = TriggerSpec(
+        "scrapes",
+        KIND_HEALTH,
+        Sustain.with_defaults(window=3, hold=3, clear=None, tick=1),
+        ScrapeFailures(consecutive=3),
+    )
+    history = _entries([_waiting(1)] * 2 + [None] * 10)
+    engine = TriggerEngine([spec], tick_seconds=1)
+    events = []
+    for second in range(4, 12):
+        done = [e for e in history if e[0].done_mono_ns <= second * S + 5_000_000]
+        for result in engine.tick(second * S + 5_000_000, done):
+            if result.transition is not None:
+                events.append((second, result.transition.event))
+    assert events == [(4, "pending"), (7, EVENT_FIRED)]
