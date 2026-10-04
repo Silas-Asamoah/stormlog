@@ -1105,8 +1105,7 @@ def test_manifest_parsing_rejects_foreign_and_malformed_documents() -> None:
         )
 
 
-def test_a_full_disk_removes_the_oldest_bundle_not_protected(tmp_path: Path) -> None:
-    store = IncidentStore(tmp_path)
+def _three_small_bundles(store: IncidentStore) -> list[str]:
     ids = []
     for second in (1, 2, 3):
         incident_id = store.new_incident_id(second * 1_000_000_000)
@@ -1116,7 +1115,35 @@ def test_a_full_disk_removes_the_oldest_bundle_not_protected(tmp_path: Path) -> 
             out.write(b"{}\n")
         writer.publish(status="completed", complete=True, sealed_at_ns=second)
         ids.append(incident_id)
-    assert store.make_room_on_disk(protected=frozenset({ids[0]}))
+    return ids
+
+
+def test_a_full_disk_removes_bundles_only_when_that_can_make_room(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A disk something else filled lost every bundle to one seal that
+    still did not fit: removal never asked whether it could make room."""
+    store = IncidentStore(tmp_path)
+    ids = _three_small_bundles(store)
+    monkeypatch.setattr(store_module, "_free_bytes", lambda path: 1)
+    assert not store.make_room_on_disk(11)  # 1 free + 3 bytes each < 11
+    assert store.take_pruned() == []
+    assert [m.incident_id for _p, m in store.bundles()] == ids
+    assert store.make_room_on_disk(7)  # removes the two oldest, no more
+    assert [p.incident_id for p in store.take_pruned()] == ids[:2]
+    monkeypatch.setattr(store_module, "_free_bytes", lambda path: 100)
+    assert not store.make_room_on_disk(7)  # the room is there already
+    assert store.take_pruned() == []
+    store.close()
+
+
+def test_a_full_disk_removes_the_oldest_bundle_not_protected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = IncidentStore(tmp_path)
+    ids = _three_small_bundles(store)
+    monkeypatch.setattr(store_module, "_free_bytes", lambda path: 0)
+    assert store.make_room_on_disk(3, protected=frozenset({ids[0]}))
     assert [m.incident_id for _p, m in store.bundles()] == [ids[0], ids[2]]
     (pruned,) = store.take_pruned()
     assert (pruned.incident_id, pruned.reason) == (ids[1], "disk_full")
@@ -1124,20 +1151,15 @@ def test_a_full_disk_removes_the_oldest_bundle_not_protected(tmp_path: Path) -> 
     store.close()
 
 
-def test_a_full_disk_skips_a_bundle_being_read(tmp_path: Path) -> None:
+def test_a_full_disk_skips_a_bundle_being_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Deferred, it was removed later as well, for room already made."""
     store = IncidentStore(tmp_path)
-    ids = []
-    for second in (1, 2, 3):
-        incident_id = store.new_incident_id(second * 1_000_000_000)
-        writer = store.new_bundle(incident_id, 4096)
-        assert writer is not None
-        with writer.file("incident.jsonl") as out:
-            out.write(b"{}\n")
-        writer.publish(status="completed", complete=True, sealed_at_ns=second)
-        ids.append(incident_id)
+    monkeypatch.setattr(store_module, "_free_bytes", lambda path: 0)
+    ids = _three_small_bundles(store)
     with open_incident_bundle(tmp_path / "incidents" / ids[0]):
-        assert store.make_room_on_disk()
+        assert store.make_room_on_disk(3)
         assert store.deferred == 0
     assert [p.incident_id for p in store.take_pruned()] == [ids[1]]
     assert store.reclaim_deferred() == 0

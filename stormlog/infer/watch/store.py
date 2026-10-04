@@ -538,20 +538,26 @@ class IncidentStore:
             removable.append((path, manifest.incident_id, freed))
         return removable
 
-    def make_room_on_disk(self, protected: frozenset[str] = frozenset()) -> bool:
-        """Remove the oldest sealed bundle not ``protected``, for a write the
-        filesystem refused (ENOSPC) though the budget allowed it: the disk
-        holds less than ``max_total_bytes``. False when none could go. A
-        bundle a reader holds is skipped, not deferred, as for the budget."""
-        for path, manifest in self.bundles():  # oldest seal first
-            if manifest.incident_id in protected:
-                continue
-            size = _payload_bytes(path, seen=set())
+    def make_room_on_disk(
+        self, need_bytes: int, protected: frozenset[str] = frozenset()
+    ) -> bool:
+        """Remove the oldest sealed bundles not ``protected`` until the
+        filesystem has ``need_bytes`` free, for a write it refused (ENOSPC)
+        though the budget allowed it: the disk holds less than
+        ``max_total_bytes``. When removing every bundle no reader holds
+        could not free that much, something else holds the disk: nothing is
+        removed, and False returned. A bundle a reader holds is skipped, not
+        deferred, as for the budget."""
+        free = _free_bytes(self.root)
+        removable = self._removable(protected)
+        if free >= need_bytes or free + sum(f for *_, f in removable) < need_bytes:
+            return False
+        for path, incident_id, freed in removable:  # oldest seal first
             if self._try_delete(path, path, defer=False):
-                self._room_pruned.append(
-                    PrunedBundle(manifest.incident_id, "disk_full", size)
-                )
-                return True
+                self._room_pruned.append(PrunedBundle(incident_id, "disk_full", freed))
+                free += freed
+                if free >= need_bytes:
+                    return True
         return False
 
     def take_pruned(self) -> list[PrunedBundle]:
@@ -953,6 +959,11 @@ def _freed_by(path: Path, bundle: Path) -> int:
     seen: set[tuple[int, int]] = set()
     bytes_on_disk([g for g in _generation_dirs(bundle) if g != path], seen=seen)
     return bytes_on_disk([path], seen=seen)
+
+
+def _free_bytes(path: Path) -> int:
+    """What the filesystem holding ``path`` has free for this process."""
+    return shutil.disk_usage(path).free
 
 
 def _own(root: Path) -> int:

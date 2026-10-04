@@ -12,6 +12,8 @@ from typing import Any
 import pytest
 
 from stormlog.infer.correlation_events import load_inference_artifact
+from stormlog.infer.watch import incidents as incidents_module
+from stormlog.infer.watch import store as store_module
 from stormlog.infer.watch.config import IncidentLimits
 from stormlog.infer.watch.disk import StoreLimits
 from stormlog.infer.watch.evaluate import TickResult, TriggerSpec
@@ -471,8 +473,6 @@ def test_an_unexpected_error_while_writing_a_bundle_lets_its_generation_go(
 ) -> None:
     """Only a budget or disk error abandoned the generation: any other left
     its reservation held and its bundle pinned against deletion for good."""
-    from stormlog.infer.watch import store as store_module
-
     harness = Harness(tmp_path)
     harness.scrapes(80, 262)
 
@@ -619,8 +619,6 @@ def test_a_seal_expands_no_scrape_on_the_loop(
     to read its status and size: 1.8 s for 180 scrapes of a 135 KiB
     /metrics, every tick of it late. The history keeps both beside each
     scrape; only the store's worker expands them, to write them."""
-    from stormlog.infer.watch import incidents as incidents_module
-
     expanded: list[int] = []
     real_expand = incidents_module.expand
 
@@ -647,6 +645,51 @@ def test_a_seal_expands_no_scrape_on_the_loop(
     assert record["pre_window"]["fidelity_detail"]["scrapes"]["failed"] == 1
 
 
+@pytest.mark.parametrize("free", ["none", "a_bundle_short"])
+def test_a_disk_something_else_fills_keeps_the_bundles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, free: str
+) -> None:
+    """On a disk another process filled, one seal removed every bundle and
+    still failed. Now nothing goes when removal could not make room, and
+    room is made once: if the write still fails, the space is going
+    elsewhere."""
+    import errno
+
+    harness = Harness(tmp_path)
+    harness.scrapes(80, 900)
+    first = harness.fire(200)
+    harness.tick(261)
+    middle = harness.fire(400)
+    harness.tick(461)
+
+    def full(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(harness.store, "new_bundle", full)
+    first_bytes = store_module._payload_bytes(
+        tmp_path / "incidents" / str(first), seen=set()
+    )
+    disk = {"free": 0}
+    make_room = harness.store.make_room_on_disk
+
+    def short_of(need: int, protected: frozenset[str]) -> bool:
+        if free == "a_bundle_short":  # removing the oldest bundle makes room
+            disk["free"] = need - first_bytes
+        return make_room(need, protected)
+
+    monkeypatch.setattr(harness.store, "make_room_on_disk", short_of)
+    monkeypatch.setattr(store_module, "_free_bytes", lambda path: disk["free"])
+    last = harness.fire(600)
+    harness.tick(661)
+    removed = [bundle.incident_id for bundle in harness.pruned]
+    assert removed == ([first] if free == "a_bundle_short" else [])
+    kept = [m.incident_id for _p, m in harness.store.bundles()]
+    assert kept == ([middle] if free == "a_bundle_short" else [first, middle])
+    record = harness.of_type(INCIDENT)[-1]
+    assert record["incident_id"] == last and record["bundle"] is None
+    assert "No space left" in record["bundle_error"]
+
+
 def test_a_seal_the_disk_refuses_makes_room_and_is_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -667,6 +710,10 @@ def test_a_seal_the_disk_refuses_makes_room_and_is_written(
         return real_new_bundle(*args, **kwargs)
 
     monkeypatch.setattr(harness.store, "new_bundle", full_once)
+    # The disk lacks the second bundle's lines, which the first one's free.
+    monkeypatch.setattr(
+        store_module, "_free_bytes", lambda path: incidents_module._RESERVE_BASE
+    )
     second = harness.fire(400)
     harness.tick(461)
     assert [bundle.incident_id for bundle in harness.pruned] == [first]

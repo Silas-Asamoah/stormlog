@@ -375,17 +375,24 @@ class IncidentManager:
         """The bundle's path, or None and why it could not be written.
 
         A disk that fills before the store's budget does (ENOSPC) gets room
-        made on it: the oldest sealed bundle goes, as for the budget, and
-        the write is tried again, so the newest incidents are the ones kept.
+        made on it once: the oldest sealed bundles go, as for the budget,
+        until the disk has the bundle's bytes free, and the write is tried
+        again, so the newest incidents are the ones kept. When removing
+        them all could not free that much, or the write still fails once
+        they are gone, something else holds the disk: no bundle is removed
+        for it, or no more.
         """
+        made_room = False
         while True:
             path, error, disk_full = self._try_write(
                 incident_id, lines, status, sealed_at, protected
             )
-            if not disk_full or not self.store.make_room_on_disk(
-                protected | {incident_id}
-            ):
+            if not disk_full or made_room:
                 return path, error
+            need = _RESERVE_BASE + lines.nbytes
+            if not self.store.make_room_on_disk(need, protected | {incident_id}):
+                return path, error
+            made_room = True
 
     def _try_write(
         self,
