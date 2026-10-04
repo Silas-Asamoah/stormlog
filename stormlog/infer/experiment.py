@@ -543,7 +543,7 @@ class _Run:
         if self.server.poll() is not None:
             self.record.outcome(f"server_exited:{self.server.exit_code}")
         stop(self.server, signals=(2, 15), timeout_s=self.plan.server.stop_timeout_s)
-        cleanup = verify_cleanup(self.server.pid, remembered)
+        cleanup = verify_cleanup(self.server.pid, remembered, mark=self.server.mark)
         self.record.cleanup = cleanup.to_record()
         if not cleanup.verified:
             self.record.protocol("collector_cleanup_unverified", before_treatment=False)
@@ -719,6 +719,11 @@ class _Run:
             unhealthy = f"treatment_unhealthy:{name}" in self.record.reasons
             if code not in treatment.expect_exit and not unhealthy:
                 self.record.outcome(f"treatment_failed:{name}:{code}")
+            # Whatever it started must not run on into the next run.
+            if not verify_cleanup(launched.pid, mark=launched.mark).verified:
+                self.record.protocol(
+                    f"treatment_cleanup_unverified:{name}", before_treatment=False
+                )
             self.record.processes.append(launched.to_record())
 
     # Steps ----------------------------------------------------------------
@@ -846,7 +851,7 @@ def _prelude(
     finally:
         if server is not None:
             stop(server, signals=(2, 15), timeout_s=plan.server.stop_timeout_s)
-            verify_cleanup(server.pid)
+            verify_cleanup(server.pid, mark=server.mark)
     if timed_out or launched.exit_code not in prelude.step.expect_exit:
         return [prelude.step.name]
     return []
