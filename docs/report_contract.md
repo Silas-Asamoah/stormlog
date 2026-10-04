@@ -70,6 +70,7 @@ heuristic detection by the tool. CI policy usually differs between the two.
 | `examples.cli.benchmark_harness` | gates passed, or no `--check` | argparse error; regression defaults outside the `pr` profile | - | a budget or regression gate failed under `--check` | budget, baseline, or tolerance asset missing, unparsable, not an object, wrong version, non-numeric, or missing a metric; baseline config mismatch (file problems are checked before any scenario runs; a missing metric after) | unexpected error; `--artifact-root` or `--output` not writable | Ctrl+C |
 | `stormlog infer profile` | done, with at least one measured request succeeding | argparse error; a setting it cannot use, checked before anything is sent; a requested tokenizer that is not installed, or `--strict-token-counts` with no tokenizer backend installed; an `--arrival-trace` case the trace does not have, or no `--arrival-trace-case` when it has several; a malformed `--slo`, or `--slo` with `--slo-file` | no measured request succeeded | - | `--arrival-trace` or `--slo-file` missing, unparsable, or invalid (offsets, policy, or a policy with a sliding interval); `--describe-server` or `--declare` missing or invalid, or a `--describe-server` description that names another run; the server's `/server_info` gave no answer within 120 s, or took the request and dropped it unanswered, checked before measuring | unexpected error | Ctrl+C (the artifact ends with an `interrupted` session record) |
 | `stormlog infer analyze` | done, including an artifact in which every request failed | argparse error; a malformed `--slo`, or `--slo` with `--slo-file` | - | - | artifact, `--server-telemetry`, `--vllm-spans` or `--slo-file` file missing, unparsable, or invalid, including an artifact with no `infer.session` or `infer.request` records, or, without `--slo` or `--slo-file`, with an invalid `infer.slo` record or one with a sliding interval | unexpected error; `--output` not writable | Ctrl+C |
+| `stormlog infer compare` | done: no gate, or every gate passed | argparse error; a `--gate` or `--fallback` it cannot read; `--family any_regression` with a rule other than `significant`; a malformed `--slo` | - | a gate failed, or could not be evaluated without `--allow-not-evaluable` | an artifact missing or unreadable; an invalid `--slo-file`; a block with two runs of one arm; incompatible arms; an arm with no usable run; an overhead baseline that ran observers; an added observer not declared | unexpected error; `--report` not writable | Ctrl+C |
 | `stormlog infer collect-server` | duration elapsed, Ctrl+C or SIGTERM, or the server process ended | argparse error; options it cannot use; a `--pid` with no running process; a `--device-index` or `--device-uuid` the host does not have; no NVML library without `--no-gpu` | the GPU identity changed mid-run | - | - | unexpected error | - |
 | `stormlog infer describe-server` | description written | argparse error; a `--pid` this host cannot read in `/proc`; no NVML library without `--no-gpu` | - | - | `--server-log` missing or unreadable | unexpected error; `--output` not writable | Ctrl+C |
 | `stormlog infer attach-manifest` | description attached | argparse error | - | - | artifact or description missing, unparsable, or invalid; the description cannot be compared with the run's before description (another run, host or boot, a restarted server, the before description itself or one already attached, taken before the last measured phase ended or sooner after the before than the run lasted, or no before description) | unexpected error | Ctrl+C |
@@ -134,7 +135,7 @@ strict (`additionalProperties: false` at the top level).
 | --- | --- | --- |
 | `schema_version` | yes | `1` |
 | `format` | yes | `stormlog.report` |
-| `report_kind` | yes | Payload family, documented per command. Today: `diagnose` and `inference_watch`. |
+| `report_kind` | yes | Payload family, documented per command. Today: `diagnose`, `inference_watch`, and `inference_comparison`. |
 | `generated_at_utc` | yes | ISO 8601 timestamp in UTC. |
 | `tool` | yes | `name` (console script), `command` (subcommand), optional `version` and `argv`. |
 | `verdict` | yes | `status`, `exit_code`, and a one-line `summary`. `status` and `exit_code` must pair as in the table above; the schema enforces it. |
@@ -147,8 +148,25 @@ strict (`additionalProperties: false` at the top level).
 
 Evidence pointers reuse the vocabulary of `stormlog query correlate` rows:
 `kind`, optional `path` (relative to the directory that holds the report),
-optional `pointer` (a JSON pointer inside that file), `session_id`,
-`record_id`, `start_ns`, `end_ns`, and a `description`.
+optional `pointer`, `session_id`, `record_id`, `start_ns`, `end_ns`, and a
+`description`. What `pointer` addresses depends on its target:
+
+- **A JSON file named by `path`:** `pointer` is a JSON pointer (RFC 6901)
+  into that document.
+- **A JSONL file named by `path`** (one record per line): `pointer` is
+  `/<line>` or `/<line>/<field>/…`, where `<line>` is the zero-based
+  physical line number, counting every raw line including blank ones, and
+  the remainder is a JSON pointer into that line's record. Such evidence
+  must carry `record_id`. Each report kind that uses JSONL pointers
+  documents how it derives `record_id` for every record type it cites, and
+  a reader confirms the line holds that record before using it. Line numbers
+  stay valid only while the file is append-only, so a producer that writes
+  JSONL pointers records each input's SHA-256, size and physical line count
+  in its payload. When a hash differs, a reader re-resolves the evidence by
+  `record_id`, or reports it unresolved.
+- **The report itself:** a `pointer` with no `path` is a JSON pointer into
+  the report that contains the evidence. A producer that writes its report
+  to a file may set `path` to that file's name instead.
 
 `tool.argv` is optional and must not carry secrets: a producer that records
 it redacts credentials (for example a tracking URI with a token) or omits

@@ -58,6 +58,20 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `stormlog infer compare --baseline ... --candidate ...`: compares two arms
+  of runs case by case (goodput, attainment, throughput, failure fraction and
+  latency quantiles), paired by block when runs are labelled. Gates are
+  `--gate METRIC=RULE:BUDGET` with `non-inferiority`, `significant` or
+  `demonstrated`; `--min-attainment` judges the share of runs that meet a
+  target; `--family any_regression` applies Holm. Modes `config`, `overhead`
+  and `incremental` check what may differ and the observers' contract. Exit
+  0, 4 (a gate failed or could not be evaluated, unless
+  `--allow-not-evaluable`) or 5 (not comparable); `--format json` and
+  `--report` give a `stormlog.report` v1 envelope (`inference_comparison`)
+  whose findings point into the `stormlog.infer.comparison` v1 payload, also
+  when the comparison exits 5. `docs/report_contract.md` now says how an
+  evidence pointer resolves in a JSON file, a JSONL file, or the report
+  itself. (#213)
 - `stormlog infer profile --experiment ID --arm NAME --block LABEL`
   (with `--position` and `--attempt`) records the run's labels, and
   `stormlog.infer.run_summary.summarize_run` reads a run back for
