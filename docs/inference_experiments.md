@@ -287,7 +287,7 @@ exactly them. The plan's `server.model` says how:
 After each run every file is hashed again, and its size, modification time
 and inode compared; a file changed, added or gone makes the run
 `protocol_failure: model_changed`. The hashing reads the whole model once
-per run. Each run's
+per run: 0.7 s for Qwen2.5-0.5B's 1.0 GB on the A30 box. Each run's
 `model_identity.json` records the files and their digests, and the runner
 appends an `infer.model_identity` record to each artifact: the verified
 model, with its evidence (`pinned_commit_verified` or
