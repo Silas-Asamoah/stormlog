@@ -215,7 +215,8 @@ its shares would fall outside 0 to 1, so such a window is
 `histogram_inconsistent`. A histogram's share of observations above a value,
 and the bucket holding a quantile, are reported as bounds between bucket
 boundaries; a quantile in the `+Inf` bucket has no upper bound
-(`quantile_in_overflow_bucket`).
+(`quantile_in_overflow_bucket`). A quantile outside 0 to 1, or a share above
+NaN, raises `ValueError`.
 
 ## Metric map
 

@@ -311,6 +311,12 @@ def test_quantile_bounds_and_the_overflow_bucket() -> None:
         histogram_quantile_bounds(scrapes, E2E, 1.5)
 
 
+def test_a_share_above_nan_is_refused() -> None:
+    # As a quantile outside 0 to 1 is: NaN would give bounds of 0 to 1.
+    with pytest.raises(ValueError, match="NaN"):
+        histogram_share_above(_histogram_scrapes(START, END), E2E, float("nan"))
+
+
 def test_histogram_without_observations_or_with_changed_boundaries() -> None:
     quiet = _histogram_scrapes(START, START)
     assert histogram_share_above(quiet, E2E, 0.5).reasons == (REASON_NO_OBSERVATIONS,)

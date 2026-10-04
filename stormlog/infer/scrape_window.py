@@ -461,6 +461,9 @@ def histogram_share_above(
 ) -> HistogramShare:
     """The share of the window's observations above ``value``, bounded by the
     bucket boundaries on either side of it."""
+    if math.isnan(value):
+        # NaN compares false with every boundary and would bound nothing.
+        raise ValueError("value must be a number, not NaN")
     count, buckets, reasons = _histogram_window(scrapes, family, labels, engine)
     if reasons or count is None or buckets is None:
         return HistogramShare(count, None, None, reasons)
