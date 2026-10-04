@@ -160,6 +160,30 @@ realization, which includes the seed, and `spec_digest`, which leaves it
 out. Runs of one workload with different seeds share a spec digest, which
 must be equal for a comparison; the realization is a covariate.
 
+## Observers
+
+The report's `observers` block says, for each observer, whether the run
+asked for it (`requested`), whether the server was set up to feed it
+(`configured`, where that can be seen), whether it produced evidence
+(`active`) and whether that evidence was good enough (`healthy`). Both are
+judged in every compared phase (each case's measured phase, from its start
+to the end of its drain), not once for the run:
+
+| Observer | Active in a phase | Healthy in a phase |
+| --- | --- | --- |
+| `system_sampler` | A sample in it | At least 90% of the samples its interval expects |
+| `vllm_metrics` | An ok scrape for it | Ok scrapes at its start and end, and no gap between ok scrapes over twice the interval |
+| `vllm_spans` | A span joined to one of its requests | Spans joined for at least 99% of its accepted requests, and no decode or receiver errors in the run |
+| `trace` | A trace started for it | The trace stopped cleanly, wrote a file, and that file was imported |
+| `execution` | An iteration of the hook in it | No dropped records, errors or disk cap in any epoch |
+
+An observer is `healthy` only when it is in every compared phase. What the
+artifact cannot show is `null`, with the reason in `unjudged`: the hook's
+heartbeat times are not kept in the artifact, so the execution hook is at
+best `null` (not shown unhealthy, not shown healthy). The session record
+now keeps the system sampler's interval and the trace settings, which these
+judgments need.
+
 ## The server's processes
 
 A description reads the server's processes from Linux `/proc`, so it runs on
