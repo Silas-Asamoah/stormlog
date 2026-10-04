@@ -29,6 +29,7 @@ from stormlog.infer.export_config import (
     export_config_from_args,
 )
 from stormlog.infer.export_metrics import ProfileLabels
+from stormlog.infer.export_spans import SpanIdentity
 from tests.export_conformance import Exposition, check_exposition
 
 LABELS = ProfileLabels(
@@ -824,9 +825,24 @@ def test_observe_takes_no_registry_lock_and_does_no_io(
 ) -> None:
     import os
 
-    pipeline = ExportPipeline(ExportConfig(prometheus_textfile_dir=tmp_path), LABELS)
+    pipeline = ExportPipeline(
+        ExportConfig(
+            prometheus_textfile_dir=tmp_path, otlp_endpoint="http://127.0.0.1:9"
+        ),
+        LABELS,
+        spans=SpanIdentity(
+            run_id="run-1",
+            session_id="session-1",
+            model="m",
+            endpoint="http://127.0.0.1:8000/v1/chat/completions",
+        ),
+    )
     lock = _RecordingLock(pipeline.registry._lock)
     pipeline.registry._lock = lock  # type: ignore[assignment]
+    assert pipeline.otlp is not None
+    ledger = pipeline.otlp.exporter.ledger
+    ledger_lock = _RecordingLock(ledger._lock)
+    ledger._lock = ledger_lock  # type: ignore[assignment]
     unaudited: list[str] = []
     with monkeypatch.context() as patched:
         # Not audited by Python: a write to a descriptor, and a sleep.
@@ -834,12 +850,15 @@ def test_observe_takes_no_registry_lock_and_does_no_io(
         patched.setattr(time, "sleep", lambda *_a: unaudited.append("time.sleep"))
         _audited.update(thread=threading.get_ident(), events=[])
         try:
-            for _ in range(10):
-                pipeline.observe(_request(), {"chunk_summary": ((0,) * 15, 0.0)})
+            for index in range(10):
+                record = {**_request(), "request_id": f"r{index}", "x_request_id": "x"}
+                pipeline.observe(record, {"chunk_summary": ((0,) * 15, 0.0)})
         finally:
             _audited["thread"] = None
     assert _audited["events"] == [] and unaudited == []
     assert threading.get_ident() not in lock.takers
+    assert threading.get_ident() not in ledger_lock.takers
     assert pipeline.queue.stats().accepted == 10
+    assert pipeline.otlp.exporter.queue.stats().accepted == 10
     assert pipeline.summary()["internal_errors"]["observe"] == 0
     pipeline.close(1.0)
