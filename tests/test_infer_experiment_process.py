@@ -65,6 +65,46 @@ def test_a_process_that_left_the_group_is_found_and_killed(tmp_path: Path) -> No
     assert escapee.pid in cleanup.killed
 
 
+LATE_ESCAPE = (
+    "import subprocess, sys, time; time.sleep(0.5); "
+    "subprocess.Popen([sys.executable, '-c', "
+    "'import os, time; os.setsid(); time.sleep(60)']); time.sleep(60)"
+)
+
+
+def test_a_process_forked_after_the_tree_was_remembered_is_found_by_its_mark(
+    tmp_path: Path,
+) -> None:
+    # A collector forked late, then moved to its own session, is in no group,
+    # no session and no remembered tree; only the mark it inherited finds it.
+    launched = launch("server", [sys.executable, "-c", LATE_ESCAPE])
+    remembered = remembered_tree(launched.pid)
+    import psutil
+
+    deadline = time.monotonic() + 10
+    escapee = None
+    while escapee is None and time.monotonic() < deadline:
+        children = psutil.Process(launched.pid).children(recursive=True)
+        escapee = next((c for c in children if os.getsid(c.pid) != launched.pid), None)
+        time.sleep(0.05)
+    assert escapee is not None
+    stop(launched, timeout_s=5)
+    cleanup = verify_cleanup(launched.pid, remembered, wait_s=5, mark=launched.mark)
+    assert cleanup.verified
+    assert escapee.pid in cleanup.killed
+    assert not psutil.pid_exists(escapee.pid) or (
+        psutil.Process(escapee.pid).status() == psutil.STATUS_ZOMBIE
+    )
+
+
+def test_every_launch_carries_its_own_mark() -> None:
+    first = launch("a", [sys.executable, "-c", "pass"])
+    second = launch("b", [sys.executable, "-c", "pass"])
+    assert first.mark and second.mark and first.mark != second.mark
+    for launched in (first, second):
+        launched.process.wait(timeout=5)
+
+
 def test_a_step_that_runs_too_long_is_stopped() -> None:
     launched, timed_out = run_step("slow", ["/bin/sleep", "30"], timeout_s=0.3)
     assert timed_out
@@ -92,3 +132,9 @@ def test_a_process_is_pinned_to_its_cpus() -> None:
         assert get_affinity(launched.pid) == {cpu}
     finally:
         stop(launched, timeout_s=2)
+
+
+def test_the_mark_is_not_a_difference_between_runs() -> None:
+    from stormlog.infer.config_classes import LABEL, field_class
+
+    assert field_class("environ.STORMLOG_RUN_MARK") == LABEL

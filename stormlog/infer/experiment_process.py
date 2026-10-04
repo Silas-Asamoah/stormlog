@@ -6,7 +6,10 @@ workers, and the ``pip`` and ``nvidia-smi`` its ``/server_info`` collector
 runs. Stopping a process signals its whole group, and the runner then
 checks that nothing it started is left: no process in the group or the
 session, and none of the processes it remembered by PID and start time,
-which also finds one that left the group with ``setsid``.
+which also finds one that left the group with ``setsid``. Every launch also
+carries a mark in its environment (``STORMLOG_RUN_MARK``), which every
+descendant inherits, so a process forked after the tree was remembered and
+then moved to a session of its own is found too.
 
 On Linux the checks read ``/proc`` (``server_process``). Elsewhere they use
 ``psutil`` and say so, since the session of another process cannot be read
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import os
 import platform
+import secrets
 import signal
 import subprocess
 import time
@@ -38,6 +42,8 @@ from .server_process import (
 )
 
 KILL_WAIT_SECONDS = 10.0
+# Inherited by everything a launch starts; a fresh value per launch.
+MARK_VARIABLE = "STORMLOG_RUN_MARK"
 POLL_SECONDS = 0.1
 EXPECTED_ROLES = frozenset(SERVER_ROLES) | frozenset(HELPER_ROLES)
 
@@ -51,6 +57,7 @@ class Launched:
     command: tuple[str, ...]
     started_at_ns: int
     log_path: Path | None
+    mark: str = ""
     affinity: str | None = None
     affinity_applied: bool | None = None
     ended_at_ns: int | None = None
@@ -118,9 +125,10 @@ def launch(
     """Start a command in a session of its own, pinned to its CPUs if asked."""
     cpus = parse_cpu_list(cpu_affinity) if cpu_affinity else None
     log = log_path.open("ab") if log_path is not None else None
+    mark = secrets.token_hex(16)
     process = subprocess.Popen(
         list(command),
-        env={**os.environ, **(env or {})},
+        env={**os.environ, **(env or {}), MARK_VARIABLE: mark},
         cwd=cwd,
         stdin=subprocess.DEVNULL,
         stdout=log if log is not None else subprocess.DEVNULL,
@@ -134,6 +142,7 @@ def launch(
         command=tuple(command),
         started_at_ns=time.time_ns(),
         log_path=log_path,
+        mark=mark,
         affinity=cpu_affinity,
         _log=log,
     )
@@ -220,18 +229,21 @@ def verify_cleanup(
     *,
     wait_s: float = KILL_WAIT_SECONDS,
     proc: Path = PROC,
+    mark: str | None = None,
 ) -> Cleanup:
     """Wait until nothing of a group, its session or remembered tree runs.
 
-    Survivors are killed by PID once; whatever outlives that and ``wait_s``
-    is listed, and the cleanup is not verified.
+    ``mark`` is the launch's environment mark: a process that carries it
+    is the launch's, wherever it went. Survivors are killed by PID once;
+    whatever outlives that and ``wait_s`` is listed, and the cleanup is not
+    verified.
     """
     keys = list(remembered)
     method = "proc" if _linux() else "psutil"
     deadline = time.monotonic() + wait_s
     killed: tuple[int, ...] = ()
     while True:
-        survivors = _survivors(pgid, keys, proc, method)
+        survivors = _survivors(pgid, keys, proc, method) | _marked(mark, proc, method)
         if not survivors:
             return Cleanup(True, method, killed=killed)
         if not killed:
@@ -252,6 +264,41 @@ def _survivors(
         found |= {info.pid for info in still_running(keys, proc)}
         return found
     return _psutil_group(pgid) | {pid for pid, _ in keys if _alive(pid)}
+
+
+def _marked(mark: str | None, proc: Path, method: str) -> set[int]:
+    """Live processes whose environment carries the launch's mark."""
+    if not mark:
+        return set()
+    needle = f"{MARK_VARIABLE}={mark}"
+    if method == "proc":
+        return _proc_marked(needle.encode() + b"\0", proc)
+    return _psutil_marked(mark)
+
+
+def _proc_marked(needle: bytes, proc: Path) -> set[int]:
+    found = set()
+    for entry in proc.iterdir() if proc.is_dir() else ():
+        if not entry.name.isdigit():
+            continue
+        try:
+            environ = (entry / "environ").read_bytes()
+        except OSError:
+            continue
+        if (b"\0" + environ).find(b"\0" + needle) >= 0 and _alive(int(entry.name)):
+            found.add(int(entry.name))
+    return found
+
+
+def _psutil_marked(mark: str) -> set[int]:
+    found = set()
+    for process in psutil.process_iter():
+        try:
+            if process.environ().get(MARK_VARIABLE) == mark and _alive(process.pid):
+                found.add(process.pid)
+        except (OSError, psutil.Error):
+            continue
+    return found
 
 
 def _psutil_group(pgid: int) -> set[int]:
