@@ -151,9 +151,10 @@ cause that sets aside its block (`external:<reason>`).
 
 A cleanup that left processes stops the experiment, not just its block:
 no server, treatment or prelude starts beside them. Every planned run after
-it is indexed with state `not_run` and the reason `stopped_after:<label>`.
-Each survivor is recorded by its PID and start time, and a resume refuses
-(exit 5) while any is still running; once the host is clean, it runs them. A `probe_incomplete` run is run
+it is indexed with state `not_run`, the reason `cleanup_unverified`, and
+`stopped_after: <label>`. Each survivor is recorded by its PID and start
+time, and a resume refuses (a usage error, exit 2) while any is still
+running; once the host is clean, it runs them. A `probe_incomplete` run is run
 again at once on a fresh server, after its group is verified gone, and both
 attempts are kept.
 
