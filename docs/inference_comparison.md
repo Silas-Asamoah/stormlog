@@ -60,14 +60,18 @@ case of its own, named `<case>/<segment>`, with the same metrics: its
 requests (by arrival, or by overlap), and its rates per second of the
 segment, clipped to the phase. A segment fails with its case.
 
-Under `--segment-membership overlap`, a segment has no rates (goodput,
-throughput, output tokens): its requests are those in flight during it,
-and their count per second grows with their latency, so a slower candidate
-would look faster. Those metrics read `overlapping_cohort`, and a rate gate
-with overlap segments is a usage error; gate rates by arrival. Its shares
-(attainment, failure fraction) and latency are compared as usual. Any rate
-a run cannot give is read with its interval's reason (`rate_reason`), or
-`rate_unavailable`.
+Under `--segment-membership overlap`, a segment's requests are those in
+flight during it, and that cohort is length-biased: their count per second
+grows with their latency, so a slower candidate would look faster, and a
+longer request is likelier to overlap any segment, which stretches its
+quantiles (p95 5,333 ms by arrival against 5,650 ms by overlap, in
+fable-213's simulation of a 2 s arm). An overlap segment is therefore
+**diagnostics only**: compared, marked `membership: overlap` and
+`gated: false`, and never gated, whatever `--gate` or `--min-attainment`
+asks; the whole cases, and segments by arrival, are gated as usual. Its
+rates (goodput, throughput, output tokens) read `overlapping_cohort`. Any
+rate a run cannot give is read with its interval's reason (`rate_reason`),
+or `rate_unavailable`.
 
 ### Modes
 
