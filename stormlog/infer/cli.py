@@ -148,6 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile_parser.add_argument(
         "--run-id", default=None, help="Shared run ID for an on-host collector"
     )
+    _add_label_arguments(profile_parser)
     profile_parser.add_argument(
         "--concurrency",
         default=None,
@@ -523,6 +524,39 @@ def _add_describe_server_parser(subparsers: Any) -> None:
         help="Where --hash-weights keeps digests between runs",
     )
     parser.add_argument("--no-gpu", action="store_true", help="Describe without NVML")
+
+
+def _add_label_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group(
+        "experiment labels", "Recorded with the run; infer compare pairs runs by block"
+    )
+    group.add_argument("--experiment", default=None, help="The experiment's ID")
+    group.add_argument("--arm", default=None, help="This run's arm, e.g. baseline")
+    group.add_argument("--block", default=None, help="This run's block")
+    group.add_argument(
+        "--position", type=int, default=None, help="Its position within the block"
+    )
+    group.add_argument(
+        "--attempt", type=int, default=None, help="Its attempt number (default 1)"
+    )
+
+
+def _labels(args: argparse.Namespace) -> dict[str, Any] | None:
+    """The run's experiment labels, or None when none was given."""
+    labels = {
+        "experiment": args.experiment,
+        "arm": args.arm,
+        "block": args.block,
+        "position": args.position,
+        "attempt": args.attempt,
+    }
+    if all(value is None for value in labels.values()):
+        return None
+    if labels["block"] is not None and (
+        labels["experiment"] is None or labels["arm"] is None
+    ):
+        raise InferUsageError("--block needs --experiment and --arm")
+    return labels
 
 
 def _add_slo_arguments(parser: argparse.ArgumentParser, purpose: str) -> None:
@@ -1007,6 +1041,7 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         server_probe=args.server_probe,
         allow_remote_probe=args.allow_remote_probe,
         **_manifest_inputs(args),
+        labels=_labels(args),
     )
 
 
