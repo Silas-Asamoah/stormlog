@@ -7,15 +7,25 @@ by their ``X-Request-Id``), a high in-flight limit, and its own artifact under
 ``truth/``. Open-loop neighbors arrive at a fixed rate, so the plan is a
 schedule, not a distribution.
 
-Actuation is checked from that artifact (#221 A.3): an open-loop neighbor
-must reach its planned rate within 5%, with no arrival held for a slot; a
-closed-loop neighbor must keep every worker busy. Any failed request is
-reported.
+Actuation is checked from that artifact (#221 A.3), on what was actually
+sent, not on how many records there are:
+- an open-loop neighbor reaches its planned rate within 5% overall and in
+  every 5 s window of actual send times, holds no arrival for a slot, and
+  dispatches with a p95 lag under 0.25 s;
+- a closed-loop neighbor keeps its workers busy: on average at least 90% of
+  them have a request in flight;
+- the server's own token counts match the dose: the median prompt within a
+  factor of 2 of it (the client counts words), the median output at least
+  90% of it (the neighbor ignores EOS).
+
+Any failed request is reported.
 """
 
 from __future__ import annotations
 
+import bisect
 import json
+import statistics
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +37,12 @@ from stormlog.infer.profile import InferenceProfiler
 
 RATE_TOLERANCE = 0.05
 MAX_IN_FLIGHT = 512
+WINDOW_SECONDS = 5.0
+MAX_DISPATCH_LAG_SECONDS = 0.25
+PROMPT_RANGE = (0.5, 2.0)
+OUTPUT_FLOOR = 0.9
+BUSY_SHARE = 0.9
+SECOND = 1_000_000_000
 
 
 @dataclass(frozen=True)
@@ -170,11 +186,15 @@ def judge(
     tally = _Tally.of(requests)
     planned = shape.rate_per_second
     achieved = tally.sent / duration_seconds if duration_seconds > 0 else None
+    sent = [r for r in requests if r.get("status") != "dropped"]
     problems = [f"neighbor raised {error!r}" for error in errors]
     if shape.open_loop:
         problems += _open_loop_problems(achieved, planned, tally.held)
-    elif tally.sent < (shape.concurrency or 0):
-        problems.append("fewer requests than workers")
+        problems += _window_problems(sent, planned or 0.0, duration_seconds)
+        problems += _lag_problems(sent)
+    else:
+        problems += _closed_loop_problems(sent, shape.concurrency or 0)
+    problems += _dose_problems(sent, shape)
     if tally.failed:
         problems.append(f"{tally.failed} requests failed")
     return Actuation(
@@ -218,6 +238,86 @@ def _open_loop_problems(
     if held:
         problems.append(f"{held} arrivals held for a slot")
     return problems
+
+
+def _window_problems(
+    sent: list[dict[str, Any]], planned: float, duration_seconds: float
+) -> list[str]:
+    """Sends in each full 5 s window of actual send times, from the first,
+    within 5% (or one request) of the plan: a schedule sent late, in a
+    burst, still has the right count overall."""
+    if not sent or duration_seconds < 2 * WINDOW_SECONDS:
+        return []
+    starts = sorted(int(r["started_at_ns"]) for r in sent)
+    window_ns = int(WINDOW_SECONDS * SECOND)
+    expected = planned * WINDOW_SECONDS
+    allowed = max(1.0, RATE_TOLERANCE * expected)
+    for index in range(int(duration_seconds // WINDOW_SECONDS)):
+        low = starts[0] + index * window_ns
+        count = bisect.bisect_left(starts, low + window_ns) - bisect.bisect_left(
+            starts, low
+        )
+        if abs(count - expected) > allowed:
+            return [
+                f"{count} sends in 5 s window {index} against {expected:.3g} planned"
+            ]
+    return []
+
+
+def _lag_problems(sent: list[dict[str, Any]]) -> list[str]:
+    lags = sorted(
+        float(r["dispatch_lag_ms"])
+        for r in sent
+        if r.get("dispatch_lag_ms") is not None
+    )
+    if not lags:
+        return []
+    p95 = lags[min(len(lags) - 1, int(0.95 * len(lags)))] / 1000
+    if p95 > MAX_DISPATCH_LAG_SECONDS:
+        return [f"dispatch lag p95 {p95:.3g} s, above {MAX_DISPATCH_LAG_SECONDS} s"]
+    return []
+
+
+def _closed_loop_problems(sent: list[dict[str, Any]], workers: int) -> list[str]:
+    """Every worker busy: the time-weighted number in flight over the run."""
+    if len(sent) < workers:
+        return ["fewer requests than workers"]
+    spans = [
+        (int(r["started_at_ns"]), int(r["ended_at_ns"]))
+        for r in sent
+        if r.get("ended_at_ns") is not None
+    ]
+    if not spans:
+        return ["no request ended"]
+    first, last = min(s for s, _e in spans), max(e for _s, e in spans)
+    busy = sum(end - start for start, end in spans) / max(1, last - first)
+    if busy < BUSY_SHARE * workers:
+        return [f"{busy:.2g} of {workers} workers busy on average"]
+    return []
+
+
+def _dose_problems(sent: list[dict[str, Any]], shape: NeighborShape) -> list[str]:
+    """The server's own counts against the dose, where the server gave them."""
+    problems = []
+    prompt = _server_median(sent, "prompt")
+    if prompt is not None:
+        ratio = prompt / shape.input_tokens
+        if not PROMPT_RANGE[0] <= ratio <= PROMPT_RANGE[1]:
+            problems.append(f"prompt tokens {ratio:.2g}x the dose")
+    output = _server_median(sent, "output")
+    if output is not None and output / shape.output_tokens < OUTPUT_FLOOR:
+        problems.append(f"output tokens {output / shape.output_tokens:.2g}x the dose")
+    return problems
+
+
+def _server_median(sent: list[dict[str, Any]], which: str) -> float | None:
+    counts = [
+        float(r[f"{which}_tokens"])
+        for r in sent
+        if r.get(f"{which}_token_source") == "server_usage"
+        and r.get(f"{which}_tokens") is not None
+    ]
+    return statistics.median(counts) if counts else None
 
 
 __all__ = [
