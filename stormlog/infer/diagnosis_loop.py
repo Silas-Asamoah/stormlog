@@ -140,6 +140,10 @@ class Stall:
     # The work bucket of the step the stall belongs to (see work_bucket).
     bucket: int = 0
     ongoing: bool = False
+    # A step's time that began before the step before it completed: under
+    # async scheduling its output waits for the engine's next step() call,
+    # which a scheduler paused for all requests skips.
+    overlapped: bool = False
 
 
 def work_bucket(total_tokens: int) -> int:
@@ -525,6 +529,7 @@ def _within(step: Step, previous: Step | None) -> Stall:
         start_wall,
         step.completed_wall_ns or step.end_wall_ns,
         work_bucket(step.total_tokens),
+        overlapped=start > step.end_mono_ns,
     )
 
 
@@ -554,7 +559,15 @@ def _ongoing(
         now_wall_ns,
         _ongoing_bucket(last, pending),
         ongoing=True,
+        overlapped=_scheduled_before(pending, last),
     )
+
+
+def _scheduled_before(pending: Sequence[Step], last: Step) -> bool:
+    """Whether a step in flight was scheduled before ``last`` completed: under
+    async scheduling its output waits for the engine's next step() call."""
+    done = last.completed_mono_ns or 0
+    return any(step.end_mono_ns < done for step in pending)
 
 
 def _ongoing_bucket(last: Step, pending: Sequence[Step]) -> int:
@@ -694,7 +707,8 @@ def _verdict(
     overridden = any(key in config.thresholds for key in _LOOP_KEYS)
     worst, covered = _judged(stalls, steps, records, config)
     if worst is not None and worst[0].duration_ns >= worst[1]:
-        reasons = [*reasons, *_doubts(covered, _observes_pauses(records, config))]
+        pauses = _observes_pauses(records, config)
+        reasons = [*reasons, *_doubts(worst[0], covered, pauses)]
     detail: dict[str, Any] = {
         "steps": len(steps),
         "pause_capability": _observes_pauses(records, config),
@@ -719,11 +733,18 @@ def _verdict(
     )
 
 
-def _doubts(covered: bool, pauses_observed: bool) -> list[str]:
+def _doubts(stall: Stall, covered: bool, pauses_observed: bool) -> list[str]:
     """Why a stall over its limit is still no verdict: a record may be
-    missing around it, or the hook cannot say the scheduler was not paused."""
+    missing around it, or the hook cannot say the scheduler was not paused
+    when a pause could have made it. A pause changes only what schedule()
+    returns and whether the engine steps, so it can make a gap between
+    steps, or hold an overlapped step's output for a skipped step() call;
+    it cannot lengthen a schedule() call or a step run in one call."""
     doubts = [] if covered else [REASON_COVERAGE_UNKNOWN]
-    return doubts if pauses_observed else [*doubts, REASON_PAUSE_UNKNOWN]
+    pausable = stall.locus == LOCUS_BETWEEN_STEPS or stall.overlapped
+    if pausable and not pauses_observed:
+        doubts.append(REASON_PAUSE_UNKNOWN)
+    return doubts
 
 
 Judged = tuple[Stall, float, str, float | None]

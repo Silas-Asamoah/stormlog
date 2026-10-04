@@ -236,6 +236,41 @@ def test_without_the_pause_capability_a_stall_gives_no_verdict() -> None:
     assert engine_loop_gap(steady).exceeds is False
 
 
+@pytest.mark.parametrize(
+    "locus, verdict",
+    [
+        (LOCUS_IN_SCHEDULE, True),  # a pause changes what schedule() returns
+        (LOCUS_WITHIN_STEP, True),  # a step run in one call cannot pause
+    ],
+)
+def test_without_the_pause_capability_a_pause_cannot_explain_a_step(
+    locus: str, verdict: bool
+) -> None:
+    """spec5's shape: a 1.3 s step on a hook that does not record pauses."""
+    records = _loop(60, stall_after=40, stall_ns=1_300 * MS, locus=locus)
+    records[0].pop("observes")
+
+    signal = engine_loop_gap(records)
+
+    assert signal.detail["locus"] == locus
+    assert (signal.exceeds, signal.sufficient) == (verdict, True)
+
+
+def test_without_the_pause_capability_an_overlapped_step_gives_no_verdict() -> None:
+    """Under async scheduling a step's output waits for the next step()
+    call, which a scheduler paused for all requests skips: a late output
+    could be a pause."""
+    records = _async_loop(60, slow_after=40)
+    records[0].pop("observes")
+
+    signal = engine_loop_gap(records)
+
+    assert signal.detail["locus"] == LOCUS_WITHIN_STEP
+    assert (signal.exceeds, signal.reason) == (None, REASON_PAUSE_UNKNOWN)
+    records[0]["observes"] = _hello()["observes"]
+    assert engine_loop_gap(records).exceeds is True
+
+
 def test_a_tail_window_carries_its_epoch_s_hello() -> None:
     """An online trigger evaluates the tail of a long log. Its hello says
     whether pauses are recorded; passed with the tail, or prepended to it,
@@ -519,26 +554,32 @@ def test_no_steps_or_no_completed_step() -> None:
     assert engine_loop_gap(only_scheduled).reason == REASON_TOO_FEW_STEPS
 
 
-def _async_loop(steps: int, *, late_after: int | None = None) -> list[dict[str, Any]]:
+def _async_loop(
+    steps: int, *, late_after: int | None = None, slow_after: int | None = None
+) -> list[dict[str, Any]]:
     """Async scheduling: each step is scheduled while the previous one runs,
     3 ms before it completes. ``late_after`` delays one schedule() call
-    until 300 ms after the previous completion."""
+    until 300 ms after the previous completion; ``slow_after`` instead lets
+    the next step, scheduled on time, complete 300 ms late."""
+    delayed = late_after if late_after is not None else slow_after
     records: list[dict[str, Any]] = [_hello()]
     for index in range(steps):
         end = (
             T
             + (index + 1) * CADENCE
-            + (300 * MS if late_after is not None and index > late_after else 0)
+            + (300 * MS if delayed is not None and index > delayed else 0)
         )
         start = end - CADENCE - 3 * MS
         if late_after is not None and index == late_after + 1:
             start = end - CADENCE
+        if slow_after is not None and index == slow_after + 1:
+            start -= 300 * MS
         records.append(scheduled(index, start, _decode("a", "b")))
     for index in range(steps):
         end = (
             T
             + (index + 1) * CADENCE
-            + (300 * MS if late_after is not None and index > late_after else 0)
+            + (300 * MS if delayed is not None and index > delayed else 0)
         )
         records.append(completed(index, end, [done("a"), done("b")]))
     records.sort(key=lambda r: r.get("start_mono_ns", r.get("mono_ns", 0)))
