@@ -1,5 +1,6 @@
 """Prometheus export from a real ``infer profile`` run against a fake server."""
 
+import asyncio
 import json
 import signal
 import socket
@@ -438,6 +439,30 @@ def test_a_ctrl_c_while_the_capability_record_is_written_waits_for_it(
     records = _records(output)
     summary = _capability(records)["metadata"]["summary"]["records"]
     assert summary["offered"] == summary["applied"] + sum(summary["dropped"].values())
+    assert records[-1]["event_type"] == "infer.session"
+    assert records[-1]["status"] == "interrupted"
+
+
+def test_a_ctrl_c_while_server_evidence_is_imported_still_ends_the_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # After the capture, the run imports traces and the execution log; a
+    # Ctrl+C there must still leave the artifact's terminal record.
+    async def interrupted_import(self: InferenceProfiler, output_path: Path) -> None:
+        signal.raise_signal(signal.SIGINT)
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(
+        InferenceProfiler, "_import_server_evidence", interrupted_import
+    )
+    output = tmp_path / "infer.jsonl"
+    with _fake_server() as endpoint:
+        config = _config(
+            endpoint, output, ExportConfig(), request_count=2, warmup_requests=0
+        )
+        with pytest.raises(KeyboardInterrupt):
+            InferenceProfiler(config).run()
+    records = _records(output)
     assert records[-1]["event_type"] == "infer.session"
     assert records[-1]["status"] == "interrupted"
 
