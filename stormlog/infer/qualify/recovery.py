@@ -57,6 +57,10 @@ class Thresholds:
     exceedance_share: float = 0.05
     exceedance_quantile: float = 0.99
     min_cadence_samples: int = 20
+    # Queue recovery (F1, T1, W1): as many waits above the baseline's p95,
+    # and waiting counts outside its range, as the same chance allows.
+    min_wait_samples: int = 20
+    min_gauge_samples: int = 5
 
 
 @dataclass(frozen=True)
@@ -247,6 +251,44 @@ class MedianWithin:
         return self.times
 
 
+class MostlyWithin:
+    """At least ``min_samples`` samples in the interval, the first of them
+    inside [low, high], and no more outside it than chance allows. The band
+    is a baseline's tail, which ``exceedance_share`` of normal samples
+    leave. A hold that began with an outside sample would end the effect
+    before its last sample."""
+
+    def __init__(
+        self,
+        points: Sequence[Point],
+        thresholds: Thresholds,
+        *,
+        min_samples: int,
+        low: float = float("-inf"),
+        high: float = float("inf"),
+    ) -> None:
+        self.times = [time for time, _value in points]
+        self.inside = [low <= value <= high for _time, value in points]
+        self.outside = _prefix(float(not inside) for inside in self.inside)
+        self.min_samples = min_samples
+        self.thresholds = thresholds
+
+    def holds(self, start_ns: int, end_ns: int) -> bool:
+        first = bisect.bisect_left(self.times, start_ns)
+        last = bisect.bisect_right(self.times, end_ns)
+        count = last - first
+        if count < self.min_samples or not self.inside[first]:
+            return False
+        return self.outside[last] - self.outside[first] <= allowed_exceedances(
+            count,
+            self.thresholds.exceedance_share,
+            self.thresholds.exceedance_quantile,
+        )
+
+    def change_points(self) -> Sequence[int]:
+        return self.times
+
+
 class CadenceWithin:
     """A gap series is back to its baseline over the interval: at least
     ``min_cadence_samples`` gaps; their mean within ``rate_tolerance`` of
@@ -425,10 +467,24 @@ class Context:
 
 
 def _queue_criteria(context: Context) -> list[Criterion]:
-    baseline = context.baseline
+    """Waits back below the baseline's p95, and the waiting count within its
+    range, but for as many exceptions as chance allows: 5% of normal waits
+    are above a p95, so "every wait" would almost never hold."""
+    baseline, thresholds = context.baseline, context.thresholds
     return [
-        AllWithin(context.signals.waits, high=baseline.wait_p95),
-        AllWithin(context.signals.waiting, baseline.waiting_low, baseline.waiting_high),
+        MostlyWithin(
+            context.signals.waits,
+            thresholds,
+            min_samples=thresholds.min_wait_samples,
+            high=baseline.wait_p95,
+        ),
+        MostlyWithin(
+            context.signals.waiting,
+            thresholds,
+            min_samples=thresholds.min_gauge_samples,
+            low=baseline.waiting_low,
+            high=baseline.waiting_high,
+        ),
     ]
 
 
@@ -751,6 +807,7 @@ __all__ = [
     "GapStats",
     "Mechanism",
     "MedianWithin",
+    "MostlyWithin",
     "NoEvents",
     "Signals",
     "Thresholds",
