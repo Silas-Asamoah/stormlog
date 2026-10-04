@@ -370,3 +370,25 @@ def test_an_api_server_pulse_that_stalled_the_engine_adds_that_mechanism(
     assert f4b.validity.realization == "realized", f4b.validity
     assert "host_stall@engine_core" in f4b.validity.realized_mechanisms
     assert ("host_stall", "engine_core") in {(a.kind, a.component) for a in f4b.allows}
+
+
+def test_a_capture_records_its_start_for_i1s_realization(tmp_path: Path) -> None:
+    # A1 realizes I1 only when the capture both started and stopped.
+    from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan(
+        {**record, "episodes": [{"type": "I1", "dose": {"seconds": 0.1}}]}
+    )
+    config = FakeEngineConfig(step_seconds=0.001, trace_dir=tmp_path / "traces")
+    with FakeEngine(config) as engine:
+        server = Server(engine.base_url, engine.config.model, tmp_path)
+        run = InjectionRun(plan, RunDirectory(tmp_path / "runs", "q221-y"), server)
+        actions, actuated, _injected = run._capture(plan.episodes[0])
+    assert actuated
+    assert actions.capture_started_ns is not None
+    assert actions.stop_requested_ns is not None
+    assert actions.capture_started_ns <= actions.stop_requested_ns
