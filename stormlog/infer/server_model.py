@@ -193,7 +193,7 @@ def snapshot_files(directory: Path, *, verify: bool = False) -> list[ModelFile]:
     a loop, has none either.
     """
     files = []
-    for path in _walk(directory):
+    for path in walk_files(directory):
         relative = path.relative_to(directory).as_posix()
         try:
             blob = path.resolve(strict=True)
@@ -204,7 +204,7 @@ def snapshot_files(directory: Path, *, verify: bool = False) -> list[ModelFile]:
         algorithm, digest = _blob_name(snapshot_blob(path))
         if verify:
             algorithm = algorithm if algorithm != "none" else SHA256
-            digest = _sha256(blob) if algorithm == SHA256 else _git_sha1(blob)
+            digest = sha256_file(blob) if algorithm == SHA256 else git_sha1_file(blob)
         files.append(ModelFile(relative, algorithm, digest, size, checked=verify))
     return files
 
@@ -237,7 +237,7 @@ def local_files(
     """Each file of a local model directory, by size or by SHA-256."""
     known = _load_cache(cache) if hash_contents else {}
     files = []
-    for path in _walk(directory):
+    for path in walk_files(directory):
         relative = path.relative_to(directory).as_posix()
         try:
             stat = path.stat()
@@ -264,7 +264,7 @@ def _cached_sha256(path: Path, stat: os.stat_result, known: dict[str, str]) -> s
         f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{stat.st_ctime_ns}"
         f"|{stat.st_ino}"
     )
-    digest = known.get(key) or _sha256(path)
+    digest = known.get(key) or sha256_file(path)
     known[key] = digest
     return digest
 
@@ -366,13 +366,13 @@ def _read_ref(repo: Path, name: str) -> str | None:
     return commit if _COMMIT.match(commit) else None
 
 
-def _walk(directory: Path) -> Iterator[Path]:
+def walk_files(directory: Path) -> Iterator[Path]:
     for root, _dirs, names in sorted(os.walk(directory)):
         for name in sorted(names):
             yield Path(root) / name
 
 
-def _sha256(path: Path) -> str:
+def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while chunk := handle.read(_CHUNK):
@@ -380,7 +380,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _git_sha1(path: Path) -> str:
+def git_sha1_file(path: Path) -> str:
     digest = hashlib.sha1(f"blob {path.stat().st_size}\0".encode())  # noqa: S324
     with path.open("rb") as handle:
         while chunk := handle.read(_CHUNK):
@@ -422,11 +422,14 @@ __all__ = [
     "ModelFile",
     "chat_template_digest",
     "describe_model",
+    "git_sha1_file",
     "generation_config",
     "hub_cache_dir",
     "hub_snapshot",
     "launch_arguments",
     "local_files",
+    "sha256_file",
     "snapshot_files",
+    "walk_files",
     "weights_digest",
 ]
