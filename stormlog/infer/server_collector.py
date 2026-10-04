@@ -8,7 +8,7 @@ import math
 import socket
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -172,6 +172,20 @@ class NvmlUnavailableError(RuntimeError):
     """The NVML library cannot be loaded on this host."""
 
 
+class CollectionObserver(Protocol):
+    """Told the collector's identity, each poll, and why it stopped.
+
+    ``identify`` runs before anything is collected; its ``ValueError`` is
+    a usage error. ``poll`` and ``close`` must not raise.
+    """
+
+    def identify(self, identity: ServerIdentity) -> None: ...
+
+    def poll(self, samples: Sequence[TelemetrySample]) -> None: ...
+
+    def close(self, stop_reason: str) -> None: ...
+
+
 class NvmlMemorySource:
     """Read NVML v2 memory counters from a verified GPU or MIG handle."""
 
@@ -274,6 +288,7 @@ def collect_server_telemetry(
     gpu_source: GpuMemorySource | None = None,
     stop_event: threading.Event | None = None,
     on_warning: Callable[[str], None] | None = None,
+    observer: CollectionObserver | None = None,
 ) -> CollectionResult:
     """Sample a live server process until the duration, a stop, or a change.
 
@@ -282,7 +297,9 @@ def collect_server_telemetry(
     changes. The result says which, so callers can tell a clean stop from one
     that leaves later case windows unobserved. ``group_id``, ``rank`` and
     ``world_size`` declare this process as one member of a server group, such as
-    one tensor-parallel worker.
+    one tensor-parallel worker. An ``observer``, such as the health
+    export, is told the identity before the first poll, each poll after it
+    is written, and the stop reason.
     """
     try:
         _validate_collection_options(run_id, pid, no_gpu, device_uuid, gpu_source)
@@ -301,20 +318,36 @@ def collect_server_telemetry(
         identity = _server_identity(
             process, source, replica_id, (group_id, rank, world_size)
         )
-        polls, stop_reason, detail = _collect_loop(
-            run_id,
-            process,
-            identity,
-            source,
-            Path(output_path),
-            interval_seconds,
-            duration_seconds,
-            stop_event or threading.Event(),
-        )
+        _identify(observer, identity)
+        stop_reason = "error"
+        try:
+            polls, stop_reason, detail = _collect_loop(
+                run_id,
+                process,
+                identity,
+                source,
+                Path(output_path),
+                interval_seconds,
+                duration_seconds,
+                stop_event or threading.Event(),
+                observer,
+            )
+        finally:
+            if observer is not None:
+                observer.close(stop_reason)
         return CollectionResult(polls, stop_reason, detail, tuple(warnings))
     finally:
         if own_source and source:
             source.close()
+
+
+def _identify(observer: CollectionObserver | None, identity: ServerIdentity) -> None:
+    if observer is None:
+        return
+    try:
+        observer.identify(identity)
+    except ValueError as exc:
+        raise InferUsageError(str(exc)) from exc
 
 
 def _server_process(pid: int) -> psutil.Process:
@@ -450,6 +483,7 @@ def _collect_loop(
     interval_seconds: float,
     duration_seconds: float | None,
     stop_event: threading.Event,
+    observer: CollectionObserver | None = None,
 ) -> tuple[int, str, str | None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
@@ -475,6 +509,8 @@ def _collect_loop(
                 )
                 handle.flush()
                 polls += 1
+                if observer is not None:
+                    observer.poll(samples)
                 if stop is not None:
                     return polls, stop[0], stop[1]
                 next_poll = next_poll_time(

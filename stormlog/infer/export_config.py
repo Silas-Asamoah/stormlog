@@ -29,10 +29,10 @@ from .trace_context import (
     parse_server_sampler,
 )
 
-Command = Literal["profile", "watch"]
+Command = Literal["profile", "watch", "collect-server"]
 # Every label value of a profile comes from its configuration, so nothing
 # needs room to appear later; a watcher's trigger IDs can change.
-DEFAULT_HEADROOM: dict[str, int] = {"profile": 0, "watch": 64}
+DEFAULT_HEADROOM: dict[str, int] = {"profile": 0, "watch": 64, "collect-server": 0}
 MIN_MAX_BYTES = 4096
 # The longest linger or textfile interval.
 MAX_SECONDS = 3600.0
@@ -466,6 +466,12 @@ def add_trace_context_arguments(parser: argparse.ArgumentParser) -> None:
 
 def add_export_arguments(parser: argparse.ArgumentParser) -> None:
     """The export flags, shared by ``infer profile`` and ``infer watch``."""
+    add_prometheus_arguments(parser)
+    _add_otlp_arguments(parser)
+
+
+def add_prometheus_arguments(parser: argparse.ArgumentParser) -> None:
+    """The Prometheus flags; ``infer collect-server`` has only these."""
     group = parser.add_argument_group(
         "export (optional)",
         "Expose Stormlog's own measurements to Prometheus. Off unless asked "
@@ -535,7 +541,6 @@ def add_export_arguments(parser: argparse.ArgumentParser) -> None:
         help='With off, every series has case="all", for matrices too big '
         "for the budget (default on).",
     )
-    _add_otlp_arguments(parser)
 
 
 def _add_otlp_arguments(parser: argparse.ArgumentParser) -> None:
@@ -612,7 +617,9 @@ def _add_otlp_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def export_config_from_args(args: argparse.Namespace) -> ExportConfig:
+def export_config_from_args(
+    args: argparse.Namespace, *, command: Command = "profile"
+) -> ExportConfig:
     defaults = ExportConfig()
     textfile_dir = getattr(args, "prometheus_textfile_dir", None)
     config = ExportConfig(
@@ -639,7 +646,7 @@ def export_config_from_args(args: argparse.Namespace) -> ExportConfig:
     )
     given = _given_flags(args)
     config = _with_server_ratio(config, given)
-    config.validate(given=given)
+    config.validate(command, given=given)
     return config
 
 
