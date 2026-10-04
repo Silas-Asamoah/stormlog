@@ -97,9 +97,11 @@ the flaky benchmark memory gates
   last: `/version`, `/v1/models` and, on a loopback or private host (or
   with `--allow-remote-probe`), vLLM's dev-mode `/server_info`, kept
   redacted as `infer.server_probe` records. Answers are capped at 4 MiB with
-  no redirects. `/server_info` gets one 120 s deadline and no retry; if it
-  does not answer, the profile exits 5 before measuring, since vLLM's
-  environment collector may still be running. (#213)
+  no redirects, and each deadline bounds the whole exchange.
+  `/server_info` gets one 120 s deadline and no retry; if it does not
+  answer, or the server drops the request unanswered, the profile exits 5
+  before measuring, since vLLM's environment collector may still be
+  running. (#213)
 - `stormlog infer describe-server --pid PID --output FILE`: one
   description of a running vLLM server from the host that serves it
   (`stormlog.infer.server_description` v1): its process tree from `/proc`,

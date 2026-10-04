@@ -328,13 +328,18 @@ value is kept with an issue.
 `infer profile` asks the server about itself over HTTP before the first case
 and after the last (`--server-probe`, see [Inference Profiling](inference.md)).
 Each route's answer is recorded with its status (`ok`, `http_error`,
-`unreachable`, `failed`, `timeout`, `too_large`, `invalid_json` or
-`skipped`), HTTP status, time and size:
+`unreachable`, `delivery_unknown`, `failed`, `timeout`, `too_large`,
+`invalid_json` or `skipped`), HTTP status, time and size:
 
 - every answer is capped at 4 MiB, and redirects are never followed;
 - the API key goes only to the endpoint's own origin;
-- `/version` and `/v1/models` get 60 seconds each, `/server_info` one 120-second deadline;
-- when the server cannot be reached, the other routes are skipped instead of each waiting out its deadline.
+- `/version` and `/v1/models` get 60 seconds each, `/server_info` one 120-second deadline. A deadline bounds the whole exchange, from connecting to the last byte, however slowly the server sends;
+- when the server cannot be reached, or a route gets no answer in time, the other routes are skipped instead of each waiting out its deadline.
+
+`/server_info` is never retried. When it times out, or the server takes the
+request and drops it before a byte of answer (`delivery_unknown`), vLLM's
+environment collector may still be running, so `profile` exits `5` before
+it measures.
 
 A URL anywhere in the `/version` and `/v1/models` answers, such as a
 model's `root`, loses its credentials and query. `/server_info`'s answer is

@@ -10,11 +10,15 @@ a loopback or private-network host unless ``allow_remote`` says otherwise.
 more) the first time and caches the answer. So it gets one deadline of 120
 seconds and is never retried: a retry would start a second collector, and
 a cached answer would say nothing about the first. A request that runs out
-of time leaves the probe ``incomplete``, and a run must not measure next to
-a collector that may still be running.
+of time, or that the server took and then dropped without a byte of
+answer, leaves the probe ``incomplete``, and a run must not measure next
+to a collector that may still be running.
 
-Every answer is capped at 4 MiB, redirects are never followed, and the API
-key goes only to the endpoint's own origin. ``/server_info`` is kept
+Each deadline bounds the whole exchange, from connecting to the last byte,
+however slowly the server trickles its answer. Once a route gets no answer
+in time, the routes after it are skipped. Every answer is capped at 4 MiB,
+redirects are never followed, and the API key goes only to the endpoint's
+own origin, from which every route is built. ``/server_info`` is kept
 redacted (see ``server_privacy``).
 """
 
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -30,7 +35,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .openai_client import ConnectError, inference_opener
+from .openai_client import ConnectError, NoResponseError, inference_opener
 from .server_privacy import redact_vllm_config, redact_vllm_env, system_env_summary
 
 AUTO = "auto"
@@ -65,6 +70,8 @@ OK = "ok"
 HTTP_ERROR = "http_error"
 UNREACHABLE = "unreachable"
 FAILED = "failed"
+# The request may have reached the server, which gave no answer.
+DELIVERY_UNKNOWN = "delivery_unknown"
 TIMEOUT = "timeout"
 TOO_LARGE = "too_large"
 INVALID_JSON = "invalid_json"
@@ -108,9 +115,13 @@ class ServerProbe:
 
     @property
     def incomplete(self) -> bool:
-        """Whether ``/server_info`` ran out of time, so its collector may run on."""
+        """Whether ``/server_info`` may have started a collector that runs on.
+
+        It ran out of time, or the server may have taken the request and
+        dropped it before answering.
+        """
         answer = self.answers.get(SERVER_INFO)
-        return answer is not None and answer.status == TIMEOUT
+        return answer is not None and answer.status in (TIMEOUT, DELIVERY_UNKNOWN)
 
     def to_record(self, *, session_id: str) -> dict[str, Any]:
         return {
@@ -146,11 +157,11 @@ def probe_server(
     send = opener or _default_opener()
     routes = [VERSION, MODELS] + ([SERVER_INFO] if mode == AUTO else [])
     answers: dict[str, ProbeAnswer] = {}
-    down = False
+    down: str | None = None
     for route in routes:
-        if down:
-            # No connection: every other route would wait out its own deadline.
-            answers[route] = ProbeAnswer(route, SKIPPED, detail="unreachable")
+        if down is not None:
+            # Every other route would wait out its own deadline as well.
+            answers[route] = ProbeAnswer(route, SKIPPED, detail=down)
             continue
         if route == SERVER_INFO:
             answers[route] = _server_info(send, origin, api_key, allow_remote, phase)
@@ -158,8 +169,11 @@ def probe_server(
             answer = _ask(send, origin, route, api_key, BASIC_DEADLINE_SECONDS)
             # A model's root can be a URL with credentials in it.
             answers[route] = replace(answer, body=_stripped(answer.body))
-        down = answers[route].status == UNREACHABLE
+        down = _SKIP_REASONS.get(answers[route].status)
     return ServerProbe(phase, mode, origin, probe.started_at_ns, answers)
+
+
+_SKIP_REASONS = {UNREACHABLE: "unreachable", TIMEOUT: "no answer to an earlier route"}
 
 
 def endpoint_origin(endpoint: str) -> str:
@@ -230,24 +244,50 @@ def _redacted_server_info(body: Any, phase: str) -> Any:
 def _ask(
     send: Opener, origin: str, route: str, api_key: str | None, deadline: float
 ) -> ProbeAnswer:
-    url = origin + route
     headers = {"Accept": "application/json"}
-    if api_key and _same_origin(url, origin):
+    if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    request = urllib.request.Request(url, headers=headers, method="GET")
+    request = urllib.request.Request(origin + route, headers=headers, method="GET")
     started = time.monotonic()
     try:
-        response = send(request, deadline)
-        with response:
-            raw = _read_capped(response, started + deadline)
-            status = int(getattr(response, "status", 200))
+        raw, status = _exchange(send, request, deadline)
     except (OSError, _TooLarge) as exc:
         return _failure(route, exc, started)
     try:
         body = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         return _answer(route, INVALID_JSON, started, http_status=status, size=len(raw))
     return _answer(route, OK, started, http_status=status, size=len(raw), body=body)
+
+
+def _exchange(
+    send: Opener, request: urllib.request.Request, deadline: float
+) -> tuple[bytes, int]:
+    """The whole request and answer within ``deadline`` seconds.
+
+    The socket timeout applies to each operation, so a server that trickles
+    its headers or body would hold a plain read for as long as it keeps
+    sending. The exchange runs in a daemon thread instead, and is abandoned
+    when the deadline passes.
+    """
+    outcome: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            with send(request, deadline) as response:
+                outcome["raw"] = _read_capped(response)
+                outcome["status"] = int(getattr(response, "status", 200))
+        except BaseException as exc:  # handed to the caller below
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=run, name="stormlog-probe", daemon=True)
+    worker.start()
+    worker.join(deadline)
+    if worker.is_alive():
+        raise TimeoutError(f"no complete answer within {deadline:g} s")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["raw"], outcome["status"]
 
 
 def _failure(route: str, exc: Exception, started: float) -> ProbeAnswer:
@@ -260,10 +300,13 @@ def _failure(route: str, exc: Exception, started: float) -> ProbeAnswer:
         reason = exc.reason
         if isinstance(reason, TimeoutError):
             return _answer(route, TIMEOUT, started, detail=str(reason))
-        kind = UNREACHABLE if isinstance(reason, ConnectError) else FAILED
+        # A failure while sending: the server may have the request.
+        kind = UNREACHABLE if isinstance(reason, ConnectError) else DELIVERY_UNKNOWN
         return _answer(route, kind, started, detail=str(reason))
     if isinstance(exc, TimeoutError):
         return _answer(route, TIMEOUT, started, detail=str(exc) or "deadline")
+    if isinstance(exc, NoResponseError):
+        return _answer(route, DELIVERY_UNKNOWN, started, detail=str(exc))
     return _answer(route, FAILED, started, detail=f"{type(exc).__name__}: {exc}")
 
 
@@ -271,13 +314,11 @@ class _TooLarge(Exception):
     pass
 
 
-def _read_capped(response: Any, deadline: float) -> bytes:
-    """The body, up to the cap and the deadline, whichever comes first."""
+def _read_capped(response: Any) -> bytes:
+    """The body, up to the cap."""
     chunks: list[bytes] = []
     size = 0
     while True:
-        if time.monotonic() > deadline:
-            raise TimeoutError("deadline reached while reading the answer")
         chunk = response.read(_CHUNK)
         if not chunk:
             return b"".join(chunks)
@@ -306,10 +347,6 @@ def _answer(
         body=body,
         detail=detail,
     )
-
-
-def _same_origin(url: str, origin: str) -> bool:
-    return endpoint_origin(url) == origin
 
 
 def _default_opener() -> Opener:
