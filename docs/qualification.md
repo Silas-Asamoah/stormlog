@@ -80,6 +80,21 @@ every problem:
 
 `load_injections` also refuses an episode written twice.
 
+**The run** (`stormlog.qualify.run/1`, `truth/run.json`). Each episode names
+its `run_id`, and one run record holds what the harness measured on the
+victim's clock: the measured window, and the priming, baseline and
+final-recovery windows, any run-level protocol failure (a failed priming
+check), and the run's actions. The scorer derives the run's negative
+exposure from it and the run's episodes (`negative_exposure`).
+
+```json
+{"format": "stormlog.qualify.run/1", "run_id": "q221-dxoff-b03-r07",
+ "clock_domain": "<the victim artifact's clock domain>",
+ "measured": {"start_ns": 0, "end_ns": 0}, "priming": {"start_ns": 0, "end_ns": 0},
+ "baseline": {"start_ns": 0, "end_ns": 0}, "final_recovery": {"start_ns": 0, "end_ns": 0},
+ "protocol_failure": null, "actions": []}
+```
+
 **The four validity layers:**
 
 1. **Actuation:** the action took place. Signals were delivered and the
@@ -205,10 +220,15 @@ design's.
 
 ## Scoring: `score_v1`
 
-`score_episode(injection, diagnosis, config)` scores one episode against the
-diagnosis of its run: a `stormlog.report` from `diagnose_artifact`, or its
-payload. `summarize(scores, config)` turns the episodes into the claims. The
-rules are frozen before any evaluation data is drawn.
+`score_run(run, injections, diagnosis, config)` scores a run's episodes
+against the run's diagnosis: a `stormlog.report` from `diagnose_artifact`,
+or its payload. `score_episode` scores one episode alone. `summarize(runs,
+config)` turns the runs into the claims. The rules are frozen before any
+evaluation data is drawn.
+
+**One finding, one episode.** A finding that qualifies for several episodes
+of a run goes to the one whose effect began latest at or before its start
+(`assign_findings`), so it is never credited twice.
 
 **The candidate set.** These are every finding, of any kind, subject or role,
 that passes the temporal rule, less the neutral secondaries. The set is
@@ -271,8 +291,8 @@ spurious.
 | Claim | Population | Gate |
 | --- | --- | --- |
 | Accuracy per episode type (top-1 at L2) | `valid` fault episodes, one stratum for every type the support matrix (`ScoreConfig.supported_types`, required) declares. A declared stratum with no valid episode has no bound and fails; each records its excluded episodes by status | Clopper–Pearson lower bound ≥ 0.78 in every stratum |
-| False-positive rate | `valid` negative runs, one negative episode each | upper bound ≤ 0.05 |
-| False claims per negative hour | the same | descriptive: the exact Poisson bound |
+| False-positive rate | negative runs: a run holding exactly one `valid` episode of C.5's eight negative types (T1, T2, T3, T3b, H0, W1, P, N). A run's false claims are counted over its whole negative exposure: the measured window less the priming and the span of every attempted fault or instrumentation episode, from its onset to its effect end plus grace. I1 and outages are not negatives; a run with two negatives is reported, not counted | upper bound ≤ 0.05 |
+| False claims per negative hour | the same claims over the same exposure, summed over the negative runs | descriptive: the exact Poisson bound |
 | Incident attribution | fault episodes with victim impact | descriptive |
 | Condition localization | fault episodes. An eligible finding of the label's kind at its location counts, in any role, cause or severity | descriptive |
 

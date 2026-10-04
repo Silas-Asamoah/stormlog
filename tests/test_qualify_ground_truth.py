@@ -21,15 +21,20 @@ from stormlog.infer.qualify.ground_truth import (
     RECOVERY_INCOMPLETE,
     VALID,
     GroundTruthError,
+    Interval,
     OutcomeCounts,
     PhaseWindow,
+    RunRecord,
     Times,
     assess_impact,
     decide_status,
     is_aligned,
     load_injections,
+    load_run,
     parse_injection,
+    parse_run,
     write_injections,
+    write_run,
 )
 
 S = 1_000_000_000
@@ -40,6 +45,7 @@ def f2_record() -> dict[str, Any]:
     return {
         "format": "stormlog.qualify.injection/1",
         "episode_id": "q221-0f3a9c1b2d4e5f60",
+        "run_id": "q221-dxoff-b03-r07",
         "episode_type": "F2",
         "cause_class": "fault",
         "injected": {
@@ -334,3 +340,23 @@ def test_an_episode_written_twice_is_refused(tmp_path: Path) -> None:
     write_injections(path, [injection, injection])
     with pytest.raises(GroundTruthError, match="line 2: episode q221-0f3a9c1b2d4e5f60"):
         load_injections(path)
+
+
+def test_a_run_record_round_trips(tmp_path: Path) -> None:
+    run = RunRecord(
+        run_id="q221-dxoff-b03-r07",
+        clock_domain="node-a/boot-1/unix_epoch_ns",
+        measured=Interval(0, 420 * S),
+        priming=Interval(0, 30 * S),
+        baseline=Interval(30 * S, 75 * S),
+        final_recovery=Interval(360 * S, 420 * S),
+    )
+    path = tmp_path / "run.json"
+    write_run(path, run)
+    assert load_run(path) == run
+    record = run.to_record()
+    record["priming"] = {"start_ns": 30 * S, "end_ns": 0}
+    with pytest.raises(GroundTruthError, match="priming ends before it begins"):
+        parse_run(record)
+    with pytest.raises(GroundTruthError, match="format"):
+        parse_run({"format": "other"})
