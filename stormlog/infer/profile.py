@@ -1670,19 +1670,35 @@ def _check_span_file(config: ProfileConfig) -> None:
     if span_file is None:
         return
     target = Path(span_file).resolve()
-    if target == Path(config.output_path).resolve():
+    if _same_path(target, Path(config.output_path)):
         raise ValueError(
-            f"--otlp-file {span_file} is the artifact; choose another path"
+            f"--otlp-file {span_file} is the artifact, or differs from it only "
+            "in case; choose another path"
         )
     for flag, directory in (
         ("--prometheus-textfile-dir", config.export.prometheus_textfile_dir),
         ("--vllm-execution-dir", config.vllm_execution_dir),
     ):
-        if directory is not None and target.is_relative_to(Path(directory).resolve()):
+        if directory is not None and any(
+            _same_path(parent, Path(directory)) for parent in target.parents
+        ):
             raise ValueError(
                 f"--otlp-file {span_file} is inside {flag} {directory}; "
                 "choose a path of its own"
             )
+
+
+def _same_path(a: Path, b: Path) -> bool:
+    """Whether two paths may name one file or directory.
+
+    The same inode when both exist. Otherwise the resolved paths compared
+    ignoring case, since a case-insensitive disk (macOS's default) folds
+    it: two names that differ only in case are taken as one everywhere.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return str(a.resolve()).casefold() == str(b.resolve()).casefold()
 
 
 # How long closing the exporters may take after Ctrl+C, at most; otherwise
