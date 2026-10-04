@@ -240,7 +240,11 @@ class AllWithin:
 
 
 class Never:
-    """Never holds: a criterion whose baseline is too thin to compare with."""
+    """Never holds: a criterion whose baseline is too thin to compare with.
+    ``reason`` says which series and by how much, for the run's truth."""
+
+    def __init__(self, reason: str = "baseline_too_thin") -> None:
+        self.reason = reason
 
     def holds(self, start_ns: int, end_ns: int) -> bool:
         return False
@@ -629,7 +633,7 @@ def _queue_criteria(context: Context) -> list[Criterion]:
     baseline, thresholds = context.baseline, context.thresholds
     factor = thresholds.long_gap_factor
     slack = 1 / (1 - thresholds.rate_tolerance)
-    waits: Criterion = Never()
+    waits: Criterion = _thin("waits", baseline.wait_count, thresholds.min_wait_samples)
     if baseline.wait_count >= thresholds.min_wait_samples:
         waits = MostlyWithin(
             context.signals.waits,
@@ -639,7 +643,9 @@ def _queue_criteria(context: Context) -> list[Criterion]:
             ceiling=factor * baseline.wait_p99,
             mean_ceiling=slack * baseline.wait_mean,
         )
-    waiting: Criterion = Never()
+    waiting: Criterion = _thin(
+        "waiting counts", baseline.waiting_count, thresholds.min_gauge_samples
+    )
     if baseline.waiting_count >= thresholds.min_gauge_samples:
         waiting = MostlyWithin(
             context.signals.waiting,
@@ -677,16 +683,25 @@ def _cadence_criteria(context: Context, *, chunks: bool) -> list[Criterion]:
     victim's chunk gaps) look like the baseline's again: like with like,
     since idle gaps measure the traffic, not the engine."""
     signals, baseline = context.signals, context.baseline
-    thresholds = context.thresholds
-    busy = signals.in_flight
-    criteria: list[Criterion] = [
-        CadenceWithin(signals.busy_step_gaps(), baseline.steps, thresholds, busy)
+    series: list[tuple[str, Sequence[Point], GapStats]] = [
+        ("busy step gaps", signals.busy_step_gaps(), baseline.steps)
     ]
     if chunks:
-        criteria.append(
-            CadenceWithin(signals.chunk_gaps, baseline.chunks, thresholds, busy)
-        )
+        series.append(("chunk gaps", signals.chunk_gaps, baseline.chunks))
+    needed = context.thresholds.min_cadence_samples
+    criteria: list[Criterion] = []
+    for name, points, stats in series:
+        if stats.count < needed:
+            criteria.append(_thin(name, stats.count, needed))
+        else:
+            criteria.append(
+                CadenceWithin(points, stats, context.thresholds, signals.in_flight)
+            )
     return criteria
+
+
+def _thin(name: str, count: int, needed: int) -> Never:
+    return Never(f"baseline_too_thin: {count} {name} of the {needed} a hold needs")
 
 
 def _queue_onset(context: Context) -> tuple[int | None, str]:
@@ -1066,6 +1081,18 @@ def priming_check(
     return median >= thresholds.priming_cached_at_least, median
 
 
+def recovery_blocked(episode_type: str, context: Context) -> tuple[str, ...]:
+    """Why the episode's recovery can never hold, one reason per criterion
+    whose baseline is too thin to compare with; empty when none is, and for
+    a type timed by its actions. A timeout then says why, not just that
+    recovery never held."""
+    mechanism = MECHANISMS.get(base_type(episode_type))
+    if mechanism is None:
+        return ()
+    criteria = mechanism.recovery(context)
+    return tuple(c.reason for c in criteria if isinstance(c, Never))
+
+
 def next_episode(
     action_end_ns: int,
     recovery_held_at_ns: int | None,
@@ -1118,4 +1145,5 @@ __all__ = [
     "priming_check",
     "quantile",
     "realization",
+    "recovery_blocked",
 ]

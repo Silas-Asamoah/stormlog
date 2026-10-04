@@ -510,6 +510,38 @@ def test_a_queue_twin_without_baseline_waits_never_recovers() -> None:
     assert timing.end_ns is None
 
 
+def test_a_thin_baseline_says_why_recovery_can_never_hold() -> None:
+    # fable-design's A2 delta 2, N0: a run whose baseline was too thin
+    # timed out with nothing in its truth but recovery_timeout. The rule
+    # now names each series that is too thin, and by how much, so the
+    # harness can say so; a baseline that is thick enough names none.
+    from stormlog.infer.qualify.recovery import recovery_blocked
+
+    no_waits = Signals(
+        in_flight=None,
+        waits=[(tenth * S // 10, 5.0) for tenth in range(550, 2000)],
+        waiting=every_second(50, 200, lambda s: 2.0),
+    )
+    assert recovery_blocked("T1", context(no_waits)) == (
+        "baseline_too_thin: 0 waits of the 20 a hold needs",
+        "baseline_too_thin: 0 waiting counts of the 5 a hold needs",
+    )
+    idle = Signals(
+        in_flight=[(50 * S, 200 * S)], step_starts=list(range(0, 200 * S, S))
+    )
+    assert recovery_blocked("F4b", context(idle)) == (
+        "baseline_too_thin: 0 busy step gaps of the 20 a hold needs",
+        "baseline_too_thin: 0 chunk gaps of the 20 a hold needs",
+    )
+    healthy = Signals(
+        in_flight=None,
+        waits=[(tenth * S // 10, 0.08) for tenth in range(2000)],
+        waiting=every_second(0, 200, lambda s: 2.0),
+    )
+    assert recovery_blocked("F1", context(healthy)) == ()
+    assert recovery_blocked("N", context(healthy)) == ()
+
+
 def test_a_missing_reference_signal_leaves_its_check_incomplete() -> None:
     # T3b's engine-wide hit ratio comes from scrapes. With none, the check
     # can't be judged: it neither fails the twin nor passes it, and the
