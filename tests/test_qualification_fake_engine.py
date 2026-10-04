@@ -566,6 +566,26 @@ def test_a_client_that_goes_away_is_counted_not_reported() -> None:
     assert server_errors == []
 
 
+def test_a_handler_error_is_reported_not_counted_as_a_dropped_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Fable's closure of #276: only a client that went away is counted and
+    # kept quiet. A handler that raises anything else is a fault of the fake
+    # engine, and it still reaches server_errors.
+    def broken(self: FakeEngine) -> dict[str, object]:
+        raise ValueError("server_info broke")
+
+    monkeypatch.setattr(FakeEngine, "server_info", broken)
+    with FakeEngine(FAST) as engine:
+        with pytest.raises(OSError):
+            get(f"{engine.base_url}/server_info")
+        assert wait_until(lambda: len(engine.server_errors) == 1)
+        server_errors = list(engine.server_errors)
+        dropped = list(engine.dropped_clients)
+    assert "ValueError: server_info broke" in server_errors[0]
+    assert dropped == []
+
+
 def test_resets_while_requests_run_break_no_connection() -> None:
     config = FakeEngineConfig(
         step_seconds=0.0005, decode_token_seconds=0.0001, max_num_seqs=64
