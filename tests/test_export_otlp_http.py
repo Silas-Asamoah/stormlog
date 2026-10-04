@@ -192,10 +192,20 @@ def test_abort_ends_an_attempt_in_progress() -> None:
         )
         worker.start()
         assert _wait(lambda: bool(collector.received))
-        transport.abort()
+        # The body had gone out, so the collector may have stored it.
+        assert transport.abort() is True
         worker.join(2)
-    assert not worker.is_alive()
-    assert results[0].kind == AMBIGUOUS
+        assert not worker.is_alive()
+        assert results[0].kind == AMBIGUOUS
+        # Aborting is final: nothing more is sent.
+        assert transport.send(_body(), spans=3).kind == NOT_SENT
+    assert len(collector.received) == 1
+
+
+def test_abort_before_anything_was_sent_says_so() -> None:
+    transport = _transport(f"http://127.0.0.1:{_closed_port()}")
+    assert transport.send(_body(), spans=3).kind == NOT_SENT
+    assert transport.abort() is False
 
 
 def _wait(predicate: Any, timeout: float = 5.0) -> bool:
