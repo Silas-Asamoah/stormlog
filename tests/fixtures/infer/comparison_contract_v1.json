@@ -1033,6 +1033,64 @@
    }
   },
   {
+   "id": "baseline_outcome_failure_is_control_failed",
+   "note": "a baseline run that failed as an outcome must not pass the candidate: the caller says so, and the contrast is not evaluable",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0,
+     98.0,
+     101.0,
+     99.0,
+     100.0
+    ],
+    "candidate": [
+     104.0,
+     106.5,
+     101.5,
+     105.5,
+     103.0,
+     104.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.5,
+     "unit": "relative"
+    },
+    "unavailable": "control_failed",
+    "trials": null
+   },
+   "expect": {
+    "effect": 0.04079420672487687,
+    "lower": 0.03740095433061048,
+    "upper": 0.044198558166009504,
+    "gate": "not_evaluable",
+    "reason": "control_failed"
+   }
+  },
+  {
    "id": "missing_outcomes_non-inferiority",
    "note": "unknown SLO outcomes widen goodput: non-inferiority uses the worst case, regression claims the best",
    "input": {
