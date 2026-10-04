@@ -135,13 +135,16 @@ class TestParserBounds:
         assert peak < 2 * len(text)
 
     def test_a_long_label_within_the_cap_parses_in_bounded_memory(self) -> None:
+        """A plain label is matched without a step per character: the old
+        pattern peaked at 13 MB on one of 64 Ki characters, the new one at
+        0.2 MB. An escape-heavy label costs a few megabytes either way."""
         value = "x" * (MAX_LINE_CHARS - 64)
         escapes = "\\\\" * ((MAX_LINE_CHARS - 64) // 2)
-        for label in (value, escapes):
+        for label, bound in ((value, 1 << 20), (escapes, 8 << 20)):
             text = f'vllm:x{{model_name="{label}"}} 1\n'
             peak, error = self._peak(text)
             assert error is None
-            assert peak < 16 * 1024 * 1024
+            assert peak < bound
 
     def test_series_over_the_cap_stop_the_parse(self) -> None:
         text = "vllm:x 1\n" * 1_000_000  # 9 MB of samples
