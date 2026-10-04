@@ -770,16 +770,8 @@ class _Run:
     # Server -------------------------------------------------------------
 
     def _start_server(self) -> bool:
-        server, model = self.plan.server, self.env.model
-        command = [
-            expand(part, self.values)
-            for part in (*server.command, *self.arm.server_args)
-        ]
-        env = {**server.env, **self.arm.server_env}
-        if model is not None:
-            # The weights verified before launch, and nothing else.
-            command += list(model.server_args)
-            env.update(model.env)
+        server = self.plan.server
+        command, env = _server_launch(self.plan, self.arm, self.values, self.env)
         self.server = self._launch("server", command, env, server.cpu_affinity)
         self.values["server_pid"] = self.server.pid
         # Read now: the start ticks name this process, and no restart.
@@ -1142,11 +1134,11 @@ def _prelude(
     server = None
     if prelude.server_arm is not None:
         arm = plan.arms[prelude.server_arm]
-        command = [expand(p, values) for p in (*plan.server.command, *arm.server_args)]
+        command, server_env = _server_launch(plan, arm, values, env)
         server = launch(
             "server",
             command,
-            env={**plan.server.env, **arm.server_env},
+            env=server_env,
             cpu_affinity=plan.server.cpu_affinity,
             log_path=directory / "server.log",
         )
@@ -1156,6 +1148,20 @@ def _prelude(
         left = server is not None and not _stop_prelude_server(plan, server, directory)
     name = prelude.step.name
     return ([] if ran else [name]) + ([f"{name}:cleanup_unverified"] if left else [])
+
+
+def _server_launch(
+    plan: ExperimentPlan, arm: Arm, values: Mapping[str, Any], env: Environment
+) -> tuple[list[str], dict[str, str]]:
+    """An arm's server command and environment, a run's or a prelude's."""
+    server = plan.server
+    command = [expand(part, values) for part in (*server.command, *arm.server_args)]
+    server_env = {**server.env, **arm.server_env}
+    if env.model is not None:
+        # The weights verified before launch, and nothing else.
+        command += list(env.model.server_args)
+        server_env.update(env.model.env)
+    return command, server_env
 
 
 def _prelude_ran(
