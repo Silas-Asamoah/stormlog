@@ -125,6 +125,9 @@ class AppendOnlyTelemetrySink:
         self._buffered_event_count = 0
         self._buffered_bytes = 0
         self._fd: int | None = None
+        # A segment a failed write left longer than it was, and the size to
+        # cut it back to, when the cut-back itself failed.
+        self._pending_cut_back: tuple[str, int] | None = None
         self._lock = threading.Lock()
         self._flush_stop_event = threading.Event()
         self._flush_thread: threading.Thread | None = None
@@ -326,10 +329,12 @@ class AppendOnlyTelemetrySink:
         """Append every byte and fsync, or cut the segment back as it was.
 
         A failed write would otherwise leave a partial line that the next
-        successful write extends into a corrupt record. The cut-back goes to
-        the file's own size before the write, never to a remembered one, and
-        the descriptor is then closed: the next write reopens the segment and
-        trims any partial line a failed cut-back left, from the file itself.
+        successful write extends into a corrupt record, or whole lines it
+        writes again. The cut-back goes to the file's own size before the
+        write, never to a remembered one. When it works, the descriptor is
+        kept, so a failing disk costs no reopen and no read of the segment.
+        When the cut-back itself fails, the descriptor is closed, and the
+        segment is cut back to that size before it is written again.
         """
         fd = self._ensure_fd_locked(current)
         before = os.fstat(fd).st_size
@@ -340,8 +345,8 @@ class AppendOnlyTelemetrySink:
             try:
                 os.ftruncate(fd, before)
             except OSError:
-                pass
-            self._close_fd_locked()
+                self._pending_cut_back = (current.filename, before)
+                self._close_fd_locked()
             raise
 
     def _record_flush_failure_locked(self, exc: OSError, now: float) -> None:
@@ -469,12 +474,33 @@ class AppendOnlyTelemetrySink:
 
     def _ensure_fd_locked(self, current: TelemetrySinkSegment) -> int:
         if self._fd is None:
-            segment_path = self.root_dir / current.filename
-            self._recover_segment_tail_locked(segment_path, current)
+            if not self._finish_cut_back_locked(current):
+                segment_path = self.root_dir / current.filename
+                self._recover_segment_tail_locked(segment_path, current)
             self._fd = os.open(
-                segment_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666
+                self.root_dir / current.filename,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                0o666,
             )
         return self._fd
+
+    def _finish_cut_back_locked(self, current: TelemetrySinkSegment) -> bool:
+        """Cut a segment back where a failed write's own cut-back could not;
+        True when that was the current segment, whose counts then still
+        hold, so it need not be read."""
+        if self._pending_cut_back is None:
+            return False
+        filename, size = self._pending_cut_back
+        path = self.root_dir / filename
+        try:
+            cut = path.stat().st_size >= size  # never extended with zeros
+            if cut:
+                os.truncate(path, size)
+        except FileNotFoundError:
+            cut = False
+        # Any other error is a failed flush, and the cut-back stays pending.
+        self._pending_cut_back = None
+        return cut and filename == current.filename
 
     def _load_existing_state(self) -> None:
         discovered = _discover_segment_paths(self.root_dir)
