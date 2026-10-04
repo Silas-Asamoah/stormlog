@@ -412,11 +412,35 @@ def _real_coverage(label: Expectation) -> str | None:
 
 
 def test_a_kind_assessed_at_the_labels_component_is_no_coverage_gap() -> None:
-    # #218 PR 1b reports host_stall as partial: engine_core and worker aren't
-    # assessed by this version, but api_server is. An F4b miss is then
+    # #218 PR 1b reports host_stall as partial, and per component: api_server
+    # assessed, engine_core and worker unsupported. An F4b miss is then
     # no_finding; an F4a miss is a coverage gap.
     assert _real_coverage(Expectation("host_stall", "api_server")) == MISS_NO_FINDING
     assert _real_coverage(Expectation("host_stall", "engine_core")) == MISS_COVERAGE_GAP
+
+
+def test_218s_per_component_coverage_decides_not_its_reasons() -> None:
+    # The same partial host_stall, with the same reasons, but #218 now says
+    # api_server wasn't assessed either (say, no API-server evidence in the
+    # run): an F4b miss is a coverage gap. A component it doesn't list is
+    # one too.
+    unassessed = {
+        "status": "partial",
+        "reasons": ["engine_core_and_worker_not_assessed_by_this_version"],
+        "by_subject": {"window:c1:0": {"status": "assessed"}},
+        "components": {
+            "api_server": "unsupported",
+            "engine_core": "unsupported",
+            "worker": "unsupported",
+        },
+    }
+    nothing = {
+        "payload": {"findings_detail": {}, "coverage": {"host_stall": unassessed}}
+    }
+    f4b = replace(episode(), expects=(Expectation("host_stall", "api_server"),))
+    assert score_episode(f4b, nothing, CONFIG).miss == MISS_COVERAGE_GAP
+    unassessed["components"] = {"engine_core": "assessed"}
+    assert score_episode(f4b, nothing, CONFIG).miss == MISS_COVERAGE_GAP
 
 
 @pytest.mark.parametrize(

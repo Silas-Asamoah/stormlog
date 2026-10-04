@@ -130,17 +130,6 @@ EDGES: Mapping[str, Edge] = MappingProxyType(
 )
 
 
-# #218's kind-level coverage reasons that exclude components (its NOT_YET):
-# a kind partial only for these reasons is assessed at every other one.
-NOT_ASSESSED_COMPONENTS: Mapping[str, frozenset[str]] = MappingProxyType(
-    {
-        "engine_core_and_worker_not_assessed_by_this_version": frozenset(
-            {"engine_core", "worker"}
-        ),
-    }
-)
-
-
 def severity_at_least(severity: str, floor: str) -> bool:
     """Whether ``severity`` reaches ``floor`` in #218's order."""
     return SEVERITIES.index(severity) >= SEVERITIES.index(floor)
@@ -160,7 +149,6 @@ __all__ = [
     "Edge",
     "KINDS",
     "KIND_COMPONENTS",
-    "NOT_ASSESSED_COMPONENTS",
     "PRIMARY",
     "SECONDARY",
     "SEVERITIES",

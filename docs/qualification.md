@@ -300,12 +300,11 @@ spurious.
 | `no_finding` | has none, and the kind was assessed there |
 
 The labels apply in that order. A kind counts as assessed at a component
-when its coverage is `assessed`, or `partial` with every subject assessed
-and only for reasons that exclude other components: #218 PR 1b reports
-`host_stall` partial because it doesn't assess `engine_core` and `worker`
-yet, so an F4b miss at `api_server` is `no_finding`, and an F4a miss a
-coverage gap. The reasons that exclude components are a copy of #218's
-table (`vocabulary.NOT_ASSESSED_COMPONENTS`), checked against its module.
+as #218 says per component (`coverage.<kind>.components`) for a kind that
+spans components, and by its own status, `assessed`, for any other: #218
+PR 1b reports `host_stall` assessed at `api_server` but not at `engine_core`
+or `worker`, so an F4b miss at `api_server` is `no_finding`, and an F4a miss
+a coverage gap.
 
 **The claims.**
 
