@@ -170,7 +170,7 @@ such start is tried.
 
 | Episodes | Effect onset | Recovered when, for 10 s |
 | --- | --- | --- |
-| F1 / T1 | the first 5 s window whose median victim wait exceeds the baseline p95 (F1); the neighbor's first send (T1) | over at least 20 waits and 5 waiting counts, the first of each back in band, no more waits above the baseline p95, and no more counts outside the baseline's range, than chance allows (`MostlyWithin`, the same Binomial allowance as cadence) |
+| F1 / T1 | the first 5 s window whose median victim wait exceeds the baseline p95 (F1); the neighbor's first send (T1) | over at least 20 waits and 5 waiting counts, the first of each back in band, no more waits above the baseline p95, and no more counts outside the baseline's range, than chance allows (`MostlyWithin`, the same Binomial allowance as cadence); and none far out: no wait above twice the baseline's p99, no count above twice its highest (or 2), so recurring saturation bursts don't pass as chance |
 | F2 / T2 | the first victim preemption (F2); the neighbor's first admission (T2) | no victim preemption, and KV usage at most the baseline maximum + 0.05 |
 | F3 / T3 / T3b | the first 5 s window whose median victim cached fraction is below 0.5 (F3); the neighbor's first send (T3, T3b) | the median cached fraction is at least 0.9 |
 | F4a / F4b / H0 / P | the first stop confirmed (state `T`) | from the last `SIGCONT`, for 10 s, the busy step gaps look like the baseline's (below); for F4b, the victim's chunk gaps too |
