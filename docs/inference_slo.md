@@ -125,9 +125,13 @@ spec = slo_from_artifact(records)   # the artifact's infer.slo record, or None
 spec.digest()                       # SHA-256 of the canonical document
 ```
 
+The canonical document sorts the criteria by boundary and metric, since they
+are joined by AND, and writes whole numbers without a fraction, so `500` and
+`500.0` digest alike. The policy's own record keeps the order it was given.
+
 | Function | Errors |
 | --- | --- |
-| `load_slo(path)` | `InferInputError` (the CLI exits 5) for a missing, unreadable or invalid file |
+| `load_slo(path)` | `InferInputError` (the CLI exits 5) for a missing, unreadable or invalid file, including a key given twice in one object, a number too large for a float, and nesting too deep to parse |
 | `parse_slo_flags(items)` | `InferUsageError` (exit 2) for a malformed flag, an unknown criterion, `client.itl`, a repeated key or a limit that is not positive |
 | `slo_from_artifact(records)` | `InferInputError` (exit 5) for more than one `infer.slo` record, or one that is not a valid policy |
 

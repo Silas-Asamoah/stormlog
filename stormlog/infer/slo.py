@@ -233,11 +233,17 @@ class SloSpec:
         }
 
     def digest(self) -> str:
-        """SHA-256 of the canonical document; 500 and 500.0 digest alike."""
+        """SHA-256 of the canonical document.
+
+        500 and 500.0 digest alike, and so do the same criteria in another
+        order: they are joined by AND.
+        """
+        record = self.to_record()
+        record["criteria"] = sorted(
+            record["criteria"], key=lambda item: (item["boundary"], item["metric"])
+        )
         canonical = json.dumps(
-            _integral_floats_as_ints(self.to_record()),
-            sort_keys=True,
-            separators=(",", ":"),
+            _integral_floats_as_ints(record), sort_keys=True, separators=(",", ":")
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -248,10 +254,12 @@ class SloSpec:
 def load_slo(path: str | Path) -> SloSpec:
     """Read a policy file; a file that cannot be read or is invalid exits 5."""
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = json.loads(
+            Path(path).read_text(encoding="utf-8"), object_pairs_hook=_unique_keys
+        )
     except OSError as exc:
         raise InferInputError(f"SLO policy {path}: {exc.strerror or exc}") from exc
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise InferInputError(f"SLO policy {path}: not valid JSON ({exc})") from exc
     try:
         return slo_from_document(payload)
@@ -807,7 +815,7 @@ def _known_boundary(boundary: str, metric: str) -> Boundary:
 
 
 def _limit(value: Any, label: str) -> float:
-    if not _is_real(value) or not math.isfinite(value) or value <= 0:
+    if not _finite(value) or value <= 0:
         raise ValueError(f"{label} must be a positive number of milliseconds")
     return float(value)
 
@@ -830,7 +838,7 @@ def _interval_from_document(value: Any) -> SloInterval:
             raise ValueError("a measured_window interval takes no seconds")
         return SloInterval()
     if kind == SLIDING:
-        if not _is_real(seconds) or not math.isfinite(seconds) or seconds <= 0:
+        if not _finite(seconds) or seconds <= 0:
             raise ValueError("a sliding interval needs seconds > 0")
         return SloInterval(kind=SLIDING, seconds=float(seconds))
     raise ValueError(f"interval.kind must be {MEASURED_WINDOW!r} or {SLIDING!r}")
@@ -846,6 +854,25 @@ def _reject_unknown(
 
 def _is_real(value: Any) -> TypeGuard[int | float]:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _finite(value: Any) -> TypeGuard[int | float]:
+    """A real number a float can hold; an integer too large for one is not."""
+    if not _is_real(value):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """A JSON object whose keys are each given once; readers differ on repeats."""
+    keys = [key for key, _value in pairs]
+    repeated = sorted({key for key in keys if keys.count(key) > 1})
+    if repeated:
+        raise ValueError(f"{', '.join(repeated)} given more than once")
+    return dict(pairs)
 
 
 def _integral_floats_as_ints(value: Any) -> Any:

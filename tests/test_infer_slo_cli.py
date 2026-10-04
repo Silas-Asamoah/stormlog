@@ -145,9 +145,19 @@ def test_bad_slo_flags_are_usage_errors(
     assert message in err
 
 
-def test_an_unusable_policy_file_is_invalid_input(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"format": "stormlog.infer.slo", "version": 9}',
+        '{"format": "stormlog.infer.slo", "version": 1, "name": "x", "criteria": '
+        '[{"metric": "e2e", "boundary": "client", "max_ms": 1' + "0" * 400 + "}]}",
+        "[" * 100_000 + "]" * 100_000,
+    ],
+    ids=["bad_version", "huge_integer", "deep_nesting"],
+)
+def test_an_unusable_policy_file_is_invalid_input(tmp_path: Path, text: str) -> None:
     bad = tmp_path / "slo.json"
-    bad.write_text('{"format": "stormlog.infer.slo", "version": 9}')
+    bad.write_text(text)
     status, _out, err = _analyze(str(_artifact(tmp_path)), "--slo-file", str(bad))
     assert status == ExitCode.INVALID_INPUT
     assert "SLO policy" in err

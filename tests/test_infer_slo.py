@@ -95,6 +95,61 @@ def test_the_digest_ignores_integral_float_spelling() -> None:
     assert slo_from_document(changed).digest() != whole.digest()
 
 
+def test_the_digest_ignores_the_order_of_the_criteria() -> None:
+    # The criteria are joined by AND: the same policy in another order.
+    forward = parse_slo_flags(["ttft:500", "e2e:2000"])
+    backward = parse_slo_flags(["e2e:2000", "ttft:500"])
+    assert forward.digest() == backward.digest()
+    # The record keeps the order it was given, for display.
+    assert [c["metric"] for c in backward.to_record()["criteria"]] == ["e2e", "ttft"]
+
+
+def test_a_policy_built_in_python_digests_like_its_document() -> None:
+    # Integer limits written in code are the same policy as the parsed floats.
+    built = SloSpec(
+        name="chat_interactive",
+        criteria=(
+            Criterion(metric="ttft", boundary="client", max_ms=500),
+            Criterion(
+                metric="ttft", boundary="server", max_ms=400, attainment_target=0.99
+            ),
+        ),
+        attainment_target=0.98,
+    )
+    assert built.digest() == slo_from_document(_document()).digest()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"criteria": [{"metric": "e2e", "boundary": "client", "max_ms": 10**400}]},
+        {"interval": {"kind": "sliding", "seconds": 10**400}},
+        {"attainment_target": 10**400},
+    ],
+)
+def test_numbers_beyond_a_float_are_invalid_input(tmp_path: Path, change: Any) -> None:
+    with pytest.raises(InferInputError, match="SLO policy"):
+        load_slo(_write(tmp_path / "slo.json", _document(**change)))
+
+
+def test_a_policy_nested_too_deeply_to_parse_is_invalid_input(tmp_path: Path) -> None:
+    path = tmp_path / "slo.json"
+    path.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    with pytest.raises(InferInputError, match="SLO policy"):
+        load_slo(path)
+
+
+def test_a_key_given_twice_is_invalid_input(tmp_path: Path) -> None:
+    # Readers disagree on which of two values wins; neither is taken.
+    text = json.dumps(_document()).replace(
+        '"max_ms": 500', '"max_ms": 100, "max_ms": 99999'
+    )
+    path = tmp_path / "slo.json"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(InferInputError, match="max_ms.*more than once"):
+        load_slo(path)
+
+
 def test_a_sliding_interval_carries_seconds() -> None:
     spec = slo_from_document(_document(interval={"kind": "sliding", "seconds": 60}))
     assert spec.interval == SloInterval(kind="sliding", seconds=60.0)
