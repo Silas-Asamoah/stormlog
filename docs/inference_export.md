@@ -211,6 +211,8 @@ These series sit beside the exported metrics:
   - `queue_full`: the exporter's queue (65,536 records or 8 MiB, counted as
     the memory each queued record holds, about 2 KiB) was full;
   - `shutdown`: still queued when the exporter closed;
+  - `error`: its update failed and was undone whole, which is an exporter
+    bug, counted in `stormlog_exporter_internal_errors_total` too;
   - `closed`: offered after it closed.
 
   While every reason is 0, the exported totals are exact.
