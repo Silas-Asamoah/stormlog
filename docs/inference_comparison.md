@@ -422,8 +422,9 @@ hold, with seed 213 and 20,000 replications per cell; the Monte Carlo
 standard error of a 2.5% rate is about 0.11 points. Its results are in
 `examples/analysis/simulation_results.json`, and a sample of its
 replications goes through `compare_values` too, which must make the same
-decisions: paired latency, paired goodput (higher is better) and
-independent runs (it does, in every one).
+decisions: paired latency, paired goodput (higher is better), independent
+runs, and a failure fraction's run-level claim and floored interval at 5–10
+blocks (it does, in every one).
 
 **Non-inferiority at a true change equal to the budget** (+5% latency, run
 spread 0.05 on the log scale, paired blocks, leave-one-out applied as the
@@ -515,6 +516,36 @@ Fewer than 17 runs cannot show a share of 0.8 at all:
 | --- | --- | --- |
 | 30 | 0.03% | 95.89% |
 | 60 | 0.01% | 99.48% |
+
+**Fractions**, at a 1% failure budget with a true difference equal to it,
+so that every pass of an interval is false. With failures independent, the
+descriptive interval (the paired t, its standard error floored at the
+pooled binomial one) must be false-safe at most 2.83%; the run-level claim,
+the gate, is exact under independent runs, and passes here only as often
+as most runs really are within the budget (about 65% of runs are):
+
+| Blocks × requests | Floored paired t | Pooled requests | Run-level claim passes |
+| --- | --- | --- | --- |
+| 6 × 300 | 1.27% | 1.51% | 6.87% |
+| 8 × 300 | 1.63% | 1.83% | 3.07% |
+| 10 × 300 | 1.94% | 2.18% | 8.45% |
+| 8 × 1000 | 1.29% | 2.11% | 1.29% |
+| 8 × 300, baseline 0.5% | 0.84% | 0.29% | 1.61% |
+
+With failures correlated within a run (beta-binomial, intra-run correlation
+ρ), no interval on the fraction holds, and more requests per run do not
+help; this is published as a limit, and is why neither interval gates. The
+run-level claim's passes there are true statements: 70–79% of runs are
+within the budget.
+
+| Blocks × requests | ρ | Floored paired t | Pooled requests | Run-level claim passes |
+| --- | --- | --- | --- | --- |
+| 8 × 300 | 0.02 | 15.08% | 25.14% | 7.04% |
+| 8 × 1000 | 0.02 | 14.87% | 38.69% | 5.66% |
+| 10 × 300 | 0.02 | 13.59% | 24.95% | 17.85% |
+| 8 × 300 | 0.05 | 25.47% | 38.52% | 14.66% |
+| 8 × 1000 | 0.05 | 25.05% | 48.69% | 12.20% |
+| 10 × 300 | 0.05 | 22.14% | 37.62% | 32.79% |
 
 **The skew screen** must flag 5% ± 0.5 points of normal noise:
 

@@ -109,8 +109,12 @@ the flaky benchmark memory gates
   holds at the supremum of a false claim and under correlated failures where
   pooled requests do not, and the skew screen flags 5% of normal noise. A
   run-gate cell the gate cannot pass at all is reported as one, with the
-  fewest runs that could, never as a pass rate of 0. Strong right skew
-  (8–12%) and pooled requests are published as limits. (#213)
+  fewest runs that could, never as a pass rate of 0. A fraction's floored
+  paired t stays within 2.83% when failures are independent (1.3–1.9% at
+  6–10 blocks of 300 requests). Strong right skew (8–12%), pooled requests,
+  and a fraction's intervals under failures correlated within a run
+  (beta-binomial: 14–25% for the floored t, 25–49% for pooled requests) are
+  published as limits. (#213)
 - `tests/fixtures/infer/comparison_contract_v1.json`: the comparison's
   units contract, 27 cases whose expected effects, intervals and gate
   outcomes are computed from the formulas and the gate rules by
