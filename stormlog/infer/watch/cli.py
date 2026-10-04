@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import os
 import signal
 import sys
@@ -67,8 +68,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
         },
     )
     every, from_file = _test_trigger(args.test_trigger)
-    if args.duration is not None and args.duration <= 0:
-        raise InferUsageError("--duration must be > 0")
+    if args.duration is not None and not (
+        math.isfinite(args.duration) and args.duration > 0
+    ):
+        raise InferUsageError("--duration must be a finite number > 0")
     options = WatchOptions(
         duration_seconds=args.duration,
         ready_file=args.ready_file,
@@ -123,7 +126,7 @@ def _test_trigger(value: str | None) -> tuple[float | None, bool]:
             seconds = float(value[len(prefix) :])
         except ValueError:
             seconds = 0.0
-        if seconds > 0:
+        if math.isfinite(seconds) and seconds > 0:
             return seconds, False
     raise InferUsageError("--test-trigger must be every=SECONDS or file")
 

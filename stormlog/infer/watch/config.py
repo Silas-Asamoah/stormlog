@@ -1,8 +1,10 @@
 """The watch configuration: ``stormlog.infer.watch_config`` version 1.
 
-A JSON file, strictly validated: an unknown key, a wrong type, or settings
-that contradict each other (a hold time shorter than its window, a window
-longer than the history) are refused. Everything the file leaves out comes
+A JSON file, strictly validated: an unknown key, a wrong type, a number
+that is not finite (JSON readers accept NaN and Infinity), a URL that is
+not http or https, or settings that contradict each other (a hold time
+shorter than its window, a window, or incident windows, longer than the
+history) are refused. Everything the file leaves out comes
 from the defaults ``watch_defaults/1``, and the resolved configuration's
 digest goes into the watcher's session record, so a run says exactly which
 settings it qualified. The ``export`` section belongs to #220 and is passed
@@ -13,6 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -48,6 +52,8 @@ from .triggers import Sustain
 CONFIG_FORMAT = "stormlog.infer.watch_config"
 CONFIG_VERSION = 1
 DEFAULTS_VERSION = "watch_defaults/1"
+# A shorter tick would only measure the watcher's own overhead.
+MIN_TICK_SECONDS = 0.05
 SIGNALS = (QUEUE_SATURATION, KV_PREEMPTION_PRESSURE, PREFIX_CACHE_LOSS)
 _PREDICATE_KEYS = (
     "signal",
@@ -207,8 +213,14 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
     base_url = server.get("base_url")
     if not isinstance(base_url, str) or not base_url:
         raise InferUsageError("server.base_url is required")
+    _http_url(base_url, "server.base_url")
+    metrics_url = server.get("metrics_url", "auto")
+    if metrics_url not in (None, "auto"):
+        _http_url(metrics_url, "server.metrics_url")
     engine = _engine(server.get("engine"), "server.engine")
     tick = _positive(payload.get("tick_seconds", 1.0), "tick_seconds")
+    if tick < MIN_TICK_SECONDS:
+        raise InferUsageError(f"tick_seconds must be at least {MIN_TICK_SECONDS}")
     history = _section(payload, "history", {"seconds", "bytes"})
     history_seconds = _positive(history.get("seconds", 600.0), "history.seconds")
     triggers = payload.get("triggers", DEFAULT_TRIGGERS)
@@ -222,7 +234,7 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
     _check_triggers(specs, history_seconds)
     return WatchConfig(
         base_url=base_url,
-        metrics_url=server.get("metrics_url", "auto"),
+        metrics_url=metrics_url,
         engine=engine,
         tick_seconds=tick,
         scrape_timeout_seconds=_positive(
@@ -230,9 +242,7 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
             "scrape_timeout_seconds",
         ),
         history_seconds=history_seconds,
-        history_bytes=int(
-            _positive(history.get("bytes", 32 * 1024 * 1024), "history.bytes")
-        ),
+        history_bytes=_count(history.get("bytes", 32 * 1024 * 1024), "history.bytes"),
         incident=_incident(payload, history_seconds),
         store=_store(payload),
         triggers=specs,
@@ -276,9 +286,28 @@ def _section(
 
 
 def _positive(value: Any, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-        raise InferUsageError(f"{name} must be a number > 0")
+    try:
+        number = _finite(value, name)
+    except ValueError as exc:
+        raise InferUsageError(f"{name} must be a finite number > 0") from exc
+    if number <= 0:
+        raise InferUsageError(f"{name} must be a finite number > 0")
+    return number
+
+
+def _finite(value: Any, name: str) -> float:
+    """A JSON number that is finite; ``ValueError`` otherwise."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number")
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite")
     return float(value)
+
+
+def _http_url(value: Any, name: str) -> None:
+    parts = urllib.parse.urlsplit(value) if isinstance(value, str) else None
+    if parts is None or parts.scheme not in ("http", "https") or not parts.hostname:
+        raise InferUsageError(f"{name} must be an http or https URL with a host")
 
 
 def _count(value: Any, name: str) -> int:
@@ -303,8 +332,12 @@ def _incident(payload: Mapping[str, Any], history_seconds: float) -> IncidentLim
             section.get("max_incidents_per_hour", 30), "max_incidents_per_hour"
         ),
     )
-    if limits.pre_seconds > history_seconds:
-        raise InferUsageError("incident.pre_seconds must be <= history.seconds")
+    # The seal reads both windows from the history: the oldest scrape it
+    # needs is pre_seconds plus post_seconds old by then.
+    if limits.pre_seconds + limits.post_seconds > history_seconds:
+        raise InferUsageError(
+            "incident.pre_seconds plus post_seconds must be <= history.seconds"
+        )
     return limits
 
 
@@ -315,17 +348,15 @@ def _store(payload: Mapping[str, Any]) -> StoreLimits:
         {"max_total_bytes", "max_incident_bytes", "max_incidents", "max_age_hours"},
     )
     defaults = StoreLimits()
+    counts = {
+        key: _count(section.get(key, getattr(defaults, key)), f"store.{key}")
+        for key in ("max_total_bytes", "max_incident_bytes", "max_incidents")
+    }
+    age = _positive(
+        section.get("max_age_hours", defaults.max_age_hours), "store.max_age_hours"
+    )
     try:
-        return StoreLimits(
-            max_total_bytes=int(
-                section.get("max_total_bytes", defaults.max_total_bytes)
-            ),
-            max_incident_bytes=int(
-                section.get("max_incident_bytes", defaults.max_incident_bytes)
-            ),
-            max_incidents=int(section.get("max_incidents", defaults.max_incidents)),
-            max_age_hours=float(section.get("max_age_hours", defaults.max_age_hours)),
-        )
+        return StoreLimits(**counts, max_age_hours=age)
     except (TypeError, ValueError) as exc:
         raise InferUsageError(f"store: {exc}") from exc
 
@@ -351,10 +382,11 @@ def _trigger(
         raise InferUsageError(f"trigger {name}: give exactly one predicate")
     engine = _engine(settings.get("engine", default_engine), f"trigger {name}: engine")
     try:
+        clear = settings.get("clear_seconds")
         sustain = Sustain.with_defaults(
-            window=float(settings.get("window_seconds", 30.0)),
-            hold=float(settings.get("hold_seconds", 60.0)),
-            clear=settings.get("clear_seconds"),
+            window=_seconds(settings.get("window_seconds", 30.0), "window_seconds"),
+            hold=_seconds(settings.get("hold_seconds", 60.0), "hold_seconds"),
+            clear=None if clear is None else _seconds(clear, "clear_seconds"),
             tick=tick,
         )
         return TriggerSpec(
@@ -384,42 +416,76 @@ def _optional(settings: Mapping[str, Any], key: str, kind: type) -> Any:
     return value
 
 
+def _seconds(value: Any, name: str) -> float:
+    seconds = _finite(value, name)
+    if seconds <= 0:
+        raise ValueError(f"{name} must be > 0")
+    return seconds
+
+
+def _share(value: Any, name: str) -> float:
+    share = _finite(value, name)
+    if not 0 < share <= 1:
+        raise ValueError(f"{name} must be in (0, 1]")
+    return share
+
+
+def _whole(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be an integer > 0")
+    return int(value)
+
+
+def _family(options: Mapping[str, Any]) -> str:
+    family = options["family"]
+    if not isinstance(family, str) or not family:
+        raise ValueError("family must be a metric name")
+    return family
+
+
 def _predicate(key: str, value: Any, engine: str | None) -> Any:
     options = value if isinstance(value, Mapping) else {}
     if key == "signal":
         if value not in SIGNALS:
             raise ValueError(f"signal must be one of {', '.join(SIGNALS)}")
         return SignalExceeds(str(value), SignalConfig(engine=engine))
+    if key in ("gauge", "counter_rate", "histogram_share"):
+        return _metric_predicate(key, options, engine)
+    if key == "scrape_failures":
+        return ScrapeFailures(
+            consecutive=_whole(options.get("consecutive", 3), "consecutive")
+        )
+    if key == "scrape_failure_share":
+        return ScrapeFailureShare(
+            share=_share(options.get("share", 0.05), "share"),
+            scrapes=_whole(options.get("scrapes", 60), "scrapes"),
+        )
+    return FrozenExporter(ticks=_whole(options.get("ticks", 5), "ticks"), engine=engine)
+
+
+def _metric_predicate(key: str, options: Mapping[str, Any], engine: str | None) -> Any:
     if key == "gauge":
         return GaugeAtLeast(
-            family=str(options["family"]),
-            threshold=float(options["at_least"]),
-            share=float(options.get("share", 1.0)),
-            min_samples=int(options.get("min_samples", 2)),
+            family=_family(options),
+            threshold=_finite(options["at_least"], "at_least"),
+            share=_share(options.get("share", 1.0), "share"),
+            min_samples=_whole(options.get("min_samples", 2), "min_samples"),
             engine=engine,
         )
     if key == "counter_rate":
+        rate = _finite(options["at_least_per_s"], "at_least_per_s")
+        if rate < 0:
+            raise ValueError("at_least_per_s must be >= 0")
         return CounterRateAtLeast(
-            family=str(options["family"]),
-            rate_per_s=float(options["at_least_per_s"]),
-            engine=engine,
+            family=_family(options), rate_per_s=rate, engine=engine
         )
-    if key == "histogram_share":
-        return HistogramShareAbove(
-            family=str(options["family"]),
-            value=float(options["above"]),
-            share=float(options["share"]),
-            min_samples=int(options.get("min_samples", 20)),
-            engine=engine,
-        )
-    if key == "scrape_failures":
-        return ScrapeFailures(consecutive=int(options.get("consecutive", 3)))
-    if key == "scrape_failure_share":
-        return ScrapeFailureShare(
-            share=float(options.get("share", 0.05)),
-            scrapes=int(options.get("scrapes", 60)),
-        )
-    return FrozenExporter(ticks=int(options.get("ticks", 5)), engine=engine)
+    return HistogramShareAbove(
+        family=_family(options),
+        value=_finite(options["above"], "above"),
+        share=_share(options["share"], "share"),
+        min_samples=_whole(options.get("min_samples", 20), "min_samples"),
+        engine=engine,
+    )
 
 
 _COMPLETION_FAMILIES = (

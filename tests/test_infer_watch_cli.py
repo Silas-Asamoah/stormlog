@@ -56,6 +56,14 @@ def test_a_second_watcher_on_a_root_exits_two(tmp_path: Path) -> None:
         ("--base-url", "http://127.0.0.1:9", "--duration", "0"),
         ("--base-url", "http://127.0.0.1:9", "--interval", "-1"),
         ("--base-url", "http://127.0.0.1:9", "--api-key-env", "STORMLOG_UNSET_KEY"),
+        # JSON and float() accept these; each crashed with exit 1, no report.
+        ("--base-url", "http://127.0.0.1:9", "--duration", "inf"),
+        ("--base-url", "http://127.0.0.1:9", "--duration", "nan"),
+        ("--base-url", "http://127.0.0.1:9", "--interval", "nan"),
+        ("--base-url", "http://127.0.0.1:9", "--interval", "1e-12"),
+        ("--base-url", "http://127.0.0.1:9", "--test-trigger", "every=inf"),
+        ("--base-url", "ftp://127.0.0.1:9"),
+        ("--base-url", "not a url"),
     ],
 )
 def test_bad_arguments_exit_two(

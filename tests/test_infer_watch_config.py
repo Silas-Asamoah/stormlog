@@ -154,6 +154,22 @@ def test_a_missing_file_is_an_input_error(tmp_path: Path) -> None:
         ({"store": {"max_incidents": 0}}, "store"),
         ({"store": {"max_total_bytes": 10, "max_incident_bytes": 20}}, "store"),
         ({"triggers": {"id": "x"}}, "list"),
+        ({"tick_seconds": float("nan")}, "tick_seconds"),
+        ({"tick_seconds": float("inf")}, "tick_seconds"),
+        ({"tick_seconds": 1e-12}, "tick_seconds must be at least"),
+        ({"scrape_timeout_seconds": float("nan")}, "scrape_timeout"),
+        ({"history": {"seconds": float("inf")}}, "history.seconds"),
+        ({"history": {"bytes": 0.5}}, "history.bytes"),
+        ({"store": {"max_incidents": "7"}}, "store.max_incidents"),
+        ({"store": {"max_incident_bytes": True}}, "store.max_incident_bytes"),
+        ({"store": {"max_age_hours": float("nan")}}, "store.max_age_hours"),
+        ({"incident": {"post_seconds": float("inf")}}, "post_seconds"),
+        ({"incident": {"pre_seconds": 400, "post_seconds": 300}}, "post_seconds"),
+        ({"server": {"base_url": "not a url"}}, "server.base_url"),
+        (
+            {"server": {"base_url": BASE, "metrics_url": "ftp://h/metrics"}},
+            "metrics_url",
+        ),
         ({"export": []}, "export"),
         ({"server": []}, "server"),
     ],
@@ -198,6 +214,34 @@ def test_settings_the_watcher_cannot_use_are_usage_errors(
             "never count toward the exit code",
         ),
         ("not an object", "must be an object"),
+        (_trigger(window_seconds="30"), "window_seconds must be a number"),
+        (_trigger(hold_seconds=float("inf")), "hold_seconds must be finite"),
+        (_trigger(clear_seconds=0), "clear_seconds must be > 0"),
+        (
+            _trigger(gauge={"family": "f", "at_least": float("nan")}),
+            "at_least must be finite",
+        ),
+        (
+            _trigger(gauge={"family": "f", "at_least": 1, "share": 0}),
+            r"share must be in \(0, 1\]",
+        ),
+        (
+            _trigger(gauge={"family": "f", "at_least": 1, "min_samples": 2.5}),
+            "min_samples must be an integer",
+        ),
+        (_trigger(gauge={"family": 5, "at_least": 1}), "family must be"),
+        (
+            {"id": "h", "kind": "health", "scrape_failures": {"consecutive": 2.9}},
+            "consecutive must be an integer",
+        ),
+        (
+            {
+                "id": "c",
+                "kind": "metric",
+                "counter_rate": {"family": "f", "at_least_per_s": -1},
+            },
+            "at_least_per_s must be >= 0",
+        ),
         (
             {"id": "h", "kind": "health", "scrape_failure_share": {"share": 2}},
             "share must be in",
@@ -297,3 +341,11 @@ def test_an_engine_is_a_label_value(engine: Any) -> None:
 def test_export_is_passed_through_for_the_exporter() -> None:
     config = resolve_watch_config(_payload(export={"otlp": {"endpoint": "x"}}))
     assert config.export == {"otlp": {"endpoint": "x"}}
+
+
+def test_a_data_gap_allowance_is_never_under_two_ticks() -> None:
+    """The plan's G >= 2Δ: the default scrape_failures trigger (F = 3 s)
+    had G = 1.5 s at a 1 s tick, so one late scrape and one refused reset it."""
+    config = resolve_watch_config(_payload())
+    for spec in config.triggers:
+        assert spec.sustain.gap >= 2 * config.tick_seconds
