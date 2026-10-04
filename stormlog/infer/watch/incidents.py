@@ -18,10 +18,11 @@ firing never changes a sealed bundle.
 Incidents are bounded three ways, and every firing they turn away is counted
 by reason: at most ``max_open_incidents`` collect at once, at most
 ``max_incidents_per_hour`` open in any trailing hour, and at most 16
-triggers join one incident. Health and test incidents have open and hourly
-budgets of their own, the same sizes, so a flapping exporter or a test run
-never crowds out an incident that counts toward the exit code: in all, up
-to twice each limit (``IncidentLimits.totals``).
+triggers join one incident. Health and test triggers share one side lane,
+with open and hourly budgets of the same sizes, so a flapping exporter or a
+test run never crowds out an incident that counts toward the exit code,
+though the two use up each other's: in all, up to twice each limit
+(``IncidentLimits.totals``).
 """
 
 from __future__ import annotations

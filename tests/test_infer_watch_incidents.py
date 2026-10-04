@@ -529,6 +529,23 @@ def test_a_counting_trigger_joining_a_health_incident_makes_it_count(
     assert harness.manager.recorded_counting == 1
 
 
+def test_health_and_test_triggers_share_one_side_lane(tmp_path: Path) -> None:
+    """The side lane is one budget for both: two exporter restarts use up an
+    hour's two, and the next test trigger is turned away, while a metric
+    trigger still opens its incident."""
+    harness = Harness(tmp_path, limits=IncidentLimits(max_incidents_per_hour=2))
+    harness.scrapes(0, 900)
+    for second in (100, 200):
+        harness.now = second * S
+        assert harness.manager.on_event("exporter_restart", "restarted", harness.now)
+        harness.tick(second + 61)
+    harness.now = 300 * S
+    assert harness.manager.on_test(harness.now, requested_wall_ns=None) is None
+    snapshot = harness.stats.health()
+    assert counter_value(snapshot, "suppressed_total", ("rate_limit",)) == 1
+    assert harness.fire(400) is not None
+
+
 def test_the_lanes_together_hold_the_totals_the_config_states(
     tmp_path: Path,
 ) -> None:
