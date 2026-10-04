@@ -132,6 +132,22 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     ]
     assert artifact["context"]["run_id"] == record.run_id
     assert artifact["context"]["clock_domain"] == record.clock_domain
+    # The victim ended its measured window when the run was done, drained
+    # and completed: the diagnoser gets a whole artifact, not an
+    # interrupted one.
+    victim_records = [
+        json.loads(line)
+        for line in (run / "run" / "victim.jsonl").read_text().splitlines()
+    ]
+    (measured,) = [
+        r
+        for r in victim_records
+        if r.get("event_type") == "infer.phase_window" and r["phase"] == "measured"
+    ]
+    assert measured["stopped_early"] is True
+    sessions = [r for r in victim_records if r.get("event_type") == "infer.session"]
+    assert sessions[-1]["status"] == "completed"
+    assert "KeyboardInterrupt" not in (run / "probes" / "victim.log").read_text()
 
 
 def test_a_bad_plan_is_refused_before_anything_runs(tmp_path: Path) -> None:

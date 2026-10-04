@@ -77,6 +77,9 @@ from .run_dir import RunDirectory
 from .victim import read_marker
 
 MARKER_TIMEOUT_SECONDS = 120.0
+# After its stop file appears the victim drains (its --timeout at most) and
+# runs its post-run imports; past this it is interrupted instead.
+VICTIM_STOP_SECONDS = 180.0
 
 
 def victim_prefix(run_id: str) -> str:
@@ -563,6 +566,7 @@ class InjectionRun:
             "--prefix-groups", str(victim.prefix_groups),
             "--seed", str(self.plan.seed),
             "--run-id", self.directory.label,
+            "--stop-file", str(self._victim_stop_file),
             "--output", str(self.directory.run / "victim.jsonl"),
             *self.victim_arguments,
         ]  # fmt: skip
@@ -575,14 +579,26 @@ class InjectionRun:
             command, env=_environment(), stdout=log, stderr=subprocess.STDOUT
         )
 
+    @property
+    def _victim_stop_file(self) -> Path:
+        return self.directory.probes / "stop-victim"
+
     def _stop_victim(self, victim: subprocess.Popen[bytes]) -> None:
-        if victim.poll() is None:
+        """End the victim's measured window with its stop file, so it drains,
+        imports and completes; interrupt it only if that doesn't end it."""
+        if victim.poll() is not None:
+            return
+        self._victim_stop_file.touch()
+        try:
+            victim.wait(timeout=VICTIM_STOP_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
             victim.send_signal(signal.SIGINT)
-            try:
-                victim.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                victim.kill()
-                victim.wait()
+        try:
+            victim.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            victim.kill()
+            victim.wait()
 
     def _wait_for_measured(self, victim: subprocess.Popen[bytes]) -> int:
         deadline = time.monotonic() + MARKER_TIMEOUT_SECONDS
