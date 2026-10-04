@@ -118,7 +118,9 @@ the flaky benchmark memory gates
   server before measuring, and a `/server_info` that does not answer
   (`probe_incomplete`) is retried once on a fresh server. Each run ends
   `completed`, `outcome_failure` (kept as data) or `protocol_failure` (set
-  aside, retryable), recorded in `index.jsonl`; resumes refuse a changed
+  aside, retryable), recorded in `index.jsonl`. A cleanup that left
+  processes, a run's or a prelude's, stops the experiment, and the runs it
+  left are indexed `not_run` for a resume; resumes refuse a changed
   plan or pre-registration, and secrets reach commands without being
   written down. `sanitize_bundle` scans the finished bundle for the plan's
   secret values and for bearer, `hf_` and `sk-` token shapes
