@@ -226,15 +226,24 @@ def test_a_run_level_pass_with_the_mean_beyond_the_budget_carries_a_warning() ->
     # rev-213-a's D3: nine runs at 0% and one at 50% failures pass the claim
     # about runs, while the mean rose 5 points against a 1-point budget.
     # The gate stands, as specified; the claim says the mean is beyond it.
+    # The lead's ruling: the flag and the value in the payload, and a
+    # warning in the text verdict; the exit code is unchanged.
+    from stormlog.infer.compare_report import _metric_line
+
     result = _fractions([0.0] * 9 + [0.5])
     gate = result.gate
     assert gate is not None and gate.status == "pass" and gate.claim is not None
-    assert gate.claim["warning"] == "mean_exceeds_budget"
+    assert gate.claim["mean_exceeds_budget"] is True
     assert gate.claim["mean_change"] == pytest.approx(0.05)
-    assert "mean change 0.05 is beyond the budget" in gate.claim["statement"]
+    line = _metric_line("failure_fraction", result)
+    assert "gate pass (run-level claim): 9 of 10 candidate runs within 0.01" in line
+    assert line.endswith(
+        "; warning: mean failure fraction rose 5.0 pp against a 1 pp budget"
+    )
     quiet = _fractions([0.0] * 10)
     assert quiet.gate is not None and quiet.gate.claim is not None
-    assert quiet.gate.claim["warning"] is None
+    assert quiet.gate.claim["mean_exceeds_budget"] is False
+    assert "warning" not in _metric_line("failure_fraction", quiet)
 
 
 def test_all_zero_fractions_pass_as_a_claim_about_runs_not_a_bound() -> None:
