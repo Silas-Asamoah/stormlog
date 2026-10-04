@@ -24,6 +24,7 @@ from examples.qualification.pulser import (
     Pulser,
     PulseRefused,
     Target,
+    TargetGone,
     check_schedule,
     discover_roles,
 )
@@ -608,6 +609,27 @@ def test_a_stop_someone_else_ended_is_flagged(loop: subprocess.Popen[bytes]) -> 
     assert early.to_record()["continued_by_other"] is True
 
 
+def test_a_continue_then_stop_by_someone_else_is_flagged(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    # rev-220-a's final A2 delta-2 note: one status read just before
+    # SIGCONT missed a second actor who continued the target and stopped it
+    # again, so the target ran for part of the hold unflagged. The hold's
+    # checks now see it running.
+    def interfere() -> None:
+        def act() -> None:
+            os.kill(loop.pid, signal.SIGCONT)
+            time.sleep(0.05)
+            os.kill(loop.pid, signal.SIGSTOP)
+
+        threading.Timer(0.1, act).start()
+
+    with Pulser(Target.of(loop.pid), max_pulse_seconds=0.5) as pulser:
+        pulse = pulser.pulse(0.5, during=interfere)
+    assert pulse.continued_by_other is True
+    assert _running_within(loop.pid, 1.0)
+
+
 def test_a_pulser_never_holds_past_the_design_cap(
     loop: subprocess.Popen[bytes],
 ) -> None:
@@ -663,7 +685,7 @@ def test_a_target_gone_mid_pulse_is_named() -> None:
 
     try:
         with Pulser(Target.of(target.pid)) as pulser:
-            with pytest.raises(PulseRefused, match="exited during the stop"):
+            with pytest.raises(TargetGone, match="^target_gone: .* exited during"):
                 pulser.pulse(1.5, during=kill_soon)
             cut = pulser.cut_short
     finally:

@@ -304,7 +304,7 @@ def test_the_pulse_a_failure_cut_short_is_in_what_was_done(
         run = InjectionRun(plan, RunDirectory(tmp_path / "runs", "q221-x"), server)
         # Inside the first 300 ms pulse, once its stop is confirmed.
         _after_the_stop_is_confirmed(monkeypatch, kill)
-        with pytest.raises(PulseRefused, match="exited during the stop"):
+        with pytest.raises(PulseRefused, match="^target_gone: .* exited during"):
             run._pulse(plan.episodes[0])
         done = run._done_so_far(plan.episodes[0])
     finally:
