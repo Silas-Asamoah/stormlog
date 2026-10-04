@@ -165,12 +165,20 @@ or a test trigger, which has no window, reaches back the whole
 `pre_seconds`. Its post-window runs `post_seconds` past the firing. Firings
 within the post-window, its last instant included, join it, and widen its
 pre-window to their own: at most 16 triggers in one incident. A test
-trigger never joins an incident and is never joined. When the post-window ends, the incident
-is sealed: its windows, the scrapes inside them and its `infer.incident`
-record go into `gen-0/incident.jsonl` of its bundle, an inference artifact
-that `stormlog.infer.correlation_events.load_inference_artifact` reads. Each
-window says how complete it is: `complete`, `partial` (a failed scrape, or
-history that began late) or `missing` (no successful scrape).
+trigger never joins an incident and is never joined.
+
+When the post-window ends, the incident is sealed: its windows, the scrapes
+inside them and its `infer.incident` record go into `gen-0/incident.jsonl`
+of its bundle, an inference artifact that
+`stormlog.infer.correlation_events.load_inference_artifact` reads. The
+record's `status` is `completed`, or `interrupted` when the watch stopped
+first. Each window says how complete it is: `complete`, `partial` or
+`missing` (no successful scrape). A window is partial when a scrape in it
+failed, when the history began late, when it was cut short (an interrupted
+post-window is judged against the whole `post_seconds`), or when ticks
+were missed: fewer scrapes were attempted than one a tick, give or take
+one. `fidelity_detail.scrapes` gives the counts: attempted, expected, ok
+and failed.
 
 The `infer.incident` record goes to the ledger, and into `report.json`, also
 when its bundle could not be written (a full disk, say): its `bundle` is then

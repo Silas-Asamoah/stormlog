@@ -97,6 +97,7 @@ def _window(start_s: float, end_s: float, detail: str) -> dict[str, Any]:
         "fidelity_detail": {
             "scrapes": {
                 "attempted": int(end_s - start_s),
+                "expected": int(end_s - start_s),
                 "ok": int(end_s - start_s),
                 "failed": 0,
                 "requested_seconds": end_s - start_s,
@@ -113,6 +114,7 @@ def maximal_incident() -> dict[str, Any]:
         incident_id=FIRST,
         detected_at_ns=_at(100),
         owner=OWNER,
+        status="completed",
         trigger=_trigger(0, 100),
         joined_triggers=[
             _trigger(i, 100 + i, "metric") for i in range(1, MAX_JOINED_TRIGGERS + 1)

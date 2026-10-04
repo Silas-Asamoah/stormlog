@@ -189,6 +189,7 @@ class IncidentManager:
         self._loss = loss
         # Bundles the store removed to make room for a seal, for the ledger.
         self._on_pruned = on_pruned
+        self._tick_seconds = tick_seconds
         self._slack_seconds = _FIRST_TICK_SLACK * tick_seconds
         self.open: dict[str, OpenIncident] = {}
         self._lanes = {False: _Lane(), True: _Lane()}  # keyed by "is a side kind"
@@ -336,6 +337,7 @@ class IncidentManager:
             self.history.ring.compressed(incident.pre_start_mono, end_mono)
         )
         record = self._incident_record(incident, held, end_mono)
+        record["status"] = STATUS_INTERRUPTED if interrupted else STATUS_COMPLETED
         lines = _Lines(self._bundle_head(incident, end_mono), held, _line(record))
         status = STATUS_INTERRUPTED if interrupted else STATUS_COMPLETED
         sealed_at = self.clock.to_wall(at_mono)
@@ -477,7 +479,10 @@ class IncidentManager:
             last_informative_before_capture=None,
             first_informative_after_mask=None,
             pre_window=self._window(held, incident.pre_start_mono, detected),
-            post_window=self._window(held, detected, end_mono),
+            # Requested in full: one cut short by the watch's end is partial.
+            post_window=self._window(
+                held, detected, end_mono, requested_end=incident.post_end_mono
+            ),
             deep_window=None,
             # Deep capture arrives in a later step; health never captures.
             capture=capture_fields(
@@ -507,28 +512,43 @@ class IncidentManager:
         return record
 
     def _window(
-        self, scrapes: _HeldScrapes, start_mono: int, end_mono: int
+        self,
+        scrapes: _HeldScrapes,
+        start_mono: int,
+        end_mono: int,
+        *,
+        requested_end: int | None = None,
     ) -> dict[str, Any]:
+        """A window's bounds and how much of it the scrapes cover.
+
+        Partial when a scrape failed, when the history began late or the
+        window was cut short of ``requested_end``, or when ticks were missed:
+        fewer scrapes were attempted than one a tick, give or take one.
+        """
         inside = [
             index
             for index, (stamp, _blob) in enumerate(scrapes.items)
             if start_mono <= stamp.mono_ns <= end_mono
         ]
         ok = sum(scrapes.ok[index] for index in inside)
-        requested = (end_mono - start_mono) / _NS
+        requested = ((requested_end or end_mono) - start_mono) / _NS
         first = scrapes.items[inside[0]][0].mono_ns if inside else end_mono
         held = (end_mono - first) / _NS
         failed = len(inside) - ok
+        expected = int(requested / self._tick_seconds)
+        covered = held + self._slack_seconds >= requested
+        fidelity = _fidelity(ok, failed, covered, len(inside), expected)
         return {
             "start_ns": self.clock.to_wall(start_mono),
             "end_ns": self.clock.to_wall(end_mono),
             "clock_domain": self.identity.clock_domain,
-            "fidelity": _fidelity(ok, failed, held + self._slack_seconds, requested),
+            "fidelity": fidelity,
             "detail_requested": "metrics",
             "detail_collected": "metrics" if ok else None,
             "fidelity_detail": {
                 "scrapes": {
                     "attempted": len(inside),
+                    "expected": expected,
                     "ok": ok,
                     "failed": failed,
                     "requested_seconds": requested,
@@ -620,11 +640,14 @@ def _line(record: Mapping[str, Any]) -> bytes:
     return (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
-def _fidelity(ok: int, failed: int, covered: float, requested: float) -> str:
-    """Missing with no good scrape; partial with a gap or a failed scrape."""
+def _fidelity(
+    ok: int, failed: int, covered: bool, attempted: int, expected: int
+) -> str:
+    """Missing with no good scrape; partial with a failed one, with time not
+    covered, or with fewer scrapes attempted than one a tick, give or take one."""
     if not ok:
         return "missing"
-    if failed or covered < requested:
+    if failed or not covered or attempted < expected - 1:
         return "partial"
     return "complete"
 
