@@ -59,6 +59,8 @@ class MetricSpec:
     value_unit: str | None
     read: Callable[[Mapping[str, Any]], Reading]
     slo: bool = False
+    # A fraction's requests per run: its gate needs them.
+    trials: Callable[[Mapping[str, Any]], int | None] | None = None
 
 
 def default_metrics(case: Mapping[str, Any]) -> list[MetricSpec]:
@@ -81,6 +83,7 @@ def default_metrics(case: Mapping[str, Any]) -> list[MetricSpec]:
             "fraction",
             _attainment,
             slo=True,
+            trials=_slo_offered,
         ),
         MetricSpec(
             "throughput_rps",
@@ -105,6 +108,7 @@ def default_metrics(case: Mapping[str, Any]) -> list[MetricSpec]:
             "fraction",
             "fraction",
             _failure_fraction,
+            trials=_offered,
         ),
     ]
     present = ((case.get("latency") or {}).get("metrics") or {}).keys()
@@ -206,6 +210,19 @@ def _rate_reason(case: Mapping[str, Any]) -> str:
     """Why a case has no rate: its interval's reason, or that it has none."""
     reason = (case.get("intervals") or {}).get("rate_reason")
     return str(reason) if reason else RATE_UNAVAILABLE
+
+
+def _count(value: Any) -> int | None:
+    return int(value) if is_number(value) and value > 0 else None
+
+
+def _offered(case: Mapping[str, Any]) -> int | None:
+    return _count((case.get("population") or {}).get("offered"))
+
+
+def _slo_offered(case: Mapping[str, Any]) -> int | None:
+    slo = case.get("slo")
+    return _count(slo.get("offered")) if isinstance(slo, Mapping) else None
 
 
 def _failure_fraction(case: Mapping[str, Any]) -> Reading:
