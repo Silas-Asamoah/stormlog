@@ -255,7 +255,7 @@ def run_plan(
     epoch = _stops_so_far(output_dir)
     written: list[dict[str, Any]] = []
     for block, arms in enumerate(order.blocks):
-        records = _run_block(
+        records, stopped = _run_block(
             plan,
             block,
             arms,
@@ -265,10 +265,9 @@ def run_plan(
             on_event,
         )
         written += records
-        left = [r for r in records if _left_running(r)]
-        if left:
+        if stopped is not None:
             # Nothing more starts beside a process that would not stop.
-            written += _not_run(plan, order, left[0], output_dir, on_event)
+            written += _not_run(plan, order, stopped, output_dir, on_event)
             break
     report = sanitize_bundle(output_dir, env.secrets.values())
     (output_dir / "sanitizer.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -377,8 +376,9 @@ def _cleanups(output: Path) -> Iterator[tuple[str, Mapping[str, Any]]]:
         for process in record.get("processes", []):
             if process.get("cleanup"):
                 yield f"{path.parent.name} {process['name']}", process["cleanup"]
-    for path in sorted((output / "preludes").glob("*/cleanup.json")):
-        yield f"prelude {path.parent.name}", json.loads(path.read_text())
+    for name in ("cleanup.json", "step-cleanup.json"):
+        for path in sorted((output / "preludes").glob(f"*/{name}")):
+            yield f"prelude {path.parent.name}", json.loads(path.read_text())
 
 
 def _interrupted_labels(runs: Path) -> set[str]:
@@ -446,13 +446,63 @@ def _run_block(
     env: Environment,
     resuming: _Resume,
     on_event: Events | None,
-) -> list[dict[str, Any]]:
-    written: list[dict[str, Any]] = []
-    prelude_failures = [
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """The block's runs, and what stopped the experiment in it, if anything."""
+    prelude_failures, stop = _block_preludes(plan, block, arms, output, env, resuming)
+    if stop is not None:
+        return [], stop
+    written, held = _run_arms(
+        plan, block, arms, output, env, resuming, prelude_failures, on_event
+    )
+    for record in held:
+        _decide_unhealthy(plan, record, output)
+        _publish(output, record, on_event)
+    return written, next((r for r in written if _left_running(r)), None)
+
+
+def _block_preludes(
+    plan: ExperimentPlan,
+    block: int,
+    arms: list[str],
+    output: Path,
+    env: Environment,
+    resuming: _Resume,
+) -> tuple[list[str], dict[str, Any] | None]:
+    """Run the block's preludes, unless none of its arms will start an
+    attempt; a prelude that left processes, or found the port taken, stops
+    the experiment, whatever the arms would do."""
+    if not _needs_prelude(plan, block, arms, output, resuming):
+        return [], None
+    failures = [
         reason
         for prelude in plan.preludes
         for reason in _prelude(plan, prelude, block, output, env)
     ]
+    stop = next((f for f in failures if _stop_reason({"reasons": [f]})), None)
+    if stop is None:
+        return failures, None
+    name = stop.split(":", 1)[0]
+    return failures, {
+        "label": f"prelude b{block:02d}-{name}",
+        "block": block,
+        "position_planned": -1,
+        "reasons": [stop],
+    }
+
+
+def _run_arms(
+    plan: ExperimentPlan,
+    block: int,
+    arms: list[str],
+    output: Path,
+    env: Environment,
+    resuming: _Resume,
+    prelude_failures: list[str],
+    on_event: Events | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Each arm's attempts in order, published as they end, except a server
+    that never came up, held until the block's control has run."""
+    written: list[dict[str, Any]] = []
     held: list[dict[str, Any]] = []
     for position, arm in enumerate(arms):
         records = _attempts(
@@ -467,16 +517,31 @@ def _run_block(
         )
         for record in records:
             if NEVER_HEALTHY in record["reasons"]:
-                held.append(record)  # until the block's control has run
+                held.append(record)
             else:
                 _publish(output, record, on_event)
         written += records
         if any(_left_running(r) for r in records):
             break
-    for record in held:
-        _decide_unhealthy(plan, record, output)
-        _publish(output, record, on_event)
-    return written
+    return written, held
+
+
+def _needs_prelude(
+    plan: ExperimentPlan, block: int, arms: list[str], output: Path, resuming: _Resume
+) -> bool:
+    """Whether any arm of the block may start an attempt: a fresh run, or one
+    a resume runs again."""
+    runs = output / "runs"
+    for position, arm in enumerate(arms):
+        base = f"{plan.experiment_id}-b{block:02d}-p{position}-{arm}"
+        if _pending_decision(runs, base) is not None:
+            continue
+        finished = _finished_attempts(runs, base) if runs.is_dir() else []
+        if not finished or not resuming.resume:
+            return True
+        if _retry_wanted(finished[-1], resuming.retry):
+            return True
+    return False
 
 
 def _publish(output: Path, record: dict[str, Any], on_event: Events | None) -> None:
