@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 import urllib.error
 from typing import Callable, Iterator
@@ -597,3 +598,46 @@ def test_the_first_watchdog_also_gets_the_clamped_cap(
         command = psutil.Process(pulser.watchdog_pid).cmdline()
     limit = float(command[command.index("--limit") + 1])
     assert limit == MAX_PULSE_SECONDS + WATCHDOG_SLACK_SECONDS
+
+
+def test_a_pulse_cut_short_is_on_record(loop: subprocess.Popen[bytes]) -> None:
+    # Fable's and rev-220-a's second A2 deltas, D3 and D2: a pulse that a
+    # failure or a signal cut short was sent, so the engine went through
+    # it, but only completed pulses were on record.
+    def interrupted() -> None:
+        raise KeyboardInterrupt
+
+    with Pulser(Target.of(loop.pid), watchdog=False) as pulser:
+        with pytest.raises(KeyboardInterrupt):
+            pulser.pulse(0.5, during=interrupted)
+        cut = pulser.cut_short
+        assert pulser.pulses == []
+        assert not psutil.Process(loop.pid).status() == psutil.STATUS_STOPPED
+    assert cut is not None and cut["completed"] is False
+    assert cut["stop_sent_ns"] <= cut["stopped_ns"] <= cut["continue_sent_ns"]
+
+
+def test_a_target_gone_mid_pulse_is_named() -> None:
+    # rev-220-a's second A2 delta, D2: a target killed mid-pulse was
+    # reported as "the watchdog stopped watching", since the watchdog exits
+    # once its target is gone. The pulse now says the target went, and its
+    # record has no continue: none was sent.
+    target = subprocess.Popen([sys.executable, "-c", LOOP], start_new_session=True)
+
+    def kill_soon() -> None:
+        def kill() -> None:
+            target.kill()
+            target.wait()
+
+        threading.Timer(0.1, kill).start()
+
+    try:
+        with Pulser(Target.of(target.pid)) as pulser:
+            with pytest.raises(PulseRefused, match="exited during the stop"):
+                pulser.pulse(1.5, during=kill_soon)
+            cut = pulser.cut_short
+    finally:
+        target.kill()
+        target.wait()
+    assert cut is not None and cut["completed"] is False
+    assert cut["stopped_ns"] is not None and cut["continue_sent_ns"] is None

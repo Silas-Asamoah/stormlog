@@ -249,6 +249,41 @@ def test_a_target_replaced_since_the_run_began_is_never_pulsed(
         stand_in.wait()
 
 
+def test_the_pulse_a_failure_cut_short_is_in_what_was_done(tmp_path: Path) -> None:
+    # Fable's and rev-220-a's second A2 deltas: the engine went through a
+    # stop that a failure cut short (here its process killed mid-pulse),
+    # but the truth listed completed pulses only.
+    import threading
+
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.pulser import PulseRefused, Target
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    dose = {"pulse_ms": 300, "period_ms": 800}
+    plan = parse_plan({**record, "episodes": [{"type": "F4a", "dose": dose}]})
+    loop = "import time\nwhile True:\n    time.sleep(0.01)\n"
+    stand_in = subprocess.Popen([sys.executable, "-c", loop], start_new_session=True)
+
+    def kill() -> None:
+        stand_in.kill()
+        stand_in.wait()
+
+    try:
+        target = Target.of(stand_in.pid, "engine_core")
+        server = Server("http://127.0.0.1:9", "m", tmp_path, {"engine_core": target})
+        run = InjectionRun(plan, RunDirectory(tmp_path / "runs", "q221-x"), server)
+        threading.Timer(0.15, kill).start()  # inside the first 300 ms pulse
+        with pytest.raises(PulseRefused, match="exited during the stop"):
+            run._pulse(plan.episodes[0])
+        done = run._done_so_far(plan.episodes[0])
+    finally:
+        kill()
+    (cut,) = done["pulses"]
+    assert cut["completed"] is False and cut["continue_sent_ns"] is None
+
+
 def test_targets_are_bound_at_startup(tmp_path: Path) -> None:
     from examples.qualification.__main__ import _targets
 

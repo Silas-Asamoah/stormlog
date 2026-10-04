@@ -122,6 +122,7 @@ class Pulse:
             "continue_sent_ns": self.continue_sent_ns,
             "held_ns": self.held_ns,
             "continued_by_other": self.continued_by_other,
+            "completed": True,
         }
 
 
@@ -210,6 +211,9 @@ class Pulser:
         # Never longer than the design's cap, whoever asks.
         self.max_pulse_seconds = min(max_pulse_seconds, MAX_PULSE_SECONDS)
         self.pulses: list[Pulse] = []
+        # The last pulse a failure or an interruption cut short: its stop was
+        # sent, so the target went through it, but it never completed.
+        self.cut_short: dict[str, Any] | None = None
         self._lock = threading.Lock()
         self._closed = False
         self._watched = watchdog
@@ -245,6 +249,7 @@ class Pulser:
             self._ensure_watchdog()
             self._signal(signal.SIGSTOP)
             wall, sent = time.time_ns(), time.monotonic_ns()
+            stopped = None
             try:
                 stopped = self._confirm_stopped(sent)
                 if during is not None:
@@ -254,6 +259,12 @@ class Pulser:
                 # watchdog stops watching, which would leave a harness killed
                 # in this stop nobody to continue its target.
                 self._hold_until(sent + int(seconds * 1e9))
+            except BaseException:
+                continued_sent = self._continue()
+                self.cut_short = _cut_short(
+                    wall, sent, stopped, time.monotonic_ns() if continued_sent else None
+                )
+                raise
             finally:
                 running = not process_stopped(self.target.pid)
                 self._continue()
@@ -312,6 +323,9 @@ class Pulser:
     def _hold_until(self, monotonic_ns: int) -> None:
         while True:
             if not self._watchdog_watching():
+                # A watchdog exits once its target is gone: say which went.
+                if not self.target.is_alive():
+                    raise PulseRefused(f"pid {self.target.pid} exited during the stop")
                 raise PulseRefused("the watchdog stopped watching during the stop")
             left = monotonic_ns - time.monotonic_ns()
             if left <= 0:
@@ -352,9 +366,12 @@ class Pulser:
             raise PulseRefused(f"pid {self.target.pid} is no longer the target")
         os.kill(self.target.pid, signum)
 
-    def _continue(self) -> None:
-        if self.target.is_alive():
-            os.kill(self.target.pid, signal.SIGCONT)
+    def _continue(self) -> bool:
+        """Whether SIGCONT was sent: never to a target that is gone."""
+        if not self.target.is_alive():
+            return False
+        os.kill(self.target.pid, signal.SIGCONT)
+        return True
 
     def _confirm_stopped(self, stop_sent: int) -> int:
         """When the stop was seen, on the monotonic clock."""
@@ -364,6 +381,24 @@ class Pulser:
                 return time.monotonic_ns()
             time.sleep(CONFIRM_POLL_SECONDS)
         raise PulseRefused(f"pid {self.target.pid} did not stop within 1 s")
+
+
+def _cut_short(
+    wall_ns: int, sent: int, stopped: int | None, continued: int | None
+) -> dict[str, Any]:
+    """A pulse that never completed, from the wall time at ``SIGSTOP`` and
+    monotonic times; a time not reached (no stop confirmed, no ``SIGCONT``
+    sent to a target that was gone) is None."""
+
+    def wall(at: int | None) -> int | None:
+        return None if at is None else wall_ns + at - sent
+
+    return {
+        "stop_sent_ns": wall_ns,
+        "stopped_ns": wall(stopped),
+        "continue_sent_ns": wall(continued),
+        "completed": False,
+    }
 
 
 def _wait_until(monotonic_ns: int, stop: threading.Event | None) -> bool:
