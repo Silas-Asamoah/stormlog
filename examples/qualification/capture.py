@@ -70,14 +70,21 @@ def post(url: str, *, timeout_seconds: float) -> Call:
 def capture_window(
     base_url: str, seconds: float, *, timeout_seconds: float = 120.0
 ) -> CaptureWindow:
-    """Open a profiler window for ``seconds``, then close it. A failed start
-    is never followed by a stop."""
+    """Open a profiler window for ``seconds``, then close it. A start the
+    server refused is never followed by a stop; an ambiguous one (a timeout
+    or a reset, so the server may have started) is, and so is a window cut
+    short by an interrupt, which is then re-raised."""
     start = post(f"{base_url}/start_profile", timeout_seconds=timeout_seconds)
-    if start.status != 200:
+    if start.status is not None and start.status != 200:
         return CaptureWindow(start, None)
-    time.sleep(seconds)
-    stop = post(f"{base_url}/stop_profile", timeout_seconds=timeout_seconds)
+    try:
+        _wait(seconds)
+    finally:
+        stop = post(f"{base_url}/stop_profile", timeout_seconds=timeout_seconds)
     return CaptureWindow(start, stop)
+
+
+_wait = time.sleep
 
 
 __all__ = ["Call", "CaptureWindow", "capture_window", "post"]

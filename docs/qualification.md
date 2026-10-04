@@ -600,9 +600,12 @@ F3, and their workload twins.
 
 `examples.qualification.capture.capture_window` opens one profiler window and
 closes it, stamping when each call was requested and when it returned. A start
-that fails is never followed by a stop. vLLM writes the trace inside the stop
-call while its step loop waits, so the stop's interval, plus #219's drain, is
-I1's effect.
+the server refused is never followed by a stop. An ambiguous one (a timeout
+or a reset: the server may have started) is, and so is a window cut short
+by an interrupt, so the server is never left profiling. vLLM writes the trace
+inside the stop call while its step loop waits, so the stop's interval, plus
+#219's drain, is I1's effect. In DX-OFF the window is opened directly, not by
+#219's watcher, so there is no drain to add.
 
 ### The catalog and the plan
 
