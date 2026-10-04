@@ -337,3 +337,54 @@ def test_a_fault_claim_without_a_window_in_a_negative_run() -> None:
     mixed = run_of([episode(), late_null], diagnosis(windowless))
     assert mixed.false_claims == ()
     assert mixed.problems == ("run q221-run: 1 fault claims without a window",)
+
+
+# ------------------------------------------------------------------ pinned by mutation
+
+
+def test_a_finding_goes_to_the_latest_episode_begun_before_it() -> None:
+    # Two KV episodes; a finding at 165-175 s qualifies for both: the first
+    # by its grace, the second by its pre-grace. It goes to the second,
+    # whose effect began latest before it, not to the earliest.
+    first = replace(episode(), episode_id="e1")
+    second = replace(
+        episode(),
+        episode_id="e2",
+        times=Times(
+            action_onset_ns=160 * S, effect_onset_ns=160 * S, effect_end_ns=200 * S
+        ),
+    )
+    late = finding("a", KV, 1, window=(165, 175))
+    score = run_of([first, second], diagnosis(late))
+    assert [e.correct(TOP1, 2) for e in score.episodes] == [False, True]
+
+
+def test_a_neutral_secondary_in_a_negative_run_is_no_false_claim() -> None:
+    # A KV twin whose label declares the queue a secondary through KV -> queue:
+    # a queue fault claim secondary to the twin's KV finding is neutral.
+    from tests.test_qualify_scoring import negative
+
+    twin = replace(
+        negative("T2"),
+        cause_class="workload_change",
+        expects=(Expectation(KV, "kv_cache", cause="workload_change"),),
+        secondary=(Neutral(QUEUE, "scheduler", edge=f"{KV}->{QUEUE}"),),
+    )
+    kv = finding("a", KV, 1, cause="workload_change")
+    queue = finding(
+        "q",
+        QUEUE,
+        2,
+        role="secondary",
+        window=(110, 130),
+        secondary_to=[f"{KV}.{'a':0>12}"],
+    )
+    assert run_of([twin], diagnosis(kv, queue)).false_claims == ()
+
+
+def test_an_episode_given_twice_is_refused() -> None:
+    from tests.test_qualify_scoring import null_run, run_record
+
+    null = replace(null_run(), run_id="r")
+    with pytest.raises(ValueError, match="given twice"):
+        score_run(run_record("r"), [null, null], diagnosis(), CONFIG)

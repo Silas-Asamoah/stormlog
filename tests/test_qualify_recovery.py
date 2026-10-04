@@ -19,6 +19,7 @@ from stormlog.infer.qualify.recovery import (
     Context,
     Criterion,
     GapStats,
+    MostlyWithin,
     NoEvents,
     Signals,
     Thresholds,
@@ -576,3 +577,43 @@ def _queue_criteria_of(ctx: Context) -> list[Criterion]:
     from stormlog.infer.qualify.recovery import _queue_criteria
 
     return _queue_criteria(ctx)
+
+
+def test_a_hold_needs_its_minimum_samples() -> None:
+    # 19 healthy gaps are one short of the cadence minimum; 19 waits and 4
+    # waiting counts are one short of theirs.
+    baseline = GapStats(count=250, mean=0.020, p95=0.026, p99=0.030)
+    steps = [tick * 20 * MS for tick in range(21)]
+    cadence = CadenceWithin(
+        Signals(in_flight=ALWAYS, step_starts=steps).busy_step_gaps(),
+        baseline,
+        Thresholds(),
+        ALWAYS,
+    )
+    assert not cadence.holds(0, 380 * MS)  # 19 gaps
+    assert cadence.holds(0, 400 * MS)  # 20 gaps
+    waits = [(tick * 100 * MS, 0.05) for tick in range(20)]
+    rule = MostlyWithin(waits, Thresholds(), min_samples=20, high=0.1)
+    assert not rule.holds(0, 1800 * MS) and rule.holds(0, 1900 * MS)
+    gauge = [(second * S, 1.0) for second in range(5)]
+    rule = MostlyWithin(gauge, Thresholds(), min_samples=5, high=2.0)
+    assert not rule.holds(0, 3 * S) and rule.holds(0, 4 * S)
+
+
+def test_an_idle_gap_in_a_hold_is_not_the_engines() -> None:
+    # The victim idles 500 ms just after the last SIGCONT, with no step; the
+    # engine is healthy, so recovery holds at once. Judged on every gap,
+    # the idle 500 ms would be a long gap and hold recovery off.
+    last = PULSES[-1][1]
+    idle = (last + 2 * S, last + 2_500 * MS)
+    steps = [
+        t
+        for t in stalled_steps(PULSES, keep_stepping=False)
+        if not idle[0] < t < idle[1]
+    ]
+    signals = Signals(in_flight=[(0, idle[0]), (idle[1], 200 * S)], step_starts=steps)
+    actions = Actions(
+        first_stop_confirmed_ns=60 * S, last_continue_ns=last, pulses=PULSES
+    )
+    timing = effect_timing("F4a", context(signals, actions))
+    assert timing.end_ns is not None and timing.end_ns - last < S
