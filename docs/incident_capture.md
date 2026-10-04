@@ -183,9 +183,13 @@ the fault behind it. A 20 s fault can keep a queue observably saturated for
 much longer.
 - **A violation shorter than `F` never fires.** Accumulation starts at zero
   on the first violating evaluation, so the accumulated time is at most the
-  span from the first violating tick to the last. A window predicate stays
-  true for at most `d + W` after an observable violation of length `d`, so
-  `d < F - W` never fires: with the defaults, anything under 30 s.
+  span from the first violating tick to the last. A window's first scrape is
+  the latest to return within one tick of the window's start, so it may
+  have returned up to `Δ` before it. A window predicate therefore stays true
+  for at most `d + W + Δ` after an observable violation of length `d`, from
+  the start of the first violating scrape to the response of the last, and
+  `d < F - W - Δ` never fires: with the defaults and 1 s ticks, anything
+  under 29 s.
 - **A lasting violation fires on time.** If the predicate turns violating at
   `a` and stays so, the trigger fires by `a + Δ + ⌈(F + j)/Δ⌉·Δ + j`, plus any
   time it spent paused, where ticks are scheduled every `Δ` and each runs at
