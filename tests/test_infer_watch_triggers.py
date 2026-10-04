@@ -171,30 +171,31 @@ def test_the_fire_bound_holds_for_random_lateness() -> None:
 
 
 def test_the_worked_example_resets_on_the_outage_and_fires_after_it() -> None:
-    """W=30, F=60, G=30: violating from 30, scrapes failing over 90-121, and
-    windows data gaps until their start scrape follows the outage (152)."""
+    """The docs' example, W=30, F=60, G=30, as the windows classify: violating
+    from 29 s, when the first full window is in; data gaps from the outage at
+    89 s until the windows' start scrapes follow it, at 151 s."""
 
     def classify(t: float) -> str:
-        if t < 30:
+        if t < 29:
             return CLEAR
-        if t < 90:
+        if t < 89:
             return VIOLATING
-        if t < 152:
+        if t < 151:
             return DATA_GAP
         return VIOLATING
 
     _state, transitions = _run(DEFAULT, classify, until=260)
     assert _events(transitions) == [
-        (30, EVENT_PENDING),
-        (120, EVENT_RESET),
-        (152, EVENT_PENDING),
-        (212, EVENT_FIRED),
+        (29, EVENT_PENDING),
+        (119, EVENT_RESET),
+        (151, EVENT_PENDING),
+        (211, EVENT_FIRED),
     ]
     reset = transitions[1][1]
     assert reset.reason == RESET_DATA_GAP
     assert reset.accumulated_ns == 59 * S
-    # Inside the stated bound: reset + F + W + tick + data-gap time after it.
-    assert 212 <= 120 + 60 + 30 + 1 + 32
+    # Violating again from 151 s, it fires within the stated bound of that.
+    assert 211 <= 151 + DEFAULT.fire_bound(1)
 
 
 def test_masked_time_pauses_the_clock_and_never_counts_toward_the_gap() -> None:
