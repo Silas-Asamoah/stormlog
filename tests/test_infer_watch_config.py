@@ -257,6 +257,19 @@ def test_settings_the_watcher_cannot_use_are_usage_errors(
             {"id": "h", "kind": "health", "scrape_failure_share": {"share": 2}},
             "share must be in",
         ),
+        # Counts no history holds: at 10**19 each crashed with exit 1.
+        (
+            {"id": "h", "kind": "health", "scrape_failures": {"consecutive": 10**19}},
+            "more than history.seconds holds",
+        ),
+        (
+            {"id": "h", "kind": "health", "frozen_exporter": {"ticks": 10**19}},
+            "more than history.seconds holds",
+        ),
+        (
+            {"id": "h", "kind": "health", "scrape_failure_share": {"scrapes": 601}},
+            r"reads 601 scrapes, more than history.seconds holds at tick_seconds \(600\)",
+        ),
     ],
 )
 def test_bad_triggers_are_usage_errors(trigger: Any, message: str) -> None:
@@ -398,6 +411,39 @@ def test_a_config_s_own_triggers_keep_the_default_health_triggers() -> None:
         )
     with pytest.raises(InferUsageError, match="default_health_triggers"):
         resolve_watch_config(_payload(triggers=[], default_health_triggers="no"))
+
+
+def test_a_health_tail_must_fit_the_history_at_the_tick() -> None:
+    """The failed-scrape share reads its last 60 scrapes. At a 15 s tick that
+    is 900 s, past a 600 s history: it would judge scrapes its incident's
+    bundle cannot contain, so the default says how to make room."""
+    fits = resolve_watch_config(_payload(tick_seconds=10))
+    assert fits.tick_seconds == 10
+    with pytest.raises(
+        InferUsageError,
+        match=r"scrape_failure_share: it reads 60 scrapes.*\(40\).*default health",
+    ):
+        resolve_watch_config(_payload(tick_seconds=15))
+    longer = resolve_watch_config(_payload(tick_seconds=15, history={"seconds": 900}))
+    assert longer.history_seconds == 900
+    # 0.3 / 0.1 is 2.999...: three scrapes still fit.
+    resolve_watch_config(
+        _payload(
+            tick_seconds=0.1,
+            history={"seconds": 0.3},
+            incident={"pre_seconds": 0.1, "post_seconds": 0.1},
+            default_health_triggers=False,
+            triggers=[
+                {
+                    "id": "h",
+                    "kind": "health",
+                    "window_seconds": 0.3,
+                    "hold_seconds": 0.3,
+                    "scrape_failures": {"consecutive": 3},
+                }
+            ],
+        )
+    )
 
 
 def test_the_digest_is_of_the_resolved_triggers() -> None:

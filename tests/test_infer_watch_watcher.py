@@ -501,7 +501,12 @@ def test_the_parsed_tail_holds_what_every_health_trigger_reads(
         "hold_seconds": 10,
         "scrape_failure_share": {"scrapes": 200},
     }
-    payload = watch_config("http://127.0.0.1:9", tick_seconds=1, triggers=[trigger])
+    payload = watch_config(
+        "http://127.0.0.1:9",
+        tick_seconds=1,
+        history={"seconds": 200},  # the most a 200-scrape tail may have
+        triggers=[trigger],
+    )
     watcher = Watcher(resolve_watch_config(payload), tmp_path)
     try:
         record = scrape(exposition(gauges={"vllm:num_requests_waiting": 0}), 0)
