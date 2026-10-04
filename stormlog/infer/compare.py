@@ -80,6 +80,9 @@ BASELINE_OUTCOME_UNRECOVERABLE = "baseline_outcome_unrecoverable"
 PROTOCOL_FAILURE = "protocol_failure"
 # Reasons that fail a gate outright rather than leave it unjudged.
 _FAILING = (PROTOCOL_FAILURE, OUTCOME_UNRECOVERABLE)
+# A lost outcome is why a metric has too few values, whatever the
+# statistics say.
+_LOST = (OUTCOME_UNRECOVERABLE, BASELINE_OUTCOME_UNRECOVERABLE)
 
 
 @dataclass(frozen=True)
@@ -847,7 +850,7 @@ def _metric(
         seed=spec.seed,
         unavailable=unavailable,
     )
-    if unavailable is not None and compared.reason is None:
+    if unavailable is not None and (compared.reason is None or unavailable in _LOST):
         # Why it was not compared, gated or not.
         compared = replace(compared, reason=unavailable)
     if not failing or gate is None:
