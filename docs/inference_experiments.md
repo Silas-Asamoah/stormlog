@@ -243,12 +243,15 @@ exactly them. The plan's `server.model` says how:
 ```
 
 - **`pinned_hub`**: the revision is resolved to a commit in the cache, and
-  every file of that snapshot is hashed and checked against its blob's name
-  (SHA-256 for a file in LFS, git's SHA-1 for the rest). Each server gets
+  every file of that snapshot is hashed and checked against the name of the
+  blob it links to (SHA-256 for a file in LFS, git's SHA-1 for the rest),
+  even where a deduplicated cache links that blob on to a shared store under
+  another name. Each server gets
   `--revision <commit> --tokenizer-revision <commit>` and `HF_HUB_OFFLINE=1`,
   so it cannot load anything else. `{model}` is the repository.
-- **`staged`**: every file of a local directory is hashed, and the directory
-  is hard-linked (or copied) into `<store>/<weights_digest>/`, read-only. The
+- **`staged`**: every file of a local directory is hashed, and each file
+  (never a link to it, so a hub snapshot can be staged) is hard-linked, or
+  copied, into `<store>/<weights_digest>/`, read-only. The
   server loads that directory: its name is its content. `{model}` is its
   path.
 
