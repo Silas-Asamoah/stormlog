@@ -120,12 +120,15 @@ setting it true is refused.
 | `histogram_share` | `family`, `above`, `share`, optional `min_samples` (20) |
 | `signal` | one of `queue_saturation`, `kv_preemption_pressure`, `prefix_cache_loss` |
 | `scrape_failures` | optional `consecutive` (3) |
+| `scrape_failure_share` | optional `share` (0.05) and `scrapes` (60) |
 | `frozen_exporter` | optional `ticks` (5) |
 
 Without `triggers`, the defaults (`watch_defaults/1`) watch the
 `queue_saturation` and `kv_preemption_pressure` signals, three consecutive
-failed scrapes, and a frozen exporter. The `export` section belongs to the
-exporter (#220) and is passed through.
+failed scrapes, a share of failed scrapes (at least 5% of the last 60, held
+for 60 s), and a frozen exporter. Failures too sparse to come three in a row
+leave every window trigger judged on fewer scrapes; the share reports them.
+The `export` section belongs to the exporter (#220) and is passed through.
 
 A server running several engines (vLLM's data parallelism) labels each
 engine's series apart, and a trigger judges one engine. Name it with
@@ -314,10 +317,10 @@ The memory bound counts each one's compressed bytes plus 320 bytes for the
 Python objects that hold it, so it bounds what is retained even when the
 items are tiny. A scrape larger than the whole bound is refused and counted
 (`oversized`). Only the last few scrapes, as many as the widest trigger
-window needs, are also held parsed (about 130 KB each), and only scrapes the
-memory holds, so a trigger never judges a scrape its incident's bundle
-cannot contain. A bundle is written from the compressed copies, expanded
-one at a time and never parsed.
+window or the longest health-trigger tail needs, are also held parsed (about
+130 KB each), and only scrapes the memory holds, so a trigger never judges a
+scrape its incident's bundle cannot contain. A bundle is written from the
+compressed copies, expanded one at a time and never parsed.
 
 ## Triggers and what "sustained" means
 

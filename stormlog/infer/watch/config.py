@@ -40,6 +40,7 @@ from .predicates import (
     GaugeAtLeast,
     HistogramShareAbove,
     ScrapeFailures,
+    ScrapeFailureShare,
     SignalExceeds,
 )
 from .triggers import Sustain
@@ -54,6 +55,7 @@ _PREDICATE_KEYS = (
     "counter_rate",
     "histogram_share",
     "scrape_failures",
+    "scrape_failure_share",
     "frozen_exporter",
 )
 _TRIGGER_KEYS = {
@@ -78,6 +80,13 @@ DEFAULT_TRIGGERS: tuple[Mapping[str, Any], ...] = (
         "window_seconds": 3,
         "hold_seconds": 3,
         "scrape_failures": {"consecutive": 3},
+    },
+    {
+        "id": "scrape_failure_share",
+        "kind": "health",
+        "window_seconds": 60,
+        "hold_seconds": 60,
+        "scrape_failure_share": {"share": 0.05, "scrapes": 60},
     },
     {
         "id": "frozen_exporter",
@@ -405,6 +414,11 @@ def _predicate(key: str, value: Any, engine: str | None) -> Any:
         )
     if key == "scrape_failures":
         return ScrapeFailures(consecutive=int(options.get("consecutive", 3)))
+    if key == "scrape_failure_share":
+        return ScrapeFailureShare(
+            share=float(options.get("share", 0.05)),
+            scrapes=int(options.get("scrapes", 60)),
+        )
     return FrozenExporter(ticks=int(options.get("ticks", 5)), engine=engine)
 
 

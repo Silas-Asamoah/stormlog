@@ -15,6 +15,7 @@ import pytest
 from stormlog import telemetry_sink
 from stormlog.infer.errors import InferUsageError
 from stormlog.infer.watch.config import resolve_watch_config
+from stormlog.infer.watch.history import Stamped
 from stormlog.infer.watch.records import (
     INCIDENT,
     INCIDENT_EVENT,
@@ -33,6 +34,7 @@ from stormlog.infer.watch.watcher import (
     WatchOutcome,
 )
 from tests import watch_fixture_helpers as fixtures
+from tests.vllm_scrape_helpers import exposition, scrape
 from tests.watch_test_helpers import (
     FakeMetrics,
     of_type,
@@ -479,5 +481,29 @@ def test_triggers_allow_their_scrapes_the_scrape_timeout(tmp_path: Path) -> None
     watcher = Watcher(resolve_watch_config(payload), tmp_path)
     try:
         assert watcher.engine.scrape_timeout_seconds == 0.25
+    finally:
+        watcher.close()
+
+
+def test_the_parsed_tail_holds_what_every_health_trigger_reads(
+    tmp_path: Path,
+) -> None:
+    """A failed-scrape share over 200 scrapes with a 10 s window needs 200
+    parsed scrapes, not the window's 10: with fewer it is never judged."""
+    trigger = {
+        "id": "share",
+        "kind": "health",
+        "window_seconds": 10,
+        "hold_seconds": 10,
+        "scrape_failure_share": {"scrapes": 200},
+    }
+    payload = watch_config("http://127.0.0.1:9", tick_seconds=1, triggers=[trigger])
+    watcher = Watcher(resolve_watch_config(payload), tmp_path)
+    try:
+        record = scrape(exposition(gauges={"vllm:num_requests_waiting": 0}), 0)
+        for second in range(250):
+            mono = second * 1_000_000_000
+            watcher.history.add(Stamped(mono, mono + 1, mono), record)
+        assert len(watcher.history.parsed()) >= 200
     finally:
         watcher.close()

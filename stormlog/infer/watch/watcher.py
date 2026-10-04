@@ -48,7 +48,7 @@ from ..trace_capture import server_root
 from ..vllm_scraper import VllmMetricsScraper
 from ..vllm_telemetry import MARKER_INTERVAL, SCRAPE_OK, VllmScrapeRecord
 from .config import DEFAULTS_VERSION, WatchConfig
-from .evaluate import TickResult, TriggerEngine
+from .evaluate import HistoryPredicate, TickResult, TriggerEngine
 from .history import ScrapeHistory, Stamped
 from .incidents import Identity, IncidentManager, WatchClock
 from .io import SerialWorker
@@ -533,8 +533,15 @@ class Watcher:
         loop.call_soon_threadsafe(task)
 
     def _parsed_count(self) -> int:
+        """Enough parsed scrapes for the widest window and the longest tail a
+        health trigger reads."""
         widest = max((s.sustain.window for s in self.config.triggers), default=1.0)
-        return int(widest / self.config.tick_seconds) + 8
+        tails = [
+            spec.predicate.tail_scrapes
+            for spec in self.config.triggers
+            if isinstance(spec.predicate, HistoryPredicate)
+        ]
+        return max([int(widest / self.config.tick_seconds), *tails]) + 8
 
     def _scraper(self) -> VllmMetricsScraper:
         configured = self.config.metrics_url
