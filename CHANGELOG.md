@@ -78,8 +78,10 @@ the flaky benchmark memory gates
   an identity field unknown on one; redacted, inferred and declared values
   never verify one) or `compatible`. A `null` setting is a value, and a
   field only one run has, where both read its source, is a difference. The
-  `infer.workload` record gains `spec_digest`, its digest without the
-  seed. (#213)
+  weights are verified only by the experiment runner's
+  `infer.model_identity` record, bound to the server it launched, never by
+  a description alone. The `infer.workload` record gains `spec_digest`,
+  its digest without the seed. (#213)
 - The run manifest: `infer profile --describe-server FILE` records a
   description taken before the run, refusing (exit 5) one that names another
   run, and `--declare FILE` the operator's declarations, as append-only

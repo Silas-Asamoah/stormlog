@@ -37,6 +37,9 @@ from .describe_server import load_description
 from .errors import InferInputError
 
 MANIFEST_EVENT = "infer.manifest"
+# The experiment runner's record of weights it verified before it launched
+# a server: the only evidence that binds weights to what the server loaded.
+MODEL_IDENTITY_EVENT = "infer.model_identity"
 BEFORE = "before"
 AFTER = "after"
 DECLARED = "declared"
@@ -70,6 +73,30 @@ def description_record(
         "server": {"pid": server.get("pid"), "start_ticks": server.get("start_ticks")},
         "gpu_uuids": (description.get("gpus") or {}).get("server_uuids", []),
         "description": dict(description),
+    }
+
+
+def model_identity_record(
+    model: Mapping[str, Any],
+    *,
+    session_id: str,
+    run_id: str,
+    server: Mapping[str, Any],
+    boot_id: str | None,
+) -> dict[str, Any]:
+    """An ``infer.model_identity`` record, bound to the server it launched.
+
+    ``model`` is the verified model section (weights digest, snapshot,
+    evidence); ``server`` the launched API server's ``pid`` and
+    ``start_ticks``, on the boot ``boot_id``.
+    """
+    return {
+        "event_type": MODEL_IDENTITY_EVENT,
+        "session_id": session_id,
+        "run_id": run_id,
+        "server": {"pid": server.get("pid"), "start_ticks": server.get("start_ticks")},
+        "boot_id": boot_id,
+        "model": dict(model),
     }
 
 
@@ -528,6 +555,7 @@ __all__ = [
     "DESCRIPTION_MISMATCH",
     "IDENTITY_CHANGED",
     "MANIFEST_EVENT",
+    "MODEL_IDENTITY_EVENT",
     "ROLES",
     "after_refusals",
     "attach_manifest",
@@ -542,5 +570,6 @@ __all__ = [
     "manifest_lines",
     "manifest_summary",
     "manifests",
+    "model_identity_record",
     "run_span_ns",
 ]

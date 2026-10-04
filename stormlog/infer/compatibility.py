@@ -47,7 +47,7 @@ from .config_classes import (
     field_class,
     vllm_env_class,
 )
-from .manifest import BEFORE, DECLARED, manifests
+from .manifest import BEFORE, DECLARED, MODEL_IDENTITY_EVENT, manifests
 from .server_privacy import is_redacted
 from .server_probe import SERVER_INFO, VERSION
 from .workload import workload_digests
@@ -192,7 +192,9 @@ def run_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, RunField]:
     fields: dict[str, RunField] = {}
     by_role = manifests(records)
     if by_role[BEFORE]:
-        fields.update(_description_fields(by_role[BEFORE][-1]["description"]))
+        description = by_role[BEFORE][-1]["description"]
+        fields.update(_description_fields(description))
+        fields.update(_launch_bound_fields(records, description))
     # What Stormlog observed outranks what the server reported.
     for name, item in _probe_fields(records).items():
         fields.setdefault(name, item)
@@ -461,9 +463,14 @@ def _section(document: Mapping[str, Any], name: str) -> Mapping[str, Any]:
 
 
 def _model_fields(model: Mapping[str, Any]) -> dict[str, RunField]:
-    """Model fields; a digest the run did not bind to its launch is inferred."""
+    """Model fields as a description gives them: read after the server started.
+
+    Whatever evidence a description names, its digests are inferred: only
+    the runner's launch-bound record (``_launch_bound_fields``) shows what
+    the server loaded.
+    """
     evidence = model.get("identity_evidence")
-    provenance = OBSERVED if evidence in VERIFIED_EVIDENCE else INFERRED
+    provenance = INFERRED
     source = f"describe-server ({evidence})"
     return {
         "model.configured": RunField(model.get("configured"), source, OBSERVED),
@@ -488,6 +495,60 @@ def _model_fields(model: Mapping[str, Any]) -> dict[str, RunField]:
 
 # Only a launch the experiment runner controlled binds weights to a server.
 VERIFIED_EVIDENCE = frozenset({"pinned_commit_verified", "staged_snapshot_verified"})
+
+
+def _launch_bound_fields(
+    records: Sequence[Mapping[str, Any]], description: Mapping[str, Any]
+) -> dict[str, RunField]:
+    """The model fields the runner verified before launching this server.
+
+    The runner's ``infer.model_identity`` record counts only for the server
+    the before description shows (same boot, PID and start time), and only
+    when the description's own digest, where it has one, agrees. Then the
+    weights, the snapshot, and the chat template and generation defaults
+    read from that snapshot are observed.
+    """
+    record = next(
+        (
+            r
+            for r in reversed(records)
+            if r.get("event_type") == MODEL_IDENTITY_EVENT and _binds(r, description)
+        ),
+        None,
+    )
+    model = _section(record or {}, "model")
+    evidence = model.get("identity_evidence")
+    described = _section(description, "model")
+    if evidence not in VERIFIED_EVIDENCE or not _agrees(model, described):
+        return {}
+    source = f"experiment runner ({evidence})"
+    values = {
+        "model.weights_digest": model.get("weights_digest"),
+        "model.resolved_snapshot": model.get("resolved_snapshot"),
+        "server.chat_template_digest": described.get("chat_template_digest"),
+        "server.generation_config": _digest(described.get("generation_config")),
+        "model.identity_evidence": evidence,
+    }
+    return {name: RunField(value, source, OBSERVED) for name, value in values.items()}
+
+
+def _binds(record: Mapping[str, Any], description: Mapping[str, Any]) -> bool:
+    server = _section(description, "server")
+    bound = _section(record, "server")
+    lifetime = (server.get("pid"), server.get("start_ticks"))
+    return (
+        None not in lifetime
+        and (bound.get("pid"), bound.get("start_ticks")) == lifetime
+        and record.get("boot_id") == _section(description, "host").get("boot_id")
+    )
+
+
+def _agrees(model: Mapping[str, Any], described: Mapping[str, Any]) -> bool:
+    """The description's digests, where it has them, match the verified ones."""
+    return all(
+        described.get(name) in (None, model.get(name))
+        for name in ("weights_digest", "resolved_snapshot")
+    )
 
 
 def _probe_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, RunField]:

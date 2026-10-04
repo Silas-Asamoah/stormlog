@@ -313,8 +313,16 @@ have changed since it started. So the description only names its evidence:
 | `size_only` | A local directory, not hashed |
 | `unresolved` | The revision or the cache could not be found |
 
-None of these verifies the model's identity on its own; only a launch the
-experiment runner controls can do that.
+None of these verifies the model's identity on its own, whatever a
+description file says; only a launch the experiment runner controls can do
+that. The runner fixes the weights before it starts the server and appends
+an `infer.model_identity` record to the run's artifact
+(`manifest.model_identity_record`): the verified model section, bound to
+the API server it launched by boot, PID and start time. A comparison
+counts the weights digest, the snapshot, and the chat template and
+generation defaults read from it as observed only when that record binds
+to the server the `before` description shows, and the description's own
+digests, where it has them, agree.
 
 ## The server's log
 
