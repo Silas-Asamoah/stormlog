@@ -21,7 +21,11 @@ from stormlog.infer.config import ProfileConfig
 from stormlog.infer.export import ExportPipeline
 from stormlog.infer.export_config import ExportConfig
 from stormlog.infer.export_metrics import ProfileMetrics
-from stormlog.infer.profile import InferenceProfiler, _ctrl_c_held
+from stormlog.infer.profile import (
+    EXPORT_INTERRUPT_CLOSE_SECONDS,
+    InferenceProfiler,
+    _ctrl_c_held,
+)
 from tests.export_conformance import check_exposition
 from tests.test_infer_profile import _fake_server
 
@@ -235,6 +239,7 @@ def test_ctrl_c_still_freezes_and_records_final_counts(
     exposition = check_exposition((metrics_dir / "stormlog-default.prom").read_text())
     assert exposition.value("stormlog_run_active") == 0
     sent = [r for r in records if r["event_type"] == "infer.request"]
+    assert sent  # the final counts are of requests, not all zeros
     assert sum(exposition.matching("stormlog_infer_requests_total")) == len(sent)
 
 
@@ -465,6 +470,28 @@ def test_a_ctrl_c_while_server_evidence_is_imported_still_ends_the_artifact(
     records = _records(output)
     assert records[-1]["event_type"] == "infer.session"
     assert records[-1]["status"] == "interrupted"
+
+
+def test_the_runs_fallback_close_has_the_interrupted_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # When the capture never reached its own close, the run's close is the
+    # first, and gets the interrupted run's 2 s, not none.
+    deadlines: list[float] = []
+    monkeypatch.setattr(
+        ExportPipeline, "close", lambda _self, deadline: deadlines.append(deadline)
+    )
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    with _fake_server() as endpoint:
+        config = _config(
+            endpoint,
+            tmp_path / "infer.jsonl",
+            ExportConfig(prometheus_textfile_dir=metrics_dir),
+        )
+        profiler = InferenceProfiler(config)
+        profiler._end_export(interrupted=True)
+    assert deadlines == [EXPORT_INTERRUPT_CLOSE_SECONDS]
 
 
 def test_a_held_ctrl_c_is_delivered_once_the_block_ends() -> None:
