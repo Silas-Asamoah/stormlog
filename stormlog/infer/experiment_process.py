@@ -73,6 +73,9 @@ class Launched:
     stopped_by: str | None = None
     # Its PID and start time, read as it started (``identify``).
     identity: dict[str, Any] = field(default_factory=dict)
+    # The monotonic clock at its start and at its end, for how long it ran.
+    started_monotonic: float = field(default_factory=time.monotonic)
+    ended_monotonic: float | None = None
     _log: IO[bytes] | None = field(default=None, repr=False)
 
     @property
@@ -83,9 +86,16 @@ class Launched:
         code = self.process.poll()
         if code is not None and self.ended_at_ns is None:
             self.ended_at_ns = time.time_ns()
+            self.ended_monotonic = time.monotonic()
             self.exit_code = code
             self._close_log()
         return code
+
+    def lasted_s(self) -> float | None:
+        """How long its leader ran; None while it runs."""
+        if self.ended_monotonic is None:
+            return None
+        return self.ended_monotonic - self.started_monotonic
 
     def _close_log(self) -> None:
         if self._log is not None:
@@ -224,7 +234,11 @@ def clean_up_after(launched: Launched, *, wait_s: float = KILL_WAIT_SECONDS) -> 
     nothing it started is left, as after a server."""
     _signal_group(launched.pid, signal.SIGTERM)
     return verify_cleanup(
-        launched.pid, mark=launched.mark, since=launched.identity, wait_s=wait_s
+        launched.pid,
+        mark=launched.mark,
+        since=launched.identity,
+        lasted_s=launched.lasted_s(),
+        wait_s=wait_s,
     )
 
 
@@ -323,6 +337,7 @@ def verify_cleanup(
     proc: Path = PROC,
     mark: str | None = None,
     since: Mapping[str, Any] | None = None,
+    lasted_s: float | None = None,
 ) -> Cleanup:
     """Wait until nothing of a group, its session or remembered tree runs.
 
@@ -331,9 +346,9 @@ def verify_cleanup(
     whatever outlives that and ``wait_s`` is listed, and the cleanup is not
     verified. A process whose environment cannot be read, or holds no
     variable, cannot be shown unmarked: with ``since``, the launch's
-    ``identify`` record, one that may be the launch's (``_may_be_launched``)
-    keeps the cleanup from verifying, and is never killed, since it may be
-    another's.
+    ``identify`` record, and ``lasted_s``, how long its leader ran, one that
+    may be the launch's (``_may_be_launched``) keeps the cleanup from
+    verifying, and is never killed, since it may be another's.
     """
     keys = list(remembered)
     method = "proc" if _linux() else "psutil"
@@ -342,7 +357,7 @@ def verify_cleanup(
     while True:
         search = _marked(mark, proc, method)
         survivors = _survivors(pgid, keys, proc, method) | search.found
-        blind = _blind(search.unclear, since, proc, method)
+        blind = _blind(search.unclear, since, lasted_s, proc, method)
         if not survivors and not blind:
             return Cleanup(True, method, killed=killed, unreadable=search.unreadable)
         if survivors and not killed:
@@ -469,23 +484,38 @@ class _Process:
 
 
 def _blind(
-    unclear: set[int], since: Mapping[str, Any] | None, proc: Path, method: str
+    unclear: set[int],
+    since: Mapping[str, Any] | None,
+    lasted_s: float | None,
+    proc: Path,
+    method: str,
 ) -> tuple[dict[str, Any], ...]:
     if since is None:
         return ()
-    found = sorted(pid for pid in unclear if _may_be_launched(pid, since, proc, method))
+    found = sorted(
+        pid
+        for pid in unclear
+        if _may_be_launched(pid, since, proc, method, lasted_s=lasted_s)
+    )
     return tuple(identify(pid, proc=proc) for pid in found)
 
 
 def _may_be_launched(
-    pid: int, since: Mapping[str, Any], proc: Path, method: str
+    pid: int,
+    since: Mapping[str, Any],
+    proc: Path,
+    method: str,
+    *,
+    lasted_s: float | None = None,
 ) -> bool:
     """Whether a live process may be the launch's, by what is readable
     without its environment.
 
     It is not when another user runs it (which includes anything run under
     sudo), when it started more than ``START_SLACK_SECONDS`` before the
-    launch, or when its parent is not ``init``: a launch's process that
+    launch or after its leader had exited (``lasted_s``: nothing of the
+    launch was left to start it, but another orphan, itself judged), or
+    when its parent is not ``init``: a launch's process that
     left its group and session is an orphan, adopted by ``init``, and any
     other parent shows whose it is (a launch's own processes are found by
     their group, session and remembered tree). An orphan adopted by a
@@ -496,7 +526,7 @@ def _may_be_launched(
         return False
     if seen.uid is not None and seen.uid != os.getuid():
         return False
-    if _older(seen.start, since, method):
+    if _older(seen.start, since, method) or _later(seen.start, since, method, lasted_s):
         return False
     return seen.ppid == 1
 
@@ -510,6 +540,22 @@ def _older(start: float | None, since: Mapping[str, Any], method: str) -> bool:
     if start is None or not isinstance(launch, (int, float)):
         return False
     return start < launch - slack
+
+
+def _later(
+    start: float | None, since: Mapping[str, Any], method: str, lasted_s: float | None
+) -> bool:
+    """Whether a start, in the processes' own clock, is after the launch's
+    leader had exited."""
+    if lasted_s is None or start is None:
+        return False
+    if method == "proc":
+        launch, unit = since.get("start_ticks"), _clock_ticks()
+    else:
+        launch, unit = since.get("create_time"), 1
+    if not isinstance(launch, (int, float)):
+        return False
+    return start > launch + (lasted_s + START_SLACK_SECONDS) * unit
 
 
 def _clock_ticks() -> int:
