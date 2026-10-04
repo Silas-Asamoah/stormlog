@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 from stormlog.infer.qualify.ground_truth import Expectation, Neutral
-from stormlog.infer.qualify.scoring import TOP1, score_episode, summarize
+from stormlog.infer.qualify.scoring import TOP1, score_episode, score_run, summarize
 from tests.test_qualify_scoring import (
     CONFIG,
     KV,
@@ -206,3 +206,26 @@ def test_a_negative_runs_claim_must_lie_mostly_in_its_exposure() -> None:
     assert run_of([null_run()], diagnosis(trailing)).false_claims == ()
     inside = finding("s", "host_stall", 1, component="engine_core", window=(300, 340))
     assert run_of([null_run()], diagnosis(inside)).false_claims == (inside["id"],)
+
+
+def test_void_negative_runs_are_reported_by_why() -> None:
+    # A void negative shrinks the FPR's denominator: 0 of 52 bounds the
+    # rate at 0.056, over the 0.05 ceiling. So the summary says how many
+    # negative runs were left out, and why, instead of dropping them.
+    from tests.test_qualify_scoring import negative, null_run, run_record
+
+    unrealized = replace(negative("T3b"), status="not_realized")
+    runs = [run_of([null_run()], diagnosis(), run_id=f"n{i}") for i in range(3)]
+    runs += [run_of([unrealized], diagnosis(), run_id=f"t{i}") for i in range(2)]
+    failed = replace(run_record("p0"), protocol_failure="priming_check_failed")
+    runs.append(
+        score_run(failed, [replace(null_run(), run_id="p0")], diagnosis(), CONFIG)
+    )
+    summary = summarize(runs, CONFIG)
+    assert summary.negative_runs == 3
+    assert summary.excluded_negatives == {"not_realized": 2, "protocol_failure": 1}
+    assert summary.to_record(CONFIG)["excluded_negative_runs"] == {
+        "not_realized": 2,
+        "protocol_failure": 1,
+    }
+    assert runs[3].excluded_negative == "not_realized"
