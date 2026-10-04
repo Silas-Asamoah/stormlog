@@ -1,8 +1,10 @@
 """Evaluate every configured trigger once per tick.
 
 Each trigger pairs a predicate with a :class:`~.triggers.Sustain`. A window
-predicate is asked about the window :func:`~.predicates.select_window` cuts;
-a health predicate about the history's tail. An evaluation whose window
+predicate is asked about the window :func:`~.predicates.select_window` cuts,
+and its evaluation records in its ``failed_scrapes`` detail how many of the
+window's scrapes failed, since the window is judged on the rest; a health
+predicate is asked about the history's tail. An evaluation whose window
 overlaps one of the watcher's own perturbation intervals is classified as
 masked, whatever its value, so a capture's pause can neither advance nor
 reset a trigger. A trigger on a family vLLM records at a request's
@@ -17,6 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Protocol, runtime_checkable
 
+from ..vllm_telemetry import SCRAPE_OK
 from .predicates import (
     REASON_NO_RECENT_SCRAPE,
     Entry,
@@ -186,7 +189,10 @@ class TriggerEngine:
         if selection.reason is not None:
             return Evaluation(DATA_GAP, reasons=(selection.reason,)), at_ns
         assert selection.sample_start_ns is not None  # set with every window
-        return predicate.evaluate(selection.scrapes), selection.sample_start_ns
+        evaluation = predicate.evaluate(selection.scrapes)
+        failed = sum(scrape.status != SCRAPE_OK for scrape in selection.scrapes)
+        detail = {**evaluation.detail, "failed_scrapes": failed}
+        return replace(evaluation, detail=detail), selection.sample_start_ns
 
 
 __all__ = [
