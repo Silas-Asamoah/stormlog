@@ -409,6 +409,27 @@ def test_the_temporal_rule(
     assert (score.candidates == (candidate["id"],)) is qualifies
 
 
+def test_a_finding_outside_218s_vocabulary_is_refused_by_name() -> None:
+    # #218's severities and roles are closed: an unknown one is a schema
+    # mismatch, refused with the finding named, not a crash deep in a rule.
+    odd = finding("a", KV, 1, severity="critical")
+    with pytest.raises(
+        ValueError,
+        match="diagnosis.kv_preemption_pressure.00000000000a: unknown severity 'critical'",
+    ):
+        score_episode(episode(), diagnosis(odd), CONFIG)
+    sideways = finding("a", KV, 1, role="tertiary")
+    with pytest.raises(ValueError, match="unknown role 'tertiary'"):
+        score_episode(episode(), diagnosis(sideways), CONFIG)
+
+
+def test_a_window_that_ends_before_it_starts_never_qualifies() -> None:
+    backwards = finding("a", KV, 1, window=(140, 102))
+    assert score_episode(episode(), diagnosis(backwards), CONFIG).candidates == ()
+    stall = finding("h", "host_stall", 1, component="engine_core", window=(280, 250))
+    assert run_of([null_run()], diagnosis(stall)).false_claims == ()
+
+
 def test_a_window_on_another_clock_never_qualifies() -> None:
     # The scoring window is on the victim's clock; a finding placed on
     # another clock domain can't be compared with it.

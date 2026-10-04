@@ -63,6 +63,7 @@ from .vocabulary import (
     NOT_ASSESSED_COMPONENTS,
     PRIMARY,
     SECONDARY,
+    SEVERITIES,
     Edge,
     severity_at_least,
 )
@@ -155,6 +156,9 @@ class FindingView:
 
     @classmethod
     def from_detail(cls, detail: Mapping[str, Any]) -> FindingView:
+        """Raises:
+        ValueError: for a severity or role outside #218's vocabulary."""
+        _check_vocabulary(detail)
         location = detail.get("location") or {}
         window = detail.get("window")
         eligibility = detail.get("eligibility") or {}
@@ -189,6 +193,14 @@ class FindingView:
             and self.cause == CAUSE_FAULT
             and severity_at_least(self.severity, "warning")
         )
+
+
+def _check_vocabulary(detail: Mapping[str, Any]) -> None:
+    name = detail.get("id")
+    if detail.get("severity") not in SEVERITIES:
+        raise ValueError(f"finding {name}: unknown severity {detail.get('severity')!r}")
+    if detail.get("role") not in (PRIMARY, SECONDARY):
+        raise ValueError(f"finding {name}: unknown role {detail.get('role')!r}")
 
 
 def _window(record: Mapping[str, Any]) -> Window:
@@ -226,7 +238,7 @@ def in_scoring_window(
     onset, end = injection.times.effect_onset_ns, injection.times.effect_end_ns
     if window is None or onset is None or end is None:
         return False
-    if not window.on_clock(injection.clock_domain):
+    if window.end_ns < window.start_ns or not window.on_clock(injection.clock_domain):
         return False
     first = onset - window.pre_grace_ns
     last = end + config.grace(finding.kind)
@@ -723,6 +735,8 @@ def _placed_in(
     """The temporal rule over the exposure: the window is on the victim's
     clock, starts in the exposure, and lies at least half in it."""
     if window is None or not exposure or not window.on_clock(clock_domain):
+        return False
+    if window.end_ns < window.start_ns:
         return False
     if not any(i.start_ns <= window.start_ns <= i.end_ns for i in exposure):
         return False
