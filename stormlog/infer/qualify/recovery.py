@@ -1093,6 +1093,24 @@ def priming_check(
     return median >= thresholds.priming_cached_at_least, median
 
 
+def engine_stalled(context: Context, now_ns: int) -> bool:
+    """Whether the engine looks hung at ``now_ns``: the busy part of the
+    step gap still open then is longer than ``long_gap_factor`` times the
+    baseline's p99. A recovery found in an earlier stretch can be complete
+    while a victim request sent since has been stuck; a live loop holds the
+    next episode back while this is true. False with too thin a baseline to
+    judge, or no steps yet."""
+    signals, baseline = context.signals, context.baseline
+    thresholds = context.thresholds
+    index = bisect.bisect_right(signals.step_starts, now_ns)
+    if index == 0 or baseline.steps.count < thresholds.min_cadence_samples:
+        return False
+    cadence = CadenceWithin(
+        signals.busy_step_gaps(), baseline.steps, thresholds, signals.in_flight
+    )
+    return cadence.open_gap(signals.step_starts[index - 1], now_ns) > cadence.longest
+
+
 def recovery_blocked(episode_type: str, context: Context) -> tuple[str, ...]:
     """Why the episode's recovery can never hold, one reason per criterion
     whose baseline is too thin to compare with; empty when none is, and for
@@ -1150,6 +1168,7 @@ __all__ = [
     "base_type",
     "between",
     "effect_timing",
+    "engine_stalled",
     "first_window",
     "held_from",
     "next_episode",
