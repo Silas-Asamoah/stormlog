@@ -486,25 +486,42 @@ class IncidentStore:
     def _reserve(self, nbytes: int, protected: frozenset[str]) -> Allowance | None:
         """An allowance, removing the oldest unprotected bundles until it fits.
 
-        The store keeps the newest incidents: a reservation that does not fit
-        is refused only when no unprotected bundle is left to remove. A
-        bundle a reader holds is deferred, which frees nothing yet.
+        The store keeps the newest incidents. A reservation that does not fit
+        is refused when removing every unprotected bundle no reader holds
+        could not make room, and then nothing is removed. A bundle a reader
+        takes meanwhile is skipped, not deferred: deferred, it would be
+        removed later for room already made.
         """
         allowance = self.budget.reserve(nbytes)
         if allowance is not None or nbytes > self.limits.max_incident_bytes:
             return allowance
-        for path, manifest in self.bundles():  # oldest seal first
-            if manifest.incident_id in protected:
-                continue
-            size = _payload_bytes(path, seen=set())
-            if self._try_delete(path, path):
+        removable = self._removable(protected)
+        if nbytes > self.budget.free_bytes() + sum(freed for *_, freed in removable):
+            return None
+        for path, incident_id, freed in removable:  # oldest seal first
+            if self._try_delete(path, path, defer=False):
                 self._room_pruned.append(
-                    PrunedBundle(manifest.incident_id, "max_total_bytes", size)
+                    PrunedBundle(incident_id, "max_total_bytes", freed)
                 )
                 allowance = self.budget.reserve(nbytes)
                 if allowance is not None:
                     return allowance
         return None
+
+    def _removable(self, protected: frozenset[str]) -> list[tuple[Path, str, int]]:
+        """The unprotected bundles no reader holds, oldest seal first, each
+        with the bytes removing it would free."""
+        removable = []
+        for path, manifest in self.bundles():
+            if manifest.incident_id in protected:
+                continue
+            try:
+                with _exclusive(path):
+                    freed = _freed_by(path, path)
+            except BlockingIOError:
+                continue
+            removable.append((path, manifest.incident_id, freed))
+        return removable
 
     def take_pruned(self) -> list[PrunedBundle]:
         """Bundles removed to make room since the last call, for the ledger."""
@@ -671,12 +688,13 @@ class IncidentStore:
             if stale.name != f"gen-{keep}":
                 self._try_delete(stale, bundle)
 
-    def _try_delete(self, path: Path, bundle: Path) -> bool:
+    def _try_delete(self, path: Path, bundle: Path, *, defer: bool = True) -> bool:
         """Delete ``path`` (a generation, or the whole bundle) under the
         bundle's exclusive lock, and forget exactly the bytes that freed.
 
-        While a reader holds the lock the deletion is deferred, and the bytes
-        stay charged until :meth:`reclaim_deferred` succeeds. What was freed
+        While a reader holds the lock the deletion is deferred, unless
+        ``defer`` is False, and the bytes stay charged until
+        :meth:`reclaim_deferred` succeeds. What was freed
         is measured under the lock, just before the deletion: a hard link
         another generation keeps frees nothing, and a path already gone
         frees nothing, so no byte is ever forgotten twice.
@@ -686,7 +704,8 @@ class IncidentStore:
                 freed = _freed_by(path, bundle)
                 self._remove(path, bundle)
         except BlockingIOError:
-            self._deferred[path] = bundle
+            if defer:
+                self._deferred[path] = bundle
             return False
         self._deferred.pop(path, None)
         if path == bundle:

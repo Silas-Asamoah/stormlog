@@ -697,6 +697,50 @@ def test_a_full_store_makes_room_for_the_newest_incident(tmp_path: Path) -> None
     assert store.budget.used_bytes == store._scan_bytes()
 
 
+def test_a_reservation_that_cannot_fit_removes_nothing(tmp_path: Path) -> None:
+    """Making room deleted every unprotected bundle and then refused, when
+    a protected one meant room could never be made."""
+    store = IncidentStore(
+        tmp_path, _limits(max_total_bytes=64 * KIB, max_incident_bytes=48 * KIB)
+    )
+    base = time.time_ns()
+    big = _gen0_exact(store, b"p" * 36 * KIB, now_ns=base)
+    small = [_gen0_exact(store, b"s" * 4 * KIB, now_ns=base + i) for i in range(1, 6)]
+    # 8 KiB free, and 20 KiB more the five small ones would free: never 40.
+    assert (
+        store.new_bundle(store.new_incident_id(), 40 * KIB, protected=frozenset({big}))
+        is None
+    )
+    assert store.take_pruned() == []
+    assert [m.incident_id for _p, m in store.bundles()] == [big, *small]
+    writer = store.new_bundle(
+        store.new_incident_id(), 24 * KIB, protected=frozenset({big})
+    )
+    assert writer is not None
+    assert [p.incident_id for p in store.take_pruned()] == small[:4]
+    writer.abandon()
+
+
+def test_a_bundle_being_read_is_skipped_when_making_room(tmp_path: Path) -> None:
+    """It was deferred, the next one removed for the room, and the deferred
+    one removed too once its reader left: two incidents for one."""
+    store = IncidentStore(
+        tmp_path, _limits(max_total_bytes=10 * KIB, max_incident_bytes=4 * KIB)
+    )
+    base = time.time_ns()
+    held, nxt, kept = (
+        _gen0_exact(store, b"x" * 3 * KIB, now_ns=base + i) for i in range(3)
+    )
+    with open_incident_bundle(tmp_path / "incidents" / held):
+        writer = store.new_bundle(store.new_incident_id(), 3 * KIB)
+        assert writer is not None
+        assert [p.incident_id for p in store.take_pruned()] == [nxt]
+        assert store.deferred == 0
+    writer.abandon()
+    assert store.reclaim_deferred() == 0
+    assert [m.incident_id for _p, m in store.bundles()] == [held, kept]
+
+
 def _gen0_exact(store: IncidentStore, payload: bytes, *, now_ns: int) -> str:
     incident_id = store.new_incident_id(now_ns)
     writer = store.new_bundle(incident_id, len(payload))
