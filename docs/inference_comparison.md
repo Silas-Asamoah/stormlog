@@ -12,6 +12,72 @@ The run is the unit of replication. A request inside a run is not an
 independent sample of the server, so no interval here treats requests as
 independent unless it says so.
 
+## Command line
+
+```bash
+stormlog infer compare \
+  --baseline runs/base-*.jsonl --candidate runs/cand-*.jsonl \
+  --gate 'client.e2e.p95=non-inferiority:0.05' \
+  --gate 'goodput_rps=non-inferiority:0.05' \
+  --gate 'attainment=non-inferiority:0.01' \
+  --report comparison.json
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--baseline`, `--candidate` | Each arm's artifacts |
+| `--case ID` | Only this case; repeatable |
+| `--slo KEY:MS`, `--slo-file FILE` | Judge both arms by this policy instead of each run's own |
+| `--mode config\|overhead\|incremental` | What may differ between the arms (see Modes) |
+| `--design auto\|paired_blocks\|independent` | `auto` pairs runs by block when every run is labelled |
+| `--allow FIELD` | A field (`engine.max_num_seqs`) or `vllm_config` JSON pointer (`/scheduler_config`) that may differ |
+| `--added-observers NAME,...` | The observers an `incremental` candidate adds |
+| `--gate METRIC=RULE:BUDGET` | Gate a metric, or every metric a pattern names (`client.*.p99`). A latency, goodput or throughput budget is relative (0.05 is 5%); an attainment or failure-fraction budget is a fraction (0.01 is one point) |
+| `--fallback METRIC=BUDGET:UNIT` | A pre-registered budget on the difference, for when a zero leaves the log ratio undefined |
+| `--min-complete-blocks N` | Every gate needs at least N complete pairs |
+| `--min-attainment X`, `--min-run-pass Q` | At least a share Q (0.5) of candidate runs reach attainment X: a claim about runs. `--attainment-model bernoulli` pools requests instead, labelled model-based |
+| `--family all_budgets\|any_regression` | `any_regression` adjusts the regression tests with Holm's method; its gates use `significant` |
+| `--on-incomplete exclude\|fail` | A run set aside by a protocol failure is listed (`exclude`), or fails its contrasts (`fail`) |
+| `--allow-not-evaluable` | Exit 0 although a gate could not be evaluated: for exploration, and recorded |
+| `--evidence-floor F` | The `evidence_coverage` SLO metrics need in every run (1.0) |
+| `--format txt\|json`, `--report FILE` | Text, or the report envelope on stdout; `--report` writes the envelope too |
+
+Metrics, for every case: `goodput_rps`, `attainment` (bounds when outcomes
+are unknown), `throughput_rps`, `output_tps`, `failure_fraction`, and p50,
+p90, p95 and p99 of each latency metric the runs have (`client.ttft`,
+`client.e2e`, `client.tpot`, `client.e2e_from_intended`, and `server.ttft`
+and `server.e2e` with spans). Latency quantiles are the failure-penalized
+estimand: a quantile that falls among failed requests (`penalized`) or rests
+on too few requests (`insufficient_tail_samples`) cannot be gated.
+
+### Modes
+
+- `config`: only allowed fields may differ; observers must match.
+- `overhead`: the cost of observing. The baseline runs no observers; the
+  candidate's must be active and healthy.
+- `incremental`: the cost of added observers. Shared observers are active
+  and healthy in both arms; the added ones are declared and healthy in the
+  candidate.
+
+### Exit codes and the report
+
+| Code | When |
+| --- | --- |
+| 0 | No gate, or every gate passed |
+| 4 | A gate failed, or one could not be evaluated without `--allow-not-evaluable` |
+| 5 | The runs could not be compared: an artifact missing, a block with two runs of one arm, incompatible arms, an arm with no usable run, an observer contract broken |
+| 2 | Flags it cannot read |
+
+`--format json` and `--report` give a `stormlog.report` v1 envelope with
+`report_kind: inference_comparison` and the `stormlog.infer.comparison` v1
+payload. A failed gate is a `regression` finding, a gate that cannot be
+evaluated a `not_evaluable` one, and a run set aside an `excluded_run` one.
+Each points at its metric with a JSON pointer into the payload
+(`/payload/cases/<case>/metrics/<metric>`): on stdout with no `path`, so it
+resolves inside the report itself; in a written report, with `path` set to
+the report's file name. A comparison that exits 5 still writes its report,
+with one `invalid_input` finding, so a CI job keeps the reason.
+
 ## Runs
 
 Each run is summarized again from its artifact's raw records

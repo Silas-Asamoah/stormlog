@@ -1,0 +1,371 @@
+"""Comparing a baseline arm of runs with a candidate arm."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from stormlog.infer.compare import ComparisonSpec, compare_runs
+from stormlog.infer.comparison_stats import GateRule
+from stormlog.infer.compatibility import RunField
+from stormlog.infer.errors import InferInputError, InferUsageError
+from stormlog.infer.run_summary import RunSummary, summarize_run
+from stormlog.infer.slo import parse_slo_flags
+from tests.infer_workload_helpers import run_profile_with_fake_client
+
+CASE = "c1"
+E2E_GATE = (("client.e2e.p95", GateRule("non-inferiority", 0.05, "relative")),)
+
+
+def _fields(**overrides: Any) -> dict[str, RunField]:
+    values = {
+        "model.weights_digest": "w" * 64,
+        "engine.version": "0.30.0",
+        "gpu.name": "NVIDIA A30",
+        "gpu.driver_version": "580.82.07",
+        "workload.spec_digest": "s" * 64,
+        "vllm_config/scheduler_config/max_num_seqs": 256,
+    }
+    values.update(overrides)
+    return {name: RunField(value, "test", "observed") for name, value in values.items()}
+
+
+def _latency(p95: float, *, penalized: bool = False, sufficient: bool = True) -> dict:
+    estimate = {
+        "value_ms": None if penalized else p95,
+        "sufficient": sufficient,
+        "penalized": penalized,
+    }
+    levels = {level: dict(estimate) for level in ("p50", "p90", "p95", "p99")}
+    return {"metrics": {"client.e2e": {"failure_penalized": levels}}}
+
+
+def _case(
+    e2e: float,
+    *,
+    goodput: float = 10.0,
+    attainment: float = 0.99,
+    coverage: float = 1.0,
+    penalized: bool = False,
+) -> dict[str, Any]:
+    return {
+        "population": {"offered": 100, "successful": 99, "cohort_valid": True},
+        "throughput": {"requests_per_second": 10.0, "output_tokens_per_second": 400.0},
+        "latency": _latency(e2e, penalized=penalized),
+        "slo": {
+            "status": "evaluated",
+            "goodput_lower_rps": goodput,
+            "goodput_upper_rps": goodput,
+            "attainment_lower": attainment,
+            "attainment_upper": attainment,
+            "evidence_coverage": coverage,
+            "met": round(attainment * 100),
+            "offered": 100,
+        },
+        "cache": {},
+    }
+
+
+def _run(
+    arm: str,
+    block: int | None,
+    e2e: float,
+    *,
+    fields: dict[str, RunField] | None = None,
+    observers: dict[str, Any] | None = None,
+    status: str = "completed",
+    started: int = 0,
+    **case: Any,
+) -> RunSummary:
+    labels = (
+        {} if block is None else {"experiment": "e", "arm": arm, "block": str(block)}
+    )
+    return RunSummary(
+        path=None,
+        sha256=None,
+        run_id=f"{arm}-{block}-{e2e}",
+        session_id="s",
+        session_status=status,
+        labels=labels,
+        fields=fields or _fields(),
+        report={
+            "cases": {CASE: _case(e2e, **case)},
+            "observers": {"observers": observers or {}},
+        },
+        protocol_failures=() if status == "completed" else (f"session_{status}",),
+        started_at_ns=started,
+    )
+
+
+BASE_E2E = [100.0, 102.0, 98.0, 101.0, 99.0, 100.0]
+
+
+def _arms(
+    candidate_e2e: list[float], *, paired: bool = True, **candidate: Any
+) -> tuple[list[RunSummary], list[RunSummary]]:
+    def block(i: int) -> int | None:
+        return i if paired else None
+
+    baseline = [
+        _run("baseline", block(i), e2e, started=2 * i) for i, e2e in enumerate(BASE_E2E)
+    ]
+    candidates = [
+        _run("candidate", block(i), e2e, started=2 * i + 1, **candidate)
+        for i, e2e in enumerate(candidate_e2e)
+    ]
+    return baseline, candidates
+
+
+SLOWER = [140.0, 143.0, 137.0, 141.0, 138.5, 140.5]
+SAME = [100.5, 101.5, 98.5, 100.5, 99.5, 100.0]
+
+
+def test_a_latency_regression_fails_its_gate_with_exit_4() -> None:
+    comparison = compare_runs(*_arms(SLOWER), ComparisonSpec(gates=E2E_GATE))
+    metric = comparison.cases[CASE]["metrics"]["client.e2e.p95"]
+
+    assert comparison.design == "paired_blocks"
+    assert metric.n_pairs == 6
+    assert metric.gate is not None and metric.gate.status == "fail"
+    assert (CASE, "client.e2e.p95") in comparison.failed
+    assert comparison.exit_code == 4
+    payload = comparison.to_payload()
+    assert (payload["format"], payload["version"]) == ("stormlog.infer.comparison", 1)
+    assert payload["verdict"]["exit_code"] == 4
+
+
+def test_an_unchanged_candidate_passes() -> None:
+    comparison = compare_runs(*_arms(SAME), ComparisonSpec(gates=E2E_GATE))
+    assert comparison.exit_code == 0
+    assert comparison.failed == []
+
+
+def test_unlabelled_runs_are_independent_samples() -> None:
+    comparison = compare_runs(*_arms(SLOWER, paired=False), ComparisonSpec())
+    metric = comparison.cases[CASE]["metrics"]["client.e2e.p95"]
+    assert comparison.design == "independent"
+    assert metric.worst is not None and metric.worst.df == 5
+
+
+def test_a_block_with_two_runs_of_an_arm_is_refused() -> None:
+    baseline, candidate = _arms(SAME)
+    candidate[1] = _run("candidate", 0, 100.0)
+    with pytest.raises(InferInputError, match="has two candidate runs"):
+        compare_runs(baseline, candidate, ComparisonSpec())
+
+
+def test_an_unfinished_run_is_set_aside_and_listed() -> None:
+    baseline, candidate = _arms(SLOWER)
+    candidate[5] = _run("candidate", 5, 140.0, status="interrupted")
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    metric = comparison.cases[CASE]["metrics"]["client.e2e.p95"]
+    assert metric.n_pairs == 5
+    assert comparison.excluded[0]["reasons"] == ["session_interrupted"]
+    strict = compare_runs(
+        baseline, candidate, ComparisonSpec(gates=E2E_GATE, on_incomplete="fail")
+    )
+    gate = strict.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None and (gate.status, gate.reason) == (
+        "fail",
+        "protocol_failure",
+    )
+
+
+def test_incompatible_arms_are_an_input_error_unless_the_difference_is_allowed() -> (
+    None
+):
+    baseline, _ = _arms(SAME)
+    changed = _fields(**{"vllm_config/scheduler_config/max_num_seqs": 64})
+    candidate = [_run("candidate", i, e, fields=changed) for i, e in enumerate(SAME)]
+    with pytest.raises(InferInputError, match="max_num_seqs"):
+        compare_runs(baseline, candidate, ComparisonSpec())
+    allowed = compare_runs(
+        baseline, candidate, ComparisonSpec(allow=("engine.max_num_seqs",))
+    )
+    assert allowed.comparability.status == "compatible"
+
+
+def test_unverified_runs_cannot_pass_a_gate() -> None:
+    unknown = _fields()
+    del unknown["model.weights_digest"]
+    baseline = [_run("baseline", i, e, fields=unknown) for i, e in enumerate(BASE_E2E)]
+    candidate = [_run("candidate", i, e, fields=unknown) for i, e in enumerate(SAME)]
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None and (gate.status, gate.reason) == (
+        "not_evaluable",
+        "unverified",
+    )
+    assert comparison.exit_code == 4
+    explore = compare_runs(
+        baseline, candidate, ComparisonSpec(gates=E2E_GATE, allow_not_evaluable=True)
+    )
+    assert explore.exit_code == 0
+
+
+def _observer(requested: bool, healthy: bool | None = True) -> dict[str, Any]:
+    return {
+        "requested": requested,
+        "active": requested,
+        "healthy": healthy if requested else None,
+    }
+
+
+def test_an_overhead_baseline_must_run_no_observers() -> None:
+    watched = {"vllm_metrics": _observer(True)}
+    baseline = [
+        _run("baseline", i, e, observers=watched) for i, e in enumerate(BASE_E2E)
+    ]
+    candidate = [_run("candidate", i, e, observers=watched) for i, e in enumerate(SAME)]
+    with pytest.raises(InferInputError, match="baseline without observers"):
+        compare_runs(baseline, candidate, ComparisonSpec(mode="overhead"))
+
+
+def test_an_unhealthy_observer_under_test_makes_gates_not_evaluable() -> None:
+    baseline, _ = _arms(SAME)
+    sick = {"vllm_metrics": _observer(True, healthy=False)}
+    candidate = [_run("candidate", i, e, observers=sick) for i, e in enumerate(SAME)]
+    comparison = compare_runs(
+        baseline, candidate, ComparisonSpec(mode="overhead", gates=E2E_GATE)
+    )
+    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None and gate.reason == "observer_not_active"
+    assert comparison.observer_issues
+
+
+def test_an_incremental_candidate_declares_what_it_adds() -> None:
+    baseline, _ = _arms(SAME)
+    added = {"vllm_spans": _observer(True)}
+    candidate = [_run("candidate", i, e, observers=added) for i, e in enumerate(SAME)]
+    with pytest.raises(InferInputError, match="--added-observers: vllm_spans"):
+        compare_runs(baseline, candidate, ComparisonSpec(mode="incremental"))
+    declared = compare_runs(
+        baseline,
+        candidate,
+        ComparisonSpec(mode="incremental", added_observers=("vllm_spans",)),
+    )
+    assert declared.observer_issues == []
+
+
+def test_a_penalized_quantile_cannot_be_gated() -> None:
+    baseline, _ = _arms(SAME)
+    candidate = [
+        _run("candidate", i, e, penalized=(i == 2)) for i, e in enumerate(SAME)
+    ]
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None and (gate.status, gate.reason) == (
+        "not_evaluable",
+        "penalized",
+    )
+
+
+def test_slo_metrics_need_full_evidence_unless_a_floor_is_declared() -> None:
+    baseline, _ = _arms(SAME)
+    candidate = [_run("candidate", i, e, coverage=0.97) for i, e in enumerate(SAME)]
+    gates = (("goodput_rps", GateRule("non-inferiority", 0.05, "relative")),)
+    strict = compare_runs(baseline, candidate, ComparisonSpec(gates=gates))
+    gate = strict.cases[CASE]["metrics"]["goodput_rps"].gate
+    assert gate is not None and gate.reason == "evidence_coverage_below_floor"
+    lenient = compare_runs(
+        baseline, candidate, ComparisonSpec(gates=gates, evidence_floor=0.95)
+    )
+    gate = lenient.cases[CASE]["metrics"]["goodput_rps"].gate
+    assert gate is not None and gate.status == "pass"
+
+
+@pytest.mark.parametrize(("missing", "status"), [(0, "pass"), (1, "fail")])
+def test_min_attainment_is_a_claim_about_runs(missing: int, status: str) -> None:
+    baseline, _ = _arms(SAME)
+    candidate = [
+        _run("candidate", i, e, attainment=0.98 if i < missing else 0.995)
+        for i, e in enumerate(SAME)
+    ]
+    comparison = compare_runs(
+        baseline, candidate, ComparisonSpec(min_attainment=0.99, min_run_pass=0.5)
+    )
+    gate = comparison.cases[CASE]["attainment_gate"]
+    assert (gate["runs_meeting"], gate["runs"], gate["status"]) == (
+        6 - missing,
+        6,
+        status,
+    )
+    assert gate["model"] == "independent_runs"
+    assert comparison.cases[CASE]["attainment_mean"]["model"] == "normal_run_means"
+
+
+def test_pooled_requests_are_labelled_model_based() -> None:
+    baseline, _ = _arms(SAME)
+    candidate = [_run("candidate", i, e, attainment=1.0) for i, e in enumerate(SAME)]
+    comparison = compare_runs(
+        baseline,
+        candidate,
+        ComparisonSpec(min_attainment=0.99, attainment_model="bernoulli"),
+    )
+    gate = comparison.cases[CASE]["attainment_gate"]
+    assert gate["model"] == "independent_requests" and gate["model_based"] is True
+
+
+def test_any_regression_needs_the_significant_rule_and_uses_holm() -> None:
+    with pytest.raises(InferUsageError, match="significant"):
+        ComparisonSpec(family="any_regression", gates=E2E_GATE)
+    gates = (("client.e2e.*", GateRule("significant", 0.05, "relative")),)
+    comparison = compare_runs(
+        *_arms(SLOWER), ComparisonSpec(family="any_regression", gates=gates)
+    )
+    assert comparison.family is not None and comparison.family["method"] == "holm"
+    assert comparison.family["tests"] == 4
+    assert "c1/client.e2e.p95" in comparison.family["rejected"]
+    assert (CASE, "client.e2e.p95") in comparison.failed
+
+
+def test_arms_run_one_after_the_other_are_flagged() -> None:
+    baseline, candidate = _arms(SAME)
+    candidate = [_run("candidate", i, e, started=100 + i) for i, e in enumerate(SAME)]
+    comparison = compare_runs(baseline, candidate, ComparisonSpec())
+    assert any("confounded" in w for w in comparison.diagnostics["warnings"])
+    interleaved = compare_runs(*_arms(SAME), ComparisonSpec())
+    assert interleaved.diagnostics["warnings"] == []
+
+
+def test_a_regression_that_crosses_the_slo_shows_in_goodput_and_attainment(
+    tmp_path: Any,
+) -> None:
+    """End to end: profiled runs, a slower candidate, an SLO it misses."""
+    slo = parse_slo_flags(["e2e:100"])
+
+    def runs(arm: str, latency: float) -> list[RunSummary]:
+        summaries = []
+        for block in range(3):
+            directory = tmp_path / f"{arm}{block}"
+            directory.mkdir()
+            run_profile_with_fake_client(
+                directory,
+                latency_seconds=latency,
+                request_count=6,
+                slo=slo,
+                slo_source="flags",
+                labels={"experiment": "e", "arm": arm, "block": str(block)},
+            )
+            summaries.append(summarize_run(directory / "infer.jsonl"))
+        return summaries
+
+    baseline, candidate = runs("baseline", 0.01), runs("candidate", 0.15)
+    gates = (
+        ("goodput_rps", GateRule("non-inferiority", 0.05, "relative")),
+        ("attainment", GateRule("non-inferiority", 0.01, "fraction")),
+    )
+    comparison = compare_runs(
+        baseline, candidate, ComparisonSpec(gates=gates, allow_not_evaluable=True)
+    )
+    (case_id,) = comparison.cases
+    metrics = comparison.cases[case_id]["metrics"]
+    goodput = metrics["goodput_rps"]
+    assert goodput.reason == "candidate_zero"
+    assert goodput.gate is not None and goodput.gate.status == "fail"
+    attainment = metrics["attainment"]
+    assert attainment.worst is not None and attainment.worst.effect == pytest.approx(
+        -1.0
+    )
+    assert comparison.exit_code == 4
