@@ -8,6 +8,7 @@ import math
 import os
 import signal
 import sys
+import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -160,7 +161,10 @@ def _restore(previous: Mapping[signal.Signals, Any]) -> None:
     SIGINT before SIGTERM's turn interrupted the return, against the code
     the report held, and left SIGTERM ignored. One that lands as SIGINT's
     own handler comes back came at the watch's very end, and is dropped, as
-    one a moment earlier, while ignored, was."""
+    one a moment earlier, while ignored, was. Off the main thread nothing
+    was installed, and ``signal.signal`` would raise."""
+    if threading.current_thread() is not threading.main_thread():
+        return
     for signum in sorted(previous, key=lambda s: s == signal.SIGINT):
         try:
             signal.signal(signum, previous[signum])

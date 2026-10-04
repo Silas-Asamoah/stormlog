@@ -284,7 +284,8 @@ default interrupt. From the
 report's write on, further signals are ignored, so the process exits with
 the code the report holds. A watch run from Python code through
 `stormlog.infer.cli.main(["watch", ...])` gives the handlers back when it
-returns.
+returns. Run off the main thread, it installs no handlers and touches none,
+so only `--duration` ends it.
 
 ### Test triggers
 

@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -194,6 +195,29 @@ def test_a_watch_run_in_process_gives_the_signals_back(
         assert stormlog_main() == 0
     assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
     assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
+
+
+def test_a_watch_run_off_the_main_thread_returns_its_report_s_code(
+    tmp_path: Path,
+) -> None:
+    """Off the main thread no handler is installed, and putting the old ones
+    back raised ValueError: the watch wrote a report of 0 and returned 1."""
+    previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+    codes: list[int] = []
+    path = tmp_path / "watch.json"
+    with serve_metrics(FakeMetrics()) as base_url:
+        path.write_text(json.dumps(watch_config(base_url)), encoding="utf-8")
+        thread = threading.Thread(
+            target=lambda: codes.append(
+                _watch(tmp_path, "--config", str(path), "--duration", "0.5")
+            )
+        )
+        thread.start()
+        thread.join(30)
+    assert codes == [0]
+    report = json.loads((tmp_path / "watch" / "report.json").read_text())
+    assert report["verdict"]["exit_code"] == 0
+    assert {s: signal.getsignal(s) for s in previous} == previous
 
 
 def test_a_signal_while_the_handlers_come_back_keeps_the_report_s_code(
