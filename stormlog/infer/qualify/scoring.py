@@ -535,6 +535,9 @@ class RunScore:
     exposure: tuple[Interval, ...] = ()
     false_claims: tuple[str, ...] = ()
     problems: tuple[str, ...] = ()
+    # Why a run with a negative episode is no FPR unit: the episode's
+    # status, the run's protocol failure, or several negatives.
+    excluded_negative: str | None = None
 
     @property
     def exposure_ns(self) -> int:
@@ -548,6 +551,7 @@ class RunScore:
             "exposure": [interval.to_record() for interval in self.exposure],
             "false_claims": list(self.false_claims),
             "problems": list(self.problems),
+            "excluded_negative": self.excluded_negative,
         }
 
 
@@ -573,9 +577,11 @@ def score_run(
         )
         for injection in injections
     )
-    unit, problems = _negative_unit(run, injections, config)
+    unit, problems, excluded = _negative_unit(run, injections, config)
     if unit is None:
-        return RunScore(run.run_id, episodes, problems=problems)
+        return RunScore(
+            run.run_id, episodes, problems=problems, excluded_negative=excluded
+        )
     exposure = negative_exposure(run, injections, config)
     elsewhere = {
         finding.id
@@ -629,16 +635,21 @@ def _onset(injection: Injection) -> int:
 
 def _negative_unit(
     run: RunRecord, injections: Sequence[Injection], config: ScoreConfig
-) -> tuple[Injection | None, tuple[str, ...]]:
-    """The run's one valid negative episode, if the run is an FPR unit."""
-    if run.protocol_failure:
-        return None, (f"run {run.run_id}: protocol failure {run.protocol_failure}",)
+) -> tuple[Injection | None, tuple[str, ...], str | None]:
+    """The run's one valid negative episode, if the run is an FPR unit;
+    else any problem, and why a run with a negative isn't one."""
     negatives = [i for i in injections if i.episode_type in config.negative_types]
+    if run.protocol_failure:
+        problem = f"run {run.run_id}: protocol failure {run.protocol_failure}"
+        return None, (problem,), "protocol_failure" if negatives else None
     if len(negatives) > 1:
-        return None, (f"run {run.run_id}: more than one negative episode",)
-    if negatives and negatives[0].status == VALID:
-        return negatives[0], ()
-    return None, ()
+        problem = f"run {run.run_id}: more than one negative episode"
+        return None, (problem,), "several_negatives"
+    if not negatives:
+        return None, (), None
+    if negatives[0].status != VALID:
+        return None, (), negatives[0].status
+    return negatives[0], (), None
 
 
 def negative_exposure(
@@ -782,6 +793,9 @@ class Summary:
     negative_hours: float = 0.0
     problems: tuple[str, ...] = ()
     secondary_errors: tuple[int, int] = (0, 0)
+    # Runs with a negative episode that are no FPR unit, by why: a void
+    # negative shrinks the denominator, so it is reported, never dropped.
+    excluded_negatives: Mapping[str, int] = field(default_factory=dict)
 
     def to_record(self, config: ScoreConfig) -> dict[str, Any]:
         return {
@@ -799,6 +813,7 @@ class Summary:
             "strata": [stratum.to_record() for stratum in self.strata],
             "accuracy_passes": self.accuracy_passes,
             "negative_runs": self.negative_runs,
+            "excluded_negative_runs": dict(self.excluded_negatives),
             "false_positive_runs": self.false_positive_runs,
             "fpr_upper_bound": self.fpr_upper_bound,
             "fpr_passes": self.fpr_passes,
@@ -845,7 +860,13 @@ def summarize(runs: Sequence[RunScore], config: ScoreConfig) -> Summary:
         negative_hours=hours,
         problems=tuple(problem for run in runs for problem in run.problems),
         secondary_errors=_secondary_errors(faults),
+        excluded_negatives=_excluded_negatives(runs),
     )
+
+
+def _excluded_negatives(runs: Sequence[RunScore]) -> dict[str, int]:
+    counts = Counter(run.excluded_negative for run in runs if run.excluded_negative)
+    return dict(sorted(counts.items()))
 
 
 def _secondary_errors(faults: Sequence[EpisodeScore]) -> tuple[int, int]:
