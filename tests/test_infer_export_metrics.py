@@ -1,10 +1,13 @@
 """How an inference profile's records become Prometheus metrics."""
 
+import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+import stormlog
 from stormlog._export.registry import DEFAULT_MAX_SAMPLES, Registry, render
 from stormlog.infer.events import REQUEST_PHASES, REQUEST_STATUSES
 from stormlog.infer.export_metrics import (
@@ -297,6 +300,76 @@ def test_ingested_and_unexported_records_map_to_nothing(event_type: str) -> None
 def test_every_family_is_stormlogs_own() -> None:
     registry, _ = _metrics(metrics_server=SERVER, traces=True)
     assert all(f.spec.name.startswith("stormlog_") for f in registry.families)
+
+
+MAPPED_EVENT_TYPES = {
+    "infer.request",
+    "infer.phase_window",
+    "infer.vllm_scrape",
+    "infer.trace_window",
+}
+
+
+def _event_types() -> set[str]:
+    """Every infer.* event type named anywhere in the package."""
+    root = Path(stormlog.__file__).parent
+    found: set[str] = set()
+    for path in root.rglob("*.py"):
+        found.update(re.findall(r"[\"'](infer\.[a-z_]+)[\"']", path.read_text()))
+    return found
+
+
+def test_only_the_four_mapped_record_types_reach_the_metrics() -> None:
+    # Engine steps, telemetry samples and every other record the artifact
+    # holds are the engine's or the host's figures, never Stormlog's metrics.
+    _, metrics = _metrics(metrics_server=SERVER, traces=True)
+    event_types = _event_types()
+    assert MAPPED_EVENT_TYPES <= event_types and len(event_types) > 10
+    for event_type in sorted(event_types - MAPPED_EVENT_TYPES):
+        record = {"event_type": event_type, "case_id": "c4_in8_out8", "status": "ok"}
+        assert metrics.envelope(record, None) is None, event_type
+
+
+def test_a_scrape_record_gives_only_its_outcome_timing_and_source() -> None:
+    _, metrics = _metrics(metrics_server=SERVER)
+    envelope = metrics.envelope(_scrape("ok", 100.0, 1_000_000_000), None)
+    assert envelope is not None
+    assert {name for name, _ in envelope.fields} == {
+        "status",
+        "duration_ms",
+        "observed_ns",
+        "process_start",
+    }
+
+
+def test_no_scraped_engine_value_is_exported() -> None:
+    # Canary values in every vllm:* series the scrape read: none may appear
+    # in the exposition, and only the scrape's own families change.
+    canary = 987654.321
+    registry, metrics = _metrics(metrics_server=SERVER)
+    before = dict(_exposition(registry).samples)
+    record = _scrape("ok", 100.0, 1_000_000_000)
+    record["scrape"]["values"].update(
+        {
+            "vllm:num_requests_running": {"0": canary},
+            "vllm:request_success_total": {"0": canary + 1},
+            "vllm:e2e_request_latency_seconds_sum": {"0": canary + 2},
+            "vllm:generation_tokens_total": {"0": canary + 3},
+        }
+    )
+    _feed(registry, metrics, record)
+    after = _exposition(registry)
+    assert not [v for v in after.samples.values() if 987654 <= v < 987660]
+    changed = {
+        key[0] for key, value in after.samples.items() if before.get(key) != value
+    }
+    assert changed <= {
+        "stormlog_engine_scrapes_total",
+        "stormlog_engine_last_scrape_timestamp_seconds",
+        "stormlog_engine_scrape_duration_seconds_bucket",
+        "stormlog_engine_scrape_duration_seconds_sum",
+        "stormlog_engine_scrape_duration_seconds_count",
+    }
 
 
 def test_the_envelope_does_not_grow_with_the_record() -> None:

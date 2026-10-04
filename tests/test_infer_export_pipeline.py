@@ -4,6 +4,7 @@ import argparse
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from stormlog._export.registry import BudgetExceeded
 from stormlog.infer import export as export_module
 from stormlog.infer.correlation_events import CorrelationContext
 from stormlog.infer.export import (
+    RECEIVER_HEALTH,
     ExportPipeline,
     ExportUsageError,
     HealthMetric,
@@ -260,6 +262,56 @@ def test_a_record_that_fails_to_apply_is_dropped_as_an_error(
     text = (tmp_path / "stormlog-t.prom").read_text()
     assert sum(check_exposition(text).matching("stormlog_infer_requests_total")) == 2
     pipeline.stop_serving()
+
+
+# Every family a profile can export, with scraping, traces, the span receiver
+# and both outputs on. A new family changes this list and the docs together.
+FAMILIES = (
+    "stormlog_engine_last_scrape_timestamp_seconds",
+    "stormlog_engine_metrics_source_changes_total",
+    "stormlog_engine_scrape_duration_seconds",
+    "stormlog_engine_scrapes_total",
+    "stormlog_engine_span_receiver_requests_total",
+    "stormlog_engine_span_receiver_spans_total",
+    "stormlog_exporter_internal_errors_total",
+    "stormlog_health_snapshot_age_seconds",
+    "stormlog_infer_abandoned_requests_total",
+    "stormlog_infer_chunk_interarrival_seconds",
+    "stormlog_infer_dispatch_lag_seconds",
+    "stormlog_infer_e2e_from_intended_seconds",
+    "stormlog_infer_phases_total",
+    "stormlog_infer_request_duration_seconds",
+    "stormlog_infer_requests_held_for_slot_total",
+    "stormlog_infer_requests_total",
+    "stormlog_infer_time_to_first_chunk_seconds",
+    "stormlog_infer_time_to_first_token_seconds",
+    "stormlog_infer_tokens_total",
+    "stormlog_metrics_records_applied_total",
+    "stormlog_metrics_records_dropped_total",
+    "stormlog_metrics_scrapes_total",
+    "stormlog_metrics_series_overflow_total",
+    "stormlog_metrics_series_rejected_total",
+    "stormlog_metrics_textfile_writes_total",
+    "stormlog_run_info",
+    "stormlog_run_start_time_seconds",
+    "stormlog_trace_windows_total",
+)
+
+
+def test_the_families_are_a_fixed_list_and_each_is_documented(
+    tmp_path: Path,
+) -> None:
+    labels = replace(
+        LABELS, metrics_server="http://127.0.0.1:8000/metrics", traces=True
+    )
+    pipeline = ExportPipeline(
+        ExportConfig(prometheus_textfile_dir=tmp_path, prometheus_listen="127.0.0.1:0"),
+        labels,
+        health=[(RECEIVER_HEALTH, ReceiverHealth.health_metrics())],
+    )
+    assert sorted(f.spec.name for f in pipeline.registry.families) == sorted(FAMILIES)
+    docs = (Path(__file__).parents[1] / "docs" / "inference_export.md").read_text()
+    assert [name for name in FAMILIES if f"`{name}" not in docs] == []
 
 
 def test_a_full_queue_drops_counts_and_degrades_health(tmp_path: Path) -> None:
