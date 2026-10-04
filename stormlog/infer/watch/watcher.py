@@ -247,7 +247,6 @@ class Watcher:
         done = max(started, self.clock.mono_ns())
         stamp = Stamped(started, done, wall)
         self._account_scrape(record, kept=self.history.add(stamp, record))
-        self._check_exporter(record, done)
         self._judge(done, record, stamp, lag_seconds)
 
     async def _scrape(
@@ -285,13 +284,19 @@ class Watcher:
         stamp: Stamped,
         lag_seconds: float,
     ) -> None:
-        """Evaluate the triggers at ``at_mono`` and act on what they found."""
+        """Evaluate the triggers at ``at_mono`` and act on what they found.
+
+        Incidents whose post-window has ended are sealed first, so they hold
+        no open slot against this tick's firings.
+        """
+        self.incidents.on_tick(at_mono)
+        if record is not None:
+            self._check_exporter(record, at_mono)
         results = list(self.engine.tick(at_mono, self.history.parsed()))
         if any(_frozen(result) for result in results):
             self.stats.add("frozen_ticks_total")
         for result in results:
             self._on_result(result)
-        self.incidents.on_tick(at_mono)
         self._maybe_test(at_mono)
         if self._ticks % PRUNE_EVERY_TICKS == 0:
             self._prune()
