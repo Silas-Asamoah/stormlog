@@ -215,7 +215,11 @@ run_plan(plan, out, resume=True,
 Either way the resume finishes the attempt in place, keeps its number, and
 indexes it with `interrupted: true`. A label must name an attempt that was
 interrupted, and only one way: a finished attempt keeps the state it
-recorded, so an outcome failure can never become a set-aside.
+recorded, so an outcome failure can never become a set-aside. That holds
+for an attempt the runner was killed in after recording its state, in
+`run.json` or in its artifacts' `infer.run_state`, but before renaming its
+directory: a resume finishes it in the state it recorded, and refuses a
+cause or an outcome named for it.
 
 ## Running from the command line
 
