@@ -280,6 +280,40 @@ def test_a_stopped_watchdog_costs_no_slot(server: MetricsServer) -> None:
     assert server.stats.rejected_busy == 0 and server.stats.active == 0
 
 
+class _NeverFires:
+    """A watchdog that never acts, as one whose thread has died."""
+
+    def arm(self, sock: socket.socket, deadline: float) -> int:
+        return 1
+
+    def disarm(self, token: int) -> bool:
+        return True
+
+    def fired(self, token: int) -> bool:
+        return False
+
+    def stop(self) -> None:
+        pass
+
+
+def test_without_its_watchdog_an_idle_client_is_cut_a_second_late() -> None:
+    metrics = MetricsServer(
+        "127.0.0.1:0",
+        RenderCache(lambda: BODY),
+        deadline=0.3,
+        watchdog=_NeverFires(),  # type: ignore[arg-type]
+    )
+    metrics.start()
+    try:
+        sock = _idle(metrics)
+        started = time.monotonic()
+        assert sock.recv(10) == b""  # the per-read fallback timeout closed it
+        assert 1.0 <= time.monotonic() - started < 4
+        sock.close()
+    finally:
+        metrics.stop()
+
+
 def test_a_busy_port_raises_for_the_caller_to_record() -> None:
     first = MetricsServer("127.0.0.1:0", RenderCache(lambda: BODY))
     first.start()
