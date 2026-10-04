@@ -314,6 +314,48 @@ def test_min_attainment_is_a_claim_about_runs(missing: int, status: str) -> None
     assert comparison.cases[CASE]["attainment_mean"]["model"] == "normal_run_means"
 
 
+def test_a_candidate_run_whose_slo_was_not_judged_does_not_meet_it() -> None:
+    # Dropping the unmeasurable runs would keep only the ones that met it.
+    baseline, _ = _arms(SAME + SAME[:4])
+    candidate = [_run("candidate", i, 100.0, attainment=0.995) for i in range(6)] + [
+        _run("candidate", 6 + i, 100.0, attainment=0.995) for i in range(4)
+    ]
+    for run in candidate[6:]:
+        run.report["cases"][CASE]["slo"]["attainment_lower"] = None
+    comparison = compare_runs(
+        baseline, candidate, ComparisonSpec(min_attainment=0.99, min_run_pass=0.5)
+    )
+    gate = comparison.cases[CASE]["attainment_gate"]
+    assert (gate["runs_meeting"], gate["runs"], gate["runs_unmeasurable"]) == (6, 10, 4)
+    assert gate["status"] == "fail"
+
+
+def test_an_attainment_gate_that_cannot_be_evaluated_exits_4() -> None:
+    baseline, _ = _arms(SAME)
+    candidate = [_run("candidate", i, e) for i, e in enumerate(SAME)]
+    for run in candidate:
+        del run.report["cases"][CASE]["slo"]
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(min_attainment=0.99))
+    assert comparison.cases[CASE]["attainment_gate"]["status"] == "not_evaluable"
+    assert (CASE, "min_attainment", "no_slo_evaluation") in comparison.not_evaluable
+    assert comparison.exit_code == 4
+
+
+def test_the_attainment_gate_obeys_the_same_blockers_as_the_others() -> None:
+    # Arms not shown to measure one server cannot pass any gate.
+    baseline, _ = _arms(SAME)
+    unknown = _fields()
+    del unknown["model.weights_digest"]
+    candidate = [
+        _run("candidate", i, e, fields=unknown, attainment=1.0)
+        for i, e in enumerate(SAME)
+    ]
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(min_attainment=0.99))
+    gate = comparison.cases[CASE]["attainment_gate"]
+    assert (gate["status"], gate["reason"]) == ("not_evaluable", "unverified")
+    assert comparison.exit_code == 4
+
+
 def test_pooled_requests_are_labelled_model_based() -> None:
     baseline, _ = _arms(SAME)
     candidate = [_run("candidate", i, e, attainment=1.0) for i, e in enumerate(SAME)]

@@ -192,11 +192,18 @@ class Comparison:
 
     @property
     def not_evaluable(self) -> list[tuple[str, str, str | None]]:
-        return [
+        found = [
             (case, name, gate.reason)
             for case, name, gate in self.gates
             if gate.status == NOT_EVALUABLE
         ]
+        found += [
+            (case_id, "min_attainment", gate.get("reason"))
+            for case_id, case in self.cases.items()
+            if (gate := case.get("attainment_gate") or {}).get("status")
+            == NOT_EVALUABLE
+        ]
+        return found
 
     @property
     def exit_code(self) -> int:
@@ -484,7 +491,7 @@ def _case(
         "attrition": attrition,
     }
     if spec.min_attainment is not None:
-        case.update(_attainment_gate(case_id, kept[CANDIDATE], spec))
+        case.update(_attainment_gate(case_id, kept[CANDIDATE], spec, blocked))
     return case
 
 
@@ -637,16 +644,24 @@ def _blocks(
 
 
 def _attainment_gate(
-    case_id: str, candidate: list[RunSummary], spec: ComparisonSpec
+    case_id: str,
+    candidate: list[RunSummary],
+    spec: ComparisonSpec,
+    blocked: str | None,
 ) -> dict[str, Any]:
-    """Whether a share of candidate runs meets the target, and the mean, described."""
+    """Whether a share of candidate runs meets the target, and the mean, described.
+
+    It obeys the case's blockers like any gate. A candidate run whose SLO
+    could not be judged counts as not meeting the target: leaving it out
+    would keep only the runs that met it.
+    """
     target = spec.min_attainment
     assert target is not None
-    lowers = [
-        ((run.comparable_cases[case_id].get("slo") or {}).get("attainment_lower"))
-        for run in candidate
-    ]
-    known = [float(x) for x in lowers if isinstance(x, (int, float))]
+    if blocked is not None:
+        status = FAIL if blocked == "protocol_failure" else NOT_EVALUABLE
+        return {"attainment_gate": {"status": status, "reason": blocked}}
+    lowers = _attainment_lowers(case_id, candidate)
+    known = [x for x in lowers if x is not None]
     if not known:
         return {
             "attainment_gate": {"status": NOT_EVALUABLE, "reason": "no_slo_evaluation"}
@@ -655,9 +670,19 @@ def _attainment_gate(
         gate = _pooled_attainment(case_id, candidate, target, spec)
     else:
         meeting = sum(1 for value in known if value >= target)
-        gate = run_pass_gate(meeting, len(known), spec.min_run_pass, spec.confidence)
+        gate = run_pass_gate(meeting, len(lowers), spec.min_run_pass, spec.confidence)
     gate["target"] = target
+    gate["runs_unmeasurable"] = len(lowers) - len(known)
     return {"attainment_gate": gate, "attainment_mean": _mean_interval(known, spec)}
+
+
+def _attainment_lowers(case_id: str, runs: list[RunSummary]) -> list[float | None]:
+    """Each run's attainment lower bound, or None where its SLO was not judged."""
+    lowers: list[float | None] = []
+    for run in runs:
+        value = (run.comparable_cases[case_id].get("slo") or {}).get("attainment_lower")
+        lowers.append(float(value) if isinstance(value, (int, float)) else None)
+    return lowers
 
 
 def _pooled_attainment(

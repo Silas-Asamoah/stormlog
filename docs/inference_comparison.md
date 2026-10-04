@@ -35,7 +35,7 @@ stormlog infer compare \
 | `--gate METRIC=RULE:BUDGET` | Gate a metric, or every metric a pattern names (`client.*.p99`). A latency, goodput or throughput budget is relative (0.05 is 5%); an attainment or failure-fraction budget is a fraction (0.01 is one point). A budget that can never fail is a usage error: a fraction above 1, or a fall of 100% or more in a rate |
 | `--fallback METRIC=BUDGET:UNIT` | A pre-registered budget on the difference, for when a zero leaves the log ratio undefined |
 | `--min-complete-blocks N` | Every gate needs at least N complete pairs |
-| `--min-attainment X`, `--min-run-pass Q` | At least a share Q (0.5) of candidate runs reach attainment X: a claim about runs. Both are in (0, 1]. `--attainment-model bernoulli` pools requests instead, labelled model-based |
+| `--min-attainment X`, `--min-run-pass Q` | At least a share Q (0.5) of candidate runs reach attainment X: a claim about runs. Both are in (0, 1]. A candidate run whose SLO could not be judged counts as not reaching X, and the gate obeys the same blockers as the metric gates (unverified comparability, observers, `--on-incomplete fail`); when it cannot be evaluated, it exits 4 like they do. `--attainment-model bernoulli` pools requests instead, labelled model-based |
 | `--family all_budgets\|any_regression` | `any_regression` adjusts the regression tests with Holm's method; its gates use `significant` |
 | `--on-incomplete exclude\|fail` | A run set aside by a protocol failure is listed (`exclude`), or fails its contrasts (`fail`) |
 | `--allow-not-evaluable` | Exit 0 although a gate could not be evaluated: for exploration, and recorded |
