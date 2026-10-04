@@ -83,6 +83,23 @@ Every arm of a block gets the same `{block_seed}`, the first 31 bits of
 SHA-256 of `<seed>:<block>`, so matched arms send identical prompts at
 identical times.
 
+## Processes
+
+Every process the runner starts (the server, each step, each treatment) gets
+a session and process group of its own, so the runner owns everything it
+starts, children included: vLLM's engine and workers, and the `pip` and
+`nvidia-smi` its `/server_info` collector runs. A `cpu_affinity` pins the
+process, and its children inherit the pin; the runner checks the pin took.
+
+Stopping a process signals its whole group, then SIGKILL after a timeout.
+The runner then checks that nothing it started is left: no process in the
+group or the session, and none of the server's processes it remembered by
+PID and start time, which finds one that left the group with `setsid`. A
+survivor is killed by PID; one that outlives that is a failed cleanup, and
+the runner does not start the next server beside it. On Linux these checks
+read `/proc`; elsewhere they use `psutil`, and remembered processes are not
+tracked.
+
 ## Python API
 
 ```python
