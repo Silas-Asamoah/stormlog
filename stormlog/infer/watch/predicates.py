@@ -18,7 +18,7 @@ engine-wide: it describes all of the server's traffic.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
@@ -50,7 +50,13 @@ _EMPTY: Mapping[str, Any] = MappingProxyType({})
 
 @dataclass(frozen=True)
 class Selection:
-    """The scrapes of one window, or why there is no window."""
+    """The scrapes of one window, or why there is no window.
+
+    The scrapes are stamped on the watcher's monotonic clock (see
+    :func:`on_monotonic_clock`), so every duration and rate measured on them
+    is too. ``start_ns`` and ``end_ns`` are when the window's first and last
+    fetch returned.
+    """
 
     scrapes: tuple[VllmScrapeRecord, ...] = ()
     start_ns: int | None = None
@@ -85,8 +91,29 @@ def select_window(
     if start is None:
         return Selection(reason=REASON_START_MISSING)
     first, last = start[0].done_mono_ns, end[0].done_mono_ns
-    scrapes = tuple(r for s, r in done if first <= s.done_mono_ns <= last)
+    scrapes = tuple(
+        on_monotonic_clock(stamp, record)
+        for stamp, record in done
+        if first <= stamp.done_mono_ns <= last
+    )
     return Selection(scrapes, first, last)
+
+
+def on_monotonic_clock(stamp: Stamped, record: VllmScrapeRecord) -> VllmScrapeRecord:
+    """The record as sampled on the watcher's monotonic clock.
+
+    Window aggregation times counters and histograms from a record's
+    ``observed_at_ns`` and ``duration_ms``, which are the client's wall
+    clock: an NTP step inside a window would bend every rate. Here they
+    become the fetch's monotonic start and its duration to the response,
+    which bound the server's sample instant just as well.
+    """
+    return replace(
+        record,
+        # A record's stamp must be positive; the offset changes no duration.
+        observed_at_ns=stamp.mono_ns + 1,
+        duration_ms=max(0, stamp.done_mono_ns - stamp.mono_ns) / 1e6,
+    )
 
 
 def _start_entry(done: Sequence[Entry], target_ns: int, tick_ns: int) -> Entry | None:
@@ -383,6 +410,7 @@ __all__ = [
     "SignalExceeds",
     "WindowPredicate",
     "exporter_restarted",
+    "on_monotonic_clock",
     "overlaps",
     "select_window",
 ]
