@@ -99,17 +99,16 @@ _SIGNALS = (signal.SIGINT, signal.SIGTERM)
 
 async def _run(watcher: Watcher) -> WatchOutcome:
     """Run until done: the first SIGINT or SIGTERM is the documented end, a
-    second cuts the shutdown short, and a third is the default interrupt.
-    Once the watch has returned, both are ignored for good, so the exit code
-    stays the one the report holds."""
+    second cuts the shutdown short, and a third is the default interrupt. A
+    signal while a shutdown the duration began is under way cuts it short
+    at once: the watch is already ending. Once the watch has returned, both
+    are ignored for good, so the exit code stays the one the report holds."""
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     installed: list[signal.Signals] = []
-    received: list[int] = []
 
     def on_signal(signum: int) -> None:
-        received.append(signum)
-        if len(received) == 1:
+        if not stop.is_set() and not watcher.ending:
             stop.set()
             return
         watcher.hurry()

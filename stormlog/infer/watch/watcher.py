@@ -201,6 +201,7 @@ class Watcher:
         # Set by a second stop signal; the loop time it came at.
         self._hurried: asyncio.Event | None = None
         self._hurried_at: float | None = None
+        self._ending: asyncio.Event | None = None
         # The ring's evictions already added to history_evictions_total.
         self._evictions_counted: dict[str, int] = dict.fromkeys(EVICTION_CAUSES, 0)
 
@@ -217,7 +218,7 @@ class Watcher:
         self._prune()
         # Set by ``stop`` or by the end of the duration, so either can cut
         # a scrape short.
-        ending = asyncio.Event()
+        ending = self._ending = asyncio.Event()
         relay = asyncio.ensure_future(_relay(stop, ending))
         timer = (
             self._loop.call_later(self.options.duration_seconds, ending.set)
@@ -515,6 +516,11 @@ class Watcher:
         return loss
 
     # ------------------------------------------------------------ shutdown
+
+    @property
+    def ending(self) -> bool:
+        """True once the watch is ending: stopped, or its duration over."""
+        return self._ending is not None and self._ending.is_set()
 
     def hurry(self) -> None:
         """A second stop signal: finish the shutdown within FAST_EXIT_SECONDS."""

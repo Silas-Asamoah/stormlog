@@ -262,7 +262,8 @@ thirds for the incident store, the rest for the ledger). A second cuts that
 to 5 s, shared the same way: a writer, the store's or the ledger's, still
 busy at the end of its share is left behind and the watch is unsound, and
 the root stays locked until the process exits, since that writer may still
-write there. A third is the default interrupt. Once the report is
+write there. Once `--duration` has begun the shutdown, the first signal
+cuts it short at once. A third is the default interrupt. Once the report is
 written, further signals are ignored, so the process exits with the code
 the report holds.
 

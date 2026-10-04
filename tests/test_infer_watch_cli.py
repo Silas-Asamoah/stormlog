@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import signal
@@ -27,6 +28,46 @@ def _restore_signals() -> Iterator[None]:
     yield
     for signum, handler in previous.items():
         signal.signal(signum, handler)
+
+
+class _SignalledWatch:
+    """Stands in for a Watcher under the CLI's signal handling: it signals
+    this process and records what the handlers did."""
+
+    def __init__(self, *, ending: bool) -> None:
+        self.ending = ending
+        self.hurried = 0
+        self.stopped = False
+
+    def hurry(self) -> None:
+        self.hurried += 1
+
+    async def run(self, stop: asyncio.Event) -> str:
+        loop = asyncio.get_running_loop()
+        if not self.ending:
+            loop.call_soon(os.kill, os.getpid(), signal.SIGINT)
+            await asyncio.wait_for(stop.wait(), 5)
+            self.stopped = True
+            self.ending = True  # the shutdown has begun
+        loop.call_soon(os.kill, os.getpid(), signal.SIGINT)
+        deadline = loop.time() + 5
+        while not self.hurried and loop.time() < deadline:
+            await asyncio.sleep(0.01)
+        return "outcome"
+
+
+@pytest.mark.parametrize("ended_by_duration", [False, True])
+def test_a_signal_during_a_shutdown_cuts_it_short(ended_by_duration: bool) -> None:
+    """A second signal hurries the shutdown; nothing tested that wiring. A
+    signal while a shutdown --duration began is under way hurries it too:
+    it only set the stop, which nothing read any more."""
+    from stormlog.infer.watch.cli import _run
+
+    watch = _SignalledWatch(ending=ended_by_duration)
+    outcome: object = asyncio.run(_run(watch))  # type: ignore[arg-type]
+    assert outcome == "outcome"
+    assert watch.hurried == 1
+    assert watch.stopped is not ended_by_duration
 
 
 def _watch(tmp_path: Path, *extra: str) -> int:
