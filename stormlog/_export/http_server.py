@@ -179,7 +179,12 @@ class _Server(ThreadingHTTPServer):
         self._slots.release()
 
     def handle_error(self, request: Any, client_address: Any) -> None:
-        self.owner.count("errors")
+        # A handler cut at its deadline fails in whatever it was doing; that
+        # is counted once, as the timeout, when the connection finishes.
+        with self._lock:
+            token = self._tokens.get(id(request))
+        if token is None or not self.owner.watchdog.fired(token):
+            self.owner.count("errors")
 
     def close_connections(self) -> None:
         with self._lock:

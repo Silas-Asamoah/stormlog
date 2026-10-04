@@ -125,6 +125,8 @@ def test_a_client_that_never_reads_is_cut_at_the_deadline() -> None:
         assert _wait_for(
             lambda: metrics.stats.timeout == 1 and metrics.stats.active == 0
         )
+        # The cut ends the send with an error: counted once, as the timeout.
+        assert metrics.stats.errors == 0
         sock.close()
     finally:
         metrics.stop()
