@@ -195,8 +195,11 @@ the flaky benchmark memory gates
 - The vLLM execution hook takes about 60–65% less time on vLLM's engine thread
   per scheduler step. Each record's fields are now serialized once, when the
   record is queued. Before, they were walked in Python to bound their size,
-  then serialized again by the writer thread. The records written are
-  byte-identical. The queue counts each record at its exact JSON size, so:
+  then serialized again by the writer thread. On an A30 serving
+  Qwen2.5-0.5B with vLLM 0.30.0, the hook now costs 1.3% of throughput at
+  concurrency 32 (it was 9.7%) and 7.7% at concurrency 256 (it was 12.0%).
+  The records written are byte-identical. The queue counts each record at
+  its exact JSON size, so:
   - the memory it holds is now its 32 MiB of JSON at most, plus about 113
     bytes a record: about 34 MiB in all at the 20,000-record cap. The live
     records it held before could take twice the 32 MiB;
