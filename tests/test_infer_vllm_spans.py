@@ -349,21 +349,28 @@ def _small_message_export(shape: str, count: int) -> bytes:
 _REPEATED_MESSAGE_FIELDS = {
     target.name: target for target in message_fields() if repeated(target.field)
 }
-# Parse an export in a fresh process, from a bytearray as the receiver
-# reads it; print how far its peak RSS grew and what the receiver charges
-# for the parse.
+# Parse an export in a fresh process, as parse_otlp_protobuf does, from a
+# bytearray as the receiver reads it; print how far its peak RSS grew and
+# what the receiver charges for the parse. Anything held for a while and
+# let go before the parse raises the peak first and hides as much of the
+# parse's growth: so the body is read straight into its bytearray, without
+# a copy, and stormlog is imported after the parse, since compiling its
+# modules, when their bytecode is not cached, takes memory too.
 _PARSE_RSS = """
-import resource, sys
-from stormlog.infer import vllm_spans
-from stormlog.infer.otlp_wire import count_trace_request
-with open(sys.argv[1], "rb") as file:
-    body = bytearray(file.read())
-counts = count_trace_request(body, max_messages=10**12, max_spans=10**12)
-vllm_spans.parse_otlp_protobuf(b"")
+import os, resource, sys
+from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
+body = bytearray(os.path.getsize(sys.argv[1]))
+with open(sys.argv[1], "rb", buffering=0) as file:
+    file.readinto(body)
+request_class = trace_service_pb2.ExportTraceServiceRequest
+request_class.FromString(b"")
 scale = 1 if sys.platform == "darwin" else 1024
 before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-message = vllm_spans.parse_otlp_protobuf(body)
+message = request_class.FromString(bytes(body))
 grew = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) * scale
+from stormlog.infer import vllm_spans
+from stormlog.infer.otlp_wire import count_trace_request
+counts = count_trace_request(body, max_messages=10**12, max_spans=10**12)
 print(grew, vllm_spans.protobuf_parse_estimate(counts, len(body)))
 """
 
@@ -991,15 +998,22 @@ class TestReceiverAdmission:
         env["PYTHONPATH"] = os.pathsep.join(
             [str(repo), *filter(None, [env.get("PYTHONPATH")])]
         )
-        result = subprocess.run(
-            [sys.executable, "-c", _PARSE_RSS, str(body)],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=120,
-            check=True,
-        )
-        grew, charged = (int(n) for n in result.stdout.split())
+        # Under memory pressure the system can page out the interpreter's
+        # own memory, so a small parse may not lift the process past its
+        # earlier peak and reads as no growth at all: that is no
+        # measurement, and it is taken again.
+        for _attempt in range(3):
+            result = subprocess.run(
+                [sys.executable, "-c", _PARSE_RSS, str(body)],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=120,
+                check=True,
+            )
+            grew, charged = (int(n) for n in result.stdout.split())
+            if grew > 0:
+                break
         assert grew > 0
         assert grew <= charged
 
