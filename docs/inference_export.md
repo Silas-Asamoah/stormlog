@@ -281,6 +281,21 @@ Under Python's GIL, any other running thread can still delay the event loop
 by up to a switch interval (5 ms by default). The design limits how often
 that happens, not how long it lasts.
 
+Memory is bounded, by figures the tests measure with `tracemalloc` on the
+real parts. With M the largest scrape (the budget's bytes) and S its
+samples:
+
+| Holder | Bound |
+| --- | --- |
+| Metric queue | 65,536 records or 8 MiB, counted as the memory each queued record holds (about 2 KiB) |
+| Registry | M plus about 350 bytes per sample |
+| Renders | at most 3 alive, so 3 M, and 3.25 M at the peak while the next is built |
+| Textfile | shares the render it writes; one write at a time |
+| Endpoint | 4 connections, each holding at most 16 KiB of request head |
+
+That is at most about 8 MiB + 4.25 M + 350 B × S: about 15 MiB for 20 cases,
+and about 93 MiB at the default limits (16 MiB, 50,000 samples).
+
 `scripts/benchmark_export_observe.py` reports the per-record cost on your
 machine. Its numbers depend heavily on machine load, and they are not a
 claim about serving overhead. Matched exporter-off and exporter-on runs on
