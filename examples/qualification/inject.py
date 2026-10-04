@@ -214,6 +214,10 @@ class InjectionRun:
         self._lock = threading.Lock()
         self._stop_polling = threading.Event()
         self._closed = False
+        # The current episode's pulser, if it pulses, and an episode a
+        # signal or Ctrl+C interrupted mid-action: (its index, what was done).
+        self._pulser: Pulser | None = None
+        self._interrupted: tuple[int, dict[str, Any]] | None = None
 
     # ------------------------------------------------------------ the run
 
@@ -293,11 +297,17 @@ class InjectionRun:
         # An episode starts only once its clean time has passed (alignment).
         self._sleep_until(clean_since + int(self.plan.timeline.min_clean * SECOND))
         started, started_mono = self.clock(), time.monotonic_ns()
+        self._pulser = None
         try:
             actions, actuated, injected = self._actuate(index, episode)
         except Exception as error:  # a failed actuation: not actuated, on record
             actions, actuated = Actions(), False
             injected = {"method": episode.row.method, "error": repr(error)}
+        except BaseException:
+            # Interrupted mid-action: what was done goes on record before the
+            # run is published, then the interruption goes on.
+            self._interrupted = (index, self._done_so_far(episode))
+            raise
         ended, ended_mono = self.clock(), time.monotonic_ns()
         result = "ok" if actuated else str(injected.get("error", "failed"))
         actions_record = [
@@ -323,6 +333,18 @@ class InjectionRun:
             actions_record, added_mechanisms(episode.type, checks),
             observation_of(checks),
         )  # fmt: skip
+
+    def _done_so_far(self, episode: EpisodePlan) -> dict[str, Any]:
+        """An interrupted episode's record: its dose, and the pulses that
+        completed before the interruption (each one continued)."""
+        done: dict[str, Any] = {
+            "method": episode.row.method,
+            "dose": dict(episode.dose),
+            "interrupted": True,
+        }
+        if self._pulser is not None:
+            done["pulses"] = [pulse.to_record() for pulse in self._pulser.pulses]
+        return done
 
     # ------------------------------------------------------------ actuation
 
@@ -384,6 +406,7 @@ class InjectionRun:
         period_s = episode.dose["period_ms"] / 1000
         count = max(1, int(self.plan.timeline.episode / period_s))
         with Pulser(target, max_pulse_seconds=pulse_s) as pulser:
+            self._pulser = pulser  # kept for the record if interrupted
             pulses = pulser.run(pulse_s, period_s, count)
         actions = Actions(
             first_stop_confirmed_ns=pulses[0].stopped_ns,
@@ -481,7 +504,7 @@ class InjectionRun:
         )
         injections = [self._injection(attempt, truth) for attempt in attempts]
         injections += [
-            _skipped(truth, index, episode)
+            self._unfinished(truth, index, episode, progress)
             for index, episode in enumerate(self.plan.episodes)
             if index >= len(attempts)
         ]
@@ -498,6 +521,17 @@ class InjectionRun:
         (self.directory.truth / "episodes.json").write_text(
             json.dumps(episodes, indent=2, sort_keys=True)
         )
+
+    def _unfinished(
+        self, truth: _Truth, index: int, episode: EpisodePlan, progress: _Progress
+    ) -> Injection:
+        """An episode the run never finished: interrupted mid-action, with
+        what was done, or skipped, after a recovery timeout or the run's end."""
+        if self._interrupted is not None and self._interrupted[0] == index:
+            return _skipped(truth, index, episode, self._interrupted[1], "interrupted")
+        reason = "run_ended" if progress.failure else "recovery_timeout"
+        injected = {"method": episode.row.method, "skipped": reason}
+        return _skipped(truth, index, episode, injected, "skipped")
 
     def _injection(self, attempt: _Attempt, truth: _Truth) -> Injection:
         row = attempt.plan.row
@@ -770,15 +804,21 @@ def _harness_clock() -> str:
     return wall_clock_domain(socket.gethostname(), host_boot_id())
 
 
-def _skipped(truth: _Truth, index: int, episode: EpisodePlan) -> Injection:
-    """An episode skipped after a recovery timeout: published, never run."""
+def _skipped(
+    truth: _Truth,
+    index: int,
+    episode: EpisodePlan,
+    injected: dict[str, Any],
+    actuation: str,
+) -> Injection:
+    """An episode the run didn't finish, published not actuated."""
     row = episode.row
     return Injection(
         episode_id=f"{truth.run_id}-e{index}",
         run_id=truth.run_id,
         episode_type=row.id,
         cause_class=row.cause_class,
-        injected={"method": row.method, "skipped": "recovery_timeout"},
+        injected=injected,
         expects=row.expects,
         secondary=row.secondary,
         allows=row.allows,
@@ -786,7 +826,7 @@ def _skipped(truth: _Truth, index: int, episode: EpisodePlan) -> Injection:
         clock_domain=truth.clock_domain,
         status=decide_status(protocol_failure=not truth.priming[0], actuated=False),
         validity=Validity(
-            actuation="skipped", realization="not_assessed", observation="not_assessed"
+            actuation=actuation, realization="not_assessed", observation="not_assessed"
         ),
     )
 

@@ -745,8 +745,11 @@ The run is published atomically (see below), whatever ends it. An episode
 whose actuation raised (a stop that never took, a target gone) is published
 as `not_actuated` with the error. A run that fails part way (the victim
 exiting before it measures, say) or is interrupted publishes every episode it
-attempted, the rest as skipped, with the reason as the run record's protocol
-failure. `inject` then exits 1, or 130 when interrupted by Ctrl+C. SIGTERM and
+attempted, the rest as skipped (`run_ended`, or `recovery_timeout` after a
+recovery timeout), with the reason as the run record's protocol failure. An
+episode interrupted mid-action is published `not_actuated` with actuation
+`interrupted`, its dose and, for pulses, every pulse that completed: the
+target was stopped, and the truth says so. `inject` then exits 1, or 130 when interrupted by Ctrl+C. SIGTERM and
 SIGHUP (a job's timeout, an ssh disconnect) interrupt it the same way from the
 moment the run starts, whether or not any pulse has run, and it exits
 128 plus the signal's number.
