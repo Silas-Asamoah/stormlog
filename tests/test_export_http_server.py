@@ -4,6 +4,7 @@ import http.client
 import socket
 import threading
 import time
+import tracemalloc
 from collections.abc import Iterator
 
 import pytest
@@ -137,6 +138,89 @@ def test_stop_closes_open_connections() -> None:
     metrics.stop()
     assert _wait_for(lambda: metrics.stats.active == 0)
     sock.close()
+
+
+def _read_all(sock: socket.socket) -> bytes:
+    chunks = []
+    while chunk := sock.recv(65536):
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def test_a_head_of_a_few_kilobytes_is_served(server: MetricsServer) -> None:
+    sock = _idle(server)
+    try:
+        pad = b"X-Pad: " + b"a" * 8000 + b"\r\n"
+        sock.sendall(b"GET /metrics HTTP/1.1\r\nHost: x\r\n" + pad + b"\r\n")
+        assert _read_all(sock).startswith(b"HTTP/1.1 200")
+    finally:
+        sock.close()
+
+
+def test_a_head_past_sixteen_kibibytes_is_answered_431_and_closed(
+    server: MetricsServer,
+) -> None:
+    sock = _idle(server)
+    try:
+        # Never ends: a server without a head limit waits for the blank line.
+        pad = b"X-Pad: " + b"a" * (16 * 1024 + 100) + b"\r\n"
+        sock.sendall(b"GET /metrics HTTP/1.1\r\nHost: x\r\n" + pad)
+        assert _read_all(sock).startswith(b"HTTP/1.1 431")
+        assert server.stats.bad_request == 1
+        assert server.stats.timeout == 0
+    finally:
+        sock.close()
+
+
+def test_a_request_line_past_sixteen_kibibytes_is_answered_431(
+    server: MetricsServer,
+) -> None:
+    sock = _idle(server)
+    try:
+        sock.sendall(b"GET /metrics?" + b"a" * (16 * 1024 + 100))
+        assert _read_all(sock).startswith(b"HTTP/1.1 431")
+        assert server.stats.bad_request == 1
+    finally:
+        sock.close()
+
+
+def test_header_floods_from_every_slot_hold_little_memory() -> None:
+    # The review's flood: four connections, each sending 98 header lines of
+    # 64 KiB inside the deadline. The stock parser holds them all (25 MiB),
+    # then builds several copies of the head when it ends.
+    metrics = MetricsServer(
+        "127.0.0.1:0", RenderCache(lambda: BODY), max_connections=4, deadline=5
+    )
+    metrics.start()
+    line = b"X-Pad: " + b"a" * (65536 - 10) + b"\r\n"
+    sockets = [_idle(metrics) for _ in range(4)]
+
+    def flood(sock: socket.socket) -> None:
+        try:
+            sock.sendall(b"GET /metrics HTTP/1.1\r\nHost: x\r\n")
+            for _ in range(98):
+                sock.sendall(line)
+            sock.sendall(b"\r\n")
+        except OSError:
+            pass  # cut off by the server
+
+    tracemalloc.start()
+    try:
+        baseline = tracemalloc.get_traced_memory()[0]
+        floods = [threading.Thread(target=flood, args=(sock,)) for sock in sockets]
+        for thread in floods:
+            thread.start()
+        for thread in floods:
+            thread.join(10)
+        time.sleep(0.5)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+        for sock in sockets:
+            sock.close()
+        metrics.stop()
+    assert peak - baseline < 2 * 1024 * 1024
+    assert metrics.stats.bad_request == 4
 
 
 def test_a_busy_port_raises_for_the_caller_to_record() -> None:

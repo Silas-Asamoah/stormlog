@@ -5,24 +5,30 @@ header is read: past ``max_connections`` a connection gets a canned 503 if
 its send buffer takes it, and is closed. Each admitted connection serves one
 request and has a total deadline, enforced by the watchdog, so a client that
 sends no headers, dribbles them, or never reads its answer is cut off at the
-deadline and frees its slot.
+deadline and frees its slot. A request line and headers past ``HEAD_LIMIT``
+bytes are answered 431 and the connection closed, so no client makes the
+server hold more of a request than that.
 """
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import socket
 import threading
 import time
 from dataclasses import dataclass
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, BinaryIO, cast
 
 from .renders import RenderCache
 from .watchdog import Watchdog
 
 CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 METRICS_PATH = "/metrics"
+# The request line and headers together; a scraper sends a few hundred bytes.
+HEAD_LIMIT = 16 * 1024
 _BUSY = (
     b"HTTP/1.1 503 Service Unavailable\r\n"
     b"Content-Length: 0\r\nConnection: close\r\n\r\n"
@@ -36,6 +42,9 @@ class ServerStats:
     # Connections cut at their deadline, whatever they were doing.
     timeout: int = 0
     not_found: int = 0
+    # Requests refused while being read: a head past HEAD_LIMIT, or one the
+    # request parser could not take.
+    bad_request: int = 0
     errors: int = 0
     active: int = 0
 
@@ -180,6 +189,33 @@ def _refuse(request: socket.socket) -> None:
         pass
 
 
+class _HeadTooLarge(http.client.HTTPException):
+    """The request line and headers went past ``HEAD_LIMIT`` bytes."""
+
+
+class _HeadReader:
+    """The connection's reader, refusing a request head past ``limit`` bytes.
+
+    Each line is read with at most one byte more than is left, so a head is
+    refused once ``limit + 1`` bytes of it were read, wherever they fall.
+    """
+
+    def __init__(self, raw: BinaryIO, limit: int) -> None:
+        self._raw = raw
+        self._left = limit
+
+    def readline(self, size: int = -1) -> bytes:
+        cap = self._left + 1 if size < 0 else min(size, self._left + 1)
+        line = self._raw.readline(cap)
+        self._left -= len(line)
+        if self._left < 0:
+            raise _HeadTooLarge(f"request head over {HEAD_LIMIT} bytes")
+        return line
+
+    def close(self) -> None:
+        self._raw.close()
+
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server: _Server
@@ -190,6 +226,24 @@ class _Handler(BaseHTTPRequestHandler):
         # always acts first and the cut is counted as one.
         super().setup()
         self.connection.settimeout(self.server.owner.deadline + 1.0)
+        # Only GET and HEAD are served, so the head is all that is read.
+        self.rfile = cast(BinaryIO, _HeadReader(self.rfile, HEAD_LIMIT))
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except _HeadTooLarge:
+            # The request line alone was too long; header lines past the
+            # limit are refused the same way by the request parser.
+            self.requestline = self.request_version = self.command = ""
+            self.send_error(HTTPStatus.REQUEST_HEADER_FIELDS_TOO_LARGE)
+
+    def send_error(
+        self, code: int, message: str | None = None, explain: str | None = None
+    ) -> None:
+        # Only the request parser sends errors: a request refused unread.
+        self.server.owner.count("bad_request")
+        super().send_error(code, message, explain)
 
     def do_GET(self) -> None:  # noqa: N802
         self._serve(include_body=True)
