@@ -199,15 +199,23 @@ def test_an_invalid_negative_episode_makes_no_fpr_unit() -> None:
     assert run_of([unrealized], diagnosis()).negative_episode is None
 
 
-def test_a_negative_runs_claim_must_lie_mostly_in_its_exposure() -> None:
-    # The run's measured window ends at 324 s: a claim from 320 s to 400 s
-    # starts in the exposure but lies mostly outside it.
+def test_a_negative_runs_claim_is_placed_by_its_part_in_the_run() -> None:
+    # A window is clipped to the run's measured window (0-324 s, priming to
+    # 30 s), then counted when at least half of what is left lies in the
+    # exposure, wherever it starts (rev-220-b's delta D5).
     from tests.test_qualify_scoring import null_run
 
-    trailing = finding("s", "host_stall", 1, component="engine_core", window=(320, 400))
-    assert run_of([null_run()], diagnosis(trailing)).false_claims == ()
-    inside = finding("s", "host_stall", 1, component="engine_core", window=(300, 340))
-    assert run_of([null_run()], diagnosis(inside)).false_claims == (inside["id"],)
+    def claims(window: tuple[float, float]) -> tuple[str, ...]:
+        stall = finding("s", "host_stall", 1, component="engine_core", window=window)
+        return run_of([null_run()], diagnosis(stall)).false_claims
+
+    # A claim over the whole run, from its start or from inside the priming:
+    # the plainest false positive. Both used to be dropped for their start.
+    assert claims((0, 400)) and claims((25, 400))
+    # Mostly in the priming: not placed.
+    assert claims((10, 35)) == ()
+    # Starting near the window's end: what lies inside the run is exposure.
+    assert claims((320, 400))
 
 
 def test_void_negative_runs_are_reported_by_why() -> None:
@@ -309,3 +317,23 @@ def test_findings_on_another_clock_make_no_clean_negative_run() -> None:
     summary = summarize(runs, CONFIG)
     assert summary.negative_runs == 0 and not summary.fpr_passes
     assert summary.excluded_negatives == {"findings_off_clock": 60}
+
+
+def test_a_fault_claim_without_a_window_in_a_negative_run() -> None:
+    # A claim the scorer can't place in time counts as false in a negative
+    # run that injected nothing it could be about; in one that also held a
+    # fault or capture, it is reported as unplaced instead.
+    from tests.test_qualify_scoring import null_run
+
+    windowless = finding("s", "host_stall", 1, component="engine_core", window=None)
+    alone = run_of([null_run()], diagnosis(windowless))
+    assert alone.false_claims == (windowless["id"],)
+    late_null = replace(
+        null_run(),
+        times=Times(
+            action_onset_ns=220 * S, effect_onset_ns=220 * S, effect_end_ns=260 * S
+        ),
+    )
+    mixed = run_of([episode(), late_null], diagnosis(windowless))
+    assert mixed.false_claims == ()
+    assert mixed.problems == ("run q221-run: 1 fault claims without a window",)
