@@ -221,9 +221,14 @@ observers sees it.
 
 An observer is `healthy` only when it is in every compared phase it could
 be judged in. What the artifact cannot show is `null`, with the reason in
-`unjudged` (or, for one phase, in that phase's reasons): the hook's
-heartbeat times are not kept in the artifact, so the execution hook is at
-best `null` (not shown unhealthy, not shown healthy). The session record
+`unjudged` (or, for one phase, in that phase's reasons). The execution
+hook is healthy in a phase only when its writer was beating through it: the
+import's liveness block for the hook's epochs (`heartbeat_gaps/1`, from
+`stormlog infer import-execution`) shows heartbeats from before the phase to
+after it, and no gap of 5 s or more inside it. The stamps are the server's
+wall clock, so the hosts' clocks must agree, as with NTP. An import without
+that block leaves the hook `null` (`unjudged: heartbeat_gaps`): not shown
+unhealthy, not shown healthy. The session record
 now keeps the system sampler's interval and the trace settings, which these
 judgments need.
 

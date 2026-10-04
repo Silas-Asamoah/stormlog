@@ -362,33 +362,79 @@ def _execution(
     summary = _execution_summary(records)
     configured = summary is not None and "failed" not in summary
     problems = _epoch_problems(summary or {})
-    judged = _execution_phases(records, phases, problems)
-    # The artifact does not keep the hook's heartbeat times, so a run with
-    # no other problem is not shown healthy, only not unhealthy.
+    liveness = _liveness(summary or {})
+    judged = _execution_phases(records, phases, problems, liveness)
+    # Without the import's liveness (#218), when the hook was beating is
+    # unknown: a run with no other problem is not unhealthy, nor healthy.
+    unknown = liveness is None
     return _state(
         True,
         configured=configured,
         phases=judged,
         settings={"directory": directory, "server_hook_dir": server_hook},
-        unjudged=["heartbeat_gaps"],
-        run_healthy=False if problems else None,
+        unjudged=["heartbeat_gaps"] if unknown else [],
+        run_healthy=False if problems else None if unknown else True,
     )
 
 
 def _execution_phases(
-    records: Sequence[Mapping[str, Any]], phases: list[Phase], problems: list[str]
+    records: Sequence[Mapping[str, Any]],
+    phases: list[Phase],
+    problems: list[str],
+    liveness: list[Mapping[str, Any]] | None,
 ) -> dict[str, dict[str, Any]]:
     starts = [
         (r.get("metadata") or {}).get("start_wall_ns")
         for r in records
         if r.get("event_type") == "infer.iteration"
     ]
-    return {
-        phase.case_id: _phase(
-            any(phase.holds(at) for at in starts), not problems, list(problems)
-        )
-        for phase in phases
-    }
+    judged = {}
+    for phase in phases:
+        reasons = list(problems)
+        if liveness is not None and not any(_beating(b, phase) for b in liveness):
+            reasons.append("the hook's heartbeat did not cover the phase")
+        active = any(phase.holds(at) for at in starts)
+        judged[phase.case_id] = _phase(active, not reasons, reasons)
+    return judged
+
+
+# #218's import summary: when each hook epoch's writer was beating.
+LIVENESS_BASIS = "heartbeat_gaps/1"
+
+
+def _liveness(summary: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
+    """Every epoch's liveness block, or None unless every epoch has one."""
+    blocks = [state.get("liveness") for state in (summary.get("epochs") or {}).values()]
+    if not blocks or not all(
+        isinstance(block, Mapping) and block.get("basis") == LIVENESS_BASIS
+        for block in blocks
+    ):
+        return None
+    return [block for block in blocks if isinstance(block, Mapping)]
+
+
+def _beating(block: Mapping[str, Any], phase: Phase) -> bool:
+    """Heartbeats from before the phase to after it, with no gap inside it.
+
+    The stamps are the server's wall clock, so the hosts' clocks must agree,
+    as with NTP.
+    """
+    began = _section(block, "first").get("start_wall_ns")
+    ended = _section(block, "last").get("end_wall_ns")
+    if not (is_number(began) and is_number(ended)):
+        return False
+    if began > phase.started_at_ns or ended < phase.ended_at_ns:
+        return False
+    return not any(_inside(gap, phase) for gap in block.get("gaps") or [])
+
+
+def _inside(gap: Any, phase: Phase) -> bool:
+    if not isinstance(gap, Mapping):
+        return True
+    start, end = gap.get("start_wall_ns"), gap.get("end_wall_ns")
+    if not (is_number(start) and is_number(end)):
+        return True
+    return bool(start < phase.ended_at_ns and end > phase.started_at_ns)
 
 
 # ---------------------------------------------------------------- helpers
