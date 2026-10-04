@@ -684,6 +684,8 @@ def _textfile_summary(textfile: TextfileWriter | None) -> dict[str, Any] | None:
         "writes_ok": stats.writes_ok,
         "writes_failed": stats.writes_failed,
         "abandoned": stats.abandoned,
+        # The final write had only a render from before the values froze.
+        "final_stale": stats.final_stale,
     }
 
 

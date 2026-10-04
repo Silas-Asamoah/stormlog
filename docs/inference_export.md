@@ -227,7 +227,8 @@ for `export.prometheus`:
 - `supported`, `enabled` and `collected` name the endpoint and the textfile.
 - `metadata.summary` holds the record counts (and whether they are `exact`),
   the budget, series and overflow per family, scrape outcomes, the textfile's
-  writes, the slot, and any endpoint error.
+  writes (with `final_stale` true if its final write could only use values
+  from before they froze), the slot, and any endpoint error.
 
 That record is written when the capture ends, after the exporter has
 stopped and frozen its values, and before the session's last record.
