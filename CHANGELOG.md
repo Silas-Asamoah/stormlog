@@ -58,6 +58,10 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `tests/fixtures/infer/comparison_contract_v1.json`: the comparison's
+  units contract, 19 cases whose expected effects, intervals and gate
+  outcomes are computed from the formulas by
+  `examples/analysis/comparison_contract.py`. (#213)
 - `stormlog.infer.comparison_stats`: one metric compared between a
   baseline and a candidate arm of runs. Paired t on block log ratios (or
   differences) when runs carry block labels, Welch t with df = min(nA, nB) − 1
