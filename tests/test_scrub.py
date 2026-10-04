@@ -537,9 +537,38 @@ def test_arrays_and_objects_are_redacted_whole(text: str, scrubbed: str) -> None
         ("the token expired", "the token expired"),
         ("run --model m --verbose", "run --model m --verbose"),
         ("--api-key --verbose", "--api-key --verbose"),
+        # A flag right after a quote or a bracket, as a command is quoted.
+        ('cmd: "--api-key opaque-cred-1"', 'cmd: "--api-key <redacted>"'),
+        ("args=(--token opaque-cred-1)", "args=(--token <redacted>"),
+        ("env: 'API-KEY opaque'", "env: 'API-KEY <redacted>'"),
     ],
 )
 def test_a_key_and_value_separated_by_a_space(text: str, scrubbed: str) -> None:
+    assert scrub_text(text) == scrubbed
+
+
+@pytest.mark.parametrize(
+    ("text", "scrubbed"),
+    [
+        # subprocess.CalledProcessError prints the command as a list.
+        (
+            "Command '['vllm', 'serve', '--api-key', 'opaque-cred-1']' "
+            "returned non-zero exit status 1.",
+            "Command '['vllm', 'serve', '--api-key', '<redacted>']' "
+            "returned non-zero exit status 1.",
+        ),
+        ('["--token", "opaque-cred-1"]', '["--token", "<redacted>"]'),
+        ("['-password','a b c']", "['-password','<redacted>']"),
+        # Other flags and their values are left alone.
+        (
+            "['--model', 'qwen', '--port', '8000']",
+            "['--model', 'qwen', '--port', '8000']",
+        ),
+    ],
+)
+def test_a_flag_and_its_value_in_a_quoted_argument_list(
+    text: str, scrubbed: str
+) -> None:
     assert scrub_text(text) == scrubbed
 
 
@@ -737,6 +766,9 @@ ADVERSARIAL = (
     ("'a=\"' * 17000", None),
     ("'password=\"' * 5000", None),
     ('"password=\'" * 5000', None),
+    ("\"'--token', \" * 7000", None),
+    ('"\'--token" * 9000', None),
+    ('"\'" * 52000', None),
 )
 
 

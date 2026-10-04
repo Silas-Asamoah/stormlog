@@ -120,7 +120,8 @@ What it removes:
 | URL user information (to the last `@` before the first `/` or space, whatever it holds) and query strings | `https://u:p@host/x?k=v` | `https://<redacted>@host/x?<redacted>` |
 | a JSON member, or a Python dict repr's single-quoted one, whose key, read with its escapes decoded, contains a word from `SECRET_KEY_WORDS` (below); its value a string, bare (such as a number), or an array or object, redacted whole | `"api_key": "abc"`, `"api_key": 1234` | `"api_key": "<redacted>"`, `"api_key": <redacted>` |
 | `key=value` or `key: value` with such a key, the value bare or in single or double quotes; a quoted value with no closing quote, as in a truncated body, runs to the end | `client_secret=abc`, `password="a b"` | `client_secret=<redacted>`, `password="<redacted>"` |
-| such a key separated from its value by spaces, when it is a command-line flag or an upper-case name (prose is neither) | `--api-key abc`, `API-KEY abc` | `--api-key <redacted>`, `API-KEY <redacted>` |
+| such a key separated from its value by spaces, when it is a command-line flag or an upper-case name (prose is neither), at the start, after a space, or after a quote, bracket, comma or `=` | `--api-key abc`, `cmd: "API-KEY abc"` | `--api-key <redacted>`, `cmd: "API-KEY <redacted>"` |
+| such a flag and its value as items of a quoted argument list, as Python prints a command | `['vllm', '--api-key', 'abc']` | `['vllm', '--api-key', '<redacted>']` |
 | known key formats | `sk-…`, `hf_…`, `AKIA…`/`ASIA…`, `ghp_…` and the other GitHub token prefixes, `github_pat_…`, `xox?-…`, three-part JWTs | `<redacted>` |
 | private key blocks, including one cut before its `END` line | `-----BEGIN PRIVATE KEY-----…` | `<redacted>` |
 
