@@ -29,8 +29,10 @@ from stormlog.infer.qualify.scoring import (
     MISS_SECONDARY_ONLY,
     TOP1,
     TOP3,
+    FindingView,
     RunScore,
     ScoreConfig,
+    in_scoring_window,
     negative_exposure,
     score_episode,
     score_run,
@@ -626,8 +628,8 @@ def test_an_episodes_span_covers_every_kinds_grace() -> None:
 
 def test_one_finding_is_credited_to_one_episode() -> None:
     # Two F2 episodes 60 s apart; one late KV finding qualifies for both
-    # (its uncertainty is 40 s). It goes to the one whose effect began
-    # latest before it: the first.
+    # (its uncertainty is 40 s, within a 60 s cap). It goes to the one
+    # whose effect began latest before it: the first.
     first = replace(
         episode(),
         times=Times(
@@ -642,7 +644,8 @@ def test_one_finding_is_credited_to_one_episode() -> None:
     )
     late = finding("a", KV, 1, window=(150, 165), resolution=5)
     late["window"]["uncertainty_ns"] = 40 * S
-    config = replace(CONFIG, default_grace_ns=30 * S)
+    config = replace(CONFIG, default_grace_ns=30 * S, max_pre_grace_ns=60 * S)
+    assert in_scoring_window(FindingView.from_detail(late), second, config)
     score = run_of([first, second], diagnosis(late), config)
     assert [e.correct(TOP1, 2) for e in score.episodes] == [True, False]
 

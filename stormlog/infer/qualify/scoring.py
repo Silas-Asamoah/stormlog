@@ -120,6 +120,11 @@ class ScoreConfig:
     # A negative run with less exposure than this is no FPR unit: a run
     # that is all priming must not count as a clean one (C.5 plans ~294 s).
     min_exposure_ns: int = 60_000_000_000
+    # The most a finding's own resolution and uncertainty may reach back
+    # before an effect's onset. #218 states both, and nothing else bounds
+    # them: unbounded, a claim made long before a fault was credited to it,
+    # and one in a negative run's exposure was taken by a later episode.
+    max_pre_grace_ns: int = 30_000_000_000
 
     def grace(self, kind: str) -> int:
         return self.grace_ns.get(kind, self.default_grace_ns)
@@ -254,7 +259,7 @@ def in_scoring_window(
         return False
     if window.end_ns < window.start_ns or not window.on_clock(injection.clock_domain):
         return False
-    first = onset - window.pre_grace_ns
+    first = onset - min(window.pre_grace_ns, config.max_pre_grace_ns)
     last = end + config.grace(finding.kind)
     if window.start_ns < first or window.start_ns > last:
         return False
@@ -598,9 +603,7 @@ def score_run(
         for injection in injections
     )
     unit, problems, excluded = _negative_unit(run, injections, config)
-    off_clock = _off_clock(run, findings)
-    if off_clock:
-        problems += (off_clock,)
+    problems += _finding_problems(run, findings, config)
     if unit is None:
         return RunScore(
             run.run_id, episodes, problems=problems, excluded_negative=excluded
@@ -625,11 +628,22 @@ def score_run(
     return RunScore(run.run_id, episodes, unit.episode_id, exposure, claims, problems)
 
 
-def _off_clock(run: RunRecord, findings: Sequence[FindingView]) -> str | None:
-    count = sum(
-        1 for f in findings if f.window and not f.window.on_clock(run.clock_domain)
+def _finding_problems(
+    run: RunRecord, findings: Sequence[FindingView], config: ScoreConfig
+) -> tuple[str, ...]:
+    """How many of the run's findings are off its clock, and how many claim
+    more pre-grace than the cap allows them."""
+    windows = [f.window for f in findings if f.window is not None]
+    off_clock = sum(1 for w in windows if not w.on_clock(run.clock_domain))
+    capped = sum(1 for w in windows if w.pre_grace_ns > config.max_pre_grace_ns)
+    return tuple(
+        f"run {run.run_id}: {count} findings {what}"
+        for count, what in (
+            (off_clock, "on another clock"),
+            (capped, "with more pre-grace than max_pre_grace_ns"),
+        )
+        if count
     )
-    return f"run {run.run_id}: {count} findings on another clock" if count else None
 
 
 def _unusable_exposure(

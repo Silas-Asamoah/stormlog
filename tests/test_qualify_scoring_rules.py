@@ -403,6 +403,44 @@ def test_windowless_claims_count_in_the_planned_negative_runs() -> None:
     assert not summary.fpr_passes
 
 
+def test_a_findings_pre_grace_is_capped() -> None:
+    # rev-220-b's delta 2, E3: pre-grace was the finding's own resolution
+    # plus uncertainty, unbounded. With 100 s of uncertainty, a KV claim
+    # that ended 50 s before F2's onset was credited to F2.
+    early = finding("a", KV, 1, window=(40, 50))
+    early["window"]["uncertainty_ns"] = 100 * S
+    assert not score_episode(episode(), diagnosis(early), CONFIG).correct(TOP1, 2)
+    # Within the cap, a finding's pre-grace still counts in full.
+    near = finding("a", KV, 1, window=(85, 95))
+    near["window"]["uncertainty_ns"] = 20 * S
+    assert score_episode(episode(), diagnosis(near), CONFIG).correct(TOP1, 2)
+
+
+def test_a_wide_pre_grace_never_hides_a_negative_runs_false_claim() -> None:
+    # E3's other half: 60 planned runs (F2 at 100-150 s, then N at
+    # 250-300 s), each with a host-stall claim at 50-60 s in the exposure.
+    # With 60 s of uncertainty the claim went to F2, and 0 of 60 passed.
+    from tests.test_qualify_scoring import null_run
+
+    claim = finding("s", "host_stall", 1, component="engine_core", window=(50, 60))
+    claim["window"]["uncertainty_ns"] = 60 * S
+    late_null = replace(
+        null_run(),
+        times=Times(
+            action_onset_ns=250 * S, effect_onset_ns=250 * S, effect_end_ns=300 * S
+        ),
+    )
+    runs = [
+        run_of([episode(), late_null], diagnosis(claim), run_id=f"g{i}")
+        for i in range(60)
+    ]
+    assert runs[0].problems == (
+        "run g0: 1 findings with more pre-grace than max_pre_grace_ns",
+    )
+    summary = summarize(runs, CONFIG)
+    assert summary.negative_runs == 60 and summary.false_positive_runs == 60
+
+
 # ------------------------------------------------------------------ pinned by mutation
 
 
