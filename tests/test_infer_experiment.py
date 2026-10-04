@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from stormlog.infer.compare import ComparisonSpec, compare_runs
+from stormlog.infer.comparison_stats import GateRule
 from stormlog.infer.errors import InferInputError
 from stormlog.infer.experiment import Environment, run_plan
 from stormlog.infer.experiment_plan import plan_from_document
@@ -170,6 +171,42 @@ def test_a_plan_runs_every_arm_of_every_block_into_comparable_runs(
         arm("off"), arm("watch"), ComparisonSpec(allow_not_evaluable=True)
     )
     assert comparison.design == "paired_blocks"
+
+
+def test_a_candidate_whose_server_crashes_fails_its_gate_end_to_end(
+    tmp_path: Path,
+) -> None:
+    # Runner, summarizer and gate: a crashed run is an outcome the
+    # comparison counts against the candidate, never a run it sets aside.
+    document = _plan(_port(), blocks=3, order={"kind": "random"})
+    document["arms"] = {
+        "off": document["arms"]["off"],
+        "crash": {"server": {"args": ["--die-after", "1"]}, "workload": "same_as:off"},
+    }
+    records = _run(tmp_path, document)
+    crashed = [r for r in records if r["arm"] == "crash"]
+    assert {r["state"] for r in crashed} == {"outcome_failure"}, crashed
+
+    def arm(name: str) -> list[Any]:
+        return [
+            summarize_run(Path(r["run_dir"]) / "c1.jsonl")
+            for r in records
+            if r["arm"] == name
+        ]
+
+    candidate = arm("crash")
+    for run in candidate:
+        assert run.protocol_failures == ()
+        assert "runner:server_exited:1" in run.outcome_failures
+    gate = GateRule("non-inferiority", 0.05, "relative")
+    comparison = compare_runs(
+        arm("off"), candidate, ComparisonSpec(gates=(("client.e2e.p95", gate),))
+    )
+    assert comparison.excluded == []
+    (case,) = comparison.cases.values()
+    outcome = case["metrics"]["client.e2e.p95"].gate
+    assert outcome is not None and outcome.status == "fail", outcome
+    assert comparison.exit_code == 4
 
 
 def test_a_resumed_experiment_skips_finished_runs_and_refuses_a_changed_plan(

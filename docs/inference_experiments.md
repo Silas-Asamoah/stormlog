@@ -129,10 +129,15 @@ reasons:
 | --- | --- | --- |
 | `completed` | Every step exited as expected, every artifact is there and labelled, and every treatment held up | Compared |
 | `outcome_failure` | The server exited (`server_exited`); a step failed or timed out; an artifact is missing; a treatment was not ready, stopped before the workload ended (`treatment_unhealthy`, even with exit 0), or exited unexpectedly | Compared: outcomes are data, and a retry never replaces them |
-| `protocol_failure` | A server that never became healthy; a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`, `treatment_cleanup_unverified:<name>`) | Set aside, with the reason; may be retried |
+| `protocol_failure` | A server that never became healthy; a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`, `treatment_cleanup_unverified:<name>`) | Set aside with its block, both arms, with the reason; may be retried |
 
 When both kinds apply, the outcome wins, unless the protocol fault came
-before the first workload step started. A cleanup that left processes stops
+before the first workload step started. The runner appends the state to
+each of the run's artifacts as an `infer.run_state` record (`state`,
+`reasons`, `before_treatment`), and `infer compare` reads it: an outcome
+failure is compared and counted against its arm (`runner:<reason>`), even
+when the profile's session finished, and a protocol failure is the external
+cause that sets aside its block (`external:<reason>`). A cleanup that left processes stops
 the block: no server starts beside them. A `probe_incomplete` run is run
 again at once on a fresh server, after its group is verified gone, and both
 attempts are kept.
