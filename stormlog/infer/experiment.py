@@ -309,12 +309,19 @@ def _check_nothing_left(output: Path) -> None:
     for where, cleanup in _cleanups(output):
         if cleanup.get("verified") is not False:
             continue
-        running = [s["pid"] for s in cleanup.get("survivors", []) if still_there(s)]
+        # Survivors, and processes it could not judge that may be the launch's.
+        left = [*cleanup.get("survivors", []), *_blind_of(cleanup)]
+        running = [s["pid"] for s in left if still_there(s)]
         if running:
             pids = ", ".join(str(pid) for pid in running)
             raise InferUsageError(
                 f"{where}: its cleanup left {pids} running; stop it, then resume"
             )
+
+
+def _blind_of(cleanup: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    search = cleanup.get("mark_search") or {}
+    return [item for item in search.get("blind", []) if isinstance(item, Mapping)]
 
 
 def _cleanups(output: Path) -> Iterator[tuple[str, Mapping[str, Any]]]:
