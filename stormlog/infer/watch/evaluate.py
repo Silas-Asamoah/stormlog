@@ -38,6 +38,8 @@ ACTION_DEEP_CAPTURE = "deep_capture"
 WHEN_ALWAYS = "always"
 WHEN_UNEXPLAINED = "unexplained"
 _NS = 1_000_000_000
+# An SLO trigger traces only a violation no signal already explains.
+_DEFAULT_WHEN = {KIND_SLO: WHEN_UNEXPLAINED}
 
 
 @runtime_checkable
@@ -58,15 +60,21 @@ class HistoryPredicate(Protocol):
 
 @dataclass(frozen=True)
 class TriggerSpec:
-    """One configured trigger."""
+    """One configured trigger, held to the capture and exit policy.
+
+    Health triggers record only and never count toward exit 3 (decision
+    13); signal triggers record without a trace; SLO triggers capture only
+    when the cause is unexplained unless told otherwise. ``None`` takes the
+    kind's default.
+    """
 
     trigger_id: str
     kind: str
     sustain: Sustain
     predicate: WindowPredicate | HistoryPredicate
     action: str = ACTION_RECORD
-    deep_capture_when: str = WHEN_ALWAYS
-    counts_toward_exit: bool = True
+    deep_capture_when: str | None = None
+    counts_toward_exit: bool | None = None
     completion_recorded: bool = False
 
     def __post_init__(self) -> None:
@@ -76,10 +84,23 @@ class TriggerSpec:
             raise ValueError(f"trigger kind {self.kind!r} is not evaluated here")
         if self.action not in (ACTION_RECORD, ACTION_DEEP_CAPTURE):
             raise ValueError(f"unknown action {self.action!r}")
+        self._default("deep_capture_when", _DEFAULT_WHEN.get(self.kind, WHEN_ALWAYS))
+        self._default("counts_toward_exit", self.kind != KIND_HEALTH)
         if self.deep_capture_when not in (WHEN_ALWAYS, WHEN_UNEXPLAINED):
             raise ValueError(f"unknown deep_capture_when {self.deep_capture_when!r}")
+        self._check_policy()
+
+    def _check_policy(self) -> None:
         if self.kind == KIND_HEALTH and self.action != ACTION_RECORD:
             raise ValueError("health triggers only record incidents")
+        if self.kind == KIND_HEALTH and self.counts_toward_exit:
+            raise ValueError("health triggers never count toward the exit code")
+        if self.kind == KIND_SIGNAL and self.action != ACTION_RECORD:
+            raise ValueError("signal triggers record without a trace")
+
+    def _default(self, name: str, value: object) -> None:
+        if getattr(self, name) is None:
+            object.__setattr__(self, name, value)
 
 
 @dataclass(frozen=True)

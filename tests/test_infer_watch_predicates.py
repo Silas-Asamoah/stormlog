@@ -311,6 +311,32 @@ def test_spec_validation() -> None:
         TriggerEngine([_queue_trigger(), _queue_trigger()], tick_seconds=1)
 
 
+def test_specs_follow_the_capture_and_exit_policy() -> None:
+    """Decision 13: health triggers never count toward exit 3; signal
+    triggers record without a trace; SLO triggers capture only when the
+    cause is unexplained, unless told otherwise."""
+    sustain = Sustain.with_defaults(window=5, hold=5, clear=None, tick=1)
+    health = TriggerSpec("h", KIND_HEALTH, sustain, ScrapeFailures())
+    assert health.counts_toward_exit is False
+    with pytest.raises(ValueError, match="never count"):
+        TriggerSpec(
+            "h", KIND_HEALTH, sustain, ScrapeFailures(), counts_toward_exit=True
+        )
+    with pytest.raises(ValueError, match="record without a trace"):
+        TriggerSpec(
+            "s",
+            KIND_SIGNAL,
+            sustain,
+            SignalExceeds(QUEUE_SATURATION),
+            action=ACTION_DEEP_CAPTURE,
+        )
+    slo = TriggerSpec("slo", "slo", sustain, GaugeAtLeast(WAITING, 8))
+    assert slo.deep_capture_when == "unexplained"
+    assert slo.counts_toward_exit is True
+    metric = TriggerSpec("m", KIND_METRIC, sustain, GaugeAtLeast(WAITING, 8))
+    assert metric.deep_capture_when == "always"
+
+
 def test_the_engine_resets_on_an_outage_and_fires_after_it_from_scrapes() -> None:
     """Saturated from 0 s; scrapes fail over 89-121 s; W=30, F=60, G=30.
 
