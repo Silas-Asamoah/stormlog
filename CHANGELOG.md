@@ -295,9 +295,12 @@ the flaky benchmark memory gates
   while blocks are still held. The answer is now read and recorded as
   `acknowledged`, `refused` or `accepted_unverified`. A refused reset is
   retried for up to `--cache-reset-timeout` seconds (default 10), then
-  counts as a failed reset, so the case is not labelled a cold start. `infer.cache_state` records and the report's
-  `cache` block gain `attempted` and `acknowledged`, and the reset's
-  `success`, `answer` and `attempts`. (#213)
+  counts as a failed reset, so the case is not labelled a cold start. A
+  `success` field with any value other than `true` is a refusal too, and no
+  retry starts after the timeout. `infer.cache_state` records and the
+  report's `cache` block gain `attempted` and `acknowledged`, and the reset's
+  `success`, `answer`, `attempts` and `answered_at_ns`, when the recorded
+  answer came back. (#213)
 - The benchmark harness's memory gates no longer fail on runner noise:
   - The soak's RSS checks (`max_rss_delta_bytes`, `rss_growth_per_24h_equiv`)
     now read memory inside the sample loop, after a warmup. Before, they

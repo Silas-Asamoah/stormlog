@@ -259,13 +259,16 @@ reads the answer, and records it as one of:
 | Answer | Meaning |
 | --- | --- |
 | `acknowledged` | The server answered `success: true`. |
-| `refused` | The server kept answering `success: false`. A refused reset is retried every half second for up to `--cache-reset-timeout` seconds (default 10; 0 tries once); the record keeps the number of attempts. It counts as a failed reset. |
+| `refused` | The server kept answering `success: false`, or a `success` field with any value other than `true`. A refused reset is retried every half second for up to `--cache-reset-timeout` seconds (default 10; 0 tries once); the record keeps the number of attempts. No attempt starts after the timeout, though the last one can take up to `--timeout` to answer. It counts as a failed reset. |
 | `accepted_unverified` | A 2xx answer without a `success` field, such as SGLang's text reply. |
 
 The `infer.cache_state` record and the report's `cache` block record:
 - whether a reset was `attempted`;
 - whether it was `acknowledged`;
-- the reset's status, `success` field, answer and attempts.
+- the reset's status, `success` field, answer and attempts;
+- when the first attempt was sent (`at_ns`) and when the recorded answer,
+  the last attempt's, came back (`answered_at_ns`). After refusals, the cache
+  was cleared near the second, not the first.
 
 No engine adapter can read the cache yet, so the state is still `unverified`,
 with the reason. The reason is one of:

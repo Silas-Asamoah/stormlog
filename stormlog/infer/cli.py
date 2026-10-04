@@ -669,7 +669,8 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="SECONDS",
         help=(
             "How long to retry a reset the server refuses, as vLLM does while "
-            f"blocks are held (default: {RESET_RETRY_SECONDS:g}; 0 tries once)"
+            "blocks are held. No attempt starts later, though the last can take "
+            f"up to --timeout (default: {RESET_RETRY_SECONDS:g}; 0 tries once)"
         ),
     )
 

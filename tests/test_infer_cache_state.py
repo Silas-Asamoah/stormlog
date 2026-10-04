@@ -290,9 +290,11 @@ class _AnsweringResetHandler(BaseHTTPRequestHandler):
 
     answers: list[bytes] = []
     calls = 0
+    started: list[float] = []
 
     def do_POST(self) -> None:  # noqa: N802
         cls = type(self)
+        cls.started.append(time.monotonic())
         body = cls.answers[min(cls.calls, len(cls.answers) - 1)]
         cls.calls += 1
         self.send_response(200)
@@ -309,6 +311,7 @@ class _AnsweringResetHandler(BaseHTTPRequestHandler):
 def _answering_server(*answers: bytes) -> Iterator[str]:
     _AnsweringResetHandler.answers = list(answers)
     _AnsweringResetHandler.calls = 0
+    _AnsweringResetHandler.started = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _AnsweringResetHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -353,6 +356,54 @@ def test_a_reset_vllm_keeps_refusing_is_a_failed_reset() -> None:
     )
     assert record["acknowledged"] is False
     assert record["reason"].startswith("the cache reset failed (refused")
+
+
+def test_the_record_says_when_the_acknowledged_reset_ran() -> None:
+    held = b'{"success": false}'
+    with _answering_server(held, held, b'{"success": true}') as url:
+        reset = reset_cache(url, timeout_seconds=5, retry_seconds=5)
+    assert reset.acknowledged
+    # Two refusals half a second apart came before the reset that ran.
+    assert reset.answered_at_ns is not None
+    assert reset.answered_at_ns - reset.at_ns >= 900_000_000
+    assert reset.to_record()["answered_at_ns"] == reset.answered_at_ns
+
+
+@pytest.mark.parametrize(("budget", "attempts"), [(0.2, 1), (1.0, 2)])
+def test_no_retry_starts_after_the_reset_timeout(budget: float, attempts: int) -> None:
+    with _answering_server(b'{"success": false}') as url:
+        began = time.monotonic()
+        reset = reset_cache(url, timeout_seconds=5, retry_seconds=budget)
+    assert reset.attempts == attempts
+    assert all(start - began <= budget for start in _AnsweringResetHandler.started)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"success": "false"}',
+        b'{"success": 0}',
+        b'{"success": null}',
+        b'{"success": "true"}',
+    ],
+)
+def test_a_success_field_that_is_not_true_is_a_refusal(body: bytes) -> None:
+    # It answered the question, and not with true: no cold start.
+    with _answering_server(body) as url:
+        reset = reset_cache(url, timeout_seconds=5, retry_seconds=0)
+    assert reset.answer == "refused"
+    assert not reset.succeeded
+    assert run_kind("cold", 0, reset) == "unspecified"
+
+
+def test_the_report_says_whether_a_reset_was_attempted() -> None:
+    reset = CacheReset("http://host/reset", at_ns=1, status=200, success=True)
+    record = cache_state_record(
+        session_id="s", case_id="c1", requested="cold", reset=reset, warmup_requests=0
+    )
+    assert cache_summary(record)["attempted"] is True
+    assert cache_summary({"requested": "cold"})["attempted"] is None  # older
+    assert cache_summary(None)["attempted"] is None
 
 
 @pytest.mark.parametrize("body", [b"", b"Cache flushed.", b'{"ok": true}', b"[]"])
