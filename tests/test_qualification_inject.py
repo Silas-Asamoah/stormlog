@@ -8,6 +8,7 @@ import re
 import signal
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -426,3 +427,32 @@ def test_a_capture_records_its_start_for_i1s_realization(tmp_path: Path) -> None
     assert actions.capture_started_ns is not None
     assert actions.stop_requested_ns is not None
     assert actions.capture_started_ns <= actions.stop_requested_ns
+
+
+def test_a_twin_without_its_scraped_ratio_is_published_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A server whose /metrics has no prefix-cache counters: T3b's hit-ratio
+    # check has nothing to judge. The twin stays valid on its victim check,
+    # and its observation says the reference channel was incomplete.
+    from examples.qualification import reference
+
+    scrape = reference.scrape_metrics
+
+    def without_counters(url: str, **kwargs: Any) -> reference.Scrape:
+        taken = scrape(url, **kwargs)
+        return replace(taken, prefix_queries=None, prefix_hits=None)
+
+    monkeypatch.setattr(reference, "scrape_metrics", without_counters)
+    dose = {"rate_per_second": 2, "input_tokens": 64, "output_tokens": 4}
+    plan = _short_plan(tmp_path / "plan.json", {"type": "T3b", "dose": dose})
+    with FakeEngineProcess(
+        ["--step-seconds", "0.002", "--hook-dir", str(tmp_path / "hook")]
+    ) as server:
+        assert _inject(server, tmp_path, plan) == 0
+    run = tmp_path / "runs" / "q221-00000000000000bb"
+    (twin,) = load_injections(run / "truth" / "injections.jsonl")
+    assert twin.status == "valid", twin.validity
+    assert twin.validity.observation == "incomplete"
+    (ratio,) = [c for c in twin.validity.checks if c["name"] == "engine_hit_ratio_fell"]
+    assert ratio["incomplete"] is True

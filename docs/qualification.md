@@ -113,7 +113,9 @@ measured window with length.
 2. **Realization:** the mechanism occurred, on the victim's own requests
    where it can be attributed to them.
 3. **Observation completeness** of the diagnosed configuration's capture.
-   This is reported, never used to drop an episode.
+   This is reported, never used to drop an episode. Until PR D assesses the
+   capture, the harness publishes `not_assessed`, or `incomplete` when the
+   reference channel itself lacked a signal a realization check needed.
 4. **Victim impact:** whether the episode raised the victim's SLO violations.
    `assess_impact` gives `impact` when the effect window has at least three
    violations, and a one-sided Fisher exact test against the baseline gives

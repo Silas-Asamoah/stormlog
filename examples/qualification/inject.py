@@ -64,6 +64,7 @@ from stormlog.infer.qualify.recovery import (
     added_mechanisms,
     effect_timing,
     next_episode,
+    observation_of,
     priming_check,
     realization,
 )
@@ -134,6 +135,7 @@ class _Attempt:
     actions_record: list[dict[str, Any]] = field(default_factory=list)
     # Mechanisms realized beyond the label's (A.4), as "kind@component".
     added: tuple[str, ...] = ()
+    observation: str | None = None
 
 
 @dataclass
@@ -317,6 +319,7 @@ class InjectionRun:
             index, episode, actions, onset, ended, actuated, injected, timing,
             decision, realized, [check.to_record() for check in checks], clean_since,
             actions_record, added_mechanisms(episode.type, checks),
+            observation_of(checks),
         )  # fmt: skip
 
     # ------------------------------------------------------------ actuation
@@ -523,7 +526,9 @@ class InjectionRun:
         validity = Validity(
             actuation="ok" if attempt.actuated else "failed",
             realization="realized" if attempt.realized else "not_realized",
-            observation="not_assessed",
+            # "incomplete" when the reference channel lacked a signal a check
+            # needed; the diagnosed configuration's capture is PR D's.
+            observation=attempt.observation or "not_assessed",
             impact=impact,
             realized_mechanisms=tuple(
                 (labelled if attempt.realized else []) + list(attempt.added)
