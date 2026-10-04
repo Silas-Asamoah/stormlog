@@ -262,6 +262,25 @@ def run_gate_reachable(n: int, q: float) -> bool:
     return bool(0.025 ** (1 / n) >= q)
 
 
+def runs_to_show(q: float) -> int:
+    """The fewest runs that can show a share q at all."""
+    return next(n for n in range(1, 10_000) if run_gate_reachable(n, q))
+
+
+def run_gate_cell(n: int, q: float) -> dict[str, Any]:
+    """The run-level gate at the supremum of a false claim (p = q).
+
+    A cell where n runs cannot show q is reported as one the gate cannot
+    pass, with the fewest runs that could: its pass rate of 0 says nothing
+    about the gate.
+    """
+    row: dict[str, Any] = {"runs": n, "p_run": q, "q": q}
+    row["min_runs_to_pass"] = runs_to_show(q)
+    row["can_pass"] = run_gate_reachable(n, q)
+    row["false_pass"] = run_gate_false_pass(n, q, q) if row["can_pass"] else None
+    return row
+
+
 def run_gate_false_pass(n: int, p_run: float, q: float) -> float:
     """Exact: P(the Clopper-Pearson lower bound of k/n >= q) when k ~ Bin(n, p).
 
@@ -428,10 +447,7 @@ def run(reps: int, seed: int = SEED, module_samples: int = 200) -> dict[str, Any
         for label, na, nb, sa, sb, ratio in INDEPENDENT_CASES
     ]
     results["run_gate_false_pass"] = [
-        {"runs": n, "p_run": q, "q": q, "false_pass": run_gate_false_pass(n, q, q)}
-        for n in (6, 8, 10, 30)
-        for q in (0.5, 0.6, 0.8)
-        if run_gate_reachable(n, q)
+        run_gate_cell(n, q) for n in (6, 8, 10, 30) for q in (0.5, 0.6, 0.8)
     ]
     results["clustered_runs"] = {
         str(n): clustered_run_gate(rng, n, reps) for n in (30, 60)
@@ -468,6 +484,7 @@ def verdict(results: dict[str, Any]) -> dict[str, bool]:
         "run_gate": all(
             row["false_pass"] <= CRITERION_FALSE_SAFE
             for row in results["run_gate_false_pass"]
+            if row["can_pass"]
         )
         and all(
             v["runs"] <= CRITERION_FALSE_SAFE
