@@ -137,9 +137,9 @@ def test_an_engine_stall_is_timed_from_the_first_stop_and_recovers_after_the_las
     )
     timing = effect_timing("F4a", context(signals, actions))
     assert timing.onset_ns == 60 * S
-    # From the last SIGCONT the median step gap is the baseline's again; the
-    # one 100 ms gap the pulse left doesn't move it.
-    assert timing.end_ns == 62 * S + 100 * MS
+    # The pulse's own 100 ms gap ends at the last SIGCONT; from just after
+    # it the cadence is the baseline's again.
+    assert timing.end_ns == 62 * S + 100 * MS + 1
     assert timing.recovery_held_at_ns == timing.end_ns + 5 * S
     assert realization("F4a", context(signals, actions), timing)[0]
     # An engine that kept stepping was not stalled, though the API server was.
@@ -218,9 +218,8 @@ def test_an_unknown_episode_type_has_no_rule() -> None:
 
 
 def test_cadence_recovers_when_the_step_gaps_look_like_the_baseline_again() -> None:
-    # A served engine idles between requests, so its step gaps have a long
-    # tail: some gap in any 5 s is above the baseline's p95. Recovery is the
-    # median gap back within the baseline's p95, not every gap.
+    # Jittered step gaps have a tail: some gap in any 5 s is above the
+    # baseline's p95. Recovery allows as many as chance does, not none.
     import random
 
     rng = random.Random(221)

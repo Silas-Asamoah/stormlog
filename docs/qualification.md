@@ -110,15 +110,18 @@ The harness keeps a reference channel beside every diagnosed configuration:
 the execution hook, a tailer, and scrapes every second. `recovery` reads it as
 time series on the victim's clock (`Signals`). Those are the victim's own
 admission waits and cached fractions, the preemptions of its requests, the
-waiting and KV-usage gauges, hook step starts, and the victim's chunk gaps.
-The injector's own times are `Actions`. Nothing here depends on the diagnosed
+waiting and KV-usage gauges, hook step starts, the victim's chunk gaps, and
+the intervals during which a victim request was in flight. The injector's own
+times are `Actions`. Nothing here depends on the diagnosed
 configuration's capture.
 
 `Baseline.measure` takes these from the baseline segment:
 - the p95 wait;
 - the range of the waiting count;
 - the maximum KV usage;
-- the p95 step gap and chunk gap;
+- the busy step gaps' and the chunk gaps' count, mean, p95 and p99. A step
+  gap is busy when a victim request was in flight for all of it; a gap that
+  spans an idle period measures the traffic, not the engine;
 - the median cached fraction.
 
 `effect_timing(episode_type, context)` gives each mechanism's onset, its end
@@ -132,9 +135,23 @@ such start is tried.
 | F1 / T1 | the first 5 s window whose median victim wait exceeds the baseline p95 (F1); the neighbor's first send (T1) | waits are at most the baseline p95, and the waiting count is within the baseline's range |
 | F2 / T2 | the first victim preemption (F2); the neighbor's first admission (T2) | no victim preemption, and KV usage at most the baseline maximum + 0.05 |
 | F3 / T3 / T3b | the first 5 s window whose median victim cached fraction is below 0.5 (F3); the neighbor's first send (T3, T3b) | the median cached fraction is at least 0.9 |
-| F4a / F4b / H0 / P | the first stop confirmed (state `T`) | from the last `SIGCONT`, the median step gap is within the baseline p95 for 5 s; for F4b, the median chunk gap too. A served engine idles between requests, so some single gap in any interval is longer |
+| F4a / F4b / H0 / P | the first stop confirmed (state `T`) | from the last `SIGCONT`, for 5 s, the busy step gaps look like the baseline's (below); for F4b, the victim's chunk gaps too |
 | W1 | the neighbor's first send | the queue and KV criteria |
 | I1 | the stop request | at the stop's return plus #219's drain |
+
+**Cadence** (`CadenceWithin`) is judged like with like, over at least 20
+busy gaps in the hold:
+- their mean is within 20% of the baseline's rate (a long gap weighs by its
+  length, so a slow minority shows);
+- none is longer than twice the baseline's p99;
+- no more of them lie above the baseline's p95 than chance allows: the 99%
+  point of Binomial(n, 0.05).
+
+An engine back at its baseline recovers at once; one still degraded doesn't.
+The tests hold both: engines with 40–51% of steps 10× slow, every step 2× or
+3× slow, bimodal stalls, slow steps among idle gaps, pulses the injector
+never recorded, a slow resume, and a minority 1.6× slow, against jittered
+engines that must recover in every seed.
 
 `realization(episode_type, context, timing)` applies the catalog's checks:
 

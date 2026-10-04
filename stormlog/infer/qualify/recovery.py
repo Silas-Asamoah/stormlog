@@ -17,9 +17,12 @@ The thresholds are frozen from ``dev_v1``; the defaults are the design's.
 from __future__ import annotations
 
 import bisect
+import functools
+import itertools
+import math
 import statistics
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Iterable, Protocol, Sequence
 
 Point = tuple[int, float]  # (event time in ns, value)
 
@@ -44,6 +47,16 @@ class Thresholds:
     priming_cached_at_least: float = 0.9
     min_recovery_ns: int = 60 * SECOND
     recovery_timeout_ns: int = 150 * SECOND
+    # Cadence recovery (F4a, F4b, H0, P): over the hold, the busy gaps'
+    # mean may exceed the baseline's by at most this share of the rate...
+    rate_tolerance: float = 0.2
+    # ...no gap may be longer than this many times the baseline's p99...
+    long_gap_factor: float = 2.0
+    # ...and no more gaps may lie above the baseline's p95 than chance
+    # allows: this quantile of Binomial(n, exceedance_share).
+    exceedance_share: float = 0.05
+    exceedance_quantile: float = 0.99
+    min_cadence_samples: int = 20
 
 
 @dataclass(frozen=True)
@@ -56,7 +69,9 @@ class Signals:
     a victim request was preempted, from the hook's ``scheduled.preempted``.
     ``waiting`` and ``kv_usage`` are scraped gauges. ``step_starts`` are hook
     step starts, and ``chunk_gaps`` the victim's gaps between streamed
-    chunks, in seconds, at the later chunk.
+    chunks, in seconds, at the later chunk. ``in_flight`` holds the sorted,
+    disjoint intervals during which at least one victim request was in
+    flight; None means unknown, and every step gap then counts as busy.
     """
 
     waits: Sequence[Point] = ()
@@ -66,6 +81,7 @@ class Signals:
     kv_usage: Sequence[Point] = ()
     step_starts: Sequence[int] = ()
     chunk_gaps: Sequence[Point] = ()
+    in_flight: Sequence[tuple[int, int]] | None = None
 
     def step_gaps(self) -> list[Point]:
         """Each step's gap from the one before, in seconds, at its start."""
@@ -74,6 +90,27 @@ class Signals:
             (later, (later - earlier) / SECOND)
             for earlier, later in zip(starts, starts[1:])
         ]
+
+    def busy_step_gaps(self) -> list[Point]:
+        """The step gaps that lie wholly inside an in-flight interval. A gap
+        that spans an idle period measures the idling, not the engine."""
+        intervals = self.in_flight
+        if intervals is None:
+            return self.step_gaps()
+        opens = [start for start, _end in intervals]
+        starts = self.step_starts
+        return [
+            (later, (later - earlier) / SECOND)
+            for earlier, later in zip(starts, starts[1:])
+            if _covered(intervals, opens, earlier, later)
+        ]
+
+
+def _covered(
+    intervals: Sequence[tuple[int, int]], opens: Sequence[int], start: int, end: int
+) -> bool:
+    index = bisect.bisect_right(opens, start) - 1
+    return index >= 0 and intervals[index][1] >= end
 
 
 @dataclass(frozen=True)
@@ -210,6 +247,70 @@ class MedianWithin:
         return self.times
 
 
+class CadenceWithin:
+    """A gap series is back to its baseline over the interval: at least
+    ``min_cadence_samples`` gaps; their mean within ``rate_tolerance`` of
+    the baseline's rate; none longer than ``long_gap_factor`` times the
+    baseline's p99; and no more above the baseline's p95 than chance allows.
+    The mean weighs a long gap by its length, so a slow minority shows."""
+
+    def __init__(
+        self, points: Sequence[Point], baseline: GapStats, thresholds: Thresholds
+    ) -> None:
+        self.times = [time for time, _value in points]
+        values = [value for _time, value in points]
+        self.sums = _prefix(values)
+        self.above = _prefix(float(value > baseline.p95) for value in values)
+        longest = thresholds.long_gap_factor * baseline.p99
+        self.long = _prefix(float(value > longest) for value in values)
+        self.mean_ceiling = baseline.mean / (1 - thresholds.rate_tolerance)
+        self.thresholds = thresholds
+
+    def holds(self, start_ns: int, end_ns: int) -> bool:
+        first = bisect.bisect_left(self.times, start_ns)
+        last = bisect.bisect_right(self.times, end_ns)
+        count = last - first
+        if count < self.thresholds.min_cadence_samples:
+            return False
+        if self.long[last] > self.long[first]:
+            return False
+        if (self.sums[last] - self.sums[first]) / count > self.mean_ceiling:
+            return False
+        above = self.above[last] - self.above[first]
+        return above <= allowed_exceedances(
+            count,
+            self.thresholds.exceedance_share,
+            self.thresholds.exceedance_quantile,
+        )
+
+    def change_points(self) -> Sequence[int]:
+        return self.times
+
+
+def _prefix(values: Iterable[float]) -> list[float]:
+    return list(itertools.accumulate(values, initial=0.0))
+
+
+@functools.lru_cache(maxsize=4096)
+def allowed_exceedances(count: int, share: float, quantile: float) -> int:
+    """How many of ``count`` samples may lie beyond a baseline quantile by
+    chance: the ``quantile`` point of Binomial(count, share)."""
+    log_share, log_rest = math.log(share), math.log1p(-share)
+    total = 0.0
+    for k in range(count + 1):
+        log_pmf = (
+            math.lgamma(count + 1)
+            - math.lgamma(k + 1)
+            - math.lgamma(count - k + 1)
+            + k * log_share
+            + (count - k) * log_rest
+        )
+        total += math.exp(log_pmf)
+        if total >= quantile:
+            return k
+    return count
+
+
 def held_from(
     criteria: Sequence[Criterion],
     from_ns: int,
@@ -242,6 +343,28 @@ def held_from(
 
 
 @dataclass(frozen=True)
+class GapStats:
+    """A gap series in the baseline: how many gaps, their mean, p95 and
+    p99, in seconds. With no gaps nothing can be compared with it."""
+
+    count: int = 0
+    mean: float = math.inf
+    p95: float = math.inf
+    p99: float = math.inf
+
+    @classmethod
+    def of(cls, values: Sequence[float]) -> GapStats:
+        if not values:
+            return cls()
+        return cls(
+            count=len(values),
+            mean=statistics.fmean(values),
+            p95=_q95(values),
+            p99=quantile(values, 0.99) or math.inf,
+        )
+
+
+@dataclass(frozen=True)
 class Baseline:
     """What normal looked like in the baseline segment."""
 
@@ -249,8 +372,8 @@ class Baseline:
     waiting_low: float
     waiting_high: float
     kv_max: float
-    step_gap_p95: float
-    chunk_gap_p95: float
+    steps: GapStats
+    chunks: GapStats
     cached_median: float
 
     @classmethod
@@ -261,8 +384,8 @@ class Baseline:
             waiting_low=min(waiting),
             waiting_high=max(waiting),
             kv_max=max(between(signals.kv_usage, start_ns, end_ns) or [0.0]),
-            step_gap_p95=_q95(between(signals.step_gaps(), start_ns, end_ns)),
-            chunk_gap_p95=_q95(between(signals.chunk_gaps, start_ns, end_ns)),
+            steps=GapStats.of(between(signals.busy_step_gaps(), start_ns, end_ns)),
+            chunks=GapStats.of(between(signals.chunk_gaps, start_ns, end_ns)),
             cached_median=_median(between(signals.cached_fraction, start_ns, end_ns)),
         )
 
@@ -323,15 +446,16 @@ def _cache_criteria(context: Context) -> list[Criterion]:
 
 
 def _cadence_criteria(context: Context, *, chunks: bool) -> list[Criterion]:
-    """Cadence is back when the median step gap (and, for the front end, the
-    median chunk gap) is within the baseline's p95: a served engine idles
-    between requests, so some single gap in any interval is longer."""
+    """Cadence is back when the busy step gaps (and, for the front end, the
+    victim's chunk gaps) look like the baseline's again: like with like,
+    since idle gaps measure the traffic, not the engine."""
     signals, baseline = context.signals, context.baseline
+    thresholds = context.thresholds
     criteria: list[Criterion] = [
-        MedianWithin(signals.step_gaps(), high=baseline.step_gap_p95)
+        CadenceWithin(signals.busy_step_gaps(), baseline.steps, thresholds)
     ]
     if chunks:
-        criteria.append(MedianWithin(signals.chunk_gaps, high=baseline.chunk_gap_p95))
+        criteria.append(CadenceWithin(signals.chunk_gaps, baseline.chunks, thresholds))
     return criteria
 
 
@@ -620,15 +744,18 @@ __all__ = [
     "Actions",
     "AllWithin",
     "Baseline",
+    "CadenceWithin",
     "Check",
     "Context",
     "Criterion",
+    "GapStats",
     "Mechanism",
     "MedianWithin",
     "NoEvents",
     "Signals",
     "Thresholds",
     "Timing",
+    "allowed_exceedances",
     "between",
     "effect_timing",
     "first_window",
