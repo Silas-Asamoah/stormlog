@@ -1,10 +1,13 @@
 # The collector for #221's X1 outage episode: killed and restarted mid-run.
 #
-# Nothing sits between the receiver and the file: no batch processor and no
-# sending queue, so a span is in the file once the collector has answered
-# for it, and a span lost with the process was never acknowledged. Count
-# unique and raw spans in the file afterwards to check Stormlog's
-# collector-side bounds. Run Stormlog with --otlp-probe-interval 1.
+# Nothing sits between the receiver and the file: no batch processor, and
+# rotation set, which makes the file exporter write each export as it
+# arrives instead of buffering it for its flush_interval. The receiver can
+# still answer just before the write, so a span the collector acknowledged
+# in the moment it was killed may be missing: the collector-side bounds
+# checked on this file are approximate. fake_collector.py, which fsyncs
+# before it answers, gives exact ones. Run Stormlog with
+# --otlp-probe-interval 1.
 #
 # The file path comes from X1_OUT (default ./x1-traces.jsonl).
 
@@ -17,8 +20,8 @@ receivers:
 exporters:
   file:
     path: ${env:X1_OUT:-./x1-traces.jsonl}
-    sending_queue:
-      enabled: false
+    rotation:
+      max_megabytes: 1000
 
 service:
   pipelines:

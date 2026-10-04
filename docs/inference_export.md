@@ -620,11 +620,15 @@ stormlog infer profile ... --vllm-spans-listen 127.0.0.1:4319 \
 ```
 
 **Outage episodes.** For #221's qualification:
-- `otelcol-x1.yaml` writes straight to a file, with no batching and no
-  sending queue, so the file holds exactly what the collector acknowledged
-  before it was killed. Kill and restart it with `local_stack.py kill
-  otelcol` and `local_stack.py start --x1 otelcol`, and run Stormlog with
+- `otelcol-x1.yaml` writes straight to a file, with no batching and with
+  rotation set, so each export is written as it arrives rather than
+  buffered for a second. The collector can still answer just before it
+  writes, so what it acknowledged in the moment it was killed may be
+  missing, and the collector-side bounds checked on this file are
+  approximate. Kill and restart it with `local_stack.py kill otelcol` and
+  `local_stack.py start --x1 otelcol`, and run Stormlog with
   `--otlp-probe-interval 1`.
+- For exact bounds, run the episode against `fake_collector.py` instead.
 - `fake_collector.py` stores each export's spans, fsynced, before it
   answers, after `--delay-seconds`, with `--status`. `GET /counts`, or
   `--count FILE` after it has gone, gives the raw and unique spans to check
