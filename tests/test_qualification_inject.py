@@ -112,6 +112,19 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     assert all(pulse["landed"] in landings for pulse in stall.injected["pulses"])
     assert stall.times.effect_onset_ns == stall.times.action_onset_ns
     assert injections["N"].status == "valid"
+    # Every label at an engine component names the engine #218 will name:
+    # the producer in the fake engine's hello, for L2.
+    (hello,) = [
+        json.loads(line)
+        for path in (run / "truth" / "reference" / "hook").rglob("*.jsonl*")
+        if "engine-" in str(path)
+        for line in path.read_text().splitlines()
+        if '"hello"' in line
+    ]
+    assert hello["producer"]
+    assert stall.expects[0].component == "engine_core"
+    assert stall.expects[0].engine == hello["producer"]
+    assert injections["F2"].expects[0].engine == hello["producer"]
     # F2's neighbor preempts victim requests: the KV fault is realized.
     kv = injections["F2"]
     assert kv.status == "valid", kv.validity

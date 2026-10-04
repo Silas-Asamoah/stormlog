@@ -35,6 +35,7 @@ from typing import Any, Callable, Sequence
 
 from stormlog.infer.host_clock import host_boot_id, wall_clock_domain
 from stormlog.infer.qualify.ground_truth import (
+    Expectation,
     Impact,
     Injection,
     Interval,
@@ -465,6 +466,7 @@ class InjectionRun:
             baseline=(windows.priming_end, windows.baseline_end),
             clock_domain=clock,
             same_clock=clock is not None and clock == _harness_clock(),
+            producers=tuple(self.channel.view.producers if self.channel else ()),
         )
         write_run(
             self.directory.truth / "run.json",
@@ -537,7 +539,7 @@ class InjectionRun:
             episode_type=row.id,
             cause_class=row.cause_class,
             injected=attempt.injected,
-            expects=row.expects,
+            expects=name_engine(row.expects, truth.producer_at(times.action_onset_ns)),
             secondary=row.secondary,
             allows=allows,
             times=times,
@@ -714,9 +716,38 @@ class _Truth:
     baseline: tuple[int, int]
     clock_domain: str | None
     same_clock: bool
+    # The engine epochs' producers, from their hellos: (wall ns, producer).
+    producers: tuple[tuple[int, str], ...] = ()
 
     def priming_record(self) -> dict[str, Any]:
         return {"passed": self.priming[0], "cached_fraction_median": self.priming[1]}
+
+    def producer_at(self, at_ns: int | None) -> str | None:
+        """The engine serving at ``at_ns``: the last to say hello by then,
+        else the first."""
+        ordered = sorted(self.producers)
+        before = [p for t, p in ordered if at_ns is not None and t <= at_ns]
+        return before[-1] if before else (ordered[0][1] if ordered else None)
+
+
+# Where #218 names the engine on a finding (``location.engine_producer``):
+# the engine's own components and the API server in front of it (opus-218,
+# 2026-10-04). A label there names the engine too, for L2.
+ENGINE_COMPONENTS = frozenset(
+    {"scheduler", "kv_cache", "prefix_cache", "engine_core", "api_server"}
+)
+
+
+def name_engine(
+    expects: tuple[Expectation, ...], producer: str | None
+) -> tuple[Expectation, ...]:
+    """The expectations, each at an engine component naming ``producer``."""
+    if producer is None:
+        return expects
+    return tuple(
+        replace(e, engine=producer) if e.component in ENGINE_COMPONENTS else e
+        for e in expects
+    )
 
 
 def _victim_clock(records: list[dict[str, Any]]) -> str | None:
@@ -753,4 +784,11 @@ def _skipped(truth: _Truth, index: int, episode: EpisodePlan) -> Injection:
     )
 
 
-__all__ = ["InjectionRun", "Server", "neighbor_name", "victim_prefix"]
+__all__ = [
+    "ENGINE_COMPONENTS",
+    "InjectionRun",
+    "Server",
+    "name_engine",
+    "neighbor_name",
+    "victim_prefix",
+]
