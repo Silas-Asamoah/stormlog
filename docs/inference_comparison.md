@@ -259,11 +259,116 @@ test checks the fixture is what that script writes.
 | `blocks_for_precision(sd_log_ratio, h)` | The fewest blocks, from 6 to 10, whose log-scale half-width `t·sd/√n` is at most `log1p(h)`; 10 with `meets_target: false` when none is |
 | `holm(p_values)` | Which of a family's one-sided regression tests Holm's step-down rejects, for a claim that any regression is detected |
 
+## Method validation
+
+`examples/analysis/simulation_study.py` simulates each rule where it has to
+hold, with seed 213 and 20,000 replications per cell; the Monte Carlo
+standard error of a 2.5% rate is about 0.11 points. Its results are in
+`examples/analysis/simulation_results.json`, and a sample of its
+replications goes through `compare_values` too, which must make the same
+decisions (it does, in every one).
+
+**Non-inferiority at a true change equal to the budget** (+5% latency, run
+spread 0.05 on the log scale, paired blocks, leave-one-out applied as the
+module applies it). Every pass here is a false "safe": the rule must stay at
+or below 2.83% (2.5% plus three standard errors) wherever it is supported.
+
+| Noise in the block log ratios | Block spread | 3 blocks | 6 | 8 | 10 |
+| --- | --- | --- | --- | --- | --- |
+| normal | 0.0 | 2.54% | 0.77% | 0.98% | 1.05% |
+| normal | 0.05 | 2.61% | 0.85% | 1.07% | 1.11% |
+| normal | 0.2 | 2.63% | 0.87% | 1.11% | 1.03% |
+| t, 3 df | 0.0 | 1.90% | 0.60% | 0.77% | 0.94% |
+| t, 3 df | 0.05 | 2.07% | 0.57% | 0.81% | 0.83% |
+| t, 3 df | 0.2 | 1.96% | 0.52% | 0.80% | 0.80% |
+| lognormal 0.8, right tail (unsupported) | 0.0 | 11.91% | 8.33% | 8.88% | 8.36% |
+| lognormal 0.8, right tail (unsupported) | 0.05 | 11.26% | 7.63% | 8.47% | 8.77% |
+| lognormal 0.8, right tail (unsupported) | 0.2 | 11.42% | 8.09% | 8.60% | 8.38% |
+| lognormal 0.8, left tail (unsupported) | 0.0 | 0.46% | 0.05% | 0.03% | 0.04% |
+| lognormal 0.8, left tail (unsupported) | 0.05 | 0.55% | 0.03% | 0.06% | 0.03% |
+| lognormal 0.8, left tail (unsupported) | 0.2 | 0.38% | 0.03% | 0.03% | 0.03% |
+
+Below 4 blocks no leave-one-out sample can be gated, so 3 blocks show the
+interval alone. Strongly right-skewed block log ratios are outside what the
+rule claims: there it passes 8–12% of the time instead of at most 2.5%.
+
+**The same for attainment with unknown outcomes**, a one-point budget judged
+on the worst case: missing evidence only makes the gate more careful.
+
+| Unknown outcomes per run | 3 blocks | 6 | 8 | 10 |
+| --- | --- | --- | --- | --- |
+| 0.50% | 0.03% | 0.01% | 0.00% | 0.00% |
+| 2.00% | 0.00% | 0.00% | 0.00% | 0.00% |
+
+**Independent runs**, coverage of the min-df Welch interval on logs; it must
+be at least 0.947:
+
+| Independent runs | Coverage |
+| --- | --- |
+| 20v3, cv 10%/20%, ratio 0.01 (adversarial) | 0.9683 |
+| 20v3, cv 5%/15%, ratio 1.0 | 0.9581 |
+| 5v5, cv 5%/5%, ratio 1.05 | 0.9765 |
+| 3v3, cv 3%/10%, ratio 1.0 | 0.9759 |
+| 10v4, cv 20%/5%, ratio 0.9 | 0.9916 |
+
+**The run-level attainment gate**, with the true share of runs that meet the
+target just below q (exact binomial pass rates):
+
+| Runs | True share of runs meeting the target | q | Pass rate |
+| --- | --- | --- | --- |
+| 6 | 0.49 | 0.5 | 1.38% |
+| 6 | 0.89 | 0.9 | 0.00% |
+| 8 | 0.49 | 0.5 | 0.33% |
+| 8 | 0.89 | 0.9 | 0.00% |
+| 10 | 0.49 | 0.5 | 0.91% |
+| 10 | 0.89 | 0.9 | 0.00% |
+
+With failures correlated inside a run (each run serves everything with
+probability 0.9 and otherwise misses 5% of requests; the claim that a run
+meets 0.99 with probability 0.95 is false), the run-level gate never passes;
+pooling requests as if they were independent passes most of the time, which
+is why `--attainment-model bernoulli` is labelled model-based:
+
+| Runs | Run-level gate | Pooled requests (`bernoulli`) |
+| --- | --- | --- |
+| 6 | 0.00% | 53.41% |
+| 10 | 0.00% | 73.42% |
+| 30 | 0.00% | 92.47% |
+
+**The skew screen** must flag 5% ± 0.5 points of normal noise:
+
+| Blocks | Skew screen rate under normal noise |
+| --- | --- |
+| 3 | 5.25% |
+| 6 | 4.97% |
+| 8 | 4.94% |
+| 10 | 5.14% |
+| 20 | 5.16% |
+| 30 | 4.96% |
+
+**What leave-one-out costs.** With no change at all, the share of
+non-inferiority gates that pass, at a 5% budget:
+
+| Run spread | Blocks | Passes | Passes without leave-one-out | Stopped by leave-one-out |
+| --- | --- | --- | --- | --- |
+| 0.02 | 3 | 38.23% | 38.23% | 0.00% |
+| 0.02 | 6 | 72.50% | 91.59% | 19.09% |
+| 0.02 | 8 | 93.84% | 98.33% | 4.50% |
+| 0.02 | 10 | 98.94% | 99.76% | 0.83% |
+| 0.05 | 3 | 10.93% | 10.93% | 0.00% |
+| 0.05 | 6 | 12.86% | 27.88% | 15.02% |
+| 0.05 | 8 | 23.21% | 39.31% | 16.11% |
+| 0.05 | 10 | 33.84% | 49.63% | 15.78% |
+
+The stability guard stops up to a fifth of the passes a plain interval would
+give at 6 blocks; more blocks, or less noise between runs, buy them back.
+
 ## Limits
 
 - Paired t is nominal for roughly symmetric block log ratios. Under strongly
-  skewed noise it covers 86–88% instead of 95%, with one-sided false safety
-  of 12–13%, and 6–7% even when the guards pass.
+  right-skewed block log ratios a non-inferiority gate at a true change
+  equal to its budget passes 8–12% of the time instead of at most 2.5% (see
+  Method validation).
 - Guards flag; they do not certify coverage.
 - The independent design's intervals are conservative by construction.
 - The order-statistic screens on latency quantiles assume independent
