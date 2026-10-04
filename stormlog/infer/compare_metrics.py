@@ -32,6 +32,7 @@ PENALIZED = "penalized"
 INSUFFICIENT_TAIL = "insufficient_tail_samples"
 UNMEASURABLE = "unmeasurable"
 NO_SLO = "no_slo_policy"
+RATE_UNAVAILABLE = "rate_unavailable"
 LATENCY_KEYS = (
     "client.ttft",
     "client.e2e",
@@ -168,7 +169,8 @@ def _goodput(case: Mapping[str, Any]) -> Reading:
         return None, NO_SLO
     if slo.get("status") != "evaluated":
         return None, UNMEASURABLE
-    return _bounds(slo.get("goodput_lower_rps"), slo.get("goodput_upper_rps")), None
+    value = _bounds(slo.get("goodput_lower_rps"), slo.get("goodput_upper_rps"))
+    return value, None if value is not None else _rate_reason(case)
 
 
 def _attainment(case: Mapping[str, Any]) -> Reading:
@@ -183,9 +185,17 @@ def _attainment(case: Mapping[str, Any]) -> Reading:
 def _throughput(key: str) -> Callable[[Mapping[str, Any]], Reading]:
     def read(case: Mapping[str, Any]) -> Reading:
         value = (case.get("throughput") or {}).get(key)
-        return (float(value) if is_number(value) else None), None
+        if is_number(value):
+            return float(value), None
+        return None, _rate_reason(case)
 
     return read
+
+
+def _rate_reason(case: Mapping[str, Any]) -> str:
+    """Why a case has no rate: its interval's reason, or that it has none."""
+    reason = (case.get("intervals") or {}).get("rate_reason")
+    return str(reason) if reason else RATE_UNAVAILABLE
 
 
 def _failure_fraction(case: Mapping[str, Any]) -> Reading:
