@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,16 @@ from stormlog.infer.cli import main as infer_main
 from tests.watch_test_helpers import FakeMetrics, serve_metrics, watch_config
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _restore_signals() -> Iterator[None]:
+    """A watch run in this process leaves SIGINT and SIGTERM ignored, as the
+    process it is written for is about to exit."""
+    previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+    yield
+    for signum, handler in previous.items():
+        signal.signal(signum, handler)
 
 
 def _watch(tmp_path: Path, *extra: str) -> int:
@@ -174,3 +185,58 @@ def test_sigterm_ends_a_watch_whose_scrape_trickles(tmp_path: Path) -> None:
     assert process.returncode == 1, err  # no scrape ever finished
     report = json.loads((root / "report.json").read_text())
     assert report["payload"]["unsound"] == ["no_successful_scrape"]
+
+
+def test_two_quick_signals_end_with_the_exit_code_the_report_holds(
+    tmp_path: Path,
+) -> None:
+    """A second SIGINT right after the first escaped as KeyboardInterrupt
+    once the watch had returned: exit -2 after a report saying 3."""
+    root = tmp_path / "watch"
+    ready = tmp_path / "ready"
+    metrics = FakeMetrics()
+    metrics.waiting = 20
+    with serve_metrics(metrics) as base_url:
+        config = tmp_path / "watch.json"
+        config.write_text(json.dumps(watch_config(base_url)), encoding="utf-8")
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "stormlog.entrypoint",
+                "infer",
+                "watch",
+                "--root",
+                str(root),
+                "--config",
+                str(config),
+                "--ready-file",
+                str(ready),
+            ],
+            cwd=REPO,
+            env={**os.environ, "PYTHONPATH": str(REPO)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 60
+            while not ready.exists():
+                assert process.poll() is None, process.communicate()
+                assert time.monotonic() < deadline, "the watcher never became ready"
+                time.sleep(0.05)
+            time.sleep(1.0)  # the queue trigger has fired: an incident is open
+            process.send_signal(signal.SIGINT)
+            report_path = root / "report.json"
+            while not report_path.exists() and process.poll() is None:
+                time.sleep(0.001)
+            # The second lands as the watch returns, report written.
+            if process.poll() is None:
+                process.send_signal(signal.SIGINT)
+            _out, err = process.communicate(timeout=30)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+    report = json.loads((root / "report.json").read_text())
+    assert process.returncode == report["verdict"]["exit_code"], err
