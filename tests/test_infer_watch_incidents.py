@@ -466,6 +466,29 @@ def test_a_bundle_that_cannot_be_created_still_records_its_incident(
     assert sealed["bundle_error"] == record["bundle_error"]
 
 
+def test_an_unexpected_error_while_writing_a_bundle_lets_its_generation_go(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a budget or disk error abandoned the generation: any other left
+    its reservation held and its bundle pinned against deletion for good."""
+    from stormlog.infer.watch import store as store_module
+
+    harness = Harness(tmp_path)
+    harness.scrapes(80, 262)
+
+    def broken(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("store bug")
+
+    monkeypatch.setattr(store_module.GenerationWriter, "publish", broken)
+    incident_id = harness.fire(200)
+    assert incident_id is not None
+    harness.tick(261)
+    (record,) = harness.of_type(INCIDENT)
+    assert record["bundle_error"] == "RuntimeError: store bug"
+    assert harness.store.budget.reserved_bytes == 0
+    assert not (tmp_path / "incidents" / incident_id).exists()
+
+
 def test_health_incidents_never_use_up_the_counting_budget(tmp_path: Path) -> None:
     """A flapping exporter's restarts used up the hour's incidents, and a
     real violation after them was turned away."""
