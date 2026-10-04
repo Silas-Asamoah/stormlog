@@ -85,6 +85,8 @@ MARKER_TIMEOUT_SECONDS = 120.0
 # After its stop file appears the victim drains (its --timeout at most) and
 # runs its post-run imports; past this it is interrupted instead.
 VICTIM_STOP_SECONDS = 180.0
+# How long an interrupted victim gets to record its end before it is killed.
+VICTIM_INTERRUPT_SECONDS = 60.0
 
 
 def neighbor_name(run_id: str, index: int) -> str:
@@ -247,24 +249,36 @@ class InjectionRun:
             progress.failure = "interrupted"
             self._finish(victim, poller, progress)
             raise
-        return self._finish(victim, poller, progress)
+        published, held = self._finish(victim, poller, progress)
+        if held is not None:
+            _act_on(held)
+        return published
 
     def _finish(
         self,
         victim: subprocess.Popen[bytes] | None,
         poller: threading.Thread,
         progress: _Progress,
-    ) -> Path:
-        if victim is not None:
-            self._stop_victim(victim)
-        self._close_channel()
-        poller.join(timeout=10)
-        if self.channel is not None:
-            # The hook log the replay cuts by first-seen time, in the truth.
-            self.channel.tailer.copy_to(self.directory.reference / "hook")
-        self.failure = progress.failure
-        self._write_truth(progress)
-        return self.directory.publish()
+    ) -> tuple[Path, int | None]:
+        """Stop the victim, write the truth and publish the run, with
+        SIGTERM, SIGHUP and SIGINT held: one that arrives meanwhile cuts the
+        victim's drain short, and is returned to act on once the run is
+        published, so it can't leave the run half written."""
+        with _HeldSignals() as held:
+            if victim is not None:
+                self._stop_victim(victim, held)
+            if held.received and progress.failure is None:
+                # The victim's drain was cut short: its artifact isn't whole.
+                progress.failure = "interrupted"
+            self._close_channel()
+            poller.join(timeout=10)
+            if self.channel is not None:
+                # The hook log the replay cuts by first-seen time, in the truth.
+                self.channel.tailer.copy_to(self.directory.reference / "hook")
+            self.failure = progress.failure
+            self._write_truth(progress)
+            published = self.directory.publish()
+        return published, held.received[0] if held.received else None
 
     def _episodes(self, victim: subprocess.Popen[bytes], progress: _Progress) -> None:
         t0 = progress.measured_start = self._wait_for_measured(victim)
@@ -665,22 +679,21 @@ class InjectionRun:
     def _victim_stop_file(self) -> Path:
         return self.directory.probes / "stop-victim"
 
-    def _stop_victim(self, victim: subprocess.Popen[bytes]) -> None:
+    def _stop_victim(self, victim: subprocess.Popen[bytes], held: _HeldSignals) -> None:
         """End the victim's measured window with its stop file, so it drains,
-        imports and completes; interrupt it only if that doesn't end it."""
+        imports and completes. Interrupt it if that doesn't end it, or once a
+        signal arrives meanwhile; kill it if that doesn't either, or once a
+        second signal arrives."""
         if victim.poll() is not None:
             return
         self._victim_stop_file.touch()
-        try:
-            victim.wait(timeout=VICTIM_STOP_SECONDS)
+        if _exited(victim, VICTIM_STOP_SECONDS, lambda: len(held.received) > 0):
             return
-        except subprocess.TimeoutExpired:
-            victim.send_signal(signal.SIGINT)
-        try:
-            victim.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            victim.kill()
-            victim.wait()
+        victim.send_signal(signal.SIGINT)
+        if _exited(victim, VICTIM_INTERRUPT_SECONDS, lambda: len(held.received) > 1):
+            return
+        victim.kill()
+        victim.wait()
 
     def _wait_for_measured(self, victim: subprocess.Popen[bytes]) -> int:
         deadline = time.monotonic() + MARKER_TIMEOUT_SECONDS
@@ -711,6 +724,57 @@ class InjectionRun:
 
     def _sleep_for(self, seconds: float) -> None:
         time.sleep(max(0.0, seconds))
+
+
+class _HeldSignals:
+    """SIGTERM, SIGHUP and SIGINT noted instead of acted on, while the run
+    is published. Handlers can be set only from the main thread; elsewhere
+    nothing is held."""
+
+    SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+    def __init__(self) -> None:
+        self.received: list[int] = []
+        self._previous: dict[int, Any] = {}
+
+    def __enter__(self) -> _HeldSignals:
+        if threading.current_thread() is threading.main_thread():
+            for signum in self.SIGNALS:
+                self._previous[signum] = signal.signal(signum, self._note)
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        for signum, previous in self._previous.items():
+            if previous is not None:
+                signal.signal(signum, previous)
+
+    def _note(self, signum: int, _frame: Any) -> None:
+        self.received.append(signum)
+
+
+def _act_on(signum: int) -> None:
+    """End the harness as the held signal would have."""
+    if signum == signal.SIGINT:
+        raise KeyboardInterrupt
+    raise SystemExit(128 + signum)
+
+
+def _exited(
+    process: subprocess.Popen[bytes], seconds: float, hurry: Callable[[], bool]
+) -> bool:
+    """Wait up to ``seconds`` for ``process``; give up early once ``hurry``
+    says so. Whether it exited."""
+    deadline = time.monotonic() + seconds
+    while not hurry():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            process.wait(timeout=min(0.1, remaining))
+            return True
+        except subprocess.TimeoutExpired:
+            continue
+    return process.poll() is not None
 
 
 def _action_onset(actions: Actions, started: int) -> int:
