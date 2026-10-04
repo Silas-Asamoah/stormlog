@@ -42,8 +42,8 @@ class ServerStats:
     # Connections cut at their deadline, whatever they were doing.
     timeout: int = 0
     not_found: int = 0
-    # Requests refused while being read: a head past HEAD_LIMIT, or one the
-    # request parser could not take.
+    # Requests refused from their head alone: one past HEAD_LIMIT, one the
+    # request parser could not take, or a method other than GET and HEAD.
     bad_request: int = 0
     errors: int = 0
     active: int = 0
@@ -258,7 +258,8 @@ class _Handler(BaseHTTPRequestHandler):
     def send_error(
         self, code: int, message: str | None = None, explain: str | None = None
     ) -> None:
-        # Only the request parser sends errors: a request refused unread.
+        # Only the stock request handling sends errors, for a request refused
+        # from its head: too long, malformed, or a method with no handler (501).
         self.server.owner.count("bad_request")
         super().send_error(code, message, explain)
 

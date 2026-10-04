@@ -191,6 +191,18 @@ def test_a_head_past_sixteen_kibibytes_is_answered_431_and_closed(
         sock.close()
 
 
+def test_a_method_other_than_get_and_head_is_a_bad_request(
+    server: MetricsServer,
+) -> None:
+    host, port = parse_listen(server.address)
+    connection = http.client.HTTPConnection(host, port, timeout=5)
+    connection.request("POST", "/metrics", body=b"x")
+    assert connection.getresponse().status == 501
+    connection.close()
+    assert _wait_for(lambda: server.stats.bad_request == 1)
+    assert server.stats.ok == 0
+
+
 def test_a_request_line_past_sixteen_kibibytes_is_answered_431(
     server: MetricsServer,
 ) -> None:
