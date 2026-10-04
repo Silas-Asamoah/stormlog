@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import socket
@@ -484,3 +485,60 @@ def test_a_schedule_that_falls_behind_keeps_the_duty_cap(
     assert all(pulse.held_ns >= 0.29e9 for pulse in pulses)
     for this, following in zip(pulses, pulses[1:]):
         assert following.stop_sent_ns - this.continue_sent_ns >= 0.95 * this.held_ns
+
+
+@pytest.mark.parametrize("signum", [signal.SIGKILL, signal.SIGSTOP])
+def test_a_stop_ends_at_once_when_its_watchdog_stops_watching(
+    loop: subprocess.Popen[bytes], signum: int
+) -> None:
+    # The watchdog killed or frozen during a held stop: were the harness
+    # killed now too, nobody would continue the target. So the stop ends
+    # within a check, refused, instead of holding to its end.
+    with Pulser(Target.of(loop.pid), max_pulse_seconds=2.0) as pulser:
+        watchdog = pulser.watchdog_pid
+        assert watchdog is not None
+        started = time.monotonic()
+        try:
+            with pytest.raises(PulseRefused, match="stopped watching"):
+                pulser.pulse(2.0, during=lambda: os.kill(watchdog, signum))
+            assert time.monotonic() - started < 1.0
+            assert psutil.Process(loop.pid).status() != psutil.STATUS_STOPPED
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(watchdog, signal.SIGKILL)
+
+
+HOLDING_HARNESS = textwrap.dedent(
+    """
+    import sys
+    from examples.qualification.pulser import Pulser, Target
+    pulser = Pulser(Target.of(int(sys.argv[1])), max_pulse_seconds=2.0)
+    print(pulser.watchdog_pid, flush=True)
+    pulser.pulse(2.0, during=lambda: print("stopped", flush=True))
+    """
+)
+
+
+def test_a_watchdog_killed_then_its_harness_killed_leaves_the_target_running(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    # rev-220-a's double failure: the watchdog killed mid-stop, then the
+    # harness's group killed outright 200 ms later. The harness ends the
+    # stop within a check of the watchdog's death, before it dies itself.
+    harness = subprocess.Popen(
+        [sys.executable, "-c", HOLDING_HARNESS, str(loop.pid)],
+        env=_environment(),
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    assert harness.stdout is not None
+    watchdog = int(harness.stdout.readline())
+    assert harness.stdout.readline().strip() == "stopped"
+    os.kill(watchdog, signal.SIGKILL)
+    time.sleep(0.2)
+    # The harness may already have ended the stop and exited, refused.
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(harness.pid, signal.SIGKILL)
+    harness.wait(timeout=10)
+    assert _running_within(loop.pid, 1.0)

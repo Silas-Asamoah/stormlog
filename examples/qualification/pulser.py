@@ -38,6 +38,8 @@ CONFIRM_POLL_SECONDS = 0.0005
 # The watchdog continues a target stopped this long past the longest pulse.
 WATCHDOG_SLACK_SECONDS = 1.0
 WATCHDOG_READY_SECONDS = 30.0
+# How often a held stop checks that its watchdog still watches.
+WATCHDOG_CHECK_SECONDS = 0.01
 
 
 class PulseRefused(RuntimeError):
@@ -206,8 +208,10 @@ class Pulser:
 
         Raises:
             PulseRefused: for a pulse too long, a closed pulser, a watchdog
-                that can't be (re)started, a target that is no longer the
-                same process, or a stop that was not confirmed within 1 s.
+                that can't be (re)started or stops watching during the stop
+                (the target is continued at once), a target that is no
+                longer the same process, or a stop that was not confirmed
+                within 1 s.
         """
         if not 0 < seconds <= self.max_pulse_seconds:
             raise PulseRefused(f"a pulse lasts at most {self.max_pulse_seconds} s")
@@ -222,8 +226,10 @@ class Pulser:
                 if during is not None:
                     during()
                 # Ends ``seconds`` after SIGSTOP, however long it took to see
-                # the stop, and whatever the wall clock does.
-                _sleep_until(sent + int(seconds * 1e9))
+                # the stop, and whatever the wall clock does; at once if the
+                # watchdog stops watching, which would leave a harness killed
+                # in this stop nobody to continue its target.
+                self._hold_until(sent + int(seconds * 1e9))
             finally:
                 self._continue()
                 continued = time.monotonic_ns()
@@ -276,6 +282,29 @@ class Pulser:
         for a signal handler, which may interrupt a pulse in progress."""
         self._continue()
 
+    def _hold_until(self, monotonic_ns: int) -> None:
+        while True:
+            if not self._watchdog_watching():
+                raise PulseRefused("the watchdog stopped watching during the stop")
+            left = monotonic_ns - time.monotonic_ns()
+            if left <= 0:
+                return
+            time.sleep(min(WATCHDOG_CHECK_SECONDS, left / 1e9))
+
+    def _watchdog_watching(self) -> bool:
+        """The watchdog is alive and not itself stopped (or none was asked
+        for)."""
+        if not self._watched:
+            return True
+        process = self._watchdog
+        if process is None or process.poll() is not None:
+            return False
+        try:
+            status = psutil.Process(process.pid).status()
+        except psutil.Error:
+            return False
+        return status not in (psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE)
+
     def _ensure_watchdog(self) -> None:
         """A watchdog that died (the OOM killer, a user) is replaced before
         the next stop; one that can't be is a refusal."""
@@ -308,10 +337,6 @@ class Pulser:
                 return time.monotonic_ns()
             time.sleep(CONFIRM_POLL_SECONDS)
         raise PulseRefused(f"pid {self.target.pid} did not stop within 1 s")
-
-
-def _sleep_until(monotonic_ns: int) -> None:
-    time.sleep(max(0.0, (monotonic_ns - time.monotonic_ns()) / 1e9))
 
 
 def _wait_until(monotonic_ns: int, stop: threading.Event | None) -> bool:

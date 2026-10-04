@@ -538,7 +538,12 @@ F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
     continues a target stopped more than 1 s past the longest pulse.
 - **No stop without a watchdog.** The pulser waits for the watchdog to say
   it is ready before its first stop, replaces a watchdog that died before the
-  next one, and refuses to pulse if it can't.
+  next one, and refuses to pulse if it can't. While a stop is held it checks
+  every 10 ms that the watchdog still watches (alive, and not itself
+  stopped); if not, it continues the target at once and refuses the pulse.
+  So a stop is left in place only if the watchdog and the harness are both
+  killed within the same 10 ms or so: two independent kills, the one
+  residual risk.
 - **Caps.** A pulse lasts at most 2 s, at a duty cycle of at most 50%. A
   pulse ends its length after `SIGSTOP` was sent, timed on the monotonic
   clock, however long the stop took to confirm and whatever the wall clock
