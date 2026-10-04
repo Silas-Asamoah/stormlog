@@ -117,8 +117,9 @@ completes, so the step scheduled just before it may come after an idle
 stretch in which nothing was ready. A memberless, zero-token step (which
 vLLM schedules to send finished IDs) runs nothing and is passed over: the gap
 runs from the step before it. A request prefilled in chunks is ready
-between them; a streaming-input request (`resumable`) never makes a gap
-ready, since between steps it may be waiting for its client's next input. A
+between them. A streaming-input request (`resumable`) is ready within a
+turn, where it decodes like any other, but not across a gap after which its
+prompt grew: then it was waiting for its client's next input. A
 stretch the scheduler spent paused with
 `PAUSED_ALL` (from the hook's `pause` records), or one the caller excludes
 with `exclude_wall` (for example its own profiler stop), has no ready work;

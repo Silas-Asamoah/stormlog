@@ -122,9 +122,11 @@ class Step:
     total_tokens: int
     # Members whose request finished in this step (from its completion).
     finished: frozenset[str] = frozenset()
-    # Streaming-input members: between steps they may be waiting for their
-    # client's next input, so they never make a gap ready.
+    # Streaming-input members: one whose next step starts a new turn (its
+    # prompt grew) was waiting for its client's input in between.
     streaming: frozenset[str] = frozenset()
+    # Each member's prompt length in this step, as (member, tokens).
+    prompts: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -179,13 +181,39 @@ def _step(scheduled: Mapping[str, Any], completed: Mapping[str, Any] | None) -> 
         streaming=frozenset(
             str(m.get("internal")) for m in members if m.get("resumable") is True
         ),
+        prompts=tuple(
+            (str(m.get("internal")), int(m["prompt_tokens"]))
+            for m in members
+            if isinstance(m.get("prompt_tokens"), int)
+        ),
     )
 
 
 def ready(step: Step) -> frozenset[str]:
-    """The members still ready to run after ``step``: not finished in it,
-    and not a streaming-input request, which may wait for its client."""
+    """The members still ready to run after ``step``, with nothing scheduled
+    since: not finished in it, and not a streaming-input request, which may
+    be waiting for its client's next input."""
     return step.members - step.finished - step.streaming
+
+
+def continuing(before: Step, after: Step) -> frozenset[str]:
+    """The requests of ``before`` that ``after`` runs on: not finished in
+    ``before``, and, for a streaming-input request, not starting a new turn
+    in ``after``. Between turns it waited for its client's input, which is
+    not the engine's to explain; within one it decodes like any other."""
+    went_on = (before.members - before.finished) & after.members
+    return went_on - _new_turns(before, after)
+
+
+def _new_turns(before: Step, after: Step) -> frozenset[str]:
+    """Streaming-input members whose prompt grew from ``before`` to
+    ``after``, or whose prompt either step does not give."""
+    old, new = dict(before.prompts), dict(after.prompts)
+    return frozenset(
+        member
+        for member in before.streaming & after.members
+        if member not in old or member not in new or new[member] > old[member]
+    )
 
 
 def _finished(completed: Mapping[str, Any] | None) -> frozenset[str]:
@@ -400,7 +428,7 @@ def find_stalls(
     completions = _Completions(steps)
     stalls: list[Stall] = []
     for before, after in zip(steps, steps[1:]):
-        if ready(before) & after.members:
+        if continuing(before, after):
             stalls.append(_in_schedule(after))
         between = _between(after, completions)
         if between is not None:
@@ -456,7 +484,7 @@ def _between(after: Step, completions: _Completions) -> Stall | None:
     last = completions.latest_before(after.start_mono_ns)
     if last is None or last.completed_mono_ns is None:
         return None
-    if not ready(last) & after.members:
+    if not continuing(last, after):
         return None
     return Stall(
         LOCUS_BETWEEN_STEPS,
@@ -601,7 +629,7 @@ def cadence_table(steps: Sequence[Step]) -> list[Cadence]:
     completed = [step for step in steps if step.completed_mono_ns is not None]
     table = []
     for before, after in zip(completed, completed[1:]):
-        if ready(before) & after.members:
+        if continuing(before, after):
             end = after.completed_mono_ns or 0
             cadence = end - (before.completed_mono_ns or 0)
             table.append((end, work_bucket(after.total_tokens), cadence))
