@@ -7,14 +7,16 @@ import json
 import threading
 import time
 import urllib.error
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 from .. import __version__
+from ..scrub import redact_url
 from ..session import (
     SESSION_STATUS_INCOMPLETE,
     SESSION_STATUS_INTERRUPTED,
@@ -25,8 +27,8 @@ from ..session import (
     update_session_summary,
 )
 from .analysis import analyze_inference_events
-from .arrivals import CLOSED, arrival_offsets
-from .cache_state import cache_state_record, redact_url, reset_cache
+from .arrivals import CLOSED, arrival_offsets, scheduled_endpoint
+from .cache_state import cache_state_record, reset_cache
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
@@ -34,12 +36,31 @@ from .host_clock import host_boot_id, wall_clock_domain
 from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
 from .openai_client import (
     ChatCompletionResult,
+    ConnectError,
+    CutResponseError,
     EndpointHTTPError,
+    NoResponseError,
     OpenAIChatCompletionsClient,
+    ignored_proxies,
 )
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
+from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
+from .trace_capture import TraceWindows
+from .vllm_execution_devices import WorkerIndex
+from .vllm_execution_import import (
+    flush_execution_log,
+    import_execution_into_artifact,
+    record_failed_execution_import,
+)
+from .vllm_scraper import (
+    INTERRUPT_SCRAPE_TIMEOUT_SECONDS,
+    VllmMetricsScraper,
+    metrics_api_key,
+)
+from .vllm_spans import OTLP_EXTRA_HINT, OtlpSpanReceiver, span_capability_event
+from .vllm_telemetry import MARKER_PHASE_END, MARKER_PHASE_START
 from .workload import workload_record
 
 
@@ -88,6 +109,40 @@ class InferenceProfiler:
         # Pool threads remove finished calls while the event loop reads the set.
         self._unfinished_lock = threading.Lock()
         self._opened_artifact = False
+        self.vllm_scraper = self._build_vllm_scraper()
+        self.span_receiver: OtlpSpanReceiver | None = None
+        self._span_receiver_error: str | None = None
+        self.traces = (
+            TraceWindows(config.trace, api_key=config.api_key, on_warning=on_warning)
+            if config.trace is not None
+            else None
+        )
+        self.execution_dir = config.vllm_execution_dir
+
+    def _build_vllm_scraper(self) -> VllmMetricsScraper | None:
+        """The ``/metrics`` scraper when native vLLM telemetry is on."""
+        config = self.config
+        if config.vllm_metrics_url is None:
+            return None
+        return VllmMetricsScraper(
+            url=config.vllm_metrics_url,
+            interval_seconds=config.vllm_metrics_interval_seconds,
+            timeout_seconds=config.timeout_seconds,
+            session_id=self.session.session_id,
+            run_id=self.run_id,
+            clock_domain=wall_clock_domain(self.session.host, host_boot_id()),
+            api_key=metrics_api_key(
+                config.endpoint,
+                config.vllm_metrics_url,
+                config.api_key,
+                on_warning=self.on_warning,
+            ),
+            on_warning=self.on_warning,
+        )
+
+    def _x_request_id(self, request_id: str) -> str:
+        """The run-scoped ``X-Request-Id`` sent with a request and recorded on it."""
+        return f"stormlog-{self.run_id}-{request_id}"
 
     def _check_schedules(self) -> None:
         """Refuse an open-loop schedule above the arrival cap up front."""
@@ -124,6 +179,7 @@ class InferenceProfiler:
                 )
             raise
 
+        await self._import_server_evidence(output_path)
         try:
             report = analyze_inference_events(output_path)
         except Exception:
@@ -132,7 +188,73 @@ class InferenceProfiler:
         self._write_terminal_session(output_path=output_path, report=report)
         return report
 
+    async def _import_server_evidence(self, output_path: Path) -> None:
+        """Traces, then the execution log, before the analysis reads the artifact.
+
+        The hook's worker hellos name each traced process's GPU, so the log is
+        flushed and indexed first. A failed import warns and records what was
+        not collected instead of failing the finished run.
+        """
+        index = (
+            await asyncio.to_thread(self._execution_index)
+            if self.execution_dir is not None
+            else None
+        )
+        if self.traces is not None:
+            await asyncio.to_thread(
+                self.traces.import_into,
+                output_path,
+                run_id=self.run_id,
+                session=self.session,
+                worker_index=index,
+            )
+        if self.execution_dir is not None:
+            await asyncio.to_thread(self._import_execution, output_path)
+
+    def _execution_index(self) -> WorkerIndex | None:
+        """Seal the hook's open segments, then index its worker hellos."""
+        directory = self.execution_dir
+        assert directory is not None
+        try:
+            flush = flush_execution_log(
+                directory, timeout_seconds=EXECUTION_FLUSH_TIMEOUT_SECONDS
+            )
+            if flush["timed_out"]:
+                self._warn(
+                    f"vLLM execution log {directory}: no heartbeat from "
+                    f"{', '.join(flush['timed_out'])} within "
+                    f"{EXECUTION_FLUSH_TIMEOUT_SECONDS:g} s of the flush request; "
+                    "its last records may be missing from this import"
+                )
+            return WorkerIndex.from_directory(directory)
+        except Exception as exc:
+            self._warn(
+                f"vLLM execution log {directory} could not be read ({exc}); "
+                "traces are imported without its device map"
+            )
+            return None
+
+    def _import_execution(self, output_path: Path) -> None:
+        directory = self.execution_dir
+        assert directory is not None
+        try:
+            import_execution_into_artifact(output_path, directory)
+        except Exception as exc:  # a finished run must not fail on its import
+            self._warn(
+                f"vLLM execution log {directory} was not imported ({exc}); run "
+                "`stormlog infer import-execution` on it"
+            )
+            try:
+                record_failed_execution_import(output_path, directory, str(exc))
+            except Exception as record_exc:
+                self._warn(f"the failed import could not be recorded ({record_exc})")
+
+    def _warn(self, message: str) -> None:
+        if self.on_warning is not None:
+            self.on_warning(message)
+
     async def _capture(self, output_path: Path) -> None:
+        self._start_span_receiver()
         with JsonlEventWriter(output_path) as writer:
             self._opened_artifact = True
             writer.append(
@@ -162,6 +284,28 @@ class InferenceProfiler:
                         "prompts": self.prompt_spec.to_record(),
                         "cache_state": self.config.cache_state,
                         "cache_reset_url": redact_url(self.config.cache_reset_url),
+                        "cache_reset_timeout_seconds": (
+                            self.config.cache_reset_timeout_seconds
+                        ),
+                        "vllm_metrics": (
+                            self.vllm_scraper.config_record()
+                            if self.vllm_scraper is not None
+                            else None
+                        ),
+                        "vllm_spans": (
+                            {
+                                **self.span_receiver.config_record(),
+                                "drain_seconds": self.config.vllm_spans_drain_seconds,
+                            }
+                            if self.span_receiver is not None
+                            else None
+                        ),
+                        "vllm_execution_dir": (
+                            str(self.execution_dir)
+                            if self.execution_dir is not None
+                            else None
+                        ),
+                        "environment_proxies": ignored_proxies(),
                     },
                 }
             )
@@ -174,6 +318,14 @@ class InferenceProfiler:
                     prompt_spec=self.prompt_spec,
                 )
             )
+            if self.config.slo is not None:
+                writer.append(
+                    slo_record(
+                        self.config.slo,
+                        session_id=self.session.session_id,
+                        source=self.config.slo_source or "flags",
+                    )
+                )
             stop_sampling = asyncio.Event()
             sample_task = asyncio.create_task(
                 self._sample_system_loop(
@@ -182,12 +334,110 @@ class InferenceProfiler:
                     stop_event=stop_sampling,
                 )
             )
+            stop_spans = asyncio.Event()
+            span_task = asyncio.create_task(
+                self._drain_spans_loop(writer=writer, stop_event=stop_spans)
+            )
+            completed = False
             try:
                 for case in self.config.cases():
                     await self._run_case(case=case, writer=writer)
+                completed = True
             finally:
+                # The helpers are waited for, never awaited: under a real
+                # Ctrl+C asyncio.run has cancelled them too, and a bare
+                # await would raise here and skip the rest of this block.
                 stop_sampling.set()
-                await sample_task
+                await _wait_for(sample_task)
+                try:
+                    # The one optional step of the shutdown: a cancel that
+                    # lands in this wait must not skip the steps after it.
+                    if completed:
+                        await self._wait_for_late_spans()
+                finally:
+                    stop_spans.set()
+                    await _wait_for(span_task)
+                    self._stop_span_receiver(writer)
+                    # Written on the way out of an interrupted run too, so
+                    # the artifact says what the engine exposed before it
+                    # says why the run stopped.
+                    self._write_capabilities(writer)
+
+    async def _wait_for_late_spans(self) -> None:
+        """Keep the receiver up after the last phase for the exporter's last batch.
+
+        vLLM's span exporter flushes on a schedule (5 s by default), so the
+        spans of the final requests usually leave the server after the last
+        request has been answered. The wait is skipped when no receiver runs.
+        """
+        if self.span_receiver is None or self.config.vllm_spans_drain_seconds <= 0:
+            return
+        await asyncio.sleep(self.config.vllm_spans_drain_seconds)
+
+    def _start_span_receiver(self) -> None:
+        """Bind the OTLP receiver before any request can produce a span."""
+        listen = self.config.vllm_spans_listen
+        if listen is None:
+            return
+        try:
+            receiver = OtlpSpanReceiver(
+                listen=listen, session_id=self.session.session_id, run_id=self.run_id
+            )
+            receiver.start()
+        except OSError as exc:
+            self._span_receiver_error = f"{type(exc).__name__}: {exc}"
+            if self.on_warning is not None:
+                self.on_warning(
+                    f"vLLM span receiver could not listen on {listen}: "
+                    f"{self._span_receiver_error}; spans are not collected"
+                )
+            return
+        self.span_receiver = receiver
+        if not receiver.protobuf_available and self.on_warning is not None:
+            self.on_warning(
+                f"vLLM span receiver on {receiver.listen} cannot decode OTLP "
+                f"protobuf, which is what vLLM exports: {OTLP_EXTRA_HINT}; "
+                "protobuf exports are refused and recorded"
+            )
+
+    def _stop_span_receiver(self, writer: JsonlEventWriter) -> None:
+        receiver = self.span_receiver
+        if receiver is None:
+            return
+        receiver.stop()
+        for record in receiver.drain():
+            writer.append(record.to_record())
+
+    async def _drain_spans_loop(
+        self, *, writer: JsonlEventWriter, stop_event: asyncio.Event
+    ) -> None:
+        """Move received spans onto the artifact from the event loop thread."""
+        receiver = self.span_receiver
+        if receiver is None:
+            return
+        while not stop_event.is_set():
+            for record in receiver.drain():
+                writer.append(record.to_record())
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=0.25)
+            except asyncio.TimeoutError:
+                pass
+
+    def _write_capabilities(self, writer: JsonlEventWriter) -> None:
+        """Say what the engine exposed, once the run knows."""
+        if self.vllm_scraper is None and self.config.vllm_spans_listen is None:
+            return
+        context = self._artifact_identity().context
+        if self.vllm_scraper is not None:
+            writer.append(self.vllm_scraper.capability_event(context).to_record())
+        if self.config.vllm_spans_listen is not None:
+            event = span_capability_event(
+                context,
+                receiver=self.span_receiver,
+                listen=self.config.vllm_spans_listen,
+                error=self._span_receiver_error,
+            )
+            writer.append(event.to_record())
 
     def _artifact_identity(self) -> ArtifactIdentityEvent:
         session = self.session
@@ -290,6 +540,7 @@ class InferenceProfiler:
                 self.config.cache_reset_url,
                 timeout_seconds=self.config.timeout_seconds,
                 api_key=self.config.api_key,
+                retry_seconds=self.config.cache_reset_timeout_seconds,
             )
             if not reset.succeeded and self.on_warning is not None:
                 self.on_warning(
@@ -349,14 +600,16 @@ class InferenceProfiler:
         prompts.warm()
         if abandoned is None:
             abandoned = await self._wait_for_abandoned()
-        if case.arrival.open_loop:
-            window = await self._run_open_phase(
-                request, total_requests, duration_seconds
-            )
-        else:
-            window = await self._run_closed_phase(
-                request, total_requests, duration_seconds
-            )
+        try:
+            async with self._trace_window(case.case_id, phase):
+                window = await self._run_scraped_phase(
+                    request, total_requests, duration_seconds
+                )
+        finally:
+            # Written on cancellation too, even one that lands while the
+            # profiler start is in flight, so the artifact names the trace files.
+            for record in self._trace_records():
+                writer.append(record)
         writer.append(
             window.to_record(
                 session_id=self.session.session_id,
@@ -365,6 +618,134 @@ class InferenceProfiler:
                 abandoned=abandoned,
             )
         )
+
+    async def _run_scraped_phase(
+        self,
+        request: "_PhaseRequest",
+        total_requests: int | None,
+        duration_seconds: float | None,
+    ) -> "_PhaseWindow":
+        """Run the phase's arrivals, scraping vLLM around and during them.
+
+        The first scrape lands just before the first send and the last one
+        after the drain, so counters and histograms between them cover the
+        requests this phase completed; the interval scrapes catch the gauges
+        while the phase runs.
+        """
+        scraper = self.vllm_scraper
+        if scraper is None:
+            return await self._run_phase_requests(
+                request, total_requests, duration_seconds
+            )
+        case_id, phase, writer = request.case.case_id, request.phase, request.writer
+        await self._scrape(scraper, MARKER_PHASE_START, case_id, phase, writer)
+        stop_scraping = asyncio.Event()
+        scrape_task = asyncio.create_task(
+            scraper.interval_loop(
+                append=writer.append,
+                case_id=case_id,
+                phase=phase,
+                stop_event=stop_scraping,
+            )
+        )
+        completed = False
+        try:
+            window = await self._run_phase_requests(
+                request, total_requests, duration_seconds
+            )
+            completed = True
+            return window
+        finally:
+            stop_scraping.set()
+            # A finished phase keeps a straddling interval scrape, however
+            # long its fetch takes. A cancelled one waits briefly for a
+            # scrape in flight and then gives it up: its thread is dropped,
+            # and its late result with it, so nothing from it is recorded.
+            bound = None if completed else INTERRUPT_SCRAPE_TIMEOUT_SECONDS
+            if not await _wait_for(scrape_task, bound):
+                scrape_task.cancel()
+                await _wait_for(scrape_task)
+            # A cancelled phase still gets its end scrape, on a short clock.
+            if completed:
+                await self._scrape(scraper, MARKER_PHASE_END, case_id, phase, writer)
+            else:
+                await self._bounded_end_scrape(scraper, case_id, phase, writer)
+
+    async def _bounded_end_scrape(
+        self,
+        scraper: VllmMetricsScraper,
+        case_id: str,
+        phase: str,
+        writer: JsonlEventWriter,
+    ) -> None:
+        """The end scrape of a cancelled phase, under one overall deadline.
+
+        The short timeout given to the fetch is a socket inactivity timeout,
+        so a response that keeps dribbling bytes inside it would hold the
+        stop open for as long as it liked. The same bound is applied to the
+        scrape as a whole; past it the fetch is left to its daemon thread
+        and the record says the deadline passed.
+        """
+        observed_at_ns = time.time_ns()
+        deadline = INTERRUPT_SCRAPE_TIMEOUT_SECONDS
+        task = asyncio.ensure_future(
+            scraper.scrape_async(
+                marker=MARKER_PHASE_END,
+                case_id=case_id,
+                phase=phase,
+                timeout_seconds=deadline,
+            )
+        )
+        if await _wait_for(task, deadline):
+            record = task.result()
+        else:
+            task.cancel()
+            await _wait_for(task)
+            record = scraper.abandoned(
+                marker=MARKER_PHASE_END,
+                case_id=case_id,
+                phase=phase,
+                observed_at_ns=observed_at_ns,
+                deadline_seconds=deadline,
+            )
+        writer.append(record.to_record())
+
+    async def _run_phase_requests(
+        self,
+        request: "_PhaseRequest",
+        total_requests: int | None,
+        duration_seconds: float | None,
+    ) -> "_PhaseWindow":
+        if request.case.arrival.open_loop:
+            return await self._run_open_phase(request, total_requests, duration_seconds)
+        return await self._run_closed_phase(request, total_requests, duration_seconds)
+
+    async def _scrape(
+        self,
+        scraper: VllmMetricsScraper,
+        marker: str,
+        case_id: str,
+        phase: str,
+        writer: JsonlEventWriter,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        record = await scraper.scrape_async(
+            marker=marker,
+            case_id=case_id,
+            phase=phase,
+            timeout_seconds=timeout_seconds,
+        )
+        writer.append(record.to_record())
+
+    def _trace_records(self) -> list[dict[str, Any]]:
+        if self.traces is None:
+            return []
+        return self.traces.take_records(session_id=self.session.session_id)
+
+    def _trace_window(self, case_id: str, phase: str) -> Any:
+        if self.traces is None:
+            return _no_trace_window()
+        return self.traces.window(case_id, phase)
 
     def _track(self, call: Future[Any]) -> None:
         with self._unfinished_lock:
@@ -523,11 +904,20 @@ class InferenceProfiler:
             window_ended_at_ns = dispatch.started_at_ns + round(duration_seconds * 1e9)
             drain_timeout += (window_ended_at_ns - time.time_ns()) / 1e9
         await _drain(dispatch.tasks, timeout=max(drain_timeout, 0.0))
+        endpoint = scheduled_endpoint(
+            case.arrival,
+            count=total_requests,
+            duration_seconds=duration_seconds,
+            seed=self.config.seed,
+        )
         return _PhaseWindow(
             dispatch.started_at_ns,
             window_ended_at_ns,
             time.time_ns(),
             scheduled_arrivals=len(offsets),
+            scheduled_endpoint_offset_ns=(
+                None if endpoint is None else round(endpoint * 1e9)
+            ),
         )
 
     async def _send(
@@ -566,17 +956,20 @@ class InferenceProfiler:
         arrival: Arrival,
         prompt: Prompt,
         prompt_count: TokenCount,
+        sent: bool = True,
     ) -> dict[str, Any]:
         """Fields every request event carries, whatever its outcome.
 
         ``prompt_count`` is the server's count when it reported one, an exact
         count made on the request's thread, or the planned size for a
-        request that never completed.
+        request that never completed. ``sent`` is False for a request that
+        never went out, which therefore carried no ``X-Request-Id``.
         """
         case = request.case
         return {
             "session_id": self.session.session_id,
             "request_id": request_id,
+            "x_request_id": self._x_request_id(request_id) if sent else None,
             "case_id": case.case_id,
             "phase": request.phase,
             "endpoint": self.config.endpoint,
@@ -619,6 +1012,7 @@ class InferenceProfiler:
                 output_tokens=case.output_tokens,
                 stream=self.config.stream,
                 stream_include_usage=self.config.stream_include_usage,
+                request_id=self._x_request_id(request_id),
             ),
         )
         self._track(call)
@@ -772,6 +1166,7 @@ class InferenceProfiler:
                 arrival=arrival,
                 prompt=prompt,
                 prompt_count=prompt.planned_count,
+                sent=False,
             ),
             started_at_ns=now_ns,
             ended_at_ns=now_ns,
@@ -863,6 +1258,9 @@ class _PhaseWindow:
     window_ended_at_ns: int
     drained_at_ns: int
     scheduled_arrivals: int | None = None
+    # Where the schedule's observation window ends, from the phase start: the
+    # duration, or one whole slot after the last counted arrival.
+    scheduled_endpoint_offset_ns: int | None = None
 
     def to_record(
         self,
@@ -884,9 +1282,30 @@ class _PhaseWindow:
             "drained_at_ns": self.drained_at_ns,
             "drain_timeout_seconds": drain_timeout_seconds,
             "scheduled_arrivals": self.scheduled_arrivals,
+            "scheduled_endpoint_offset_ns": self.scheduled_endpoint_offset_ns,
             "prompts_digest": request.prompts.digest(),
             "abandoned_requests": abandoned.to_record(),
         }
+
+
+async def _wait_for(task: asyncio.Task[Any], timeout: float | None = None) -> bool:
+    """Wait for a helper task; True once it has finished.
+
+    ``await task`` would re-raise the CancelledError of a task that
+    ``asyncio.run`` has already cancelled (a Ctrl+C on Python 3.10 cancels
+    every task of the run at once) and abort the ``finally`` doing the
+    waiting. A finished task's own failure is still raised, so a bug in a
+    helper is not hidden.
+    """
+    done, _pending = await asyncio.wait({task}, timeout=timeout)
+    if task in done and not task.cancelled():
+        task.result()
+    return task in done
+
+
+@asynccontextmanager
+async def _no_trace_window() -> AsyncIterator[None]:
+    yield None
 
 
 async def _drain(tasks: list[asyncio.Task[None]], *, timeout: float | None) -> None:
@@ -922,25 +1341,40 @@ def _lag_ms(arrival: Arrival, sent_at_ns: int) -> float:
 
 # The server declined the request: rate limited or overloaded.
 REJECTED_HTTP_STATUSES = frozenset({429, 503})
+# How long the finished run waits for the vLLM execution hook to seal its open
+# segments (a heartbeat per second confirms it) before importing the log.
+EXECUTION_FLUSH_TIMEOUT_SECONDS = 10.0
 
 
 def classify_failure(exc: BaseException) -> tuple[str, int | None]:
-    """Return the request status for a failure and its HTTP status, if any."""
-    http_status = exc.status if isinstance(exc, EndpointHTTPError) else None
+    """Return the request status for a failure and its HTTP status, if any.
+
+    urllib wraps every error from connecting and sending in ``URLError``.
+    A failure inside ``connect()``, before any byte of the request was sent,
+    is ``unreachable``: the server never saw the request. A failure while
+    sending, or a reset or close before the response's status line, is
+    ``delivery_unknown``: the server may have received it. After the status
+    line the server has answered, so a reset is the answer it gave: an
+    ``error`` (or ``rejected``) with that status. A timeout while waiting
+    for the response, or a read that stalls, is ``timeout``. Redirects are
+    not followed, so a 3xx is an ``error``.
+    """
+    http_status = (
+        exc.status if isinstance(exc, (EndpointHTTPError, CutResponseError)) else None
+    )
     if http_status in REJECTED_HTTP_STATUSES:
         return "rejected", http_status
-    if _is_timeout(exc):
+    if isinstance(exc, NoResponseError):
+        return "delivery_unknown", None
+    if isinstance(exc, urllib.error.URLError) and not isinstance(
+        exc, urllib.error.HTTPError
+    ):
+        if isinstance(exc.reason, ConnectError):
+            return "unreachable", None
+        return "delivery_unknown", None
+    if isinstance(exc, TimeoutError):
         return "timeout", http_status
     return "error", http_status
-
-
-def _is_timeout(exc: BaseException) -> bool:
-    if isinstance(exc, TimeoutError):
-        return True
-    # urllib wraps a connect timeout in URLError.
-    return isinstance(exc, urllib.error.URLError) and isinstance(
-        exc.reason, TimeoutError
-    )
 
 
 class _RequestCounter:

@@ -229,11 +229,14 @@ class _Response:
 def test_extra_fields_reach_the_request_body(monkeypatch: pytest.MonkeyPatch) -> None:
     sent: list[dict[str, Any]] = []
 
-    def urlopen(request: Any, timeout: float) -> _Response:
-        sent.append(json.loads(request.data))
-        return _Response({"choices": [{"message": {"content": "hi"}}]})
+    class _Opener:
+        def open(self, request: Any, timeout: float) -> _Response:
+            sent.append(json.loads(request.data))
+            return _Response({"choices": [{"message": {"content": "hi"}}]})
 
-    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    monkeypatch.setattr(
+        "stormlog.infer.openai_client.inference_opener", lambda: _Opener()
+    )
     client = OpenAIChatCompletionsClient(
         endpoint="http://127.0.0.1:1/v1/chat/completions",
         model="m",

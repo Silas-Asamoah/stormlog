@@ -59,6 +59,9 @@ infer-tokenizers = [
     "transformers>=4.40",
     "sentencepiece>=0.2",
 ]
+infer-otlp = [
+    "opentelemetry-proto>=1.20",
+]
 wandb = [
     "wandb>=0.19.0",
 ]
@@ -81,6 +84,7 @@ all = [
     "tiktoken>=0.7",
     "transformers>=4.40",
     "sentencepiece>=0.2",
+    "opentelemetry-proto>=1.20",
     "textual>=0.57.0",
     "pyfiglet>=1.0.2",
     "wandb>=0.19.0",
@@ -150,6 +154,11 @@ gpumemprof = "stormlog.cli:main"
 tfmemprof = "stormlog.tensorflow.cli:main"
 jaxmemprof = "stormlog.jax.cli:main"
 stormlog = "stormlog.entrypoint:main"
+
+# vLLM loads this in its engine-core and worker processes; it does nothing
+# unless STORMLOG_VLLM_HOOK_DIR is set (docs/vllm_execution.md).
+[project.entry-points."vllm.general_plugins"]
+stormlog = "stormlog.vllm_hook:register"
 
 [tool.setuptools_scm]
 fallback_version = "0.0.0"
@@ -257,6 +266,17 @@ module = [
     "mlflow.*",
     "torchvision",
     "torchvision.*",
+    # The infer-otlp extra: generated protobuf classes without a py.typed
+    # marker, absent from the lint job's environment, and the protobuf
+    # runtime they need.
+    "opentelemetry",
+    "opentelemetry.*",
+    "google.protobuf",
+    "google.protobuf.*",
+    # The vLLM execution hook runs inside a vLLM server; vLLM is never a
+    # Stormlog dependency.
+    "vllm",
+    "vllm.*",
 ]
 ignore_missing_imports = true
 

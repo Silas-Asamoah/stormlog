@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stormlog.readthedocs.io/en/latest/schemas/inference_vllm_v1.schema.json",
+  "title": "Stormlog vLLM native telemetry record v1",
+  "description": "Either one /metrics scrape kept whole in compact form, stamped on the client clock, or one OpenTelemetry span as vLLM exported it. Both are engine-side evidence about every request the engine served; neither attributes GPU time to a request. The loader also checks rules this schema cannot state: an ok scrape carries its series and discovery while a failed one carries an error instead, and integers have no decimal point or exponent.",
+  "oneOf": [
+    { "$ref": "#/$defs/scrape" },
+    { "$ref": "#/$defs/span" }
+  ],
+  "$defs": {
+    "scrape": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "event_type",
+        "observation_scope",
+        "session_id",
+        "run_id",
+        "observed_at_ns",
+        "timestamp_ns",
+        "source_url",
+        "marker",
+        "interval_ms",
+        "status",
+        "clock_domain",
+        "case_id",
+        "phase",
+        "duration_ms",
+        "http_status",
+        "error",
+        "content_digest",
+        "content_bytes",
+        "scrape",
+        "discovery"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "event_type": { "const": "infer.vllm_scrape" },
+        "observation_scope": { "const": "engine_aggregate" },
+        "session_id": { "type": "string", "minLength": 1 },
+        "run_id": { "type": "string", "minLength": 1 },
+        "observed_at_ns": { "type": "integer", "minimum": 1 },
+        "timestamp_ns": { "type": "integer", "minimum": 1 },
+        "source_url": { "type": "string", "minLength": 1 },
+        "marker": { "enum": ["phase_start", "interval", "phase_end", "manual"] },
+        "interval_ms": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["ok", "error"] },
+        "clock_domain": { "type": "string", "pattern": "^.+/unix_epoch_ns$" },
+        "case_id": { "type": ["string", "null"], "minLength": 1 },
+        "phase": { "type": ["string", "null"], "minLength": 1 },
+        "duration_ms": { "type": ["number", "null"], "minimum": 0 },
+        "http_status": { "type": ["integer", "null"], "minimum": 0 },
+        "error": { "type": ["string", "null"], "minLength": 1 },
+        "content_digest": { "type": ["string", "null"], "minLength": 1 },
+        "content_bytes": { "type": ["integer", "null"], "minimum": 0 },
+        "scrape": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/compact_scrape" }]
+        },
+        "discovery": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/discovery" }]
+        }
+      }
+    },
+    "compact_scrape": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["families", "label_sets", "values", "helps"],
+      "properties": {
+        "families": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": ["gauge", "counter", "histogram", "summary", "untyped", "info"]
+          }
+        },
+        "label_sets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "oneOf": [
+                { "$ref": "#/$defs/sample_value" },
+                { "$ref": "#/$defs/histogram_value" }
+              ]
+            }
+          }
+        },
+        "helps": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "sample_value": {
+      "description": "A Prometheus sample value; NaN and the infinities are written as the strings NaN, +Inf and -Inf so every line stays strict JSON.",
+      "oneOf": [
+        { "type": "number" },
+        { "enum": ["NaN", "+Inf", "-Inf"] }
+      ]
+    },
+    "histogram_value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["buckets", "sum", "count"],
+      "properties": {
+        "buckets": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [{ "type": "string" }, { "$ref": "#/$defs/sample_value" }],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "sum": {
+          "description": "null when the exposition had no _sum sample; it is never invented as zero.",
+          "oneOf": [{ "$ref": "#/$defs/sample_value" }, { "type": "null" }]
+        },
+        "count": {
+          "description": "null when the exposition had no _count sample.",
+          "oneOf": [{ "$ref": "#/$defs/sample_value" }, { "type": "null" }]
+        }
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verified_vllm_version",
+        "present",
+        "absent",
+        "optional_absent",
+        "deprecated_present",
+        "removed_present",
+        "unknown",
+        "engines",
+        "model_names",
+        "process_start_ns"
+      ],
+      "properties": {
+        "verified_vllm_version": { "type": "string", "minLength": 1 },
+        "present": { "$ref": "#/$defs/names" },
+        "absent": { "$ref": "#/$defs/names" },
+        "optional_absent": { "$ref": "#/$defs/names" },
+        "optional_present": { "$ref": "#/$defs/names" },
+        "deprecated_present": { "$ref": "#/$defs/names" },
+        "removed_present": { "$ref": "#/$defs/names" },
+        "unknown": { "$ref": "#/$defs/names" },
+        "engines": { "$ref": "#/$defs/names" },
+        "model_names": { "$ref": "#/$defs/names" },
+        "process_start_ns": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "names": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "event_type",
+        "session_id",
+        "run_id",
+        "source",
+        "name",
+        "clock_domain",
+        "received_at_ns",
+        "timestamp_ns",
+        "trace_id",
+        "span_id",
+        "parent_span_id",
+        "kind",
+        "start_unix_ns",
+        "end_unix_ns",
+        "attributes",
+        "resource",
+        "scope",
+        "status",
+        "dropped",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "event_type": { "const": "infer.vllm_span" },
+        "session_id": { "type": "string", "minLength": 1 },
+        "run_id": { "type": "string", "minLength": 1 },
+        "source": { "enum": ["otlp_http_receiver", "otlp_json_file", "jsonl_file"] },
+        "name": { "type": "string", "minLength": 1 },
+        "clock_domain": { "type": "string", "pattern": "^.+/unix_epoch_ns$" },
+        "received_at_ns": { "type": ["integer", "null"], "minimum": 0 },
+        "timestamp_ns": { "type": ["integer", "null"], "minimum": 0 },
+        "trace_id": { "type": ["string", "null"], "minLength": 1 },
+        "span_id": { "type": ["string", "null"], "minLength": 1 },
+        "parent_span_id": { "type": ["string", "null"], "minLength": 1 },
+        "kind": { "type": ["string", "null"], "minLength": 1 },
+        "start_unix_ns": { "type": ["integer", "null"], "minimum": 0 },
+        "end_unix_ns": { "type": ["integer", "null"], "minimum": 0 },
+        "attributes": { "type": "object" },
+        "resource": { "type": "object" },
+        "scope": { "type": "object" },
+        "status": { "type": ["object", "null"] },
+        "dropped": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "request_id": { "type": ["string", "null"], "minLength": 1 }
+      }
+    }
+  }
+}

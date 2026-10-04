@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from typing import Any, TypeGuard
 
@@ -31,10 +32,13 @@ def percentile(values: list[float], percent: int) -> float | None:
 def int_value(value: Any) -> int:
     if isinstance(value, int) and not isinstance(value, bool):
         return value
-    if isinstance(value, float):
+    if isinstance(value, float) and math.isfinite(value):
         return int(value)
     return 0
 
 
 def is_number(value: Any) -> TypeGuard[int | float]:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """A finite real number; NaN and infinities in an artifact are no value."""
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return isinstance(value, int) and not isinstance(value, bool)

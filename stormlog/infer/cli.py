@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import signal
 import sys
@@ -14,7 +15,11 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 from ..exit_codes import ExitCode
-from .analysis import analyze_inference_events, format_analysis_text
+from .analysis import (
+    analyze_inference_events,
+    format_analysis_text,
+    replaced_policies,
+)
 from .arrivals import (
     ARRIVAL_MODES,
     BURST,
@@ -24,7 +29,7 @@ from .arrivals import (
     ArrivalTrace,
     load_arrival_trace,
 )
-from .cache_state import CACHE_STATES, COLD, UNSPECIFIED
+from .cache_state import CACHE_STATES, COLD, RESET_RETRY_SECONDS, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
 from .errors import InferInputError, InferUsageError
 from .profile import InferenceProfiler
@@ -36,6 +41,19 @@ from .server_collector import (
     NvmlUnavailableError,
     collect_server_telemetry,
 )
+from .slo import (
+    CLIENT,
+    SERVER,
+    SloSpec,
+    load_slo,
+    parse_slo_flags,
+    require_measured_window,
+)
+from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
+from .trace_import import import_traces_into_artifact, parse_device_uuids
+from .vllm_execution_import import import_execution_into_artifact
+from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
+from .vllm_spans import DEFAULT_SPANS_LISTEN, parse_listen_address
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -64,6 +82,10 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         return cmd_analyze(args)
     if args.infer_command == "collect-server":
         return cmd_collect_server(args)
+    if args.infer_command == "import-trace":
+        return cmd_import_trace(args)
+    if args.infer_command == "import-execution":
+        return cmd_import_execution(args)
     parser.error(f"Unsupported infer command: {args.infer_command}")
 
 
@@ -227,9 +249,64 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Seed for prompts and Poisson arrivals (default: 0)",
     )
+    profile_parser.add_argument(
+        "--vllm-metrics",
+        nargs="?",
+        const=AUTO_METRICS_URL,
+        default=None,
+        metavar="URL",
+        help=(
+            "Scrape vLLM's Prometheus metrics at the start and end of every "
+            "phase and every --vllm-metrics-interval seconds inside it; without "
+            "a URL, the endpoint's origin plus /metrics"
+        ),
+    )
+    profile_parser.add_argument(
+        "--vllm-metrics-interval",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Seconds between vLLM metrics scrapes inside a phase (default: 1)",
+    )
+    profile_parser.add_argument(
+        "--vllm-execution-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR as this host sees "
+            "it; when the run ends, its final scheduler steps are imported and "
+            "its worker hellos name the GPU of each traced process"
+        ),
+    )
+    profile_parser.add_argument(
+        "--vllm-spans-listen",
+        nargs="?",
+        const=DEFAULT_SPANS_LISTEN,
+        default=None,
+        metavar="HOST:PORT",
+        help=(
+            "Receive vLLM's OpenTelemetry request spans over OTLP/HTTP at "
+            "HOST:PORT (default 127.0.0.1:4318) for the length of the run; "
+            "start vLLM with --otlp-traces-endpoint pointing at it and "
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf, since vLLM "
+            "exports over gRPC by default"
+        ),
+    )
+    profile_parser.add_argument(
+        "--vllm-spans-drain",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Keep the span receiver listening this long after the last phase, "
+            "for the exporter's final batch (default: 6; vLLM flushes every 5 s)"
+        ),
+    )
+    _add_slo_arguments(profile_parser, "record in the artifact and judge the run by")
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
     _add_cache_arguments(profile_parser)
+    _add_trace_arguments(profile_parser)
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -260,6 +337,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Assert requests went to the single server identity in telemetry",
     )
     analyze_parser.add_argument(
+        "--vllm-spans",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help=(
+            "vLLM request spans collected elsewhere, as OTLP JSON or one span "
+            "per line; may be supplied more than once"
+        ),
+    )
+    analyze_parser.add_argument(
         "--clock-offset-ns",
         type=int,
         default=None,
@@ -276,6 +363,10 @@ def build_parser() -> argparse.ArgumentParser:
             "Absolute uncertainty of --clock-offset-ns; on one host and boot "
             "it may be given alone"
         ),
+    )
+    _add_slo_arguments(
+        analyze_parser,
+        "judge the cases by, instead of the policy the artifact recorded",
     )
     collector_parser = subparsers.add_parser(
         "collect-server",
@@ -332,7 +423,129 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Number of group members; each rank 0..N-1 needs a collector",
     )
+    _add_import_trace_parser(subparsers)
+    _add_import_execution_parser(subparsers)
     return parser
+
+
+def _add_slo_arguments(parser: argparse.ArgumentParser, purpose: str) -> None:
+    parser.add_argument(
+        "--slo",
+        action="append",
+        default=[],
+        metavar="KEY:MS",
+        help=(
+            f"An SLO criterion to {purpose}, such as ttft:500 or "
+            "server.ttft:400 (milliseconds; a key without a boundary is a "
+            "client criterion); repeatable"
+        ),
+    )
+    parser.add_argument(
+        "--slo-file",
+        default=None,
+        metavar="FILE",
+        help=f"A stormlog.infer.slo policy file to {purpose}",
+    )
+
+
+def _slo_policy(args: argparse.Namespace) -> tuple[SloSpec | None, str]:
+    """The policy from --slo or --slo-file, and which one gave it."""
+    if args.slo and args.slo_file:
+        raise InferUsageError("use --slo or --slo-file, not both")
+    if args.slo_file:
+        spec = load_slo(args.slo_file)
+        return require_measured_window(spec, f"SLO policy {args.slo_file}"), "file"
+    if args.slo:
+        return parse_slo_flags(args.slo), "flags"
+    return None, "flags"
+
+
+def _add_import_trace_parser(subparsers: Any) -> None:
+    import_parser = subparsers.add_parser(
+        "import-trace",
+        help="Add a profiler trace's GPU activity to an artifact",
+    )
+    import_parser.add_argument("artifact", help="Inference JSONL with a run identity")
+    import_parser.add_argument(
+        "traces",
+        nargs="+",
+        help=(
+            "Kineto Chrome traces (.json, .json.gz) or Nsight Systems SQLite "
+            "exports (.sqlite); an .nsys-rep report is registered only"
+        ),
+    )
+    import_parser.add_argument(
+        "--device-uuid",
+        action="append",
+        default=[],
+        metavar="[TRACE_FILE:]INDEX=UUID",
+        help=(
+            "GPU UUID for a CUDA device ordinal in the traced process (after "
+            "CUDA_VISIBLE_DEVICES); repeat per device. Prefix a trace's path as "
+            "given here, or its file name when only one trace has it, to scope "
+            "the entry to that trace; a prefix that names no trace or several is "
+            "refused, as is an unscoped ordinal that traces from different "
+            "processes use. Without it, GPU activity is kept but not measured"
+        ),
+    )
+    import_parser.add_argument(
+        "--detail",
+        choices=("launch", "kernel"),
+        default="launch",
+        help=(
+            "launch: one record per launch call (default, compact); kernel: one "
+            "record per GPU event (exact, large)"
+        ),
+    )
+    import_parser.add_argument(
+        "--vllm-execution-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR; its worker hellos "
+            "name the GPU of each traced process (by host, pid and lifetime), so "
+            "--device-uuid is only needed where that leaves a gap"
+        ),
+    )
+    import_parser.add_argument(
+        "--envelope", default=None, help="Run envelope (default: beside the artifact)"
+    )
+
+
+def _add_import_execution_parser(subparsers: Any) -> None:
+    parser = subparsers.add_parser(
+        "import-execution",
+        help="Add a vLLM execution hook's scheduler steps to an artifact",
+    )
+    parser.add_argument("artifact", help="Inference JSONL with a run identity")
+    parser.add_argument(
+        "directory",
+        help=(
+            "The hook's STORMLOG_VLLM_HOOK_DIR, copied or mounted from the "
+            "server host; only steps that are final since the last import are added"
+        ),
+    )
+    parser.add_argument(
+        "--raw-foreign-ids",
+        action="store_true",
+        help=(
+            "Record other clients' request IDs as vLLM saw them instead of keyed "
+            "pseudonyms (the artifact then names requests that are not yours)"
+        ),
+    )
+    parser.add_argument(
+        "--server-stopped",
+        action="store_true",
+        help=(
+            "The server that wrote this log is no longer running: an epoch "
+            "without a goodbye record is gone and its pending steps are final. "
+            "Without it, silence is judged only on the server's own host and "
+            "boot; from anywhere else such an epoch's pending steps wait"
+        ),
+    )
+    parser.add_argument(
+        "--envelope", default=None, help="Run envelope (default: beside the artifact)"
+    )
 
 
 def _add_arrival_arguments(parser: argparse.ArgumentParser) -> None:
@@ -449,6 +662,116 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
             "vLLM /reset_prefix_cache or SGLang /flush_cache"
         ),
     )
+    parser.add_argument(
+        "--cache-reset-timeout",
+        type=float,
+        default=RESET_RETRY_SECONDS,
+        metavar="SECONDS",
+        help=(
+            "How long to retry a reset the server refuses, as vLLM does while "
+            "blocks are held. No attempt starts later, though the last can take "
+            f"up to --timeout (default: {RESET_RETRY_SECONDS:g}; 0 tries once)"
+        ),
+    )
+
+
+def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group(
+        "profiler trace",
+        "Bounded vLLM torch-profiler windows. The server must be started with "
+        "--profiler-config.profiler=torch and torch_profiler_dir; Stormlog only "
+        "starts and stops the profiler and imports the worker traces.",
+    )
+    group.add_argument(
+        "--trace", choices=TRACE_MODES, default=None, help="Capture a profiler trace"
+    )
+    group.add_argument(
+        "--trace-dir",
+        default=None,
+        help=(
+            "The server's torch_profiler_dir as this host sees it; without it the "
+            "traces stay on the server for `stormlog infer import-trace`"
+        ),
+    )
+    group.add_argument(
+        "--trace-control-url",
+        default=None,
+        help="Server root for /start_profile and /stop_profile (default: endpoint host)",
+    )
+    group.add_argument(
+        "--trace-phase",
+        choices=TRACE_PHASES,
+        default="measured",
+        help="Phase of each case to profile (default: measured)",
+    )
+    group.add_argument(
+        "--trace-max-seconds",
+        type=float,
+        default=None,
+        help="Stop the profiler after this many seconds even if the phase continues",
+    )
+    group.add_argument(
+        "--trace-max-bytes",
+        type=int,
+        default=None,
+        help="Register but do not import a trace file larger than this",
+    )
+    group.add_argument(
+        "--trace-device-uuid",
+        action="append",
+        default=[],
+        metavar="INDEX=UUID",
+        help="GPU UUID for a CUDA device ordinal in the server process; repeatable",
+    )
+    group.add_argument(
+        "--trace-detail",
+        choices=("launch", "kernel"),
+        default="launch",
+        help="Import one record per launch (default) or per GPU event",
+    )
+
+
+def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig | None:
+    if args.trace is None:
+        return None
+    return TraceCaptureConfig(
+        mode=args.trace,
+        control_url=args.trace_control_url or server_root(endpoint),
+        trace_dir=Path(args.trace_dir) if args.trace_dir else None,
+        phase=args.trace_phase,
+        max_seconds=args.trace_max_seconds,
+        max_bytes=args.trace_max_bytes,
+        device_uuids=parse_device_uuids(args.trace_device_uuid),
+        detail=args.trace_detail,
+    )
+
+
+def _validate_trace_arguments(args: argparse.Namespace) -> None:
+    if args.trace is not None:
+        _validate_http_url(args.trace_control_url, "--trace-control-url")
+        if args.trace_phase == "warmup" and args.warmup_requests < 1:
+            raise ValueError(
+                "--trace-phase warmup needs --warmup-requests >= 1; without "
+                "warmup requests there is no warmup phase to profile"
+            )
+        if args.trace_dir is not None and not Path(args.trace_dir).is_dir():
+            _print_warning(
+                f"--trace-dir {args.trace_dir} does not exist yet; traces are found "
+                "only if the server creates it and this host can read it"
+            )
+        return
+    options: tuple[tuple[str, object, object], ...] = (
+        ("--trace-dir", args.trace_dir, None),
+        ("--trace-control-url", args.trace_control_url, None),
+        ("--trace-phase", args.trace_phase, "measured"),
+        ("--trace-max-seconds", args.trace_max_seconds, None),
+        ("--trace-max-bytes", args.trace_max_bytes, None),
+        ("--trace-device-uuid", args.trace_device_uuid, []),
+        ("--trace-detail", args.trace_detail, "launch"),
+    )
+    given = [flag for flag, value, default in options if value != default]
+    if given:
+        raise ValueError(f"{', '.join(given)} needs --trace")
 
 
 def cmd_profile(args: argparse.Namespace) -> int:
@@ -464,6 +787,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         )
     with _usage_errors():
         profiler = InferenceProfiler(_profile_config(args), on_warning=_print_warning)
+    _warn_about_unjudgeable_criteria(profiler.config)
     report = profiler.run()
     print(format_analysis_text(report))
     print(f"Artifact saved to: {Path(args.output)}")
@@ -505,6 +829,7 @@ def _usage_errors() -> Iterator[None]:
 
 def _profile_config(args: argparse.Namespace) -> ProfileConfig:
     endpoint = resolve_endpoint(endpoint=args.endpoint, base_url=args.base_url)
+    slo, slo_source = _slo_policy(args)
     return ProfileConfig(
         endpoint=endpoint,
         model=args.model,
@@ -552,7 +877,22 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         prefix_groups=args.prefix_groups,
         cache_state=args.cache_state,
         cache_reset_url=args.cache_reset_url,
+        cache_reset_timeout_seconds=args.cache_reset_timeout,
         extra_body=_extra_body(args.extra_body),
+        vllm_metrics_url=resolve_metrics_url(endpoint, args.vllm_metrics),
+        vllm_metrics_interval_seconds=(
+            1.0 if args.vllm_metrics_interval is None else args.vllm_metrics_interval
+        ),
+        vllm_spans_listen=args.vllm_spans_listen,
+        vllm_spans_drain_seconds=(
+            6.0 if args.vllm_spans_drain is None else args.vllm_spans_drain
+        ),
+        trace=_trace_config(args, endpoint),
+        vllm_execution_dir=(
+            Path(args.vllm_execution_dir) if args.vllm_execution_dir else None
+        ),
+        slo=slo,
+        slo_source=slo_source if slo is not None else None,
     )
 
 
@@ -598,13 +938,23 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if not input_path.exists():
         print(f"Error: Input file '{args.input_file}' not found", file=sys.stderr)
         return int(ExitCode.INVALID_INPUT)
+    slo, slo_source = _slo_policy(args)
     report = analyze_inference_events(
         input_path,
         server_telemetry_paths=args.server_telemetry,
         direct_server=args.direct_server,
         clock_offset_ns=args.clock_offset_ns,
         clock_uncertainty_ns=args.clock_uncertainty_ns,
+        vllm_span_paths=args.vllm_spans,
+        slo=slo,
+        slo_source=slo_source,
     )
+    for replaced in replaced_policies(report):
+        _print_warning(
+            f"--{'slo-file' if slo_source == 'file' else 'slo'} replaces the "
+            f"policy the artifact recorded ({replaced.get('name')}, digest "
+            f"{str(replaced.get('digest'))[:12]})"
+        )
     if args.format == "json":
         payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
     else:
@@ -702,13 +1052,57 @@ def _validate_profile_arguments(args: argparse.Namespace) -> None:
         raise ValueError("Use either --duration or --requests, not both")
     _validate_arrival_arguments(args)
     _validate_prompt_arguments(args)
-    _validate_http_url(args.cache_reset_url, "--cache-reset-url")
+    _validate_cache_arguments(args)
+    _validate_trace_arguments(args)
     if args.timeout <= 0:
         raise ValueError("--timeout must be > 0")
     if args.warmup_requests < 0:
         raise ValueError("--warmup-requests must be >= 0")
     if args.sample_interval <= 0:
         raise ValueError("--sample-interval must be > 0")
+    _validate_vllm_metrics_arguments(args)
+    _validate_vllm_span_arguments(args)
+    _validate_execution_dir_argument(args)
+
+
+def _validate_execution_dir_argument(args: argparse.Namespace) -> None:
+    directory = args.vllm_execution_dir
+    if directory is not None and not Path(directory).is_dir():
+        _print_warning(
+            f"--vllm-execution-dir {directory} does not exist yet; the execution "
+            "log is imported only if the hook writes it there and this host can "
+            "read it"
+        )
+
+
+def _validate_vllm_metrics_arguments(args: argparse.Namespace) -> None:
+    if args.vllm_metrics not in (None, AUTO_METRICS_URL):
+        _validate_http_url(args.vllm_metrics, "--vllm-metrics")
+    interval = args.vllm_metrics_interval
+    if interval is None:
+        return
+    if args.vllm_metrics is None:
+        raise ValueError("--vllm-metrics-interval only applies with --vllm-metrics")
+    if not math.isfinite(interval) or interval < 0.1:
+        raise ValueError("--vllm-metrics-interval must be a number of seconds >= 0.1")
+
+
+def _validate_cache_arguments(args: argparse.Namespace) -> None:
+    _validate_http_url(args.cache_reset_url, "--cache-reset-url")
+    if not math.isfinite(args.cache_reset_timeout) or args.cache_reset_timeout < 0:
+        raise ValueError("--cache-reset-timeout must be a finite number >= 0")
+
+
+def _validate_vllm_span_arguments(args: argparse.Namespace) -> None:
+    if args.vllm_spans_listen is not None:
+        parse_listen_address(args.vllm_spans_listen)
+    drain = args.vllm_spans_drain
+    if drain is None:
+        return
+    if args.vllm_spans_listen is None:
+        raise ValueError("--vllm-spans-drain only applies with --vllm-spans-listen")
+    if not math.isfinite(drain) or drain < 0:
+        raise ValueError("--vllm-spans-drain must be a number of seconds >= 0")
 
 
 def _validate_arrival_arguments(args: argparse.Namespace) -> None:
@@ -769,6 +1163,34 @@ def _validate_loop_flags(args: argparse.Namespace) -> None:
         )
 
 
+def _warn_about_unjudgeable_criteria(config: ProfileConfig) -> None:
+    """Say before sending which criteria no request of this run can be judged on."""
+    if config.slo is None:
+        return
+    for criterion in config.slo.criteria:
+        if criterion.definition.per_request is None:
+            reason = f"{criterion.key} is aggregate-only"
+        elif criterion.boundary == SERVER and config.vllm_spans_listen is None:
+            reason = (
+                f"{criterion.key} needs vLLM spans (--vllm-spans-listen here, or "
+                "--vllm-spans when analyzing)"
+            )
+        elif criterion.boundary == CLIENT and criterion.metric in _STREAMED_METRICS:
+            if config.stream:
+                continue
+            reason = f"{criterion.key} needs streamed responses (drop --no-stream)"
+        else:
+            continue
+        _print_warning(
+            f"SLO criterion {reason}; it cannot be judged per request, so each "
+            "case's SLO evaluation will be unmeasurable"
+        )
+
+
+# Client criteria measured from the first streamed chunk.
+_STREAMED_METRICS = frozenset({"ttft", "ttft_from_intended"})
+
+
 def _warn_about_short_prompts(args: argparse.Namespace) -> None:
     if args.prompt_mode == REPEAT:
         return
@@ -789,3 +1211,145 @@ def _warn_about_repeated_prompts(args: argparse.Namespace) -> None:
         "that already served this workload starts with them cached. Pass "
         "--cache-reset-url or change --seed to start cold"
     )
+
+
+def cmd_import_trace(args: argparse.Namespace) -> int:
+    """Append profiler-trace GPU activity to an existing inference artifact."""
+    capture = import_traces_into_artifact(
+        args.artifact,
+        args.traces,
+        device_uuids=parse_device_uuids(args.device_uuid),
+        detail=args.detail,
+        envelope_path=args.envelope,
+        execution_dir=args.vllm_execution_dir,
+    )
+    for summary in (capture.summary or {}).get("traces", []):
+        _print_trace_summary(summary)
+    for path in (capture.summary or {}).get("already_imported", []):
+        print(f"Skipped {path}: already imported into this run")
+    return int(ExitCode.OK)
+
+
+def cmd_import_execution(args: argparse.Namespace) -> int:
+    """Append a vLLM execution log's final steps to an existing artifact."""
+    capture = import_execution_into_artifact(
+        args.artifact,
+        args.directory,
+        raw_foreign_ids=args.raw_foreign_ids,
+        envelope_path=args.envelope,
+        server_stopped=args.server_stopped,
+    )
+    _print_execution_summary((capture.summary or {}).get("execution", {}))
+    return int(ExitCode.OK)
+
+
+def _print_execution_summary(summary: dict[str, Any]) -> None:
+    counts = summary.get("records", {})
+    print(
+        f"Imported execution log {summary.get('directory')}: "
+        f"{counts.get('iterations', 0)} iterations, "
+        f"{counts.get('memberships', 0)} memberships, "
+        f"{counts.get('requests', 0)} requests, "
+        f"{counts.get('clock_alignment', 0)} clock alignments"
+    )
+    for name, epoch in sorted(summary.get("epochs", {}).items()):
+        print(f"  {name}: {_epoch_line(epoch)}")
+        for error in epoch.get("errors", []):
+            print(f"    error: {error}")
+    for note in summary.get("notes", []):
+        print(f"  note: {note}")
+
+
+def _epoch_line(epoch: dict[str, Any]) -> str:
+    state = _state_text(epoch)
+    if not epoch.get("reduced"):
+        return f"{epoch.get('role')} epoch, {state}; not reduced"
+    waiting = epoch.get("iterations_pending", 0)
+    line = (
+        f"{state}; kept {epoch.get('iterations_kept', 0)} steps "
+        f"({epoch.get('iterations_incomplete', 0)} incomplete), {waiting} pending, "
+        f"{epoch.get('iterations_already_imported', 0)} already imported, "
+        f"{epoch.get('foreign_only_counted', 0)} foreign-only counted, "
+        f"{epoch.get('empty_counted', 0)} empty; "
+        f"high-water seq {epoch.get('high_water_seq')}"
+    )
+    dropped = sum(int(value) for value in (epoch.get("dropped") or {}).values())
+    if dropped or epoch.get("gaps"):
+        line += (
+            f"; {dropped} records dropped by the hook, {epoch.get('gaps', 0)} missing"
+        )
+    withheld = epoch.get("withheld") or {}
+    if any(withheld.values()):
+        line += (
+            f"; no epoch key: {withheld.get('memberships', 0)} memberships, "
+            f"{withheld.get('executions', 0)} requests and "
+            f"{withheld.get('foreign_only_steps', 0)} steps of other clients withheld"
+        )
+    return line
+
+
+def _state_text(epoch: dict[str, Any]) -> str:
+    """The epoch's liveness; an unjudged one says why and what to do."""
+    state = str(epoch.get("state"))
+    if state != "unknown":
+        return state
+    reason = epoch.get("state_reason") or "liveness not judged"
+    return (
+        f"unknown ({reason}: pending steps wait; pass --server-stopped if the "
+        "server that wrote this log has stopped)"
+    )
+
+
+def _print_trace_summary(summary: dict[str, Any]) -> None:
+    if summary.get("skipped") == "not_exported":
+        print(
+            f"Registered {summary['file']} without importing it; export it with "
+            "`nsys export --type sqlite` and import the .sqlite file"
+        )
+        return
+    if summary.get("skipped"):
+        print(
+            f"Registered trace {summary['file']} ({summary['bytes']} bytes) "
+            f"without importing it: over the {summary['skipped']} bound"
+        )
+        return
+    unresolved = sum(summary["unresolved_gpu_events"].values())
+    print(
+        f"Imported trace {summary['trace_id'] or '(no trace id)'}: "
+        f"{summary['gpu_events']} GPU events as {summary['activity_records']} "
+        f"records; {summary['linked_gpu_events']} linked to iterations, "
+        f"{unresolved} unresolved"
+    )
+    for reason, count in summary["unresolved_gpu_events"].items():
+        print(f"  unresolved ({reason}): {count}")
+    _print_trace_devices(summary)
+    for note in summary.get("notes", []):
+        print(f"  note: {note}")
+
+
+def _print_trace_devices(summary: dict[str, Any]) -> None:
+    for device, values in summary["devices"].items():
+        uuid = values["device_uuid"] or "unknown UUID, not measured"
+        if values.get("device_uuid_source") == "execution_log":
+            uuid += ", from the vLLM execution log"
+        pid, _, ordinal = str(device).rpartition("/")
+        label = f"process {pid} device {ordinal}" if pid else f"device {device}"
+        print(
+            f"  {label} ({uuid}): busy {values['busy_ns'] / 1e6:.3f} ms, "
+            f"summed {values['summed_ns'] / 1e6:.3f} ms"
+        )
+    binding = summary.get("execution_log")
+    if binding is not None and binding.get("status") != "bound":
+        print(f"  execution log: {_binding_note(binding)}")
+
+
+def _binding_note(binding: dict[str, Any]) -> str:
+    parts = []
+    if binding.get("unmatched"):
+        pids = ", ".join(str(pid) for pid in binding["unmatched"])
+        parts.append(f"no worker epoch covers process {pids}")
+    for pid, epochs in binding.get("ambiguous", {}).items():
+        parts.append(f"process {pid} matches {len(epochs)} worker epochs")
+    if not parts:
+        parts.append(f"status {binding.get('status')}")
+    return "; ".join(parts) + "; give --device-uuid for it"

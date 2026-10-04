@@ -25,6 +25,86 @@ the flaky benchmark memory gates
 
 ### Added
 
+- `stormlog.scrub`, shared scrubbing primitives for what Stormlog records or
+  sends elsewhere: `redact_url` (moved from `stormlog.infer.cache_state`,
+  which still exports it) with a new `origin_only` mode; `KnownSecrets`,
+  which redacts the exact credentials Stormlog was given in their raw,
+  percent-encoded, JSON-escaped and base64 forms; `scrub_text` for free text
+  an exporter has consent to send; `truncate_utf8`; and
+  `is_forbidden_key_name`. Documented in `docs/scrubbing.md`; the wider
+  artifact policy stays with #111. (#220)
+- `stormlog infer analyze` gives each case:
+  - a `latency` block: p50/p90/p95/p99 of each client latency metric, and of
+    vLLM's own TTFT, end-to-end and queue time when spans are joined;
+  - for each quantile, its value over the successful requests and with
+    failures ranked worst, its sample count, whether the case has enough
+    requests, and its order-statistic confidence interval. The second has
+    no value, with a reason, when a successful request lacks the metric. The
+    block's `rule` states what the intervals assume;
+  - for each status other than `ok`, the count and the elapsed time observed
+    before the request ended (for a cancelled request, its send to its
+    cancellation), kept apart from the latency quantiles;
+  - a `streaming` block of chunk-level figures, never called inter-token
+    latency. (#213)
+- `stormlog.infer.slo`: SLO policies whose criteria name their boundary
+  (`client.ttft`, `server.ttft`, ...), so client and server latency are never
+  mixed. Policies come from a versioned JSON file (`stormlog.infer.slo` v1),
+  `KEY:MS` flags, or an artifact's `infer.slo` record.
+  - `evaluate_request` judges an `infer.request` record as met, missed or
+    unknown, with a reason per criterion.
+  - `evaluate_span` judges a vLLM span on server criteria only, with success
+    unverified, since vLLM emits spans for failed requests too.
+  - A negative or non-finite value is unknown, never a pass, and the latency
+    quantiles leave it out.
+  - There is no client inter-token latency; `docs/inference_slo.md` explains
+    why. (#213)
+- `--slo KEY:MS` (repeatable) and `--slo-file FILE` on `stormlog infer
+  profile` and `stormlog infer analyze`. `profile` records the policy in the
+  artifact as `infer.slo`; `analyze` judges by the flags, or else by the
+  policy the artifact recorded. The report gains a top-level `slo` block
+  (name, digest, source, policy; the digest does not depend on the order of
+  the criteria) and, per case, SLO attainment and SLO goodput at the offered
+  load as lower and upper bounds with evidence coverage, `null` with a reason
+  when the policy cannot be judged, and whether the case's cohort is valid. A
+  malformed flag, or both options at once, exits 2; a missing or invalid
+  policy file, including one with a key given twice or a number too large for
+  a float, exits 5, as does a policy with a sliding interval, which an online
+  watcher judges. `profile` warns before sending when a criterion cannot be
+  judged per request in the run. When `analyze` options replace the policy
+  the artifact recorded, `slo.overrides` keeps its name and digest, and a
+  warning says so. (#213)
+- `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
+  hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,
+  `infer.membership`, `infer.request` and `infer.clock_alignment` records:
+  only final steps, each written once, with requests bound to the run by the
+  recorded `X-Request-Id` and other clients' requests kept under keyed
+  pseudonyms. `stormlog infer profile --vllm-execution-dir DIR` imports the
+  log when the run ends, before the report, and now imports traces before
+  the report too; `import-trace --vllm-execution-dir DIR` takes each
+  trace's GPU UUID from the hook's worker hellos. `infer analyze` gains
+  `telemetry.execution`, a coverage block of per-device unions: linkage,
+  membership, ownership, measurement and capture loss, with non-additive
+  case figures labelled. (#217)
+- vLLM native telemetry for `stormlog infer profile`. `--vllm-metrics [URL]`
+  scrapes vLLM's Prometheus metrics just before each phase's first send,
+  after its drain and every `--vllm-metrics-interval` seconds between, as
+  one `infer.vllm_scrape` record per scrape that keeps every series under
+  its native name with native histogram boundaries. `--vllm-spans-listen
+  [HOST:PORT]` runs an OTLP/HTTP receiver for the run and keeps each request
+  span as an `infer.vllm_span` record (protobuf exports need the new
+  `infer-otlp` extra, `opentelemetry-proto>=1.20`, and a server started with
+  `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf`, since vLLM exports
+  over gRPC by default); `infer analyze --vllm-spans FILE` loads spans
+  collected elsewhere. Every request now sends
+  `X-Request-Id: stormlog-<run_id>-<request_id>`, recorded as
+  `x_request_id`, so spans join to requests by the recorded value. The
+  report gains `telemetry.vllm`: per case and per engine label, counter and
+  histogram deltas, gauge summaries, token rates, prefix-cache hit ratio,
+  logical KV occupancy and the MFU estimates, with resets, restarts, missing
+  and retired series left unresolved with a reason instead of zero, plus a
+  capability record naming what vLLM 0.30.0 exposes and that
+  `--collect-detailed-traces` never fills the forward and execute fields.
+  ([#263](https://github.com/Silas-Asamoah/stormlog/pull/263))
 - Open-loop arrivals for `stormlog infer profile`. `--arrival fixed-rate`,
   `poisson`, `burst` or `replay` sends requests on a seeded schedule that is
   fixed before the run starts (`--rate`, `--burst-size`, `--burst-interval`,
@@ -105,6 +185,45 @@ the flaky benchmark memory gates
 
 ### Changed
 
+- **Breaking:** `stormlog infer analyze` JSON is `analysis_version: 2`.
+  - Each case's throughput divides by its rate interval. For an open loop
+    that is the schedule's own window; for a closed loop, the phase start to
+    the drain end. It used to be the span of the case's successful requests,
+    which shrank when the last requests failed.
+  - `throughput.duration_seconds` is replaced by `interval_seconds`,
+    `interval_kind` and `numerator_cohort`. The rate keys keep their names
+    with the new denominator, so a consumer must check `analysis_version`
+    before reading any rate:
+
+    | Version 1 | Version 2 |
+    | --- | --- |
+    | `throughput.duration_seconds`: first successful start to last successful end | `interval_seconds`, `interval_kind`, `numerator_cohort` |
+    | `requests_per_second`, `output_tokens_per_second`, `total_tokens_per_second` over `duration_seconds` | The same keys over `interval_seconds` |
+    | A rate over an empty span: `0.0` | `null`, with `intervals.rate_reason` |
+  - A rate over an empty interval is `null`, not `0.0`, and so is every rate
+    of an open loop with no known endpoint, such as a replay without
+    `--duration` (`rate_reason: endpoint_undeclared`).
+  - Each case gains a `population` block (offered, sent, accepted,
+    successful, failed, timed out, cancelled and the rest, with cohort checks)
+    and an `intervals` block. A case whose phase was cut short, such as by
+    Ctrl+C, has an invalid cohort (`phase_window_missing`, with its missing
+    scheduled arrivals) and no rates, and `summary.session_status` says how
+    the run ended. (#213)
+- `stormlog infer profile` tells apart where a failed request stopped. Two
+  new request statuses:
+  - `unreachable`: the connection failed before any byte was sent. A connect
+    timeout used to be `timeout`, and a refused connection `error`.
+  - `delivery_unknown`: sending failed after the connection completed, or
+    the connection closed before the response's status line, so the server
+    may have received the request. A reset after the status line is the
+    answer the server gave: an `error` (or `rejected`) with its status.
+
+  Inference requests and cache resets no longer follow HTTP redirects.
+  urllib re-sent a redirected POST as a GET to another address, so a 3xx is
+  now recorded as `error` with its status. They also ignore proxies set in
+  the environment, through which an unreachable server read as the proxy's
+  HTTP 502, and the session config records that they did
+  (`environment_proxies`). (#213)
 - **Breaking:** `gpumemprof`, `tfmemprof` and `jaxmemprof diagnose` exit 3
   for memory risk. They used to exit 2, which could not be told apart from
   an `argparse` usage error from the same command. The bundle manifest's
@@ -160,9 +279,43 @@ the flaky benchmark memory gates
 - `stormlog infer analyze` lists every case, including cases in which no
   request succeeded, so drops and failures stay visible.
   ([#248](https://github.com/Silas-Asamoah/stormlog/pull/248))
+- The vLLM execution hook takes about 60–65% less time on vLLM's engine thread
+  per scheduler step. Each record's fields are now serialized once, when the
+  record is queued. Before, they were walked in Python to bound their size,
+  then serialized again by the writer thread. On an A30 serving
+  Qwen2.5-0.5B with vLLM 0.30.0, the hook now costs 1.3% of throughput at
+  concurrency 32 (it was 9.7%) and 7.7% at concurrency 256 (it was 12.0%).
+  The records written are byte-identical. The queue counts each record at
+  its exact JSON size, so:
+  - the memory it holds is now its 32 MiB of JSON at most, plus about 113
+    bytes a record: about 34 MiB in all at the 20,000-record cap. The live
+    records it held before could take twice the 32 MiB;
+  - fewer records are dropped as oversized: only a record whose JSON is over
+    4 MiB is, where the old estimate, about 1.65 times the JSON, also
+    dropped some that fit.
+
+  A record the queue cannot take at any size, because it is full or the disk
+  cap has stopped record writing, is now dropped before it is serialized, and
+  so is a record whose request IDs, which clients choose, alone pass 4 MiB.
+  (#217)
 
 ### Fixed
 
+- `stormlog infer analyze` no longer keeps the first of two different
+  deliveries of a request's vLLM span. That request, and any request with more
+  than one span, is quarantined: its spans are left out of the case's span
+  statistics and counted under `quarantined_requests`. (#213)
+- `stormlog infer profile --cache-reset-url` no longer counts an HTTP 200 as a
+  reset. vLLM's `/reset_prefix_cache` answers 200 with `{"success": false}`
+  while blocks are still held. The answer is now read and recorded as
+  `acknowledged`, `refused` or `accepted_unverified`. A refused reset is
+  retried for up to `--cache-reset-timeout` seconds (default 10), then
+  counts as a failed reset, so the case is not labelled a cold start. A
+  `success` field with any value other than `true` is a refusal too, and no
+  retry starts after the timeout. `infer.cache_state` records and the
+  report's `cache` block gain `attempted` and `acknowledged`, and the reset's
+  `success`, `answer`, `attempts` and `answered_at_ns`, when the recorded
+  answer came back. (#213)
 - The benchmark harness's memory gates no longer fail on runner noise:
   - The soak's RSS checks (`max_rss_delta_bytes`, `rss_growth_per_24h_equiv`)
     now read memory inside the sample loop, after a warmup. Before, they
@@ -189,6 +342,31 @@ the flaky benchmark memory gates
   run, and a budgets file that is valid JSON but not an object no longer
   crashes with an `AttributeError` after the run.
   ([#249](https://github.com/Silas-Asamoah/stormlog/pull/249))
+- `stormlog infer profile --trace vllm-torch` now stops the profiler after a
+  `/start_profile` that answered 5xx, timed out, or lost its reply. vLLM runs
+  the start before it replies, so such a server could be left profiling, its
+  memory growing, until the next stop. Each `infer.trace_window` record now
+  carries `start_outcome` (`acknowledged`, `rejected` or `unknown`) and the
+  times the start request was sent and answered. Only a 401, 403, 404, 405
+  or 407, which come before vLLM's handler runs, is left unstopped. A stop that fails is warned about
+  and recorded, not retried, and the record says the profiler may still be
+  running.
+  ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
+- `stormlog infer profile`'s vLLM collectors bound what an endpoint can make
+  the client hold. A `/metrics` response is read at most 8 MiB far and
+  parsed one line at a time, refused at a line over 64 Ki characters or
+  past 20,000 series, so a scrape holds at most about twenty-five times
+  what it read. The OTLP span receiver admits at most 8 connections and
+  10 s for each whole request, headers and a protobuf body's wire scan
+  included; charges the exports in flight at most 128 MiB, each decoding
+  step from a measured estimate before it runs (a protobuf parse per
+  message, counted on the wire first); refuses a body of more than 10,000
+  spans; and queues at most 100,000 spans and 64 MiB of what they hold.
+  Before, the scrape read any response whole, and the receiver accepted
+  any number of connections into an unbounded queue. Refusals are counted
+  in the capability records (`docs/vllm_telemetry.md`, "Ingestion
+  limits").
+  ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
 
 ## [0.3.10] - 2026-10-01
 

@@ -222,6 +222,8 @@ def test_requests_still_running_at_the_drain_deadline_are_cancelled(
     assert report["summary"]["failures_by_status"] == {"cancelled": 2}
     (window,) = _windows(tmp_path)
     assert (window["phase"], window["scheduled_arrivals"]) == ("measured", 2)
+    # Two arrivals at 100/s occupy two 10 ms slots.
+    assert window["scheduled_endpoint_offset_ns"] == 20_000_000
     assert window["drain_timeout_seconds"] == 0.1
 
 
@@ -574,6 +576,7 @@ class _SlowThenRejectingClient:
         output_tokens: int,
         stream: bool,
         stream_include_usage: bool,
+        request_id: str | None = None,
     ) -> ChatCompletionResult:
         self.calls += 1
         if self.calls > 1:

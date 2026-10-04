@@ -36,6 +36,7 @@ class SleepingClient:
         output_tokens: int,
         stream: bool,
         stream_include_usage: bool,
+        request_id: str | None = None,
     ) -> ChatCompletionResult:
         started_at_ns = time.time_ns()
         with self.lock:

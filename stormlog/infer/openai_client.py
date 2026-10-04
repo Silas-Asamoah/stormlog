@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import http.client
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -17,6 +19,159 @@ class EndpointHTTPError(RuntimeError):
     def __init__(self, status: int, message: str) -> None:
         super().__init__(f"HTTP {status}: {message}")
         self.status = status
+
+
+class ConnectError(OSError):
+    """``connect()`` failed, so no byte of the request was sent.
+
+    That covers a refused or timed-out connection, a TLS handshake that did
+    not finish, and a socket the peer reset before ``connect()`` returned.
+    urllib wraps this in ``URLError``, as it does every error from sending,
+    and the reason tells the two apart: a request that failed here never
+    reached the server.
+    """
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(f"{type(cause).__name__}: {cause}")
+        self.cause = cause
+
+
+class NoResponseError(ConnectionError):
+    """The connection failed after the request was sent, before any response.
+
+    A small request fits in the socket buffer, so it counts as sent before
+    the server has read a byte of it. A reset or close while waiting for the
+    status line leaves delivery as unknown as a failure while sending.
+    """
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(f"{type(cause).__name__}: {cause}")
+        self.cause = cause
+
+
+class CutResponseError(ConnectionError):
+    """The server answered with a status line, then the connection failed.
+
+    The server took the request: delivery is known, and the status is the
+    answer it gave, cut short.
+    """
+
+    def __init__(self, status: int, cause: BaseException) -> None:
+        super().__init__(f"HTTP {status}, then {type(cause).__name__}: {cause}")
+        self.status = status
+        self.cause = cause
+
+
+class _StatusLine:
+    """The status a connection's response line gave, once it arrived."""
+
+    def __init__(self) -> None:
+        self.status: int | None = None
+
+
+def _response_class(seen: _StatusLine) -> type[http.client.HTTPResponse]:
+    class _Response(http.client.HTTPResponse):
+        def _read_status(self) -> tuple[str, int, str]:
+            version, status, reason = super()._read_status()  # type: ignore[misc]
+            seen.status = int(status)
+            return str(version), int(status), str(reason)
+
+    return _Response
+
+
+class _Answered:
+    """Tells a failure before the status line from one after it."""
+
+    def _track(self) -> None:
+        self._status_line = _StatusLine()
+        self.response_class = _response_class(self._status_line)
+
+    def _failed(self, exc: ConnectionError) -> ConnectionError:
+        status = self._status_line.status
+        return NoResponseError(exc) if status is None else CutResponseError(status, exc)
+
+
+class _TrackedHTTPConnection(_Answered, http.client.HTTPConnection):
+    def connect(self) -> None:
+        try:
+            super().connect()
+        except OSError as exc:
+            raise ConnectError(exc) from exc
+
+    def getresponse(self) -> http.client.HTTPResponse:
+        self._track()
+        try:
+            return super().getresponse()
+        except ConnectionError as exc:
+            raise self._failed(exc) from exc
+
+
+class _TrackedHTTPSConnection(_Answered, http.client.HTTPSConnection):
+    def connect(self) -> None:
+        try:
+            super().connect()
+        except OSError as exc:
+            raise ConnectError(exc) from exc
+
+    def getresponse(self) -> http.client.HTTPResponse:
+        self._track()
+        try:
+            return super().getresponse()
+        except ConnectionError as exc:
+            raise self._failed(exc) from exc
+
+
+class _TrackedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(_TrackedHTTPConnection, req)
+
+
+class _TrackedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        options: dict[str, Any] = {"context": getattr(self, "_context", None)}
+        check_hostname = getattr(self, "_check_hostname", None)
+        if check_hostname is not None:
+            options["check_hostname"] = check_hostname
+        return self.do_open(_TrackedHTTPSConnection, req, **options)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Report a redirect as the HTTP error it is instead of following it.
+
+    urllib would re-send a redirected POST as a GET to another address, after
+    the first server had already received the request.
+    """
+
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def inference_opener() -> urllib.request.OpenerDirector:
+    """An opener that marks where a request failed and goes straight there.
+
+    It follows no redirects and ignores proxies from the environment. Through
+    a proxy, ``connect()`` reaches the proxy, so a server that cannot be
+    reached reads as the proxy's HTTP 502 rather than as ``unreachable``.
+    """
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _NoRedirect(),
+        _TrackedHTTPHandler(),
+        _TrackedHTTPSHandler(),
+    )
+
+
+def ignored_proxies() -> dict[str, Any]:
+    """What the environment asked of proxies, which the opener ignores.
+
+    Only the schemes: a proxy's URL can carry its credentials.
+    """
+    schemes = {
+        name.lower()[: -len("_proxy")]
+        for name, value in os.environ.items()
+        if value and name.lower().endswith("_proxy")
+    }
+    return {"ignored": True, "schemes": sorted(schemes)}
 
 
 @dataclass(frozen=True)
@@ -54,6 +209,7 @@ class OpenAIChatCompletionsClient:
         self.api_key = api_key
         self.max_tokens_field = max_tokens_field
         self.extra_body = validate_extra_body(extra_body, max_tokens_field)
+        self._opener = inference_opener()
 
     def complete(
         self,
@@ -62,7 +218,13 @@ class OpenAIChatCompletionsClient:
         output_tokens: int,
         stream: bool,
         stream_include_usage: bool,
+        request_id: str | None = None,
     ) -> ChatCompletionResult:
+        """Send one chat completion.
+
+        ``request_id`` goes out as ``X-Request-Id``, which vLLM embeds in its
+        own request id and in the ``gen_ai.request.id`` of the request span.
+        """
         payload = {
             **self.extra_body,
             "model": self.model,
@@ -79,6 +241,8 @@ class OpenAIChatCompletionsClient:
         }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        if request_id:
+            headers["X-Request-Id"] = request_id
 
         _validate_http_endpoint(self.endpoint)
         request = urllib.request.Request(
@@ -91,7 +255,7 @@ class OpenAIChatCompletionsClient:
         started_at_ns = time.time_ns()
         started_perf = time.perf_counter()
         try:
-            with urllib.request.urlopen(
+            with self._opener.open(
                 request,
                 timeout=self.timeout_seconds,
             ) as response:

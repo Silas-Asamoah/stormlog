@@ -34,6 +34,12 @@ stormlog infer profile \
   --output artifacts/infer_steady_state.jsonl
 ```
 
+Every request goes out with an `X-Request-Id: stormlog-<run_id>-<request_id>`
+header, recorded on its event as `x_request_id`. OpenAI-compatible servers
+ignore headers they do not know; vLLM embeds it in its own request id and in
+the span it emits per request, which is how
+[vLLM native telemetry](vllm_telemetry.md) joins spans to requests.
+
 The profiler sends controlled traffic for each workload case in the matrix:
 
 - `concurrency`
@@ -108,7 +114,10 @@ Each case's `arrivals` block in the report counts what was offered, sent,
 completed, dropped and held. It also gives failures by status, peak
 in-flight, the offered rate and dispatch-lag percentiles. The offered rate is
 measured from the arrivals actually scheduled, so a Poisson case shows the
-rate it drew rather than `--rate`. It is null for a closed loop, and for a
+rate it drew rather than `--rate`: the gaps between the first and last
+intended arrivals, `(N − 1)` over that span. It is not the rate throughput
+divides by; see the realized offered rate in
+[Inference SLOs and goodput](inference_slo.md). It is null for a closed loop, and for a
 case whose arrivals all came at one instant, such as a single request or a
 single burst. When requests were held, latency measured from the send leaves
 out the time they waited.
@@ -132,6 +141,19 @@ in it is measured, so each one finishes or times out. Every phase writes an
 `infer.phase_window` record, and each case's `arrivals` block reports
 `window_seconds` and `drain_seconds`.
 
+An open-loop phase's record also gives `scheduled_endpoint_offset_ns`: where
+the schedule itself ends, measured from the phase start. It does not depend on
+when requests were actually sent.
+
+| Phase | Ends at |
+| --- | --- |
+| Limited by `--duration` | The duration |
+| Counted with `--requests` | One whole slot after the last scheduled arrival: the next offset the schedule would have produced |
+
+With a count, two requests at 10/s span 0.2 s, not the 0.1 s between their
+arrivals, and a Poisson count gives the usual N/T_N rate. A replay without
+`--duration`, and a closed loop, have no scheduled endpoint (`null`).
+
 `cancelled` means Stormlog stopped waiting, not that the request stopped. The
 HTTP call keeps running, on the server and on a client thread, until it
 finishes or reaches `--timeout`. So the next phase waits for those calls
@@ -144,7 +166,10 @@ Ctrl+C stops a profile with exit code 130. Requests still running are
 recorded as `cancelled`, and the artifact ends with an `infer.session` record
 whose status is `interrupted`. A run that fails for another reason ends with
 status `incomplete`. Either way, the requests recorded before the stop can
-still be analyzed.
+still be analyzed. The report's `summary.session_status` gives that status,
+and a case whose phase never recorded its window is marked
+`phase_window_missing`, with an invalid cohort and no rates, instead of
+reading as a complete case.
 
 `infer profile` returns codes from the
 [exit-code contract](report_contract.md):
@@ -160,11 +185,20 @@ Request outcomes:
 | `status` | Meaning |
 | --- | --- |
 | `ok` | The request completed |
-| `timeout` | The client gave up after `--timeout` |
+| `timeout` | The client gave up after `--timeout` while waiting for the response |
 | `rejected` | The server answered HTTP 429 or 503; `http_status` says which |
-| `error` | Any other failure, with `http_status` when there was one |
+| `unreachable` | The connection failed before any byte of the request was sent: refused, DNS, a connect timeout or a TLS handshake. The server never saw the request |
+| `delivery_unknown` | The connection completed, but sending the request failed, or the server reset or closed the connection before the response's status line. A small request is handed to the operating system before the server reads it, so the server may or may not have received it |
+| `error` | Any other failure, with `http_status` when there was one. Redirects are not followed, so a 3xx is an `error` with its status. A reset after the status line is the answer the server gave: an `error` (or `rejected`) with that status |
 | `dropped` | Never sent: `--overflow drop` turned the arrival away, or the drain deadline passed while `--overflow wait` held it; `error_message` says which |
 | `cancelled` | Still running when the drain deadline passed; the call itself runs on until it finishes or times out |
+
+Inference requests, and cache resets, ignore proxies set in the environment
+(`HTTP_PROXY`, `HTTPS_PROXY`). Through a proxy, the connection reaches the
+proxy, and a server that cannot be reached reads as the proxy's HTTP 502, an
+`error`, rather than as `unreachable`. The session record says so
+(`config.environment_proxies`: `ignored`, and the schemes the environment
+set, never their URLs). To go through a proxy, point the endpoint at it.
 
 ### Prompts and prefix sharing
 
@@ -227,20 +261,38 @@ stormlog infer profile \
   --output artifacts/infer_cold.jsonl
 ```
 
-Asking for a cold cache is not proof that the cache was empty. No engine
-adapter can read the cache yet, so each case's `infer.cache_state` record and
-the report's `cache` block say `unverified`, with the reason. The reason is
-one of:
+Asking for a cold cache is not proof that the cache was empty, and neither is
+an HTTP 200 from the reset route. vLLM answers 200 with `{"success": false}`
+while blocks are still held, for example by requests still running. Stormlog
+reads the answer, and records it as one of:
 
-- the reset succeeded but cannot be confirmed;
-- the reset failed, with its HTTP status or error;
+| Answer | Meaning |
+| --- | --- |
+| `acknowledged` | The server answered `success: true`. |
+| `refused` | The server kept answering `success: false`, or a `success` field with any value other than `true`. A refused reset is retried every half second for up to `--cache-reset-timeout` seconds (default 10; 0 tries once); the record keeps the number of attempts. No attempt starts after the timeout, though the last one can take up to `--timeout` to answer. It counts as a failed reset. |
+| `accepted_unverified` | A 2xx answer without a `success` field, such as SGLang's text reply. |
+
+The `infer.cache_state` record and the report's `cache` block record:
+- whether a reset was `attempted`;
+- whether it was `acknowledged`;
+- the reset's status, `success` field, answer and attempts;
+- when the first attempt was sent (`at_ns`) and when the recorded answer,
+  the last attempt's, came back (`answered_at_ns`). After refusals, the cache
+  was cleared near the second, not the first.
+
+No engine adapter can read the cache yet, so the state is still `unverified`,
+with the reason. The reason is one of:
+
+- the server acknowledged the reset, but it cannot be confirmed;
+- the reset returned a 2xx without saying whether it succeeded;
+- the reset failed or was refused, with its HTTP status, error or attempts;
 - nothing reset the cache.
 
-A failed reset is recorded and the run continues. Each case also has a
+A failed or refused reset is recorded and the run continues. Each case also has a
 `run_kind`, which names how the run was designed:
 
 - `cold_start`: a cold cache was requested, no warmup ran, and no reset
-  failed;
+  failed or was refused;
 - `steady_state`: warmup ran;
 - `unspecified`: anything else, including a cold start whose reset failed.
 
@@ -289,18 +341,73 @@ stormlog infer analyze artifacts/infer_qwen.jsonl --format json --output report.
 
 The report includes:
 
+- `analysis_version` (2), which says how the figures below are computed
+- per case, a `population` block that counts every measured request by
+  outcome, and an `intervals` block naming the interval rates divide by (see
+  [Inference SLOs and goodput](inference_slo.md))
 - end-to-end latency percentiles
 - TTFT percentiles for streaming responses
 - first streamed chunk latency
-- requests/sec
-- output tokens/sec and total tokens/sec
+- requests/sec, output tokens/sec and total tokens/sec of the successful
+  requests, per second of the case's rate interval
+- a `latency` block for each latency metric (`client.ttft`, `client.e2e`,
+  `client.tpot`, the `*_from_intended` variants, and `server.ttft`,
+  `server.e2e` and `server.queue` when vLLM spans are joined), with p50, p90,
+  p95 and p99:
+  - each over the successful requests and with failures ranked worst;
+  - each with its sample count, whether the case has enough requests for it,
+    and its order-statistic confidence interval (see
+    [Inference SLOs and goodput](inference_slo.md));
+  - and, for each status other than `ok`, how many requests ended with it and
+    how long they ran before they did;
+- a `streaming` block of chunk-level figures: content chunks per response,
+  chunk gaps, and mean tokens per chunk when the server reports usage. A
+  chunk can carry several tokens, so chunk gaps are never reported as
+  inter-token latency
+- with an SLO policy (`--slo`, `--slo-file`, or the `infer.slo` record
+  `infer profile` wrote), a top-level `slo` block naming the policy and, per
+  case, SLO attainment and goodput as lower and upper bounds (see
+  [Inference SLOs and goodput](inference_slo.md))
 - failure rate
 - highest recorded client-local device memory when system telemetry is available
 - scoped server memory observations when a matching on-host collector artifact is supplied
 
-`infer analyze` exits `5` when the artifact or a `--server-telemetry` file is
-missing, unparsable, or invalid, which includes an artifact with no
-`infer.session` or `infer.request` records. Otherwise it exits `0`, even when
+Throughput divides by the case's **rate interval**, named in
+`throughput.interval_kind` and `throughput.interval_seconds`:
+- for an open loop, the schedule's own window (`scheduled_window`), counting
+  the requests scheduled in it however late they finished;
+- for a closed loop, the phase start to the end of its drain
+  (`measured_span`);
+- for an artifact older than phase windows, the span of every measured
+  request that has both times, failed ones included (`request_span`).
+
+A case whose phase was cut short has no rate interval: the run recorded its
+workload, so it would have recorded the phase's window once the phase
+drained (`intervals.rate_reason: phase_window_missing`).
+
+A rate is `null` when its interval has no length, and for an open loop with
+no known endpoint, such as a replay without `--duration`: the span to the
+drain's end would make its rate depend on when its requests finished, so
+there is no rate interval (`intervals.rate_reason: endpoint_undeclared`).
+
+Before `analysis_version` 2, throughput divided by
+`throughput.duration_seconds`: the span of the case's **successful**
+requests. That span shrank when the last requests failed or timed out, which
+flattered a failing run. The old key is gone, so a consumer that reads it
+fails rather than misreading the new figures. The rate keys kept their names
+and changed their meaning, so a consumer must check `analysis_version` before
+reading any rate:
+
+| Version 1 | Version 2 | How to tell |
+| --- | --- | --- |
+| `throughput.duration_seconds`: first successful start to last successful end | `throughput.interval_seconds`, with `interval_kind` (`scheduled_window`, `measured_span`, `request_span`) and `numerator_cohort` | `duration_seconds` is absent in version 2 |
+| `requests_per_second`, `output_tokens_per_second`, `total_tokens_per_second` over `duration_seconds` | The same keys over `interval_seconds` | `analysis_version` is 2 |
+| A rate over an empty span was `0.0` | `null`, and `null` for an open loop with no known endpoint or a phase cut short (`intervals.rate_reason`) | `analysis_version` is 2 |
+| No populations | `population` and `intervals` blocks per case | The blocks are present |
+
+`infer analyze` exits `5` when the artifact, a `--server-telemetry` file, a
+`--vllm-spans` file or the `--slo-file` policy is missing, unparsable, or invalid, which includes an
+artifact with no `infer.session` or `infer.request` records. Otherwise it exits `0`, even when
 every request in the artifact failed: analysis reports findings without
 failing.
 
@@ -368,6 +475,9 @@ Stormlog reports client-observed metrics in v1:
   token-level ITL unless a future engine adapter can prove token-level events.
 - Token throughput uses server usage when available; otherwise the configured
   tokenizer or estimate is clearly recorded.
+
+SLO policies use the same boundaries; see
+[Inference SLOs and goodput](inference_slo.md).
 
 ## Client-local telemetry
 
@@ -620,12 +730,135 @@ fields separately in its [NVML memory structure](https://docs.nvidia.com/deploy/
 Exporters such as DCGM may report interval averages or cached values; this
 collector currently reads NVML directly and does not ingest DCGM metrics.
 
+## vLLM native telemetry
+
+When the endpoint is vLLM, `--vllm-metrics` scrapes its Prometheus metrics
+around and during every phase and `--vllm-spans-listen` receives the span it
+emits per request, both into the same artifact. The report then separates a
+latency change into queueing (waiting requests and queue time), cache
+pressure (KV block occupancy and prefix-cache hits) and token rates, per
+engine, with every delta that cannot be trusted marked unresolved and why.
+Spans join to requests by the recorded `X-Request-Id`; receiving vLLM's
+protobuf exports needs `pip install "stormlog[infer-otlp]"` and a server
+started with `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf`, because
+vLLM exports over gRPC by default. These are
+engine-aggregate numbers over every client's traffic; they attribute no GPU
+time to a request. See [vLLM native telemetry](vllm_telemetry.md) for the
+flags, the metric map and the capability matrix.
+## Profiler traces
+
+`stormlog infer profile --trace vllm-torch` opens a vLLM torch-profiler window
+around one phase of each case, then imports the GPU work in the traces it wrote
+(see [Importing profiler traces](inference_correlation.md#importing-profiler-traces)).
+
+What must be set when the server starts, and what Stormlog does while it runs:
+
+| When | Setting | Who sets it |
+| --- | --- | --- |
+| Server start | `--profiler-config.profiler=torch` and `--profiler-config.torch_profiler_dir=DIR` | you |
+| Server start | `--profiler-config.torch_profiler_with_stack=false` (Python stacks per operator are the largest overhead) and `--profiler-config.ignore_frontend=true` (no second profiler in the API server) | you; recommended |
+| During the run | `POST /start_profile` and `/stop_profile` around the window | Stormlog |
+| After the run | read the new worker trace files in `DIR` and import them | Stormlog, when `--trace-dir` is readable from the client |
+
+```bash
+stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
+  --concurrency 1,8 --requests 64 \
+  --trace vllm-torch --trace-dir /shared/vllm-traces \
+  --trace-max-seconds 30 --trace-device-uuid 0=GPU-6d1f0c5e-...
+```
+
+- **Window.** By default each case's measured phase is profiled
+  (`--trace-phase warmup` profiles warmup instead). The window closes when the
+  phase ends, when `--trace-max-seconds` elapses (the phase keeps running
+  unprofiled), or when the run is cancelled. In every case Stormlog sends one
+  `/stop_profile`. A stop that fails is not retried: Stormlog warns, and the
+  window's record keeps the stop's status and error and says the profiler may
+  still be running.
+- **Ownership.** Stormlog stops every profile its own `/start_profile` may
+  have started. vLLM runs the start in the engine before it replies, so the
+  reply alone does not show whether profiling began. Each window's
+  `start_outcome` records what the reply established:
+  - `acknowledged` (2xx): the window runs, and is stopped at its end.
+  - `rejected` (404 or 405, a server started without the profiler routes; or
+    401, 403 or 407 from a proxy in front of it, since vLLM's own API key
+    does not cover these routes): the start never reached the engine, and
+    nothing is stopped. Any other 4xx is `unknown`: vLLM 0.30.0 answers 400
+    or 422 for an exception raised while it handles the start, which may
+    already have reached the engine, and a proxy can answer 408 after
+    forwarding it.
+  - `unknown` (5xx, a timeout, a dropped connection, a malformed reply, or a
+    redirect, which is never followed): Stormlog sends `/stop_profile` at
+    once, with `stop_reason` `start_unknown`, and waits for that call to
+    return (bounded by the control timeout). The phase then runs whether or
+    not the stop was confirmed: unprofiled if it took effect, and if it
+    failed, Stormlog warns and the record says the profiler may still be
+    running. A trace that stop writes is still listed.
+
+  vLLM 0.30.0 answers 200 to a second `/start_profile` and to `/stop_profile`
+  with nothing running, so Stormlog cannot tell from HTTP whether another
+  profile was already active. Do not point two profilers at one server: an
+  unknown start is stopped, so a proxy's 502 or a timeout while another
+  operator is profiling ends their profile too. If a worker trace appears
+  before Stormlog's stop, for example from a profile configured with
+  `max_iterations`, the window's `stop_reason` is `stopped_by_server`.
+- **Record.** Each window writes an `infer.trace_window` event, also when the
+  run is cancelled: case, phase, control URL (credentials and query removed),
+  when the window was requested, when the `/start_profile` call itself was
+  sent and answered (`start_requested_at_ns`, `start_returned_at_ns`), the
+  `start_outcome`, when the start was confirmed, start and stop HTTP status or
+  error, why it stopped, and the trace files found. A cancelled run
+  does not import its traces; import the listed files with
+  `stormlog infer import-trace`. If `--trace` was requested and no trace could
+  be imported, the trace collector's `infer.capabilities` record says so, with
+  each window's reason.
+- **Files.** Only worker traces (`rank<N>.*.pt.trace.json*`, or
+  `dp<D>_pp<P>_tp<T>_dcp<C>_ep<E>_rank<N>.*` for models where vLLM creates every
+  parallel group, such as MoE models) that appear during the
+  window are imported; the API server's `*.async_llm.*` trace is ignored. A file
+  larger than `--trace-max-bytes` is registered in the run envelope but not
+  parsed. Without `--trace-dir`, the traces stay on the server; import them
+  later with `stormlog infer import-trace`. vLLM writes the trace while handling
+  `/stop_profile`, so if no new file has appeared about 5 seconds after the
+  stop, Stormlog stops waiting for that window.
+- **Clock and settings.** Imported timestamps are Kineto's host-calibrated
+  device times, not a raw GPU clock. The CUDA-graph and compile settings the
+  server ran with are not in the trace; they stay unknown unless recorded
+  elsewhere.
+- **Coverage.** With an engine that emits iteration ranges, GPU work launched
+  outside them stays unresolved by design. On vLLM 0.30.0 with Qwen2.5-0.5B on
+  an NVIDIA A30, two profiled cases produced 367,192 GPU events in 29,578
+  launch records: all unresolved without ranges, and all linked with a test
+  plugin that wrapped each step in `stormlog.iteration/...` ranges.
+- **Cost.** The profiler adds no synchronization per request, but it does CPU
+  work per operator, and `/stop_profile` blocks while the server writes the
+  trace (tens of seconds for a 30-second window). On vLLM 0.30.0 on an NVIDIA
+  A30, with stacks off and `ignore_frontend=true`, output tokens per second fell
+  0.4–1.3% for Qwen2.5-7B and 4.4–6.5% for Qwen2.5-0.5B, and requests per step
+  were unchanged within 0.5%. A trace import never treats CPU launch time as GPU
+  time.
+
+For a PyTorch program that is not behind a server, `capture_torch_trace`
+profiles a block in-process and writes a trace for `import-trace`:
+
+```python
+from stormlog.infer.trace_ranges import iteration_range
+from stormlog.infer.trace_torch import capture_torch_trace
+
+with capture_torch_trace("traces/run.pt.trace.json"):
+    for step in range(100):
+        with iteration_range("my-loop", str(step)):
+            train_or_serve_one_step()
+```
+
+It refuses to start while another PyTorch profiler is running.
+
 ## Execution correlation and future adapters
 
-The v1 request path is engine-agnostic. Future adapters can enrich the same run
-with engine-native telemetry such as vLLM scheduler metrics, SGLang cache
-metrics, TensorRT-LLM inflight batching metrics, or MLX Metal runtime stats
-without changing the core `stormlog infer profile` artifact shape.
+The v1 request path is engine-agnostic. Adapters enrich the same run with
+engine-native telemetry, as the vLLM adapter does with scheduler and cache
+metrics; SGLang cache metrics, TensorRT-LLM inflight batching metrics, or MLX
+Metal runtime stats could follow without changing the core
+`stormlog infer profile` artifact shape.
 
 The versioned request, iteration, stage, membership, and GPU activity contract
 is described in [Inference execution correlation](inference_correlation.md).
