@@ -237,7 +237,8 @@
           "budget",
           "owner",
           "unavailable",
-          "open_limit"
+          "open_limit",
+          "join_limit"
         ]
       },
       "help": "Firings that opened no incident or capture, by reason.",

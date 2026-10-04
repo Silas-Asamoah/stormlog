@@ -203,7 +203,8 @@ At most `max_open_incidents` collect at once, and at most
 incidents have budgets of their own of the same sizes, so an exporter that
 restarts over and over, or a qualification run, never turns away an
 incident from a metric or signal trigger. A firing turned away is counted
-by reason in `stormlog_watch_suppressed_total`. When the watch stops, open
+by reason in `stormlog_watch_suppressed_total`: `rate_limit`, `open_limit`,
+or `join_limit` when the incident it would join already holds 16 triggers. When the watch stops, open
 incidents are sealed as `interrupted`.
 
 ### Records and health
