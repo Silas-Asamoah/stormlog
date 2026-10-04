@@ -252,6 +252,33 @@ def test_an_excluded_interval_is_not_a_stall() -> None:
     assert signal.exceeds is False
 
 
+@pytest.mark.parametrize(
+    ("covered", "remainder_ms"),
+    [
+        ((-1, 1), 3_003.8),  # only its last millisecond
+        ((-2_000, -1_500), 1_500.0),  # a stretch in the middle: the longer side
+    ],
+)
+def test_an_excluded_interval_removes_only_what_it_covers(
+    covered: tuple[int, int], remainder_ms: float
+) -> None:
+    """A 3 s stall (3,004.8 ms with the step's own run) that a profiler
+    window covers in part still stalled for the rest: only the covered part
+    is removed. ``covered`` is in ms from the stalled step's completion."""
+    records = _loop(60, stall_after=40, stall_ns=3_000 * MS, locus=LOCUS_WITHIN_STEP)
+    completion = next(
+        r["wall_ns"]
+        for r in records
+        if r["kind"] == "completed" and r["iteration"] == "41"
+    )
+    config = LoopGapConfig(
+        exclude_wall=[(completion + covered[0] * MS, completion + covered[1] * MS)]
+    )
+    signal = engine_loop_gap(records, config)
+    assert signal.exceeds is True
+    assert signal.value == pytest.approx(remainder_ms * MS, abs=0.01 * MS)
+
+
 # -------------------------------------------------------------- ongoing
 def test_an_ongoing_stall_counts_to_the_evaluation_time() -> None:
     records = _loop(60)

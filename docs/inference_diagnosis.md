@@ -109,7 +109,9 @@ between them; a streaming-input request (`resumable`) never makes a gap
 ready, since between steps it may be waiting for its client's next input. A
 stretch the scheduler spent paused with
 `PAUSED_ALL` (from the hook's `pause` records), or one the caller excludes
-with `exclude_wall` (for example its own profiler stop), has no ready work.
+with `exclude_wall` (for example its own profiler stop), has no ready work;
+only the part of a stall such an interval covers is removed, and what
+remains on either side is still a stall.
 Where a stall sits decides what it can be blamed on:
 
 | `detail["locus"]` | Stretch | `detail["attribution"]` |
