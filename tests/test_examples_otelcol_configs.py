@@ -62,6 +62,14 @@ def test_the_x1_collector_writes_straight_to_its_file() -> None:
     assert "flush_interval" not in exporter
 
 
+@pytest.mark.parametrize("name", ["otelcol.yaml", "otelcol-x1.yaml"])
+def test_a_collector_leaves_port_8888_to_jaeger(name: str) -> None:
+    # Jaeger v2 is built on the collector too, and both serve their own
+    # metrics on 8888 by default: on one host, the second would not start.
+    config = _yaml(name)
+    assert config["service"]["telemetry"]["metrics"]["level"] == "none"
+
+
 def test_prometheus_scrapes_vllm_and_stormlog_apart() -> None:
     config = _yaml("prometheus.yml")
     jobs = {job["job_name"] for job in config["scrape_configs"]}

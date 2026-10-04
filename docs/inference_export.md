@@ -591,8 +591,9 @@ A binary is found on `PATH`, or named by `STORMLOG_OTELCOL`,
 `STORMLOG_PROMETHEUS` or `STORMLOG_JAEGER`; a missing one is skipped.
 `prometheus.yml` scrapes vLLM and Stormlog as separate jobs. Jaeger takes OTLP
 over gRPC on 4317, leaving 4318 to the collector, and serves its UI on
-16686. `docker-compose.yml` runs the same three services, but has not been
-run yet and is marked so.
+16686; it keeps port 8888 for its own metrics, since both collector
+configs turn theirs off. `docker-compose.yml` runs the same three services,
+but has not been run yet and is marked so.
 
 **A collector in front.** `otelcol.yaml` takes vLLM's spans and Stormlog's on
 one OTLP/HTTP receiver (127.0.0.1:4318) and feeds two pipelines:
@@ -605,6 +606,11 @@ one OTLP/HTTP receiver (127.0.0.1:4318) and feeds two pipelines:
   whatever their `service.name`. Its queue and retries are bounded; a retry
   can deliver a batch twice, which the analysis counts as duplicates and
   keeps once.
+
+The two pipelines share one receiver, so a refusal in either, such as the
+process-wide memory limiter while the backend's tail sampler buffers, is
+the receiver's answer: the sender retries, and the other pipeline gets the
+batch again. The analysis keeps each span once; Jaeger may show it twice.
 - **`traces/backend`** sends everything to Jaeger and to a file, through tail
   sampling that keeps every failed trace and one in ten others. Remove the
   sampler to keep all.
