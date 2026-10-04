@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import email.utils
 import io
 import json
 import time
@@ -269,6 +270,30 @@ def test_an_after_closer_to_the_before_than_the_run_lasted_is_refused() -> None:
     ]
     late = _later(before, observed_at_ns=1_011 * SECOND)
     assert after_refusals(_skewed_run(before), late, run_id="r") == []
+
+
+def test_an_after_taken_before_the_server_answered_the_after_probe_is_refused() -> None:
+    # Taken mid-run: 12 s after the before description covers the 10 s run,
+    # and the client's clock is behind, so only the server's own clock,
+    # stamped on the after probe's answers, shows it came too early.
+    before = _description(observed_at_ns=1_000 * SECOND)
+    after_probe = {
+        "event_type": "infer.server_probe",
+        "phase": "after",
+        "answers": {"/version": {"status": "ok", "date": _http_date(1_020)}},
+    }
+    records = [*_skewed_run(before), after_probe]
+    midrun = _later(before, observed_at_ns=1_012 * SECOND)
+    assert after_refusals(records, midrun, run_id="r") == [
+        "it was taken before the server answered the after probe, by the "
+        "server's own clock"
+    ]
+    after = _later(before, observed_at_ns=1_020 * SECOND + SECOND // 2)
+    assert after_refusals(records, after, run_id="r") == []
+
+
+def _http_date(seconds: int) -> str:
+    return email.utils.formatdate(seconds, usegmt=True)
 
 
 def test_other_weights_after_the_run_are_an_identity_change() -> None:
