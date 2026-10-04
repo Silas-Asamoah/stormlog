@@ -877,6 +877,7 @@ class _BlockingClient:
         stream: bool,
         stream_include_usage: bool,
         request_id: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> ChatCompletionResult:
         started_at_ns = time.time_ns()
         started_perf = time.perf_counter()

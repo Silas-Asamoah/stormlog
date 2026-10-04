@@ -18,6 +18,7 @@ from typing import Any, Literal
 from .._export.http_server import parse_listen
 from .._export.registry import DEFAULT_MAX_BYTES, DEFAULT_MAX_SAMPLES
 from .._export.textfile import validate_slot
+from .trace_context import FOLLOW_SAMPLING, OFF, POLICIES
 
 Command = Literal["profile", "watch"]
 # Every label value of a profile comes from its configuration, so nothing
@@ -42,6 +43,14 @@ class ExportConfig:
     prometheus_max_bytes: int = DEFAULT_MAX_BYTES
     prometheus_series_headroom: int | None = None
     prometheus_case_label: bool = True
+    # Profile only: send traceparent with each request, and how to flag it.
+    trace_context: str = OFF
+    # Stormlog's own head-sampling ratio: what follow-sampling sends, and
+    # which request spans an OTLP export keeps.
+    sample_ratio: float = 1.0
+    # The server's OTEL_TRACES_SAMPLER as the operator declares it; recorded
+    # as declared, never verified.
+    server_trace_sampler: str | None = None
 
     @property
     def prometheus_enabled(self) -> bool:
@@ -59,7 +68,9 @@ class ExportConfig:
             return self.prometheus_series_headroom
         return DEFAULT_HEADROOM[command]
 
-    def validate(self, given: Collection[str] | None = None) -> None:
+    def validate(
+        self, command: Command = "profile", given: Collection[str] | None = None
+    ) -> None:
         """Raise ``ValueError`` for a setting the exporter cannot use.
 
         ``given`` names the settings that were set, by flag or in JSON, even
@@ -71,9 +82,12 @@ class ExportConfig:
         validate_slot(self.prometheus_slot)
         _check_dependent(self, _given(self) if given is None else set(given))
         _check_numbers(self)
+        _check_trace_context(self, command)
 
     @classmethod
-    def from_mapping(cls, mapping: Mapping[str, Any]) -> ExportConfig:
+    def from_mapping(
+        cls, mapping: Mapping[str, Any], command: Command = "profile"
+    ) -> ExportConfig:
         """Settings from the ``"export"`` section of a JSON configuration.
 
         The keys are the flags' names with underscores, such as
@@ -89,7 +103,7 @@ class ExportConfig:
         if values.get("prometheus_textfile_dir") is not None:
             values["prometheus_textfile_dir"] = Path(values["prometheus_textfile_dir"])
         config = cls(**values)
-        config.validate(given=set(mapping))
+        config.validate(command, given=set(mapping))
         return config
 
 
@@ -106,6 +120,9 @@ _SETTING_TYPES = {
     "prometheus_max_bytes": _COUNT,
     "prometheus_series_headroom": _COUNT,
     "prometheus_case_label": _FLAG,
+    "trace_context": _TEXT,
+    "sample_ratio": _SECONDS,
+    "server_trace_sampler": _TEXT,
 }
 
 
@@ -114,6 +131,7 @@ _NULLABLE = {
     "prometheus_listen",
     "prometheus_textfile_dir",
     "prometheus_series_headroom",
+    "server_trace_sampler",
 }
 
 
@@ -170,6 +188,22 @@ def _check_dependent(config: ExportConfig, given: set[str]) -> None:
                 raise ValueError(f"{flag} only applies with --prometheus-textfile-dir")
 
 
+def _check_trace_context(config: ExportConfig, command: Command) -> None:
+    if config.trace_context not in POLICIES:
+        raise ValueError(f"--trace-context must be one of {', '.join(POLICIES)}")
+    if command == "watch" and config.trace_context != OFF:
+        raise ValueError(
+            "--trace-context applies to infer profile only: a watcher sends no "
+            "requests"
+        )
+    if not 0.0 <= config.sample_ratio <= 1.0:
+        raise ValueError("--otlp-sample-ratio must be between 0 and 1")
+    if config.sample_ratio != 1.0 and config.trace_context != FOLLOW_SAMPLING:
+        raise ValueError(
+            "--otlp-sample-ratio only applies with --trace-context follow-sampling"
+        )
+
+
 def _check_numbers(config: ExportConfig) -> None:
     _check_time("--prometheus-linger", config.prometheus_linger_seconds, 0.0)
     _check_time(
@@ -193,6 +227,36 @@ def _check_time(flag: str, value: float, lowest: float) -> None:
         raise ValueError(
             f"{flag} must be finite, from {lowest:g} to {MAX_SECONDS:g} seconds"
         )
+
+
+def add_trace_context_arguments(parser: argparse.ArgumentParser) -> None:
+    """The trace-context flags; ``infer profile`` only."""
+    group = parser.add_argument_group(
+        "trace context (optional)",
+        "Send W3C trace context with each request so a tracing server's span "
+        "joins Stormlog's in one trace. Off unless asked for.",
+    )
+    group.add_argument(
+        "--trace-context",
+        choices=POLICIES,
+        help="off (default) sends no traceparent. preserve-engine always "
+        "marks it sampled, so the server records every request as it would "
+        "without the header; follow-sampling sends Stormlog's own decision.",
+    )
+    group.add_argument(
+        "--server-trace-sampler",
+        metavar="NAME[:ARG]",
+        help="The server's OTEL_TRACES_SAMPLER, such as "
+        "parentbased_traceidratio:0.1, recorded as declared; Stormlog cannot "
+        "read it.",
+    )
+    group.add_argument(
+        "--otlp-sample-ratio",
+        type=float,
+        metavar="RATIO",
+        help="Stormlog's own sampling ratio, 0 to 1 (default 1): what "
+        "follow-sampling sends, and which request spans are exported.",
+    )
 
 
 def add_export_arguments(parser: argparse.ArgumentParser) -> None:
@@ -288,6 +352,9 @@ def export_config_from_args(args: argparse.Namespace) -> ExportConfig:
         prometheus_max_bytes=_or(args, "prometheus_max_bytes", DEFAULT_MAX_BYTES),
         prometheus_series_headroom=getattr(args, "prometheus_series_headroom", None),
         prometheus_case_label=getattr(args, "prometheus_case_label", None) != "off",
+        trace_context=_or(args, "trace_context", OFF),
+        sample_ratio=_or(args, "otlp_sample_ratio", 1.0),
+        server_trace_sampler=getattr(args, "server_trace_sampler", None),
     )
     config.validate(given=_given_flags(args))
     return config
@@ -297,6 +364,7 @@ def export_config_from_args(args: argparse.Namespace) -> ExportConfig:
 _FLAG_FIELDS = {
     "prometheus_linger": "prometheus_linger_seconds",
     "prometheus_textfile_interval": "prometheus_textfile_interval_seconds",
+    "otlp_sample_ratio": "sample_ratio",
 }
 
 

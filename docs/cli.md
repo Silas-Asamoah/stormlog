@@ -108,7 +108,9 @@ pass the same `--run-id` to `infer profile`, and import the collector JSONL with
 clock evidence required before a server sample enters a case report.
 To feed Prometheus while a profile runs, add `--prometheus-listen HOST:PORT`
 or `--prometheus-textfile-dir DIR`; see
-[Exporting inference metrics](inference_export.md).
+[Exporting inference metrics](inference_export.md). `--trace-context
+preserve-engine` sends W3C trace context with each request, so a tracing
+server's spans join Stormlog's traces.
 
 ### Watch a vLLM server for incidents
 

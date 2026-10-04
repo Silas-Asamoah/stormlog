@@ -38,7 +38,10 @@ Every request goes out with an `X-Request-Id: stormlog-<run_id>-<request_id>`
 header, recorded on its event as `x_request_id`. OpenAI-compatible servers
 ignore headers they do not know; vLLM embeds it in its own request id and in
 the span it emits per request, which is how
-[vLLM native telemetry](vllm_telemetry.md) joins spans to requests.
+[vLLM native telemetry](vllm_telemetry.md) joins spans to requests. With
+`--trace-context preserve-engine`, a `traceparent` header goes out too, and
+the request's `trace_id` and `span_id` are recorded; see
+[Trace context](inference_export.md#trace-context).
 
 The profiler sends controlled traffic for each workload case in the matrix:
 
