@@ -1054,6 +1054,19 @@ def test_compare_values_and_compare_runs_agree_on_a_baseline_without_a_value() -
         assert (found.status, found.reason) == ("not_evaluable", "control_failed")
 
 
+def test_a_baseline_arm_with_no_measured_run_is_not_blamed_on_the_candidate() -> None:
+    baseline, candidate = _arms(SAME)
+    _served(baseline, 1000, [2] * 6)
+    _served(candidate, 1000, [2] * 6)
+    for run in baseline:
+        del run.report["cases"][CASE]["population"]["offered"]
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=FAILURE_GATE))
+    gate = comparison.cases[CASE]["metrics"]["failure_fraction"].gate
+    assert gate is not None
+    assert (gate.status, gate.reason) == ("not_evaluable", "baseline_unmeasured")
+    assert comparison.exit_code == 4
+
+
 def test_a_fraction_gate_needs_enough_requests_in_every_run() -> None:
     # 100 requests per run: one failure is a whole point, past a 1% budget.
     baseline, candidate = _arms(SAME)

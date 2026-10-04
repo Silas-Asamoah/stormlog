@@ -138,7 +138,8 @@ the flaky benchmark memory gates
   cluster within a run: k of n candidate runs within the budget of their
   block's baseline, passing iff the one-sided 97.5% Clopper–Pearson lower
   bound of k/n is at least 0.5 (6 of 6, 8 of 8, 9 of 10), with `3 / b`
-  requests a run, and only with blocks (`fraction_needs_blocks`), the mean
+  requests a run, and only with blocks (`fraction_needs_blocks`) and a measured baseline
+  (`baseline_unmeasured`), the mean
   change beside it (`mean_exceeds_budget`, and a warning in the text
   verdict, when that is beyond the budget); its paired t, with the standard error floored at the
   pooled binomial one, and the pooled requests' bounds are reported,
