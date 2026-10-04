@@ -295,7 +295,9 @@ on the model:
   what the blob holds. A snapshot of copies rather than links (where links
   are unsupported) has no digests by name, so its files have none, and no
   `weights_digest`, unless verification hashes them. A link that leads
-  nowhere, or in a loop, has no digest either.
+  nowhere, or in a loop, has no digest either. The name is the blob the
+  snapshot links to, not whatever that blob leads to: a deduplicated cache
+  may link the blob on to a shared store under another name.
 - **A local directory.** Files have no digest of their own. With weight
   hashing, each file's SHA-256 is computed, and cached by path, size,
   `mtime_ns`, `ctime_ns` and inode so the next description does not read the

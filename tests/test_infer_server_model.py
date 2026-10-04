@@ -154,6 +154,42 @@ def test_a_revision_missing_from_the_cache_is_unresolved(tmp_path: Path) -> None
     assert model["files"] == {} and model["weights_digest"] is None
 
 
+def _nested_hub(tmp_path: Path) -> Path:
+    """A hub cache whose weights blob is itself a link into a shared store,
+    as a deduplicated cache lays it out: blobs/<sha256> -> store/bb/<other>."""
+    cache = _hub(tmp_path)
+    blobs = cache / ("models--" + REPO.replace("/", "--")) / "blobs"
+    blob = blobs / hashlib.sha256(WEIGHTS).hexdigest()
+    store = cache / "blobs" / "bb"
+    store.mkdir(parents=True)
+    other = store / ("bb" + "5" * 62)
+    other.write_bytes(blob.read_bytes())
+    blob.unlink()
+    blob.symlink_to(Path("../../blobs/bb") / other.name)
+    return cache
+
+
+@pytest.mark.parametrize("verify", [False, True])
+def test_a_file_is_named_by_the_blob_its_snapshot_links_to(
+    tmp_path: Path, verify: bool
+) -> None:
+    # Not by whatever file the blob itself leads to: on the A30 box the
+    # weights' blob is a link into a shared store with another name.
+    model = describe_model(
+        LaunchArguments(model=REPO),
+        hub_cache=_nested_hub(tmp_path),
+        verify_blobs=verify,
+    )
+    weights = model["files"]["model.safetensors"]
+    assert (weights["algorithm"], weights["digest"], weights["size"]) == (
+        SHA256,
+        hashlib.sha256(WEIGHTS).hexdigest(),
+        len(WEIGHTS),
+    )
+    assert weights["checked"] is verify
+    assert model["weights_digest"] is not None
+
+
 def test_verifying_blobs_hashes_their_content(tmp_path: Path) -> None:
     cache = _hub(tmp_path)
     model = describe_model(

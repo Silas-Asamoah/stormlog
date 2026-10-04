@@ -178,9 +178,11 @@ def snapshot_files(directory: Path, *, verify: bool = False) -> list[ModelFile]:
     """Each file of a hub snapshot, named by the blob its link points to.
 
     Only a link into the repository's ``blobs`` whose name is a digest is
-    named by it. huggingface_hub copies files where links are unsupported,
-    and a copy's name is no digest: it has none unless ``verify`` hashes it.
-    A link that leads nowhere, or in a loop, has none either.
+    named by it: the snapshot's own link, since a deduplicated cache may
+    link that blob on to a file of another name. huggingface_hub copies
+    files where links are unsupported, and a copy's name is no digest: it
+    has none unless ``verify`` hashes it. A link that leads nowhere, or in
+    a loop, has none either.
     """
     files = []
     for path in _walk(directory):
@@ -191,7 +193,7 @@ def snapshot_files(directory: Path, *, verify: bool = False) -> list[ModelFile]:
         except (OSError, RuntimeError):
             files.append(ModelFile(relative, "none", "", 0, checked=False))
             continue
-        algorithm, digest = _blob_name(path, blob)
+        algorithm, digest = _blob_name(snapshot_blob(path))
         if verify:
             algorithm = algorithm if algorithm != "none" else SHA256
             digest = _sha256(blob) if algorithm == SHA256 else _git_sha1(blob)
@@ -199,9 +201,20 @@ def snapshot_files(directory: Path, *, verify: bool = False) -> list[ModelFile]:
     return files
 
 
-def _blob_name(path: Path, blob: Path) -> tuple[str, str]:
-    """The digest a blob's name gives, when the file is a link to a blob."""
-    if not path.is_symlink() or blob.parent.name != "blobs":
+def snapshot_blob(path: Path) -> Path | None:
+    """The blob a snapshot file links to in its repository's ``blobs``.
+
+    Read from the snapshot's own link, one hop, without resolving further.
+    """
+    if not path.is_symlink():
+        return None
+    target = Path(os.path.normpath(path.parent / os.readlink(path)))
+    return target if target.parent.name == "blobs" else None
+
+
+def _blob_name(blob: Path | None) -> tuple[str, str]:
+    """The digest a blob's name gives."""
+    if blob is None:
         return "none", ""
     if _SHA256.match(blob.name):
         return SHA256, blob.name
