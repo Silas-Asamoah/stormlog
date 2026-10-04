@@ -35,6 +35,8 @@ from .export_config import Command, ExportConfig
 from .export_metrics import ProfileLabels, ProfileMetrics
 
 COMPONENT_PROMETHEUS = "export.prometheus"
+# Whichever binds first; a request record is charged about 1.8-2.5 KiB, so
+# the bytes do, at about 3,400-4,800 request records.
 METRIC_QUEUE_ITEMS = 65_536
 METRIC_QUEUE_BYTES = 8 * 1024 * 1024
 HEALTH_INTERVAL_SECONDS = 1.0

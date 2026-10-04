@@ -215,8 +215,10 @@ directory of its own.
 These series sit beside the exported metrics:
 - `stormlog_metrics_records_applied_total`, and
   `stormlog_metrics_records_dropped_total{reason}` with `reason` one of:
-  - `queue_full`: the exporter's queue (65,536 records or 8 MiB, counted as
-    the memory each queued record holds, about 2 KiB) was full;
+  - `queue_full`: the exporter's queue was full: 8 MiB, counted as the
+    memory each queued record holds, or 65,536 records, whichever comes
+    first. A request record holds about 1.8 to 2.5 KiB, so the bytes bind
+    first, at about 3,400 to 4,800 records;
   - `shutdown`: not yet applied when the exporter's close stopped waiting
     for it;
   - `error`: its update failed and was undone whole, which is an exporter
@@ -287,7 +289,7 @@ samples:
 
 | Holder | Bound |
 | --- | --- |
-| Metric queue | 65,536 records or 8 MiB, counted as the memory each queued record holds (about 2 KiB) |
+| Metric queue | 8 MiB, counted as the memory each queued record holds, or 65,536 records, whichever comes first. A request record holds about 1.8 to 2.5 KiB, so about 3,400 to 4,800 request records fit: at 1,000 requests/s, a stalled worker drops records after 3 to 5 s |
 | Registry | M plus about 350 bytes per sample |
 | Renders | at most 3 alive, so 3 M, and 3.25 M at the peak while the next is built |
 | Textfile | shares the render it writes; one write at a time |
