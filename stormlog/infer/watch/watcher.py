@@ -637,6 +637,9 @@ class Watcher:
         return int(ExitCode.OK)
 
     def _report(self, exit_code: int, unsound: list[str]) -> dict[str, Any]:
+        # A retention pass, or any other store operation, that raised on the
+        # store's worker: counted there, and recorded here.
+        store = self._store_worker.stats()
         findings = [
             _finding(index, incident)
             for index, incident in enumerate(self.incidents.sealed, start=1)
@@ -663,6 +666,7 @@ class Watcher:
                 "scrapes_ok": self._ok_scrapes,
                 "scrapes_failed": self._failed_scrapes,
                 "scrapes_oversized": self._oversized_scrapes,
+                "store_operations_failed": store.failed,
             },
             artifacts=[
                 Artifact(kind="watch_ledger", path="ledger"),
@@ -676,6 +680,7 @@ class Watcher:
                 "config_digest": self.config.digest(),
                 "defaults": DEFAULTS_VERSION,
                 "unsound": unsound,
+                "store_last_error": store.last_error,
                 "incidents": self.incidents.sealed,
                 "stats": _jsonable(self.stats.health()),
             },
