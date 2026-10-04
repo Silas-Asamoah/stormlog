@@ -268,7 +268,7 @@ spurious.
 
 | Claim | Population | Gate |
 | --- | --- | --- |
-| Accuracy per episode type (top-1 at L2) | `valid` fault episodes of the types in the support matrix | Clopper–Pearson lower bound ≥ 0.78 in every stratum |
+| Accuracy per episode type (top-1 at L2) | `valid` fault episodes, one stratum for every type the support matrix (`ScoreConfig.supported_types`, required) declares. A declared stratum with no valid episode has no bound and fails; each records its excluded episodes by status | Clopper–Pearson lower bound ≥ 0.78 in every stratum |
 | False-positive rate | `valid` negative runs, one negative episode each | upper bound ≤ 0.05 |
 | False claims per negative hour | the same | descriptive: the exact Poisson bound |
 | Incident attribution | fault episodes with victim impact | descriptive |

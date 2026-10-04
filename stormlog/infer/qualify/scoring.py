@@ -33,6 +33,7 @@ among the first k candidates.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -467,13 +468,15 @@ def _wrong_finding(same: Sequence[FindingView]) -> str:
 
 @dataclass(frozen=True)
 class Stratum:
-    """One fault episode type's accuracy and its gate."""
+    """One declared fault episode type's accuracy and its gate, with its
+    attempted episodes that didn't count, by status."""
 
     episode_type: str
     episodes: int
     correct: int
     lower_bound: float | None
     passes: bool
+    excluded: Mapping[str, int] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -482,6 +485,7 @@ class Stratum:
             "correct": self.correct,
             "lower_bound": self.lower_bound,
             "passes": self.passes,
+            "excluded": dict(self.excluded),
         }
 
 
@@ -533,15 +537,21 @@ def summarize(
     *,
     negative_hours: float | None = None,
 ) -> Summary:
-    """Gate per-stratum accuracy over valid fault episodes of supported
-    types, and the false-positive rate over valid negative runs."""
+    """Gate per-stratum accuracy over valid fault episodes, a stratum for
+    every type the support matrix declares, and the false-positive rate
+    over valid negative runs.
+
+    Raises:
+        ValueError: without ``config.supported_types``: a declared stratum
+            with no valid episode must fail, not vanish.
+    """
     faults = [s for s in scores if _counts_for_accuracy(s, config)]
     negatives = [s for s in scores if s.valid and s.cause_class != "fault"]
-    strata = _strata(faults, config)
+    strata = _strata(scores, config)
     flagged, upper = _fpr(negatives, config)
     return Summary(
         strata=strata,
-        accuracy_passes=bool(strata) and all(stratum.passes for stratum in strata),
+        accuracy_passes=all(stratum.passes for stratum in strata),
         negative_runs=len(negatives),
         false_positive_runs=flagged,
         fpr_upper_bound=upper,
@@ -564,9 +574,13 @@ def _localized_count(faults: Sequence[EpisodeScore]) -> tuple[int, int]:
     return sum(1 for score in faults if score.localized), len(faults)
 
 
-def _strata(faults: Sequence[EpisodeScore], config: ScoreConfig) -> tuple[Stratum, ...]:
-    types = sorted({score.episode_type for score in faults})
-    return tuple(_stratum(episode_type, faults, config) for episode_type in types)
+def _strata(scores: Sequence[EpisodeScore], config: ScoreConfig) -> tuple[Stratum, ...]:
+    if not config.supported_types:
+        raise ValueError("a gated summary needs the support matrix: supported_types")
+    return tuple(
+        _stratum(episode_type, scores, config)
+        for episode_type in sorted(config.supported_types)
+    )
 
 
 def _counts_for_accuracy(score: EpisodeScore, config: ScoreConfig) -> bool:
@@ -591,20 +605,42 @@ def _fpr(
 
 
 def _stratum(
-    episode_type: str, faults: Sequence[EpisodeScore], config: ScoreConfig
+    episode_type: str, scores: Sequence[EpisodeScore], config: ScoreConfig
 ) -> Stratum:
-    members = [s for s in faults if s.episode_type == episode_type]
-    correct = sum(
-        1 for s in members if s.correct(config.gated_metric, config.gated_level)
-    )
-    lower = clopper_pearson_lower(correct, len(members), config.confidence)
+    """A stratum with no valid episode has no bound, and fails."""
+    attempted = _attempts(scores, episode_type)
+    members = [s for s in attempted if s.valid]
+    correct = sum(_gated_correct(s, config) for s in members)
+    lower = _accuracy_bound(correct, len(members), config)
     return Stratum(
         episode_type=episode_type,
         episodes=len(members),
         correct=correct,
         lower_bound=lower,
-        passes=lower >= config.accuracy_floor,
+        passes=lower is not None and lower >= config.accuracy_floor,
+        excluded=_excluded(attempted),
     )
+
+
+def _attempts(scores: Sequence[EpisodeScore], episode_type: str) -> list[EpisodeScore]:
+    return [
+        s for s in scores if s.episode_type == episode_type and s.cause_class == "fault"
+    ]
+
+
+def _excluded(attempted: Sequence[EpisodeScore]) -> dict[str, int]:
+    counts = Counter(s.status for s in attempted if not s.valid)
+    return dict(sorted(counts.items()))
+
+
+def _gated_correct(score: EpisodeScore, config: ScoreConfig) -> bool:
+    return score.correct(config.gated_metric, config.gated_level)
+
+
+def _accuracy_bound(correct: int, episodes: int, config: ScoreConfig) -> float | None:
+    if not episodes:
+        return None
+    return clopper_pearson_lower(correct, episodes, config.confidence)
 
 
 def _hourly(
