@@ -283,13 +283,47 @@ def test_a_staged_store_whose_content_changed_is_refused_when_reused(
 def test_a_pin_with_the_commits_file_list_verifies_the_commit(
     tmp_path: Path,
 ) -> None:
+    # rev-213-a's N8: the pin names each file's blob, recorded when the
+    # revision was pinned (the hub's lfs.sha256 or blob_id), not only names.
     cache = _hub(tmp_path)
     spec = {"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)}
-    listed = ["config.json", "model.safetensors", "tokenizer.json"]
-    model = prepare_model({**spec, "files": listed})
+    pinned = {
+        "config.json": _git_sha1(CONFIG),
+        "model.safetensors": hashlib.sha256(WEIGHTS).hexdigest(),
+        "tokenizer.json": _git_sha1(TOKENIZER),
+    }
+    model = prepare_model({**spec, "files": pinned})
     assert model.record()["identity_evidence"] == "pinned_commit_verified"
-    with pytest.raises(InferInputError, match="README.md, which the pin lists"):
-        prepare_model({**spec, "files": [*listed, "README.md"]})
+    with pytest.raises(InferInputError, match="README.md, which the pin names"):
+        prepare_model({**spec, "files": {**pinned, "README.md": "a" * 40}})
+    with pytest.raises(InferInputError, match="map each path to its blob"):
+        prepare_model({**spec, "files": list(pinned)})
+    # A file the pin does not name cannot be shown to be the commit's.
+    del pinned["tokenizer.json"]
+    with pytest.raises(InferInputError, match="tokenizer.json, which the pin does not"):
+        prepare_model({**spec, "files": pinned})
+
+
+def test_a_link_re_pointed_at_another_commits_blob_fails_the_pin(
+    tmp_path: Path,
+) -> None:
+    # rev-213-a's N8 (p10): commit X's weights link re-pointed at commit Y's
+    # blob in the same repository verified as commit X.
+    cache = _hub(tmp_path)
+    other = WEIGHTS[::-1]
+    other_blob = hashlib.sha256(other).hexdigest()
+    (_repo(cache) / "blobs" / other_blob).write_bytes(other)
+    link = _repo(cache) / "snapshots" / COMMIT / "model.safetensors"
+    link.unlink()
+    link.symlink_to(Path("../../blobs") / other_blob)
+    pinned = {
+        "config.json": _git_sha1(CONFIG),
+        "model.safetensors": hashlib.sha256(WEIGHTS).hexdigest(),
+        "tokenizer.json": _git_sha1(TOKENIZER),
+    }
+    spec = {"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)}
+    with pytest.raises(InferInputError, match="model.safetensors: blob"):
+        prepare_model({**spec, "files": pinned})
 
 
 def test_a_snapshot_without_a_tokenizer_is_refused(tmp_path: Path) -> None:
