@@ -52,8 +52,15 @@ class Thresholds:
     rate_tolerance: float = 0.2
     # ...no more gaps may be longer than this many times the baseline's p99
     # than the baseline's own share of them allows by chance, and none this
-    # many times its p99.9...
+    # many times its p99.9, nor longer than the tolerance cap...
     long_gap_factor: float = 2.0
+    # ...which is the smallest F4a/F4b dose (60 ms in eval): a gap as long
+    # as a dosed pulse is never tolerated, however long the baseline's own
+    # long gaps were (three 1 s pauses in a baseline let 1.5 s stalls
+    # through). Where 2x the p99 is longer still, nothing is tolerated
+    # beyond it. G0 checks that every dose is longer than a typical prefill
+    # step; refrozen with the doses.
+    long_gap_tolerance_cap_s: float = 0.06
     # ...and no more gaps may lie above the baseline's p95 than chance
     # allows: this quantile of Binomial(n, exceedance_share).
     exceedance_share: float = 0.05
@@ -392,7 +399,11 @@ class CadenceWithin:
         self.longest = thresholds.long_gap_factor * baseline.p99
         self.long = _prefix(float(value > self.longest) for value in values)
         self.long_share = baseline.long_count / baseline.count if baseline.count else 0
-        never = thresholds.long_gap_factor * baseline.p999
+        tolerated = min(
+            thresholds.long_gap_factor * baseline.p999,
+            thresholds.long_gap_tolerance_cap_s,
+        )
+        never = max(self.longest, tolerated)
         self.too_long = _prefix(float(value > never) for value in values)
         self.mean_ceiling = baseline.mean / (1 - thresholds.rate_tolerance)
         self.thresholds = thresholds
