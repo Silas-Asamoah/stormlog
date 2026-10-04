@@ -2,8 +2,12 @@
 
 A firing trigger opens an incident, or joins one still collecting its
 post-window. The incident's pre-window reaches back from the firing to the
-start of the trigger's first violating window, capped at ``pre_seconds``; its
-post-window runs ``post_seconds`` past the firing. When the post-window ends
+start of the trigger's first violating window, capped at ``pre_seconds``,
+and a trigger that joins widens it to its own; an event or a test trigger,
+which has no window, reaches back the whole ``pre_seconds``. The
+post-window runs ``post_seconds`` past the firing. A test trigger never
+joins an incident and is never joined: it qualifies the capture path on
+its own. When the post-window ends
 the incident is sealed: its scrapes, its windows and its ``infer.incident``
 record are written as generation 0 of a bundle, off the watcher's loop, and
 the record goes to the ledger once the bundle is published. The scrapes are
@@ -223,7 +227,9 @@ class IncidentManager:
             counts_toward_exit=False,
             requested_at_ns=requested_wall_ns,
         )
-        return self._admit(trigger, counts=False, at_mono=at_mono, reach_mono=at_mono)
+        return self._admit(
+            trigger, counts=False, at_mono=at_mono, reach_mono=self._earliest(at_mono)
+        )
 
     def on_event(self, trigger_id: str, reason: str, at_mono: int) -> str | None:
         """A health event that needs no sustain, such as an exporter restart."""
@@ -234,13 +240,24 @@ class IncidentManager:
             fired_at_ns=self.clock.to_wall(at_mono),
             counts_toward_exit=False,
         )
-        return self._admit(trigger, counts=False, at_mono=at_mono, reach_mono=at_mono)
+        return self._admit(
+            trigger, counts=False, at_mono=at_mono, reach_mono=self._earliest(at_mono)
+        )
+
+    def _earliest(self, at_mono: int) -> int:
+        """How far back a pre-window from ``at_mono`` may reach."""
+        return at_mono - int(self.limits.pre_seconds * _NS)
 
     def _admit(
         self, trigger: dict[str, Any], *, counts: bool, at_mono: int, reach_mono: int
     ) -> str | None:
         self.firings += 1
-        joinable = [i for i in self.open.values() if at_mono <= i.post_end_mono]
+        joinable = [
+            incident
+            for incident in self.open.values()
+            if at_mono <= incident.post_end_mono
+            and KIND_TEST not in (incident.trigger["kind"], trigger["kind"])
+        ]
         if joinable:
             incident = joinable[0]
             if len(incident.joined) >= MAX_JOINED_TRIGGERS:
@@ -249,6 +266,9 @@ class IncidentManager:
                 return None
             incident.joined.append(trigger)
             incident.counts_toward_exit |= counts
+            incident.pre_start_mono = min(
+                incident.pre_start_mono, max(reach_mono, self._earliest(at_mono))
+            )
             return incident.incident_id
         reason = self._lane(trigger).refusal(at_mono, self.limits)
         if reason is not None:
@@ -265,13 +285,12 @@ class IncidentManager:
         self, trigger: dict[str, Any], *, counts: bool, at_mono: int, reach_mono: int
     ) -> str:
         incident_id = self.store.new_incident_id(self.clock.to_wall(at_mono))
-        pre_ns = int(self.limits.pre_seconds * _NS)
         incident = OpenIncident(
             incident_id=incident_id,
             trigger=trigger,
             counts_toward_exit=counts,
             detected_at_mono=at_mono,
-            pre_start_mono=max(reach_mono, at_mono - pre_ns),
+            pre_start_mono=max(reach_mono, self._earliest(at_mono)),
             post_end_mono=at_mono + int(self.limits.post_seconds * _NS),
             loss_at_open=self._loss(),
         )

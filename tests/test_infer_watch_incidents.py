@@ -496,3 +496,45 @@ def test_a_counting_firing_turned_away_is_not_counted_as_recorded(
     assert (harness.manager.recorded, harness.manager.recorded_counting) == (1, 0)
     snapshot = harness.stats.health()
     assert counter_value(snapshot, "suppressed_total", ("rate_limit",)) == 1
+
+
+def test_events_and_tests_reach_back_the_whole_pre_window(harness: Harness) -> None:
+    """An exporter restart's incident kept no scrape from before it: the
+    evidence of what led to the restart."""
+    harness.scrapes(0, 262)
+    harness.now = 200 * S
+    event = harness.manager.on_event("exporter_restart", "restarted", harness.now)
+    test = harness.manager.on_test(harness.now, requested_wall_ns=None)
+    assert event is not None and test is not None and event != test
+    for incident_id in (event, test):
+        assert harness.manager.open[incident_id].pre_start_mono == 80 * S
+    harness.tick(261)
+    for record in harness.of_type(INCIDENT):
+        assert record["pre_window"]["fidelity"] == "complete"
+        assert record["pre_window"]["fidelity_detail"]["scrapes"]["ok"] == 121
+
+
+def test_a_trigger_that_joins_widens_the_pre_window_to_its_own(
+    harness: Harness,
+) -> None:
+    first = harness.fire(200, pending_since_s=190)  # reaches back to 160 s
+    second = harness.fire(230, trigger_id="kv", pending_since_s=150)  # to 120 s
+    assert first == second and first is not None
+    assert harness.manager.open[first].pre_start_mono == 120 * S
+
+
+def test_test_triggers_neither_join_nor_are_joined(harness: Harness) -> None:
+    """Test incidents absorbed real firings within their post-window, and
+    each other, using up the 16-trigger cap."""
+    harness.now = 200 * S
+    first = harness.manager.on_test(harness.now, requested_wall_ns=None)
+    harness.now = 210 * S
+    second = harness.manager.on_test(harness.now, requested_wall_ns=None)
+    real = harness.fire(220)
+    assert len({first, second, real}) == 3
+    assert all(not incident.joined for incident in harness.manager.open.values())
+
+
+def test_a_firing_at_the_post_window_s_last_instant_joins(harness: Harness) -> None:
+    first = harness.fire(200)  # post-window ends at 260 s
+    assert harness.fire(260, trigger_id="kv") == first
