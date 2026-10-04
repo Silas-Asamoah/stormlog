@@ -64,8 +64,9 @@ the flaky benchmark memory gates
   runs sent different workload realizations is set aside). A run that did
   not finish, or a case a run lacks, is an outcome, compared rather than
   set aside, and a value it lost fails the candidate's gate
-  (`outcome_unrecoverable`); only a protocol failure, such as an external
-  cause a runner records in `infer.run_state`, sets aside a block, both
+  (`outcome_unrecoverable`), as does an outcome a runner records in
+  `infer.run_state`; only a protocol failure, such as an external cause a
+  runner records there, sets aside a block, both
   arms, and more than one block lost leaves the case's gates
   `not_evaluable`. A retried block keeps its last attempt, but a retry
   never replaces an outcome failure. An SLO gate over runs judged by
