@@ -80,7 +80,10 @@ before it is written:
 - A raw trace is hard-linked in (copied, where no link can be made) and
   charged its actual size first. Its original name is removed only once the
   generation is published, so an abandoned generation leaves it where it
-  was, and anything it grew by meanwhile is charged at publication.
+  was, and anything it grew by meanwhile is charged at publication. A trace
+  in a directory the watcher cannot write is copied, not linked: its name
+  could never be removed, and its producer could rewrite the bundle's copy
+  through it.
 - A file written by the watcher is charged chunk by chunk, before each chunk
   reaches the disk.
 
