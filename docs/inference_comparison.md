@@ -220,7 +220,13 @@ A gate is `not_evaluable`, never passed, when:
   (`decision_unstable`); only samples that could still be gated count, so
   this is checked from 4 pairs;
 - the caller already knows why, such as unverified comparability or a
-  censored quantile.
+  censored quantile;
+- the case has no metric the gate's name or pattern matches, such as a
+  server latency gate on runs without spans (`metric_absent`, listed under
+  the case's `absent_gates`): a gate on something never measured gates
+  nothing, and must not read as a pass.
+
+A `--case` that no run has is invalid input (exit 5).
 
 ## Guards
 

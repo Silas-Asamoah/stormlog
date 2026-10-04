@@ -106,7 +106,8 @@ def _gate_findings(comparison: Comparison, path: str | None) -> list[Finding]:
         if gate.status == "pass":
             continue
         failed = gate.status == "fail"
-        pointer = f"/payload/cases/{_escape(case_id)}/metrics/{_escape(name)}"
+        where = "absent_gates" if gate.reason == "metric_absent" else "metrics"
+        pointer = f"/payload/cases/{_escape(case_id)}/{where}/{_escape(name)}"
         findings.append(
             Finding(
                 id=_finding_id(
