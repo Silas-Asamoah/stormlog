@@ -89,7 +89,10 @@ def test_a_host_the_codec_refuses_is_a_counted_failure_not_a_stall() -> None:
         threading.excepthook = previous_hook
     assert errors == []
     assert resolver.stats.failures == 2
-    assert "UnicodeError" in (resolver.stats.last_error or "")
+    # UnicodeError, or its subclass UnicodeEncodeError from Python 3.13.
+    assert (resolver.stats.last_error or "").startswith(
+        ("UnicodeError", "UnicodeEncodeError")
+    )
     assert not resolver.stalled and waited < 2
 
 

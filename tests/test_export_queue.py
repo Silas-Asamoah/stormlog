@@ -7,6 +7,10 @@ import pytest
 
 from stormlog._export.queue import ENTRY_BYTES, TAKE_LIMIT, BoundedQueue
 
+# Bytes for a few small items on any Python: ENTRY_BYTES is 92 on 3.10-3.13
+# and 100 on 3.14, so a fixed 100 held none there.
+ROOM = 10 * (ENTRY_BYTES + 8)
+
 
 def test_offers_past_the_item_bound_are_dropped_and_counted() -> None:
     queue: BoundedQueue[int] = BoundedQueue(max_items=2, max_bytes=1000)
@@ -47,7 +51,7 @@ def test_take_times_out_empty() -> None:
 
 
 def test_an_offer_wakes_a_waiting_consumer() -> None:
-    queue: BoundedQueue[int] = BoundedQueue(max_items=10, max_bytes=100)
+    queue: BoundedQueue[int] = BoundedQueue(max_items=10, max_bytes=ROOM)
     got: list[list[int]] = []
     consumer = threading.Thread(target=lambda: got.append(queue.take(timeout=5)))
     consumer.start()
@@ -58,7 +62,7 @@ def test_an_offer_wakes_a_waiting_consumer() -> None:
 
 
 def test_close_wakes_consumers_and_refuses_offers() -> None:
-    queue: BoundedQueue[int] = BoundedQueue(max_items=10, max_bytes=100)
+    queue: BoundedQueue[int] = BoundedQueue(max_items=10, max_bytes=ROOM)
     got: list[list[int]] = []
     consumer = threading.Thread(target=lambda: got.append(queue.take(timeout=None)))
     consumer.start()
@@ -72,7 +76,7 @@ def test_close_wakes_consumers_and_refuses_offers() -> None:
 
 
 def test_items_queued_before_close_can_still_be_taken() -> None:
-    queue: BoundedQueue[int] = BoundedQueue(max_items=10, max_bytes=100)
+    queue: BoundedQueue[int] = BoundedQueue(max_items=10, max_bytes=ROOM)
     queue.offer(1, 1)
     queue.close()
     assert queue.take(timeout=0) == [1]
