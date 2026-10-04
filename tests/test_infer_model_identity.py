@@ -258,6 +258,21 @@ def test_a_file_rewritten_in_place_with_its_size_and_time_kept_is_caught(
     assert changed_files(staged) == ["config.json", "extra.safetensors"]
 
 
+def test_a_staged_store_whose_content_changed_is_refused_when_reused(
+    tmp_path: Path,
+) -> None:
+    # rev-213-a's mutant r9: nothing failed when a reused store went unhashed.
+    source = tmp_path / "model"
+    source.mkdir()
+    (source / "model.safetensors").write_bytes(WEIGHTS)
+    (source / "config.json").write_bytes(CONFIG)
+    spec = {"route": "staged", "source": str(source), "store": str(tmp_path / "s")}
+    staged = prepare_model(spec)
+    _rewrite_in_place(staged.directory / "model.safetensors", WEIGHTS[::-1])
+    with pytest.raises(InferInputError, match="model.safetensors changed"):
+        prepare_model(spec)
+
+
 def test_an_unknown_route_is_refused() -> None:
     with pytest.raises(InferInputError, match="route"):
         prepare_model({"route": "trust_me"})
