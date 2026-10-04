@@ -167,6 +167,9 @@ def test_a_missing_file_is_an_input_error(tmp_path: Path) -> None:
         ({"incident": {"post_seconds": float("inf")}}, "post_seconds"),
         ({"incident": {"pre_seconds": 400, "post_seconds": 300}}, "post_seconds"),
         ({"server": {"base_url": "not a url"}}, "server.base_url"),
+        # Only http and https: file:// and others too, not just ftp://.
+        ({"server": {"base_url": "file:///etc/passwd"}}, "server.base_url"),
+        ({"server": {"base_url": "gopher://h:70"}}, "server.base_url"),
         (
             {"server": {"base_url": BASE, "metrics_url": "ftp://h/metrics"}},
             "metrics_url",
