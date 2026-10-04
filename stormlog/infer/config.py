@@ -156,6 +156,9 @@ class ProfileConfig:
     # operator's declarations; each is recorded as an infer.manifest record.
     server_description: dict[str, Any] | None = None
     declarations: dict[str, Any] | None = None
+    # Which experiment, arm and block this run is: infer compare pairs runs
+    # of one block. None leaves the run unlabelled.
+    labels: dict[str, Any] | None = None
 
     def prompt_spec(self) -> PromptSpec:
         return PromptSpec(

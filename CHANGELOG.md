@@ -58,6 +58,12 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `stormlog infer profile --experiment ID --arm NAME --block LABEL`
+  (with `--position` and `--attempt`) records the run's labels, and
+  `stormlog.infer.run_summary.summarize_run` reads a run back for
+  comparison: its report, labels, comparable fields, and protocol failures
+  (unfinished session, identity change, incomplete probe, invalid cohort,
+  unacknowledged cold-cache reset). (#213)
 - `tests/fixtures/infer/comparison_contract_v1.json`: the comparison's
   units contract, 19 cases whose expected effects, intervals and gate
   outcomes are computed from the formulas by

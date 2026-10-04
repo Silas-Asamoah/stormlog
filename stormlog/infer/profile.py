@@ -388,6 +388,7 @@ class InferenceProfiler:
                 "tokenizer": self.config.tokenizer,
                 "system_sampler": self.sampler.name,
                 "sample_interval_seconds": self.config.sample_interval_seconds,
+                "labels": self.config.labels,
                 "trace": _trace_settings(self.config.trace),
                 "arrivals": [spec.to_record() for spec in self.config.arrival_specs()],
                 "max_in_flight": self.config.max_in_flight,
