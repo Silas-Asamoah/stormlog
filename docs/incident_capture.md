@@ -192,7 +192,7 @@ reason `engine_required`.
 | Predicate | Fires when | Judged on |
 | --- | --- | --- |
 | a gauge at or above a value | every sample in the window, or a chosen share of them, is at or above it | the window's minimum, or the share |
-| a counter's rate | the counter rises at least as fast as the threshold | the lower bound of its rate, from the window's timing uncertainty |
+| a counter's rate | the counter rises at least as fast as the threshold | the lower bound of its rate, from the window's timing uncertainty, timed on the watcher's monotonic clock so a wall-clock step cannot bend it |
 | a histogram's share above a value | more than the chosen share of the window's observations are above the value | the lower bucket bound: a value between two bucket bounds gives an interval `[lo, hi]`, and only `lo` can fire |
 | a #218 signal (`queue_saturation`, `kv_preemption_pressure`, `prefix_cache_loss`) | the signal exceeds its threshold in #218's shared table | the signal's own window rule; the incident says the mechanism is *suspected* |
 | scrape failures | the last `k` scrapes all failed; a failed scrape is evidence here, not a gap | the scrapes |

@@ -135,6 +135,29 @@ def test_counter_rate_fires_on_its_lower_bound_and_not_across_a_reset() -> None:
     assert "counter_reset" in reset.reasons
 
 
+@pytest.mark.parametrize("wall_step_s", [0.0, -0.9, 30.0])
+def test_a_rate_is_timed_on_the_monotonic_clock(wall_step_s: float) -> None:
+    """An NTP step inside a window moved the records' wall stamps, and a
+    true rate of 1/s judged against 1.2/s read 1.29/s and fired."""
+    history = []
+    for second in range(20):
+        wall = second + (wall_step_s if second >= 13 else 0.0)
+        record = scrape(exposition(counters={PREEMPTIONS: float(second)}), wall)
+        mono = second * S
+        history.append((Stamped(mono, mono + 4_000_000, mono), record))
+    spec = TriggerSpec(
+        "preemptions",
+        KIND_METRIC,
+        Sustain.with_defaults(window=5, hold=5, clear=None, tick=1),
+        CounterRateAtLeast(PREEMPTIONS, rate_per_s=1.2),
+    )
+    (result,) = TriggerEngine([spec], tick_seconds=1).tick(15 * S + 5_000_000, history)
+    assert result.evaluation.classification == CLEAR
+    assert result.evaluation.observed_bounds is not None
+    lower, upper = result.evaluation.observed_bounds
+    assert upper is not None and lower <= 1.0 <= upper
+
+
 def _ttft(cumulative: Sequence[tuple[str, float]]) -> str:
     return exposition(histograms={TTFT: (cumulative, 10.0)})
 
