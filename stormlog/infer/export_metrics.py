@@ -575,6 +575,8 @@ def _declare_engine(
             enums={"outcome": SCRAPE_OUTCOMES},
         ),
         known,
+        # Absent until a scrape has that outcome: a 0 would read as 1970.
+        precreate=False,
     )
     families.source_changes = registry.add(
         FamilySpec(

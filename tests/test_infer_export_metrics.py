@@ -302,6 +302,17 @@ def test_trace_windows_count_how_they_ended() -> None:
     assert exposition.value(windows, stop_reason="not_started", started="false") == 1
 
 
+def test_a_last_scrape_time_is_absent_until_a_scrape_has_that_outcome() -> None:
+    # A 0 would read as a scrape about 56 years ago.
+    registry, metrics = _metrics(metrics_server=SERVER)
+    last = "stormlog_engine_last_scrape_timestamp_seconds"
+    assert _exposition(registry).matching(last) == []
+    _feed(registry, metrics, _scrape("ok", 100.0, 1_000_000_000))
+    exposition = _exposition(registry)
+    assert exposition.value(last, outcome="ok") == 1.0
+    assert exposition.matching(last, outcome="error") == []
+
+
 def test_engine_and_trace_families_exist_only_when_collected() -> None:
     registry, _ = _metrics()
     names = {family.spec.name for family in registry.families}
