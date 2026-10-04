@@ -255,17 +255,29 @@ class GenerationWriter:
             files=files,
             metadata=dict(metadata or {}),
         )
-        _replace_manifest(self.bundle, manifest)
+        staged = _stage_manifest(self.bundle, manifest)
+        os.replace(staged, self.bundle / MANIFEST_FILENAME)
+        # Published from here on: whatever fails next, abandon() must not
+        # delete what the manifest now names.
         self._done = True
         self.allowance.release()
+        _fsync_dir(self.bundle)
         self.store._reclaim_old_generations(self.bundle, keep=self.generation)
         return manifest
 
     def abandon(self) -> None:
-        """Remove this generation; nothing it wrote stays charged."""
+        """Remove this generation; nothing it wrote stays charged.
+
+        A generation the manifest already names is published, whatever
+        raised after the rename, and is never removed here.
+        """
         if self._done:
             return
         self._done = True
+        current = self.store.manifest(self.incident_id)
+        if current is not None and current.generation == self.generation:
+            self.allowance.release()
+            return
         shutil.rmtree(self.directory, ignore_errors=True)
         self.allowance.release(keep=0)
 
@@ -371,6 +383,10 @@ class IncidentStore:
                 self._recover_unpublished(bundle, clock, report)
                 continue
             except (OSError, ValueError):
+                report.unreadable.append(bundle.name)
+                continue
+            if not (bundle / manifest.current).is_dir():
+                # Nothing named survives: keep what is there, for a person.
                 report.unreadable.append(bundle.name)
                 continue
             report.generations_removed += self._remove_unnamed(bundle, manifest)
@@ -565,6 +581,12 @@ def _read_manifest(bundle: Path) -> BundleManifest:
 
 
 def _replace_manifest(bundle: Path, manifest: BundleManifest) -> None:
+    os.replace(_stage_manifest(bundle, manifest), bundle / MANIFEST_FILENAME)
+    _fsync_dir(bundle)
+
+
+def _stage_manifest(bundle: Path, manifest: BundleManifest) -> Path:
+    """The manifest written and fsynced beside the real one, not yet named."""
     temporary = bundle / (MANIFEST_FILENAME + ".tmp")
     data = (json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n").encode()
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -573,8 +595,7 @@ def _replace_manifest(bundle: Path, manifest: BundleManifest) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-    os.replace(temporary, bundle / MANIFEST_FILENAME)
-    _fsync_dir(bundle)
+    return temporary
 
 
 def _describe_files(

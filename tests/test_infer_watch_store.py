@@ -258,7 +258,7 @@ def test_a_crash_at_each_publication_boundary_leaves_one_whole_generation(
     def crash(*_args: Any, **_kwargs: Any) -> None:
         raise Crash
 
-    target = "_replace_manifest" if crash_point == "before_manifest" else None
+    target = "_stage_manifest" if crash_point == "before_manifest" else None
     if target:
         monkeypatch.setattr(store_module, target, crash)
     else:
@@ -293,6 +293,53 @@ def test_recovery_keeps_the_deletions_a_reader_defers(tmp_path: Path) -> None:
     assert restarted.reclaim_deferred() == 1
     assert [p.name for p in bundle.glob("gen-*")] == ["gen-0"]
     assert restarted.budget.used_bytes == restarted._scan_bytes()
+
+
+def test_a_publish_that_fails_after_the_rename_stays_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The directory fsync after the manifest's rename can fail (EIO,
+    EMFILE). The caller's abandon() then deleted the generation the
+    manifest named, and recover() deleted the other one."""
+    store = IncidentStore(tmp_path, _limits())
+    incident_id = _gen0(store, b"first\n")
+    bundle = tmp_path / "incidents" / incident_id
+    second = store.next_generation(incident_id, KIB)
+    assert second is not None
+    with second.file("incident.jsonl") as out:
+        out.write(b"second\n")
+    real_fsync_dir = store_module._fsync_dir
+
+    def fsync_dir(directory: Path) -> None:
+        if directory == bundle and (bundle / "manifest.json").exists():
+            if store_module._read_manifest(bundle).current == "gen-1":
+                raise OSError(5, "Input/output error")
+        real_fsync_dir(directory)
+
+    monkeypatch.setattr(store_module, "_fsync_dir", fsync_dir)
+    with pytest.raises(OSError, match="Input/output"):
+        second.publish()
+    second.abandon()  # as the API tells a caller whose publish raised
+    monkeypatch.undo()
+
+    with open_incident_bundle(bundle) as view:
+        assert view.manifest.current == "gen-1"
+        assert view.file("incident.jsonl").read_bytes() == b"second\n"
+    IncidentStore(tmp_path, _limits()).recover()
+    assert (bundle / "gen-1" / "incident.jsonl").read_bytes() == b"second\n"
+
+
+def test_recovery_keeps_every_generation_when_the_named_one_is_missing(
+    tmp_path: Path,
+) -> None:
+    store = IncidentStore(tmp_path, _limits())
+    incident_id = _gen0(store, b"first\n")
+    bundle = tmp_path / "incidents" / incident_id
+    (bundle / "gen-0").rename(bundle / "gen-7")  # the manifest names gen-0
+    report = store.recover()
+    assert report.unreadable == [incident_id]
+    assert report.generations_removed == 0
+    assert (bundle / "gen-7" / "incident.jsonl").exists()
 
 
 def test_recovery_removes_a_half_written_manifest(tmp_path: Path) -> None:
