@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import http.client
 import json
 import signal
@@ -37,6 +38,7 @@ from stormlog.infer.vllm_spans import (
     OtlpSpanReceiver,
     ProtobufDecodeError,
     RawSpan,
+    ReceiverLimits,
     decode_otlp_json,
     decode_otlp_protobuf,
     gunzip_capped,
@@ -414,8 +416,12 @@ class TestReceiver:
 
 
 @contextlib.contextmanager
-def _receiver(listen: str = "127.0.0.1:0") -> Iterator[OtlpSpanReceiver]:
-    receiver = OtlpSpanReceiver(listen=listen, session_id="s", run_id="run-1")
+def _receiver(
+    listen: str = "127.0.0.1:0", limits: ReceiverLimits | None = None
+) -> Iterator[OtlpSpanReceiver]:
+    receiver = OtlpSpanReceiver(
+        listen=listen, session_id="s", run_id="run-1", limits=limits
+    )
     receiver.start()
     try:
         yield receiver
@@ -624,6 +630,131 @@ class TestReceiverRobustness:
                 == 200
             )
             assert receiver.drain()[0].clock_domain == "::1/unix_epoch_ns"
+
+
+def _json_export(count: int) -> bytes:
+    spans = [{"name": f"s{i}"} for i in range(count)]
+    return json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}).encode()
+
+
+def _connect(listen: str) -> socket.socket:
+    host, port = parse_listen_address(listen)
+    return socket.create_connection((host, port), timeout=5)
+
+
+class TestReceiverAdmission:
+    def test_limits_are_validated(self) -> None:
+        with pytest.raises(ValueError, match="max_connections"):
+            ReceiverLimits(max_connections=0)
+        with pytest.raises(ValueError, match="hold one full body"):
+            ReceiverLimits(max_inflight_bytes=1024)
+
+    def test_connections_over_the_cap_get_503_without_a_handler(self) -> None:
+        with _receiver(limits=ReceiverLimits(max_connections=2)) as receiver:
+            held = [_connect(receiver.listen) for _ in range(2)]
+            try:
+                time.sleep(0.2)  # both accepted and held by handler threads
+                with _connect(receiver.listen) as extra:
+                    reply = extra.recv(4096)
+                metadata = receiver.capability_metadata()
+            finally:
+                for sock in held:
+                    sock.close()
+            time.sleep(0.2)
+            url = f"http://{receiver.listen}/v1/traces"
+            assert _post(url, JSON_EXPORT, "application/json") == 200
+        assert reply.startswith(b"HTTP/1.1 503")
+        assert b"Retry-After: 1" in reply
+        assert metadata["refused_connections"] == 1
+        assert metadata["requests"] == 0
+
+    def test_a_body_that_trickles_past_the_deadline_is_dropped(self) -> None:
+        limits = ReceiverLimits(body_deadline_seconds=0.5)
+        with _receiver(limits=limits) as receiver:
+            with _connect(receiver.listen) as sock:
+                sock.sendall(
+                    b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n"
+                    b"Content-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"
+                )
+                started = time.monotonic()
+                # One byte every 0.2 s keeps every single read under its timeout.
+                with contextlib.suppress(OSError):
+                    for _ in range(10):
+                        time.sleep(0.2)
+                        sock.sendall(b" ")
+                reply = b""
+                with contextlib.suppress(OSError):
+                    reply = sock.recv(4096)
+                elapsed = time.monotonic() - started
+            metadata = receiver.capability_metadata()
+        assert metadata["body_timeouts"] == 1
+        assert metadata["spans"] == 0
+        assert reply == b"" or reply.startswith(b"HTTP/1.1 408")
+        assert elapsed < 1.9  # cut off at the deadline, not at the end of the body
+
+    def test_bodies_over_the_in_flight_budget_get_503(self) -> None:
+        import gzip
+
+        # A gzip body is charged its inflation cap (32 MiB) on top of its own
+        # length, so with a 32 MiB budget it can never be admitted.
+        limits = ReceiverLimits(max_inflight_bytes=32 * 1024 * 1024)
+        with _receiver(limits=limits) as receiver:
+            request = urllib.request.Request(
+                f"http://{receiver.listen}/v1/traces",
+                data=gzip.compress(JSON_EXPORT),
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                },
+                method="POST",
+            )
+            with pytest.raises(urllib.error.HTTPError) as refused:
+                urllib.request.urlopen(request, timeout=5)
+            plain = _post(
+                f"http://{receiver.listen}/v1/traces", JSON_EXPORT, "application/json"
+            )
+            metadata = receiver.capability_metadata()
+        assert refused.value.code == 503
+        assert refused.value.headers["Retry-After"] == "1"
+        assert plain == 200
+        assert metadata["busy"] == 1
+        assert metadata["spans"] == 1
+
+    def test_too_many_spans_in_one_body_is_refused(self) -> None:
+        with _receiver(limits=ReceiverLimits(max_spans_per_body=3)) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            assert _post(url, _json_export(4), "application/json") == 413
+            assert _post(url, _json_export(3), "application/json") == 200
+            metadata = receiver.capability_metadata()
+        assert metadata["too_many_spans"] == 1
+        assert metadata["spans"] == 3
+
+    def test_a_body_that_does_not_fit_the_queue_is_refused_whole(self) -> None:
+        with _receiver(limits=ReceiverLimits(max_queued_spans=5)) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            assert _post(url, _json_export(4), "application/json") == 200
+            # Four more would make eight: none of them is queued.
+            assert _post(url, _json_export(4), "application/json") == 503
+            before_drain = receiver.capability_metadata()
+            assert len(receiver.drain()) == 4
+            # Draining frees the queue; the resent body now fits.
+            assert _post(url, _json_export(4), "application/json") == 200
+            after = receiver.capability_metadata()
+        assert before_drain["dropped_queue_full"] == 4
+        assert before_drain["queued"] == 4
+        assert after["queued"] == 4
+        assert after["spans"] == 8
+
+    def test_the_queue_is_also_bounded_by_bytes(self) -> None:
+        body = _json_export(2)
+        limits = ReceiverLimits(max_queued_bytes=len(body) + len(body) // 2)
+        with _receiver(limits=limits) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            assert _post(url, body, "application/json") == 200
+            assert _post(url, body, "application/json") == 503
+            metadata = receiver.capability_metadata()
+        assert metadata["dropped_queue_full"] == 2
+        assert metadata["queued"] == 2
 
 
 def _raw_request_span(attributes: dict[str, Any]) -> RawSpan:
@@ -880,6 +1011,7 @@ class TestProfileReceiver:
             "listen": f"127.0.0.1:{port}",
             "path": "/v1/traces",
             "protobuf": True,
+            "limits": dataclasses.asdict(ReceiverLimits()),
             "drain_seconds": 0.0,
         }
         capability = _span_capability(records)

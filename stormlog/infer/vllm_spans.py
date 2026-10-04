@@ -18,13 +18,13 @@ marks the derived stage windows as estimates.
 from __future__ import annotations
 
 import json
-import queue
 import socket
 import threading
 import time
 import zlib
+from collections import deque
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -427,10 +427,49 @@ class ReceiverStats:
     bad_requests: int = 0
     handler_errors: int = 0
     after_stop: int = 0
+    refused_connections: int = 0
+    busy: int = 0
+    body_timeouts: int = 0
+    too_many_spans: int = 0
+    dropped_queue_full: int = 0
     by_media: dict[str, int] = field(default_factory=dict)
 
 
 MAX_BODY_BYTES = 32 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class ReceiverLimits:
+    """Admission bounds, applied before a body is read, decoded or queued.
+
+    A connection over ``max_connections`` is answered 503 and closed without a
+    handler thread. A body must arrive within ``body_deadline_seconds``. The
+    bodies being read and decoded at once may hold at most
+    ``max_inflight_bytes``, a gzip body counted at its inflation cap. A body
+    with more than ``max_spans_per_body`` spans is refused, and one that does
+    not fit the queue whole is refused with 503, so the exporter can resend
+    it; spans are never queued in part.
+    """
+
+    max_connections: int = 8
+    body_deadline_seconds: float = 10.0
+    max_inflight_bytes: int = 64 * 1024 * 1024
+    max_spans_per_body: int = 10_000
+    max_queued_spans: int = 100_000
+    max_queued_bytes: int = 64 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        for name, value in asdict(self).items():
+            if value <= 0:
+                raise ValueError(f"receiver {name} must be > 0")
+        if self.max_inflight_bytes < MAX_BODY_BYTES:
+            raise ValueError("receiver max_inflight_bytes must hold one full body")
+
+
+_BUSY_RESPONSE = (
+    b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\n"
+    b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+)
 # How long stop() waits for an export already being read to finish.
 STOP_GRACE_SECONDS = 2.0
 
@@ -463,19 +502,32 @@ GRPC_HINT = (
 class OtlpSpanReceiver:
     """Accept OTLP/HTTP trace exports on a local port while a profile runs."""
 
-    def __init__(self, *, listen: str, session_id: str, run_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        listen: str,
+        session_id: str,
+        run_id: str,
+        limits: ReceiverLimits | None = None,
+    ) -> None:
         host, port = parse_listen_address(listen)
         self.session_id = session_id
         self.run_id = run_id
+        self.limits = limits or ReceiverLimits()
         self.protobuf_available = otlp_protobuf_available()
         self.stats = ReceiverStats()
-        self._queue: queue.SimpleQueue[VllmSpanRecord] = queue.SimpleQueue()
+        # Each queued span with the bytes it is charged; guarded by _lock.
+        self._queue: deque[tuple[VllmSpanRecord, int]] = deque()
+        self._queued_bytes = 0
+        self._inflight_bytes = 0
         self._lock = threading.Lock()
         self._stopped = False
         receiver = self
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
+            # Also closes a kept-alive connection that stays idle this long.
+            timeout = self.limits.body_deadline_seconds
 
             def parse_request(self) -> bool:
                 # vLLM's default exporter is gRPC: its HTTP/2 connection
@@ -524,7 +576,15 @@ class OtlpSpanReceiver:
 
             def process_request(self, request: Any, client_address: Any) -> None:
                 with self._idle:
-                    self._connections.add(request)
+                    admitted = len(self._connections) < receiver.limits.max_connections
+                    if admitted:
+                        self._connections.add(request)
+                if not admitted:
+                    # Refused before a handler thread exists for it.
+                    receiver._count("refused_connections")
+                    _refuse_connection(request)
+                    self.shutdown_request(request)
+                    return
                 super().process_request(request, client_address)
 
             def shutdown_request(self, request: Any) -> None:
@@ -598,18 +658,49 @@ class OtlpSpanReceiver:
         return self._stopped
 
     def drain(self) -> list[VllmSpanRecord]:
-        records: list[VllmSpanRecord] = []
-        while True:
-            try:
-                records.append(self._queue.get_nowait())
-            except queue.Empty:
-                return records
+        with self._lock:
+            records = [record for record, _size in self._queue]
+            self._queue.clear()
+            self._queued_bytes = 0
+        return records
 
     def _handle(self, handler: BaseHTTPRequestHandler) -> None:
         if handler.path != OTLP_TRACES_PATH:
             _respond(handler, 404, b"", "text/plain")
             return
         self._count("requests")
+        reserved = self._admit(handler)
+        if reserved is None:
+            return
+        try:
+            self._handle_admitted(handler)
+        finally:
+            with self._lock:
+                self._inflight_bytes -= reserved
+
+    def _admit(self, handler: BaseHTTPRequestHandler) -> int | None:
+        """Reserve the bytes this request may hold while it is read and
+        decoded; None after answering 503 when they do not fit."""
+        try:
+            length = max(0, int(handler.headers.get("Content-Length") or 0))
+        except ValueError:
+            length = 0  # _read_body answers the malformed length
+        encoding = (handler.headers.get("Content-Encoding") or "").strip().lower()
+        reserve = min(length, MAX_BODY_BYTES)
+        if encoding == "gzip":
+            reserve += MAX_BODY_BYTES
+        with self._lock:
+            fits = self._inflight_bytes + reserve <= self.limits.max_inflight_bytes
+            if fits:
+                self._inflight_bytes += reserve
+            else:
+                self.stats.busy += 1
+        if not fits:
+            _respond_busy(handler)
+            return None
+        return reserve
+
+    def _handle_admitted(self, handler: BaseHTTPRequestHandler) -> None:
         media = (handler.headers.get("Content-Type") or "").split(";")[0].strip()
         body = self._read_body(handler)
         if body is None:
@@ -628,7 +719,13 @@ class OtlpSpanReceiver:
             self._count("decode_failures")
             _respond(handler, 400, b"", "text/plain")
             return
-        self._enqueue(spans, media, handler.client_address[0])
+        if len(spans) > self.limits.max_spans_per_body:
+            self._count("too_many_spans")
+            _respond(handler, 413, b"too many spans in one body", "text/plain")
+            return
+        if not self._enqueue(spans, media, handler.client_address[0], len(body)):
+            _respond_busy(handler)
+            return
         # An empty ExportTraceServiceResponse is valid in either encoding.
         _respond(handler, 200, b"" if media == PROTOBUF_MEDIA else b"{}", media)
 
@@ -646,7 +743,13 @@ class OtlpSpanReceiver:
             self._count("oversized")
             _respond(handler, 413, b"", "text/plain")
             return None
-        body = handler.rfile.read(length)
+        try:
+            body = self._read_within_deadline(handler, length)
+        except TimeoutError:
+            self._count("body_timeouts")
+            handler.close_connection = True
+            _try_respond(handler, 408)
+            return None
         encoding = (handler.headers.get("Content-Encoding") or "").strip().lower()
         if encoding in {"", "identity"}:
             return body
@@ -657,6 +760,34 @@ class OtlpSpanReceiver:
             )
             return None
         return self._gunzip(handler, body)
+
+    def _read_within_deadline(
+        self, handler: BaseHTTPRequestHandler, length: int
+    ) -> bytes:
+        """The body, or ``TimeoutError`` once ``body_deadline_seconds`` passed.
+
+        The deadline covers the whole body, so a sender trickling bytes cannot
+        hold a connection and its reserved bytes open by meeting a per-read
+        timeout.
+        """
+        deadline = time.monotonic() + self.limits.body_deadline_seconds
+        chunks: list[bytes] = []
+        remaining = length
+        try:
+            while remaining:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError("body deadline passed")
+                handler.connection.settimeout(left)
+                chunk = handler.rfile.read1(min(remaining, 64 * 1024))  # type: ignore[attr-defined]
+                if not chunk:
+                    break  # a short body fails to decode and is answered 400
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        finally:
+            # The next request on a kept-alive connection gets the full wait.
+            handler.connection.settimeout(self.limits.body_deadline_seconds)
+        return b"".join(chunks)
 
     def _gunzip(self, handler: BaseHTTPRequestHandler, body: bytes) -> bytes | None:
         """The inflated body, within the same cap as a plain one."""
@@ -676,28 +807,47 @@ class OtlpSpanReceiver:
         with self._lock:
             setattr(self.stats, name, getattr(self.stats, name) + 1)
 
-    def _enqueue(self, spans: list[RawSpan], media: str, peer: str) -> None:
+    def _enqueue(
+        self, spans: list[RawSpan], media: str, peer: str, body_bytes: int
+    ) -> bool:
+        """Queue every span of one body, or none; False when it does not fit.
+
+        Each span is charged an equal share of the decoded body's bytes.
+        """
         received_at_ns = time.time_ns()
-        for raw in spans:
-            self._queue.put(
-                span_record(
-                    raw,
-                    session_id=self.session_id,
-                    run_id=self.run_id,
-                    source=SPAN_SOURCE_RECEIVER,
-                    clock_domain=span_clock_domain(raw.resource, peer),
-                    received_at_ns=received_at_ns,
-                )
+        records = [
+            span_record(
+                raw,
+                session_id=self.session_id,
+                run_id=self.run_id,
+                source=SPAN_SOURCE_RECEIVER,
+                clock_domain=span_clock_domain(raw.resource, peer),
+                received_at_ns=received_at_ns,
             )
+            for raw in spans
+        ]
+        size = max(1, body_bytes // max(1, len(records)))
         with self._lock:
+            fits = (
+                len(self._queue) + len(records) <= self.limits.max_queued_spans
+                and self._queued_bytes + size * len(records)
+                <= self.limits.max_queued_bytes
+            )
+            if not fits:
+                self.stats.dropped_queue_full += len(records)
+                return False
+            self._queue.extend((record, size) for record in records)
+            self._queued_bytes += size * len(records)
             self.stats.spans += len(spans)
             self.stats.by_media[media] = self.stats.by_media.get(media, 0) + len(spans)
+        return True
 
     def config_record(self) -> dict[str, Any]:
         return {
             "listen": self.listen,
             "path": OTLP_TRACES_PATH,
             "protobuf": self.protobuf_available,
+            "limits": asdict(self.limits),
         }
 
     def capability_metadata(self) -> dict[str, Any]:
@@ -714,6 +864,12 @@ class OtlpSpanReceiver:
                 "bad_requests": self.stats.bad_requests,
                 "handler_errors": self.stats.handler_errors,
                 "after_stop": self.stats.after_stop,
+                "refused_connections": self.stats.refused_connections,
+                "busy": self.stats.busy,
+                "body_timeouts": self.stats.body_timeouts,
+                "too_many_spans": self.stats.too_many_spans,
+                "dropped_queue_full": self.stats.dropped_queue_full,
+                "queued": len(self._queue),
                 "spans_by_media": dict(self.stats.by_media),
             }
         if not self.protobuf_available:
@@ -737,6 +893,29 @@ def _respond(
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _respond_busy(handler: BaseHTTPRequestHandler) -> None:
+    """503 with ``Retry-After``; the connection closes, since the request
+    body may be unread."""
+    handler.close_connection = True
+    try:
+        handler.send_response(503)
+        handler.send_header("Retry-After", "1")
+        handler.send_header("Content-Length", "0")
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+    except (OSError, ValueError):
+        pass
+
+
+def _refuse_connection(sock: Any) -> None:
+    """Answer an over-limit connection with a bare 503 before closing it."""
+    try:
+        sock.settimeout(1.0)
+        sock.sendall(_BUSY_RESPONSE)
+    except OSError:
+        pass
 
 
 def _try_respond(handler: BaseHTTPRequestHandler, status: int) -> None:

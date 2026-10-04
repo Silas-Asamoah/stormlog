@@ -97,18 +97,24 @@ counts requests without a span, so a late batch is visible, never silent.
 
 ### Ingestion limits
 
-A scrape never lets the endpoint grow the client's memory. Each limit is
-applied before the response is held whole, and each refusal is recorded as a
-failed scrape with its reason:
+Neither collector lets an endpoint grow the client's memory. Each limit is
+applied before the data is held whole, and each refusal is counted:
 
 | Collector | Limit | Default | When it is exceeded |
 | --- | --- | --- | --- |
 | `/metrics` scrape | response bytes read | 8 MiB | the scrape fails with `oversized`, and the rest of the response is never read |
 | `/metrics` scrape | series in one response | 20,000 | the scrape fails with `oversized`, before the compact record is built |
+| span receiver | open connections | 8 | the next connection gets a bare 503 with `Retry-After: 1` and is closed, without a handler thread (`refused_connections`) |
+| span receiver | time to receive a whole body | 10 s | the connection is closed with 408 (`body_timeouts`); this is also how long an idle kept-alive connection stays open |
+| span receiver | bytes being read or decoded at once | 64 MiB, a gzip body counted at its 32 MiB inflation cap | 503 with `Retry-After: 1` (`busy`) |
+| span receiver | spans in one body | 10,000 | 413 (`too_many_spans`) |
+| span receiver | spans waiting in the queue | 100,000 spans and 64 MiB | 503 with `Retry-After: 1`, and none of the body's spans is kept (`dropped_queue_full`, which counts spans the exporter may resend) |
 
-A vLLM 0.30.0 response for one model is about 90 KB and 360 series, so
-these limits bind only on a misbehaving or hostile endpoint. Both are in the
-scraper's config record.
+A vLLM 0.30.0 response for one model is about 90 KB and 360 series, and a
+profile drains the queue every 0.25 s, so these limits bind only on a
+misbehaving or hostile endpoint. The receiver's limits are in its config
+record (`limits`), and its counters, with the spans still `queued`, are in
+the `vllm.spans` capability record.
 
 Every request is sent with `X-Request-Id: stormlog-<run_id>-<request_id>`,
 recorded on its `infer.request` event as `x_request_id`. vLLM embeds that
@@ -131,7 +137,8 @@ joins to a request by the recorded value and never by a rebuilt string.
   receiver collects are named by the peer address the export came from,
   such as `127.0.0.1/unix_epoch_ns`, which never counts as the client's
   clock. Bodies may be gzip-encoded; a body over 32 MiB, as sent or once
-  inflated, is refused with 413 before it is held whole in memory.
+  inflated, is refused with 413 before it is held whole in memory (see
+  [Ingestion limits](#ingestion-limits) for the rest).
 - `infer.capabilities` for `vllm.metrics` and `vllm.spans`: what was
   supported, enabled and collected, with the engine's unknown, retired and
   removed series, scrape and span counts, and the receiver's decode failures.
