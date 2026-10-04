@@ -57,6 +57,8 @@ BUNDLE_FORMAT = "stormlog.infer.incident_bundle"
 BUNDLE_SCHEMA_VERSION = 1
 MANIFEST_FILENAME = "manifest.json"
 LOCK_FILENAME = ".lock"
+# Held exclusively by the one store that owns ``<root>/incidents``.
+STORE_LOCK_FILENAME = ".store.lock"
 INCIDENTS_DIRNAME = "incidents"
 BUNDLE_NAME = re.compile(r"^inc-\d{8}T\d{6}Z-\d{4}-[0-9a-f]{8}$")
 GENERATION_NAME = re.compile(r"^gen-(\d+)$")
@@ -147,6 +149,10 @@ class BundleManifest:
         return manifest
 
 
+class StoreInUse(RuntimeError):
+    """Another process already owns this store root."""
+
+
 @dataclass
 class RecoveryReport:
     """What :meth:`IncidentStore.recover` found and did."""
@@ -184,6 +190,11 @@ class GenerationWriter:
         self.directory = bundle / f"gen-{generation}"
         self.directory.mkdir(mode=0o700)
         self._done = False
+        # The bundle is pinned while this generation is written, so no
+        # deletion (a recovery, a retention pass) can take it from under us.
+        self._pin: int | None = _pin(bundle)
+        # Every file this writer made, adopted or linked, checked at publish.
+        self._written: list[Path] = []
         # Adopted files: their source, their name here, and what was charged.
         self._adopted: list[tuple[Path, Path, int]] = []
         # Bytes linked from the generation before, part of the bundle's total.
@@ -197,7 +208,9 @@ class GenerationWriter:
         """A new file in this generation, every byte charged before it is written."""
         target = self._target(relpath)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        return CappedWriter(target, self.allowance)
+        writer = CappedWriter(target, self.allowance)
+        self._written.append(target)
+        return writer
 
     def adopt(self, source: Path, relpath: str) -> int:
         """Bring a file in, charged by its actual size; return its bytes.
@@ -225,6 +238,7 @@ class GenerationWriter:
                 target.unlink()
                 raise
         self._adopted.append((source, target, size))
+        self._written.append(target)
         return size
 
     def _copy_in(self, source: Path, target: Path, size: int) -> int:
@@ -259,6 +273,7 @@ class GenerationWriter:
         target = self._target(relpath)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.link(source, target)
+        self._written.append(target)
 
     def publish(
         self,
@@ -274,6 +289,7 @@ class GenerationWriter:
         if self._done:
             raise RuntimeError("generation already published or abandoned")
         previous = self.store.manifest(self.incident_id)
+        self._check_written()
         self._charge_growth()
         files = tuple(_describe_files(self.bundle, self.directory, digests=digests))
         _sync_tree(self.directory)
@@ -300,6 +316,7 @@ class GenerationWriter:
         # before is already charged, and a copy may be a little smaller.
         self.allowance.release(keep=_freed_by(self.directory, self.bundle))
         self._release_sources()
+        self._unpin()  # before reclaiming, which takes the lock exclusively
         _fsync_dir(self.bundle)
         self.store._reclaim_old_generations(self.bundle, keep=self.generation)
         return manifest
@@ -322,9 +339,24 @@ class GenerationWriter:
         current = self.store.manifest(self.incident_id)
         if current is not None and current.generation == self.generation:
             self.allowance.release()
+            self._unpin()
             return
         shutil.rmtree(self.directory, ignore_errors=True)
         self.allowance.release(keep=0)
+        self._unpin()
+
+    def _check_written(self) -> None:
+        """Every file this writer put here is still here, or nothing is named."""
+        if not self.directory.is_dir():
+            raise FileNotFoundError(f"{self.directory} vanished before publication")
+        for path in self._written:
+            if not path.exists():
+                raise FileNotFoundError(f"{path} vanished before publication")
+
+    def _unpin(self) -> None:
+        fd, self._pin = self._pin, None
+        if fd is not None:
+            os.close(fd)
 
     def _target(self, relpath: str) -> Path:
         target = (self.directory / relpath).resolve()
@@ -339,6 +371,7 @@ class IncidentStore:
     def __init__(self, root: Path, limits: StoreLimits | None = None) -> None:
         self.root = Path(root) / INCIDENTS_DIRNAME
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._owner: int | None = _own(self.root)
         self.limits = limits or StoreLimits()
         self.budget = DiskBudget(self.limits, used_bytes=self._scan_bytes())
         self._sequence = 0
@@ -346,6 +379,12 @@ class IncidentStore:
         self._deferred: dict[Path, Path] = {}
         # Bundles removed to make room for a reservation, until taken.
         self._room_pruned: list[PrunedBundle] = []
+
+    def close(self) -> None:
+        """Let another process own the root."""
+        fd, self._owner = self._owner, None
+        if fd is not None:
+            os.close(fd)
 
     # -------------------------------------------------------------- creation
 
@@ -772,6 +811,28 @@ def _freed_by(path: Path, bundle: Path) -> int:
     return bytes_on_disk([path], seen=seen)
 
 
+def _own(root: Path) -> int:
+    """The store root's lock, held exclusively for the store's lifetime."""
+    fd = os.open(root / STORE_LOCK_FILENAME, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise StoreInUse(f"another process holds the incident store {root}") from None
+    return fd
+
+
+def _pin(bundle: Path) -> int:
+    """The bundle's lock, held shared, as a reader holds it."""
+    fd = os.open(bundle / LOCK_FILENAME, os.O_RDONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 @contextlib.contextmanager
 def _exclusive(bundle: Path) -> Iterator[None]:
     """Hold the bundle's lock exclusively, or raise ``BlockingIOError`` at once."""
@@ -800,6 +861,7 @@ __all__ = [
     "PrunedBundle",
     "RecoveryReport",
     "STATUS_COMPLETED",
+    "StoreInUse",
     "STATUS_INTERRUPTED",
     "open_incident_bundle",
     "read_manifest_snapshot",

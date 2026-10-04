@@ -19,6 +19,7 @@ from stormlog.infer.watch.store import (
     BundleManifest,
     GenerationWriter,
     IncidentStore,
+    StoreInUse,
     open_incident_bundle,
     read_manifest_snapshot,
 )
@@ -202,6 +203,7 @@ def test_a_new_generation_links_traces_and_frees_only_what_it_replaced(
     # The trace is one inode: charged once, and still charged.
     assert store.budget.used_bytes == 1000 + 250 + 2
     # What the budget charged is what a fresh scan of the generations finds.
+    store.close()  # a restart: the process that held it is gone
     assert IncidentStore(tmp_path, _limits()).budget.used_bytes == 1000 + 250 + 2
     assert bytes_on_disk([bundle / "gen-1"], seen=set()) == 1000 + 250 + 2
 
@@ -248,6 +250,51 @@ def test_max_incident_bytes_bounds_a_bundle_across_its_generations(
     bundle = tmp_path / "incidents" / incident_id
     assert store_module._payload_bytes(bundle, seen=set()) == 1000
     assert store.budget.used_bytes == store._scan_bytes()
+
+
+def test_one_store_owns_a_root(tmp_path: Path) -> None:
+    """A second process's recover() deleted a live writer's generation, and
+    that writer then published a manifest naming nothing."""
+    store = IncidentStore(tmp_path, _limits())
+    with pytest.raises(StoreInUse, match="another process"):
+        IncidentStore(tmp_path, _limits())
+    store.close()
+    again = IncidentStore(tmp_path, _limits())
+    again.close()
+
+
+def test_a_generation_being_written_is_never_deleted_under_it(
+    tmp_path: Path,
+) -> None:
+    store = IncidentStore(tmp_path, _limits())
+    incident_id = _gen0(store, b"first\n")
+    bundle = tmp_path / "incidents" / incident_id
+    writer = store.next_generation(incident_id, KIB)
+    assert writer is not None
+    with writer.file("incident.jsonl") as out:
+        out.write(b"second\n")
+    # Whoever tries (a recovery, a retention pass) defers while it is written.
+    assert store._try_delete(writer.directory, bundle) is False
+    store._deferred.clear()
+    writer.publish()
+    with open_incident_bundle(bundle) as view:
+        assert view.file("incident.jsonl").read_bytes() == b"second\n"
+
+
+def test_a_generation_whose_files_vanished_is_never_published(
+    tmp_path: Path,
+) -> None:
+    store = IncidentStore(tmp_path, _limits())
+    incident_id = _gen0(store, b"first\n")
+    writer = store.next_generation(incident_id, KIB)
+    assert writer is not None
+    with writer.file("incident.jsonl") as out:
+        out.write(b"second\n")
+    (writer.directory / "incident.jsonl").unlink()  # removed behind its back
+    with pytest.raises(FileNotFoundError, match="incident.jsonl"):
+        writer.publish()
+    writer.abandon()
+    assert store.manifest(incident_id).current == "gen-0"  # type: ignore[union-attr]
 
 
 # ------------------------------------------------------------------ readers
@@ -315,6 +362,7 @@ def test_recovery_seals_a_bundle_left_without_a_manifest(tmp_path: Path) -> None
     store = IncidentStore(tmp_path, _limits())
     writer = _unpublished(store, b"partial\n")  # the watcher died before sealing
 
+    store.close()  # a restart: the process that held it is gone
     report = IncidentStore(tmp_path, _limits()).recover()
 
     assert report.sealed_interrupted == [writer.incident_id]
@@ -368,12 +416,14 @@ def test_a_crash_at_each_publication_boundary_leaves_one_whole_generation(
     with pytest.raises(Crash):
         second.publish()
     monkeypatch.undo()
+    second._unpin()  # the process died, and its locks with it
 
     # A reader at this moment sees one whole generation.
     view = read_manifest_snapshot(bundle)
     expected = b"first\n" if crash_point == "before_manifest" else b"second\n"
     assert view.file("incident.jsonl").read_bytes() == expected
 
+    store.close()  # a restart: the process that held it is gone
     report = IncidentStore(tmp_path, _limits()).recover()
     assert report.generations_removed == 1
     assert [p.name for p in sorted(bundle.glob("gen-*"))] == [view.manifest.current]
@@ -387,6 +437,8 @@ def test_recovery_keeps_the_deletions_a_reader_defers(tmp_path: Path) -> None:
     assert left is not None
     with left.file("incident.jsonl") as out:
         out.write(b"orphan\n")
+    left._unpin()  # the process died, and its locks with it
+    store.close()  # a restart: the process that held it is gone
     restarted = IncidentStore(tmp_path, _limits())
     with open_incident_bundle(bundle):
         report = restarted.recover()
@@ -427,6 +479,7 @@ def test_a_publish_that_fails_after_the_rename_stays_published(
     with open_incident_bundle(bundle) as view:
         assert view.manifest.current == "gen-1"
         assert view.file("incident.jsonl").read_bytes() == b"second\n"
+    store.close()  # a restart: the process that held it is gone
     IncidentStore(tmp_path, _limits()).recover()
     assert (bundle / "gen-1" / "incident.jsonl").read_bytes() == b"second\n"
 
@@ -453,6 +506,7 @@ def test_a_generation_left_by_a_crash_is_forgotten_when_replaced(
     assert left is not None
     with left.file("incident.jsonl") as out:
         out.write(b"orphan" * 100)  # never published: the watcher died
+    store.close()  # a restart: the process that held it is gone
     restarted = IncidentStore(tmp_path, _limits())  # charges it, from disk
     retry = restarted.next_generation(incident_id, KIB)
     assert retry is not None
