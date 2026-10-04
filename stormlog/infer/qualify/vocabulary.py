@@ -111,11 +111,13 @@ EDGES: Mapping[str, Edge] = MappingProxyType(
                 QUEUE_SATURATION,
                 frozenset({"scheduler"}),
             ),
+            # #218 puts no location on this edge's downstream; #221's I1
+            # label says where it expects the stall (A.4).
             Edge(
                 CAPTURE_PAUSE,
                 frozenset({"profiler"}),
                 HOST_STALL,
-                frozenset({"engine_core", "worker"}),
+                KIND_COMPONENTS[HOST_STALL],
             ),
             Edge(
                 PREFIX_CACHE_LOSS,

@@ -374,3 +374,11 @@ def test_impact_without_baseline_outcomes_is_partial() -> None:
         OutcomeCounts(violations=9, met=31), OutcomeCounts(unknown=12)
     )
     assert (alone.status, alone.reason) == (IMPACT_PARTIAL, "no_baseline_outcomes")
+
+
+def test_the_capture_pause_edge_is_218s_without_a_narrower_location() -> None:
+    # #218 v2.1 §4.6 puts no location on capture_pause -> host_stall; the
+    # copy must not narrow it. The I1 label's allows say where #221 expects
+    # the stall.
+    edge = vocabulary.EDGES["capture_pause->host_stall"]
+    assert edge.downstream_components == vocabulary.KIND_COMPONENTS["host_stall"]
