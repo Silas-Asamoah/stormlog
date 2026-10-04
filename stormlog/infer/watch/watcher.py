@@ -215,8 +215,7 @@ class Watcher:
         record = await self.scraper.scrape_async(marker=MARKER_INTERVAL)
         done = max(started, self.clock.mono_ns())
         stamp = Stamped(started, done, wall)
-        self._account_scrape(record)
-        self.history.add(stamp, record)
+        self._account_scrape(record, kept=self.history.add(stamp, record))
         self._check_exporter(record, done)
         results = list(self.engine.tick(done, self.history.parsed()))
         if any(_frozen(result) for result in results):
@@ -229,13 +228,17 @@ class Watcher:
             self._prune()
         self._health(record, stamp, lag_seconds)
 
-    def _account_scrape(self, record: VllmScrapeRecord) -> None:
-        if record.status == SCRAPE_OK:
+    def _account_scrape(self, record: VllmScrapeRecord, *, kept: bool) -> None:
+        """Count a scrape by outcome. One the history could not hold, being
+        larger than its whole bound, is oversized: no trigger judges it and
+        no bundle holds it."""
+        oversized = (record.error or "").startswith(OVERSIZED_PREFIX)
+        if record.status == SCRAPE_OK and kept:
             self._ok_scrapes += 1
             self.stats.add("scrapes_total", labels=("ok",))
             if self._ok_scrapes == 1 and self.options.ready_file is not None:
                 _write_ready(self.options.ready_file, self.identity.session_id)
-        elif (record.error or "").startswith(OVERSIZED_PREFIX):
+        elif oversized or not kept:
             self._oversized_scrapes += 1
             self.stats.add("scrapes_total", labels=("oversized",))
         else:

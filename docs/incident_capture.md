@@ -54,7 +54,9 @@ writes anything; so does a watcher whose `incidents/` another process holds.
    due during a slow scrape is skipped and counted. A response over 8 MiB or
    20,000 series is refused and counted as oversized.
 2. Keep the scrape in the bounded history (`history.seconds`, 600 by
-   default, and `history.bytes`, 32 MiB of compressed scrapes).
+   default, and `history.bytes`, 32 MiB; see "The recent past in memory").
+   A scrape larger than the whole bound is counted as oversized too, and
+   no trigger judges it.
 3. Evaluate every trigger (see "Triggers and what "sustained" means").
 4. Open an incident for a trigger that fires, or join it to one still
    collecting its post-window.
