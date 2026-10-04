@@ -98,9 +98,10 @@ def test_launch_values_lose_credentials_and_queries() -> None:
     )
     record = launch.to_record()
     assert secret not in str(record)
-    assert record["model"] == "https://models.example/m"
+    # The path is replaced by its digest: a token can sit in it.
+    assert record["model"] == "https://models.example/<sha256:4da12da337c2>"
     assert record["revision"] == "main?<redacted>"
-    assert record["tokenizer"] == "https://h/t"
+    assert record["tokenizer"] == "https://h/<sha256:599c83a04aed>"
 
 
 def test_inline_templates_that_differ_after_a_question_mark_digest_apart(

@@ -15,20 +15,24 @@ redacted values are never equal.
 
 from __future__ import annotations
 
+import hashlib
 import re
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from .cache_state import redact_url
+from ..scrub import redact_url
 
 CREDENTIAL_PATHS_VERSION = "credential_paths_v1"
 
 # Fields of vLLM 0.30.0's VllmConfig that can hold a credential: Hugging Face
 # tokens, the free-form configs handed to loaders, connectors, cache managers
-# and platform plugins, and Ray's runtime environment, whose env_vars can
-# carry any secret of the job.
+# and platform plugins, the model's free-form overrides, and Ray's runtime
+# environment, whose env_vars can carry any secret of the job.
 CREDENTIAL_PATHS_V1: tuple[str, ...] = (
     "/model_config/hf_token",
+    "/model_config/hf_overrides",
+    "/model_config/override_generation_config",
     "/speculative_config/target_model_config/hf_token",
     "/speculative_config/draft_model_config/hf_token",
     "/load_config/model_loader_extra_config",
@@ -172,7 +176,7 @@ def scrub_argument(value: str) -> str:
     trimmed = value.strip()
     if _URL.match(trimmed):
         try:
-            return redact_url(trimmed) or "<redacted>"
+            return recorded_url(trimmed)
         except ValueError:
             return "<redacted>"
     found = _USERINFO.match(trimmed)
@@ -184,11 +188,27 @@ def scrub_argument(value: str) -> str:
 
 
 def strip_url(value: str, path: str) -> Any:
-    """A URL without credentials or query; a malformed one is removed."""
+    """A URL as it may be kept (``recorded_url``); a malformed one is removed."""
     try:
-        return redact_url(value)
+        return recorded_url(value)
     except ValueError:
         return redacted(path)
+
+
+def recorded_url(url: str) -> str:
+    """A URL's scheme, host and port, with a short digest of its path.
+
+    A token can sit in a path as easily as in its credentials or query, so
+    the path is never kept; its digest still tells a changed path apart.
+    A removed query is marked.
+    """
+    parts = urllib.parse.urlsplit(url)
+    origin = redact_url(url, origin_only=True)
+    path = parts.path if parts.path not in ("", "/") else ""
+    digest = hashlib.sha256(path.encode()).hexdigest()[:12] if path else ""
+    marked = f"/<sha256:{digest}>" if path else ""
+    query = "?<redacted>" if parts.query else ""
+    return f"{origin}{marked}{query}"
 
 
 def redact_vllm_config(config: Mapping[str, Any]) -> dict[str, Any]:
