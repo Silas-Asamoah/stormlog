@@ -606,6 +606,9 @@ class Mechanism:
     recovery: Callable[[Context], list[Criterion]]
     end_from: str = "onset"  # recovery is sought from the onset or the action's end
     hold: str = "hold_ns"
+    # A workload twin leaves the signals alone, so its recovery holds at
+    # once; its effect, the benign change, lasts as long as its action.
+    spans_action: bool = False
 
 
 def _stall_recovery(context: Context) -> list[Criterion]:
@@ -626,12 +629,12 @@ _FIRST_STOP = _action_onset("first_stop_confirmed_ns", "first_sigstop_confirmed"
 
 MECHANISMS: dict[str, Mechanism] = {
     "F1": Mechanism(_queue_onset, _queue_criteria),
-    "T1": Mechanism(_FIRST_SEND, _queue_criteria),
+    "T1": Mechanism(_FIRST_SEND, _queue_criteria, spans_action=True),
     "F2": Mechanism(_preemption_onset, _kv_criteria),
-    "T2": Mechanism(_FIRST_ADMISSION, _kv_criteria),
+    "T2": Mechanism(_FIRST_ADMISSION, _kv_criteria, spans_action=True),
     "F3": Mechanism(_cache_onset, _cache_criteria),
-    "T3": Mechanism(_FIRST_SEND, _cache_criteria),
-    "T3b": Mechanism(_FIRST_SEND, _cache_criteria),
+    "T3": Mechanism(_FIRST_SEND, _cache_criteria, spans_action=True),
+    "T3b": Mechanism(_FIRST_SEND, _cache_criteria, spans_action=True),
     "F4a": Mechanism(_FIRST_STOP, _stall_recovery, "action_end", "cadence_hold_ns"),
     "F4b": Mechanism(_FIRST_STOP, _frontend_recovery, "action_end", "cadence_hold_ns"),
     "H0": Mechanism(_FIRST_STOP, _stall_recovery, "action_end", "cadence_hold_ns"),
@@ -672,6 +675,9 @@ def effect_timing(episode_type: str, context: Context) -> Timing:
         since = context.actions.last_continue_ns or onset
     hold = getattr(context.thresholds, mechanism.hold)
     end = held_from(mechanism.recovery(context), since, context.until_ns, hold)
+    action_end = context.actions.action_end_ns
+    if mechanism.spans_action and end is not None and action_end is not None:
+        end = max(end, action_end)
     return Timing(onset, basis, end, None if end is None else end + hold)
 
 
