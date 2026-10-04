@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -107,12 +108,150 @@ def test_a_difference_metric_stays_in_its_unit() -> None:
         direction="higher_is_better",
         scale="difference",
         unit="fraction",
+        trials=([1000] * 6, [1000] * 6),
         gate=GateRule("non-inferiority", 0.01, "fraction"),
     )
     diffs = np.subtract(attainment_b, attainment_a)
     assert result.worst is not None
     assert result.worst.effect == pytest.approx(diffs.mean())
     assert result.gate is not None and result.gate.status == "fail"
+
+
+def _fractions(candidate: Sequence[float | None], **options: Any) -> Any:
+    n = len(candidate)
+    blocks = [f"b{i}" for i in range(n)]
+    return compare_values(
+        "failure_fraction",
+        options.pop("baseline", [0.0] * n),
+        candidate,
+        direction="lower_is_better",
+        scale="difference",
+        unit="fraction",
+        blocks=options.pop("blocks", (blocks, blocks)),
+        trials=options.pop("trials", ([300] * n, [300] * n)),
+        gate=options.pop("gate", GateRule("non-inferiority", 0.01, "fraction")),
+        **options,
+    )
+
+
+@pytest.mark.parametrize(
+    ("within", "beyond", "status", "lower"),
+    [
+        (6, 0, "pass", 0.025 ** (1 / 6)),
+        (5, 1, "fail", float(stats.beta.ppf(0.025, 5, 2))),
+        (8, 0, "pass", 0.025 ** (1 / 8)),
+        (7, 1, "fail", float(stats.beta.ppf(0.025, 7, 2))),
+        (9, 1, "pass", float(stats.beta.ppf(0.025, 9, 2))),
+    ],
+)
+def test_a_fraction_is_gated_on_the_share_of_runs_within_its_budget(
+    within: int, beyond: int, status: str, lower: float
+) -> None:
+    # Exact under independent runs, whatever the correlation of failures
+    # within a run (fable-213's ruling, opus-221's D32).
+    result = _fractions([0.005] * within + [0.02] * beyond)
+    gate = result.gate
+    assert gate is not None and (gate.status, gate.case) == (status, "run_level")
+    assert gate.reason == (None if status == "pass" else "too_few_runs_within_budget")
+    assert gate.claim is not None
+    assert (gate.claim["runs_within_budget"], gate.claim["runs"]) == (
+        within,
+        within + beyond,
+    )
+    assert gate.claim["run_pass_lower"] == pytest.approx(lower)
+    assert gate.claim["model"] == "independent_runs"
+    assert "run-pass rate" in gate.claim["statement"]
+
+
+def test_a_run_is_judged_against_its_own_blocks_baseline() -> None:
+    # 0.015 against a block baseline of 0.01 is within a 0.01 budget; 0.025
+    # against 0.01 is not.
+    within = _fractions([0.015] * 8, baseline=[0.01] * 8)
+    assert within.gate is not None and within.gate.status == "pass"
+    beyond = _fractions([0.015] * 7 + [0.025], baseline=[0.01] * 8)
+    assert beyond.gate is not None and beyond.gate.status == "fail"
+    # Without blocks, each candidate run against the baseline arm's mean.
+    unpaired = _fractions([0.015] * 8, baseline=[0.0, 0.02] * 4, blocks=None)
+    assert unpaired.gate is not None and unpaired.gate.status == "pass"
+    assert unpaired.gate.claim is not None
+    assert unpaired.gate.claim["reference"] == "baseline_mean"
+
+
+def test_an_unmeasurable_candidate_run_is_a_miss() -> None:
+    result = _fractions([0.0] * 7 + [None])
+    assert result.gate is not None and result.gate.status == "fail"
+    assert result.gate.claim is not None
+    assert result.gate.claim["runs_unmeasurable"] == 1
+
+
+def test_all_zero_fractions_pass_as_a_claim_about_runs_not_a_bound() -> None:
+    # No failure anywhere: the claim is that runs stay within the budget, not
+    # that the failure rate is bounded; the interval is floored, not [0, 0].
+    result = _fractions([0.0] * 8)
+    assert result.gate is not None and result.gate.status == "pass"
+    assert result.worst is not None
+    p = 1 / (2400 + 2)
+    floor = math.sqrt(2 * p * (1 - p) / 2400)
+    assert result.worst.effect == 0.0
+    assert result.worst.upper == pytest.approx(_t(0.95, 7) * floor)
+    assert result.worst.lower == pytest.approx(-_t(0.95, 7) * floor)
+    assert "binomial_floor" in (result.worst.detail or "")
+
+
+def test_the_fraction_interval_floors_its_se_at_the_pooled_binomial_se() -> None:
+    baseline = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    candidate = [0.01, 0.01, 0.0133, 0.0100, 0.01, 0.0067, 0.01, 0.01]
+    candidate = [round(x * 300) / 300 for x in candidate]
+    result = _fractions(candidate, baseline=baseline)
+    d = np.subtract(candidate, baseline)
+    x_b, x_c = 0, round(sum(candidate) * 300)
+    p_b, p_c = (x_b + 1) / 2402, (x_c + 1) / 2402
+    floor = math.sqrt(p_b * (1 - p_b) / 2400 + p_c * (1 - p_c) / 2400)
+    se = max(d.std(ddof=1) / math.sqrt(8), floor)
+    assert result.worst is not None
+    assert result.worst.upper == pytest.approx(d.mean() + _t(0.95, 7) * se)
+
+
+def test_pooled_requests_are_reported_and_labelled_model_based() -> None:
+    result = _fractions([0.0] * 8)
+    assert result.pooled is not None
+    assert result.pooled["model"] == "independent_requests"
+    assert result.pooled["candidate"]["n"] == 2400
+    assert result.pooled["n_eff_for_zero_event_bound"] == 368
+    assert "1 + (m - 1)" in result.pooled["note"]
+
+
+@pytest.mark.parametrize(
+    ("options", "reason"),
+    [
+        ({"trials": ([200] * 8, [200] * 8)}, "too_few_requests_per_run"),
+        ({"trials": None}, "requests_per_run_unrecorded"),
+        ({"trials": ([300] * 8, [300] * 7 + [None])}, "requests_per_run_unrecorded"),
+    ],
+)
+def test_the_claim_needs_three_over_the_budget_requests_per_run(
+    options: dict[str, Any], reason: str
+) -> None:
+    # With fewer, a single failure breaches the budget.
+    result = _fractions([0.0] * 8, **options)
+    assert result.gate is not None
+    assert (result.gate.status, result.gate.reason) == ("not_evaluable", reason)
+
+
+def test_too_few_runs_to_make_the_claim_cannot_be_evaluated() -> None:
+    # Five of five within budget give a lower bound of 0.478 < 0.5: no
+    # outcome of five runs could pass, so failing would say nothing.
+    result = _fractions([0.0] * 5)
+    assert result.gate is not None
+    assert (result.gate.status, result.gate.reason) == (
+        "not_evaluable",
+        "too_few_runs_for_claim",
+    )
+
+
+def test_a_regression_claim_on_a_fraction_is_a_usage_error() -> None:
+    with pytest.raises(InferUsageError, match="share of runs within"):
+        _fractions([0.0] * 8, gate=GateRule("significant", 0.01, "fraction"))
 
 
 def test_absolute_uses_the_candidates_runs_alone() -> None:
@@ -172,30 +311,59 @@ def test_higher_is_better_passes_non_inferiority_when_the_lower_bound_is_above_m
 
 
 def test_missing_evidence_neither_hides_nor_invents_a_regression() -> None:
-    # Attainment per run as (lower, upper): unknown SLO outcomes widen it.
-    baseline = [(0.990, 0.992)] * 6
-    candidate = [(0.975, 0.995), (0.976, 0.994), (0.974, 0.996)] * 2
-    gate_safe = GateRule("non-inferiority", 0.005, "fraction")
-    gate_regression = GateRule("significant", 0.005, "fraction")
+    # Goodput per run as (lower, upper): unknown SLO outcomes widen it.
+    baseline = [(10.0, 10.2)] * 6
+    candidate = [(9.7, 10.3), (9.75, 10.25), (9.72, 10.32)] * 2
+    gate_safe = GateRule("non-inferiority", 0.01, "relative")
+    gate_regression = GateRule("significant", 0.01, "relative")
     common: dict[str, Any] = {
         "baseline": baseline,
         "candidate": candidate,
         "direction": "higher_is_better",
-        "scale": "difference",
-        "unit": "fraction",
     }
     safe = _latency(gate=gate_safe, **common)
     regression = _latency(gate=gate_regression, **common)
 
     assert safe.interval_valued
     assert safe.worst is not None and safe.best is not None
-    assert safe.worst.effect == pytest.approx(0.975 - 0.992, abs=0.002)
+    assert safe.worst.effect < 0 < safe.best.effect
     # Non-inferiority, a safety claim, is judged on the worst case: it fails.
     assert safe.gate is not None
     assert (safe.gate.status, safe.gate.case) == ("fail", "worst_case")
     # A regression must be shown in the best case too: here it is not.
     assert regression.gate is not None
     assert (regression.gate.status, regression.gate.case) == ("pass", "best_case")
+
+
+def test_a_run_with_unknown_outcomes_is_judged_on_its_worst_case() -> None:
+    # Attainment per run as (lower, upper): a run is within a 0.01 budget
+    # only if its lower bound is, against its block baseline's upper bound.
+    baseline = [(0.990, 0.992)] * 8
+    within = [(0.985, 0.995)] * 8
+    result = compare_values(
+        "attainment",
+        baseline,
+        within,
+        direction="higher_is_better",
+        scale="difference",
+        unit="fraction",
+        blocks=(BLOCKS + ["b7", "b8"], BLOCKS + ["b7", "b8"]),
+        trials=([1000] * 8, [1000] * 8),
+        gate=GateRule("non-inferiority", 0.01, "fraction"),
+    )
+    assert result.gate is not None and result.gate.status == "pass"
+    wider = compare_values(
+        "attainment",
+        baseline,
+        within[:7] + [(0.975, 0.995)],
+        direction="higher_is_better",
+        scale="difference",
+        unit="fraction",
+        blocks=(BLOCKS + ["b7", "b8"], BLOCKS + ["b7", "b8"]),
+        trials=([1000] * 8, [1000] * 8),
+        gate=GateRule("non-inferiority", 0.01, "fraction"),
+    )
+    assert wider.gate is not None and wider.gate.status == "fail"
 
 
 def test_a_zero_candidate_on_a_higher_is_better_metric_always_fails() -> None:
@@ -277,12 +445,14 @@ def test_a_preregistered_fallback_gates_the_difference_the_same_in_any_unit() ->
 
 
 def test_all_zero_differences_report_a_run_level_bound_not_zero_to_zero() -> None:
+    # Without request counts there is no floor: no interval, and a gate in
+    # the metric's own unit cannot pass on the run-level bound alone.
     result = _latency(
         baseline=[0.0] * 6,
         candidate=[0.0] * 6,
         scale="difference",
-        unit="fraction",
-        gate=GateRule("non-inferiority", 0.01, "fraction"),
+        unit="seconds",
+        gate=GateRule("non-inferiority", 0.01, "seconds"),
     )
     assert result.reason == "degenerate_zero"
     assert result.worst is None
@@ -290,7 +460,10 @@ def test_all_zero_differences_report_a_run_level_bound_not_zero_to_zero() -> Non
     bound = result.degenerate["run_departs_upper"]["candidate"]
     assert bound == pytest.approx(1 - 0.025 ** (1 / 6))
     assert result.gate is not None
-    assert (result.gate.status, result.gate.reason) == ("pass", "degenerate_zero")
+    assert (result.gate.status, result.gate.reason) == (
+        "not_evaluable",
+        "degenerate_zero",
+    )
 
 
 def test_fewer_than_three_pairs_cannot_gate() -> None:

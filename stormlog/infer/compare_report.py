@@ -16,6 +16,7 @@ from typing import Any
 
 from ..report import Evidence, Finding, build_report
 from .compare import Comparison
+from .comparison_stats import GateOutcome
 
 REPORT_KIND = "inference_comparison"
 _ID_UNSAFE = re.compile(r"[^a-z0-9_.]+")
@@ -124,11 +125,19 @@ def _gate_findings(comparison: Comparison, path: str | None) -> list[Finding]:
                     if failed
                     else f"{name} in {case_id} could not be gated"
                 ),
-                message=gate.reason,
+                message=_gate_message(gate),
                 evidence=[_pointer_evidence(pointer, path, "the metric's comparison")],
             )
         )
     return findings
+
+
+def _gate_message(gate: GateOutcome) -> str | None:
+    """A gate's reason, and for a fraction the claim about runs it rests on."""
+    statement = (gate.claim or {}).get("statement")
+    if statement is None:
+        return gate.reason
+    return f"{gate.reason}: {statement}" if gate.reason else statement
 
 
 def _attainment_findings(comparison: Comparison, path: str | None) -> list[Finding]:
@@ -237,12 +246,17 @@ def _metric_line(name: str, metric: Any) -> str:
         shown = f"{estimate.effect:+.1%} [{estimate.lower:+.1%}, {estimate.upper:+.1%}]"
     else:
         shown = f"{estimate.effect:+.4g} [{estimate.lower:+.4g}, {estimate.upper:+.4g}] {metric.unit}"
+        if metric.unit == "fraction":
+            # Its gate is a claim about runs; the interval only describes.
+            shown += " (descriptive)"
     gate = metric.gate
     judged = (
         ""
         if gate is None
         else f"; gate {gate.status}" + (f" ({gate.reason})" if gate.reason else "")
     )
+    if gate is not None and gate.claim:
+        judged += f": {gate.claim['statement']}"
     return f"{name}: {shown}; {metric.verdict.get('direction', '')}{judged}"
 
 

@@ -795,15 +795,45 @@ def test_an_insufficient_tail_cannot_be_gated() -> None:
     assert (gate.status, gate.reason) == ("not_evaluable", "insufficient_tail_samples")
 
 
+FAILURE_GATE = (("failure_fraction", GateRule("non-inferiority", 0.01, "fraction")),)
+
+
+def _served(runs: list[RunSummary], offered: int, failed: list[int]) -> None:
+    for run, count in zip(runs, failed):
+        population = run.report["cases"][CASE]["population"]
+        population.update(offered=offered, successful=offered - count)
+
+
 def test_more_failures_in_the_candidate_is_worse() -> None:
-    gates = (("failure_fraction", GateRule("non-inferiority", 0.01, "fraction")),)
+    # Judged as a claim about runs: each candidate run against its block.
     baseline, candidate = _arms(SAME)
-    for i, run in enumerate(candidate):
-        run.report["cases"][CASE]["population"]["successful"] = 90 + i % 2
-    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=gates))
+    _served(baseline, 1000, [2] * 6)
+    _served(candidate, 1000, [100, 101, 100, 101, 100, 101])
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=FAILURE_GATE))
     metric = comparison.cases[CASE]["metrics"]["failure_fraction"]
     assert metric.direction == "lower_is_better" and metric.unit == "fraction"
-    assert metric.gate is not None and metric.gate.status == "fail"
+    assert metric.gate is not None
+    assert (metric.gate.status, metric.gate.case) == ("fail", "run_level")
+    assert metric.gate.claim is not None
+    assert metric.gate.claim["runs_within_budget"] == 0
+    assert metric.pooled is not None and metric.pooled["candidate"]["n"] == 6000
+    # Stated as a claim about runs, never as a bound on the fraction.
+    (line,) = [
+        line
+        for line in comparison_lines(comparison)
+        if line.strip().startswith("failure_fraction")
+    ]
+    assert "(descriptive)" in line
+    assert "0 of 6 candidate runs within 0.01 of the block baseline" in line
+
+
+def test_a_fraction_gate_needs_enough_requests_in_every_run() -> None:
+    # 100 requests per run: one failure is a whole point, past a 1% budget.
+    baseline, candidate = _arms(SAME)
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=FAILURE_GATE))
+    gate = comparison.cases[CASE]["metrics"]["failure_fraction"].gate
+    assert gate is not None
+    assert (gate.status, gate.reason) == ("not_evaluable", "too_few_requests_per_run")
 
 
 def test_shares_are_compared_in_fraction_units() -> None:
