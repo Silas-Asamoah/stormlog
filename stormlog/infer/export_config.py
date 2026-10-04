@@ -330,9 +330,12 @@ def sampler_warnings(config: ExportConfig) -> list[str]:
     marked = 1.0 if config.trace_context == PRESERVE_ENGINE else config.sample_ratio
     if sampler.ratio is not None and marked <= sampler.ratio:
         return []
-    declared = "an unknown share" if sampler.ratio is None else f"{sampler.ratio:g}"
+    share = "every request" if marked == 1.0 else f"{marked * 100:g}% of requests"
+    declared = (
+        "an unknown share" if sampler.ratio is None else f"{sampler.ratio * 100:g}%"
+    )
     return [
-        f"--trace-context {config.trace_context} marks {marked:g} of requests "
+        f"--trace-context {config.trace_context} marks {share} "
         f"sampled, and the server's declared sampler "
         f"{config.server_trace_sampler} follows a sampled parent: the server will "
         f"record that share of Stormlog's requests, not the {declared} it keeps "
