@@ -68,6 +68,8 @@ class RunSummary:
     started_at_ns: int | None = None
     # Kept as data: what went wrong with the run that the treatment may cause.
     outcome_failures: tuple[str, ...] = ()
+    # Each external cause's evidence, as the runner recorded it.
+    external_evidence: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def cases(self) -> Mapping[str, Mapping[str, Any]]:
@@ -163,6 +165,7 @@ def summary_from_records(
         case_failures=_case_failures(report, finished=status == COMPLETED),
         started_at_ns=_started_at(records),
         outcome_failures=tuple(outcomes),
+        external_evidence=_external_evidence(records),
     )
 
 
@@ -234,13 +237,26 @@ def _run_failures(
     return [], outcomes + protocol
 
 
-def _runner_state(records: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[str]]:
-    """How a runner says the run ended: an external cause, which a set-aside
-    needs, or an outcome it recorded, such as a server that exited."""
-    state = next(
+def _last_run_state(records: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    return next(
         (r for r in reversed(records) if r.get("event_type") == RUN_STATE_EVENT),
         None,
     )
+
+
+def _external_evidence(records: Sequence[Mapping[str, Any]]) -> dict[str, str]:
+    """The evidence for an external cause given on resume, by its reason."""
+    state = _last_run_state(records) or {}
+    cause = state.get("external_cause")
+    if state.get("state") != PROTOCOL_FAILURE or not isinstance(cause, Mapping):
+        return {}
+    return {f"external:{cause.get('reason')}": str(cause.get("evidence"))}
+
+
+def _runner_state(records: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[str]]:
+    """How a runner says the run ended: an external cause, which a set-aside
+    needs, or an outcome it recorded, such as a server that exited."""
+    state = _last_run_state(records)
     if state is None:
         return [], []
     reasons = [str(reason) for reason in state.get("reasons") or ["unstated"]]

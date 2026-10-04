@@ -201,3 +201,25 @@ def test_an_outcome_the_runner_recorded_is_kept_and_outranks_protocol() -> None:
         "identity_changed",
         "probe_incomplete",
     )
+
+
+def test_an_external_cause_keeps_its_evidence() -> None:
+    interrupted = {
+        "event_type": "infer.session",
+        "session_id": "s",
+        "status": "interrupted",
+    }
+    state = {
+        "event_type": "infer.run_state",
+        "state": "protocol_failure",
+        "reasons": ["spot_preemption"],
+        "external_cause": {
+            "reason": "spot_preemption",
+            "evidence": "box paused without a release",
+        },
+    }
+    summary = summary_from_records([interrupted, state], {})
+    assert summary.protocol_failures == ("external:spot_preemption",)
+    assert summary.external_evidence == {
+        "external:spot_preemption": "box paused without a release"
+    }

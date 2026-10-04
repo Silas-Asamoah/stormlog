@@ -66,7 +66,7 @@ the flaky benchmark memory gates
   set aside, and a value it lost fails the candidate's gate
   (`outcome_unrecoverable`), as does an outcome a runner records in
   `infer.run_state`; only a protocol failure, such as an external cause a
-  runner records there, sets aside a block, both
+  runner records there (listed with its evidence), sets aside a block, both
   arms, and more than one block lost leaves the case's gates
   `not_evaluable`. A retried block keeps its last attempt, but a retry
   never replaces an outcome failure. An SLO gate over runs judged by
