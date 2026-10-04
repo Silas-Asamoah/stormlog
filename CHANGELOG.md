@@ -108,7 +108,9 @@ the flaky benchmark memory gates
   only vLLM's processes, describes it before and after, runs the treatments
   and workload steps, stops the whole group and verifies nothing is left
   (through `/proc` on Linux, so a process that left with `setsid` is found),
-  then checks artifacts and labels and writes `SHA256SUMS`. Each run ends
+  then checks artifacts and labels and writes `SHA256SUMS`. It probes each
+  server before measuring, and a `/server_info` that does not answer
+  (`probe_incomplete`) is retried once on a fresh server. Each run ends
   `completed`, `outcome_failure` (kept as data) or `protocol_failure` (set
   aside, retryable), recorded in `index.jsonl`; resumes refuse a changed
   plan or pre-registration, and secrets reach commands without being

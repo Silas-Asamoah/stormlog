@@ -90,9 +90,11 @@ the plan's order. Before a block's first run it runs the block's preludes;
 a prelude that fails marks the block's runs `prelude_failed`. Each run then:
 
 1. starts the arm's server (the plan's command plus the arm's arguments and
-   environment), waits for `/health`, and checks the server's process tree
-   holds only vLLM's own processes (`api_server`, `engine_core`, `worker`
-   and Python's helpers), waiting up to 10 s for anything else to leave;
+   environment), waits for `/health`, probes it once (`server-probe.json`,
+   see [Inference Profiling](inference.md)), and checks the server's process
+   tree holds only vLLM's own processes (`api_server`, `engine_core`,
+   `worker` and Python's helpers), waiting up to 10 s for anything else,
+   such as the `pip` the probe's collector ran, to leave;
 2. describes the server (`describe-before.json`);
 3. starts the arm's treatments, and waits for each one's ready file;
 4. runs the workload steps in order, each to its exit code or its timeout;
@@ -115,11 +117,13 @@ reasons:
 | --- | --- | --- |
 | `completed` | Every step exited as expected, every artifact is there and labelled, and every treatment held up | Compared |
 | `outcome_failure` | The server exited (`server_exited`); a step failed or timed out; an artifact is missing; a treatment was not ready, stopped before the workload ended (`treatment_unhealthy`, even with exit 0), or exited unexpectedly | Compared: outcomes are data, and a retry never replaces them |
-| `protocol_failure` | A server that never became healthy; processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`) | Set aside, with the reason; may be retried |
+| `protocol_failure` | A server that never became healthy; a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`) | Set aside, with the reason; may be retried |
 
 When both kinds apply, the outcome wins, unless the protocol fault came
 before the first workload step started. A cleanup that left processes stops
-the block: no server starts beside them.
+the block: no server starts beside them. A `probe_incomplete` run is run
+again at once on a fresh server, after its group is verified gone, and both
+attempts are kept.
 
 ### The bundle
 

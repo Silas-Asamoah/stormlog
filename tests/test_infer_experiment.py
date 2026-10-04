@@ -285,3 +285,36 @@ def test_a_staged_model_is_fixed_before_launch_and_recorded(tmp_path: Path) -> N
     identity = json.loads((run_dir / "model_identity.json").read_text())
     assert identity["identity_evidence"] == "staged_snapshot_verified"
     assert identity["directory"] in (run_dir / "commands.sh").read_text()
+
+
+def test_a_probe_that_does_not_finish_is_retried_once_on_a_fresh_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from stormlog.infer import experiment
+    from stormlog.infer.server_probe import SERVER_INFO, ProbeAnswer, ServerProbe
+
+    calls: list[str] = []
+
+    def probe(endpoint: str, **_: Any) -> ServerProbe:
+        calls.append(endpoint)
+        status = "timeout" if len(calls) == 1 else "ok"
+        return ServerProbe(
+            "before",
+            "auto",
+            endpoint,
+            0,
+            {SERVER_INFO: ProbeAnswer(SERVER_INFO, status)},
+        )
+
+    monkeypatch.setattr(experiment, "probe_server", probe)
+    document = _plan(_port(), blocks=1)
+    document["arms"] = {"off": document["arms"]["off"]}
+    document["order"] = {"kind": "explicit", "blocks": [["off"]]}
+    first, second = _run(tmp_path, document)
+    assert (first["state"], first["reasons"]) == (
+        "protocol_failure",
+        ["probe_incomplete"],
+    )
+    assert first["cleanup"]["verified"] is True
+    assert second["state"] == "completed" and second["attempt"] == 2
+    assert second["order_broken"] is True
