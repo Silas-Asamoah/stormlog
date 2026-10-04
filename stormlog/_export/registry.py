@@ -13,8 +13,11 @@ the enums stay exact; a gauge's extra label set is rejected. Every redirect
 and rejection is counted.
 
 Updates run under one lock, which ``apply`` holds for a whole record so it
-lands atomically, and which a scrape holds only to copy values. After
-``freeze`` nothing changes: the final values are what the run reports.
+lands atomically, undone if it fails part-way, and which a scrape holds
+only to copy values. Every value is a float: an int becomes one, and
+anything a float cannot hold, or a counter cannot add, is rejected and
+counted. After ``freeze`` nothing changes: the final values are what the
+run reports.
 """
 
 from __future__ import annotations
@@ -106,11 +109,9 @@ class FamilyStats:
 @dataclass
 class _Series:
     prefixes: tuple[bytes, ...]
-    # Counter or gauge: one value. Histogram: per-bucket counts (the last
-    # is +Inf), then the sum and the count are kept apart.
+    # Counter or gauge: one value. Histogram: per-bucket counts (the last is
+    # +Inf), then the sum, then the count.
     values: list[float]
-    total: float = 0.0
-    count: int = 0
 
 
 # Per family: each series' rendered prefixes (shared, not copied) and its
@@ -146,29 +147,44 @@ class Family:
     # ------------------------------------------------------------- updates
     # Each update takes the registry's lock itself; inside Registry.apply the
     # lock is already held, so a record's updates land together.
+    # A value is used only as a float: an int becomes one (or is rejected
+    # when it is too big to), and anything else is rejected and counted, so
+    # a render never meets a value it cannot format within VALUE_BYTES.
     def inc(self, labels: LabelValues, amount: float = 1.0) -> None:
+        """Add to a value; a counter's increment must be finite and >= 0."""
         with self.registry._lock:
+            number = _number(amount)
+            if number is None or not (
+                math.isfinite(number) and (number >= 0 or self.spec.kind == "gauge")
+            ):
+                self.stats.rejected += 1
+                return
             series = self._target(labels)
             if series is not None:
-                series.values[0] += amount
+                self._add(series, 0, number)
 
     def set(self, labels: LabelValues, value: float) -> None:
         with self.registry._lock:
+            number = _number(value)
+            if number is None:
+                self.stats.rejected += 1
+                return
             series = self._target(labels)
             if series is not None:
-                series.values[0] = value
+                self._put(series, 0, number)
 
     def observe(self, labels: LabelValues, value: float) -> None:
         with self.registry._lock:
-            if not math.isfinite(value):
+            number = _number(value)
+            if number is None or not math.isfinite(number):
                 self.stats.rejected += 1
                 return
             series = self._target(labels)
             if series is None:
                 return
-            series.values[bisect.bisect_left(self.spec.buckets, value)] += 1
-            series.total += value
-            series.count += 1
+            self._add(series, bisect.bisect_left(self.spec.buckets, number), 1.0)
+            self._add(series, -2, number)
+            self._add(series, -1, 1.0)
 
     def observe_counts(
         self, labels: LabelValues, counts: Sequence[int], total: float
@@ -177,16 +193,27 @@ class Family:
         if len(counts) != len(self.spec.buckets) + 1:
             raise ValueError("one count per bucket, plus +Inf, is needed")
         with self.registry._lock:
-            if not math.isfinite(total):
+            numbers = _counts(counts)
+            sum_ = _number(total)
+            if numbers is None or sum_ is None or not math.isfinite(sum_):
                 self.stats.rejected += 1
                 return
             series = self._target(labels)
             if series is None:
                 return
-            for index, count in enumerate(counts):
-                series.values[index] += count
-            series.total += total
-            series.count += sum(counts)
+            for index, count in enumerate(numbers):
+                self._add(series, index, count)
+            self._add(series, -2, sum_)
+            self._add(series, -1, math.fsum(numbers))
+
+    def _add(self, series: _Series, index: int, amount: float) -> None:
+        self._put(series, index, series.values[index] + amount)
+
+    def _put(self, series: _Series, index: int, value: float) -> None:
+        journal = self.registry._journal
+        if journal is not None:
+            journal.append((series.values, index, series.values[index]))
+        series.values[index] = value
 
     # ------------------------------------------------------------- internals
     def _target(self, labels: LabelValues) -> _Series | None:
@@ -235,7 +262,8 @@ class Family:
     def _create(self, values: LabelValues, *, overflow: bool = False) -> _Series:
         spec = self.spec
         prefixes = _prefixes(spec, self.registry.const_labels, values)
-        slots = len(spec.buckets) + 1 if spec.kind == "histogram" else 1
+        # A histogram: each bucket, +Inf, the sum and the count.
+        slots = len(spec.buckets) + 3 if spec.kind == "histogram" else 1
         series = _Series(prefixes=prefixes, values=[0.0] * slots)
         self._series[values] = series
         if overflow:
@@ -248,13 +276,9 @@ class Family:
     def _copy(self) -> tuple[list[tuple[bytes, ...]], array]:
         prefixes = []
         values = array("d")
-        histogram = self.spec.kind == "histogram"
         for series in self._series.values():
             prefixes.append(series.prefixes)
             values.extend(series.values)
-            if histogram:
-                values.append(series.total)
-                values.append(series.count)
         return prefixes, values
 
 
@@ -281,6 +305,10 @@ class Registry:
         self._lock = threading.RLock()
         self._frozen = False
         self.late_updates = 0
+        # Records that raised part-way through and were undone.
+        self.rolled_back = 0
+        # While a record applies: each value it changed, to undo on failure.
+        self._journal: list[tuple[list[float], int, float]] | None = None
 
     def add(
         self,
@@ -326,12 +354,31 @@ class Registry:
         return budget
 
     def apply(self, update: Callable[[], None]) -> bool:
-        """Run ``update`` under the lock, whole, unless the registry is frozen."""
+        """Run ``update`` under the lock, whole, unless the registry is frozen.
+
+        A record applies all or nothing. An unusable number is rejected by
+        the update that received it and counted, and the record's other
+        updates apply. If ``update`` raises, every value it changed is put
+        back (a series it created stays, at 0), ``rolled_back`` counts it,
+        and the exception propagates.
+        """
         with self._lock:
             if self._frozen:
                 self.late_updates += 1
                 return False
-            update()
+            if self._journal is not None:  # nested inside another record
+                update()
+                return True
+            self._journal = []
+            try:
+                update()
+            except BaseException:
+                for values, index, old in reversed(self._journal):
+                    values[index] = old
+                self.rolled_back += 1
+                raise
+            finally:
+                self._journal = None
             return True
 
     def freeze(self, final: Callable[[], None] | None = None) -> None:
@@ -401,6 +448,24 @@ def _pieces(snapshot: Snapshot) -> Iterator[bytes]:
             for prefixes, value in zip(prefixes_list, values):
                 yield prefixes[0]
                 yield format_value(value).encode() + b"\n"
+
+
+def _counts(counts: Sequence[object]) -> list[float] | None:
+    """Bucket counts as floats, or None when one is not a finite count >= 0."""
+    numbers = [_number(count) for count in counts]
+    if any(n is None or not 0 <= n < math.inf for n in numbers):
+        return None
+    return [n for n in numbers if n is not None]
+
+
+def _number(value: object) -> float | None:
+    """``value`` as a float, or None when it is not a number a float can hold."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        return float(value)
+    except OverflowError:
+        return None
 
 
 def bounded_value(value: str) -> str:

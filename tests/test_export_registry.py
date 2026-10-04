@@ -408,3 +408,72 @@ def test_a_family_can_wait_for_values_instead_of_reading_zero() -> None:
     assert exposition.value("stormlog_up", state="a") == 1
     assert len(_text(registry).encode()) <= budget.size
     assert budget.samples == 2
+
+
+# ------------------------------------------------------------------ numbers
+def _gauge(registry: Registry) -> Any:
+    return registry.add(FamilySpec("stormlog_level", "gauge", "A level."))
+
+
+def test_an_int_value_renders_on_every_supported_python() -> None:
+    # int has no is_integer() before 3.12; a len() passed to set() used to
+    # break every later render there.
+    registry = Registry()
+    gauge = _gauge(registry)
+    requests = _requests(registry, ["c1"])
+    gauge.set((), 3)
+    requests.inc(("c1", "ok"), 2)
+    exposition = check_exposition(_text(registry))
+    assert exposition.value("stormlog_level") == 3
+    assert exposition.value("stormlog_infer_requests_total", status="ok") == 2
+
+
+def test_a_huge_int_stays_within_the_byte_budget() -> None:
+    registry = Registry()
+    gauge = _gauge(registry)
+    gauge.set((), 10**300)
+    assert len(render(registry.snapshot())) <= registry.budget().size
+    gauge.set((), 10**400)  # beyond any float: rejected, the old value kept
+    assert gauge.stats.rejected == 1
+    assert check_exposition(_text(registry)).value("stormlog_level") == 1e300
+
+
+@pytest.mark.parametrize(
+    "amount",
+    [10**400, float("nan"), float("inf"), -1, "3", True],
+    ids=["huge", "nan", "inf", "negative", "str", "bool"],
+)
+def test_unusable_counter_increments_are_rejected_and_counted(amount: Any) -> None:
+    registry = Registry()
+    requests = _requests(registry, ["c1"])
+    requests.inc(("c1", "ok"), 5)
+    assert registry.apply(lambda: requests.inc(("c1", "ok"), amount))
+    assert requests.stats.rejected == 1
+    exposition = check_exposition(_text(registry))
+    assert exposition.value("stormlog_infer_requests_total", status="ok") == 5
+
+
+def test_a_record_that_fails_part_way_is_rolled_back() -> None:
+    registry = Registry()
+    requests = _requests(registry, ["c1"])
+    latency = _latency(registry, ["c1"])
+    before = _text(registry)
+
+    def update() -> None:
+        requests.inc(("c1", "ok"))
+        latency.observe(("c1",), 0.5)
+        latency.observe_counts(("c1",), [1, 0, 0, 0], 0.05)
+        raise RuntimeError("the mapping broke")
+
+    with pytest.raises(RuntimeError):
+        registry.apply(update)
+    assert _text(registry) == before
+    assert registry.rolled_back == 1
+    # The registry still takes the next record.
+    assert registry.apply(lambda: requests.inc(("c1", "ok")))
+    assert (
+        check_exposition(_text(registry)).value(
+            "stormlog_infer_requests_total", status="ok"
+        )
+        == 1
+    )
