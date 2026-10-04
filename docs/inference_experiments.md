@@ -104,7 +104,9 @@ the experiment, as a run's cleanup does (below). Each run then:
    such as the `pip` the probe's collector ran, to leave;
 2. describes the server (`describe-before.json`);
 3. starts the arm's treatments, and waits for each one's ready file;
-4. runs the workload steps in order, each to its exit code or its timeout;
+4. runs the workload steps in order, each to its exit code or its timeout,
+   and after each stops whatever it left in its group and checks nothing it
+   started is left, as for a server (`step_cleanup_unverified:<name>`);
 5. checks each treatment is still running, then stops it with its signal;
 6. describes the server again (`describe-after.json`), and gives each
    `infer` artifact the run made both descriptions: the `before` one, unless
@@ -144,7 +146,7 @@ reasons:
 | --- | --- | --- |
 | `completed` | Every step exited as expected, every artifact is there and labelled, and every treatment held up | Compared |
 | `outcome_failure` | The server exited (`server_exited`); a step failed or timed out; an artifact is missing; a treatment was not ready, stopped before the workload ended (`treatment_unhealthy`, even with exit 0), or exited unexpectedly | Compared: outcomes are data, and a retry never replaces them |
-| `protocol_failure` | A server that never became healthy, unless its arm's own launch kept it from starting (below); a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`, `treatment_cleanup_unverified:<name>`); a server port already taken (`server_port_in_use`) | Set aside with its block, both arms, with the reason; may be retried |
+| `protocol_failure` | A server that never became healthy, unless its arm's own launch kept it from starting (below); a probe whose `/server_info` did not answer in 120 s (`probe_incomplete`); processes other than vLLM's; affinity not applied or overlapping; a failed prelude; an artifact labelled for another run; a cleanup that left processes (`collector_cleanup_unverified`, `treatment_cleanup_unverified:<name>`, `step_cleanup_unverified:<name>`); a server port already taken (`server_port_in_use`) | Set aside with its block, both arms, with the reason; may be retried |
 
 When both kinds apply, the outcome wins, unless the protocol fault came
 before the first workload step started.
@@ -194,7 +196,7 @@ attempts are kept.
 | `order.json` | Each block's arms in run order, whether positions balance, and each arm's position counts |
 | `index.jsonl` | One line per attempt: state, reasons, every process with its PID, times, exit code and affinity, the server's and each treatment's cleanup; and one per run a stop left unstarted (`not_run`) |
 | `runs/<label>/` | The run: its artifacts, `describe-*.json`, the logs of the server, every step and treatment, `attempt.json`, `launches.ndjson`, `commands.sh`, `run.json`, `SHA256SUMS` |
-| `preludes/` | Each block's preludes, their logs, and their server's cleanup (`cleanup.json`) |
+| `preludes/` | Each block's preludes, their logs, their server's and step's cleanups (`cleanup.json`, `step-cleanup.json`) and `launches.ndjson` |
 | `sanitizer.json` | Whether the bundle is publishable, and any secret found, by file and line |
 
 `commands.sh` holds each command exactly as run. A `secret_env` variable is

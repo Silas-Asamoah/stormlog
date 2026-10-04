@@ -84,6 +84,7 @@ from .experiment_plan import (
 )
 from .experiment_process import (
     Launched,
+    clean_up_after,
     journaled,
     launch,
     listens,
@@ -1296,7 +1297,15 @@ class _Run:
             log_path=self.dir / f"{step.name}.log",
             journal=self.dir / LAUNCHES,
         )
-        self.record.processes.append(launched.to_record())
+        # Whatever the step left in its group must not run into the next run.
+        cleanup = clean_up_after(launched)
+        if not cleanup.verified:
+            self.record.protocol(
+                f"step_cleanup_unverified:{step.name}", before_treatment=False
+            )
+        self.record.processes.append(
+            {**launched.to_record(), "cleanup": cleanup.to_record()}
+        )
         if timed_out:
             self.record.outcome(f"step_timeout:{step.name}")
             return False
@@ -1386,11 +1395,14 @@ def _prelude(
             journal=directory / LAUNCHES,
         )
     try:
-        ran = _prelude_ran(plan, prelude, server, values, directory, env)
+        ran, step_left = _prelude_ran(plan, prelude, server, values, directory, env)
     finally:
         left = server is not None and not _stop_prelude_server(plan, server, directory)
     name = prelude.step.name
-    return ([] if ran else [name]) + ([f"{name}:cleanup_unverified"] if left else [])
+    failures = [] if ran else [name]
+    if left or step_left:
+        failures.append(f"{name}:cleanup_unverified")
+    return failures
 
 
 def _server_launch(
@@ -1414,12 +1426,13 @@ def _prelude_ran(
     values: Mapping[str, Any],
     directory: Path,
     env: Environment,
-) -> bool:
-    """Whether the prelude's server came up and its step exited as expected."""
+) -> tuple[bool, bool]:
+    """Whether the prelude's server came up and its step exited as expected,
+    and whether the step left a process its cleanup could not clear."""
     if server is not None and not _wait_healthy(
         plan.server.base_url, server, plan.server.start_timeout_s
     ):
-        return False
+        return False, False
     launched, timed_out = run_step(
         prelude.step.name,
         [expand(p, values) for p in prelude.step.command],
@@ -1432,7 +1445,12 @@ def _prelude_ran(
         log_path=directory / "step.log",
         journal=directory / LAUNCHES,
     )
-    return not timed_out and launched.exit_code in prelude.step.expect_exit
+    cleanup = clean_up_after(launched)
+    (directory / "step-cleanup.json").write_text(
+        json.dumps(cleanup.to_record(), indent=2) + "\n"
+    )
+    ran = not timed_out and launched.exit_code in prelude.step.expect_exit
+    return ran, not cleanup.verified
 
 
 def _stop_prelude_server(
