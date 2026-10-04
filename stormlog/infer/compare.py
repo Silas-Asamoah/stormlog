@@ -41,6 +41,7 @@ from .compare_metrics import MetricSpec, default_metrics, evidence_coverage
 from .comparison_stats import (
     FAIL,
     INDEPENDENT,
+    MIN_GATE_PAIRS,
     NOT_EVALUABLE,
     PAIRED,
     PASS,
@@ -166,7 +167,22 @@ class ComparisonSpec:
             "cases": None if self.cases is None else list(self.cases),
             "seed": self.seed,
             "fallbacks": [list(item) for item in self.fallbacks],
+            "min_complete_blocks": self.block_floor(),
         }
+
+    def block_floor(self) -> dict[str, Any]:
+        """The fewest complete pairs a gate needs, and whether it was planned.
+
+        Without a pre-registered ``min_complete_blocks`` only the floor of
+        3 pairs stops attrition from shrinking a contrast.
+        """
+        planned = {rule.min_complete_blocks for _pattern, rule in self.gates}
+        value = planned.pop() if len(planned) == 1 else None
+        if value is None:
+            statement = f"not pre-registered (floor of {MIN_GATE_PAIRS} pairs)"
+        else:
+            statement = f"{value} (pre-registered)"
+        return {"preregistered": value, "floor": MIN_GATE_PAIRS, "statement": statement}
 
 
 def _share(value: float | None, *, low_open: bool) -> bool:
