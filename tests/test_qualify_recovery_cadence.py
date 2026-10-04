@@ -362,3 +362,26 @@ def test_an_idling_engines_slowdown_does_not_recover(
             until_ns=LAST + 150 * S,
         )
         assert effect_timing("F4a", context).end_ns is None, (label, seed)
+
+
+@pytest.mark.parametrize("runs_s", [0.5, 1.0, 4.0])
+def test_an_engine_that_stalls_after_resuming_has_not_recovered(runs_s: float) -> None:
+    # rev-220-b's D1: back at its baseline for a moment after the last
+    # SIGCONT, then hung for 30 s with requests in flight. The gaps before
+    # the hang look normal; the hang is a gap still open at the hold's end,
+    # so the effect can't end until the engine steps again.
+    def resume_then_hang() -> Gap:
+        hung = [False]
+
+        def gap(rng: random.Random, t: float) -> float:
+            if t >= runs_s and not hung[0]:
+                hung[0] = True
+                return 30.0
+            return busy(rng)
+
+        return gap
+
+    for seed in SEEDS:
+        timing = run(seed, resume_then_hang())
+        assert timing.end_ns is not None
+        assert timing.end_ns - LAST >= (runs_s + 29) * S, seed

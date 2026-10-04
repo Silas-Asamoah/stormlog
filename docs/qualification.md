@@ -192,6 +192,14 @@ busy gaps in the hold:
 - no more of them lie above the baseline's p95 than chance allows: the 99%
   point of Binomial(n, 0.05).
 
+**A gap still open at the hold's end counts.** A gap is known only when its
+next step arrives, so the time from the hold's last step to its end is a gap
+still open: its busy part (since the last step, or since a victim request
+arrived after it) joins the hold's gaps for the long-gap and mean rules. An
+engine that resumes for a moment and then hangs has a long gap at every
+hold's end until it steps again, and a live poll during a hang finds no
+recovery.
+
 **A baseline too thin to compare with never recovers.** A criterion whose
 baseline has fewer samples than it needs in a hold (20 busy gaps, 20 waits,
 5 waiting counts) never holds, so the episode times out as
