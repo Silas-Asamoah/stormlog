@@ -286,13 +286,26 @@ def vllm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, 
         writer.close()
 
 
+def _loads(line: str) -> dict[str, Any]:
+    """One log line. A key written twice fails: a record's own fields follow
+    the common ones on its line, so a field reusing a common name would."""
+
+    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        names = [name for name, _ in pairs]
+        assert len(names) == len(set(names)), f"a key written twice: {names}"
+        return dict(pairs)
+
+    record: dict[str, Any] = json.loads(line, object_pairs_hook=unique)
+    return record
+
+
 def _records(root: Path, role: str) -> list[dict[str, Any]]:
     for writer in hook._WRITERS.values():
         if writer.role == role:
             writer.close()
     records = []
     for path in sorted(root.glob(f"*/{role}-*/*.jsonl")):
-        records += [json.loads(line) for line in path.read_text().splitlines()]
+        records += [_loads(line) for line in path.read_text().splitlines()]
     return records
 
 
@@ -555,6 +568,38 @@ def test_vllm_errors_pass_through_and_telemetry_errors_do_not(
     assert status["errors"] >= 1
 
 
+def test_no_record_reuses_a_common_field_name(vllm: dict[str, Any]) -> None:
+    scheduler = vllm["Scheduler"](vllm_config())
+    vllm["EngineCore"](scheduler).preprocess_add_request(FakeRequest("a-1", 2))
+    scheduler.requests = {"a-1": FakeRequest("a-1", 2, max_tokens=1)}
+    output = SchedulerOutput([_new("a-1", 2)], CachedRequestData(), {"a-1": 2}, 2)
+    scheduler.next_output = output
+    scheduler.schedule()
+    scheduler.update_from_output(output, ModelRunnerOutput({"a-1": 0}, [[1]]))
+    scheduler.schedule()
+    scheduler.update_error = ValueError("vLLM's own error")
+    with pytest.raises(ValueError):
+        scheduler.update_from_output(output, ModelRunnerOutput({}, []))
+    vllm["Worker"](vllm_config()).init_device()
+    # A heartbeat's own fields are the status, the worker's included.
+    statuses = [writer._status() for writer in hook._WRITERS.values()]
+
+    # _loads fails on a key written twice, in every record of every kind.
+    records = _records(vllm["root"], "engine") + _records(vllm["root"], "worker")
+    assert {record["kind"] for record in records} >= {
+        "hello",
+        "alias",
+        "scheduled",
+        "completed",
+        "terminal",
+        "goodbye",
+    }
+    assert any(record.get("update_failed") for record in records)
+    assert {"range_misses", "pending_samples"} <= set(statuses[-1])
+    for status in statuses:
+        assert not {"format", "kind", "epoch", "seq"} & set(status)
+
+
 # ---------------------------------------------------------------- worker side
 
 
@@ -657,7 +702,7 @@ def test_the_writer_seals_segments_and_keeps_status(tmp_path: Path) -> None:
     assert not (writer.directory / "flush").exists()
     assert list(writer.directory.glob("*.part")) == []
     records = [
-        json.loads(line)
+        _loads(line)
         for path in sorted(writer.directory.glob("*.jsonl"))
         for line in path.read_text().splitlines()
     ]
@@ -1125,7 +1170,7 @@ def test_a_forked_worker_finalizes_its_log_on_a_normal_exit(tmp_path: Path) -> N
 
 def _epoch_records(directory: Path) -> list[dict[str, Any]]:
     return [
-        json.loads(line)
+        _loads(line)
         for path in sorted(directory.glob("*.jsonl"))
         for line in path.read_text().splitlines()
     ]
