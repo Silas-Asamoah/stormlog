@@ -106,12 +106,13 @@ class Sustain:
             clear_tolerance=min(2 * tick, hold / 10),
         )
 
-    def shortest_firing_violation(self, tick: float = 0.0) -> float:
+    def shortest_firing_violation(self, tick: float) -> float:
         """Observable violations shorter than this never fire: ``F - W - Δ``,
-        for ticks every ``Δ`` (0 for evaluation without a schedule), and
-        never below 0. A window's first scrape may have returned up to a
-        tick before the window opens, so a violation stays in view up to
-        ``W + Δ`` after it ends."""
+        for ticks every ``Δ``, and never below 0. A window's first scrape
+        may have returned up to a tick before the window opens, so a
+        violation stays in view up to ``W + Δ`` after it ends. The tick has
+        no default: every engine allows a tick either side of the window's
+        start, so none is ``F - W``."""
         return max(0.0, self.hold - self.window - tick)
 
     def fire_bound(self, tick: float, late: float = 0.0) -> float:
