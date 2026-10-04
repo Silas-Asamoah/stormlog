@@ -159,7 +159,7 @@ class AppendOnlyTelemetrySink:
             self._sessions[resolved.session_id] = resolved
             self._active_session_id = resolved.session_id
             self._closed = False
-            self._write_manifest_locked()
+            self._write_manifest_checked_locked()
             return resolved
 
     def current_session(self) -> SessionSummary | None:
@@ -210,7 +210,7 @@ class AppendOnlyTelemetrySink:
                             )
                         )
                 self._active_session_id = None
-                self._write_manifest_locked()
+                self._write_manifest_checked_locked()
                 rollup_inputs = self._rollup_inputs_locked()
                 self._closed = True
             if rollup_inputs is not None:
@@ -301,7 +301,11 @@ class AppendOnlyTelemetrySink:
         self._write_manifest_checked_locked()
 
     def _write_manifest_checked_locked(self) -> None:
-        """Write the manifest; in bounded mode a failure is counted, not raised."""
+        """Write the manifest; in bounded mode a failure is counted, not raised.
+
+        Every manifest write after construction goes through here, so a
+        bounded sink never raises from append, flush, start_session or close.
+        """
         try:
             self._write_manifest_locked()
         except OSError as exc:
@@ -386,8 +390,14 @@ class AppendOnlyTelemetrySink:
                 return
 
             path = self.root_dir / removable.filename
-            if path.exists():
-                path.unlink()
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                # Kept, and retried at the next flush.
+                self._record_flush_failure_locked(exc, time.monotonic())
+                if not self._bounded:
+                    raise
+                return
             self._segments.remove(removable)
             self._pruned_segment_count += 1
             self._pruned_bytes += removable.size_bytes
