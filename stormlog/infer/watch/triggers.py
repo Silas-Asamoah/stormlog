@@ -27,9 +27,10 @@ fires, and one that turns violating at ``a`` and stays so fires by
 ``a + Δ + ceil((F + j) / Δ)·Δ + j`` plus any paused time, for ticks
 scheduled every ``Δ`` and each at most ``j`` late: ``a + Δ + F`` only when
 ``F`` is a multiple of ``Δ`` and the ticks run on time. For a predicate over
-a window of ``W``,
-an observable violation of length ``d`` keeps it true for at most ``d + W``,
-so ``d < F - W`` never fires. These statements are about what the watcher
+a window of ``W``, whose first scrape may have returned up to one tick
+before the window opens, an observable violation of length ``d`` keeps it
+true for at most ``d + W + Δ``, so ``d < F - W - Δ`` never fires. These
+statements are about what the watcher
 observes, not about the fault that caused it; ``docs/incident_capture.md``
 has the derivation.
 """
@@ -103,9 +104,13 @@ class Sustain:
             clear_tolerance=min(2 * tick, hold / 10),
         )
 
-    def shortest_firing_violation(self) -> float:
-        """Observable violations shorter than this never fire: ``F - W``."""
-        return self.hold - self.window
+    def shortest_firing_violation(self, tick: float = 0.0) -> float:
+        """Observable violations shorter than this never fire: ``F - W - Δ``,
+        for ticks every ``Δ`` (0 for evaluation without a schedule), and
+        never below 0. A window's first scrape may have returned up to a
+        tick before the window opens, so a violation stays in view up to
+        ``W + Δ`` after it ends."""
+        return max(0.0, self.hold - self.window - tick)
 
     def fire_bound(self, tick: float, late: float = 0.0) -> float:
         """How long after a predicate turns violating, and stays so, the

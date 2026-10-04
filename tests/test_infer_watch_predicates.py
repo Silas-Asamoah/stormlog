@@ -193,6 +193,43 @@ def test_a_rate_is_timed_on_the_monotonic_clock(wall_step_s: float) -> None:
     assert upper is not None and lower <= 1.0 <= upper
 
 
+@pytest.mark.parametrize(("last_violating", "fires"), [(29, True), (27, False)])
+def test_a_violation_shorter_than_f_minus_w_minus_a_tick_never_fires(
+    last_violating: int, fires: bool
+) -> None:
+    """When the scrapes after a window's start are slow or skipped, its first
+    scrape may have returned up to a tick before it opens: a violation seen
+    for 29.6 s, under F - W = 30 s, fired. Under F - W - Δ = 29 s, none does."""
+    spec = TriggerSpec(
+        "queue",
+        KIND_METRIC,
+        Sustain.with_defaults(window=30, hold=60, clear=None, tick=1),
+        GaugeAtLeast(WAITING, threshold=8, share=0.01),
+    )
+    engine = TriggerEngine([spec], tick_seconds=1, scrape_timeout_seconds=2.0)
+    high, low = exposition(gauges={WAITING: 9}), exposition(gauges={WAITING: 0})
+    # The last violating scrape takes 0.6 s and the next 1.6 s, so the one
+    # after that is skipped.
+    latency = {last_violating: 0.6, last_violating + 1: 1.6}
+    history = []
+    for second in range(-40, 120):
+        if second == last_violating + 2:
+            continue
+        mono = (second + 100) * S
+        done = mono + round(latency.get(second, 0.004) * S)
+        text = high if 0 <= second <= last_violating else low
+        history.append((Stamped(mono, done, mono), scrape(text, second)))
+    fired = []
+    for stamp, _record in history:  # evaluated as each scrape returns
+        if stamp.done_mono_ns < 95 * S:
+            continue
+        visible = [e for e in history if e[0].done_mono_ns <= stamp.done_mono_ns]
+        (result,) = engine.tick(stamp.done_mono_ns, visible[-45:])
+        if result.transition is not None and result.transition.event == EVENT_FIRED:
+            fired.append(stamp.done_mono_ns)
+    assert bool(fired) is fires
+
+
 @dataclass(frozen=True)
 class _CompletedScrape(VllmScrapeRecord):
     """A record as #218's PR1a writes it, with the response's wall-clock
