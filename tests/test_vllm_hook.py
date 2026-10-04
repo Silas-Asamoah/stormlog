@@ -909,24 +909,43 @@ def _scheduled(iteration: int, members: int) -> dict[str, Any]:
     }
 
 
-def test_the_queue_bytes_bound_its_memory(tmp_path: Path) -> None:
+def _queue_memory(root: str) -> str:
+    """Fill a held writer's queue; what tracemalloc saw it keep, as JSON."""
     limits = WriterLimits(queue_records=100_000, queue_bytes=1 << 20)
-    writer = EpochWriter(tmp_path, "engine", limits=limits)
+    writer = EpochWriter(Path(root), "engine", limits=limits)
     tracemalloc.start()
-    try:
-        with writer._condition:  # the writer thread cannot take any
-            before = tracemalloc.get_traced_memory()[0]
-            for iteration in range(1000):
-                writer.emit("scheduled", _scheduled(iteration, 32))
-            held = tracemalloc.get_traced_memory()[0] - before
-            queued = len(writer._queue)
-    finally:
-        tracemalloc.stop()
+    with writer._condition:  # the writer thread cannot take any
+        before = tracemalloc.get_traced_memory()[0]
+        for iteration in range(1000):
+            writer.emit("scheduled", _scheduled(iteration, 32))
+        held = tracemalloc.get_traced_memory()[0] - before
+        queued = len(writer._queue)
+    tracemalloc.stop()
     writer.close()
+    dropped = writer._counters.dropped["scheduled"]
+    limit = limits.queue_bytes
+    return json.dumps(
+        {"held": held, "queued": queued, "dropped": dropped, "limit": limit}
+    )
 
-    assert writer._counters.dropped["scheduled"] > 0  # more was offered than fits
+
+def test_the_queue_bytes_bound_its_memory(tmp_path: Path) -> None:
+    # In a fresh process: tracemalloc counts every thread's allocations, and
+    # other tests leave threads behind.
+    code = f"from tests.test_vllm_hook import _queue_memory as m; print(m({str(tmp_path)!r}))"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    memory = json.loads(result.stdout.splitlines()[-1])
+
+    assert memory["dropped"] > 0  # more was offered than fits
     # A queued record holds its JSON text and a small fixed overhead, no more.
-    assert held <= limits.queue_bytes + 200 * queued
+    assert memory["held"] <= memory["limit"] + 200 * memory["queued"]
 
 
 def _counting_bodies(monkeypatch: pytest.MonkeyPatch) -> list[object]:
