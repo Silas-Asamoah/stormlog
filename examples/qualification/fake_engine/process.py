@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import threading
+from collections import deque
 from pathlib import Path
 from typing import IO, Sequence
 
@@ -19,7 +20,10 @@ class FakeEngineProcess:
     """``with FakeEngineProcess(["--step-seconds", "0.001"]) as server:``.
 
     ``server.base_url`` and ``server.pid`` are known once it serves. Stopping
-    sends SIGCONT first, so a process left stopped still ends.
+    sends SIGCONT first, so a process left stopped still ends. Its output is
+    read to the end the whole time, keeping the last lines in ``output_tail``:
+    a pipe nobody reads fills with the tracebacks of clients that gave up,
+    and the child then blocks on every write, its exit included.
     """
 
     def __init__(self, args: Sequence[str] = (), *, startup_seconds: float = 30.0):
@@ -28,6 +32,7 @@ class FakeEngineProcess:
         self.process: subprocess.Popen[str] | None = None
         self.base_url = ""
         self.pid = 0
+        self._reader: _OutputReader | None = None
 
     def start(self) -> FakeEngineProcess:
         self.process = subprocess.Popen(
@@ -39,7 +44,8 @@ class FakeEngineProcess:
             text=True,
         )
         assert self.process.stdout is not None
-        line = _first_marker(self.process.stdout, self.startup_seconds)
+        self._reader = _OutputReader(self.process.stdout)
+        line = self._reader.marker(self.startup_seconds)
         if line is None:
             self.stop()
             raise RuntimeError("the fake engine did not report its URL in time")
@@ -47,6 +53,11 @@ class FakeEngineProcess:
         self.base_url = url[len(MARKER) :]
         self.pid = int(pid.split("=", 1)[1])
         return self
+
+    @property
+    def output_tail(self) -> list[str]:
+        """The child's last lines of output, for a test's diagnostics."""
+        return [] if self._reader is None else list(self._reader.tail)
 
     @property
     def endpoint(self) -> str:
@@ -80,23 +91,27 @@ def _environment() -> dict[str, str]:
     return {**os.environ, "PYTHONPATH": path}
 
 
-def _first_marker(stream: IO[str], timeout: float) -> str | None:
-    lines: queue.Queue[str] = queue.Queue()
+class _OutputReader:
+    """Reads a child's output until it ends, handing over the URL line and
+    keeping the last ``keep`` lines."""
 
-    def reader() -> None:
-        for line in stream:
-            lines.put(line)
+    def __init__(self, stream: IO[str], keep: int = 200) -> None:
+        self.tail: deque[str] = deque(maxlen=keep)
+        self._markers: queue.Queue[str] = queue.Queue()
+        self._stream = stream
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self) -> None:
+        for line in self._stream:
+            self.tail.append(line)
             if line.startswith(MARKER):
-                return
+                self._markers.put(line.strip())
 
-    threading.Thread(target=reader, daemon=True).start()
-    while True:
+    def marker(self, timeout: float) -> str | None:
         try:
-            line = lines.get(timeout=timeout)
+            return self._markers.get(timeout=timeout)
         except queue.Empty:
             return None
-        if line.startswith(MARKER):
-            return line.strip()
 
 
 __all__ = ["FakeEngineProcess"]

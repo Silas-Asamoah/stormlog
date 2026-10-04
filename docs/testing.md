@@ -202,7 +202,10 @@ python -m examples.qualification.fake_engine --port 0 --step-seconds 0.001
 
 It prints `FAKE_ENGINE_URL=<url> PID=<pid>` once it serves.
 `FakeEngineProcess` starts it from a test and always continues it before
-stopping it.
+stopping it. It reads the child's output to the end, keeping the last lines
+in `output_tail`: an unread pipe filled with the tracebacks of clients that
+gave up, and the child then blocked on every write, so a stop ended in
+SIGKILL with no goodbye.
 
 What it serves, as vLLM 0.30.0 does:
 

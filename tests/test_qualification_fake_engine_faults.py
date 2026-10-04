@@ -8,6 +8,7 @@ import os
 import signal
 import socket
 import sys
+import threading
 import time
 import urllib.error
 from pathlib import Path
@@ -232,3 +233,30 @@ def test_a_hook_log_that_fails_to_open_stops_the_writer_it_started(
     with pytest.raises(OSError):
         hook_log.HookLog(tmp_path / "hook", FakeEngineConfig())
     assert [w._thread.is_alive() for w in opened] == [False]
+
+
+@POSIX_SIGNALS
+def test_a_flood_of_client_tracebacks_never_blocks_the_process() -> None:
+    # Fable's #267 final gate, P2-2: clients that give up while the front
+    # end is held each leave a traceback on the child's output. Unread, the
+    # pipe filled and every stop ended in SIGKILL after 10 s, with no
+    # goodbye. Read to the end, the child stops at once and cleanly.
+    with FakeEngineProcess(["--step-seconds", "0.001"]) as server:
+        assert post(f"{server.base_url}/_fault/pause?target=frontend")[0] == 200
+
+        def give_up() -> None:
+            try:
+                get(f"{server.base_url}/health", timeout=0.05)
+            except OSError:
+                pass
+
+        threads = [threading.Thread(target=give_up) for _ in range(150)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert post(f"{server.base_url}/_fault/resume?target=frontend")[0] == 200
+        assert get(f"{server.base_url}/health")[0] == 200
+        started = time.monotonic()
+        assert server.stop() == 0
+        assert time.monotonic() - started < 2.0
