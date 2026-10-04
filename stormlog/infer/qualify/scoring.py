@@ -120,12 +120,17 @@ class ScoreConfig:
     # A negative run with less exposure than this is no FPR unit: a run
     # that is all priming must not count as a clean one (C.5 plans ~294 s).
     min_exposure_ns: int = 60_000_000_000
-    # The most a finding's own resolution and uncertainty may reach back
-    # before an effect's onset: one onset window (the truth finds onsets in
-    # 5 s windows), fixed, never taken from a claim. Unbounded, a claim made
+    # How far a finding may start before an effect's onset: its resolution,
+    # at most #218's declared maximum, plus its uncertainty, at most a
+    # bounded clock uncertainty. Both bounds are fixed, never taken from a
+    # claim. #218's resolution is its first flagged window's span, and it
+    # joins 1 s windows up to its span cap (selection.span_cap_seconds,
+    # 30 s); it emits no uncertainty on one host, and 5 s bounds a clock
+    # pairing generously. Unbounded, a claim made
     # long before a fault was credited to it, and one in a negative run's
     # exposure was taken by a later episode.
-    max_pre_grace_ns: int = 5_000_000_000
+    max_resolution_ns: int = 30_000_000_000
+    max_uncertainty_ns: int = 5_000_000_000
 
     def grace(self, kind: str) -> int:
         return self.grace_ns.get(kind, self.default_grace_ns)
@@ -151,9 +156,12 @@ class Window:
         it names no clock, or that one."""
         return self.clock_domain is None or self.clock_domain == clock_domain
 
-    @property
-    def pre_grace_ns(self) -> int:
-        return self.resolution_ns + self.uncertainty_ns
+    def pre_grace_ns(self, config: ScoreConfig) -> int:
+        """How far the window may start before an effect's onset: its
+        resolution and uncertainty, each within its fixed bound."""
+        return min(self.resolution_ns, config.max_resolution_ns) + min(
+            self.uncertainty_ns, config.max_uncertainty_ns
+        )
 
 
 @dataclass(frozen=True)
@@ -260,7 +268,7 @@ def in_scoring_window(
         return False
     if window.end_ns < window.start_ns or not window.on_clock(injection.clock_domain):
         return False
-    first = onset - min(window.pre_grace_ns, config.max_pre_grace_ns)
+    first = onset - window.pre_grace_ns(config)
     last = end + config.grace(finding.kind)
     if window.start_ns < first or window.start_ns > last:
         return False
@@ -633,17 +641,21 @@ def _finding_problems(
     run: RunRecord, findings: Sequence[FindingView], config: ScoreConfig
 ) -> tuple[str, ...]:
     """How many of the run's findings are off its clock, and how many claim
-    more uncertainty than the pre-grace cap."""
+    more resolution, or more uncertainty, than the pre-grace allows."""
     windows = [f.window for f in findings if f.window is not None]
-    off_clock = sum(1 for w in windows if not w.on_clock(run.clock_domain))
-    capped = sum(1 for w in windows if w.uncertainty_ns > config.max_pre_grace_ns)
+    counts = (
+        (sum(not w.on_clock(run.clock_domain) for w in windows), "on another clock"),
+        (
+            sum(w.resolution_ns > config.max_resolution_ns for w in windows),
+            "with more resolution than max_resolution_ns",
+        ),
+        (
+            sum(w.uncertainty_ns > config.max_uncertainty_ns for w in windows),
+            "with more uncertainty than max_uncertainty_ns",
+        ),
+    )
     return tuple(
-        f"run {run.run_id}: {count} findings {what}"
-        for count, what in (
-            (off_clock, "on another clock"),
-            (capped, "with more uncertainty than max_pre_grace_ns"),
-        )
-        if count
+        f"run {run.run_id}: {count} findings {what}" for count, what in counts if count
     )
 
 
