@@ -81,7 +81,7 @@ per bundle, are not charged.
 
 | Limit | Default | When it is reached |
 | --- | --- | --- |
-| `max_total_bytes` | 4 GiB | a new bundle or generation that would not fit is not written |
+| `max_total_bytes` | 4 GiB | the oldest sealed bundles are removed to make room for a new bundle or generation, never one still open or being finalized; one that still does not fit is not written |
 | `max_incident_bytes` | 1 GiB | one bundle's bytes across its generations, a file linked forward counted once: a reservation over it is refused, and a write or link that would take the bundle over it fails before anything is published |
 | `max_incidents` | 50 | the oldest sealed bundles are removed |
 | `max_age_hours` | 72 | bundles sealed earlier are removed |

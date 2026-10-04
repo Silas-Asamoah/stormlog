@@ -344,6 +344,8 @@ class IncidentStore:
         self._sequence = 0
         # Deletions a reader held back: the path, and the bundle it is in.
         self._deferred: dict[Path, Path] = {}
+        # Bundles removed to make room for a reservation, until taken.
+        self._room_pruned: list[PrunedBundle] = []
 
     # -------------------------------------------------------------- creation
 
@@ -355,12 +357,17 @@ class IncidentStore:
         return f"inc-{stamp}-{self._sequence % 10_000:04d}-{secrets.token_hex(4)}"
 
     def new_bundle(
-        self, incident_id: str, reserve_bytes: int
+        self,
+        incident_id: str,
+        reserve_bytes: int,
+        *,
+        protected: frozenset[str] = frozenset(),
     ) -> GenerationWriter | None:
-        """Generation 0 of a new bundle, or None when the budget cannot hold it."""
+        """Generation 0 of a new bundle, or None when the budget cannot hold
+        it even after making room (see :meth:`take_pruned`)."""
         if not BUNDLE_NAME.match(incident_id):
             raise ValueError(f"not an incident id: {incident_id!r}")
-        allowance = self.budget.reserve(reserve_bytes)
+        allowance = self._reserve(reserve_bytes, protected)
         if allowance is None:
             return None
         bundle = self.root / incident_id
@@ -380,13 +387,18 @@ class IncidentStore:
             raise
 
     def next_generation(
-        self, incident_id: str, reserve_bytes: int
+        self,
+        incident_id: str,
+        reserve_bytes: int,
+        *,
+        protected: frozenset[str] = frozenset(),
     ) -> GenerationWriter | None:
-        """The generation after the published one, or None over budget."""
+        """The generation after the published one, or None over budget even
+        after making room; the bundle itself is never pruned for it."""
         current = self.manifest(incident_id)
         if current is None:
             raise FileNotFoundError(f"{incident_id} has no published generation")
-        allowance = self.budget.reserve(reserve_bytes)
+        allowance = self._reserve(reserve_bytes, protected | {incident_id})
         if allowance is None:
             return None
         bundle = self.root / incident_id
@@ -399,6 +411,34 @@ class IncidentStore:
         except BaseException:
             allowance.release(keep=0)
             raise
+
+    def _reserve(self, nbytes: int, protected: frozenset[str]) -> Allowance | None:
+        """An allowance, removing the oldest unprotected bundles until it fits.
+
+        The store keeps the newest incidents: a reservation that does not fit
+        is refused only when no unprotected bundle is left to remove. A
+        bundle a reader holds is deferred, which frees nothing yet.
+        """
+        allowance = self.budget.reserve(nbytes)
+        if allowance is not None or nbytes > self.limits.max_incident_bytes:
+            return allowance
+        for path, manifest in self.bundles():  # oldest seal first
+            if manifest.incident_id in protected:
+                continue
+            size = _payload_bytes(path, seen=set())
+            if self._try_delete(path, path):
+                self._room_pruned.append(
+                    PrunedBundle(manifest.incident_id, "max_total_bytes", size)
+                )
+                allowance = self.budget.reserve(nbytes)
+                if allowance is not None:
+                    return allowance
+        return None
+
+    def take_pruned(self) -> list[PrunedBundle]:
+        """Bundles removed to make room since the last call, for the ledger."""
+        pruned, self._room_pruned = self._room_pruned, []
+        return pruned
 
     # --------------------------------------------------------------- reading
 
