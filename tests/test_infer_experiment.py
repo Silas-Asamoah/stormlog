@@ -818,11 +818,7 @@ def test_a_resume_stops_the_server_a_killed_runner_left(tmp_path: Path) -> None:
     import signal
     import subprocess
 
-    from stormlog.infer.experiment_process import (
-        journaled,
-        still_there,
-        stop_journaled,
-    )
+    from stormlog.infer.experiment_process import journaled, still_there, stop_journaled
 
     document = _plan(_port(), blocks=1)
     document["order"] = {"kind": "explicit", "blocks": [["off", "watch"]]}
