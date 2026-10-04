@@ -46,6 +46,13 @@ class PulseRefused(RuntimeError):
     """A pulse that would break a safety rule, or reach the wrong process."""
 
 
+class TargetGone(PulseRefused):
+    """The target exited, or its pid now names another process. Its message
+    starts ``target_gone``, so a truth that records it says what happened,
+    not that the watchdog stopped watching (which it does once its target
+    is gone)."""
+
+
 @dataclass(frozen=True)
 class Target:
     """A process named by its pid and start time."""
@@ -81,9 +88,11 @@ class Pulse:
     ``SIGSTOP`` sent to ``SIGCONT`` sent: the most the target was stopped;
     the continue's time is read just before ``SIGCONT`` goes, so nothing
     the target did after it can fall inside the pulse.
-    ``continued_by_other`` says the target was already running when the
-    pulser came to continue it (the watchdog's limit, or an operator), so
-    the stop was shorter than ``held_ns`` by an unknown amount."""
+    ``continued_by_other`` says the target ran while the pulse held it:
+    already running when the pulser came to continue it (the watchdog's
+    limit, or an operator), or seen running at one of the hold's checks
+    and stopped again by someone else. The stop was then shorter than
+    ``held_ns`` by an unknown amount."""
 
     stop_sent_ns: int
     stopped_ns: int
@@ -216,6 +225,8 @@ class Pulser:
         # The last pulse a failure or an interruption cut short: its stop was
         # sent, so the target went through it, but it never completed.
         self.cut_short: dict[str, Any] | None = None
+        # Whether the target was seen running during the current pulse's hold.
+        self._ran_meanwhile = False
         self._lock = threading.Lock()
         self._closed = False
         self._watched = watchdog
@@ -249,6 +260,7 @@ class Pulser:
             if self._closed:
                 raise PulseRefused("the pulser is closed")
             self._ensure_watchdog()
+            self._ran_meanwhile = False
             self._signal(signal.SIGSTOP)
             wall, sent = time.time_ns(), time.monotonic_ns()
             stopped = None
@@ -265,7 +277,7 @@ class Pulser:
                 self.cut_short = _cut_short(wall, sent, stopped, self._continue())
                 raise
             finally:
-                running = not process_stopped(self.target.pid)
+                running = self._ran_meanwhile or not process_stopped(self.target.pid)
                 continue_sent = self._continue()
                 continued = (
                     time.monotonic_ns() if continue_sent is None else continue_sent
@@ -322,11 +334,18 @@ class Pulser:
         self._continue()
 
     def _hold_until(self, monotonic_ns: int) -> None:
+        """Hold until ``monotonic_ns``, checking every
+        ``WATCHDOG_CHECK_SECONDS`` that the target is still there and still
+        stopped (one running at a check was continued by someone else, even
+        if stopped again since) and that the watchdog still watches."""
         while True:
+            if not self.target.is_alive():
+                raise TargetGone(
+                    f"target_gone: pid {self.target.pid} exited during the stop"
+                )
+            if not process_stopped(self.target.pid):
+                self._ran_meanwhile = True
             if not self._watchdog_watching():
-                # A watchdog exits once its target is gone: say which went.
-                if not self.target.is_alive():
-                    raise PulseRefused(f"pid {self.target.pid} exited during the stop")
                 raise PulseRefused("the watchdog stopped watching during the stop")
             left = monotonic_ns - time.monotonic_ns()
             if left <= 0:
@@ -364,7 +383,9 @@ class Pulser:
 
     def _signal(self, signum: signal.Signals) -> None:
         if not self.target.is_alive():
-            raise PulseRefused(f"pid {self.target.pid} is no longer the target")
+            raise TargetGone(
+                f"target_gone: pid {self.target.pid} is no longer the target"
+            )
         os.kill(self.target.pid, signum)
 
     def _continue(self) -> int | None:
