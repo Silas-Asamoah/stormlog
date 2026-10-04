@@ -559,10 +559,15 @@ def _ongoing(
         now_wall_ns,
         _ongoing_bucket(last, pending),
         ongoing=True,
-        overlapped=any(
-            step.end_mono_ns < (last.completed_mono_ns or 0) for step in pending
-        ),
+        overlapped=_scheduled_before(pending, last),
     )
+
+
+def _scheduled_before(pending: Sequence[Step], last: Step) -> bool:
+    """Whether a step in flight was scheduled before ``last`` completed: under
+    async scheduling its output waits for the engine's next step() call."""
+    done = last.completed_mono_ns or 0
+    return any(step.end_mono_ns < done for step in pending)
 
 
 def _ongoing_bucket(last: Step, pending: Sequence[Step]) -> int:
