@@ -14,7 +14,7 @@ import pytest
 from stormlog.infer.correlation_events import load_inference_artifact
 from stormlog.infer.watch import incidents as incidents_module
 from stormlog.infer.watch import store as store_module
-from stormlog.infer.watch.config import IncidentLimits
+from stormlog.infer.watch.config import IncidentLimits, resolve_watch_config
 from stormlog.infer.watch.disk import StoreLimits
 from stormlog.infer.watch.evaluate import TickResult, TriggerSpec
 from stormlog.infer.watch.history import ScrapeHistory, Stamped
@@ -36,6 +36,7 @@ from stormlog.infer.watch.store import (
 )
 from stormlog.infer.watch.triggers import Sustain, Transition
 from tests.vllm_scrape_helpers import exposition, scrape
+from tests.watch_test_helpers import watch_config
 
 S = 1_000_000_000
 T0 = 1_790_000_000_000_000_000
@@ -504,6 +505,25 @@ def test_health_incidents_never_use_up_the_counting_budget(tmp_path: Path) -> No
     kinds = [r["trigger"]["kind"] for r in harness.of_type(INCIDENT)]
     assert kinds == ["health", "health", "metric"]  # the third restart: refused
     assert (harness.manager.recorded, harness.manager.recorded_counting) == (3, 1)
+
+
+def test_the_lanes_together_hold_the_totals_the_config_states(
+    tmp_path: Path,
+) -> None:
+    """Separate lanes let twice max_open_incidents be open at once, which
+    #220 sizes its buffers by; the session record states that total."""
+    limits = IncidentLimits(max_open_incidents=2)
+    harness = Harness(tmp_path, limits=limits)
+    harness.scrapes(0, 900)
+    # 70 s apart, past each other's post-windows, so none joins another.
+    for at, trigger_id in ((100, "q1"), (170, "q2"), (240, "q3")):
+        harness.fire(at, trigger_id=trigger_id, kind="metric")
+    for at, trigger_id in ((310, "h1"), (380, "h2"), (450, "h3")):
+        harness.fire(at, trigger_id=trigger_id, kind="health", counts=False)
+    assert len(harness.manager.open) == limits.totals()["max_open_incidents_total"]
+    resolved = resolve_watch_config(watch_config("http://h")).resolved()
+    assert resolved["incident"]["max_open_incidents_total"] == 4
+    assert resolved["incident"]["max_incidents_per_hour_total"] == 60
 
 
 def test_a_counting_firing_turned_away_is_not_counted_as_recorded(

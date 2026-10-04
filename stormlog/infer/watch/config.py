@@ -115,14 +115,29 @@ _DEFAULT_HEALTH_IDS = frozenset(
 )
 
 
+# Incidents are admitted in lanes, each with the limits above: one for
+# metric and signal triggers, one for health and test triggers, so either
+# can be full without turning the other's away.
+INCIDENT_LANES = 2
+
+
 @dataclass(frozen=True)
 class IncidentLimits:
-    """How long an incident's windows are and how many may exist."""
+    """How long an incident's windows are and how many may exist, per lane."""
 
     pre_seconds: float = 120.0
     post_seconds: float = 60.0
     max_open_incidents: int = 2
     max_incidents_per_hour: int = 30
+
+    def totals(self) -> dict[str, int]:
+        """The bounds across both lanes, which a consumer sizes by."""
+        return {
+            "max_open_incidents_total": INCIDENT_LANES * self.max_open_incidents,
+            "max_incidents_per_hour_total": (
+                INCIDENT_LANES * self.max_incidents_per_hour
+            ),
+        }
 
 
 @dataclass(frozen=True)
@@ -159,7 +174,7 @@ class WatchConfig:
             "tick_seconds": self.tick_seconds,
             "scrape_timeout_seconds": self.scrape_timeout_seconds,
             "history": {"seconds": self.history_seconds, "bytes": self.history_bytes},
-            "incident": asdict(self.incident),
+            "incident": {**asdict(self.incident), **self.incident.totals()},
             "store": asdict(self.store),
             "triggers": [_resolved_trigger(spec) for spec in self.triggers],
             "guarantees": {

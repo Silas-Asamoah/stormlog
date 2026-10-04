@@ -20,7 +20,8 @@ by reason: at most ``max_open_incidents`` collect at once, at most
 ``max_incidents_per_hour`` open in any trailing hour, and at most 16
 triggers join one incident. Health and test incidents have open and hourly
 budgets of their own, the same sizes, so a flapping exporter or a test run
-never crowds out an incident that counts toward the exit code.
+never crowds out an incident that counts toward the exit code: in all, up
+to twice each limit (``IncidentLimits.totals``).
 """
 
 from __future__ import annotations

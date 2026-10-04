@@ -207,10 +207,13 @@ null and `bundle_error` says why. A watch whose every incident write failed
 is unsound (exit 1).
 
 At most `max_open_incidents` collect at once, and at most
-`max_incidents_per_hour` open in any trailing hour. Health and test
-incidents have budgets of their own of the same sizes, so an exporter that
-restarts over and over, or a qualification run, never turns away an
-incident from a metric or signal trigger. A firing turned away is counted
+`max_incidents_per_hour` open in any trailing hour, per lane. Health and
+test incidents have a lane of their own, with the same limits, so an
+exporter that restarts over and over, or a qualification run, never turns
+away an incident from a metric or signal trigger. So up to twice each
+limit can be reached in all: the session record states the totals as
+`incident.max_open_incidents_total` and
+`incident.max_incidents_per_hour_total`, which a consumer sizes by. A firing turned away is counted
 by reason in `stormlog_watch_suppressed_total`: `rate_limit`, `open_limit`,
 or `join_limit` when the incident it would join already holds 16 triggers. When the watch stops, open
 incidents are sealed as `interrupted`.
