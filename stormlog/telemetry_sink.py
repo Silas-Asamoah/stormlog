@@ -329,7 +329,7 @@ class AppendOnlyTelemetrySink:
         try:
             _write_all(fd, payload)
             os.fsync(fd)
-        except OSError:
+        except BaseException:  # a KeyboardInterrupt mid-write too
             try:
                 os.ftruncate(fd, before)
             except OSError:
