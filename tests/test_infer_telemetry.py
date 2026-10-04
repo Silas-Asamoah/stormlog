@@ -33,11 +33,11 @@ from stormlog.infer.server_collector import (
     CollectionResult,
     GpuMemoryReading,
     NvmlMemorySource,
-    _running_compute_pids,
     collect_server_telemetry,
     describe_gpu_process_match,
     next_poll_time,
     read_process_rss,
+    running_compute_pids,
 )
 from stormlog.infer.telemetry import (
     ServerIdentity,
@@ -645,10 +645,10 @@ def test_compute_process_query_grows_the_buffer() -> None:
         count_ref._obj.value = 2
         return 0
 
-    assert _running_compute_pids(query, ctypes.c_void_p()) == {11, 12}
+    assert running_compute_pids(query, ctypes.c_void_p()) == {11, 12}
     assert calls == [False, True]
-    assert _running_compute_pids(lambda *_: 0, ctypes.c_void_p()) == set()
-    assert _running_compute_pids(lambda *_: 999, ctypes.c_void_p()) is None
+    assert running_compute_pids(lambda *_: 0, ctypes.c_void_p()) == set()
+    assert running_compute_pids(lambda *_: 999, ctypes.c_void_p()) is None
 
 
 def _run_collect_cli(

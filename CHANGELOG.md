@@ -58,6 +58,11 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `stormlog.infer.server_gpu`: the GPUs a vLLM server uses, found by NVML's
+  compute processes rather than an index, with each device's settings
+  (power limits, application clocks, persistence, ECC, MIG, compute mode)
+  and a reading of what drifts (SM clock, temperature, clock event
+  reasons). An unreadable field records NVML's code. (#213)
 - `stormlog.infer.server_process`: a vLLM server's processes from Linux
   `/proc`, each identified by PID and start time and given a role from vLLM
   0.30.0's process titles (`api_server`, `engine_core`, `worker`, helpers,

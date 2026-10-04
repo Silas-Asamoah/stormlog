@@ -117,7 +117,7 @@ def _mig_parent_handle(lib: ctypes.CDLL, handle: ctypes.c_void_p) -> ctypes.c_vo
     return parent
 
 
-def _running_compute_pids(function: Any, handle: ctypes.c_void_p) -> set[int] | None:
+def running_compute_pids(function: Any, handle: ctypes.c_void_p) -> set[int] | None:
     """Call an ``nvmlDeviceGetComputeRunningProcesses`` variant for its PIDs."""
     function.argtypes = [
         ctypes.c_void_p,
@@ -248,7 +248,7 @@ class NvmlMemorySource:
         ):
             function = getattr(self._lib, name, None)
             if function is not None:
-                return _running_compute_pids(function, self._handle)
+                return running_compute_pids(function, self._handle)
         return None
 
     def close(self) -> None:

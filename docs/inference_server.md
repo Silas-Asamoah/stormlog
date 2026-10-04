@@ -35,6 +35,25 @@ its process group and session. So a check that a server is gone looks at the
 whole group and session, and at every process the description listed, by
 PID and start time. A zombie has exited and counts as gone.
 
+## The server's GPUs
+
+The server's GPUs are the devices on which NVML lists one of the server's
+processes as a compute process. `CUDA_VISIBLE_DEVICES` renumbers devices for
+the server, so a device index alone cannot name them. Inside a container
+NVML may list host PIDs, and then no device matches; the description says
+so instead of guessing.
+
+For each device NVML lists, the description keeps:
+
+| Kind | Fields |
+| --- | --- |
+| Settings, which identify the hardware | name, power limit and enforced power limit (W), application clocks (graphics, SM, memory, MHz), persistence mode, ECC, MIG mode, compute mode |
+| A reading of what drifts during a run | SM clock (MHz), temperature (°C), clock event reasons (formerly throttle reasons, such as `sw_power_cap` or `hw_thermal_slowdown`) |
+
+plus the host's driver version and the CUDA version the driver supports.
+A field NVML cannot read records why (`{"unavailable": "NVML code 3"}`) and
+is never filled in.
+
 ## What a description keeps
 
 Redaction follows vLLM's configuration schema, never a substring. A field
@@ -92,6 +111,15 @@ from stormlog.infer.server_process import group_members, process_tree, still_run
 | `process_tree(pid)` | The process and its live descendants, root first, each with its role |
 | `group_members(pgid, sid=None)` | Every live process in the group, or in the session too |
 | `still_running(keys)` | The processes, given as `(pid, start_ticks)`, that are still alive |
+
+```python
+from stormlog.infer.server_gpu import NvmlGpuReader, describe_gpus, read_series
+```
+
+| Function | Returns |
+| --- | --- |
+| `describe_gpus(reader, server_pids)` | Every device with its settings, one drift reading, and the server processes on it |
+| `read_series(reader, uuids)` | A fresh drift reading of those devices |
 
 ## Related pages
 
