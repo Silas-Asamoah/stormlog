@@ -9,8 +9,9 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping, TextIO, cast
+from typing import TYPE_CHECKING, Any, Mapping, cast
 
+from .collector_health import collector_retry_delay_seconds
 from .session import (
     SESSION_STATUS_COMPLETED,
     SESSION_STATUS_INTERRUPTED,
@@ -46,6 +47,13 @@ class TelemetrySinkConfig:
     retention_max_total_bytes: int = 512 * 1024 * 1024
     write_rollups: bool = True
     rollup_window_seconds: int = 60
+    # Bounded mode, off by default: at most this many bytes wait in memory
+    # for a flush. A record that would go over is dropped and counted, and a
+    # failed flush is counted and retried after a growing backoff instead of
+    # raising, so a full or failing disk cannot grow the caller's memory.
+    max_buffer_bytes: int | None = None
+    failure_backoff_seconds: float = 1.0
+    failure_backoff_max_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         self.root_dir = Path(self.root_dir)
@@ -65,6 +73,17 @@ class TelemetrySinkConfig:
             raise ValueError("retention_max_total_bytes must be >= rollover_max_bytes")
         if self.rollup_window_seconds <= 0:
             raise ValueError("rollup_window_seconds must be >= 1")
+        self._validate_bounded_mode()
+
+    def _validate_bounded_mode(self) -> None:
+        if self.max_buffer_bytes is not None and self.max_buffer_bytes <= 0:
+            raise ValueError("max_buffer_bytes must be >= 1")
+        if self.failure_backoff_seconds <= 0:
+            raise ValueError("failure_backoff_seconds must be > 0")
+        if self.failure_backoff_max_seconds < self.failure_backoff_seconds:
+            raise ValueError(
+                "failure_backoff_max_seconds must be >= failure_backoff_seconds"
+            )
 
 
 @dataclass
@@ -100,9 +119,10 @@ class AppendOnlyTelemetrySink:
         self._sessions: dict[str, SessionSummary] = {}
         self._active_session_id: str | None = None
         self._next_segment_index = 1
-        self._buffer: list[str] = []
+        self._buffer: list[bytes] = []
         self._buffered_event_count = 0
-        self._handle: TextIO | None = None
+        self._buffered_bytes = 0
+        self._fd: int | None = None
         self._lock = threading.Lock()
         self._flush_stop_event = threading.Event()
         self._flush_thread: threading.Thread | None = None
@@ -111,6 +131,12 @@ class AppendOnlyTelemetrySink:
         self._rollover_count = 0
         self._pruned_segment_count = 0
         self._pruned_bytes = 0
+        self._dropped_records = 0
+        self._dropped_bytes = 0
+        self._flush_failures = 0
+        self._consecutive_flush_failures = 0
+        self._flush_retry_at = 0.0
+        self._last_flush_error: str | None = None
         self._load_existing_state()
 
     def start_session(self, summary: SessionSummary | None = None) -> SessionSummary:
@@ -144,12 +170,19 @@ class AppendOnlyTelemetrySink:
             return self._sessions.get(self._active_session_id)
 
     def append(self, record: Mapping[str, Any]) -> None:
+        line = (json.dumps(dict(record), sort_keys=True) + "\n").encode("utf-8")
         with self._lock:
             self._ensure_flush_thread_locked()
             self._closed = False
             self._ensure_active_session_locked(record)
-            self._buffer.append(json.dumps(dict(record), sort_keys=True) + "\n")
+            limit = self.config.max_buffer_bytes
+            if limit is not None and self._buffered_bytes + len(line) > limit:
+                self._dropped_records += 1
+                self._dropped_bytes += len(line)
+                return
+            self._buffer.append(line)
             self._buffered_event_count += 1
+            self._buffered_bytes += len(line)
             self._flush_locked(force=False)
 
     def flush(self, force: bool = False) -> None:
@@ -161,9 +194,8 @@ class AppendOnlyTelemetrySink:
         try:
             with self._lock:
                 self._flush_locked(force=True)
-                if self._handle is not None:
-                    self._handle.close()
-                    self._handle = None
+                self._drop_unflushed_locked()
+                self._close_fd_locked()
                 current = self._current_segment()
                 if current is not None and not current.closed:
                     current.closed = True
@@ -191,6 +223,23 @@ class AppendOnlyTelemetrySink:
         with self._lock:
             return self._diagnostics_locked()
 
+    def failure_diagnostics(self) -> dict[str, int | str | None]:
+        """Buffer and flush-failure counters; the bounded mode's evidence."""
+        with self._lock:
+            return {
+                "buffered_records": self._buffered_event_count,
+                "buffered_bytes": self._buffered_bytes,
+                "dropped_records": self._dropped_records,
+                "dropped_bytes": self._dropped_bytes,
+                "flush_failures": self._flush_failures,
+                "consecutive_flush_failures": self._consecutive_flush_failures,
+                "last_flush_error": self._last_flush_error,
+            }
+
+    @property
+    def _bounded(self) -> bool:
+        return self.config.max_buffer_bytes is not None
+
     def _ensure_active_session_locked(self, record: Mapping[str, Any]) -> None:
         record_session_id = record.get("session_id")
         if record_session_id is not None and not isinstance(record_session_id, str):
@@ -205,7 +254,7 @@ class AppendOnlyTelemetrySink:
             )
             self._sessions[resolved.session_id] = resolved
             self._active_session_id = resolved.session_id
-            self._write_manifest_locked()
+            self._write_manifest_checked_locked()
             return
         if (
             isinstance(record_session_id, str)
@@ -225,24 +274,91 @@ class AppendOnlyTelemetrySink:
                 now - self._last_flush_monotonic < self.config.flush_every_seconds
             ):
                 return
+            if self._bounded and now < self._flush_retry_at:
+                return
 
         current = self._ensure_current_segment_locked()
-        payload = "".join(self._buffer)
-        payload_bytes = payload.encode("utf-8")
-        handle = self._ensure_handle_locked(current)
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
+        payload = b"".join(self._buffer)
+        try:
+            self._write_payload_locked(current, payload)
+        except OSError as exc:
+            self._record_flush_failure_locked(exc, now)
+            if not self._bounded:
+                raise
+            return
 
         current.event_count += self._buffered_event_count
-        current.size_bytes += len(payload_bytes)
+        current.size_bytes += len(payload)
         self._buffer.clear()
         self._buffered_event_count = 0
+        self._buffered_bytes = 0
         self._last_flush_monotonic = now
+        self._consecutive_flush_failures = 0
 
         self._rollover_locked(current)
         self._prune_retention_locked()
-        self._write_manifest_locked()
+        # The records are durable; a failed manifest is rewritten next flush.
+        self._write_manifest_checked_locked()
+
+    def _write_manifest_checked_locked(self) -> None:
+        """Write the manifest; in bounded mode a failure is counted, not raised."""
+        try:
+            self._write_manifest_locked()
+        except OSError as exc:
+            self._record_flush_failure_locked(exc, time.monotonic())
+            if not self._bounded:
+                raise
+
+    def _write_payload_locked(
+        self, current: TelemetrySinkSegment, payload: bytes
+    ) -> None:
+        """Append every byte and fsync, or cut the segment back as it was.
+
+        A failed write would otherwise leave a partial line that the next
+        successful write extends into a corrupt record.
+        """
+        fd = self._ensure_fd_locked(current)
+        try:
+            _write_all(fd, payload)
+            os.fsync(fd)
+        except OSError:
+            try:
+                os.ftruncate(fd, current.size_bytes)
+            except OSError:
+                pass
+            raise
+
+    def _record_flush_failure_locked(self, exc: OSError, now: float) -> None:
+        self._flush_failures += 1
+        self._consecutive_flush_failures += 1
+        self._last_flush_error = f"{type(exc).__name__}: {exc}"
+        delay = collector_retry_delay_seconds(
+            self._consecutive_flush_failures,
+            initial_delay_s=self.config.failure_backoff_seconds,
+            factor=2.0,
+            max_delay_s=self.config.failure_backoff_max_seconds,
+        )
+        self._flush_retry_at = now + delay
+        if self._consecutive_flush_failures == 1:
+            _LOGGER.warning("telemetry sink flush failed: %s", self._last_flush_error)
+
+    def _drop_unflushed_locked(self) -> None:
+        """Count what a bounded sink could not write before closing."""
+        if not self._bounded or not self._buffer:
+            return
+        self._dropped_records += self._buffered_event_count
+        self._dropped_bytes += self._buffered_bytes
+        self._buffer.clear()
+        self._buffered_event_count = 0
+        self._buffered_bytes = 0
+
+    def _close_fd_locked(self) -> None:
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
 
     def _rollover_locked(self, current: TelemetrySinkSegment) -> None:
         if (
@@ -252,9 +368,7 @@ class AppendOnlyTelemetrySink:
             return
         current.closed = True
         self._rollover_count += 1
-        if self._handle is not None:
-            self._handle.close()
-            self._handle = None
+        self._close_fd_locked()
 
     def _prune_retention_locked(self) -> None:
         while True:
@@ -331,12 +445,14 @@ class AppendOnlyTelemetrySink:
         self._segments.append(segment)
         return segment
 
-    def _ensure_handle_locked(self, current: TelemetrySinkSegment) -> TextIO:
-        if self._handle is None:
+    def _ensure_fd_locked(self, current: TelemetrySinkSegment) -> int:
+        if self._fd is None:
             segment_path = self.root_dir / current.filename
             self._recover_segment_tail_locked(segment_path, current)
-            self._handle = segment_path.open("a", encoding="utf-8")
-        return self._handle
+            self._fd = os.open(
+                segment_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666
+            )
+        return self._fd
 
     def _load_existing_state(self) -> None:
         discovered = _discover_segment_paths(self.root_dir)
@@ -530,6 +646,16 @@ class AppendOnlyTelemetrySink:
             )
 
         return merged
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    """Write every byte; a short write continues, an error raises."""
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("write made no progress")
+        view = view[written:]
 
 
 def resolve_telemetry_sink_segment_paths(path: str | Path) -> list[Path]:

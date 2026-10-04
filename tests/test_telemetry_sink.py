@@ -331,9 +331,7 @@ def test_append_only_sink_recovery_marks_prior_session_interrupted(
             "metadata": {},
         }
     )
-    if first_sink._handle is not None:
-        first_sink._handle.close()
-        first_sink._handle = None
+    first_sink._close_fd_locked()  # a crash leaves the segment open
     first_sink._stop_flush_thread()
 
     recovered_sink = AppendOnlyTelemetrySink(config)
@@ -385,9 +383,7 @@ def test_append_only_sink_recovery_rebuilds_interrupted_rollup(
     )
     first_sink = AppendOnlyTelemetrySink(config)
     first_sink.append(_event_record(session_id="session-a", timestamp_ns=1))
-    if first_sink._handle is not None:
-        first_sink._handle.close()
-        first_sink._handle = None
+    first_sink._close_fd_locked()  # a crash leaves the segment open
     first_sink._stop_flush_thread()
 
     recovered_sink = AppendOnlyTelemetrySink(config)
@@ -533,3 +529,168 @@ def test_append_only_sink_close_stops_flush_thread_after_manifest_failure(
         sink.close()
 
     assert sink._flush_thread is None
+
+
+class _FailingDisk:
+    """Makes ``os.write`` in the sink fail with ENOSPC until healed.
+
+    ``partial`` first writes half the payload, then fails, as a disk that
+    fills up in the middle of a write does.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, partial: bool) -> None:
+        import errno
+        import os
+
+        from stormlog import telemetry_sink
+
+        self.failing = True
+        self.calls = 0
+        real_write = os.write
+
+        def write(fd: int, data: bytes | memoryview) -> int:
+            self.calls += 1
+            if not self.failing:
+                return real_write(fd, data)
+            if partial and len(data) > 1:
+                real_write(fd, bytes(data[: len(data) // 2]))
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(telemetry_sink.os, "write", write)
+
+
+def _bounded_sink(tmp_path: Path, **overrides: object) -> AppendOnlyTelemetrySink:
+    values: dict[str, object] = {
+        "root_dir": tmp_path,
+        "flush_every_events": 1,
+        "flush_every_seconds": 60.0,
+        "max_buffer_bytes": 4096,
+        "failure_backoff_seconds": 0.01,
+        "failure_backoff_max_seconds": 0.05,
+        "write_rollups": False,
+    }
+    values.update(overrides)
+    return AppendOnlyTelemetrySink(TelemetrySinkConfig(**values))  # type: ignore[arg-type]
+
+
+def test_a_failed_write_is_cut_back_so_no_partial_line_remains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sink = _bounded_sink(tmp_path)
+    sink.append({"seq": 1})
+    disk = _FailingDisk(monkeypatch, partial=True)
+    sink.append({"seq": 2, "pad": "x" * 200})
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    # Only the first, whole record is on disk; the half-written one was cut.
+    assert [json.loads(line) for line in segment.read_text().splitlines()] == [
+        {"seq": 1}
+    ]
+    disk.failing = False
+    time.sleep(0.02)  # past the backoff
+    sink.append({"seq": 3})
+    sink.close()
+    assert [r["seq"] for r in _segment_records(segment)] == [1, 2, 3]
+
+
+def test_a_default_sink_still_raises_but_cuts_the_partial_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sink = AppendOnlyTelemetrySink(
+        TelemetrySinkConfig(
+            root_dir=tmp_path, flush_every_events=1, write_rollups=False
+        )
+    )
+    sink.append({"seq": 1})
+    _FailingDisk(monkeypatch, partial=True)
+    with pytest.raises(OSError):
+        sink.append({"seq": 2, "pad": "x" * 200})
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    assert segment.read_text() == '{"seq": 1}\n'
+    sink._stop_flush_thread()
+
+
+def test_a_bounded_sink_holds_at_most_its_buffer_under_sustained_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tracemalloc
+
+    sink = _bounded_sink(tmp_path, max_buffer_bytes=8192)
+    disk = _FailingDisk(monkeypatch, partial=False)
+    record = {"seq": 0, "pad": "y" * 500}
+    tracemalloc.start()
+    baseline = tracemalloc.get_traced_memory()[0]
+    for seq in range(5000):  # about 2.6 MB offered to a dead disk
+        sink.append({**record, "seq": seq})
+    grown = tracemalloc.get_traced_memory()[0] - baseline
+    tracemalloc.stop()
+
+    health = sink.failure_diagnostics()
+    assert isinstance(health["buffered_bytes"], int)
+    assert health["buffered_bytes"] <= 8192
+    assert health["buffered_records"] == 15  # 15 lines of 524 bytes fit
+    assert health["dropped_records"] == 5000 - 15
+    assert isinstance(health["flush_failures"], int)
+    assert health["flush_failures"] >= 1
+    assert health["last_flush_error"] is not None
+    assert "No space left" in str(health["last_flush_error"])
+    # The backoff spaces the retries out: not one write per append.
+    assert disk.calls < 100
+    assert grown < 256 * 1024
+    sink.close()  # never raises in bounded mode
+    assert sink.failure_diagnostics()["dropped_records"] == 5000
+    assert sink.failure_diagnostics()["buffered_records"] == 0
+
+
+def test_a_bounded_sink_recovers_when_the_disk_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sink = _bounded_sink(tmp_path)
+    disk = _FailingDisk(monkeypatch, partial=False)
+    sink.append({"seq": 1})
+    sink.append({"seq": 2})
+    assert sink.failure_diagnostics()["buffered_records"] == 2
+    disk.failing = False
+    time.sleep(0.06)  # past the longest backoff
+    sink.append({"seq": 3})
+    health = sink.failure_diagnostics()
+    assert health["buffered_records"] == 0
+    assert health["consecutive_flush_failures"] == 0
+    sink.close()
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    assert [r["seq"] for r in _segment_records(segment)] == [1, 2, 3]
+
+
+def test_a_bounded_sink_counts_a_manifest_failure_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    sink = _bounded_sink(tmp_path)
+
+    def fail() -> None:
+        raise OSError("manifest write failed")
+
+    sink._write_manifest_locked = fail  # type: ignore[method-assign]
+    # The session's first manifest fails: counted, and the write backs off.
+    sink.append({"seq": 1})
+    assert sink.failure_diagnostics()["flush_failures"] == 1
+    assert sink.failure_diagnostics()["buffered_records"] == 1
+    time.sleep(0.02)  # past the backoff
+    # The records are written; the manifest after them fails again, counted.
+    sink.append({"seq": 2})
+    assert sink.failure_diagnostics()["flush_failures"] == 2
+    assert sink.failure_diagnostics()["buffered_records"] == 0
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    assert _segment_records(segment) == [{"seq": 1}, {"seq": 2}]
+    sink._stop_flush_thread()
+
+
+def test_bounded_mode_settings_are_validated(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="max_buffer_bytes"):
+        TelemetrySinkConfig(root_dir=tmp_path, max_buffer_bytes=0)
+    with pytest.raises(ValueError, match="failure_backoff_seconds"):
+        TelemetrySinkConfig(root_dir=tmp_path, failure_backoff_seconds=0)
+    with pytest.raises(ValueError, match="failure_backoff_max_seconds"):
+        TelemetrySinkConfig(
+            root_dir=tmp_path,
+            failure_backoff_seconds=2.0,
+            failure_backoff_max_seconds=1.0,
+        )
