@@ -118,6 +118,21 @@ def test_close_applies_what_was_queued_then_freezes(tmp_path: Path) -> None:
     assert exposition.value("stormlog_run_active") == 0
 
 
+def test_a_refused_token_count_makes_the_totals_inexact(tmp_path: Path) -> None:
+    # The token total no longer matches the artifact, so exact must say so.
+    pipeline = ExportPipeline(ExportConfig(prometheus_textfile_dir=tmp_path), LABELS)
+    pipeline.start(started_at=0.0)
+    for tokens in (4, -5, 10**400):
+        record = _request()
+        record.update(output_tokens=tokens, output_token_source="server_usage")
+        pipeline.observe(record)
+    pipeline.close(5.0)
+    records = pipeline.summary()["records"]
+    assert records["applied"] == 3 and records["tokens_rejected"] == 2
+    assert not records["exact"]
+    assert _exposition(pipeline).value("stormlog_metrics_series_rejected_total") == 0
+
+
 def test_an_interrupted_close_finishes_and_a_later_close_is_a_no_op(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

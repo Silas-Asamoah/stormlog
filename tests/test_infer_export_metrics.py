@@ -210,8 +210,10 @@ def test_a_token_count_no_counter_can_take_is_rejected(count: object) -> None:
     )
     assert exposition.value(tokens, direction="output", source="estimated", **case) == 7
     assert exposition.value("stormlog_infer_requests_total", status="ok", **case) == 1
+    # Counted on its own: the family's rejected series are for its cap.
+    assert metrics.tokens_rejected == 1
     family = next(f for f in registry.families if f.spec.name == tokens)
-    assert family.stats.rejected == 1
+    assert family.stats.rejected == 0
 
 
 def test_with_the_case_label_off_every_case_is_all() -> None:

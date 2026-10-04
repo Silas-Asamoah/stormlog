@@ -83,7 +83,7 @@ Units are base units: seconds and counts. Every series also carries
 | `stormlog_infer_chunk_interarrival_seconds` | histogram | same | Gaps between streamed chunks. This is chunk timing, not token inter-token latency | `vllm:inter_token_latency_seconds` |
 | `stormlog_infer_e2e_from_intended_seconds` | histogram | same | Open-loop arrivals only: completed requests measured from their intended arrival, so a held arrival's wait is included | — |
 | `stormlog_infer_dispatch_lag_seconds` | histogram | case, arrival_mode | How late each request was sent against its schedule | — |
-| `stormlog_infer_tokens_total` | counter | model, server, case, phase, direction, source | Prompt and output tokens of completed requests. `source` is where each count came from: `server_usage`, `tiktoken`, `transformers`, `estimated` or `unknown` | `vllm:prompt_tokens_total` and `vllm:generation_tokens_total` (every client) |
+| `stormlog_infer_tokens_total` | counter | model, server, case, phase, direction, source | Prompt and output tokens of completed requests. `source` is where each count came from: `server_usage`, `tiktoken`, `transformers`, `estimated` or `unknown`. A count no counter can take, negative or past 2^53, is left out and counted as `tokens_rejected` in the capability record | `vllm:prompt_tokens_total` and `vllm:generation_tokens_total` (every client) |
 | `stormlog_infer_requests_held_for_slot_total` | counter | case | Open-loop arrivals that found every in-flight slot taken: they waited for one, or with `--overflow drop` were dropped | — |
 | `stormlog_infer_phases_total` | counter | case, phase | Completed phase windows | — |
 | `stormlog_infer_abandoned_requests_total` | counter | case, phase | Requests from an earlier drain still running when a phase was ready to start | — |
@@ -228,9 +228,10 @@ These series sit beside the exported metrics:
     no longer takes (the run's own capability and session records) are
     never mapped.
 
-  While every reason is 0, and no record failed to be read
-  (`stormlog_exporter_internal_errors_total{entry="observe"}`), the exported
-  totals are exact: the capability record's `exact` says so. They are
+  While every reason is 0, no record failed to be read
+  (`stormlog_exporter_internal_errors_total{entry="observe"}`) and no token
+  count was left out (`tokens_rejected`), the exported totals are exact:
+  the capability record's `exact` says so. They are
   exact for the records offered to the exporter, which it is handed as
   each is written; a record written just as a second Ctrl+C lands may not
   be.
