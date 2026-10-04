@@ -659,3 +659,42 @@ def test_history_evictions_are_counted_by_cause(tmp_path: Path) -> None:
     assert health[-1]["history"]["evictions"]["age"] == (
         stats["history_evictions_total"]["age"]
     )
+
+
+def test_due_incidents_are_sealed_before_a_tick_s_firings_are_admitted(
+    tmp_path: Path,
+) -> None:
+    """Firings were admitted first, so an incident whose post-window had just
+    ended still held its open slot: with max_open_incidents 1, a firing at
+    the first tick after it was turned away."""
+    metrics = FakeMetrics()
+    metrics.waiting = 20
+    calls: list[tuple[str, int]] = []
+    with serve_metrics(metrics) as base_url:
+        watcher = Watcher(
+            resolve_watch_config(watch_config(base_url)),
+            tmp_path,
+            options=WatchOptions(duration_seconds=1.5),
+        )
+        manager = watcher.incidents
+        seal, admit = manager.on_tick, manager.on_fired
+
+        def on_tick(at_mono: int) -> list[str]:
+            calls.append(("seal", at_mono))
+            return seal(at_mono)
+
+        def on_fired(result: Any) -> str | None:
+            calls.append(("fire", result.at_ns))
+            return admit(result)
+
+        manager.on_tick = on_tick  # type: ignore[method-assign]
+        manager.on_fired = on_fired  # type: ignore[method-assign]
+
+        async def main() -> WatchOutcome:
+            return await watcher.run(asyncio.Event())
+
+        asyncio.run(main())
+    fired = [at for kind, at in calls if kind == "fire"]
+    assert fired
+    for at in fired:
+        assert calls.index(("seal", at)) < calls.index(("fire", at))

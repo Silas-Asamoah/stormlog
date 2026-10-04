@@ -63,10 +63,11 @@ writes anything; so does a watcher whose `incidents/` another process holds.
    default, and `history.bytes`, 32 MiB; see "The recent past in memory").
    A scrape larger than the whole bound is counted as oversized too, and
    no trigger judges it.
-3. Evaluate every trigger (see "Triggers and what "sustained" means").
-4. Open an incident for a trigger that fires, or join it to one still
+3. Seal incidents whose post-window has ended, so they hold no open slot
+   against this tick's firings.
+4. Evaluate every trigger (see "Triggers and what "sustained" means").
+5. Open an incident for a trigger that fires, or join it to one still
    collecting its post-window.
-5. Seal incidents whose post-window has ended.
 6. Append an `infer.watch_health` record.
 
 At start, and then every 60 ticks, retention removes the bundles over the
