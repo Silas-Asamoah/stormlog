@@ -61,7 +61,9 @@ def test_defaults_and_validation() -> None:
     assert (DEFAULT.window, DEFAULT.hold, DEFAULT.clear) == (30, 60, 60)
     assert DEFAULT.gap == 30 and DEFAULT.clear_tolerance == 2
     assert DEFAULT.shortest_firing_violation(1) == 29
-    assert DEFAULT.shortest_firing_violation() == 30
+    assert DEFAULT.shortest_firing_violation(5) == 25
+    with pytest.raises(TypeError):  # no default tick: none states F - W
+        DEFAULT.shortest_firing_violation()  # type: ignore[call-arg]
     health = Sustain.with_defaults(window=3, hold=3, clear=None, tick=1)
     assert health.shortest_firing_violation(1) == 0  # no guarantee, never < 0
     assert DEFAULT.detection_bound(1) == 91  # F a multiple of Δ, ticks on time
