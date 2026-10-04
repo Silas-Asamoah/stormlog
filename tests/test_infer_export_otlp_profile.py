@@ -223,7 +223,10 @@ def test_unusable_span_settings_exit_2_before_sending(
     "where",
     [
         "the artifact",
+        "the artifact, in other case",
         "the textfile directory",
+        "the textfile directory, in other case",
+        "the textfile directory, through a link",
         "the vLLM execution directory",
     ],
 )
@@ -232,14 +235,30 @@ def test_a_span_file_where_another_writer_owns_the_path_exits_2(
 ) -> None:
     # The span file opened for append, then the artifact opened over it:
     # the two writers interleaved and the run failed at analysis, exit 5.
+    # A case-insensitive disk (macOS) folds a name's case, so a spelling
+    # that differs only in case is refused everywhere.
     output = tmp_path / "infer.jsonl"
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
+    (tmp_path / "link").symlink_to(elsewhere)
     flags = {
         "the artifact": ["--otlp-file", str(output)],
+        "the artifact, in other case": ["--otlp-file", str(tmp_path / "INFER.jsonl")],
         "the textfile directory": [
             "--otlp-file",
             str(elsewhere / "spans.jsonl"),
+            "--prometheus-textfile-dir",
+            str(elsewhere),
+        ],
+        "the textfile directory, in other case": [
+            "--otlp-file",
+            str(tmp_path / "ELSEWHERE" / "stormlog-default.prom"),
+            "--prometheus-textfile-dir",
+            str(elsewhere),
+        ],
+        "the textfile directory, through a link": [
+            "--otlp-file",
+            str(tmp_path / "link" / "spans.jsonl"),
             "--prometheus-textfile-dir",
             str(elsewhere),
         ],
