@@ -1,5 +1,6 @@
 """T15: ``infer collect-server``'s health export, through every way it stops."""
 
+import json
 import os
 import socket
 import subprocess
@@ -13,9 +14,11 @@ from typing import Any
 import psutil
 import pytest
 
+from stormlog._export.registry import render
 from stormlog._export.renders import RenderCache
 from stormlog._export.textfile import PRODUCER_LABEL, TextfileWriter, slot_paths
 from stormlog.exit_codes import ExitCode
+from stormlog.infer import export_collector
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.export_collector import CollectorExport
 from stormlog.infer.export_config import ExportConfig
@@ -27,6 +30,7 @@ from stormlog.infer.server_collector import (
     GpuMemoryReading,
     collect_server_telemetry,
 )
+from stormlog.infer.telemetry import ServerIdentity
 from tests.export_conformance import Exposition, check_exposition
 from tests.test_infer_telemetry import _FakeGpu
 
@@ -36,6 +40,14 @@ def _export(tmp_path: Path, **config: Any) -> CollectorExport:
     metrics.mkdir(exist_ok=True)
     config.setdefault("prometheus_textfile_dir", metrics)
     return CollectorExport(ExportConfig(**config), run_id="run-c", version="9.9")
+
+
+def _identity() -> ServerIdentity:
+    return ServerIdentity(
+        host=socket.gethostname(),
+        pid=os.getpid(),
+        process_start_ns=int(psutil.Process().create_time() * 1e9),
+    )
 
 
 def _textfile(tmp_path: Path, slot: str = "default") -> Exposition:
@@ -71,7 +83,7 @@ def test_the_final_textfile_has_the_identity_polls_and_why_it_stopped(
     assert result.stop_reason == STOP_DURATION_ELAPSED
     exposition = _textfile(tmp_path)
     info = _series(exposition, "stormlog_collector_info")
-    assert len(info) == 1
+    assert len(info) == 1 and info[0][1] == 1
     labels = info[0][0]
     assert labels["pid"] == str(os.getpid())
     assert labels["device_uuid"] == "GPU-live" and labels["replica_id"] == "r-1"
@@ -80,6 +92,8 @@ def test_the_final_textfile_has_the_identity_polls_and_why_it_stopped(
     process_start = int(psutil.Process().create_time() * 1e9)
     assert labels["process_start_ns"] == str(process_start)
     assert exposition.value("stormlog_collector_polls_total") == result.polls
+    last_poll = exposition.value("stormlog_collector_last_poll_timestamp_seconds")
+    assert time.time() - 60 < last_poll <= time.time()
     assert (
         exposition.value(
             "stormlog_collector_samples_total",
@@ -213,6 +227,111 @@ def test_the_endpoint_serves_while_collecting_and_stops_with_a_request(
     assert final.value("stormlog_collector_stops_total", reason=STOP_REQUESTED) == 1
 
 
+class _BrokenGpu(_FakeGpu):
+    """A GPU source whose second read raises, as a bug in a reader would."""
+
+    def read(self) -> GpuMemoryReading:
+        if self.reads >= 1:
+            raise RuntimeError("reader bug")
+        return super().read()
+
+
+def test_a_collection_that_raises_is_recorded_as_an_error(tmp_path: Path) -> None:
+    export = _export(tmp_path)
+    with pytest.raises(RuntimeError, match="reader bug"):
+        _collect(tmp_path, export, duration_seconds=5, gpu_source=_BrokenGpu())
+    final = _textfile(tmp_path)
+    assert final.value("stormlog_collector_running") == 0
+    assert final.value("stormlog_collector_stops_total", reason="error") == 1
+    assert (
+        final.value("stormlog_collector_stops_total", reason=STOP_DURATION_ELAPSED) == 0
+    )
+
+
+def test_an_unknown_stop_reason_is_recorded_as_an_error(tmp_path: Path) -> None:
+    export = _export(tmp_path)
+    export.identify(_identity())
+    export.close("a reason from a newer collector")
+    stops = "stormlog_collector_stops_total"
+    assert _textfile(tmp_path).value(stops, reason="error") == 1
+
+
+def test_nothing_changes_after_the_close(tmp_path: Path) -> None:
+    export = _export(tmp_path)
+    _collect(tmp_path, export, duration_seconds=0.05)
+    polls = export.polls
+    export.poll([])  # a late poll, after the freeze
+    rendered = check_exposition(render(export.registry.snapshot()).decode()).value(
+        "stormlog_collector_polls_total"
+    )
+    assert rendered == polls
+
+
+def test_a_poll_that_fails_to_count_never_reaches_the_collector(
+    tmp_path: Path,
+) -> None:
+    export = _export(tmp_path)
+    export.identify(_identity())
+    export.poll([object()])  # type: ignore[list-item]
+    export.close(STOP_REQUESTED)
+
+
+class _Recording:
+    """An observer that checks each poll is on disk when it is told."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.on_disk: list[bool] = []
+        self.closed: list[str] = []
+
+    def identify(self, identity: Any, gpu_process_match: str = "unknown") -> None:
+        pass
+
+    def poll(self, samples: Any) -> None:
+        lines = self.path.read_text().splitlines()
+        self.on_disk.append(
+            all(json.dumps(s.to_record(), sort_keys=True) in lines for s in samples)
+        )
+
+    def close(self, stop_reason: str) -> None:
+        self.closed.append(stop_reason)
+
+
+def test_the_observer_hears_of_a_poll_once_it_is_written(tmp_path: Path) -> None:
+    observer = _Recording(tmp_path / "server.jsonl")
+    _collect(tmp_path, observer, duration_seconds=0.05)  # type: ignore[arg-type]
+    assert observer.on_disk and all(observer.on_disk)
+    assert observer.closed == [STOP_DURATION_ELAPSED]
+
+
+def test_an_in_flight_render_at_the_close_still_ends_in_the_final_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A periodic render that took its values before the freeze, held until
+    # after it: the final file must still say the collector stopped, and why.
+    export = _export(tmp_path, prometheus_textfile_interval_seconds=1.0)
+    real_render = export_collector.render
+    renders: list[int] = []
+
+    def held(snapshot: Any) -> bytes:
+        renders.append(1)
+        if len(renders) > 1:  # every render after the first, until the freeze
+            deadline = time.monotonic() + 10
+            while not export.registry.frozen and time.monotonic() < deadline:
+                time.sleep(0.01)
+        return real_render(snapshot)
+
+    monkeypatch.setattr(export_collector, "render", held)
+    _collect(tmp_path, export, duration_seconds=2.5)
+    final = _textfile(tmp_path)
+    assert len(renders) >= 3
+    assert final.value("stormlog_collector_running") == 0
+    assert final.value("stormlog_run_active") == 0
+    assert (
+        final.value("stormlog_collector_stops_total", reason=STOP_DURATION_ELAPSED) == 1
+    )
+
+
 def _cli(tmp_path: Path, *flags: str) -> int:
     return infer_main(
         [
@@ -277,6 +396,78 @@ def test_a_collection_that_fails_to_start_frees_its_slot(tmp_path: Path) -> None
     assert not list(metrics.glob("*.lock"))
 
 
+def test_the_slot_is_checked_before_the_process(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    metrics = tmp_path / "metrics"
+    metrics.mkdir()
+    holder = TextfileWriter(
+        metrics, "held", RenderCache(lambda: b""), const_labels={PRODUCER_LABEL: "held"}
+    )
+    holder.acquire()
+    exited = subprocess.Popen([sys.executable, "-c", "pass"])
+    exited.wait(10)
+    try:
+        code = infer_main(
+            [
+                "collect-server",
+                "--run-id",
+                "run-c",
+                "--pid",
+                str(exited.pid),
+                "--no-gpu",
+                "--output",
+                str(tmp_path / "server.jsonl"),
+                "--prometheus-textfile-dir",
+                str(metrics),
+                "--prometheus-slot",
+                "held",
+            ]
+        )
+    finally:
+        holder.close()
+    assert code == ExitCode.USAGE
+    assert "--prometheus-slot" in capsys.readouterr().err
+
+
+def test_the_endpoint_is_stopped_after_the_linger(tmp_path: Path) -> None:
+    port = _free_port()
+    code = _cli(
+        tmp_path,
+        "--duration",
+        "0.1",
+        "--prometheus-listen",
+        f"127.0.0.1:{port}",
+        "--prometheus-linger",
+        "0.2",
+    )
+    assert code == 0
+    with pytest.raises(OSError):
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=2)
+
+
+def test_an_output_inside_the_textfile_directory_exits_2(tmp_path: Path) -> None:
+    metrics = tmp_path / "metrics"
+    metrics.mkdir()
+    code = infer_main(
+        [
+            "collect-server",
+            "--run-id",
+            "run-c",
+            "--pid",
+            str(os.getpid()),
+            "--no-gpu",
+            "--duration",
+            "0.1",
+            "--output",
+            str(metrics / "server.jsonl"),
+            "--prometheus-textfile-dir",
+            str(metrics),
+        ]
+    )
+    assert code == ExitCode.USAGE
+
+
 def test_settings_it_cannot_use_exit_2_before_collecting(tmp_path: Path) -> None:
     metrics = tmp_path / "metrics"
     metrics.mkdir()
@@ -291,6 +482,13 @@ def test_settings_it_cannot_use_exit_2_before_collecting(tmp_path: Path) -> None
     try:
         for flags in (
             ["--prometheus-textfile-dir", str(metrics), "--prometheus-slot", "held"],
+            ["--prometheus-listen", "127.0.0.1:9", "--prometheus-linger", "inf"],
+            [
+                "--prometheus-textfile-dir",
+                str(metrics),
+                "--prometheus-textfile-interval",
+                "inf",
+            ],
             ["--prometheus-linger", "5"],
             ["--prometheus-listen", "127.0.0.1:9", "--prometheus-max-series", "1"],
             ["--prometheus-listen", "nonsense"],
