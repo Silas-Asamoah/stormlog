@@ -98,8 +98,8 @@ def test_close_applies_what_was_queued_then_freezes(tmp_path: Path) -> None:
     summary = pipeline.summary()["records"]
     assert summary["applied"] == 50 and summary["exact"]
     assert summary["dropped"] == {"queue_full": 0, "closed": 0, "shutdown": 0}
-    pipeline.observe(_request())  # after close: refused, counted, harmless
-    assert pipeline.summary()["records"]["dropped"]["closed"] == 1
+    pipeline.observe(_request())  # after close: not taken, and harmless
+    assert pipeline.summary()["records"]["offered"] == 50
     text = (tmp_path / "stormlog-default.prom").read_text()
     exposition = check_exposition(text)
     assert (

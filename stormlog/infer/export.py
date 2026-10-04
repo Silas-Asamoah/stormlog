@@ -208,7 +208,13 @@ class ExportPipeline:
     def observe(
         self, record: dict[str, Any], extras: Mapping[str, Any] | None = None
     ) -> None:
-        """Queue what the metrics need from ``record``; never raises or blocks."""
+        """Queue what the metrics need from ``record``; never raises or blocks.
+
+        Records after ``close`` (the run's capability records, written once
+        the counts are final) are not taken.
+        """
+        if self._closed:
+            return
         try:
             envelope = self.metrics.envelope(record, extras)
             if envelope is not None:
