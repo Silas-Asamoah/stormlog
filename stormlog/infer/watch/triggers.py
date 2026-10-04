@@ -8,16 +8,19 @@ times are sums of such intervals on the monotonic clock.
 - ``inactive`` becomes ``pending`` on a violating evaluation, with nothing
   accumulated yet: the first violating evaluation starts the clock at zero.
 - ``pending`` adds each later violating interval and fires once the total
-  reaches the hold time ``F``. Masked time, data-gap time up to ``G``, and a
-  clear run up to ``clear_tolerance`` pause the clock. More data-gap time
-  than ``G`` since the last informative evaluation, or a longer clear run,
-  resets to ``inactive``. Masked time never counts toward ``G``.
+  reaches the hold time ``F``. Masked time, data-gap time up to ``G``, and
+  clear time up to ``clear_tolerance`` in all since it went pending pause
+  the clock. More data-gap time than ``G`` since the last informative
+  evaluation, or more clear time in all, resets to ``inactive``. Masked
+  time never counts toward ``G``.
 - ``firing`` holds through violating, masked and data-gap evaluations; a
   clear one starts ``resolving``.
 - ``resolving`` returns to ``firing`` on a violating evaluation (the same
   episode, counted as a re-entry), pauses on masked and data-gap time, and
-  resolves to ``inactive`` after ``C`` of clear time. Only then can the
-  trigger fire again.
+  resolves to ``inactive`` after ``C`` of clear time. The clear evaluation
+  that starts ``resolving`` is not counted, so resolution takes ``C`` plus
+  up to one tick of clear, as firing takes ``F`` after the first violating
+  evaluation. Only then can the trigger fire again.
 
 So a predicate whose observations stay violating for less than ``F`` never
 fires, and one that turns violating at ``a`` and stays so fires by
@@ -65,7 +68,7 @@ class Sustain:
     ``window`` is the predicate's evaluation window ``W``, ``hold`` the time
     ``F`` it must be violating, ``clear`` the time ``C`` it must be clear to
     resolve, ``gap`` the data-gap time ``G`` a pending trigger survives, and
-    ``clear_tolerance`` the clear run it survives.
+    ``clear_tolerance`` the clear time, in all, it survives.
     """
 
     window: float
@@ -132,7 +135,7 @@ class TriggerState:
     reentries: int = 0
     _last_tick_ns: int | None = field(default=None, repr=False)
     _gap_ns: int = field(default=0, repr=False)
-    _clear_run_ns: int = field(default=0, repr=False)
+    _clear_total_ns: int = field(default=0, repr=False)
     _clear_ns: int = field(default=0, repr=False)
 
     def observe(self, at_ns: int, classification: str) -> Transition | None:
@@ -161,7 +164,7 @@ class TriggerState:
         self.accumulated_ns = 0
         self.reentries = 0
         self._gap_ns = 0
-        self._clear_run_ns = 0
+        self._clear_total_ns = 0
         return self._transition(EVENT_PENDING, at_ns)
 
     def _from_pending(
@@ -170,7 +173,6 @@ class TriggerState:
         if classification == VIOLATING:
             self.accumulated_ns += interval
             self._gap_ns = 0
-            self._clear_run_ns = 0
             if self.accumulated_ns >= int(self.sustain.hold * _NS):
                 return self._fire(at_ns)
             return None
@@ -182,8 +184,10 @@ class TriggerState:
                 return self._reset(at_ns, RESET_DATA_GAP)
             return None
         self._gap_ns = 0
-        self._clear_run_ns += interval
-        if self._clear_run_ns > int(self.sustain.clear_tolerance * _NS):
+        # All clear time since pending counts, not only the latest run: a
+        # predicate that keeps flapping clear must not accumulate to F.
+        self._clear_total_ns += interval
+        if self._clear_total_ns > int(self.sustain.clear_tolerance * _NS):
             return self._reset(at_ns, RESET_CLEAR)
         return None
 

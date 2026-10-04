@@ -170,6 +170,35 @@ def test_a_short_clear_run_is_tolerated_and_a_long_one_resets() -> None:
     assert reset_state.state == PENDING  # started again at 24, fires at 84
 
 
+def test_clear_time_while_pending_counts_in_total_not_per_run() -> None:
+    """The plan counts all clear time while pending against the tolerance.
+    Counted per run, a predicate clear two ticks in three fired."""
+    flapping, transitions = _run(
+        DEFAULT, lambda t: VIOLATING if int(t) % 3 == 0 else CLEAR, until=300
+    )
+    assert EVENT_FIRED not in [event for _at, event in _events(transitions)]
+    resets = [t for _at, t in transitions if t.event == EVENT_RESET]
+    assert resets and all(t.reason == RESET_CLEAR for t in resets)
+    # Two separate one-tick clears add up to the 2 s tolerance: survived.
+    _state, transitions = _run(
+        DEFAULT, lambda t: CLEAR if t in (20, 40) else VIOLATING, until=70
+    )
+    assert _events(transitions) == [(0, EVENT_PENDING), (62, EVENT_FIRED)]
+
+
+def test_an_informative_evaluation_restarts_the_data_gap_allowance() -> None:
+    """G counts data-gap time since the last informative evaluation: a
+    clear tick between two gaps of 20 s each (G is 30) resets nothing."""
+
+    def classify(t: float) -> str:
+        if 10 < t <= 30 or 31 < t <= 51:
+            return DATA_GAP
+        return CLEAR if t == 31 else VIOLATING
+
+    _state, transitions = _run(DEFAULT, classify, until=120)
+    assert EVENT_RESET not in [event for _at, event in _events(transitions)]
+
+
 def test_firing_resolves_after_c_and_reenters_without_a_new_episode() -> None:
     def classify(t: float) -> str:
         if t <= 60:

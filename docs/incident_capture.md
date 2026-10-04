@@ -142,13 +142,13 @@ outage a window is a data gap until its start scrape follows the outage.
 | --- | --- | --- |
 | inactive | violating | pending, with nothing accumulated yet |
 | pending | violating | pending, adding the time since the previous evaluation; fires once that reaches the hold time `F` |
-| pending | masked; a data gap of at most `G` in all since the last judged evaluation; a clear run of at most `clear_tolerance` | pending, the clock paused |
-| pending | more data gap than `G`, or a longer clear run | inactive (a reset, recorded with its reason) |
+| pending | masked; a data gap of at most `G` in all since the last judged evaluation; clear, with at most `clear_tolerance` of clear time in all since it went pending | pending, the clock paused |
+| pending | more data gap than `G`, or more clear time than that | inactive (a reset, recorded with its reason) |
 | firing | violating, masked or data gap | firing |
 | firing | clear | resolving |
 | resolving | violating | firing again: the same episode, counted as a re-entry |
 | resolving | masked or data gap | resolving, its clock paused |
-| resolving | `C` of clear in all | inactive; the trigger can fire again |
+| resolving | `C` of clear in all, counted from the evaluation after the one that started resolving | inactive; the trigger can fire again |
 
 Masked time never counts toward `G`. The defaults are `W` = 30 s, `F` =
 60 s, `C` = `F`, `G` = `F / 2`, and `clear_tolerance` = `min(2Δ, F / 10)`;
