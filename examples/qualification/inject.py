@@ -394,6 +394,10 @@ class InjectionRun:
         window = capture_window(self.server.base_url, float(episode.dose["seconds"]))
         stop = window.stop
         actions = Actions(
+            # Started only once the server said so: an ambiguous start isn't.
+            capture_started_ns=(
+                window.start.returned_ns if window.start.status == 200 else None
+            ),
             stop_requested_ns=None if stop is None else stop.requested_ns,
             stop_returned_ns=None if stop is None else stop.returned_ns,
         )
