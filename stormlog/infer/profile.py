@@ -143,6 +143,7 @@ class InferenceProfiler:
         config = self.config
         if not config.export.enabled:
             return None
+        _check_span_file(config)
         labels = ProfileLabels(
             model=config.model,
             server=redact_url(config.endpoint, origin_only=True),
@@ -1656,6 +1657,32 @@ def _stop_status(exc: BaseException) -> str:
 
 def _lag_ms(arrival: Arrival, sent_at_ns: int) -> float:
     return (sent_at_ns - arrival.intended_at_ns) / 1_000_000.0
+
+
+def _check_span_file(config: ProfileConfig) -> None:
+    """Refuse a span file another writer or reader of the run owns.
+
+    The artifact, a file in the textfile collector's directory, or one the
+    vLLM execution import reads: each would be written over or read as
+    something it is not.
+    """
+    span_file = config.export.otlp_file
+    if span_file is None:
+        return
+    target = Path(span_file).resolve()
+    if target == Path(config.output_path).resolve():
+        raise ValueError(
+            f"--otlp-file {span_file} is the artifact; choose another path"
+        )
+    for flag, directory in (
+        ("--prometheus-textfile-dir", config.export.prometheus_textfile_dir),
+        ("--vllm-execution-dir", config.vllm_execution_dir),
+    ):
+        if directory is not None and target.is_relative_to(Path(directory).resolve()):
+            raise ValueError(
+                f"--otlp-file {span_file} is inside {flag} {directory}; "
+                "choose a path of its own"
+            )
 
 
 # How long closing the exporters may take after Ctrl+C, at most; otherwise

@@ -276,7 +276,7 @@ stormlog infer profile ... --otlp-file artifacts/spans.jsonl
 | Flag | What it does |
 | --- | --- |
 | `--otlp-endpoint URL` | POST spans to this OTLP/HTTP traces URL. A bare origin gets `/v1/traces`. Requests are protobuf with the `infer-otlp` extra installed, JSON without it, and always gzip-compressed. Credentials in the URL are refused: use `--otlp-header`. |
-| `--otlp-file PATH` | Append spans to PATH as OTLP JSON, one export request per line, up to 256 MiB: the format of the OpenTelemetry Collector's file exporter, which its `otlpjsonfile` receiver reads. A line is written whole or not at all. Use this or `--otlp-endpoint`, not both. |
+| `--otlp-file PATH` | Append spans to PATH as OTLP JSON, one export request per line, up to 256 MiB: the format of the OpenTelemetry Collector's file exporter, which its `otlpjsonfile` receiver reads. A line is written whole or not at all. Use this or `--otlp-endpoint`, not both. The file may not be the artifact, nor sit in `--prometheus-textfile-dir` or `--vllm-execution-dir`: such a run exits 2. |
 | `--otlp-file-fsync` | fsync the file after each line. |
 | `--otlp-header NAME=VALUE` | A request header, such as an API key; repeatable. `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` are read too, flags winning. Values are sent, never recorded. |
 | `--otlp-allow-insecure-headers` | Send the headers over plain `http://` to a host other than this one. Without it, headers from the flags or the variables never go in clear text off the host: such a run exits 2. |
