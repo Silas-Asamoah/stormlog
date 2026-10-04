@@ -6,12 +6,14 @@ import enum
 import errno
 import json
 import os
+import random
 import stat
 import subprocess
 import sys
 import threading
 import time
 import timeit
+import tracemalloc
 import types
 from collections import Counter
 from collections.abc import Callable, Iterator
@@ -725,15 +727,148 @@ def test_the_queue_counts_bytes_by_content(
     assert status["dropped"]["alias"] == 60 - sum(written.values())
 
 
-@pytest.mark.parametrize(
-    "text",
-    ["chatcmpl-abc-123", 'a"b\\c', "\u00e9" * 50, "\x01" * 50, "\U0001f600" * 50],
-)
-def test_a_record_is_never_sized_below_its_json(text: str) -> None:
-    fields = {"internal": text, "members": [{"external": text}]}
-    encoded = json.dumps(fields, separators=(",", ":")).encode()
+# Escapes, control characters, a lone surrogate, and text beyond the BMP.
+_TEXT = ["a", "Z", "0", " ", '"', "\\", "/", "\x00", "\x1f", "\x7f", "\u00e9"]
+_TEXT += ["\u4e2d", "\u2028", "\ud800", "\ufeff", "\U0001f600"]
 
-    assert writer_module._estimate(fields, 1 << 30) >= len(encoded)
+
+def _random_text(rng: random.Random) -> str:
+    return "".join(rng.choices(_TEXT, k=rng.randrange(40)))
+
+
+def _random_value(rng: random.Random, depth: int = 0) -> Any:
+    kind = rng.randrange(6 if depth < 4 else 4)
+    if kind == 0:
+        return _random_text(rng)
+    if kind == 1:
+        return rng.choice([0, -1, 2**63, -(10**30), rng.randrange(-(10**6), 10**6)])
+    if kind == 2:
+        return rng.choice([0.1, -1e300, 5e-324, float("nan"), float("inf")])
+    if kind == 3:
+        return rng.choice([True, False, None, "chatcmpl-abc-123"])
+    if kind == 4:
+        return [_random_value(rng, depth + 1) for _ in range(rng.randrange(5))]
+    # json writes int, float, bool and None keys as text.
+    keys = [_random_text(rng), rng.randrange(-9, 9), 1.5, True, None]
+    return {
+        rng.choice(keys): _random_value(rng, depth + 1) for _ in range(rng.randrange(5))
+    }
+
+
+def _line_as_before(epoch: str, kind: str, seq: int, fields: dict[str, Any]) -> bytes:
+    """The line the writer wrote when its own thread serialized each record."""
+    record = {"format": writer_module.FORMAT, "kind": kind, "epoch": epoch, "seq": seq}
+    record.update(fields)
+    return json.dumps(record, separators=(",", ":")).encode()
+
+
+def test_a_record_counts_its_exact_json_and_is_written_unchanged(
+    tmp_path: Path,
+) -> None:
+    rng = random.Random(217)
+    # Top-level names never reuse the common fields' names.
+    records = [
+        {f"field_{index}": _random_value(rng) for index in range(rng.randrange(6))}
+        for _ in range(400)
+    ]
+    limits = WriterLimits(heartbeat_seconds=3600, queue_bytes=1 << 30)
+    writer = EpochWriter(tmp_path, "engine", limits=limits)
+    with writer._condition:  # the writer thread cannot take any yet
+        for fields in records:
+            before = writer._queued_bytes
+            writer.emit("alias", fields)
+            json_bytes = len(json.dumps(fields, separators=(",", ":")).encode())
+            assert writer._queued_bytes - before == json_bytes
+    writer.close()
+
+    lines = [
+        line
+        for path in sorted(writer.directory.glob("*.jsonl"))
+        for line in path.read_bytes().splitlines()
+    ]
+    assert lines[:-1] == [
+        _line_as_before(writer.epoch, "alias", seq, fields)
+        for seq, fields in enumerate(records)
+    ]
+    assert json.loads(lines[-1])["kind"] == "goodbye"
+    assert _queued_bytes(writer) == 0
+
+
+def test_a_record_is_oversized_by_its_exact_json(tmp_path: Path) -> None:
+    writer = EpochWriter(tmp_path, "engine", limits=WriterLimits(record_bytes=4096))
+    # {"internal":""} is 15 bytes, and each escaped "\u00e9" 6: 4,096 in all.
+    writer.emit("alias", {"internal": "\u00e9" * 680 + "x"})
+    writer.emit("alias", {"internal": "\u00e9" * 680 + "xy"})  # one byte over
+    writer.close()
+
+    records = _epoch_records(writer.directory)
+    assert [len(r["internal"]) for r in records if r["kind"] == "alias"] == [681]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert status["dropped"] == {"alias_oversized": 1}
+
+
+def test_a_record_json_cannot_serialize_is_an_error_and_takes_no_number(
+    tmp_path: Path,
+) -> None:
+    circular: list[Any] = []
+    circular.append(circular)
+    deep: list[Any] = []
+    for _ in range(100_000):
+        deep = [deep]
+    writer = EpochWriter(tmp_path, "engine")
+    for value in (object(), circular, deep):
+        writer.emit("alias", {"internal": value})  # never raises
+    writer.emit("alias", {"internal": "x"})
+    writer.close()
+
+    records = _epoch_records(writer.directory)
+    assert [(r["kind"], r["seq"]) for r in records] == [("alias", 0), ("goodbye", 1)]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert (status["errors"], status["dropped"]) == (3, {})
+
+
+def _scheduled(iteration: int, members: int) -> dict[str, Any]:
+    member = {
+        "sighting": "repeat",
+        "phase": "generation",
+        "scheduled": 1,
+        "computed_before": 600,
+        "prompt_tokens": 512,
+        "prefill_scheduled": 0,
+        "past_prompt_scheduled": 1,
+        "drafts_scheduled": 0,
+        "cached_at_admission": None,
+        "recompute": False,
+        "output_before": 88,
+        "resumable": False,
+    }
+    return {
+        "iteration": str(iteration),
+        "members": [
+            {"internal": f"chatcmpl-stormlog-{iteration}-{n}-0f3a9c1d", **member}
+            for n in range(members)
+        ],
+    }
+
+
+def test_the_queue_bytes_bound_its_memory(tmp_path: Path) -> None:
+    limits = WriterLimits(queue_records=100_000, queue_bytes=1 << 20)
+    writer = EpochWriter(tmp_path, "engine", limits=limits)
+    tracemalloc.start()
+    try:
+        with writer._condition:  # the writer thread cannot take any
+            before = tracemalloc.get_traced_memory()[0]
+            for iteration in range(1000):
+                writer.emit("scheduled", _scheduled(iteration, 32))
+            held = tracemalloc.get_traced_memory()[0] - before
+            queued = len(writer._queue)
+    finally:
+        tracemalloc.stop()
+    writer.close()
+
+    assert writer._counters.dropped["scheduled"] > 0  # more was offered than fits
+    # A queued record holds its JSON text and a small fixed overhead, no more.
+    assert held <= limits.queue_bytes + 200 * queued
 
 
 def _engine_step(writer: EpochWriter, members: int) -> Callable[[], None]:
