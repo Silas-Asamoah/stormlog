@@ -624,7 +624,6 @@ class InferenceProfiler:
                 window = await self._run_scraped_phase(
                     request, total_requests, duration_seconds
                 )
-            self._tell(case.case_id, phase, "ended", window.times())
         finally:
             # Written on cancellation too, even one that lands while the
             # profiler start is in flight, so the artifact names the trace files.
@@ -638,6 +637,9 @@ class InferenceProfiler:
                 abandoned=abandoned,
             )
         )
+        # Told once the window is on record, so a caller that fails here
+        # loses no record, and its marker never precedes the record.
+        self._tell(case.case_id, phase, "ended", window.times())
 
     async def _run_scraped_phase(
         self,

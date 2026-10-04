@@ -74,3 +74,21 @@ def test_a_failing_callback_stops_the_profile(tmp_path: Path) -> None:
         config = _config(engine, tmp_path / "infer.jsonl")
         with pytest.raises(RuntimeError, match="marker not written"):
             InferenceProfiler(config, on_phase=refuse).run()
+
+
+def test_a_phase_is_on_record_before_its_end_is_told(tmp_path: Path) -> None:
+    # A callback that fails at "ended" (a marker that can't be written)
+    # still leaves the phase's window in the artifact: the record comes
+    # first, so a marker never precedes the record it describes.
+    output = tmp_path / "infer.jsonl"
+
+    def refuse_end(event: PhaseEvent) -> None:
+        if event.event == "ended":
+            assert "measured" in _phase_windows(output) or event.phase != "measured"
+            raise OSError("no space left on device")
+
+    with FakeEngine(FakeEngineConfig(step_seconds=0.001)) as engine:
+        config = _config(engine, output)
+        with pytest.raises(OSError):
+            InferenceProfiler(config, on_phase=refuse_end).run()
+    assert "measured" in _phase_windows(output)
