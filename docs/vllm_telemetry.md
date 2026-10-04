@@ -88,9 +88,10 @@ read, and answers anything that still arrives with a 503, counted as
 listening, such as its startup spans or the spans of traffic between
 runs, fail on the server side and are dropped there; the exporter
 retries a failed batch with backoff for up to its export timeout
-(`OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`, 10 s by default in opentelemetry-sdk
-1.44.0), which can hold back the next batch. For short runs, start vLLM with
-`OTEL_BSP_SCHEDULE_DELAY=1000` so batches leave every second, and keep
+(`OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`, 10 s by default in
+opentelemetry-exporter-otlp-proto-http 1.44.0), which can hold back the
+next batch. For short runs, start vLLM with `OTEL_BSP_SCHEDULE_DELAY=1000`
+so batches leave every second, and keep
 `--vllm-spans-drain` at or above that delay. The report's `spans` block
 counts requests without a span, so a late batch is visible, never silent.
 
