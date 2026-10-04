@@ -663,7 +663,11 @@ def test_a_bounded_sink_recovers_when_the_disk_does(
 def test_a_bounded_sink_counts_a_manifest_failure_instead_of_raising(
     tmp_path: Path,
 ) -> None:
-    sink = _bounded_sink(tmp_path)
+    # A backoff no scheduling delay can outlast, ended by hand below: with
+    # 10 ms, a loaded machine could pass it inside the first append.
+    sink = _bounded_sink(
+        tmp_path, failure_backoff_seconds=60.0, failure_backoff_max_seconds=60.0
+    )
 
     def fail() -> None:
         raise OSError("manifest write failed")
@@ -673,7 +677,7 @@ def test_a_bounded_sink_counts_a_manifest_failure_instead_of_raising(
     sink.append({"seq": 1})
     assert sink.failure_diagnostics()["flush_failures"] == 1
     assert sink.failure_diagnostics()["buffered_records"] == 1
-    time.sleep(0.02)  # past the backoff
+    sink._flush_retry_at = 0.0  # the backoff is over
     # The records are written; the manifest after them fails again, counted.
     sink.append({"seq": 2})
     assert sink.failure_diagnostics()["flush_failures"] == 2
