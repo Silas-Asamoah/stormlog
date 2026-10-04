@@ -41,7 +41,11 @@ _NS = 1_000_000_000
 
 @runtime_checkable
 class HistoryPredicate(Protocol):
-    """A question about the history's tail rather than one window."""
+    """A question about the history's last ``tail_scrapes`` scrapes rather
+    than one window."""
+
+    @property
+    def tail_scrapes(self) -> int: ...
 
     def evaluate_history(self, history: Sequence[Entry]) -> Evaluation: ...
 
@@ -112,11 +116,13 @@ class TriggerEngine:
         """Evaluate every trigger at ``at_ns`` (monotonic) and advance it."""
         results = []
         for spec in self.specs:
-            evaluation = self._evaluate(spec, at_ns, history)
-            reach = int(spec.sustain.window * _NS)
+            evaluation, since_ns = self._evaluate(spec, at_ns, history)
+            # Masked over all the evaluation read: from its earliest scrape,
+            # which can lie before t - W, or from t - W, whichever is first.
+            reach = min(since_ns, at_ns - int(spec.sustain.window * _NS))
             if spec.completion_recorded:
-                reach += completion_horizon_ns
-            if overlaps(at_ns - reach, at_ns, perturbations):
+                reach -= completion_horizon_ns
+            if overlaps(reach, at_ns, perturbations):
                 evaluation = replace(
                     evaluation,
                     classification=MASKED,
@@ -129,10 +135,13 @@ class TriggerEngine:
 
     def _evaluate(
         self, spec: TriggerSpec, at_ns: int, history: Sequence[Entry]
-    ) -> Evaluation:
+    ) -> tuple[Evaluation, int]:
+        """The evaluation, and the earliest monotonic instant it read."""
         predicate = spec.predicate
         if isinstance(predicate, HistoryPredicate):
-            return predicate.evaluate_history(history)
+            tail = history[-predicate.tail_scrapes :]
+            since = tail[0][0].mono_ns if tail else at_ns
+            return predicate.evaluate_history(history), since
         selection = select_window(
             history,
             at_ns=at_ns,
@@ -140,8 +149,9 @@ class TriggerEngine:
             tick_ns=int(self.tick_seconds * _NS),
         )
         if selection.reason is not None:
-            return Evaluation(DATA_GAP, reasons=(selection.reason,))
-        return predicate.evaluate(selection.scrapes)
+            return Evaluation(DATA_GAP, reasons=(selection.reason,)), at_ns
+        assert selection.sample_start_ns is not None  # set with every window
+        return predicate.evaluate(selection.scrapes), selection.sample_start_ns
 
 
 __all__ = [
