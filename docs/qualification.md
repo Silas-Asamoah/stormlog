@@ -665,14 +665,23 @@ A plan, `stormlog.qualify.plan/1`, holds:
   ratio, SLO;
 - the timeline: priming, baseline, episode length, the 60 s minimum and
   150 s timeout for recovery, final recovery;
-- the episodes in order, each dose filled from the catalog's defaults.
+- the episodes in order, each dose filled from the catalog's defaults;
+- overrides of recovery's thresholds: windows in seconds (`window`, `hold`,
+  `cadence_hold`, `priming_window`), the queue minimums as counts
+  (`min_wait_samples`, `min_gauge_samples`), and the fractions.
 
 `load_plan` refuses a plan that can't be run, listing every problem: an
 unknown type or one this harness doesn't run yet, a neighbor without a rate
 or a concurrency, a pulse past the pulser's caps, a capture that isn't
 between 0 and 60 s, a timeline or victim value that isn't a number in range
 (a minimum recovery longer than the timeout among them), an unknown
-threshold override, and a plan with no episode.
+threshold override, and a plan with no episode. Once those are right, a plan
+with a queue episode (F1, T1, W1) needs a baseline and a hold long enough for
+queue recovery's samples: one more scrape than `min_gauge_samples` at the
+harness's one scrape a second (6 s by default), and the victim's expected
+requests at least `min_wait_samples` (20 by default: 6.7 s at 3 requests/s).
+A shorter window could never recover such an episode, which would time out
+and end the run.
 
 ```json
 {"format": "stormlog.qualify.plan/1", "profile": "dx-off", "seed": 7,
