@@ -353,7 +353,9 @@ ranked by #218's total `rank`, and top-1 and top-3 are taken over it.
   - it is an eligible candidate;
   - it matches one of the label's `expects`, `secondary` or `allows` entries;
   - one of #218's edges joins the two, with each end at a component the edge
-    allows;
+    allows. The table (`diagnosis_edges_v1`) is #218's PR 2 table, E1–E6,
+    copied edge for edge until that PR lands below this one, then imported:
+    E1 is `capture_pause@profiler` → `host_stall@engine_core`;
   - the secondary's window lies inside the upstream's window ± grace.
 
   Any other secondary is scored as if it were primary.

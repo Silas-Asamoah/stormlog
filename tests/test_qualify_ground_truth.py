@@ -377,9 +377,35 @@ def test_impact_without_baseline_outcomes_is_partial() -> None:
     assert (alone.status, alone.reason) == (IMPACT_PARTIAL, "no_baseline_outcomes")
 
 
-def test_the_capture_pause_edge_is_218s_without_a_narrower_location() -> None:
-    # #218 v2.1 §4.6 puts no location on capture_pause -> host_stall; the
-    # copy must not narrow it. The I1 label's allows say where #221 expects
-    # the stall.
-    edge = vocabulary.EDGES["capture_pause->host_stall"]
-    assert edge.downstream_components == vocabulary.KIND_COMPONENTS["host_stall"]
+def test_the_edge_table_is_218s_pr_2_table() -> None:
+    # The lead's ruling: #218's table is canonical, and one name never holds
+    # two contents. #218's PR 2 puts E1's host stall at engine_core; the
+    # copy had it at every host_stall component (from v2.1 §4.6).
+    def ends(edge: vocabulary.Edge) -> tuple[str, frozenset[str], str, frozenset[str]]:
+        return (
+            edge.upstream,
+            edge.upstream_components,
+            edge.downstream,
+            edge.downstream_components,
+        )
+
+    scheduler, kv = frozenset({"scheduler"}), frozenset({"kv_cache"})
+    assert vocabulary.EDGE_TABLE_VERSION == "diagnosis_edges_v1"
+    assert {ends(edge) for edge in vocabulary.EDGES.values()} == {
+        (
+            "capture_pause",
+            frozenset({"profiler"}),
+            "host_stall",
+            frozenset({"engine_core"}),
+        ),
+        ("host_stall", frozenset({"engine_core"}), "queue_saturation", scheduler),
+        ("kv_preemption_pressure", kv, "queue_saturation", scheduler),
+        ("kv_preemption_pressure", kv, "mixed_prefill_interference", scheduler),
+        ("queue_saturation", scheduler, "mixed_prefill_interference", scheduler),
+        (
+            "prefix_cache_loss",
+            frozenset({"prefix_cache"}),
+            "mixed_prefill_interference",
+            scheduler,
+        ),
+    }

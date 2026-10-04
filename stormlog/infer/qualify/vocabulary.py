@@ -82,6 +82,10 @@ class Edge:
         return f"{self.upstream}->{self.downstream}"
 
 
+# #218's edge table is canonical. Until its PR 2 is below this one, the
+# content here is #218's PR 2 table (plan v2, E1-E6), edge for edge, under
+# its name: never two contents under one name. Once it lands, this imports
+# it and the copy goes. (#218's PR 1b has only E3, as kind pairs.)
 EDGE_TABLE_VERSION = "diagnosis_edges_v1"
 EDGES: Mapping[str, Edge] = MappingProxyType(
     {
@@ -111,13 +115,11 @@ EDGES: Mapping[str, Edge] = MappingProxyType(
                 QUEUE_SATURATION,
                 frozenset({"scheduler"}),
             ),
-            # #218 puts no location on this edge's downstream; #221's I1
-            # label says where it expects the stall (A.4).
             Edge(
                 CAPTURE_PAUSE,
                 frozenset({"profiler"}),
                 HOST_STALL,
-                KIND_COMPONENTS[HOST_STALL],
+                frozenset({"engine_core"}),
             ),
             Edge(
                 PREFIX_CACHE_LOSS,
