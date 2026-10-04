@@ -112,6 +112,8 @@ OpenTelemetry collector, add `--otlp-endpoint URL` or `--otlp-file PATH`;
 see [Exporting inference metrics and spans](inference_export.md).
 `--trace-context preserve-engine` sends W3C trace context with each
 request, so a tracing server's spans join Stormlog's traces.
+`infer collect-server` takes the same `--prometheus-*` flags to report its
+own health, labelled with the identity it observes.
 
 ### Watch a vLLM server for incidents
 

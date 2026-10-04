@@ -485,6 +485,41 @@ With Prometheus on too, the same figures are metrics:
 `stormlog_export_sent_bytes_total` and
 `stormlog_export_late_results_total{outcome}`.
 
+## Collector health
+
+`stormlog infer collect-server` takes the same Prometheus flags, to report its
+own health while it runs:
+
+```bash
+stormlog infer collect-server --run-id "$RUN_ID" --pid 2600 \
+  --device-uuid "$GPU_UUID_0" --group-id tp --rank 0 --world-size 2 \
+  --output artifacts/rank0.jsonl \
+  --prometheus-textfile-dir /var/lib/node_exporter/textfile \
+  --prometheus-slot collector-rank0
+```
+
+It exports the collector's health, never its measurements: the memory
+values stay in its output, where the analysis joins them to the run, and a
+DCGM or node exporter already reports device and process memory.
+
+| Metric | Kind | Labels | Meaning |
+| --- | --- | --- | --- |
+| `stormlog_collector_info` | gauge | run_id, host, boot_id, pid, process_start_ns, device_uuid, gpu_instance_id, replica_id, group_id, rank, world_size, version | 1, labelled with the identity the collector confirmed. A part that is not known (no GPU, no MIG instance, no group) is empty, never guessed |
+| `stormlog_collector_running` | gauge | — | 1 while it polls, 0 in the final values |
+| `stormlog_collector_start_time_seconds` | gauge | — | When it started, in Unix seconds |
+| `stormlog_collector_polls_total` | counter | — | Polls written to its output |
+| `stormlog_collector_last_poll_timestamp_seconds` | gauge | — | When the last poll was taken |
+| `stormlog_collector_samples_total` | counter | metric, state | Samples by what was read (`process_rss_bytes`, `device_memory_used_bytes`, and so on) and whether it could be: `valid`, `missing`, `stale` or `invalid` |
+| `stormlog_collector_stops_total` | counter | reason | 1 for why it stopped, in the final values: `duration_elapsed`, `stop_requested` (Ctrl+C or SIGTERM), `server_process_ended`, `gpu_identity_changed`, or `error` |
+
+The identity is known once the collector has found its process and GPU, so
+the series and the budget are fixed then, before anything is collected. A
+budget overrun, a held slot or a bad address exits 2 with no output written.
+The collector closes the export in its stop path, so the final textfile
+holds the stop reason, and `--prometheus-linger` keeps `/metrics` up after
+it. Its exit codes are unchanged: 0, or 3 when the GPU identity changed.
+Span export and trace context do not apply to it.
+
 ## Trace context
 
 `--trace-context` sends a W3C `traceparent` header with each request, beside

@@ -569,6 +569,12 @@ Read process titles with `ps -o args`; `/proc/<pid>/comm` cuts them at 15
 characters. The same flags describe one process that spreads a model over
 several GPUs: run one collector per GPU with the same `--pid`.
 
+Each collector can report its own health to Prometheus with
+`--prometheus-listen` or `--prometheus-textfile-dir` (give concurrent
+collectors different `--prometheus-slot` names). The health is labelled with
+the identity the collector confirmed; the memory values stay in its output.
+See [Collector health](inference_export.md#collector-health).
+
 The analyzer joins a group only when every rank from 0 to N-1 appears exactly
 once. Otherwise the report stays unjoined with one of these reasons:
 
