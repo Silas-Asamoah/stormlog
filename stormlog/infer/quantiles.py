@@ -332,11 +332,18 @@ def _symmetric_ranks(n: int, p: float, rule: SufficiencyRule) -> tuple[int, int]
     return lower, upper
 
 
+# Digits the tie-break keys are rounded to: far above float noise, far below
+# any real difference in a rank's distance or a binomial coverage.
+_TIE_DIGITS = 12
+
+
 def _narrowest_ranks(n: int, p: float, rule: SufficiencyRule) -> tuple[int, int] | None:
     """The narrowest ranks reaching the confidence; ties go to the more central.
 
     More central means a midpoint nearer rank ``(n + 1) p``, as Le Boudec's
-    symmetric median intervals are; then the higher coverage.
+    symmetric median intervals are; then the higher coverage; then, for the
+    mirror images at the median, the higher ranks, the pessimistic side for
+    a latency. Both keys are rounded, so float noise never decides.
     """
     top = n - rule.margin
     if top < 1 or _coverage(n, p, 1, top) < rule.confidence:
@@ -352,8 +359,9 @@ def _narrowest_ranks(n: int, p: float, rule: SufficiencyRule) -> tuple[int, int]
     return min(
         (ranks for ranks in candidates if ranks[1] - ranks[0] == width),
         key=lambda ranks: (
-            abs((ranks[0] + ranks[1]) / 2 - centre),
-            -_coverage(n, p, *ranks),
+            round(abs((ranks[0] + ranks[1]) / 2 - centre), _TIE_DIGITS),
+            -round(_coverage(n, p, *ranks), _TIE_DIGITS),
+            -ranks[0],
         ),
     )
 

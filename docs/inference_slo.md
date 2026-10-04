@@ -377,7 +377,10 @@ requests it needs.
 `quantile_minimum_n(p, confidence, margin=..., tails=...)` computes any of
 these minimums. With `tails="narrowest"`, equally narrow intervals that reach
 the confidence are told apart by centre: the one whose midpoint is nearer
-rank `(n + 1) p` wins, as Le Boudec's symmetric median intervals do.
+rank `(n + 1) p` wins, as Le Boudec's symmetric median intervals do; then the
+higher coverage; then, for the mirror images at the median, the higher
+ranks, the pessimistic side for a latency. The keys are rounded, so float
+noise never picks between equals.
 
 ### Two estimands
 

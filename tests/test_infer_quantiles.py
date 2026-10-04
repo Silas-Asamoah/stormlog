@@ -78,6 +78,53 @@ def test_narrowest_ties_go_to_the_more_central_interval(
     assert (interval.lower_rank, interval.upper_rank) == expected
 
 
+def _narrowest(n: int, p: float) -> tuple[int, int] | None:
+    values = [float(v) for v in range(1, n + 1)]
+    interval = quantile_interval(
+        values, p, SufficiencyRule(margin=0, tails="narrowest")
+    )
+    return None if interval is None else (interval.lower_rank, interval.upper_rank)
+
+
+@pytest.mark.parametrize(
+    ("n", "p", "expected"),
+    [(94, 0.9, (79, 91)), (109, 0.9, (92, 105)), (164, 0.9, (140, 156))],
+)
+def test_equally_central_ties_go_to_the_higher_coverage(
+    n: int, p: float, expected: tuple[int, int]
+) -> None:
+    # (80, 92) and (79, 91) at n = 94 sit 0.5 either side of rank 85.5,
+    # covering 0.9503 and 0.9636. One ulp in (n + 1) p used to decide.
+    assert _narrowest(n, p) == expected
+
+
+def test_mirror_image_ties_at_the_median_go_to_the_higher_ranks() -> None:
+    # Equal width, equally central, equal coverage: (1, 7) and (2, 8) at
+    # n = 8. The higher ranks are the pessimistic side for a latency, and
+    # float noise in the coverage no longer picks one.
+    for n in range(6, 400):
+        found = _narrowest(n, 0.5)
+        assert found is not None
+        lower, upper = found
+        mirror = (n + 1 - upper, n + 1 - lower)
+        if (
+            mirror != (lower, upper)
+            and _covers(n, mirror)
+            and _width(mirror) == upper - lower
+        ):
+            assert lower > mirror[0], n
+
+
+def _width(ranks: tuple[int, int]) -> int:
+    return ranks[1] - ranks[0]
+
+
+def _covers(n: int, ranks: tuple[int, int]) -> bool:
+    lower, upper = ranks
+    level = stats.binom.cdf(upper - 1, n, 0.5) - stats.binom.cdf(lower - 1, n, 0.5)
+    return bool(level >= 0.95)
+
+
 @pytest.mark.parametrize(("p", "below", "at"), [(0.95, 229, 230), (0.99, 1163, 1164)])
 def test_sufficiency_turns_on_exactly_at_the_minimum(
     p: float, below: int, at: int
