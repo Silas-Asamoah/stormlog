@@ -687,6 +687,35 @@ def test_a_server_left_running_stops_the_experiment(
     ]
 
 
+def test_a_resume_waits_until_what_a_cleanup_left_is_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    from stormlog.infer import experiment
+    from stormlog.infer.experiment_process import Cleanup, identify
+
+    left = subprocess.Popen(["/bin/sleep", "60"])
+    try:
+        real = experiment.verify_cleanup
+
+        def verify(*args: Any, **kwargs: Any) -> Cleanup:
+            result = real(*args, **kwargs)
+            return Cleanup(False, result.method, (identify(left.pid),))
+
+        monkeypatch.setattr(experiment, "verify_cleanup", verify)
+        document = _plan(_port(), order=TWO_BLOCKS)
+        _run(tmp_path, document)
+        monkeypatch.undo()
+        with pytest.raises(InferInputError, match=f"left {left.pid} running"):
+            _run(tmp_path, document, resume=True)
+    finally:
+        left.kill()
+        left.wait()
+    resumed = _run(tmp_path, document, resume=True)
+    assert {r["state"] for r in resumed} == {"completed"}
+
+
 def test_a_treatment_left_running_stops_the_experiment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

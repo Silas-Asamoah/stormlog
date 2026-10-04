@@ -251,9 +251,35 @@ def verify_cleanup(
             for pid in killed:
                 _kill(pid)
         if time.monotonic() >= deadline:
-            left = tuple({"pid": pid} for pid in sorted(survivors))
+            left = tuple(identify(pid, proc=proc) for pid in sorted(survivors))
             return Cleanup(False, method, left, killed)
         time.sleep(POLL_SECONDS)
+
+
+def identify(pid: int, *, proc: Path = PROC) -> dict[str, Any]:
+    """A process by PID and start time, so a later check can tell it from
+    another process given the same PID."""
+    if _linux():
+        info = read_process(pid, proc)
+        return {"pid": pid, "start_ticks": None if info is None else info.start_ticks}
+    try:
+        return {"pid": pid, "create_time": psutil.Process(pid).create_time()}
+    except psutil.Error:
+        return {"pid": pid, "create_time": None}
+
+
+def still_there(survivor: Mapping[str, Any], *, proc: Path = PROC) -> bool:
+    """Whether a recorded survivor is still the same live process.
+
+    One recorded without its start time cannot be told from a process that
+    reused its PID, so it does not count.
+    """
+    pid = survivor.get("pid")
+    if not isinstance(pid, int) or not _alive(pid):
+        return False
+    starts = {k: v for k, v in survivor.items() if k != "pid" and v is not None}
+    now = identify(pid, proc=proc)
+    return bool(starts) and all(now.get(k) == v for k, v in starts.items())
 
 
 def _survivors(
@@ -408,10 +434,12 @@ __all__ = [
     "Cleanup",
     "Launched",
     "affinity_matches",
+    "identify",
     "launch",
     "parse_cpu_list",
     "remembered_tree",
     "run_step",
+    "still_there",
     "stop",
     "unexpected_roles",
     "verify_cleanup",

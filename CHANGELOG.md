@@ -120,7 +120,8 @@ the flaky benchmark memory gates
   `completed`, `outcome_failure` (kept as data) or `protocol_failure` (set
   aside, retryable), recorded in `index.jsonl`. A cleanup that left
   processes, a run's or a prelude's, stops the experiment, and the runs it
-  left are indexed `not_run` for a resume; resumes refuse a changed
+  left are indexed `not_run` for a resume, which refuses while a survivor
+  still runs; resumes refuse a changed
   plan or pre-registration, and secrets reach commands without being
   written down. `sanitize_bundle` scans the finished bundle for the plan's
   secret values and for bearer, `hf_` and `sk-` token shapes
