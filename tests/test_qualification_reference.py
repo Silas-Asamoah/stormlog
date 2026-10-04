@@ -204,3 +204,31 @@ def test_a_segment_rewritten_shorter_is_read_again(tmp_path: Path) -> None:
     assert (
         json.loads(problems.read_text().splitlines()[-1])["kind"] == "rewritten_shorter"
     )
+
+
+def test_the_victims_chunk_gaps_are_read_incrementally(tmp_path: Path) -> None:
+    # The signals are read every quarter second during recovery, on the GPU
+    # host: each read takes only the lines appended since the last, so lines
+    # already read are never parsed again.
+    output = tmp_path / "victim.jsonl"
+    with FakeEngine(FakeEngineConfig(step_seconds=0.001)) as engine:
+        run_profile(engine, output, run_id="victim", request_count=4)
+    lines = output.read_bytes().splitlines(keepends=True)
+    first, rest = b"".join(lines[: len(lines) // 2]), b"".join(lines[len(lines) // 2 :])
+    artifact = tmp_path / "growing.jsonl"
+    artifact.write_bytes(first + rest[:5])  # a line still being written
+    channel = ReferenceChannel(
+        hook_root=tmp_path / "hook",
+        metrics_url="http://127.0.0.1:9/metrics",
+        victim_prefix=VICTIM,
+        shared_prefix_tokens=4,
+        reference_dir=tmp_path / "reference",
+        probes_dir=tmp_path / "probes",
+        victim_artifact=artifact,
+    )
+    early = channel.signals().chunk_gaps
+    # Blank out what was read: a reader that starts over would lose it.
+    artifact.write_bytes(b" " * (len(first) - 1) + b"\n" + rest)
+    late = channel.signals().chunk_gaps
+    records = [json.loads(line) for line in (first + rest).splitlines()]
+    assert early and late == chunk_gaps(records, VICTIM)
