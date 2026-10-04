@@ -250,5 +250,23 @@ def test_requests_that_did_not_succeed_keep_their_observed_time_by_status() -> N
     }
 
 
+def test_a_cancelled_request_keeps_how_long_it_ran() -> None:
+    # Cancelled at the drain deadline, 700 ms after it was sent: profile
+    # records no e2e for it, but its send and end are recorded.
+    requests = [
+        _streamed(
+            i,
+            status="cancelled",
+            e2e_latency_ms=None,
+            started_at_ns=i * SECOND,
+            ended_at_ns=i * SECOND + 700_000_000,
+        )
+        for i in range(2)
+    ]
+    cancelled = latency_summary(requests)["unsuccessful"]["cancelled"]
+    assert cancelled["elapsed_missing"] == 0
+    assert cancelled["elapsed_ms"] == {"min": 700.0, "p50": 700.0, "max": 700.0}
+
+
 def test_a_case_where_everything_succeeded_has_no_unsuccessful_entries() -> None:
     assert latency_summary([_streamed(0), _streamed(1)])["unsuccessful"] == {}

@@ -82,7 +82,8 @@ def unsuccessful_summary(
 
     This is the time until Stormlog saw the request end, not a latency the
     request would have had: only for a timeout is it a lower bound on one.
-    A dropped request was never sent and has no time.
+    A cancelled request's is its send to its end; a dropped request was
+    never sent and has no time.
     """
     by_status: dict[str, list[Mapping[str, Any]]] = {}
     for record in requests:
@@ -192,11 +193,7 @@ def _timeout_elapsed(failures: Sequence[Mapping[str, Any]]) -> list[float] | Non
 
 
 def _elapsed_record(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    elapsed = [
-        float(value)
-        for value in (r.get("e2e_latency_ms") for r in records)
-        if is_number(value)
-    ]
+    elapsed = [value for value in map(_elapsed_ms, records) if value is not None]
     return {
         "count": len(records),
         "elapsed_ms": {
@@ -206,6 +203,23 @@ def _elapsed_record(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         },
         "elapsed_missing": len(records) - len(elapsed),
     }
+
+
+def _elapsed_ms(record: Mapping[str, Any]) -> float | None:
+    """The recorded e2e time, or, for a request sent but abandoned, send to end.
+
+    A request cancelled at the drain deadline has no e2e time of its own,
+    but its send and its end are recorded. A dropped one was never sent.
+    """
+    value = record.get("e2e_latency_ms")
+    if is_number(value):
+        return float(value)
+    began, ended = record.get("started_at_ns"), record.get("ended_at_ns")
+    if record.get("status") == "dropped" or not is_number(began):
+        return None
+    if not is_number(ended) or ended < began:
+        return None
+    return (ended - began) / 1_000_000.0
 
 
 def _estimate_record(estimate: QuantileEstimate) -> dict[str, Any]:

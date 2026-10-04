@@ -393,7 +393,9 @@ in the `latency` block's `unsuccessful` entry: for each status, the count,
 the minimum, median and maximum elapsed milliseconds, and how many have no
 elapsed time. That is the time until Stormlog saw each request end, not a
 latency it would have had; only for a timeout is it a lower bound on one. A
-dropped request was never sent, so it has no elapsed time.
+request cancelled at the drain deadline has no end-to-end time of its own,
+so its elapsed time runs from its send to its cancellation. A dropped
+request was never sent, so it has no elapsed time.
 
 ## Related pages
 
