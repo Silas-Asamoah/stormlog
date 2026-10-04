@@ -275,7 +275,8 @@ to 5 s, shared the same way: a writer, the store's or the ledger's, still
 busy at the end of its share is left behind and the watch is unsound, and
 the root stays locked until the process exits, since that writer may still
 write there. Once `--duration` has begun the shutdown, the first signal
-cuts it short at once. A third is the default interrupt. From the
+cuts it short at once and the second does nothing more. A third is the
+default interrupt. From the
 report's write on, further signals are ignored, so the process exits with
 the code the report holds. A watch run from Python code through
 `stormlog.infer.cli.main(["watch", ...])` gives the handlers back when it

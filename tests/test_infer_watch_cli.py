@@ -39,6 +39,9 @@ class _SignalledWatch:
         self.ending = ending
         self.hurried = 0
         self.stopped = False
+        # After the signal that hurried, whether a further one would still
+        # reach the CLI's handler rather than the default interrupt.
+        self.handled_after_hurry: bool | None = None
 
     def hurry(self) -> None:
         self.hurried += 1
@@ -56,6 +59,11 @@ class _SignalledWatch:
         deadline = loop.time() + 5
         while not self.hurried and loop.time() < deadline:
             await asyncio.sleep(0.01)
+        handler = signal.getsignal(signal.SIGINT)
+        self.handled_after_hurry = handler is not signal.default_int_handler
+        if self.handled_after_hurry:  # the user's second: still not the default
+            loop.call_soon(os.kill, os.getpid(), signal.SIGINT)
+            await asyncio.sleep(0.2)
         return "outcome"
 
 
@@ -63,14 +71,17 @@ class _SignalledWatch:
 def test_a_signal_during_a_shutdown_cuts_it_short(ended_by_duration: bool) -> None:
     """A second signal hurries the shutdown; nothing tested that wiring. A
     signal while a shutdown --duration began is under way hurries it too:
-    it only set the stop, which nothing read any more."""
+    it only set the stop, which nothing read any more. Either way, the
+    user's third signal is the default interrupt: after a duration's end,
+    the second was, and a quick double Ctrl+C lost the report."""
     from stormlog.infer.watch.cli import _run
 
     watch = _SignalledWatch(ending=ended_by_duration)
     outcome: object = asyncio.run(_run(watch))  # type: ignore[arg-type]
     assert outcome == "outcome"
-    assert watch.hurried == 1
+    assert watch.hurried == (2 if ended_by_duration else 1)
     assert watch.stopped is not ended_by_duration
+    assert watch.handled_after_hurry is ended_by_duration
 
 
 def _watch(tmp_path: Path, *extra: str) -> int:
