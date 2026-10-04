@@ -53,6 +53,7 @@ from .describe_server import (
 from .errors import InferInputError, InferUsageError
 from .manifest import AFTER as MANIFEST_AFTER
 from .manifest import attach_manifest, load_declarations
+from .populations import Segment
 from .profile import InferenceProfiler
 from .prompts import MIN_CONTROLLED_TOKENS, PROMPT_MODES, REPEAT, SHARED_PREFIX
 from .run_summary import RunSummary, summarize_run
@@ -1215,6 +1216,20 @@ def _add_compare_parser(subparsers: Any) -> None:
         metavar="FILE",
         help="vLLM spans collected elsewhere, for every run",
     )
+    parser.add_argument(
+        "--segment",
+        action="append",
+        default=[],
+        metavar="NAME=START:END",
+        help="Also compare this slice of each case's measured phase, in seconds "
+        "from its start; repeatable",
+    )
+    parser.add_argument(
+        "--segment-membership",
+        choices=("arrival", "overlap"),
+        default="arrival",
+        help="A segment's requests: those that arrived in it, or that overlap it",
+    )
     parser.add_argument("--format", choices=("txt", "json"), default="txt")
     parser.add_argument("--report", default=None, metavar="FILE")
 
@@ -1258,8 +1273,27 @@ def _summary(
     if not Path(path).exists():
         raise InferInputError(f"artifact {path} not found")
     return summarize_run(
-        path, slo=slo, slo_source=slo_source, span_paths=args.vllm_spans
+        path,
+        slo=slo,
+        slo_source=slo_source,
+        span_paths=args.vllm_spans,
+        segments=[_segment(item) for item in args.segment],
+        membership=args.segment_membership,
     )
+
+
+def _segment(text: str) -> Segment:
+    """``NAME=START:END`` in seconds from the measured phase's start."""
+    name, _, span = text.partition("=")
+    start, _, end = span.partition(":")
+    if not name or not start or not end:
+        raise InferUsageError(f"--segment {text!r}: use NAME=START:END")
+    begin = _number(start, f"--segment {text!r}")
+    finish = _number(end, f"--segment {text!r}")
+    try:
+        return Segment(name, round(begin * 1e9), round(finish * 1e9))
+    except ValueError as exc:
+        raise InferUsageError(f"--segment {text!r}: {exc}") from exc
 
 
 def _emit_report(report: dict[str, Any], args: argparse.Namespace) -> None:

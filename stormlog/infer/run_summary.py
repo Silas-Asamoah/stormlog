@@ -23,15 +23,18 @@ import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
 from .analysis import analyze_inference_events
 from .compatibility import RunField, run_fields
 from .errors import InferInputError
+from .populations import Membership, Segment
 from .slo import SloSpec
 
 COMPLETED = "completed"
+SEGMENT_SEPARATOR = "/"
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,16 @@ class RunSummary:
         cases = self.report.get("cases")
         return cases if isinstance(cases, Mapping) else {}
 
+    @cached_property
+    def comparable_cases(self) -> dict[str, Mapping[str, Any]]:
+        """Every case, and each case's segments as ``case/segment``."""
+        found: dict[str, Mapping[str, Any]] = {}
+        for case_id, case in self.cases.items():
+            found[str(case_id)] = case
+            for name, segment in (case.get("segments") or {}).items():
+                found[f"{case_id}{SEGMENT_SEPARATOR}{name}"] = segment
+        return found
+
     @property
     def observers(self) -> Mapping[str, Any]:
         block = self.report.get("observers")
@@ -70,8 +83,12 @@ class RunSummary:
         return self.labels.get(key)
 
     def failures_for(self, case_id: str) -> tuple[str, ...]:
-        """Why this run cannot stand for ``case_id``: the run's and the case's."""
-        return self.protocol_failures + tuple(self.case_failures.get(case_id, ()))
+        """Why this run cannot stand for ``case_id``: the run's and the case's.
+
+        A segment fails with its case.
+        """
+        case = case_id.split(SEGMENT_SEPARATOR, 1)[0]
+        return self.protocol_failures + tuple(self.case_failures.get(case, ()))
 
 
 def summarize_run(
@@ -80,6 +97,8 @@ def summarize_run(
     slo: SloSpec | None = None,
     slo_source: str = "flags",
     span_paths: Iterable[str | Path] = (),
+    segments: Sequence[Segment] = (),
+    membership: Membership = "arrival",
 ) -> RunSummary:
     """Summarize one artifact; InferInputError when it cannot be read."""
     source = Path(path)
@@ -88,7 +107,12 @@ def summarize_run(
     except OSError as exc:
         raise InferInputError(f"{source}: {exc}") from exc
     report = analyze_inference_events(
-        source, vllm_span_paths=span_paths, slo=slo, slo_source=slo_source
+        source,
+        vllm_span_paths=span_paths,
+        slo=slo,
+        slo_source=slo_source,
+        segments=segments,
+        segment_membership=membership,
     )
     records = _records(raw, source)
     return summary_from_records(
@@ -195,4 +219,10 @@ def _case_failures(report: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
     return failures
 
 
-__all__ = ["COMPLETED", "RunSummary", "summarize_run", "summary_from_records"]
+__all__ = [
+    "COMPLETED",
+    "SEGMENT_SEPARATOR",
+    "RunSummary",
+    "summarize_run",
+    "summary_from_records",
+]
