@@ -136,3 +136,33 @@ def test_a_request_adds_only_what_was_consented() -> None:
     assert full["prompt"] == "é" * 512
     assert full["output"] == "the output"
     assert len(full["output_digest"]) == 16
+
+
+def test_the_span_queue_holds_its_byte_bound_at_maximum_payloads() -> None:
+    import tracemalloc
+
+    from stormlog._export.span_export import SPAN_QUEUE_BYTES
+
+    content = frozenset({"errors", "prompts", "outputs", "digests"})
+    otlp = _otlp(content)
+    tracemalloc.start()
+    try:
+        for index in range(3000):
+            text = f"{index}:" + "é" * 32_768
+            record = {
+                "event_type": "infer.request",
+                "x_request_id": f"x{index}",
+                "request_id": f"r{index}" + "r" * 300,
+                "case_id": "c" * 300,
+                "status": "error",
+                "error_message": text,
+            }
+            otlp.observe(record, otlp.request_extras(text, text, RuntimeError(text)))
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    stats = otlp.exporter.queue.stats()
+    assert stats.dropped_full > 0 and stats.depth_bytes <= SPAN_QUEUE_BYTES
+    # The documented overhead factor for Python objects over the estimate.
+    assert peak < 3 * SPAN_QUEUE_BYTES
+    otlp.close(0.1)
