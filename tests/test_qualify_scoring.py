@@ -328,6 +328,7 @@ def test_l2_reads_218s_own_location_fields() -> None:
     label = replace(
         episode("F1", expects=(Expectation(QUEUE, "scheduler", engine=PRODUCER),)),
         secondary=(),
+        clock_domain=window["clock_domain"],
         times=Times(
             action_onset_ns=window["start_ns"],
             effect_onset_ns=window["start_ns"],
@@ -406,6 +407,20 @@ def test_the_temporal_rule(
     candidate = finding("a", KV, 1, window=window, resolution=resolution)
     score = score_episode(episode(), diagnosis(candidate), CONFIG)
     assert (score.candidates == (candidate["id"],)) is qualifies
+
+
+def test_a_window_on_another_clock_never_qualifies() -> None:
+    # The scoring window is on the victim's clock; a finding placed on
+    # another clock domain can't be compared with it.
+    elsewhere = finding("a", KV, 1)
+    elsewhere["window"]["clock_domain"] = "other-node/boot/unix_epoch_ns"
+    assert score_episode(episode(), diagnosis(elsewhere), CONFIG).candidates == ()
+    same = finding("a", KV, 1)
+    same["window"]["clock_domain"] = "node/boot/unix_epoch_ns"
+    assert score_episode(episode(), diagnosis(same), CONFIG).correct(TOP1, 2)
+    claim = finding("h", "host_stall", 1, component="engine_core", window=(250, 280))
+    claim["window"]["clock_domain"] = "other-node/boot/unix_epoch_ns"
+    assert run_of([null_run()], diagnosis(claim)).false_claims == ()
 
 
 def test_a_fault_claim_in_a_negative_run_is_a_false_positive() -> None:
