@@ -15,6 +15,7 @@ import math
 import queue
 import threading
 import time
+import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -187,6 +188,8 @@ class Engine:
         # drain, a call runs at once on the caller's thread.
         self._loop_running = False
         self._stopping = False
+        # Why the loop died, if an exception ended it.
+        self.loop_error: str | None = None
         self._snapshot = self._take_snapshot()
         self._thread = threading.Thread(
             target=self._run, name="fake-engine-core", daemon=True
@@ -290,7 +293,29 @@ class Engine:
 
     # ------------------------------------------------------------ the loop
 
+    @property
+    def loop_alive(self) -> bool:
+        return self._thread.is_alive() and self.loop_error is None
+
     def _run(self) -> None:
+        """The step loop. An exception (an observer that raises, say) ends
+        it, as one ends vLLM's engine core: the traceback is kept in
+        ``loop_error`` and every pending request is aborted, so no client
+        waits on a loop that will never step again."""
+        try:
+            self._loop()
+        except Exception:
+            self.loop_error = traceback.format_exc()
+            with self._lock:
+                pending = [*self.waiting, *self.running]
+            for request in pending:
+                self.abort(request)
+        finally:
+            with self._lock:
+                self._loop_running = False
+            self._run_calls()  # those queued before the loop stopped taking calls
+
+    def _loop(self) -> None:
         while not self._stopping:
             if not self._gate.wait(timeout=0.05):
                 continue
@@ -309,9 +334,6 @@ class Engine:
             self._complete(step)
             if not step.total_tokens and self._has_requests():
                 time.sleep(0.001)  # vLLM's yield after a step that ran nothing
-        with self._lock:
-            self._loop_running = False
-        self._run_calls()  # those queued before the loop stopped taking calls
 
     def _run_calls(self) -> None:
         while True:

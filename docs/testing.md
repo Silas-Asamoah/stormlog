@@ -245,7 +245,7 @@ is held:
 | `pause?target=engine` / `frontend` (`&seconds=S`), `resume` | Hold the step loop, or every API answer while the engine keeps stepping. Pauses stack: the hold ends when the last of them does, and `resume` ends them all |
 | `controls` (JSON body) | Set any switch in `Controls`: profiler status, start and stop pauses, a lost start answer, a stop without a trace, a `max_iterations` self-stop (taken, as in vLLM, when the step after the last profiled one starts), a slow or delayed trace write, a failing or slow `/metrics`, late or duplicated spans |
 | `foreign_trace`, `span_body?kind=oversized` / `gzip_bomb` | Drop a trace outside any window; send a span body the receiver must refuse |
-| `state` | Steps, queue, preemptions, and whether each side is paused |
+| `state` | Steps, queue, preemptions, whether each side is paused, and whether the step loop is alive: an exception that ends the loop (an observer that raises, say) is kept in `loop_error`, and every pending request is aborted, as an exception ends vLLM's engine core |
 | `kill` | Exit at once, like SIGKILL (subprocess mode only) |
 
 **Not modeled:**

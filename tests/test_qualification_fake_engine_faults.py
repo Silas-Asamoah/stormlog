@@ -18,7 +18,7 @@ import pytest
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig, hook_log
 from examples.qualification.fake_engine.__main__ import config_from_args
-from examples.qualification.fake_engine.engine import Engine
+from examples.qualification.fake_engine.engine import Engine, EngineObserver
 from examples.qualification.fake_engine.process import (
     ROOT,
     FakeEngineProcess,
@@ -307,3 +307,24 @@ def test_a_flood_of_client_tracebacks_never_blocks_the_process() -> None:
         started = time.monotonic()
         assert server.stop() == 0
         assert time.monotonic() - started < 2.0
+
+
+def test_a_loop_killed_by_an_observer_says_so_and_ends_its_requests() -> None:
+    # Fable's #267 gate, P3-4: an observer that raised ended the loop
+    # silently: the chat hung, and /_fault/state still answered as if the
+    # loop were only paused.
+    class Broken(EngineObserver):
+        def on_scheduled(self, step: object) -> None:
+            raise OSError("the observer's disk is gone")
+
+    with FakeEngine(FAST) as engine:
+        engine.engine.observers.append(Broken())
+        status, _body = post(
+            engine.endpoint,
+            json.dumps({"model": engine.config.model, "max_tokens": 4,
+                        "messages": [{"role": "user", "content": "hi"}]}).encode(),
+            timeout=10,
+        )  # fmt: skip
+        state = json.loads(get(f"{engine.base_url}/_fault/state")[1])
+    assert state["loop_alive"] is False
+    assert "OSError: the observer's disk is gone" in state["loop_error"]

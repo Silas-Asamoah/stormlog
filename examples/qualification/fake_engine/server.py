@@ -355,6 +355,9 @@ def _fault_state(handler: _Handler) -> None:
             "preemptions": engine.stats.preemptions,
             "engine_paused": engine.paused,
             "frontend_paused": handler.fake.frontend_paused,
+            # A dead loop is not a paused one: it never steps again.
+            "loop_alive": engine.loop_alive,
+            "loop_error": engine.loop_error,
             "pid": os.getpid(),
         },
     )
