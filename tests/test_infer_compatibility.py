@@ -449,6 +449,10 @@ def test_runs_from_artifacts_compare_by_their_configuration() -> None:
     assert other.status == "incompatible"
     bound = [*_records(), _bound()]
     assert compatible(run_fields(bound), run_fields(bound)).status == "compatible"
+    # A pinned snapshot verified without the commit's file list still names
+    # the bytes the server loaded.
+    snapshot = [*_records(), _bound(evidence="pinned_snapshot_verified")]
+    assert run_fields(snapshot)["model.weights_digest"].known
 
 
 def test_a_description_alone_never_verifies_its_weights() -> None:

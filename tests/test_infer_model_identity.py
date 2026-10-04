@@ -18,6 +18,7 @@ REPO = "Qwen/Qwen2.5-0.5B-Instruct"
 COMMIT = "c" * 40
 WEIGHTS = b"\x00weights" * 200
 CONFIG = b'{"architectures": ["Qwen2ForCausalLM"]}'
+TOKENIZER = b'{"model": {"type": "BPE"}}'
 
 
 def _git_sha1(content: bytes) -> str:
@@ -35,6 +36,7 @@ def _hub(root: Path, weights: bytes = WEIGHTS) -> Path:
     blobs = {
         "model.safetensors": (WEIGHTS, hashlib.sha256(WEIGHTS).hexdigest()),
         "config.json": (CONFIG, _git_sha1(CONFIG)),
+        "tokenizer.json": (TOKENIZER, _git_sha1(TOKENIZER)),
     }
     for name, (content, blob) in blobs.items():
         # The blob is named by the true content's digest; `weights` may differ.
@@ -55,7 +57,9 @@ def test_a_pinned_snapshot_is_checked_and_the_server_pointed_at_its_commit(
     assert model.server_args == ("--revision", COMMIT, "--tokenizer-revision", COMMIT)
     assert model.env["HF_HUB_OFFLINE"] == "1"
     record = model.record()
-    assert record["identity_evidence"] == "pinned_commit_verified"
+    # rev-213-a's E3, as the lead ruled: without the commit's file list,
+    # recorded when it was pinned, the evidence does not claim the commit.
+    assert record["identity_evidence"] == "pinned_snapshot_verified"
     assert record["files"]["model.safetensors"]["algorithm"] == "sha256"
     assert record["files"]["config.json"]["algorithm"] == "git-sha1"
     assert all(item["checked"] for item in record["files"].values())
@@ -118,6 +122,7 @@ def test_a_staged_snapshot_is_named_by_its_content_and_read_only(
     source.mkdir()
     (source / "model.safetensors").write_bytes(WEIGHTS)
     (source / "config.json").write_bytes(CONFIG)
+    (source / "tokenizer.json").write_bytes(TOKENIZER)
     store = tmp_path / "store"
     model = prepare_model(
         {"route": "staged", "source": str(source), "store": str(store)}
@@ -247,6 +252,7 @@ def test_a_file_rewritten_in_place_with_its_size_and_time_kept_is_caught(
     source.mkdir()
     (source / "model.safetensors").write_bytes(WEIGHTS)
     (source / "config.json").write_bytes(CONFIG)
+    (source / "tokenizer.json").write_bytes(TOKENIZER)
     staged = prepare_model(
         {"route": "staged", "source": str(source), "store": str(tmp_path / "s")}
     )
@@ -266,11 +272,31 @@ def test_a_staged_store_whose_content_changed_is_refused_when_reused(
     source.mkdir()
     (source / "model.safetensors").write_bytes(WEIGHTS)
     (source / "config.json").write_bytes(CONFIG)
+    (source / "tokenizer.json").write_bytes(TOKENIZER)
     spec = {"route": "staged", "source": str(source), "store": str(tmp_path / "s")}
     staged = prepare_model(spec)
     _rewrite_in_place(staged.directory / "model.safetensors", WEIGHTS[::-1])
     with pytest.raises(InferInputError, match="model.safetensors changed"):
         prepare_model(spec)
+
+
+def test_a_pin_with_the_commits_file_list_verifies_the_commit(
+    tmp_path: Path,
+) -> None:
+    cache = _hub(tmp_path)
+    spec = {"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)}
+    listed = ["config.json", "model.safetensors", "tokenizer.json"]
+    model = prepare_model({**spec, "files": listed})
+    assert model.record()["identity_evidence"] == "pinned_commit_verified"
+    with pytest.raises(InferInputError, match="README.md, which the pin lists"):
+        prepare_model({**spec, "files": [*listed, "README.md"]})
+
+
+def test_a_snapshot_without_a_tokenizer_is_refused(tmp_path: Path) -> None:
+    cache = _hub(tmp_path)
+    (_repo(cache) / "snapshots" / COMMIT / "tokenizer.json").unlink()
+    with pytest.raises(InferInputError, match="no tokenizer"):
+        prepare_model({"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)})
 
 
 def test_an_unknown_route_is_refused() -> None:

@@ -18,7 +18,8 @@ the weights before it launches, and points the server at exactly them:
 
 After each run every file is hashed again and its size, modification time
 and inode compared; a change makes the run a protocol failure. The evidence is
-``pinned_commit_verified`` or ``staged_snapshot_verified``, and a server
+``pinned_commit_verified`` (``pinned_snapshot_verified`` when the pin gives
+no file list of the commit) or ``staged_snapshot_verified``, and a server
 description taken by the runner carries it, bound to the server's process.
 """
 
@@ -48,8 +49,12 @@ PINNED_HUB = "pinned_hub"
 STAGED = "staged"
 ROUTES = (PINNED_HUB, STAGED)
 PINNED_COMMIT_VERIFIED = "pinned_commit_verified"
+# Every file present is the commit's, but the commit's own file list, which
+# the cache does not keep, was not checked.
+PINNED_SNAPSHOT_VERIFIED = "pinned_snapshot_verified"
 STAGED_SNAPSHOT_VERIFIED = "staged_snapshot_verified"
 WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".gguf")
+TOKENIZER_FILES = ("tokenizer.json", "tokenizer.model", "vocab.json")
 
 
 @dataclass(frozen=True)
@@ -65,14 +70,16 @@ class VerifiedModel:
     commit: str | None = None
     stats: Mapping[str, tuple[int, int, int]] = field(default_factory=dict)
     verified_at_ns: int = 0
+    # Whether the commit's file list, recorded when it was pinned, was checked.
+    file_list_checked: bool = False
 
     @property
     def evidence(self) -> str:
-        return (
-            PINNED_COMMIT_VERIFIED
-            if self.route == PINNED_HUB
-            else STAGED_SNAPSHOT_VERIFIED
-        )
+        if self.route != PINNED_HUB:
+            return STAGED_SNAPSHOT_VERIFIED
+        if self.file_list_checked:
+            return PINNED_COMMIT_VERIFIED
+        return PINNED_SNAPSHOT_VERIFIED
 
     def record(self) -> dict[str, Any]:
         """The model section of a server description, verified before launch."""
@@ -135,6 +142,9 @@ def _pinned(spec: Mapping[str, Any]) -> VerifiedModel:
     directory, commit = found
     files = tuple(_checked_blob(directory, path) for path in walk(directory))
     _check_loadable(directory, files)
+    listed = spec.get("files")
+    if listed is not None:
+        _check_listed(repo, commit, listed, files)
     return VerifiedModel(
         route=PINNED_HUB,
         model=repo,
@@ -145,7 +155,22 @@ def _pinned(spec: Mapping[str, Any]) -> VerifiedModel:
         commit=commit,
         stats=_stats(directory),
         verified_at_ns=time.time_ns(),
+        file_list_checked=listed is not None,
     )
+
+
+def _check_listed(
+    repo: str, commit: str, listed: Any, files: Sequence[ModelFile]
+) -> None:
+    """Every file the pin lists, the commit's as recorded when it was pinned,
+    is in the snapshot."""
+    if not isinstance(listed, list) or not all(isinstance(n, str) for n in listed):
+        raise InferInputError(f"model {repo}: files must be a list of paths")
+    missing = sorted(set(listed) - {item.path for item in files})
+    if missing:
+        raise InferInputError(
+            f"model {repo}@{commit[:12]}: no {', '.join(missing)}, which the pin lists"
+        )
 
 
 def _checked_blob(directory: Path, path: Path) -> ModelFile:
@@ -202,8 +227,8 @@ def _staged(spec: Mapping[str, Any]) -> VerifiedModel:
 
 
 def _check_loadable(directory: Path, files: Sequence[ModelFile]) -> None:
-    """The snapshot holds what a load reads: its config, weights, and every
-    shard an index names.
+    """The snapshot holds what a load reads: its config, a tokenizer, weights,
+    and every shard an index names.
 
     A file of the commit that no load reads cannot be told missing offline:
     the cache keeps no list of a commit's files.
@@ -212,6 +237,8 @@ def _check_loadable(directory: Path, files: Sequence[ModelFile]) -> None:
     label = f"model {directory}"
     if "config.json" not in names:
         raise InferInputError(f"{label}: no config.json")
+    if not names & set(TOKENIZER_FILES):
+        raise InferInputError(f"{label}: no tokenizer ({', '.join(TOKENIZER_FILES)})")
     if not any(name.endswith(WEIGHT_SUFFIXES) for name in names):
         raise InferInputError(f"{label}: no weights")
     for index in sorted(name for name in names if name.endswith(".index.json")):
@@ -298,6 +325,7 @@ def _stat(path: Path) -> tuple[int, int, int]:
 __all__ = [
     "PINNED_COMMIT_VERIFIED",
     "PINNED_HUB",
+    "PINNED_SNAPSHOT_VERIFIED",
     "ROUTES",
     "STAGED",
     "STAGED_SNAPSHOT_VERIFIED",
