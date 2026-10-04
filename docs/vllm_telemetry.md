@@ -134,8 +134,10 @@ An export is charged, step by step and before each step runs:
    document, where a key written with an escape (`"na\u006de"`) is
    decoded: a body with too many spans is refused, and anything the bytes
    missed is charged, before any span is built. For protobuf, the body's messages, spans and attribute values
-   are first counted on the wire, by a scan that builds nothing, and a body
-   with more spans than the limit is refused there, before it is parsed.
+   are first counted on the wire, by a scan that builds nothing and follows
+   the schema of the installed `opentelemetry-proto`, so a message field a
+   newer version adds (`Resource.entity_refs` in 1.45) is counted too. A
+   body with more spans than the limit is refused there, before it is parsed.
    The parse is then charged 384 bytes a message with protobuf's upb
    backend, or 1,536 with any other, plus 2 bytes a content byte; then the
    spans it yields, 2 KiB a span, 256 bytes an attribute value and 4 bytes

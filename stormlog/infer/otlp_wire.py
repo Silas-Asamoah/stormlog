@@ -4,9 +4,11 @@ Parsing an ``ExportTraceServiceRequest`` costs memory per message far more
 than per byte: an empty span is 2 bytes on the wire and over a hundred in
 upb's arena, a kilobyte as a pure-Python message. So the receiver charges a
 parse by its messages, counted here first by a linear scan of the wire
-format that follows only the schema's message-typed fields and builds
-nothing. The same scan counts the spans, so an export with too many is
-refused before ``ParseFromString`` runs.
+format that follows only message-typed fields and builds nothing. The scan
+reads its schema from the installed ``opentelemetry-proto`` descriptors, so
+it follows every message field the parser will build, those a newer
+version adds included. The same scan counts the spans, so an export with
+too many is refused before ``ParseFromString`` runs.
 
 The scan stops as soon as a count passes its cap; what it returns then is
 over that cap, which is all the receiver needs to refuse the export.
@@ -19,41 +21,13 @@ protobuf's default limit of 100 levels, where upb stops too.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any
 
-# The message types of opentelemetry/proto/collector/trace/v1 and the
-# common, resource and trace protos it nests.
-(
-    _REQUEST,
-    _RESOURCE_SPANS,
-    _RESOURCE,
-    _SCOPE_SPANS,
-    _SCOPE,
-    _SPAN,
-    _EVENT,
-    _LINK,
-    _STATUS,
-    _KEY_VALUE,
-    _ANY_VALUE,
-    _ARRAY_VALUE,
-    _KEY_VALUE_LIST,
-) = range(13)
-# Each type's message-typed fields, by field number; every other field is
-# skipped over by its wire type.
-_CHILDREN: tuple[dict[int, int], ...] = (
-    {1: _RESOURCE_SPANS},  # ExportTraceServiceRequest.resource_spans
-    {1: _RESOURCE, 2: _SCOPE_SPANS},  # ResourceSpans
-    {1: _KEY_VALUE},  # Resource.attributes
-    {1: _SCOPE, 2: _SPAN},  # ScopeSpans
-    {3: _KEY_VALUE},  # InstrumentationScope.attributes
-    {9: _KEY_VALUE, 11: _EVENT, 13: _LINK, 15: _STATUS},  # Span
-    {3: _KEY_VALUE},  # Span.Event.attributes
-    {4: _KEY_VALUE},  # Span.Link.attributes
-    {},  # Status
-    {2: _ANY_VALUE},  # KeyValue.value
-    {5: _ARRAY_VALUE, 6: _KEY_VALUE_LIST},  # AnyValue
-    {1: _ANY_VALUE},  # ArrayValue.values
-    {1: _KEY_VALUE},  # KeyValueList.values
-)
+# The types counted apart from other messages, by their full names.
+_SPAN = "opentelemetry.proto.trace.v1.Span"
+_KEY_VALUE = "opentelemetry.proto.common.v1.KeyValue"
+_ANY_VALUE = "opentelemetry.proto.common.v1.AnyValue"
 # protobuf's own default recursion limit.
 MAX_DEPTH = 100
 _VARINT = 0
@@ -76,6 +50,55 @@ class WireCounts:
     values: int
 
 
+@dataclass(frozen=True)
+class _Schema:
+    """The message types under a root, read from protobuf descriptors.
+
+    The root is type 0; ``children[t]`` maps each message-typed field of
+    type ``t``, by number, to the type it holds. Every other field is
+    skipped over by its wire type.
+    """
+
+    children: tuple[dict[int, int], ...]
+    span: int
+    key_value: int
+    any_value: int
+
+
+@lru_cache(maxsize=None)
+def message_schema(root: Any) -> _Schema:
+    """The schema of ``root``, a message ``Descriptor``, and of every
+    message type it can hold."""
+    types = [root]
+    index = {root.full_name: 0}
+    children: list[dict[int, int]] = []
+    for descriptor in types:  # grows while it is walked
+        fields: dict[int, int] = {}
+        for field in descriptor.fields:
+            if field.type != field.TYPE_MESSAGE:
+                continue
+            child = field.message_type
+            if child.full_name not in index:
+                index[child.full_name] = len(types)
+                types.append(child)
+            fields[field.number] = index[child.full_name]
+        children.append(fields)
+    return _Schema(
+        tuple(children),
+        index.get(_SPAN, -1),
+        index.get(_KEY_VALUE, -1),
+        index.get(_ANY_VALUE, -1),
+    )
+
+
+def trace_request_descriptor() -> Any:
+    """The installed ``ExportTraceServiceRequest`` descriptor; ``ImportError``
+    without the ``infer-otlp`` extra."""
+    from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
+
+    return trace_service_pb2.ExportTraceServiceRequest.DESCRIPTOR
+
+
 def count_trace_request(
     data: bytes | bytearray, *, max_messages: int, max_spans: int
 ) -> WireCounts:
@@ -84,7 +107,20 @@ def count_trace_request(
     Stops once ``messages`` passes ``max_messages`` or ``spans`` passes
     ``max_spans``.
     """
-    walk = _Walk(data, max_messages, max_spans)
+    return count_message(
+        data,
+        trace_request_descriptor(),
+        max_messages=max_messages,
+        max_spans=max_spans,
+    )
+
+
+def count_message(
+    data: bytes | bytearray, root: Any, *, max_messages: int, max_spans: int
+) -> WireCounts:
+    """:func:`count_trace_request` for a message of any type, by its
+    ``Descriptor``."""
+    walk = _Walk(data, message_schema(root), max_messages, max_spans)
     try:
         walk.run()
     except IndexError:
@@ -93,23 +129,31 @@ def count_trace_request(
 
 
 class _Walk:
-    def __init__(self, data: bytes | bytearray, max_messages: int, max_spans: int):
+    def __init__(
+        self,
+        data: bytes | bytearray,
+        schema: _Schema,
+        max_messages: int,
+        max_spans: int,
+    ):
         self.data = data
+        self.schema = schema
         self.max_messages = max_messages
         self.max_spans = max_spans
-        self.messages = 1  # the request itself
+        self.messages = 1  # the root itself
         self.spans = 0
         self.values = 0
         # The open messages: where each ends, and its type.
         self.ends = [len(data)]
-        self.kinds = [_REQUEST]
+        self.kinds = [0]
 
     def run(self) -> None:
+        children = self.schema.children
         pos = 0
         while self.ends:
             end = self.ends[-1]
             if pos < end:
-                pos = self._field(pos, end, _CHILDREN[self.kinds[-1]])
+                pos = self._field(pos, end, children[self.kinds[-1]])
             elif pos == end:
                 self.ends.pop()
                 self.kinds.pop()
@@ -142,10 +186,11 @@ class _Walk:
         self.ends.append(end)
         self.kinds.append(kind)
         self.messages += 1
-        if kind == _SPAN:
+        schema = self.schema
+        if kind == schema.span:
             self.spans += 1
-        elif kind == _KEY_VALUE or (
-            kind == _ANY_VALUE and self.kinds[-2] != _KEY_VALUE
+        elif kind == schema.key_value or (
+            kind == schema.any_value and self.kinds[-2] != schema.key_value
         ):
             self.values += 1
 
@@ -173,4 +218,11 @@ def _skip(data: bytes | bytearray, pos: int, wire: int) -> int:
     raise ValueError(f"protobuf wire type {wire} is not used by OTLP")
 
 
-__all__ = ["MAX_DEPTH", "WireCounts", "count_trace_request"]
+__all__ = [
+    "MAX_DEPTH",
+    "WireCounts",
+    "count_message",
+    "count_trace_request",
+    "message_schema",
+    "trace_request_descriptor",
+]

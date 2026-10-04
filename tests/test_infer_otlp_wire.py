@@ -7,6 +7,13 @@ from typing import Any
 import pytest
 
 from stormlog.infer.otlp_wire import MAX_DEPTH, count_trace_request
+from tests.otlp_test_helpers import (
+    MessageField,
+    export_with,
+    message_fields,
+    messages_in,
+    spans_in,
+)
 
 UNBOUNDED = {"max_messages": 10**9, "max_spans": 10**9}
 
@@ -16,25 +23,6 @@ def _modules() -> tuple[Any, Any]:
         "opentelemetry.proto.collector.trace.v1.trace_service_pb2"
     )
     return trace_service, trace_service.ExportTraceServiceRequest
-
-
-def _repeated(field: Any) -> bool:
-    """protobuf 7 dropped ``FieldDescriptor.label``; 6 added ``is_repeated``."""
-    is_repeated = getattr(field, "is_repeated", None)
-    if is_repeated is None:
-        return bool(field.label == field.LABEL_REPEATED)
-    return bool(is_repeated)
-
-
-def _messages(message: Any) -> int:
-    """Every message protobuf builds for ``message``, counted from the parse."""
-    total = 1
-    for field, value in message.ListFields():
-        if field.message_type is None:
-            continue
-        for child in value if _repeated(field) else [value]:
-            total += _messages(child)
-    return total
 
 
 def _rich_request() -> Any:
@@ -68,11 +56,28 @@ def _rich_request() -> Any:
 def test_the_counts_are_what_the_parse_builds() -> None:
     request = _rich_request()
     counts = count_trace_request(request.SerializeToString(), **UNBOUNDED)
-    assert counts.messages == _messages(request)
+    assert counts.messages == messages_in(request)
     assert counts.spans == 2
     # Attributes everywhere (resource, scope, span, event, link and inside
     # kvlists: 9) and array elements (3).
     assert counts.values == 12
+
+
+@pytest.mark.parametrize(
+    "target", [pytest.param(f, id=f.name) for f in message_fields()]
+)
+def test_every_message_field_the_installed_schema_defines_is_counted(
+    target: MessageField,
+) -> None:
+    """Built field by field from the installed descriptors: a field a newer
+    opentelemetry-proto adds, such as Resource.entity_refs, is counted as
+    the parse builds it."""
+    _service, request_class = _modules()
+    body = export_with(target, 3).SerializeToString()
+    parsed = request_class.FromString(body)
+    counts = count_trace_request(body, **UNBOUNDED)
+    assert counts.messages == messages_in(parsed)
+    assert counts.spans == spans_in(parsed)
 
 
 @pytest.mark.parametrize("count", [0, 1, 1000])

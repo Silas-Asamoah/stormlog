@@ -51,6 +51,7 @@ from stormlog.infer.vllm_spans import (
     spans_to_correlation_events,
 )
 from stormlog.infer.vllm_telemetry import SPAN_SOURCE_JSONL, SPAN_SOURCE_OTLP_JSON
+from tests.otlp_test_helpers import export_with, message_fields, repeated
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "vllm"
@@ -344,13 +345,19 @@ def _small_message_export(shape: str, count: int) -> bytes:
     return bytes(request.SerializeToString())
 
 
-# Parse an export in a fresh process; print how far its peak RSS grew and
-# what the receiver charges for the parse.
+# Every repeated message field of the installed schema, by name.
+_REPEATED_MESSAGE_FIELDS = {
+    target.name: target for target in message_fields() if repeated(target.field)
+}
+# Parse an export in a fresh process, from a bytearray as the receiver
+# reads it; print how far its peak RSS grew and what the receiver charges
+# for the parse.
 _PARSE_RSS = """
 import resource, sys
 from stormlog.infer import vllm_spans
 from stormlog.infer.otlp_wire import count_trace_request
-body = open(sys.argv[1], "rb").read()
+with open(sys.argv[1], "rb") as file:
+    body = bytearray(file.read())
 counts = count_trace_request(body, max_messages=10**12, max_spans=10**12)
 vllm_spans.parse_otlp_protobuf(b"")
 scale = 1 if sys.platform == "darwin" else 1024
@@ -954,9 +961,7 @@ class TestReceiverAdmission:
         assert built == []
 
     @pytest.mark.parametrize("backend", ["installed", "python"])
-    @pytest.mark.parametrize(
-        "shape", ["empty_spans", "named_spans", "empty_links", "empty_resource_spans"]
-    )
+    @pytest.mark.parametrize("shape", ["named_spans", *_REPEATED_MESSAGE_FIELDS])
     def test_a_protobuf_parse_holds_no_more_than_it_is_charged(
         self, tmp_path: Path, shape: str, backend: str
     ) -> None:
@@ -964,7 +969,9 @@ class TestReceiverAdmission:
 
         Small messages cost far more than their bytes: 100,000 empty spans
         are 200 KB on the wire and about 19 MB in upb's arena, against the
-        4.8 MB a charge of 24 bytes a body byte allowed.
+        4.8 MB a charge of 24 bytes a body byte allowed. Every repeated
+        message field the installed descriptors define is measured, those
+        a newer opentelemetry-proto adds included.
         """
         import os
         import subprocess
@@ -972,7 +979,11 @@ class TestReceiverAdmission:
 
         pytest.importorskip("resource")
         body = tmp_path / "export.pb"
-        body.write_bytes(_small_message_export(shape, 100_000))
+        if shape in _REPEATED_MESSAGE_FIELDS:
+            request = export_with(_REPEATED_MESSAGE_FIELDS[shape], 100_000)
+            body.write_bytes(request.SerializeToString())
+        else:
+            body.write_bytes(_small_message_export(shape, 100_000))
         env = dict(os.environ)
         if backend == "python":
             env["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
