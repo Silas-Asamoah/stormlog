@@ -13,7 +13,10 @@ scan counts the spans, so an export with too many is refused before
 ``ParseFromString`` runs.
 
 The scan stops as soon as a count passes its cap; what it returns then is
-over that cap, which is all the receiver needs to refuse the export.
+over that cap, which is all the receiver needs to refuse the export. It
+runs in Python, about 40 ms for a batch of 512 vLLM request spans but
+seconds for a body of millions of tiny fields, so it also stops, with
+``TimeoutError``, once a deadline passes.
 Anything protobuf could not parse as this message is a ``ValueError``. So
 are two things the pure-Python backend of protobuf 4 would parse: groups
 (wire types 3 and 4), which no OTLP message uses, and messages nested more
@@ -23,6 +26,7 @@ later pure-Python versions stop.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, NamedTuple
@@ -57,6 +61,8 @@ _WIRE_OF_TYPE = {
 }
 # Every byte of a varint but its last has the high bit set.
 _CONTINUATION_BYTES = bytes(range(0x80, 0x100))
+# How many fields the scan reads between looks at the clock.
+_CLOCK_EVERY = 4096
 
 
 @dataclass(frozen=True)
@@ -158,10 +164,12 @@ def count_trace_request(
     max_messages: int,
     max_spans: int,
     max_elements: int,
+    deadline: float | None = None,
 ) -> WireCounts:
     """Count what parsing an encoded export would build.
 
     Stops once ``messages``, ``spans`` or ``elements`` passes its cap.
+    Raises ``TimeoutError`` once ``time.monotonic()`` passes ``deadline``.
     """
     return count_message(
         data,
@@ -169,6 +177,7 @@ def count_trace_request(
         max_messages=max_messages,
         max_spans=max_spans,
         max_elements=max_elements,
+        deadline=deadline,
     )
 
 
@@ -179,10 +188,12 @@ def count_message(
     max_messages: int,
     max_spans: int,
     max_elements: int,
+    deadline: float | None = None,
 ) -> WireCounts:
     """:func:`count_trace_request` for a message of any type, by its
     ``Descriptor``."""
-    walk = _Walk(data, message_schema(root), (max_messages, max_spans, max_elements))
+    caps = (max_messages, max_spans, max_elements)
+    walk = _Walk(data, message_schema(root), caps, deadline)
     try:
         walk.run()
     except IndexError:
@@ -194,7 +205,11 @@ def count_message(
 
 class _Walk:
     def __init__(
-        self, data: bytes | bytearray, schema: _Schema, caps: tuple[int, int, int]
+        self,
+        data: bytes | bytearray,
+        schema: _Schema,
+        caps: tuple[int, int, int],
+        deadline: float | None,
     ):
         self.data = data
         self.schema = schema
@@ -207,10 +222,12 @@ class _Walk:
         # The open messages: where each ends, and its type.
         self.ends = [len(data)]
         self.kinds = [0]
+        self.deadline = deadline
 
     def run(self) -> None:
         fields = self.schema.fields
         pos = 0
+        steps = 0
         while self.ends:
             end = self.ends[-1]
             if pos < end:
@@ -220,12 +237,22 @@ class _Walk:
                 self.kinds.pop()
             else:
                 raise ValueError("a protobuf field runs past its message")
-            if (
-                self.messages > self.max_messages
-                or self.spans > self.max_spans
-                or self.elements > self.max_elements
-            ):
+            if self._over_a_cap():
                 return
+            steps += 1
+            if steps % _CLOCK_EVERY == 0:
+                self._check_clock()
+
+    def _over_a_cap(self) -> bool:
+        return (
+            self.messages > self.max_messages
+            or self.spans > self.max_spans
+            or self.elements > self.max_elements
+        )
+
+    def _check_clock(self) -> None:
+        if self.deadline is not None and time.monotonic() > self.deadline:
+            raise TimeoutError("the wire scan passed its deadline")
 
     def _field(self, pos: int, end: int, fields: dict[int, _Field]) -> int:
         """Read one field at ``pos``: enter it if it is a message, else

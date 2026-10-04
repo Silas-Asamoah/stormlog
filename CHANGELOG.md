@@ -356,15 +356,16 @@ the flaky benchmark memory gates
   the client hold. A `/metrics` response is read at most 8 MiB far and
   parsed one line at a time, refused at a line over 64 Ki characters or
   past 20,000 series, so a scrape holds at most about twenty-five times
-  what it read. The OTLP span receiver admits at most 8 connections and 10 s for
-  each whole request, headers included; charges the exports in flight at
-  most 128 MiB, each decoding step from a measured estimate before it
-  runs (a protobuf parse per message, counted on the wire first); refuses
-  a body of more than 10,000 spans; and queues at most
-  100,000 spans and 64 MiB of what they hold. Before, the scrape read any
-  response whole, and the receiver accepted any number of connections into
-  an unbounded queue. Refusals are counted in the capability records
-  (`docs/vllm_telemetry.md`, "Ingestion limits").
+  what it read. The OTLP span receiver admits at most 8 connections and
+  10 s for each whole request, headers and a protobuf body's wire scan
+  included; charges the exports in flight at most 128 MiB, each decoding
+  step from a measured estimate before it runs (a protobuf parse per
+  message, counted on the wire first); refuses a body of more than 10,000
+  spans; and queues at most 100,000 spans and 64 MiB of what they hold.
+  Before, the scrape read any response whole, and the receiver accepted
+  any number of connections into an unbounded queue. Refusals are counted
+  in the capability records (`docs/vllm_telemetry.md`, "Ingestion
+  limits").
   ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
 
 ## [0.3.10] - 2026-10-01

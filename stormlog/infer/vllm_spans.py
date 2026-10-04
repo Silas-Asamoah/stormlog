@@ -508,6 +508,7 @@ class ReceiverStats:
     busy: int = 0
     header_timeouts: int = 0
     body_timeouts: int = 0
+    scan_timeouts: int = 0
     too_many_spans: int = 0
     dropped_queue_full: int = 0
     by_media: dict[str, int] = field(default_factory=dict)
@@ -570,7 +571,8 @@ class ReceiverLimits:
     A connection over ``max_connections`` is answered 503 and closed without a
     handler thread. Each request, its request line, headers and body, must
     arrive within ``request_deadline_seconds`` of when the receiver starts
-    waiting for it; a kept-alive connection idle that long is closed. The
+    waiting for it, and a protobuf body's wire scan finish within it too; a
+    kept-alive connection idle that long is closed. The
     exports being read and decoded at once may be charged at most
     ``max_inflight_bytes``, each step charged before it runs: the body, with
     the most a gzip body can inflate to, then an estimate of decoding it
@@ -1001,6 +1003,11 @@ class OtlpSpanReceiver:
             self._count("decode_failures")
             _respond(handler, 400, b"", "text/plain")
             return
+        except TimeoutError:
+            self._count("scan_timeouts")
+            handler.close_connection = True
+            _try_respond(handler, 408)
+            return
         if spans is None:
             return
         if len(spans) > self.limits.max_spans_per_body:
@@ -1055,13 +1062,14 @@ class OtlpSpanReceiver:
         # Counted on the wire, so the parse is charged for what it builds
         # and a body with too many spans is refused before anything is
         # parsed. Past max_messages or max_elements the charge could never
-        # fit: the scan stops.
+        # fit: the scan stops. It stops too at the request's deadline.
         budget = self.limits.max_inflight_bytes
         counts = count_trace_request(
             body,
             max_messages=budget // self._rates.message,
             max_spans=self.limits.max_spans_per_body,
             max_elements=budget // self._rates.element,
+            deadline=_request_deadline(handler),
         )
         if counts.spans > self.limits.max_spans_per_body:
             self._refuse_too_many(handler)
@@ -1250,6 +1258,7 @@ class OtlpSpanReceiver:
                 "busy": self.stats.busy,
                 "header_timeouts": self.stats.header_timeouts,
                 "body_timeouts": self.stats.body_timeouts,
+                "scan_timeouts": self.stats.scan_timeouts,
                 "too_many_spans": self.stats.too_many_spans,
                 "dropped_queue_full": self.stats.dropped_queue_full,
                 "queued": len(self._queue),
@@ -1267,6 +1276,12 @@ class _Reservation:
     """What one request has been charged against ``max_inflight_bytes``."""
 
     bytes: int = 0
+
+
+def _request_deadline(handler: BaseHTTPRequestHandler) -> float | None:
+    """When the handler's request must be done by, on the monotonic clock."""
+    reader = getattr(handler, "reader", None)
+    return reader.deadline if isinstance(reader, _DeadlineReader) else None
 
 
 def _admission_bytes(handler: BaseHTTPRequestHandler) -> int:

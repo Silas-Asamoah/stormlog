@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pytest
@@ -213,6 +214,18 @@ def test_the_scan_stops_once_a_count_passes_its_cap() -> None:
         **{**UNBOUNDED, "max_elements": 20},
     )
     assert (by_elements.elements, by_elements.unknown_bytes) == (21, 63)
+
+
+def test_the_scan_stops_once_its_deadline_passes() -> None:
+    """It looks at the clock every few thousand fields, so a body of
+    millions of tiny fields cannot hold a request past its deadline."""
+    body = _field(1, _field(2, _field(2, bytes([0x98, 0x06, 0x01]) * 10_000)))
+    passed = time.monotonic() - 1
+    with pytest.raises(TimeoutError):
+        count_trace_request(body, **UNBOUNDED, deadline=passed)
+    future = time.monotonic() + 60
+    assert count_trace_request(body, **UNBOUNDED, deadline=future).elements == 10_000
+    assert count_trace_request(body, **UNBOUNDED).elements == 10_000
 
 
 @pytest.mark.parametrize(

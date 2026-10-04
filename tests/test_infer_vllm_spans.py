@@ -28,7 +28,7 @@ from unittest import mock
 import pytest
 from jsonschema import Draft202012Validator
 
-from stormlog.infer import vllm_spans
+from stormlog.infer import otlp_wire, vllm_spans
 from stormlog.infer.config import ProfileConfig
 from stormlog.infer.correlation_events import RequestEvent, StageEvent
 from stormlog.infer.profile import InferenceProfiler
@@ -1267,6 +1267,42 @@ class TestReceiverAdmission:
                 tracemalloc.stop()
         assert len(body) == length
         assert peak < 2 * length + 64 * 1024
+
+    def test_a_protobuf_scan_past_the_request_deadline_is_answered_408(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The wire scan runs in Python, seconds for a body of millions of
+        tiny fields; it stops at the request's own deadline."""
+        deadlines: list[float | None] = []
+        parsed: list[int] = []
+        count = vllm_spans.count_trace_request
+
+        def spy(data: Any, **caps: Any) -> Any:
+            deadlines.append(caps["deadline"])
+            # The scan finds its deadline passed at its first look at the
+            # clock.
+            monkeypatch.setattr(
+                otlp_wire, "time", mock.Mock(monotonic=lambda: float("inf"))
+            )
+            return count(data, **caps)
+
+        monkeypatch.setattr(vllm_spans, "count_trace_request", spy)
+        monkeypatch.setattr(
+            vllm_spans, "parse_otlp_protobuf", lambda data: parsed.append(len(data))
+        )
+        limits = ReceiverLimits(request_deadline_seconds=30.0)
+        body = _small_message_export("empty_spans", 5_000)
+        with _receiver(limits=limits) as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            posted = time.monotonic()
+            status = _post(url, body, "application/x-protobuf")
+            metadata = receiver.capability_metadata()
+        assert status == 408
+        assert metadata["scan_timeouts"] == 1
+        assert parsed == []
+        (deadline,) = deadlines
+        assert deadline is not None
+        assert posted < deadline <= time.monotonic() + 30.0
 
     def test_too_many_spans_in_one_body_is_refused(self) -> None:
         with _receiver(limits=ReceiverLimits(max_spans_per_body=3)) as receiver:
