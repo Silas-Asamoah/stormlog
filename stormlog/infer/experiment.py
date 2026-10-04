@@ -11,8 +11,9 @@ first run it runs the block's preludes. Each run then:
 5. checks each treatment stayed up for the whole workload, then stops it;
 6. describes the server again (after) and attaches that to each artifact;
 7. stops the server's whole process group and checks nothing is left;
-8. checks the promised artifacts and their labels, writes ``SHA256SUMS``
-   and renames ``runs/<label>.partial`` to ``runs/<label>``.
+8. checks the promised artifacts and their labels, appends the run's state
+   to each (``infer.run_state``), writes ``SHA256SUMS`` and renames
+   ``runs/<label>.partial`` to ``runs/<label>``.
 
 Every run ends in one state, recorded in ``index.jsonl`` with its reasons:
 
@@ -87,6 +88,7 @@ from .manifest import (
 )
 from .model_identity import VerifiedModel, changed_files, prepare_model
 from .observers import TREATMENTS_EVENT
+from .run_summary import RUN_STATE_EVENT
 from .sanitize import sanitize_bundle
 from .server_collector import NvmlUnavailableError
 from .server_probe import AUTO, BEFORE, probe_server
@@ -470,6 +472,7 @@ class _Run:
     def finish(self) -> dict[str, Any]:
         self.record.ended_at_ns = time.time_ns()
         self.record.settle()
+        self._record_state()
         self._write_commands()
         (self.dir / "run.json").write_text(
             json.dumps(self.record.to_record(), indent=2, sort_keys=True) + "\n"
@@ -477,6 +480,22 @@ class _Run:
         _write_sums(self.dir)
         self.dir.rename(self.final_dir)
         return self.record.to_record()
+
+    def _record_state(self) -> None:
+        """Tell each artifact how the run ended, so a comparison need not trust
+        the session alone: an outcome is compared and counted against its
+        arm, and a protocol failure is the external cause that sets aside
+        its block."""
+        record = {
+            "event_type": RUN_STATE_EVENT,
+            "run_id": self.label,
+            "state": self.record.state,
+            "reasons": list(self.record.reasons),
+            "before_treatment": list(self.record.before_treatment),
+        }
+        for path in self._infer_artifacts():
+            with path.open("a") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
 
     # Server -------------------------------------------------------------
 
