@@ -22,9 +22,10 @@ documented way to stop it. It seals open incidents as interrupted, waits for
 its writers within one shutdown deadline (the store's writer gets two thirds
 of it, the ledger the rest), writes ``report.json`` and returns the exit
 code. A second signal (:meth:`Watcher.hurry`) cuts what is left of the
-shutdown to ``FAST_EXIT_SECONDS``, shared the same way. A writer that
-misses its time is left behind on a daemon thread, and the root and store
-stay locked, since it may still write there. The exit code is 1 when the watch could not judge or keep what it saw (no
+shutdown to ``FAST_EXIT_SECONDS``, shared the same way. A writer, the
+store's or the ledger's, that misses its time is left behind on a daemon
+thread, and the root and store stay locked, since it may still write
+there. The exit code is 1 when the watch could not judge or keep what it saw (no
 successful scrape, a failing ledger, every incident write failing) or could
 not write its report; else 3 when a counting incident was detected; else 0.
 """
@@ -550,8 +551,9 @@ class Watcher:
                 int(ExitCode.ERROR), None, unsound, self.incidents.sealed
             )
         finally:
-            # A store writer left behind may still write under the root.
-            if drained:
+            # A writer left behind, the store's or the ledger's, may still
+            # write under the root.
+            if drained and closed:
                 self.close()
         return WatchOutcome(exit_code, path, unsound, self.incidents.sealed)
 

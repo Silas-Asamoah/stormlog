@@ -811,6 +811,29 @@ def test_a_stalled_store_leaves_the_ledger_its_share(
     watcher.close()
 
 
+def test_a_ledger_left_behind_keeps_the_root(tmp_path: Path) -> None:
+    """Only the store's writer kept the root locked: a ledger writer left
+    behind still appending under it let a second watcher take the root."""
+    with serve_metrics(FakeMetrics()) as base_url:
+        watcher = Watcher(
+            resolve_watch_config(watch_config(base_url)),
+            tmp_path,
+            options=WatchOptions(duration_seconds=0.5),
+        )
+        real_close = watcher.ledger.close
+
+        def left_behind(timeout: float) -> bool:
+            real_close(timeout)
+            return False  # as if its writer were still running
+
+        watcher.ledger.close = left_behind  # type: ignore[method-assign]
+        outcome = asyncio.run(watcher.run(asyncio.Event()))
+    assert outcome.unsound == ["ledger_close_timeout"]
+    with pytest.raises(InferUsageError, match="another watcher"):
+        Watcher(resolve_watch_config(watch_config(base_url)), tmp_path)
+    watcher.close()
+
+
 @pytest.mark.parametrize("exporting", [False, True])
 def test_export_failures_are_null_without_an_exporter(
     tmp_path: Path, exporting: bool

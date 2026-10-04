@@ -259,9 +259,10 @@ Ctrl+C and SIGTERM are the documented way to end a watch: the exit code is
 still one of the above, never 130. On the first, the watch seals what is
 open and waits for its writers within the shutdown deadline (30 s: two
 thirds for the incident store, the rest for the ledger). A second cuts that
-to 5 s, shared the same way: a writer still busy at the end of its share
-is left behind and the watch is unsound, and the root stays locked until
-the process exits, since that writer may still write there. A third is the default interrupt. Once the report is
+to 5 s, shared the same way: a writer, the store's or the ledger's, still
+busy at the end of its share is left behind and the watch is unsound, and
+the root stays locked until the process exits, since that writer may still
+write there. A third is the default interrupt. Once the report is
 written, further signals are ignored, so the process exits with the code
 the report holds.
 
