@@ -487,6 +487,45 @@ def test_retention_by_age_and_by_bytes(tmp_path: Path) -> None:
     assert store.budget.used_bytes == 0
 
 
+def test_a_full_store_makes_room_for_the_newest_incident(tmp_path: Path) -> None:
+    """A flight recorder keeps the newest: the oldest unprotected bundles go
+    to fit a reservation, and only a reservation that still cannot fit is
+    refused."""
+    store = IncidentStore(
+        tmp_path, _limits(max_total_bytes=1000, max_incident_bytes=600)
+    )
+    base = time.time_ns()
+    oldest = _gen0_exact(store, b"a" * 500, now_ns=base)
+    kept = _gen0_exact(store, b"b" * 400, now_ns=base + 1)
+
+    writer = store.new_bundle(store.new_incident_id(), 300)
+    assert writer is not None
+    pruned = store.take_pruned()
+    assert [(p.incident_id, p.reason, p.bytes) for p in pruned] == [
+        (oldest, "max_total_bytes", 500)
+    ]
+    assert store.take_pruned() == []
+    writer.abandon()
+
+    # Never a protected bundle: open, or being finalized.
+    assert (
+        store.new_bundle(store.new_incident_id(), 700, protected=frozenset({kept}))
+        is None
+    )
+    assert store.manifest(kept) is not None
+    assert store.budget.used_bytes == store._scan_bytes()
+
+
+def _gen0_exact(store: IncidentStore, payload: bytes, *, now_ns: int) -> str:
+    incident_id = store.new_incident_id(now_ns)
+    writer = store.new_bundle(incident_id, len(payload))
+    assert writer is not None
+    with writer.file("incident.jsonl") as out:
+        out.write(payload)
+    writer.publish(sealed_at_ns=now_ns)
+    return incident_id
+
+
 def test_a_bundle_being_read_is_pruned_once_the_reader_leaves(
     tmp_path: Path,
 ) -> None:
