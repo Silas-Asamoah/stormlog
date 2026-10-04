@@ -779,6 +779,37 @@ def test_a_resume_waits_until_what_a_cleanup_left_is_gone(
     assert {r["state"] for r in resumed} == {"completed"}
 
 
+def test_a_resume_waits_until_a_process_the_cleanup_could_not_judge_is_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rev-213-a's N2: a stop caused only by a blind process did not hold the
+    # resume, and three servers started beside it.
+    import subprocess
+
+    from stormlog.infer import experiment
+    from stormlog.infer.experiment_process import Cleanup, identify
+
+    blind = subprocess.Popen(["/bin/sleep", "60"])
+    try:
+        real = experiment.verify_cleanup
+
+        def verify(*args: Any, **kwargs: Any) -> Cleanup:
+            result = real(*args, **kwargs)
+            return Cleanup(False, result.method, (), (), 1, (identify(blind.pid),))
+
+        monkeypatch.setattr(experiment, "verify_cleanup", verify)
+        document = _plan(_port(), order=TWO_BLOCKS)
+        _run(tmp_path, document)
+        monkeypatch.undo()
+        with pytest.raises(InferUsageError, match=f"left {blind.pid} running"):
+            _run(tmp_path, document, resume=True)
+    finally:
+        blind.kill()
+        blind.wait()
+    resumed = _run(tmp_path, document, resume=True)
+    assert {r["state"] for r in resumed} == {"completed"}
+
+
 def test_a_prelude_server_loads_the_verified_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
