@@ -159,5 +159,8 @@ absent (`requires_hook`). Write errors also count failed seals and
 `status.json` writes, which lose nothing, so this abstains more than it
 must. Only the epoch's `status.json`, passed as `config.status`, says the
 writer is capped (`hook_capped`): no heartbeat ever does.
-`detail["pause_capability"]` says whether the hook records pauses; without it
-a pause looks like a stall with ready work.
+`detail["pause_capability"]` says whether the hook records pauses. Without
+it a pause of every running request (vLLM's `PAUSED_ALL`, as for an RL
+weight sync) looks like a stall with ready work, so a stall over its limit is
+no verdict (`pause_state_unknown`). A pause can only remove stalls, so
+records with no stall over its limit still say none exceeded.

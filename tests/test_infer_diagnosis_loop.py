@@ -19,6 +19,7 @@ from stormlog.infer.diagnosis_loop import (
     REASON_CAPPED,
     REASON_COVERAGE_UNKNOWN,
     REASON_EPOCH_CHANGED,
+    REASON_PAUSE_UNKNOWN,
     REASON_RECORDS_DROPPED,
     REASON_REQUIRES_HOOK,
     REASON_TOO_FEW_STEPS,
@@ -47,6 +48,11 @@ SCHEDULE = 200_000  # 0.2 ms inside schedule()
 EPOCH = "engine-2600-1"
 
 
+def _hello() -> dict[str, Any]:
+    """An engine hello from a hook that records scheduler pauses."""
+    return hello("engine", 2600, 1, observes=["cache_reset", "enqueued", "pause"])
+
+
 def _decode(*internals: str) -> list[dict[str, Any]]:
     return [
         member(name, scheduled=1, sighting="repeat", computed_before=8)
@@ -66,7 +72,7 @@ def _loop(
 ) -> list[dict[str, Any]]:
     """A synchronous loop: schedule, run, complete, schedule the next. One
     stall of ``stall_ns`` may follow step ``stall_after`` in ``locus``."""
-    records: list[dict[str, Any]] = [hello("engine", 2600, 1)]
+    records: list[dict[str, Any]] = [_hello()]
     clock = T
     for index in range(steps):
         stalled = stall_after is not None and index == stall_after + 1
@@ -184,7 +190,6 @@ def test_an_idle_gap_without_continuing_work_is_not_a_stall() -> None:
 # ----------------------------------------------------------- no ready work
 def test_a_scheduler_pause_with_the_capability_is_not_a_stall() -> None:
     records = _loop(60, stall_after=40, stall_ns=300 * MS)
-    records[0]["observes"] = ["enqueued", "cache_reset", "pause"]
     completion = next(
         r["wall_ns"]
         for r in records
@@ -209,6 +214,22 @@ def test_a_scheduler_pause_with_the_capability_is_not_a_stall() -> None:
     assert signal.detail["pause_capability"] is True
 
 
+def test_without_the_pause_capability_a_stall_gives_no_verdict() -> None:
+    """A hook that does not record pauses cannot tell a stall from vLLM
+    pausing all running requests (an RL weight sync, say): a stall over its
+    limit is no verdict. A pause only removes stalls, so no stall over its
+    limit still is one."""
+    stalled = _loop(60, stall_after=40, stall_ns=300 * MS)
+    steady = _loop(60)
+    for records in (stalled, steady):
+        records[0].pop("observes")
+
+    signal = engine_loop_gap(stalled)
+    assert (signal.exceeds, signal.reason) == (None, REASON_PAUSE_UNKNOWN)
+    assert signal.detail["pause_capability"] is False
+    assert engine_loop_gap(steady).exceeds is False
+
+
 def test_pause_intervals_follow_paused_all_only() -> None:
     records = [
         {"kind": "pause", "from": "UNPAUSED", "to": "PAUSED_NEW", "wall_ns": 10},
@@ -229,7 +250,6 @@ def test_an_excluded_interval_is_not_a_stall() -> None:
     config = LoopGapConfig(exclude_wall=[(completion, completion + 300 * MS)])
     signal = engine_loop_gap(records, config)
     assert signal.exceeds is False
-    assert signal.detail["pause_capability"] is False
 
 
 # -------------------------------------------------------------- ongoing
@@ -314,7 +334,7 @@ def _capped_writer_log(tmp_path: Path) -> tuple[list[dict[str, Any]], dict[str, 
         "engine",
         limits=WriterLimits(max_bytes=25_000, heartbeat_seconds=0.02),
     )
-    writer.emit("hello", _fields(hello("engine", 2600, 1)))
+    writer.emit("hello", _fields(_hello()))
     for index, record in enumerate(_loop(60)[1:]):
         if record["kind"] == "heartbeat":
             continue
@@ -361,7 +381,7 @@ def test_drops_no_heartbeats_bracket_give_no_verdict(shape: str) -> None:
     """Missing completions make a false 90 ms gap; unless heartbeats on both
     sides show nothing lost across it, there is no verdict."""
     kept, counted = _dropped_completions()
-    first = hello("engine", 2600, 1)
+    first = _hello()
     windows = {
         # The hello (nothing lost) and one heartbeat counting the drops.
         "one_beat": [first, *kept, counted],
@@ -392,7 +412,7 @@ def test_drops_no_heartbeats_bracket_give_no_verdict(shape: str) -> None:
 
 def test_drops_heartbeats_bracket_are_a_counted_loss() -> None:
     kept, counted = _dropped_completions()
-    records = [hello("engine", 2600, 1), heartbeat(T, 0), *kept, counted]
+    records = [_hello(), heartbeat(T, 0), *kept, counted]
     signal = engine_loop_gap(_sequenced(records, beats=False))
     assert signal.reason == REASON_RECORDS_DROPPED
 
@@ -418,7 +438,7 @@ def _async_loop(steps: int, *, late_after: int | None = None) -> list[dict[str, 
     """Async scheduling: each step is scheduled while the previous one runs,
     3 ms before it completes. ``late_after`` delays one schedule() call
     until 300 ms after the previous completion."""
-    records: list[dict[str, Any]] = [hello("engine", 2600, 1)]
+    records: list[dict[str, Any]] = [_hello()]
     for index in range(steps):
         end = (
             T
@@ -450,7 +470,7 @@ def _idle_then_a_new_request(idle_ns: int) -> list[dict[str, Any]]:
     runs and finishes, an empty step follows, the engine idles with nothing
     to run, then request b arrives, and each of its steps is scheduled 3 ms
     before the one before it completes."""
-    records: list[dict[str, Any]] = [hello("engine", 2600, 1)]
+    records: list[dict[str, Any]] = [_hello()]
     ends = [T + (index + 1) * CADENCE for index in range(30)]
     for index, end in enumerate(ends):
         last = index == len(ends) - 1
@@ -485,7 +505,7 @@ def _two_runs_of(
 ) -> list[dict[str, Any]]:
     """One request runs ``steps`` steps, nothing runs for ``gap_ns``, then it
     runs ``steps`` more: synchronous steps of ``member_of(index)``."""
-    records: list[dict[str, Any]] = [hello("engine", 2600, 1)]
+    records: list[dict[str, Any]] = [_hello()]
     clock = T
     for index in range(2 * steps):
         if index == steps:
@@ -553,7 +573,7 @@ def _prefills_in_decode(
 ) -> list[dict[str, Any]]:
     """A 5 ms decode loop in which the steps of ``prefills`` also schedule
     (tokens, duration ns) of prefill."""
-    records: list[dict[str, Any]] = [hello("engine", 2600, 1)]
+    records: list[dict[str, Any]] = [_hello()]
     clock = T
     for index in range(steps):
         members = _decode("a", "b")
