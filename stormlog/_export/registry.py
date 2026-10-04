@@ -338,6 +338,7 @@ class Registry:
         for name in _sample_names(spec):
             if name in self._names:
                 raise ValueError(f"metric name {name!r} is already declared")
+        _check_const_labels(spec, self.const_labels)
         family = Family(self, spec, list(known), self.headroom, precreate)
         with self._lock:
             self.families.append(family)
@@ -511,6 +512,14 @@ def _check_name(name: str, kind: Kind, unit: str) -> None:
         stem = name[: -len("_total")]
     if unit and not stem.endswith(f"_{unit}"):
         raise ValueError(f"{name} must end in its unit, _{unit}")
+
+
+def _check_const_labels(spec: FamilySpec, const_labels: Mapping[str, str]) -> None:
+    """A label name may appear once per series: refuse a family that repeats one."""
+    own = set(spec.labels) | ({"le"} if spec.kind == "histogram" else set())
+    repeated = sorted(own & set(const_labels))
+    if repeated:
+        raise ValueError(f"{spec.name} repeats the constant labels {repeated}")
 
 
 def _check_labels(

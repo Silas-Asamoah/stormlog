@@ -107,6 +107,21 @@ def test_a_name_cannot_be_declared_twice_even_through_histogram_suffixes() -> No
         )
 
 
+def test_a_family_label_cannot_repeat_a_constant_label() -> None:
+    # It would render {model="m",model="a"}, which a scrape rejects whole.
+    registry = Registry(const_labels={"model": "m"})
+    with pytest.raises(ValueError, match="model"):
+        registry.add(
+            FamilySpec("stormlog_x_total", "counter", "h", labels=("model",)),
+            known=[{"model": "a"}],
+        )
+    assert registry.families == []
+    with pytest.raises(ValueError, match="le"):  # a histogram's bucket label
+        Registry(const_labels={"le": "x"}).add(
+            FamilySpec("stormlog_x", "histogram", "h", buckets=(1.0,))
+        )
+
+
 def test_constant_label_names_are_checked() -> None:
     with pytest.raises(ValueError):
         Registry(const_labels={"bad-name": "x"})
