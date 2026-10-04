@@ -9,7 +9,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -22,8 +22,9 @@ REPO = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(autouse=True)
 def _restore_signals() -> Iterator[None]:
-    """A watch run in this process leaves SIGINT and SIGTERM ignored, as the
-    process it is written for is about to exit."""
+    """A watch run as the console script, or the CLI's signal handling
+    driven directly, leaves SIGINT and SIGTERM ignored, as the process it
+    is written for is about to exit."""
     previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     yield
     for signum, handler in previous.items():
@@ -42,7 +43,9 @@ class _SignalledWatch:
     def hurry(self) -> None:
         self.hurried += 1
 
-    async def run(self, stop: asyncio.Event) -> str:
+    async def run(
+        self, stop: asyncio.Event, *, before_report: Callable[[], None]
+    ) -> str:
         loop = asyncio.get_running_loop()
         if not self.ending:
             loop.call_soon(os.kill, os.getpid(), signal.SIGINT)
@@ -136,6 +139,39 @@ def test_a_watch_of_a_quiet_server_exits_zero(
     report = tmp_path / "watch" / "report.json"
     assert f"Watch report: {report}" in capsys.readouterr().out
     assert json.loads(report.read_text())["verdict"]["exit_code"] == 0
+
+
+def test_a_watch_run_in_process_gives_the_signals_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """main(["watch", ...]) left SIGINT and SIGTERM ignored for the rest of
+    the process. They are ignored from the report's write, so no signal
+    changes the code it holds, and given back when main returns; the
+    console script, which exits at once, keeps them ignored."""
+    from stormlog.entrypoint import main as stormlog_main
+    from stormlog.infer.watch import watcher as watcher_module
+
+    seen: list[object] = []
+    real_write = watcher_module.write_report
+
+    def write(path: Path, report: object) -> None:
+        seen.append(signal.getsignal(signal.SIGINT))
+        real_write(path, report)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(watcher_module, "write_report", write)
+    previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+    path = tmp_path / "watch.json"
+    with serve_metrics(FakeMetrics()) as base_url:
+        path.write_text(json.dumps(watch_config(base_url)), encoding="utf-8")
+        assert _watch(tmp_path, "--config", str(path), "--duration", "0.5") == 0
+        assert seen == [signal.SIG_IGN]
+        assert {s: signal.getsignal(s) for s in previous} == previous
+        argv = ["stormlog", "infer", "watch", "--root", str(tmp_path / "again")]
+        monkeypatch.setattr(sys, "argv", [*argv, "--config", str(path)])
+        monkeypatch.setattr(sys, "argv", [*sys.argv, "--duration", "0.5"])
+        assert stormlog_main() == 0
+    assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+    assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
 
 
 def test_sigterm_ends_the_watch_with_a_report(tmp_path: Path) -> None:

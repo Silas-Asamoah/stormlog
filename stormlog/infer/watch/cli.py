@@ -59,7 +59,10 @@ def add_watch_parser(subparsers: Any) -> None:
     )
 
 
-def cmd_watch(args: argparse.Namespace) -> int:
+def cmd_watch(args: argparse.Namespace, *, restore_signals: bool = True) -> int:
+    """Run a watch; ``restore_signals`` puts back the SIGINT and SIGTERM
+    handlers it found when it returns, for a caller that goes on running.
+    The console script, which exits at once, leaves them ignored."""
     config = load_watch_config(
         args.config,
         overrides={
@@ -83,15 +86,20 @@ def cmd_watch(args: argparse.Namespace) -> int:
     watcher = Watcher(config, Path(args.root), options=options)
     for warning in watcher.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
-    # The watch leaves SIGINT and SIGTERM ignored: the process is about to
-    # exit with the code its report holds, and a late signal must not turn
-    # that into an interrupt.
-    outcome = asyncio.run(_run(watcher))
-    if outcome.report_path is not None:
-        print(f"Watch report: {outcome.report_path}")
-    if outcome.unsound:
-        print(f"Watch unsound: {', '.join(outcome.unsound)}", file=sys.stderr)
-    return outcome.exit_code
+    # From the report's write on, SIGINT and SIGTERM are ignored, so a late
+    # signal cannot turn the code the report holds into an interrupt.
+    previous = {signum: signal.getsignal(signum) for signum in _SIGNALS}
+    try:
+        outcome = asyncio.run(_run(watcher))
+        if outcome.report_path is not None:
+            print(f"Watch report: {outcome.report_path}")
+        if outcome.unsound:
+            print(f"Watch unsound: {', '.join(outcome.unsound)}", file=sys.stderr)
+        return outcome.exit_code
+    finally:
+        if restore_signals:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
 
 
 _SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -101,8 +109,8 @@ async def _run(watcher: Watcher) -> WatchOutcome:
     """Run until done: the first SIGINT or SIGTERM is the documented end, a
     second cuts the shutdown short, and a third is the default interrupt. A
     signal while a shutdown the duration began is under way cuts it short
-    at once: the watch is already ending. Once the watch has returned, both
-    are ignored for good, so the exit code stays the one the report holds."""
+    at once: the watch is already ending. From the report's write on, both
+    are ignored, so the exit code stays the one the report holds."""
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     installed: list[signal.Signals] = []
@@ -122,7 +130,7 @@ async def _run(watcher: Watcher) -> WatchOutcome:
         except (NotImplementedError, RuntimeError):
             pass
     try:
-        return await watcher.run(stop)
+        return await watcher.run(stop, before_report=lambda: _ignore(loop, installed))
     finally:
         _ignore(loop, installed)
 
