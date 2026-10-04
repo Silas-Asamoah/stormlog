@@ -307,6 +307,24 @@ def _preempt(engine: Engine, request: FakeRequest) -> None:
         engine._preempt(request, [])
 
 
+def test_a_request_admitted_in_the_same_step_hits_its_siblings_blocks() -> None:
+    # vLLM caches a request's full blocks when its slots are allocated
+    # (KVCacheManager.allocate_slots), so a second request with the same
+    # prompt admitted later in the same schedule() hits them. Caching only
+    # after the step completed gave it no hits, and each request its own copy.
+    engine = _stepped_engine()
+    first = _request(engine, "a", words(40, "p"), max_tokens=2)
+    second = _request(engine, "b", words(40, "p"), max_tokens=2)
+    step = _step(engine)
+    assert [member.request for member in step.members] == [first, second]
+    assert first.prompt_len == 44
+    # The lookup leaves the last prompt token to compute: 10 blocks of 4.
+    assert (first.cached_at_admission, second.cached_at_admission) == (0, 40)
+    assert engine.stats.prefix_hits == 40
+    assert second.block_ids[:10] == first.block_ids[:10]
+    assert engine.pool.held_count() == 11 + 1
+
+
 def test_a_resumed_request_reuses_its_own_generated_blocks() -> None:
     # vLLM hashes and caches every full block, generated tokens included, so a
     # request resumed after preemption hits blocks past its prompt.

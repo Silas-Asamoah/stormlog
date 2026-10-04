@@ -365,6 +365,7 @@ class Engine:
                 self._preempt(self.running[-1], preempted)
                 if request.status != "RUNNING":
                     return budget
+            self._cache_allocated(request, want)
             members.append(self._member(request, want))
             budget -= want
             index += 1
@@ -391,6 +392,7 @@ class Engine:
             request.computed = computed
             # It fits, so this takes every block it needs.
             self._grow(request, want)
+            self._cache_allocated(request, want)
             self.waiting.popleft()
             self.running.append(request)
             self._admit(request)
@@ -523,7 +525,6 @@ class Engine:
             raise AssertionError(f"{request.internal_id} was preempted mid-step")
         request.computed += member.tokens
         request.committed = request.computed
-        self._cache_full_blocks(request)
         if not member.sampled:
             return
         self._sample(request)
@@ -532,10 +533,14 @@ class Engine:
             member.finish_reason = "length"
             freed.append(request)
 
-    def _cache_full_blocks(self, request: FakeRequest) -> None:
-        """Cache every full computed block, generated tokens included, as
-        vLLM does."""
-        full = request.computed // self.config.block_size
+    def _cache_allocated(self, request: FakeRequest, scheduled: int) -> None:
+        """Cache every full block the step will compute, generated tokens
+        included, when its slots are allocated, as vLLM's allocate_slots does:
+        up to the computed tokens plus those scheduled now, never past the
+        tokens the request has. A request admitted later in the same step
+        then hits them, instead of computing and caching its own copy."""
+        upto = min(request.computed + scheduled, request.num_tokens)
+        full = upto // self.config.block_size
         if len(request.block_hashes) < full:
             request.block_hashes = self.pool.block_hashes(request.tokens)
         for index in range(min(full, len(request.block_hashes))):
