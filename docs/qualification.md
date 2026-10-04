@@ -152,7 +152,9 @@ configuration's capture.
 - the maximum KV usage;
 - the busy step gaps' and the chunk gaps' count, mean, p95 and p99. A step
   gap is busy when a victim request was in flight for all of it; a gap that
-  spans an idle period measures the traffic, not the engine;
+  spans an idle period measures the traffic, not the engine. `in_flight` has
+  no default: a caller that doesn't know the intervals says None, and then
+  no gap is busy and cadence recovery never holds;
 - the median cached fraction.
 
 `effect_timing(episode_type, context)` gives each mechanism's onset, its end

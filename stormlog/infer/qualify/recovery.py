@@ -75,11 +75,12 @@ class Signals:
     a victim request was preempted, from the hook's ``scheduled.preempted``.
     ``waiting`` and ``kv_usage`` are scraped gauges. ``step_starts`` are hook
     step starts, and ``chunk_gaps`` the victim's gaps between streamed
-    chunks, in seconds, at the later chunk. ``in_flight`` holds the sorted,
-    disjoint intervals during which at least one victim request was in
-    flight; None means unknown, and every step gap then counts as busy.
-    ``engine_hit_ratio`` is the engine-wide prefix-cache hit ratio between
-    consecutive scrapes.
+    chunks, in seconds, at the later chunk. ``engine_hit_ratio`` is the
+    engine-wide prefix-cache hit ratio between consecutive scrapes.
+    ``in_flight`` holds the sorted, disjoint intervals during which at least
+    one victim request was in flight. It has no default: a caller that
+    doesn't know says None, and then no step gap counts as busy, so cadence
+    recovery never holds rather than judging idle gaps as the engine's.
     """
 
     waits: Sequence[Point] = ()
@@ -89,8 +90,8 @@ class Signals:
     kv_usage: Sequence[Point] = ()
     step_starts: Sequence[int] = ()
     chunk_gaps: Sequence[Point] = ()
-    in_flight: Sequence[tuple[int, int]] | None = None
     engine_hit_ratio: Sequence[Point] = ()
+    in_flight: Sequence[tuple[int, int]] | None = field(kw_only=True)
 
     def step_gaps(self) -> list[Point]:
         """Each step's gap from the one before, in seconds, at its start."""
@@ -102,10 +103,11 @@ class Signals:
 
     def busy_step_gaps(self) -> list[Point]:
         """The step gaps that lie wholly inside an in-flight interval. A gap
-        that spans an idle period measures the idling, not the engine."""
+        that spans an idle period measures the idling, not the engine; with
+        the intervals unknown, no gap can be shown busy."""
         intervals = self.in_flight
         if intervals is None:
-            return self.step_gaps()
+            return []
         opens = [start for start, _end in intervals]
         starts = self.step_starts
         return [

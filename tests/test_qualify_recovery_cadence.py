@@ -27,6 +27,9 @@ from stormlog.infer.qualify.recovery import (
 
 S = 1_000_000_000
 MS = 1_000_000
+
+# A victim request always in flight: every step gap is a busy one.
+ALWAYS = ((0, 10**18),)
 BASELINE_END = 45 * S
 FIRST_PULSE = 55 * S
 DEGRADED_FOR = 60 * S
@@ -80,6 +83,7 @@ def run(
     unrecorded: list[tuple[int, int]] | None = None,
     stall_after_last_s: float = 0.0,
     idle_when_degraded: Callable[[float], bool] | None = None,
+    known_in_flight: bool = True,
 ) -> Timing:
     """F4a: 45 s of baseline, ten recorded 100 ms pulses, 60 s of the
     degraded engine after the last SIGCONT, then the baseline engine."""
@@ -106,7 +110,8 @@ def run(
         if idle:
             engine.idle.append((at, following))
         at = following
-    signals = Signals(step_starts=engine.steps, in_flight=engine.in_flight())
+    in_flight = engine.in_flight() if known_in_flight else None
+    signals = Signals(step_starts=engine.steps, in_flight=in_flight)
     actions = Actions(
         first_stop_confirmed_ns=FIRST_PULSE, last_continue_ns=LAST, pulses=PULSES
     )
@@ -158,6 +163,22 @@ def test_an_engine_still_degraded_does_not_recover(
     timings = [run(seed, DEGRADED[name], idle_share=idle_share) for seed in SEEDS]
     # The degradation lasts 60 s; recovery can't begin much before it ends.
     assert not any(recovered_by(timing, 55.0) for timing in timings)
+
+
+@pytest.mark.parametrize(
+    "name", ["every step 2x slow", "bimodal: 2 s normal, 2 s of 500 ms gaps"]
+)
+def test_without_in_flight_intervals_cadence_never_recovers(name: str) -> None:
+    # A caller that doesn't know when the victim was in flight says None.
+    # No gap can then be shown busy, so recovery never holds: not for a
+    # degraded engine, which every gap would let recover at once with 6%
+    # idle gaps in the baseline, and not for a healthy one either.
+    for degraded in (DEGRADED[name], None):
+        timings = [
+            run(seed, degraded, idle_share=0.06, known_in_flight=False)
+            for seed in SEEDS
+        ]
+        assert all(timing.end_ns is None for timing in timings)
 
 
 @pytest.mark.parametrize("idle_share", [0.0, 0.06])
@@ -227,7 +248,7 @@ def test_jittered_engines_recover_in_every_seed(episode_type: str) -> None:
             (at * 50 * MS, rng.lognormvariate(0, 0.25) * 0.05)
             for at in range(1, (pulses[-1][1] + 200 * S) // (50 * MS))
         ]
-        signals = Signals(step_starts=steps, chunk_gaps=chunks)
+        signals = Signals(in_flight=ALWAYS, step_starts=steps, chunk_gaps=chunks)
         actions = Actions(
             first_stop_confirmed_ns=pulses[0][0],
             last_continue_ns=pulses[-1][1],
@@ -259,7 +280,7 @@ def test_the_front_end_waits_for_its_chunk_cadence_too() -> None:
         )
         for at in range(1, (LAST + 200 * S) // (50 * MS))
     ]
-    signals = Signals(step_starts=steps, chunk_gaps=chunks)
+    signals = Signals(in_flight=ALWAYS, step_starts=steps, chunk_gaps=chunks)
     actions = Actions(
         first_stop_confirmed_ns=FIRST_PULSE, last_continue_ns=LAST, pulses=PULSES
     )
@@ -303,7 +324,7 @@ def test_an_idling_engines_slowdown_does_not_recover(
             for stop, cont in PULSES:
                 if stop < at < cont:
                     at = cont
-        signals = Signals(step_starts=steps)
+        signals = Signals(in_flight=ALWAYS, step_starts=steps)
         actions = Actions(
             first_stop_confirmed_ns=FIRST_PULSE, last_continue_ns=LAST, pulses=PULSES
         )
