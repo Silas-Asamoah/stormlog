@@ -134,3 +134,16 @@ def test_a_short_output_does_not_actuate() -> None:
     shape = NeighborShape(8, 64, rate_per_second=10.0)
     short = [_request(at=i * S // 10, output=6) for i in range(10)]
     assert judge(short, shape, 1.0).problems == ("output tokens 0.094x the dose",)
+
+
+def test_a_closed_loops_busy_share_ignores_the_tail_after_its_window() -> None:
+    # Four workers busy for the whole 1 s window, then finishing one by one
+    # over 0.5 s more: the tail is not idle time in the window.
+    shape = NeighborShape(8, 4, concurrency=4)
+    busy = [
+        _request(at=i * S // 10, ended=(i + 1) * S // 10)
+        for i in range(10)
+        for _worker in range(4)
+    ]
+    tail = [_request(at=S, ended=S + worker * S // 8) for worker in range(4)]
+    assert judge(busy + tail, shape, 1.0).ok

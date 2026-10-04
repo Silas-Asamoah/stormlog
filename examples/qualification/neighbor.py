@@ -193,7 +193,9 @@ def judge(
         problems += _window_problems(sent, planned or 0.0, duration_seconds)
         problems += _lag_problems(sent)
     else:
-        problems += _closed_loop_problems(sent, shape.concurrency or 0)
+        problems += _closed_loop_problems(
+            sent, shape.concurrency or 0, duration_seconds
+        )
     problems += _dose_problems(sent, shape)
     if tally.failed:
         problems.append(f"{tally.failed} requests failed")
@@ -278,8 +280,12 @@ def _lag_problems(sent: list[dict[str, Any]]) -> list[str]:
     return []
 
 
-def _closed_loop_problems(sent: list[dict[str, Any]], workers: int) -> list[str]:
-    """Every worker busy: the time-weighted number in flight over the run."""
+def _closed_loop_problems(
+    sent: list[dict[str, Any]], workers: int, duration_seconds: float
+) -> list[str]:
+    """Every worker busy: the time-weighted number in flight over the
+    planned window from the first send (the tail after it, as the last
+    requests finish one by one, doesn't count)."""
     if len(sent) < workers:
         return ["fewer requests than workers"]
     spans = [
@@ -287,10 +293,12 @@ def _closed_loop_problems(sent: list[dict[str, Any]], workers: int) -> list[str]
         for r in sent
         if r.get("ended_at_ns") is not None
     ]
-    if not spans:
+    if not spans or duration_seconds <= 0:
         return ["no request ended"]
-    first, last = min(s for s, _e in spans), max(e for _s, e in spans)
-    busy = sum(end - start for start, end in spans) / max(1, last - first)
+    first = min(start for start, _end in spans)
+    last = first + int(duration_seconds * SECOND)
+    inside = sum(max(0, min(end, last) - max(start, first)) for start, end in spans)
+    busy = inside / (last - first)
     if busy < BUSY_SHARE * workers:
         return [f"{busy:.2g} of {workers} workers busy on average"]
     return []
