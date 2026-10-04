@@ -48,8 +48,9 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # a factor of two) to compare it with steps of its size.
         LOOP_MATCHED_BIN_MIN_STEPS: 20.0,
         # A stall still going on is judged only while the hook's writer was
-        # heard from this recently: about two of its one-second heartbeats.
-        LOOP_HEARTBEAT_GRACE_NS: 2_000_000_000.0,
+        # heard from this recently: three of its one-second heartbeats, since
+        # under load they slip (2.3 s apart on a real vLLM 0.30.0 run).
+        LOOP_HEARTBEAT_GRACE_NS: 3_000_000_000.0,
     }
 )
 

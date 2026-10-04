@@ -548,6 +548,17 @@ def test_an_ongoing_stall_needs_the_writer_heard_from_lately() -> None:
     assert (signal.exceeds, signal.reason) == (None, REASON_COVERAGE_UNKNOWN)
 
 
+def test_an_ongoing_stall_survives_a_slipped_heartbeat() -> None:
+    """Under load the writer's beats slip (2.3 s apart on a real run): a
+    stall going on is still judged 2.5 s after the last beat."""
+    records = _loop(60)
+    end = _end(records)
+
+    signal = engine_loop_gap(records, LoopGapConfig(now_wall_ns=end + 2_500 * MS))
+
+    assert signal.detail["ongoing"] and signal.exceeds is True
+
+
 def test_no_steps_or_no_completed_step() -> None:
     assert engine_loop_gap([]).reason == REASON_REQUIRES_HOOK
     only_scheduled = _sequenced([r for r in _loop(5) if r["kind"] != "completed"])
