@@ -1148,12 +1148,43 @@ def test_a_prelude_server_left_running_stops_the_experiment(
     document["block_prelude"] = [
         {"name": "warm", "server_arm": "off", "command": ["{python}", "-c", "pass"]}
     ]
-    first, *rest = _run(tmp_path, document)
-    assert first["reasons"] == ["prelude_failed:warm:cleanup_unverified"]
-    assert first["processes"] == []
-    assert len(rest) == 3 and {r["state"] for r in rest} == {"not_run"}
+    records = _run(tmp_path, document)
+    # rev-213-a's N4, as the lead ruled: a prelude's unverified cleanup is a
+    # stop, whatever the block's arms would do; no attempt starts.
+    assert [(r["type"], r["state"], r["reasons"]) for r in records] == [
+        ("not_run", "not_run", ["cleanup_unverified"])
+    ] * 4
+    assert {r["stopped_after"] for r in records} == {"prelude b00-warm"}
+    assert not (tmp_path / "exp" / "runs").exists() or not any(
+        (tmp_path / "exp" / "runs").iterdir()
+    )
     cleanup = tmp_path / "exp" / "preludes" / "b00-warm" / "cleanup.json"
     assert json.loads(cleanup.read_text())["verified"] is False
+
+
+def test_a_resume_runs_no_prelude_for_a_block_it_will_not_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rev-213-a's N4 (p14): a resume relaunched every finished block's
+    # prelude server, and that one's unverified cleanup stopped nothing.
+    document = _plan(_port(), order=TWO_BLOCKS)
+    document["block_prelude"] = [
+        {"name": "warm", "server_arm": "off", "command": ["{python}", "-c", "pass"]}
+    ]
+    # Block 0's prelude, off's server, watch's treatment and server; then
+    # block 1's prelude server is left running.
+    _survivor_on_calls(monkeypatch, 5)
+    records = _run(tmp_path, document)
+    assert [r["state"] for r in records] == ["completed"] * 2 + ["not_run"] * 2
+    preludes = tmp_path / "exp" / "preludes"
+    before = (preludes / "b00-warm" / "launches.ndjson").read_text()
+    monkeypatch.undo()
+    resumed = _run(tmp_path, document, resume=True)
+    assert [(r["block"], r["state"]) for r in resumed] == [
+        (1, "completed"),
+        (1, "completed"),
+    ]
+    assert (preludes / "b00-warm" / "launches.ndjson").read_text() == before
 
 
 def test_the_bundle_is_scanned_for_the_plans_secrets(
