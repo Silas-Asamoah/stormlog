@@ -1,15 +1,17 @@
 [← Back to main docs](index.md)
 
-# Exporting inference metrics
+# Exporting inference metrics and spans
 
-`stormlog infer profile` can expose what it measures to Prometheus while the
-run lasts. The JSONL artifact is still written in full, and stays the
-record the analysis reads. The export is optional and off unless you ask
-for it. Standard `OTEL_*` environment variables never turn it on.
+`stormlog infer profile` can expose what it measures to Prometheus, and
+send its own spans to an OpenTelemetry collector, while the run lasts. The
+JSONL artifact is still written in full, and stays the record the analysis
+reads. Each export is optional and off unless you ask for it. Standard
+`OTEL_*` environment variables never turn one on.
 
 **What is exported:** what Stormlog itself measured or decided, such as
 client-observed latencies, request outcomes, token counts, scrape health
-and the exporter's own health.
+and the exporter's own health; and, as spans, the capture, its phases and
+every request it sent.
 
 **What is not exported:** anything Stormlog collected from the engine. A
 `vllm:*` series scraped from vLLM's `/metrics` is never re-exposed, a span
@@ -262,6 +264,193 @@ for `export.prometheus`:
 That record is written when the capture ends, after the exporter has
 stopped and frozen its values, and before the session's last record.
 
+## Exporting spans
+
+Send spans over OTLP/HTTP to a collector, or write them to a file:
+
+```bash
+stormlog infer profile ... --otlp-endpoint http://127.0.0.1:4318
+stormlog infer profile ... --otlp-file artifacts/spans.jsonl
+```
+
+| Flag | What it does |
+| --- | --- |
+| `--otlp-endpoint URL` | POST spans to this OTLP/HTTP traces URL. A bare origin gets `/v1/traces`. Requests are protobuf with the `infer-otlp` extra installed, JSON without it, and always gzip-compressed. Credentials in the URL are refused: use `--otlp-header`. |
+| `--otlp-file PATH` | Append spans to PATH as OTLP JSON, one export request per line, up to 256 MiB: the format of the OpenTelemetry Collector's file exporter, which its `otlpjsonfile` receiver reads. A line is written whole or not at all. Use this or `--otlp-endpoint`, not both. |
+| `--otlp-file-fsync` | fsync the file after each line. |
+| `--otlp-header NAME=VALUE` | A request header, such as an API key; repeatable. `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` are read too, flags winning. Values are sent, never recorded. |
+| `--otlp-resource-attribute KEY=VALUE` | A resource attribute; repeatable. See "The resource" below. |
+| `--otlp-resource-attribute-allow KEY` | Accept one more resource key. |
+| `--otlp-sample-ratio RATIO` | Keep this fraction of successful request spans (default 1). Failed and cancelled requests are always kept. |
+| `--otlp-flush-timeout SECONDS` | How long the end of the run waits for spans to leave (default 5; at most 2 after Ctrl+C). |
+| `--otlp-probe-interval SECONDS` | While the collector is down, how often it is retried (default 8; 0.5 to 30). |
+| `--export-content ITEMS` | Free text spans may carry, comma-separated: `digests`, `errors`, `prompts`, `outputs`. Default none; see "What a span holds". |
+
+Spans and Prometheus can be used together, or either alone. With both, the
+span exporter's own figures are also metrics (see "The span exporter's
+health").
+
+### The spans
+
+| Span | Kind | Where | One per |
+| --- | --- | --- | --- |
+| `stormlog.infer.capture` | INTERNAL | the root of the capture's trace | run, sent as the capture ends |
+| `stormlog.infer.phase` | INTERNAL | child of the capture | phase window (warmup and measured, per case) |
+| `stormlog.infer.trace_window` | INTERNAL | child of the capture | profiler window (with `--trace`) |
+| `stormlog.infer.request` | CLIENT | its own trace, linked to its phase | request sent: never one dropped before sending |
+
+A request span with `--trace-context` keeps the trace and span IDs sent in
+its `traceparent`, so a tracing vLLM's span for that request is its child.
+Without it, a request's IDs, like every other span's, are derived from the
+session and the record: the same artifact always maps to the same spans.
+
+`--otlp-sample-ratio` keeps a successful request span when the lowest 56
+bits of its trace ID are at least (1 − ratio) · 2⁵⁶; left-out spans are
+counted as `sampled_out`. A failed or cancelled request is always kept.
+
+### What a span holds
+
+Every attribute is on a fixed list, and every value is a configuration
+identifier, an ID Stormlog made, a value from a closed set, or a number:
+
+- **Request spans:** `gen_ai.operation.name` (`chat`),
+  `gen_ai.request.model`, `gen_ai.request.max_tokens`, `server.address`,
+  `server.port`, `http.request.method`, `url.path`,
+  `http.response.status_code`, `error.type`,
+  `gen_ai.response.time_to_first_chunk`, and `stormlog.*`: the run, session,
+  request and `X-Request-Id`, the case and phase, `request.status`, the
+  arrival mode and index, dispatch lag, time to first token (also a
+  `stormlog.first_token` event), prompt and output token counts with their
+  sources, the prompt ID, prefix group and shared prefix, and the chunk
+  count.
+- **Status:** `timeout`, `rejected`, `error` and `unreachable` are ERROR,
+  with `error.type` set to the status, the HTTP status code, or the
+  exception's class name. `cancelled`, where Stormlog stopped waiting at its
+  own drain deadline, leaves the status unset; `stormlog.request.status`
+  says what happened.
+- **A server's error** is reduced to its OpenAI-style `type` and `code`,
+  each mapped to a known value or `other`: `stormlog.error.api_type` and
+  `stormlog.error.api_code`. Its message and `param` are left out.
+- **URLs:** only the endpoint's host and port. `url.path` is the path only
+  when it is a standard one (`/v1/chat/completions`, `/v1/completions`,
+  `/metrics`, `/v1/traces`), and `<redacted>` otherwise. `url.full` is
+  never exported.
+- No `gen_ai.usage.*`: token counts come from Stormlog's records, with
+  their sources.
+
+`--export-content` adds free text, each item cut to 1 KiB:
+- `digests`: the prompt's digest, from the artifact, and the output's;
+- `errors`: the server's error text, as the span's status message, and a
+  trace window's control error. A server's error can echo the request, so
+  this is consent to export echoed prompt text even without `prompts`;
+- `prompts`, `outputs`: the request's text.
+
+Consented text passes through pattern scrubbing (bearer tokens, `key=`
+pairs, URL credentials, common key shapes). Every exported string, consented
+or not, has every credential the run was given replaced with `<redacted>`:
+the API key, the OTLP header values, and the user names, passwords and query
+values of the run's URLs, in raw, percent-encoded, JSON-escaped and base64
+forms.
+
+### The resource
+
+Every span's resource has `service.name` (`stormlog`), `service.version`,
+`service.instance.id` (the session ID), `host.name`, `process.pid` and
+`stormlog.run_id`. More attributes can come from `OTEL_RESOURCE_ATTRIBUTES`,
+`OTEL_SERVICE_NAME` and `--otlp-resource-attribute`, in that order, a later
+one winning. Only these keys are accepted:
+
+`service.name`, `service.namespace`, `service.version`,
+`service.instance.id`, `deployment.environment.name`,
+`deployment.environment`, `host.name`, `host.id`, `host.arch`, `os.type`,
+`k8s.cluster.name`, `k8s.namespace.name`, `k8s.pod.name`, `k8s.pod.uid`,
+`k8s.node.name`, `k8s.deployment.name`, `k8s.statefulset.name`,
+`k8s.container.name`, `cloud.provider`, `cloud.platform`, `cloud.region`,
+`cloud.availability_zone`, `container.name`, `container.id`.
+
+`--otlp-resource-attribute-allow KEY` accepts another key, unless its name
+contains `pass`, `pwd`, `secret`, `token`, `key`, `auth`, `bearer`, `cred`,
+`cookie`, `session`, `signature` or `private`: that is refused (exit 2). A
+value must be printable and at most 128 characters. Any key left out is
+listed by name, never with its value, in the `export.otlp` record.
+
+### Delivery and accounting
+
+Spans are batched (512 spans, 4 MiB, or one second after the first) and
+sent one batch at a time, each attempt on its own connection within 5 s.
+Each attempt is classified by what is known:
+
+| Attempt | When |
+| --- | --- |
+| `confirmed` | a readable 200, which says how many spans were rejected |
+| `refused` | a 3xx (never followed), a 4xx, 429 or 503 |
+| `ambiguous` | the body was sent, then a timeout or reset; a 5xx other than 503; any 2xx other than 200; or a 200 whose body is unreadable, over 64 KiB, or claims an impossible rejection count |
+| `not_sent` | the name did not resolve, the connection or TLS failed, or the body did not all leave |
+
+Timeouts, resets, 429, 502, 503, 504 and connection failures are retried,
+with exponential backoff from 0.5 s to 8 s and full jitter, within 5
+attempts or 30 s per batch, honoring `Retry-After`. A `Retry-After` beyond
+that budget ends the batch at once. Every span offered then ends in exactly
+one disposition:
+
+| Disposition | Meaning |
+| --- | --- |
+| `exported` | confirmed stored, or written whole to the file |
+| `rejected` | the collector confirmed it rejected them |
+| `refused{status_class}` | definitely not taken: `http_4xx`, `throttled` or `redirect` |
+| `dropped{reason}` | never sent: the queue (2,048 spans or 8 MiB) was full, the exporter had closed or was shutting down, it could not be encoded, or the destination never answered (`connect_refused`, `connect_timeout`, `dns`, `tls`, `send_failed`, `file_full`, `file_error`, `file_disabled`) |
+| `unknown{reason}` | sent, but the collector may or may not have stored them: `timeout_after_send`, `reset_after_send`, `http_5xx`, `unreadable_response`, `nonconformant_response`, `shutdown_in_flight`, `file_partial`, or `rejected_after_ambiguous` / `refused_after_ambiguous`, when an earlier attempt of the same batch was ambiguous |
+
+At every instant, `offered` = `exported` + `rejected` + `refused` +
+`dropped` + `unknown` + `queued` + `in_flight`, and when the run ends both
+`queued` and `in_flight` are 0: the end of the capture waits at most
+`--otlp-flush-timeout`, then settles whatever is left (`dropped{shutdown}`,
+or `unknown{shutdown_in_flight}` for a batch being sent). An answer that
+arrives later is counted under `late_results` and changes nothing.
+
+A collector can store a batch more than once when its answer is lost and the
+batch is sent again. `max_extra_copies` bounds the extra spans that can
+cause. Compared with what a collector really received, the counts always
+satisfy:
+- `exported` ≤ unique spans received ≤ `exported` + `unknown`;
+- raw spans received − unique spans received ≤ `max_extra_copies`.
+
+After 3 batches in a row end without a confirmed attempt, the destination is
+marked down. While it is down, new spans queue up to the bounds, and the
+batch at the head is retried once per `--otlp-probe-interval`; one
+confirmed attempt marks it up again. The `export.otlp` record lists the
+transitions (`first_failure`, `breaker_open`, `first_success`,
+`breaker_closed`, at most 64), each with its time and reason.
+
+A proxy set in `HTTP_PROXY` or `HTTPS_PROXY` is not used: spans go straight
+to the endpoint, and a non-loopback endpoint with a proxy variable set
+prints one warning.
+
+### The span exporter's health
+
+The `export.otlp` record in the artifact holds the destination (its origin,
+or the file), the encoding, the header names (never their values), the
+resource keys and the keys left out, the sampling ratio, the trace-context
+policy and declared server sampler, the content items, and the final
+summary: the dispositions above, `sampled_out`, `late_results`, attempts by
+kind and category, retries, batches, encoded and sent bytes, the first
+error's kind, category and status, the transitions, and how long the flush
+at the end took.
+
+With Prometheus on too, the same figures are metrics:
+`stormlog_export_spans_{offered,exported,rejected,sampled_out,possibly_duplicated}_total`,
+`stormlog_export_spans_refused_total{status_class}`,
+`stormlog_export_spans_dropped_total{reason}`,
+`stormlog_export_spans_unknown_total{reason}`,
+`stormlog_export_in_flight_spans`, `stormlog_export_queue_spans`,
+`stormlog_export_queue_capacity_spans`,
+`stormlog_export_requests_total{outcome}`, `stormlog_export_retries_total`,
+`stormlog_export_destination_up`,
+`stormlog_export_last_success_timestamp_seconds`,
+`stormlog_export_sent_bytes_total` and
+`stormlog_export_late_results_total{outcome}`.
+`possibly_duplicated` is `max_extra_copies`.
+
 ## Trace context
 
 `--trace-context` sends a W3C `traceparent` header with each request, beside
@@ -323,6 +512,10 @@ NAME[:ARG]` records it as you declare it, unverified.
 | The matrix is over the budget, or the slot is held | Refused before anything is sent | 2 |
 | Ctrl+C | The exporter stops within 2 s, writes its final textfile and capability record, and skips the linger. A second Ctrl+C while it stops ends its waiting, not its steps: the values still freeze and the final file and record are still written. A Ctrl+C while the record is written takes effect once it is, and a second one at once, so a write stuck on a hung filesystem can still be broken off | 130, as before |
 | The run fails after the exporter started | The exporter is stopped the same way, within 2 s, so the final file says the run ended | unchanged |
+| The collector is down, slow or refusing | Spans are retried, then counted as `dropped`, `unknown` or `refused`; the run waits at most `--otlp-flush-timeout` at its end | unchanged |
+| The span file cannot be opened | One warning; `export.otlp` says `available: false`; every span is `dropped{file_disabled}` | unchanged |
+| The span queue is full | The span is dropped and counted; the artifact has the record | unchanged |
+| A bad OTLP URL, header or content item, a forbidden `--otlp-resource-attribute-allow`, or both `--otlp-endpoint` and `--otlp-file` | Refused before anything is sent | 2 |
 
 ## Cost
 
@@ -331,7 +524,10 @@ The exporter runs beside the requests it measures:
   one append to a bounded queue. It never takes the metrics lock or does I/O.
 - **Chunk gaps** are summarized on the request's own thread, so a long
   response costs the loop nothing extra.
-- **Metric updates, rendering and the textfile** run on their own threads.
+- **Metric updates, rendering and the textfile** run on their own threads,
+  and so do span building, batching and delivery. A span's extras (the
+  server's error type, consented content) are prepared on the request's own
+  thread too.
 
 Under Python's GIL, any other running thread can still delay the event loop
 by up to a switch interval (5 ms by default). The design limits how often
