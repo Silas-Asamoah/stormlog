@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stormlog.readthedocs.io/en/latest/schemas/inference_telemetry_v1.schema.json",
+  "title": "Stormlog inference host telemetry sample v1",
+  "description": "One counter reading from an inference host. The loader also checks rules this schema cannot state: clock_domain is exactly {host}/{boot_id}/unix_epoch_ns ({host}/unix_epoch_ns without a boot ID), a group member's rank is below world_size, and integers have no decimal point or exponent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_type",
+    "scope",
+    "clock_domain",
+    "counter_owner",
+    "run_id",
+    "identity",
+    "observed_at_ns",
+    "metric",
+    "value_bytes",
+    "state",
+    "source",
+    "interval_ms",
+    "detail",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_type": { "const": "infer.telemetry_sample" },
+    "scope": { "enum": ["server_process", "gpu_device", "gpu_instance"] },
+    "clock_domain": { "type": "string", "pattern": "^.+/unix_epoch_ns$" },
+    "counter_owner": {
+      "enum": [
+        "operating_system_process",
+        "gpu_process",
+        "allocator",
+        "engine_cache",
+        "gpu_device",
+        "gpu_instance"
+      ]
+    },
+    "run_id": { "type": "string", "minLength": 1 },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "pid",
+        "process_start_ns",
+        "device_uuid",
+        "gpu_instance_id",
+        "replica_id",
+        "rank",
+        "boot_id"
+      ],
+      "properties": {
+        "host": { "type": "string", "minLength": 1, "pattern": "^[^/]+$" },
+        "pid": { "type": "integer", "minimum": 1 },
+        "process_start_ns": { "type": "integer", "minimum": 1 },
+        "device_uuid": { "type": ["string", "null"], "minLength": 1 },
+        "gpu_instance_id": { "type": ["string", "null"], "minLength": 1 },
+        "replica_id": { "type": ["string", "null"], "minLength": 1 },
+        "rank": { "type": ["integer", "null"], "minimum": 0 },
+        "boot_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "pattern": "^[^/]+$"
+        },
+        "group_id": { "type": ["string", "null"], "minLength": 1 },
+        "world_size": { "type": ["integer", "null"], "minimum": 1 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "gpu_instance_id": { "type": "string" } },
+            "required": ["gpu_instance_id"]
+          },
+          "then": { "properties": { "device_uuid": { "type": "string" } } }
+        },
+        {
+          "if": {
+            "properties": { "group_id": { "type": "string" } },
+            "required": ["group_id"]
+          },
+          "then": {
+            "required": ["rank", "world_size"],
+            "properties": {
+              "world_size": { "type": "integer" },
+              "rank": { "type": "integer" }
+            }
+          },
+          "else": { "properties": { "world_size": { "type": "null" } } }
+        }
+      ]
+    },
+    "observed_at_ns": { "type": "integer", "minimum": 1 },
+    "metric": {
+      "enum": [
+        "process_rss_bytes",
+        "process_gpu_used_bytes",
+        "allocator_allocated_bytes",
+        "allocator_reserved_bytes",
+        "engine_cache_occupied_bytes",
+        "device_memory_used_bytes",
+        "device_memory_reserved_bytes",
+        "instance_memory_used_bytes",
+        "instance_memory_reserved_bytes"
+      ]
+    },
+    "value_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "state": { "enum": ["valid", "missing", "stale", "invalid"] },
+    "source": { "type": "string", "minLength": 1 },
+    "interval_ms": { "type": "integer", "minimum": 1 },
+    "detail": { "type": ["string", "null"] },
+    "provenance": { "enum": ["observed", "reported", "estimated"] }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "identity": {
+            "properties": { "boot_id": { "type": "string" } },
+            "required": ["boot_id"]
+          }
+        },
+        "required": ["identity"]
+      },
+      "then": {
+        "properties": {
+          "clock_domain": { "pattern": "^[^/]+/[^/]+/unix_epoch_ns$" }
+        }
+      },
+      "else": {
+        "properties": { "clock_domain": { "pattern": "^[^/]+/unix_epoch_ns$" } }
+      }
+    },
+    {
+      "if": { "properties": { "state": { "const": "valid" } } },
+      "then": { "properties": { "value_bytes": { "type": "integer" } } },
+      "else": { "properties": { "value_bytes": { "type": "null" } } }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "not": { "const": "process_rss_bytes" } } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "identity": { "properties": { "device_uuid": { "type": "string" } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "scope": { "const": "gpu_instance" } },
+        "required": ["scope"]
+      },
+      "then": {
+        "properties": {
+          "identity": { "properties": { "gpu_instance_id": { "type": "string" } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "process_rss_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "server_process" },
+          "counter_owner": { "const": "operating_system_process" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "process_gpu_used_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "server_process" },
+          "counter_owner": { "const": "gpu_process" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "allocator_allocated_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "server_process" },
+          "counter_owner": { "const": "allocator" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "allocator_reserved_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "server_process" },
+          "counter_owner": { "const": "allocator" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "engine_cache_occupied_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "server_process" },
+          "counter_owner": { "const": "engine_cache" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "device_memory_used_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "gpu_device" },
+          "counter_owner": { "const": "gpu_device" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "device_memory_reserved_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "gpu_device" },
+          "counter_owner": { "const": "gpu_device" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "instance_memory_used_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "gpu_instance" },
+          "counter_owner": { "const": "gpu_instance" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "metric": { "const": "instance_memory_reserved_bytes" } },
+        "required": ["metric"]
+      },
+      "then": {
+        "properties": {
+          "scope": { "const": "gpu_instance" },
+          "counter_owner": { "const": "gpu_instance" }
+        }
+      }
+    }
+  ]
+}

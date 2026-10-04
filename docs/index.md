@@ -31,8 +31,14 @@ Use the guides below based on the job you are doing, not based on package intern
 installation
 usage
 cli
+report_contract
+scrubbing
 inference
+inference_slo
 inference_correlation
+vllm_telemetry
+vllm_execution
+inference_diagnosis
 tui
 cookbook/index
 cookbook/always_on
@@ -77,17 +83,20 @@ examples/test_guides/README
 
 1. [CLI](cli.md)
 2. [Inference Profiling](inference.md)
-3. [Inference execution correlation](inference_correlation.md)
-4. [TUI](tui.md)
-5. [Production Cookbook](cookbook/index.md)
-6. [Troubleshooting](troubleshooting.md)
+3. [Inference SLOs and goodput](inference_slo.md)
+4. [Inference execution correlation](inference_correlation.md)
+5. [vLLM native telemetry](vllm_telemetry.md)
+6. [TUI](tui.md)
+7. [Production Cookbook](cookbook/index.md)
+8. [Troubleshooting](troubleshooting.md)
 
 ### Release or CI validation
 
 1. [Testing](testing.md)
 2. [CI and Release Qualification](cookbook/ci_release.md)
-3. [Examples](examples.md)
-4. [Benchmark Harness](benchmark_harness.md)
+3. [Report and Exit-Code Contract](report_contract.md)
+4. [Examples](examples.md)
+5. [Benchmark Harness](benchmark_harness.md)
 
 ### Framework-specific workflows
 

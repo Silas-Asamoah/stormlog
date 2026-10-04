@@ -12,6 +12,7 @@ import pytest
 
 import stormlog.cli as gpumemprof_cli
 from stormlog.cli import cmd_analyze
+from stormlog.exit_codes import ExitCode
 from stormlog.telemetry import telemetry_event_from_record, telemetry_event_to_dict
 from stormlog.telemetry_sink import AppendOnlyTelemetrySink, TelemetrySinkConfig
 from tests.gap_test_helpers import BASE_NS, INTERVAL_NS, build_gap_event
@@ -592,7 +593,7 @@ def test_cmd_analyze_missing_input_returns_failure(
         )
     )
 
-    assert exit_code == 1
+    assert exit_code == ExitCode.INVALID_INPUT
     assert "Error: Input file" in capsys.readouterr().out
 
 
@@ -612,7 +613,7 @@ def test_cmd_analyze_malformed_telemetry_returns_failure(
         )
     )
 
-    assert exit_code == 1
+    assert exit_code == ExitCode.INVALID_INPUT
     assert "Error parsing telemetry events:" in capsys.readouterr().out
 
 
@@ -631,16 +632,16 @@ def test_cmd_analyze_malformed_telemetry_returns_failure(
         (
             "events.json",
             '{"events": []}',
-            1,
+            ExitCode.INVALID_INPUT,
             "Error parsing telemetry events: bad events",
         ),
         (
             "events.jsonl",
             '{"results": []}',
-            1,
+            ExitCode.INVALID_INPUT,
             "Error parsing telemetry events: bad events",
         ),
-        ("broken.json", "{", 1, "Error loading input file:"),
+        ("broken.json", "{", ExitCode.INVALID_INPUT, "Error loading input file:"),
     ],
 )
 def test_cmd_analyze_loader_failure_preserves_json_fallback_policy(
@@ -691,7 +692,7 @@ def test_main_exits_nonzero_for_analyze_failures(
     with pytest.raises(SystemExit) as excinfo:
         gpumemprof_cli.main()
 
-    assert excinfo.value.code == 1
+    assert excinfo.value.code == ExitCode.INVALID_INPUT
     assert "Error: Input file" in capsys.readouterr().out
 
 

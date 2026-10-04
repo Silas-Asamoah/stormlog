@@ -331,7 +331,8 @@ jobs:
                     --baseline docs/benchmarks/v0.4_baseline.json \
                     --tolerances docs/benchmarks/v0.4_tolerances.json \
                     --output artifacts/benchmarks/ci_regression.json \
-                    --artifact-root artifacts/benchmarks/ci_scenarios
+                    --artifact-root artifacts/benchmarks/ci_scenarios \
+                    --overhead-scratch-root /dev/shm/stormlog-benchmark
 
             - name: Upload benchmark regression artifacts
               if: always()
@@ -373,7 +374,8 @@ jobs:
                     --iterations 5000 \
                     --budgets docs/benchmarks/v0.4_operating_budget.json \
                     --output artifacts/benchmarks/ci_nightly_budget.json \
-                    --artifact-root artifacts/benchmarks/ci_nightly_scenarios
+                    --artifact-root artifacts/benchmarks/ci_nightly_scenarios \
+                    --overhead-scratch-root /dev/shm/stormlog-benchmark
 
             - name: Upload nightly operability artifacts
               if: always()

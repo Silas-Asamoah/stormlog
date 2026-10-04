@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/inference_correlation_v2.schema.json",
-  "title": "Stormlog inference correlation event v2",
-  "description": "One JSONL event; v1 client observations retain their original schema.",
+  "title": "Stormlog inference correlation event v2 (v3 for activity references with busy intervals)",
+  "description": "One JSONL event; v1 client observations retain their original schema. An infer.activity_ref whose metadata.intervals lists busy intervals is schema_version 3, because those intervals replace start_ns..end_ns as its busy time; every other record is schema_version 2.",
   "oneOf": [
     {"$ref": "#/$defs/artifact"},
     {"$ref": "#/$defs/request"},
@@ -57,7 +57,7 @@
       "type": "object",
       "required": ["schema_version", "event_type", "context", "event_id", "metadata"],
       "properties": {
-        "schema_version": {"const": 2},
+        "schema_version": {"type": "integer", "minimum": 2},
         "event_type": {"type": "string"},
         "context": {"$ref": "#/$defs/context"},
         "event_id": {"type": "string", "minLength": 1},
@@ -83,6 +83,7 @@
         {
           "required": ["artifact_kind", "created_at_ns"],
           "properties": {
+            "schema_version": {"const": 2},
             "event_type": {"const": "infer.artifact"},
             "artifact_kind": {"type": "string", "minLength": 1},
             "created_at_ns": {"type": "integer", "minimum": 0}
@@ -99,6 +100,7 @@
         {
           "required": ["request_ref"],
           "properties": {
+            "schema_version": {"const": 2},
             "event_type": {"const": "infer.request"},
             "request_ref": {"$ref": "#/$defs/ref"},
             "attempt_ref": {"$ref": "#/$defs/nullable_ref"},
@@ -116,6 +118,7 @@
         {
           "required": ["iteration_ref"],
           "properties": {
+            "schema_version": {"const": 2},
             "event_type": {"const": "infer.iteration"},
             "iteration_ref": {"$ref": "#/$defs/ref"},
             "batch_ref": {"$ref": "#/$defs/nullable_ref"}
@@ -136,6 +139,7 @@
             {"properties": {"iteration_ref": {"$ref": "#/$defs/ref"}}}
           ],
           "properties": {
+            "schema_version": {"const": 2},
             "event_type": {"const": "infer.stage"},
             "stage_ref": {"$ref": "#/$defs/ref"},
             "name": {"type": "string", "minLength": 1},
@@ -153,6 +157,7 @@
         {
           "required": ["request_ref", "iteration_ref", "role"],
           "properties": {
+            "schema_version": {"const": 2},
             "event_type": {"const": "infer.membership"},
             "request_ref": {"$ref": "#/$defs/ref"},
             "iteration_ref": {"$ref": "#/$defs/ref"},
@@ -170,6 +175,7 @@
         {
           "required": ["activity_ref", "activity_kind", "attribution_status"],
           "properties": {
+            "schema_version": {"enum": [2, 3]},
             "event_type": {"const": "infer.activity_ref"},
             "activity_ref": {"$ref": "#/$defs/ref"},
             "activity_kind": {"type": "string", "minLength": 1},
@@ -185,7 +191,9 @@
           },
           "allOf": [
             {"if": {"properties": {"attribution_status": {"const": "linked"}}}, "then": {"properties": {"iteration_ref": {"$ref": "#/$defs/ref"}}, "required": ["iteration_ref"]}},
-            {"if": {"properties": {"attribution_status": {"const": "unresolved"}}}, "then": {"properties": {"iteration_ref": {"type": "null"}}}}
+            {"if": {"properties": {"attribution_status": {"const": "unresolved"}}}, "then": {"properties": {"iteration_ref": {"type": "null"}}}},
+            {"if": {"properties": {"schema_version": {"const": 3}}}, "then": {"properties": {"metadata": {"required": ["intervals"], "properties": {"intervals": {"$ref": "#/$defs/busy_intervals"}}}}}},
+            {"if": {"properties": {"schema_version": {"const": 2}}}, "then": {"properties": {"metadata": {"not": {"required": ["intervals"]}}}}}
           ]
         }
       ],
@@ -197,6 +205,7 @@
         {
           "required": ["component", "available", "supported", "enabled", "collected"],
           "properties": {
+            "schema_version": {"const": 2},
             "event_type": {"const": "infer.capabilities"},
             "component": {"type": "string", "minLength": 1},
             "available": {"type": "boolean"},
@@ -213,12 +222,24 @@
       "uniqueItems": true,
       "items": {"type": "string", "minLength": 1}
     },
+    "busy_intervals": {
+      "description": "[offset_ns, duration_ns] pairs from start_ns: sorted, disjoint, inside the span.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {"type": "integer", "minimum": 0}
+      }
+    },
     "clock_alignment": {
       "allOf": [
         {"$ref": "#/$defs/base"},
         {
           "required": ["from_clock_domain", "to_clock_domain", "offset_ns", "uncertainty_ns"],
           "properties": {
+            "schema_version": {"const": 2},
             "event_type": {"const": "infer.clock_alignment"},
             "from_clock_domain": {"type": "string", "minLength": 1},
             "to_clock_domain": {"type": "string", "minLength": 1},

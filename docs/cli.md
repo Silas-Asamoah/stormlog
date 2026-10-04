@@ -41,6 +41,17 @@ pip install "stormlog[tui,torch]"
 stormlog
 ```
 
+## Exit codes
+
+Every command returns a code from one fixed table so CI jobs and agents can
+branch without parsing output: `0` ok, `1` unexpected error, `2` usage or
+unusable installation, `3` findings (memory risk detected, or an inference
+run in which no measured request succeeded), `4` a configured gate failed, `5`
+invalid input artifact, `130` interrupted. `diagnose` bundles
+also write a `report.json` verdict that pairs with the exit code. The full
+table, the per-command behaviour, and the report schema are in the
+[Report and Exit-Code Contract](report_contract.md).
+
 ## `stormlog`
 
 The top-level `stormlog` command is TUI-first for compatibility:
@@ -87,6 +98,14 @@ pip install "stormlog[infer-tokenizers]"
 ```
 
 See [Inference Profiling](inference.md) for the full endpoint profiling guide.
+For controlled experiments, `--arrival` sends requests on a fixed-rate,
+Poisson, burst or replayed schedule instead of a closed loop. `--prompt-mode`
+chooses whether requests share prefixes, and `--cache-state cold` with
+`--cache-reset-url` asks for an empty prefix cache before each case.
+For server memory, run `stormlog infer collect-server` on the serving host,
+pass the same `--run-id` to `infer profile`, and import the collector JSONL with
+`infer analyze --server-telemetry`. The guide explains the direct-route and
+clock evidence required before a server sample enters a case report.
 
 ## `gpumemprof`
 
@@ -267,6 +286,11 @@ Each standalone diagnose bundle also owns its own session id. The bundle
 manifest records whether the run finished `completed` or was left
 `incomplete`, and synthesized timeline telemetry inherits that same session id
 when reloaded later.
+
+The command exits `0` when no risk flag is raised and `3` when one is; the
+bundle's `report.json` carries the same verdict with one finding per raised
+flag and evidence pointers into `diagnostic_summary.json`. See the
+[Report and Exit-Code Contract](report_contract.md).
 
 `--native-history` is a CUDA-only debug mode. It records allocator history for
 the current `gpumemprof diagnose` process, then writes native snapshot artifacts
@@ -482,6 +506,10 @@ tfmemprof diagnose --duration 5 --interval 0.5 --output ./tf_diag
 tfmemprof diagnose --duration 0 --output ./tf_diag_quick
 ```
 
+The bundle layout, `report.json` verdict, and exit codes (`0` no risk, `3`
+risk detected) match `gpumemprof diagnose`; see the
+[Report and Exit-Code Contract](report_contract.md).
+
 ## `jaxmemprof`
 
 The current command groups are:
@@ -545,6 +573,10 @@ jaxmemprof analyze --input jax_monitor.json --detect-leaks --optimize --visualiz
 jaxmemprof diagnose --duration 5 --interval 0.5 --output ./jax_diag
 jaxmemprof diagnose --duration 0 --output ./jax_diag_quick
 ```
+
+The bundle layout, `report.json` verdict, and exit codes (`0` no risk, `3`
+risk detected) match `gpumemprof diagnose`; see the
+[Report and Exit-Code Contract](report_contract.md).
 
 ## TUI launch
 

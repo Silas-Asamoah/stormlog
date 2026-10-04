@@ -33,6 +33,17 @@ def test_cmd_info(capsys: Any) -> None:
 
 
 @jax_mark
+@mock.patch("sys.argv", ["jaxmemprof", "info"])
+@mock.patch("stormlog.jax.cli.cmd_info", side_effect=KeyboardInterrupt)
+def test_main_interrupt_outside_capture_loop_exits_interrupted(
+    _cmd_info: Any, capsys: Any
+) -> None:
+    """Ctrl+C outside monitor/track exits 130 with a message, not a traceback."""
+    assert main() == 130
+    assert "cancelled" in capsys.readouterr().err
+
+
+@jax_mark
 @mock.patch("sys.argv", ["jaxmemprof", "--verbose", "info"])
 def test_cmd_info_verbose(capsys: Any) -> None:
     """Verify cmd_info verbose mode works without crashing."""

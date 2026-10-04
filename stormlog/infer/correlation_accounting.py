@@ -16,6 +16,7 @@ from .correlation_events import (
     MembershipEvent,
     RequestEvent,
     StageEvent,
+    activity_busy_intervals,
 )
 
 
@@ -253,9 +254,9 @@ def _missing_optional_ref(
 
 def account_gpu_time(graph: CorrelationGraph) -> RunAccounting:
     """Keep summed activity, interval union, and iteration elapsed separate."""
-    device_groups: dict[DeviceClock, list[ActivityReferenceEvent]] = {}
+    device_groups: dict[DeviceClock, list[list[tuple[int, int]]]] = {}
     iteration_groups: dict[
-        EntityRef, dict[DeviceClock, list[ActivityReferenceEvent]]
+        EntityRef, dict[DeviceClock, list[list[tuple[int, int]]]]
     ] = {}
     unmeasured: list[EntityRef] = []
     unattributed: list[EntityRef] = []
@@ -264,14 +265,15 @@ def account_gpu_time(graph: CorrelationGraph) -> RunAccounting:
             unattributed.append(activity.activity_ref)
         if activity.activity_domain != "gpu":
             continue
-        key = _device_clock(activity)
-        if key is None:
+        measured = _measured_busy(activity)
+        if measured is None:
             unmeasured.append(activity.activity_ref)
             continue
-        device_groups.setdefault(key, []).append(activity)
+        key, busy = measured
+        device_groups.setdefault(key, []).append(busy)
         if activity.iteration_ref in graph.iterations:
             by_device = iteration_groups.setdefault(activity.iteration_ref, {})
-            by_device.setdefault(key, []).append(activity)
+            by_device.setdefault(key, []).append(busy)
     iteration_timings = {
         ref: IterationTiming(
             elapsed_ns=iteration.elapsed_ns,
@@ -291,6 +293,22 @@ def account_gpu_time(graph: CorrelationGraph) -> RunAccounting:
     )
 
 
+def _measured_busy(
+    activity: ActivityReferenceEvent,
+) -> tuple[DeviceClock, list[tuple[int, int]]] | None:
+    """The device clock and busy intervals of a measurable GPU activity.
+
+    A launch record's ``metadata.intervals`` (schema version 3) replace its
+    span, so the idle gaps inside one launch are not counted as busy; the
+    record itself guarantees they are well formed.
+    """
+    key = _device_clock(activity)
+    busy = activity_busy_intervals(activity) if key is not None else None
+    if key is None or busy is None:
+        return None
+    return key, busy
+
+
 def _device_clock(activity: ActivityReferenceEvent) -> DeviceClock | None:
     context = activity.context
     if (
@@ -303,17 +321,13 @@ def _device_clock(activity: ActivityReferenceEvent) -> DeviceClock | None:
     return DeviceClock(context.device_uuid, context.clock_domain, context.clock_kind)
 
 
-def _gpu_time(activities: list[ActivityReferenceEvent]) -> GpuTime:
-    intervals = [(item.start_ns, item.end_ns) for item in activities]
-    complete = [
-        (start, end)
-        for start, end in intervals
-        if start is not None and end is not None
-    ]
+def _gpu_time(activities: list[list[tuple[int, int]]]) -> GpuTime:
+    """Summed and merged busy time of activities given as their busy intervals."""
+    intervals = [interval for busy in activities for interval in busy]
     return GpuTime(
-        summed_activity_ns=sum(end - start for start, end in complete),
-        busy_ns=_merged_duration(complete),
-        activity_count=len(complete),
+        summed_activity_ns=sum(end - start for start, end in intervals),
+        busy_ns=_merged_duration(intervals),
+        activity_count=len(activities),
     )
 
 
@@ -421,13 +435,12 @@ def align_timestamp(
         raise ValueError("timestamp_ns must be non-negative")
     if from_clock_domain == to_clock_domain:
         return AlignedTimestamp(timestamp_ns, 0, to_clock_domain)
-    matches = [
-        item
-        for item in alignments
-        if item.from_clock_domain == from_clock_domain
-        and item.to_clock_domain == to_clock_domain
-        and _alignment_covers(item, timestamp_ns)
-    ]
+    matches = covering_alignments(
+        timestamp_ns,
+        from_clock_domain=from_clock_domain,
+        to_clock_domain=to_clock_domain,
+        alignments=alignments,
+    )
     if len(matches) != 1:
         raise ValueError("no valid clock alignment or multiple ambiguous alignments")
     alignment = matches[0]
@@ -436,6 +449,27 @@ def align_timestamp(
         alignment.uncertainty_ns,
         to_clock_domain,
     )
+
+
+def covering_alignments(
+    timestamp_ns: int,
+    *,
+    from_clock_domain: str,
+    to_clock_domain: str,
+    alignments: Iterable[ClockAlignmentEvent],
+) -> list[ClockAlignmentEvent]:
+    """Return the alignments whose domains and validity window cover a timestamp.
+
+    ``align_timestamp`` needs exactly one; callers can use the count to tell a
+    missing alignment from an ambiguous one.
+    """
+    return [
+        item
+        for item in alignments
+        if item.from_clock_domain == from_clock_domain
+        and item.to_clock_domain == to_clock_domain
+        and _alignment_covers(item, timestamp_ns)
+    ]
 
 
 def _alignment_covers(alignment: ClockAlignmentEvent, timestamp_ns: int) -> bool:
@@ -456,6 +490,7 @@ __all__ = [
     "UnresolvedReference",
     "account_gpu_time",
     "align_timestamp",
+    "covering_alignments",
     "resolve_inference_events",
     "validate_request_shares",
 ]

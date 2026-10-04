@@ -1,6 +1,8 @@
 """Optional engine and trace capture integration with the run catalog."""
 
 import json
+import os
+import stat
 from dataclasses import replace
 from pathlib import Path
 
@@ -214,9 +216,9 @@ def test_capture_rejects_conflicting_existing_event_before_writing(
     class ConflictingEngine(_Engine):
         def collect(self, *, run_id: str, session_id: str) -> EngineCapture:
             capture = super().collect(run_id=run_id, session_id=session_id)
-            original = capture.events[0]
-            assert isinstance(original, IterationEvent)
-            iteration = replace(original, end_ns=201)
+            first = capture.events[0]
+            assert isinstance(first, IterationEvent)
+            iteration = replace(first, end_ns=201)
             return replace(capture, events=(iteration, *capture.events[1:]))
 
     with pytest.raises(ValueError, match="conflicting"):
@@ -290,6 +292,59 @@ def test_missing_adapters_are_recorded_without_fake_server_events(
     assert not any(isinstance(r, IterationEvent) for r in records)
 
 
+def test_capture_starts_a_new_line_after_an_unterminated_artifact(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "infer.jsonl"
+    _legacy_artifact(artifact)
+    # Valid JSONL whose last record has no newline, as an editor may save it.
+    artifact.write_bytes(artifact.read_bytes().rstrip(b"\n"))
+
+    append_inference_capture(
+        artifact,
+        run_id="run-1",
+        session=create_session_summary(source="test", session_id="session-1"),
+        envelope_path=tmp_path / "stormlog_run.json",
+    )
+
+    records = load_inference_artifact(artifact)
+    assert isinstance(records[0], LegacyInferenceRecord)
+    assert [type(record) for record in records[1:]] == [CapabilityEvent] * 2
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_capture_keeps_file_permissions(tmp_path: Path) -> None:
+    umask = os.umask(0)
+    os.umask(umask)
+    first = tmp_path / "first.jsonl"
+    _legacy_artifact(first)
+    first.chmod(0o640)
+    envelope = tmp_path / "stormlog_run.json"
+    session = create_session_summary(source="test", session_id="session-1")
+
+    append_inference_capture(
+        first, run_id="run-1", session=session, envelope_path=envelope
+    )
+
+    assert stat.S_IMODE(first.stat().st_mode) == 0o640
+    # A new envelope gets the permissions of any new file, not owner-only.
+    assert stat.S_IMODE(envelope.stat().st_mode) == 0o666 & ~umask
+
+    envelope.chmod(0o604)
+    second = tmp_path / "second.jsonl"
+    _legacy_artifact(second)
+    append_inference_capture(
+        second, run_id="run-1", session=session, envelope_path=envelope
+    )
+
+    assert stat.S_IMODE(envelope.stat().st_mode) == 0o604
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "first.jsonl",
+        "second.jsonl",
+        "stormlog_run.json",
+    ]
+
+
 def test_rejects_wrong_run_before_writing_artifact(tmp_path: Path) -> None:
     artifact = tmp_path / "infer.jsonl"
     _legacy_artifact(artifact)
@@ -339,12 +394,12 @@ def test_ambiguous_or_unscoped_correlation_stays_unresolved() -> None:
     )
 
     assert link_trace_activities((seed, other_seed), (trace,)) == (trace,)
-    [unresolved] = link_trace_activities(
+    unscoped = link_trace_activities(
         (seed,),
         (replace(trace, correlation_scope=EntityRef("runtime-0", "other")),),
-    )
-    assert isinstance(unresolved, ActivityReferenceEvent)
-    assert unresolved.attribution_status == "unresolved"
+    )[0]
+    assert isinstance(unscoped, ActivityReferenceEvent)
+    assert unscoped.attribution_status == "unresolved"
 
 
 def test_capability_outcomes_must_be_subsets() -> None:

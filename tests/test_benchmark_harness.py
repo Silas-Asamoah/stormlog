@@ -1,11 +1,13 @@
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal
+from typing import Any, Callable, Literal
 
 import pytest
 
 from examples.cli import benchmark_harness
+from stormlog.exit_codes import ExitCode
 
 
 class _UnusedRuntimeSession(benchmark_harness.RuntimeSession):
@@ -243,8 +245,10 @@ def _install_fake_runtimes(monkeypatch: pytest.MonkeyPatch) -> None:
         mode: str,
         iterations: int,
         allocation_kb: int,
+        overhead_scratch_root: Path | None = None,
     ) -> dict[str, object]:
         _ = runtime_dir, profile, mode, iterations, allocation_kb
+        _ = overhead_scratch_root
         return runtime_reports[spec.name]
 
     monkeypatch.setattr(
@@ -299,11 +303,10 @@ def test_runtime_asset_paths_follow_benchmark_naming() -> None:
     )
 
 
-def test_main_requires_explicit_regression_assets_for_non_default_profiles() -> None:
-    with pytest.raises(
-        ValueError,
-        match="Regression defaults are only checked in for the pr profile",
-    ):
+def test_main_requires_explicit_regression_assets_for_non_default_profiles(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
         benchmark_harness.main(
             [
                 "--profile",
@@ -312,6 +315,285 @@ def test_main_requires_explicit_regression_assets_for_non_default_profiles() -> 
                 "regression",
             ]
         )
+
+    assert excinfo.value.code == ExitCode.USAGE
+    assert (
+        "Regression defaults are only checked in for the pr profile"
+        in capsys.readouterr().err
+    )
+
+
+_BUDGET_METRICS = (
+    "runtime_overhead_pct",
+    "cpu_overhead_pct",
+    "artifact_growth_bytes",
+    "rss_growth_per_24h_equiv",
+    "max_rss_delta_bytes",
+    "final_retained_bytes",
+    "final_retained_files",
+    "collector_failure_event_count",
+    "history_dropped_events",
+    "history_dropped_samples",
+    "history_dropped_alerts",
+    "rollover_count",
+    "pruned_segment_count",
+    "pruned_bytes",
+)
+
+
+def _budgets_for_all_runtimes(value: float) -> dict[str, float]:
+    return {
+        f"{runtime}.{metric}": value
+        for runtime in ("gpumemprof_cpu", "tfmemprof_cpu")
+        for metric in _BUDGET_METRICS
+    }
+
+
+def _main_budget_argv(tmp_path: Path, budgets_path: Path, *extra: str) -> list[str]:
+    return [
+        "--check",
+        "--profile",
+        "pr",
+        "--mode",
+        "all",
+        "--gate-mode",
+        "budget",
+        "--budgets",
+        str(budgets_path),
+        "--output",
+        str(tmp_path / "report.json"),
+        "--artifact-root",
+        str(tmp_path / "artifacts"),
+        *extra,
+    ]
+
+
+def test_main_returns_ok_when_every_budget_passes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    budgets_path = tmp_path / "budgets.json"
+    _write_budget_file(budgets_path, _budgets_for_all_runtimes(1_000_000.0))
+
+    assert benchmark_harness.main(_main_budget_argv(tmp_path, budgets_path)) == 0
+    assert (tmp_path / "report.json").exists()
+
+
+def test_main_returns_gate_failed_when_check_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    budgets_path = tmp_path / "budgets.json"
+    _write_budget_file(budgets_path, _budgets_for_all_runtimes(-1.0))
+
+    exit_code = benchmark_harness.main(_main_budget_argv(tmp_path, budgets_path))
+
+    assert exit_code == ExitCode.GATE_FAILED
+    assert int(exit_code) == 4
+    assert "Overall status: FAIL" in capsys.readouterr().out
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["passed"] is False
+
+
+def test_main_without_check_exits_ok_even_when_a_budget_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    budgets_path = tmp_path / "budgets.json"
+    _write_budget_file(budgets_path, _budgets_for_all_runtimes(-1.0))
+    argv = [
+        arg for arg in _main_budget_argv(tmp_path, budgets_path) if arg != "--check"
+    ]
+
+    assert benchmark_harness.main(argv) == 0
+
+
+@pytest.mark.parametrize(
+    ("prepare", "expected_message"),
+    [
+        (lambda path: None, "cannot be read"),
+        (lambda path: path.write_text("{", encoding="utf-8"), "cannot be read"),
+        (lambda path: path.write_text("[]", encoding="utf-8"), "must be a JSON object"),
+        (lambda path: path.write_text("42", encoding="utf-8"), "must be a JSON object"),
+        (
+            lambda path: _write_budget_file(path, {"only.one": 1.0}, version="v0.3"),
+            "Budget file version must be v0.4",
+        ),
+        (
+            lambda path: path.write_text(
+                json.dumps({"version": "v0.4", "budgets": {"a.b": "abc"}}),
+                encoding="utf-8",
+            ),
+            "is not a number",
+        ),
+        (
+            lambda path: _write_budget_file(path, {"only.one": 1.0}),
+            "Budget file missing metric keys",
+        ),
+    ],
+)
+def test_main_returns_invalid_input_for_unusable_budget_assets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    prepare: Callable[[Path], object],
+    expected_message: str,
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    budgets_path = tmp_path / "budgets.json"
+    prepare(budgets_path)
+
+    exit_code = benchmark_harness.main(_main_budget_argv(tmp_path, budgets_path))
+
+    assert exit_code == ExitCode.INVALID_INPUT
+    assert expected_message in capsys.readouterr().err
+
+
+def test_main_rejects_unusable_assets_before_running_any_scenario(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    runs: list[str] = []
+
+    def _record_run(spec: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        runs.append(str(spec))
+        raise AssertionError("scenarios must not run when an asset is unusable")
+
+    monkeypatch.setattr(benchmark_harness, "_run_runtime_report", _record_run)
+    budgets_path = tmp_path / "budgets.json"
+    budgets_path.write_text("[]", encoding="utf-8")
+
+    exit_code = benchmark_harness.main(_main_budget_argv(tmp_path, budgets_path))
+
+    assert exit_code == ExitCode.INVALID_INPUT
+    assert runs == []
+    assert not (tmp_path / "artifacts").exists()
+
+
+def _main_regression_argv(
+    tmp_path: Path, baseline_path: Path, tolerances_path: Path
+) -> list[str]:
+    return [
+        "--check",
+        "--profile",
+        "pr",
+        "--mode",
+        "all",
+        "--gate-mode",
+        "regression",
+        "--baseline",
+        str(baseline_path),
+        "--tolerances",
+        str(tolerances_path),
+        "--output",
+        str(tmp_path / "report.json"),
+        "--artifact-root",
+        str(tmp_path / "artifacts"),
+    ]
+
+
+def _pr_baseline_config() -> dict[str, Any]:
+    return {
+        "profile": "pr",
+        "mode": "all",
+        "iterations": 5000,
+        "allocation_kb": 512,
+        "profile_equivalent_hours": benchmark_harness.PROFILE_EQUIVALENT_HOURS["pr"],
+        "runtimes": benchmark_harness._runtime_config(
+            "pr", 5000, ["gpumemprof_cpu", "tfmemprof_cpu"]
+        ),
+        "retention_validation": dict(benchmark_harness.DEFAULT_RETENTION_VALIDATION),
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_message"),
+    [
+        (
+            lambda config: config["runtimes"]["gpumemprof_cpu"].pop("default_interval"),
+            "Baseline file runtime 'gpumemprof_cpu' missing config keys: "
+            "default_interval",
+        ),
+        (
+            lambda config: config["runtimes"]["gpumemprof_cpu"].update(
+                overhead_sample_count="many"
+            ),
+            "Baseline file runtime 'gpumemprof_cpu' config key "
+            "'overhead_sample_count' is not a valid int: 'many'",
+        ),
+        (
+            lambda config: config["retention_validation"].update(
+                flush_every_events=None
+            ),
+            "Baseline file retention_validation config key 'flush_every_events' "
+            "is not a valid int: None",
+        ),
+        (
+            lambda config: config["retention_validation"].pop("sample_limit"),
+            "Baseline file retention_validation missing config keys: sample_limit",
+        ),
+        (
+            lambda config: config.update(iterations="lots"),
+            "Baseline file config key 'iterations' is not a valid int: 'lots'",
+        ),
+        (
+            lambda config: config.update(profile="nightly"),
+            "Baseline config mismatch: current=",
+        ),
+    ],
+)
+def test_main_returns_invalid_input_for_unusable_baseline_configs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mutate: Callable[[dict[str, Any]], object],
+    expected_message: str,
+) -> None:
+    # A baseline whose nested config is incomplete or holds the wrong type
+    # is an unusable asset like any other: INVALID_INPUT, not a traceback.
+    _install_fake_runtimes(monkeypatch)
+    config = _pr_baseline_config()
+    mutate(config)
+    baseline_path = tmp_path / "baseline.json"
+    tolerances_path = tmp_path / "tolerances.json"
+    _write_baseline_file(
+        baseline_path,
+        config=config,
+        metrics={"gpumemprof_cpu.runtime_overhead_pct": 0.0},
+    )
+    _write_tolerance_file(
+        tolerances_path, tolerances={"gpumemprof_cpu.runtime_overhead_pct": 10.0}
+    )
+
+    exit_code = benchmark_harness.main(
+        _main_regression_argv(tmp_path, baseline_path, tolerances_path)
+    )
+
+    assert exit_code == ExitCode.INVALID_INPUT
+    assert expected_message in capsys.readouterr().err
+    assert not (tmp_path / "artifacts").exists()
+
+
+@pytest.mark.parametrize("broken", ["--artifact-root", "--output"])
+def test_main_returns_error_when_the_output_location_is_a_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    broken: str,
+) -> None:
+    _install_fake_runtimes(monkeypatch)
+    budgets_path = tmp_path / "budgets.json"
+    _write_budget_file(budgets_path, _budgets_for_all_runtimes(1_000_000.0))
+    blocker = tmp_path / "afile"
+    blocker.write_text("x", encoding="utf-8")
+    argv = _main_budget_argv(tmp_path, budgets_path)
+    index = argv.index(broken) + 1
+    argv[index] = str(blocker if broken == "--artifact-root" else blocker / "r.json")
+
+    exit_code = benchmark_harness.main(argv)
+
+    assert exit_code == ExitCode.ERROR
+    assert "Error:" in capsys.readouterr().err
 
 
 def test_unprofiled_scenario_summary_persists_final_artifact_size(
@@ -441,6 +723,262 @@ def test_run_overhead_report_uses_low_quantile_wall_overhead_trial(
     )
     assert Path(report["scenarios"]["tracked_default"]["output_path"]).exists()
     assert not (tmp_path / "gpumemprof_cpu" / ".overhead_trials").exists()
+    assert report["scratch_root"] is None
+
+
+def test_run_overhead_report_runs_trials_under_scratch_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scratch_root = tmp_path / "scratch"
+    runtime_dir = tmp_path / "artifacts" / "gpumemprof_cpu"
+    trial_dirs: list[Path] = []
+
+    def _fake_unprofiled_scenario(
+        scenario_dir: Path,
+        *,
+        iterations: int,
+        allocation_kb: int,
+    ) -> dict[str, object]:
+        _ = iterations, allocation_kb
+        trial_dirs.append(scenario_dir)
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+        return benchmark_harness._finalize_scenario_summary(
+            scenario_dir,
+            {
+                "name": "unprofiled",
+                "wall_seconds": 0.1,
+                "cpu_seconds": 0.1,
+                "checksum": 1,
+                "artifact_dir": str(scenario_dir),
+            },
+        )
+
+    def _fake_tracked_scenario(
+        spec: benchmark_harness.RuntimeSpec,
+        scenario_dir: Path,
+        *,
+        iterations: int,
+        allocation_kb: int,
+        sample_count: int,
+        sink_overrides: benchmark_harness.SinkOverrides | None = None,
+    ) -> dict[str, object]:
+        _ = spec, iterations, allocation_kb, sample_count, sink_overrides
+        trial_dirs.append(scenario_dir)
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+        output_path = scenario_dir / "events.json"
+        output_path.write_text("{}", encoding="utf-8")
+        return benchmark_harness._finalize_scenario_summary(
+            scenario_dir,
+            {
+                "name": "gpumemprof_cpu",
+                "wall_seconds": 0.2,
+                "cpu_seconds": 0.2,
+                "checksum": 1,
+                "sample_count": 1,
+                "emitted_samples": 1,
+                "event_count": 1,
+                "collector_failure_event_count": 0,
+                "stats": {},
+                "artifact_dir": str(scenario_dir),
+                "output_path": str(output_path),
+            },
+        )
+
+    monkeypatch.setattr(
+        benchmark_harness, "_run_unprofiled_scenario", _fake_unprofiled_scenario
+    )
+    monkeypatch.setattr(
+        benchmark_harness, "_run_tracked_scenario", _fake_tracked_scenario
+    )
+    monkeypatch.setattr(benchmark_harness, "DEFAULT_OVERHEAD_TRIAL_COUNT", 2)
+
+    report = benchmark_harness._run_overhead_report(
+        benchmark_harness.RuntimeSpec(
+            name="gpumemprof_cpu",
+            default_interval=0.1,
+            factory=lambda artifact_dir, interval, sink_overrides: _UnusedRuntimeSession(),
+        ),
+        runtime_dir,
+        iterations=10,
+        allocation_kb=64,
+        scratch_root=scratch_root,
+    )
+
+    assert len(trial_dirs) == 4
+    assert all(
+        path.is_relative_to(scratch_root / "gpumemprof_cpu" / "overhead_trials")
+        for path in trial_dirs
+    )
+    assert report["scratch_root"] == str(scratch_root)
+    unprofiled_dir = Path(report["scenarios"]["unprofiled"]["artifact_dir"])
+    tracked_dir = Path(report["scenarios"]["tracked_default"]["artifact_dir"])
+    assert unprofiled_dir == runtime_dir / "overhead" / "unprofiled"
+    assert tracked_dir == runtime_dir / "overhead" / "tracked_default"
+    assert (unprofiled_dir / "summary.json").exists()
+    assert Path(report["scenarios"]["tracked_default"]["output_path"]).exists()
+    assert not (scratch_root / "gpumemprof_cpu").exists()
+    assert not (runtime_dir / ".overhead_trials").exists()
+
+
+class _SleepingRuntimeSession(benchmark_harness.RuntimeSession):
+    """Session whose only per-sample cost is an injected sleep."""
+
+    def __init__(self, sleep_seconds: float) -> None:
+        self.sleep_seconds = sleep_seconds
+
+    def start(self) -> None:
+        return None
+
+    def emit_sample(self, index: int) -> None:
+        _ = index
+        if self.sleep_seconds:
+            time.sleep(self.sleep_seconds)
+
+    def finish(self) -> dict[str, object]:
+        return {
+            "stats": {},
+            "event_count": 0,
+            "collector_failure_event_count": 0,
+            "output_path": "",
+        }
+
+
+def _overhead_pct_for_session(
+    tmp_path: Path, session: benchmark_harness.RuntimeSession
+) -> float:
+    spec = benchmark_harness.RuntimeSpec(
+        name="gpumemprof_cpu",
+        default_interval=0.1,
+        factory=lambda artifact_dir, interval, sink_overrides: session,
+    )
+    report = benchmark_harness._run_overhead_report(
+        spec,
+        tmp_path / "gpumemprof_cpu",
+        iterations=500,
+        allocation_kb=64,
+        scratch_root=tmp_path / "scratch",
+    )
+    return float(report["metrics"]["runtime_overhead_pct"])
+
+
+def test_regression_gate_catches_injected_sleep_per_sample(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(benchmark_harness, "DEFAULT_OVERHEAD_TRIAL_COUNT", 2)
+    baseline = benchmark_harness.load_regression_baseline(
+        benchmark_harness._default_runtime_baseline_path()
+    )
+    tolerances = benchmark_harness.load_regression_tolerances(
+        benchmark_harness._default_runtime_tolerances_path()
+    )
+    metric = "gpumemprof_cpu.runtime_overhead_pct"
+
+    healthy = _overhead_pct_for_session(
+        tmp_path / "healthy", _SleepingRuntimeSession(0.0)
+    )
+    # 1 ms per sample over 500 samples adds 0.5 s of wall time to a workload
+    # that takes a few milliseconds, so the ratio climbs by thousands of points
+    # regardless of how fast the machine is.
+    regressed = _overhead_pct_for_session(
+        tmp_path / "regressed", _SleepingRuntimeSession(0.001)
+    )
+
+    assert regressed - healthy > float(tolerances[metric])
+    checks = benchmark_harness.evaluate_regressions(
+        {metric: regressed}, baseline["metrics"], tolerances
+    )
+    assert checks[metric]["passed"] is False, checks
+    checks = benchmark_harness.evaluate_regressions(
+        {metric: healthy}, baseline["metrics"], tolerances
+    )
+    assert checks[metric]["passed"] is True, checks
+
+
+# Off-CPU cost per emitted sample at which the shipped v0.4 regression gate
+# flips for runtime_overhead_pct, given a tracked run at the baseline's CPU
+# overhead and a 0.10 s unprofiled workload: (778.51 + 150 - 735.28) points of
+# a 0.10 s reference spread over 5,000 samples. A baseline or tolerance change
+# that moves this number changes the gate's resolution and must be deliberate.
+OVERHEAD_GATE_OFF_CPU_THRESHOLD_US_PER_SAMPLE = 38.6
+
+
+def _overhead_metrics_for_off_cpu_cost(
+    off_cpu_us_per_sample: float,
+    *,
+    cpu_overhead_pct: float,
+    sample_count: int,
+    unprofiled_seconds: float = 0.10,
+) -> dict[str, float]:
+    """Synthetic trial timings: a CPU-bound reference plus an off-CPU cost."""
+    tracked_cpu = unprofiled_seconds * (1.0 + cpu_overhead_pct / 100.0)
+    tracked_wall = tracked_cpu + off_cpu_us_per_sample * 1e-6 * sample_count
+    unprofiled = {
+        "wall_seconds": unprofiled_seconds,
+        "cpu_seconds": unprofiled_seconds,
+        "artifact_size_bytes": 0,
+    }
+    tracked = {
+        "wall_seconds": tracked_wall,
+        "cpu_seconds": tracked_cpu,
+        "artifact_size_bytes": 0,
+    }
+    return benchmark_harness._build_overhead_metrics(unprofiled, tracked)
+
+
+def test_regression_gate_resolution_for_off_cpu_cost_per_sample() -> None:
+    baseline = benchmark_harness.load_regression_baseline(
+        benchmark_harness._default_runtime_baseline_path()
+    )
+    tolerances = benchmark_harness.load_regression_tolerances(
+        benchmark_harness._default_runtime_tolerances_path()
+    )
+    runtime_metric = "gpumemprof_cpu.runtime_overhead_pct"
+    cpu_metric = "gpumemprof_cpu.cpu_overhead_pct"
+    sample_count = benchmark_harness._overhead_sample_count(
+        benchmark_harness._RUNTIME_SPECS["gpumemprof_cpu"],
+        benchmark_harness.DEFAULT_ITERATIONS,
+    )
+    assert sample_count == 5_000
+
+    implied_threshold_us = (
+        (
+            baseline["metrics"][runtime_metric]
+            + tolerances[runtime_metric]
+            - baseline["metrics"][cpu_metric]
+        )
+        / 100.0
+        * 0.10
+        / sample_count
+        * 1e6
+    )
+    assert implied_threshold_us == pytest.approx(
+        OVERHEAD_GATE_OFF_CPU_THRESHOLD_US_PER_SAMPLE, abs=0.1
+    )
+
+    def _gate(off_cpu_us_per_sample: float) -> dict[str, dict[str, object]]:
+        metrics = _overhead_metrics_for_off_cpu_cost(
+            off_cpu_us_per_sample,
+            cpu_overhead_pct=baseline["metrics"][cpu_metric],
+            sample_count=sample_count,
+        )
+        return benchmark_harness.evaluate_regressions(
+            {
+                runtime_metric: metrics["runtime_overhead_pct"],
+                cpu_metric: metrics["cpu_overhead_pct"],
+            },
+            baseline["metrics"],
+            tolerances,
+        )
+
+    below = _gate(38.0)
+    above = _gate(39.0)
+
+    assert below[cpu_metric]["delta"] == pytest.approx(0.0, abs=1e-9)
+    assert below[runtime_metric]["passed"] is True, below
+    assert above[cpu_metric]["passed"] is True, above
+    assert above[runtime_metric]["passed"] is False, above
 
 
 def test_run_tracked_scenario_finalizes_session_on_emit_failure(
@@ -468,9 +1006,9 @@ def test_run_tracked_scenario_finalizes_session_on_emit_failure(
 @pytest.mark.parametrize(
     ("rss_delta_bytes", "expected_daily_growth", "budget_passed"),
     [
-        pytest.param(-16_384, -3_538_944_000.0, True, id="decreasing-rss"),
+        pytest.param(-16_384, -4_718_592_000.0, True, id="decreasing-rss"),
         pytest.param(0, 0.0, True, id="stable-rss"),
-        pytest.param(16_384, 3_538_944_000.0, False, id="growth-exceeds-budget"),
+        pytest.param(16_384, 4_718_592_000.0, False, id="growth-exceeds-budget"),
     ],
 )
 def test_run_soak_scenario_normalizes_rss_growth_and_enforces_budget(
@@ -482,15 +1020,17 @@ def test_run_soak_scenario_normalizes_rss_growth_and_enforces_budget(
 ) -> None:
     monkeypatch.setitem(benchmark_harness.PROFILE_EQUIVALENT_HOURS, "pr", 0.0001)
     baseline_rss = 128 * 1024 * 1024
-    # Baseline, four checkpoints (including a transient peak), then final RSS.
+    # Four samples, one checkpoint each: the warmup checkpoint supplies the
+    # baseline, then a transient peak, a return to baseline, and the final
+    # in-loop reading. The last reading is taken after session.finish() and
+    # must not feed the growth metrics.
     rss_readings = iter(
         [
             baseline_rss,
-            baseline_rss,
             baseline_rss + 65_536,
             baseline_rss,
-            baseline_rss,
             baseline_rss + rss_delta_bytes,
+            baseline_rss + rss_delta_bytes + 100 * 1024 * 1024,
         ]
     )
     monkeypatch.setattr(
@@ -508,11 +1048,16 @@ def test_run_soak_scenario_normalizes_rss_growth_and_enforces_budget(
 
     assert summary["sample_count"] == 4
     assert summary["equivalent_seconds"] == pytest.approx(0.4)
+    assert summary["rss_warmup_sample_count"] == 1
+    assert summary["rss_measured_sample_count"] == 3
+    assert summary["rss_measured_equivalent_seconds"] == pytest.approx(0.3)
+    assert summary["rss_checkpoint_count"] == 4
     assert summary["rss_baseline_bytes"] == baseline_rss
     assert summary["rss_final_bytes"] == baseline_rss + rss_delta_bytes
     assert summary["rss_delta_bytes"] == rss_delta_bytes
     assert summary["max_rss_delta_bytes"] == 65_536.0
     assert summary["rss_growth_per_24h_equiv"] == pytest.approx(expected_daily_growth)
+    assert summary["finalization_rss_delta_bytes"] == 100 * 1024 * 1024
 
     metric = "gpumemprof_cpu.rss_growth_per_24h_equiv"
     checks = benchmark_harness.evaluate_budgets(
@@ -520,6 +1065,133 @@ def test_run_soak_scenario_normalizes_rss_growth_and_enforces_budget(
         {metric: 1_000_000_000.0},
     )
     assert checks[metric]["passed"] is budget_passed
+
+
+class _RssModelRuntimeSession(benchmark_harness.RuntimeSession):
+    """Session whose simulated RSS is driven by sample and finish activity."""
+
+    def __init__(
+        self,
+        *,
+        base_rss: int,
+        startup_bytes: int = 0,
+        leak_bytes_per_sample: int = 0,
+        finish_bytes: int = 0,
+    ) -> None:
+        self.rss = base_rss
+        self.startup_bytes = startup_bytes
+        self.leak_bytes_per_sample = leak_bytes_per_sample
+        self.finish_bytes = finish_bytes
+
+    def start(self) -> None:
+        return None
+
+    def emit_sample(self, index: int) -> None:
+        if index == 0:
+            self.rss += self.startup_bytes
+        self.rss += self.leak_bytes_per_sample
+
+    def finish(self) -> dict[str, object]:
+        self.rss += self.finish_bytes
+        return {
+            "stats": {},
+            "event_count": 0,
+            "collector_failure_event_count": 0,
+            "output_path": "",
+        }
+
+
+def _soak_with_rss_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    session: _RssModelRuntimeSession,
+) -> dict[str, Any]:
+    monkeypatch.setattr(benchmark_harness, "_process_rss_bytes", lambda: session.rss)
+    spec = benchmark_harness.RuntimeSpec(
+        name="gpumemprof_cpu",
+        default_interval=0.1,
+        factory=lambda artifact_dir, interval, sink_overrides: session,
+    )
+    return benchmark_harness._run_soak_scenario(spec, tmp_path / "soak", profile="pr")
+
+
+def test_soak_rss_checkpoints_cover_warmup_and_final_sample() -> None:
+    checkpoints = benchmark_harness._soak_rss_checkpoints(216_000)
+    assert len(checkpoints) == benchmark_harness.SOAK_RSS_CHECKPOINT_COUNT
+    assert checkpoints[0] == 4_319
+    assert checkpoints[-1] == 215_999
+    assert benchmark_harness._soak_rss_checkpoints(1) == [0]
+    assert benchmark_harness._soak_rss_checkpoints(4) == [0, 1, 2, 3]
+    # A sample count that is not a multiple of the stride still ends on the
+    # final sample.
+    assert benchmark_harness._soak_rss_checkpoints(101)[-1] == 100
+
+
+def test_run_soak_scenario_excludes_finalization_and_startup_from_rss_growth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # A real CPU session loads every retained sink segment back into memory
+    # while closing (rollups) and exports its history; the residual RSS after
+    # that transient is allocator-dependent and must not be read as a leak.
+    session = _RssModelRuntimeSession(
+        base_rss=40 * 1024 * 1024,
+        startup_bytes=16 * 1024 * 1024,
+        finish_bytes=70 * 1024 * 1024,
+    )
+
+    summary = _soak_with_rss_model(monkeypatch, tmp_path, session)
+
+    assert summary["sample_count"] == 216_000
+    assert summary["rss_warmup_sample_count"] == 4_320
+    assert summary["rss_measured_sample_count"] == 211_680
+    assert summary["rss_baseline_bytes"] == 56 * 1024 * 1024
+    assert summary["max_rss_delta_bytes"] == 0.0
+    assert summary["rss_delta_bytes"] == 0
+    assert summary["rss_growth_per_24h_equiv"] == 0.0
+    assert summary["rss_after_finish_bytes"] == 126 * 1024 * 1024
+    assert summary["finalization_rss_delta_bytes"] == 70 * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    ("leak_bytes_per_sample", "expected_passed"),
+    [
+        pytest.param(64, True, id="below-tolerance"),
+        pytest.param(1_024, False, id="synthetic-leak"),
+    ],
+)
+def test_regression_gate_catches_synthetic_soak_leak(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    leak_bytes_per_sample: int,
+    expected_passed: bool,
+) -> None:
+    session = _RssModelRuntimeSession(
+        base_rss=40 * 1024 * 1024,
+        leak_bytes_per_sample=leak_bytes_per_sample,
+        finish_bytes=70 * 1024 * 1024,
+    )
+
+    summary = _soak_with_rss_model(monkeypatch, tmp_path, session)
+
+    baseline = benchmark_harness.load_regression_baseline(
+        benchmark_harness._default_runtime_baseline_path()
+    )
+    tolerances = benchmark_harness.load_regression_tolerances(
+        benchmark_harness._default_runtime_tolerances_path()
+    )
+    metrics = {
+        "gpumemprof_cpu.max_rss_delta_bytes": float(summary["max_rss_delta_bytes"]),
+        "gpumemprof_cpu.rss_growth_per_24h_equiv": float(
+            summary["rss_growth_per_24h_equiv"]
+        ),
+    }
+    checks = benchmark_harness.evaluate_regressions(
+        metrics, baseline["metrics"], tolerances
+    )
+
+    assert summary["max_rss_delta_bytes"] == 211_680 * leak_bytes_per_sample
+    assert all(check["passed"] is expected_passed for check in checks.values()), checks
 
 
 def test_run_soak_scenario_finalizes_session_on_emit_failure(tmp_path: Path) -> None:

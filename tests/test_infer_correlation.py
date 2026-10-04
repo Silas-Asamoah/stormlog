@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
@@ -19,14 +19,15 @@ from stormlog.infer.correlation_events import (
     MembershipEvent,
     RequestEvent,
     StageEvent,
+    activity_busy_intervals,
     load_inference_artifact,
     parse_inference_record,
 )
 from stormlog.infer.events import JsonlEventWriter
 
 
-def _context(**changes: object) -> CorrelationContext:
-    values = {
+def _context(**changes: Any) -> CorrelationContext:
+    values: dict[str, Any] = {
         "run_id": "run-1",
         "session_id": "session-1",
         "producer_id": "engine-0",
@@ -48,12 +49,10 @@ def _context(**changes: object) -> CorrelationContext:
         "provenance": "reported",
     }
     values.update(changes)
-    return CorrelationContext(**cast(Any, values))
+    return CorrelationContext(**values)
 
 
-def test_v2_records_round_trip_through_existing_jsonl_writer(
-    tmp_path: Path,
-) -> None:
+def test_v2_records_round_trip_through_existing_jsonl_writer(tmp_path: Path) -> None:
     context = _context()
     request = EntityRef("client", "logical-request")
     attempt = EntityRef("client", "attempt-2")
@@ -146,9 +145,7 @@ def test_v2_records_round_trip_through_existing_jsonl_writer(
     }
 
 
-def test_legacy_records_remain_readable_without_server_evidence(
-    tmp_path: Path,
-) -> None:
+def test_legacy_records_remain_readable_without_server_evidence(tmp_path: Path) -> None:
     legacy = {
         "schema_version": 1,
         "event_type": "infer.request",
@@ -271,3 +268,71 @@ def test_public_v2_schema_matches_serialized_records() -> None:
     assert parse_inference_record(capabilities.to_record()) == capabilities
     with pytest.raises(ValidationError):
         validator.validate({**event.to_record(), "schema_version": True})
+    launch = _activity(metadata={"intervals": [[0, 30], [50, 50]]})
+    validator.validate(launch.to_record())
+    with pytest.raises(ValidationError):
+        validator.validate({**launch.to_record(), "schema_version": 2})
+    with pytest.raises(ValidationError):
+        validator.validate({**_activity().to_record(), "schema_version": 3})
+    with pytest.raises(ValidationError):
+        validator.validate({**event.to_record(), "schema_version": 3})
+
+
+def _activity(**changes: Any) -> ActivityReferenceEvent:
+    values: dict[str, Any] = {
+        "context": _context(),
+        "event_id": "launch-1",
+        "activity_ref": EntityRef("trace-0", "launch-1"),
+        "activity_kind": "gpu_kernel",
+        "activity_domain": "gpu",
+        "attribution_status": "unresolved",
+        "start_ns": 100,
+        "end_ns": 200,
+    }
+    values.update(changes)
+    return ActivityReferenceEvent(**values)
+
+
+def test_activity_records_with_busy_intervals_are_schema_version_3() -> None:
+    plain = _activity()
+    with_intervals = _activity(metadata={"intervals": [[0, 30], [50, 50]]})
+
+    assert plain.to_record()["schema_version"] == 2
+    assert with_intervals.to_record()["schema_version"] == 3
+    assert parse_inference_record(with_intervals.to_record()) == with_intervals
+    assert activity_busy_intervals(with_intervals) == [(100, 130), (150, 200)]
+    assert activity_busy_intervals(plain) == [(100, 200)]
+
+
+def test_schema_version_3_fits_only_activity_refs_with_intervals() -> None:
+    record = _activity(metadata={"intervals": [[0, 30]]}).to_record()
+    with pytest.raises(
+        ValueError, match="metadata.intervals requires schema_version 3"
+    ):
+        parse_inference_record({**record, "schema_version": 2})
+    with pytest.raises(
+        ValueError, match="schema_version 3 requires metadata.intervals"
+    ):
+        parse_inference_record({**_activity().to_record(), "schema_version": 3})
+    iteration = IterationEvent(
+        context=_context(), event_id="i1", iteration_ref=EntityRef("engine-0", "i1")
+    ).to_record()
+    with pytest.raises(ValueError, match="unsupported inference schema_version: 3"):
+        parse_inference_record({**iteration, "schema_version": 3})
+
+
+def test_a_reader_that_only_knows_v2_rejects_a_v3_activity_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A v2-only loader, such as release/dev's, refuses instead of overcounting."""
+    import stormlog.infer.correlation_events as events
+
+    artifact = tmp_path / "infer.jsonl"
+    launch = _activity(metadata={"intervals": [[0, 1], [99, 1]]})
+    artifact.write_text(json.dumps(launch.to_record()) + "\n", encoding="utf-8")
+    monkeypatch.setattr(events, "_SCHEMA_VERSIONS", {})
+
+    with pytest.raises(
+        ValueError, match="line 1: unsupported inference schema_version: 3"
+    ):
+        load_inference_artifact(artifact)
