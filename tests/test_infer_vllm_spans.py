@@ -402,15 +402,30 @@ _REPEATED_SCALAR_FIELDS = {target.name: target for target in repeated_scalar_fie
 _PARSE_RSS = """
 import os, resource, sys
 from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
+
+
+def peak_rss():
+    # Linux keeps ru_maxrss across exec, so a child's starts at the peak of
+    # the pytest process it was forked from; VmHWM is this process's own.
+    try:
+        with open("/proc/self/status") as status:
+            for line in status:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    scale = 1 if sys.platform == "darwin" else 1024
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale
+
+
 body = bytearray(os.path.getsize(sys.argv[1]))
 with open(sys.argv[1], "rb", buffering=0) as file:
     file.readinto(body)
 request_class = trace_service_pb2.ExportTraceServiceRequest
 request_class.FromString(b"")
-scale = 1 if sys.platform == "darwin" else 1024
-before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+before = peak_rss()
 message = request_class.FromString(bytes(body))
-grew = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) * scale
+grew = peak_rss() - before
 from stormlog.infer import vllm_spans
 from stormlog.infer.otlp_wire import count_trace_request
 counts = count_trace_request(
