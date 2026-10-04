@@ -63,8 +63,9 @@ the flaky benchmark memory gates
   hook, whether each was requested, configured, active and healthy, judged
   in every measured phase (enough samples, ok start and end scrapes without
   long gaps and a resolved window, spans for 99% of accepted requests,
-  traces stopped and imported, no dropped hook records). The hook counts as
-  requested when the server's environment enables it. What the artifact
+  traces stopped and imported, no dropped hook records, and the hook's
+  heartbeat covering the phase where the import records it). The hook
+  counts as requested when the server's environment enables it. What the artifact
   cannot show is `null` with a reason. The `infer.session` config now
   records `sample_interval_seconds` and `trace`, and the system sampler
   keeps a fixed grid, so slow samples no longer lower its rate. (#213)

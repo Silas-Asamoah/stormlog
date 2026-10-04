@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from stormlog.infer.observers import observer_lines, observer_states
 from stormlog.infer.vllm_analysis import JoinedSpans
 
@@ -266,6 +268,57 @@ def test_a_hook_that_dropped_records_is_unhealthy() -> None:
     execution = observer_states(records)["observers"]["execution"]
     assert execution["healthy"] is False
     assert execution["phases"]["c1"]["reasons"] == ["epoch e1 dropped records"]
+
+
+def _liveness(
+    first: int = START - SECOND,
+    last: int = END + SECOND,
+    gaps: tuple[tuple[int, int], ...] = (),
+) -> dict[str, Any]:
+    """#218's liveness block: when the hook's writer was beating."""
+    return {
+        "basis": "heartbeat_gaps/1",
+        "gap_ns": 5 * SECOND,
+        "heartbeats": 12,
+        "max_interval_ns": SECOND,
+        "first": {"start_seq": 1, "start_mono_ns": 0, "start_wall_ns": first},
+        "last": {"end_seq": 12, "end_mono_ns": 0, "end_wall_ns": last},
+        "gaps": [
+            {"start_wall_ns": start, "end_wall_ns": end, "start_seq": 3, "end_seq": 4}
+            for start, end in gaps
+        ],
+    }
+
+
+def test_a_hook_beating_through_the_phase_is_healthy() -> None:
+    records = [*_base(), *_execution(liveness=_liveness())]
+    execution = observer_states(records)["observers"]["execution"]
+    assert execution["healthy"] is True
+    assert execution["unjudged"] == []
+
+
+@pytest.mark.parametrize(
+    ("liveness", "reason"),
+    [
+        (_liveness(gaps=((START + 2 * SECOND, START + 8 * SECOND),)), "heartbeat"),
+        (_liveness(last=END - 3 * SECOND), "heartbeat"),
+        (_liveness(first=START + SECOND), "heartbeat"),
+    ],
+    ids=["gap_in_phase", "stopped_early", "started_late"],
+)
+def test_a_hook_that_did_not_beat_through_the_phase_is_unhealthy(
+    liveness: dict[str, Any], reason: str
+) -> None:
+    records = [*_base(), *_execution(liveness=liveness)]
+    execution = observer_states(records)["observers"]["execution"]
+    assert execution["healthy"] is False
+    assert any(reason in item for item in execution["phases"]["c1"]["reasons"])
+
+
+def test_a_gap_outside_the_phase_does_not_count() -> None:
+    gap = (START - 10 * SECOND, START - 4 * SECOND)
+    records = [*_base(), *_execution(liveness=_liveness(first=0, gaps=(gap,)))]
+    assert observer_states(records)["observers"]["execution"]["healthy"] is True
 
 
 def test_an_observer_silent_in_the_phase_is_not_active() -> None:
