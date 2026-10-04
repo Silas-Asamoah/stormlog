@@ -52,6 +52,13 @@ the flaky benchmark memory gates
   would appear. Prompts, outputs and server error text leave only with
   `--export-content`. The final counts are in an `export.otlp` capability
   record, and in `stormlog_export_*` metrics when Prometheus is on too.
+- `examples/observability/` (#220): a two-pipeline collector config that
+  forwards only vLLM's spans to Stormlog's analysis and everything else to
+  a trace store, a collector config for outage tests, Prometheus and Jaeger
+  configs, `local_stack.py` to run them from their binaries, and
+  `fake_collector.py`, which stores spans durably before answering and
+  reports raw and unique counts. See "Deployment examples" in
+  `docs/inference_export.md`.
 - `--trace-context {off,preserve-engine,follow-sampling}` on `stormlog infer
   profile` sends a W3C `traceparent` with each request and records its
   `trace_id` and `span_id` on `infer.request`; off by default.

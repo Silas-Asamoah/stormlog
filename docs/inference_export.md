@@ -548,6 +548,93 @@ against the OpenTelemetry SDK's `OTEL_TRACES_SAMPLER` names (`always_on`,
 ratio samplers: a typo would otherwise make two compared runs differ
 silently. Anything else exits 2.
 
+## Deployment examples
+
+`examples/observability/` holds configs and scripts for three setups, from
+no services at all to a collector in front of a trace store.
+
+**No services.** Write both exports to files:
+
+```bash
+stormlog infer profile ... --output artifacts/infer.jsonl \
+  --prometheus-textfile-dir artifacts/metrics \
+  --otlp-file artifacts/spans.jsonl
+```
+
+Each line of the span file is one OTLP JSON export request. To list the
+slowest requests:
+
+```bash
+jq -r '.resourceSpans[].scopeSpans[].spans[]
+       | select(.name == "stormlog.infer.request")
+       | [((.endTimeUnixNano|tonumber) - (.startTimeUnixNano|tonumber)) / 1e6,
+          (.attributes[] | select(.key == "stormlog.request_id") | .value.stringValue)]
+       | @tsv' artifacts/spans.jsonl | sort -rn | head
+```
+
+To browse the traces, replay the file into a collector with its
+`otlpjsonfile` receiver and send them to Jaeger. `infer analyze
+--vllm-spans` reads the file too, but it looks for vLLM's request spans:
+it counts Stormlog's as `not_a_request_span`, and is not a viewer for them.
+
+**Local services.** `local_stack.py` runs `otelcol-contrib`, `prometheus` and
+`jaeger` from their binaries, each with the config beside it, and stops or
+kills them by the pid it started, never by name:
+
+```bash
+python -m examples.observability.local_stack start
+python -m examples.observability.local_stack status
+python -m examples.observability.local_stack stop
+```
+
+A binary is found on `PATH`, or named by `STORMLOG_OTELCOL`,
+`STORMLOG_PROMETHEUS` or `STORMLOG_JAEGER`; a missing one is skipped.
+`prometheus.yml` scrapes vLLM and Stormlog as separate jobs. Jaeger takes OTLP
+over gRPC on 4317, leaving 4318 to the collector, and serves its UI on
+16686. `docker-compose.yml` runs the same three services, but has not been
+run yet and is marked so.
+
+**A collector in front.** `otelcol.yaml` takes vLLM's spans and Stormlog's on
+one OTLP/HTTP receiver (127.0.0.1:4318) and feeds two pipelines:
+
+- **`traces/stormlog-analysis`** forwards only vLLM's spans, unchanged and
+  unsampled, to the receiver Stormlog runs for its engine-side analysis
+  (`--vllm-spans-listen 127.0.0.1:4319`). It selects them by the resource
+  attribute `vllm.instrumenting_module_name`, which vLLM's tracer always
+  sets, so neither Stormlog's spans nor another service's reach the analysis,
+  whatever their `service.name`. Its queue and retries are bounded; a retry
+  can deliver a batch twice, which the analysis counts as duplicates and
+  keeps once.
+- **`traces/backend`** sends everything to Jaeger and to a file, through tail
+  sampling that keeps every failed trace and one in ten others. Remove the
+  sampler to keep all.
+
+```bash
+OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf \
+OTEL_RESOURCE_ATTRIBUTES=host.name=$(hostname) \
+vllm serve MODEL --otlp-traces-endpoint http://127.0.0.1:4318/v1/traces
+
+stormlog infer profile ... --vllm-spans-listen 127.0.0.1:4319 \
+  --otlp-endpoint http://127.0.0.1:4318 --trace-context preserve-engine \
+  --prometheus-listen 127.0.0.1:9900 --prometheus-linger 30
+```
+
+**Outage episodes.** For #221's qualification:
+- `otelcol-x1.yaml` writes straight to a file, with no batching and no
+  sending queue, so the file holds exactly what the collector acknowledged
+  before it was killed. Kill and restart it with `local_stack.py kill
+  otelcol` and `local_stack.py start --x1 otelcol`, and run Stormlog with
+  `--otlp-probe-interval 1`.
+- `fake_collector.py` stores each export's spans, fsynced, before it
+  answers, after `--delay-seconds`, with `--status`. `GET /counts`, or
+  `--count FILE` after it has gone, gives the raw and unique spans to check
+  Stormlog's collector-side bounds. Slower than Stormlog's 5 s attempt
+  deadline, it gives `unknown{timeout_after_send}`.
+
+The configs follow the collector's documented syntax, but have only been
+checked by tests that read them: the filter's condition, in particular, is
+first run against a real collector in the GPU validation.
+
 ## When something goes wrong
 
 | Situation | What happens | Exit code |
