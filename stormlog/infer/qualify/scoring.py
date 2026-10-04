@@ -113,6 +113,10 @@ class ScoreConfig:
     def grace(self, kind: str) -> int:
         return self.grace_ns.get(kind, self.default_grace_ns)
 
+    def longest_grace(self) -> int:
+        """The longest any finding's kind is given after an effect ends."""
+        return max([self.default_grace_ns, *self.grace_ns.values()])
+
 
 # ------------------------------------------------------------------ findings
 
@@ -686,8 +690,9 @@ def _episode_span(
         return None
     if times.effect_end_ns is None:
         return Interval(min(starts), run.measured.end_ns)
-    kind = injection.expects[0].kind if injection.expects else ""
-    return Interval(min(starts), times.effect_end_ns + config.grace(kind))
+    # A finding of any kind is assigned to the episode up to its own kind's
+    # grace, and then can't be a false claim: the span covers the longest.
+    return Interval(min(starts), times.effect_end_ns + config.longest_grace())
 
 
 def _subtract(whole: Interval, removed: Sequence[Interval]) -> tuple[Interval, ...]:
