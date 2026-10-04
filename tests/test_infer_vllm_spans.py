@@ -1234,6 +1234,42 @@ class TestReceiverAdmission:
         assert retained < 4 * 1024 * 1024
         assert retained <= charged
 
+    def test_a_span_s_request_id_and_status_are_charged_too(self) -> None:
+        """A record keeps its request ID apart from the attribute it came
+        from, and its status: 200 spans with 50 KB IDs held 1.92 times
+        their queue charge."""
+        import tracemalloc
+
+        spans = [
+            {
+                "name": "s",
+                "attributes": [
+                    {
+                        "key": "gen_ai.request.id",
+                        "value": {"stringValue": f"chatcmpl-{i}-" + "x" * 50_000},
+                    }
+                ],
+                "status": {"code": 2, "message": "m" * 20_000},
+            }
+            for i in range(200)
+        ]
+        body = json.dumps(
+            {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
+        ).encode()
+        with _receiver() as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            tracemalloc.start()
+            try:
+                assert _post(url, body, "application/json") == 200
+                retained, _peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            charged = receiver._queued_bytes
+            records = receiver.drain()
+        assert len(records) == 200
+        assert records[0].request_id is not None
+        assert retained <= charged
+
 
 def _raw_request_span(attributes: dict[str, Any]) -> RawSpan:
     return RawSpan(

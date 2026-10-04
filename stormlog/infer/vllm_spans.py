@@ -402,14 +402,18 @@ def _read_span_lines(lines: list[str]) -> tuple[str, list[RawSpan]]:
 # ------------------------------------------------------------------ records
 def retained_bytes(spans: Sequence[RawSpan], clocks: Mapping[int, str]) -> list[int]:
     """What each span's record will hold, estimated as the decode budget is
-    (``SPAN_BYTES``, ``VALUE_BYTES`` and the size of its text); a resource,
-    a scope and a clock domain shared by several spans are charged once, to
-    the first."""
+    (``SPAN_BYTES``, ``VALUE_BYTES`` and the size of its text), its status
+    and the request ID it keeps apart from its attributes included; a
+    resource, a scope and a clock domain shared by several spans are
+    charged once, to the first."""
     seen: set[int] = set()
     sizes: list[int] = []
     for raw in spans:
         size = SPAN_BYTES + _held(raw.attributes) + _text(raw.name, raw.trace_id)
         size += _text(raw.span_id, raw.parent_span_id, raw.kind)
+        size += _held(raw.status) + _held(raw.dropped)
+        request_id = raw.attributes.get(REQUEST_ID_ATTRIBUTE)
+        size += _text(request_id) if isinstance(request_id, str) else 0
         size += _once(seen, raw.resource, _held)
         size += _once(seen, raw.scope, _held)
         size += _once(seen, clocks[id(raw.resource)], _text)
