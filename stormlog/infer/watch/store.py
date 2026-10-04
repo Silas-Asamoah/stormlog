@@ -261,11 +261,11 @@ class GenerationWriter:
         return True
 
     def _copy_in(self, source: Path, target: Path, size: int) -> int:
+        # The target is created here, exclusively: a name already taken (a
+        # relpath given twice) raises, and that file is never this copy's.
+        out = CappedWriter(target, self.allowance)
         try:
-            with (
-                source.open("rb") as handle,
-                CappedWriter(target, self.allowance) as out,
-            ):
+            with out, source.open("rb") as handle:
                 while chunk := handle.read(_COPY_CHUNK):
                     out.write(chunk)
             if target.stat().st_size != size:
