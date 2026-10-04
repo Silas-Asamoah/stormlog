@@ -1103,3 +1103,37 @@ def test_manifest_parsing_rejects_foreign_and_malformed_documents() -> None:
         BundleManifest.from_dict(
             {"format": "stormlog.infer.incident_bundle", "schema_version": 1}
         )
+
+
+def test_a_full_disk_removes_the_oldest_bundle_not_protected(tmp_path: Path) -> None:
+    store = IncidentStore(tmp_path)
+    ids = []
+    for second in (1, 2, 3):
+        incident_id = store.new_incident_id(second * 1_000_000_000)
+        writer = store.new_bundle(incident_id, 4096)
+        assert writer is not None
+        with writer.file("incident.jsonl") as out:
+            out.write(b"{}\n")
+        writer.publish(status="completed", complete=True, sealed_at_ns=second)
+        ids.append(incident_id)
+    assert store.make_room_on_disk(protected=frozenset({ids[0]}))
+    assert [m.incident_id for _p, m in store.bundles()] == [ids[0], ids[2]]
+    (pruned,) = store.take_pruned()
+    assert (pruned.incident_id, pruned.reason) == (ids[1], "disk_full")
+    assert store.budget.used_bytes == store._scan_bytes()
+    store.close()
+
+
+def test_an_abandoned_new_bundle_leaves_nothing_behind(tmp_path: Path) -> None:
+    """The bundle's directory stayed after its first generation was
+    abandoned, so writing that incident again found its id taken."""
+    store = IncidentStore(tmp_path)
+    incident_id = store.new_incident_id()
+    writer = store.new_bundle(incident_id, 4096)
+    assert writer is not None
+    writer.abandon()
+    assert not (store.root / incident_id).exists()
+    again = store.new_bundle(incident_id, 4096)
+    assert again is not None
+    again.abandon()
+    store.close()

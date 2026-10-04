@@ -791,3 +791,16 @@ def test_a_trigger_resolved_before_the_seal_is_recorded_so(tmp_path: Path) -> No
         r for r in of_type(records, TRIGGER_STATE) if r["event"] == "resolved"
     ]
     assert incident["trigger"]["resolved_at_ns"] == resolved["timestamp_ns"]
+
+
+def test_a_store_budget_larger_than_the_disk_is_warned_of(tmp_path: Path) -> None:
+    payload = watch_config(
+        "http://127.0.0.1:9",
+        store={"max_total_bytes": 1 << 62, "max_incident_bytes": 1 << 20},
+    )
+    watcher = Watcher(resolve_watch_config(payload), tmp_path)
+    try:
+        (warning,) = watcher.warnings
+        assert "less than store.max_total_bytes" in warning
+    finally:
+        watcher.close()

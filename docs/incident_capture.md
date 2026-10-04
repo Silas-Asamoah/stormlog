@@ -367,6 +367,12 @@ reader lets go. A bundle whose manifest cannot be read (corrupt, or written
 by a newer Stormlog) is charged like any other and removed once its
 directory is older than `max_age_hours`.
 
+The budget counts bytes, not the disk: a disk with less free space than
+`max_total_bytes` fills first. The watcher says so when it starts (in its
+session record, and on stderr), and a seal the disk refuses (ENOSPC)
+removes the oldest sealed bundle not still open, recorded with the reason
+`disk_full`, and is tried again, so the newest incidents are the ones kept.
+
 These limits apply only to what the watcher keeps under its root. vLLM
 writes each profiler trace into its own trace directory before the watcher
 can measure it, so nothing here bounds that write; see the watcher's

@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import os
+import shutil
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -148,6 +149,8 @@ class Watcher:
             self._release_root()
             raise InferUsageError(str(exc)) from None
         self.ledger = Ledger(self.root, observer=observer, stats=self.stats)
+        # Said at the start, in the session record and by the command.
+        self.warnings = _disk_warnings(self.store.root, config.store.max_total_bytes)
         self.history = ScrapeHistory(
             max_seconds=config.history_seconds,
             max_bytes=config.history_bytes,
@@ -203,7 +206,9 @@ class Watcher:
         self._loop = asyncio.get_running_loop()
         self._hurried = asyncio.Event()
         recovery = self.store.recover()
-        self._session("started", {"recovery": recovery.__dict__})
+        self._session(
+            "started", {"recovery": recovery.__dict__, "warnings": self.warnings}
+        )
         self._prune()
         # Set by ``stop`` or by the end of the duration, so either can cut
         # a scrape short.
@@ -755,6 +760,22 @@ def _next_poll(previous: int, interval: int, now: int) -> int:
 
 def _seconds(target_ns: int, clock: WatchClock) -> float:
     return max(0.0, (target_ns - clock.mono_ns()) / _NS)
+
+
+def _disk_warnings(root: Path, max_total_bytes: int) -> list[str]:
+    """A store budget the disk cannot hold: seals then fail for space before
+    the budget is reached, and room is made by deleting the oldest bundles."""
+    try:
+        free = shutil.disk_usage(root).free
+    except OSError:
+        return []
+    if free >= max_total_bytes:
+        return []
+    return [
+        f"the disk under {root} has {free} bytes free, less than "
+        f"store.max_total_bytes ({max_total_bytes}): a full disk will remove "
+        "the oldest incident bundles to keep the newest"
+    ]
 
 
 async def _on_daemon(func: Callable[[], bool]) -> bool:

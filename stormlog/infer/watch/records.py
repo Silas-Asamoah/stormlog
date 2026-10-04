@@ -75,7 +75,7 @@ UNSOUND_REASONS = (
     "incident_writes_failing",
     "store_writer_timeout",
 )
-PRUNE_REASONS = ("max_age_hours", "max_incidents", "max_total_bytes")
+PRUNE_REASONS = ("max_age_hours", "max_incidents", "max_total_bytes", "disk_full")
 REARM_BASES = ("exact_cohort", "horizon", "cap")
 SELF_INDUCED_REASONS = (
     "attribution_window",

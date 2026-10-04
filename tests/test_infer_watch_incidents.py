@@ -622,3 +622,33 @@ def test_a_seal_expands_no_scrape_on_the_loop(
     assert len(expanded) == 151
     (record,) = harness.of_type(INCIDENT)
     assert record["pre_window"]["fidelity_detail"]["scrapes"]["failed"] == 1
+
+
+def test_a_seal_the_disk_refuses_makes_room_and_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a disk with less room than the budget, the newest incidents failed
+    for space while the oldest bundles were kept."""
+    import errno
+
+    harness = Harness(tmp_path)
+    harness.scrapes(80, 600)
+    first = harness.fire(200)
+    harness.tick(261)
+    real_new_bundle = harness.store.new_bundle
+    refusals = [OSError(errno.ENOSPC, "No space left on device")]
+
+    def full_once(*args: Any, **kwargs: Any) -> Any:
+        if refusals:
+            raise refusals.pop()
+        return real_new_bundle(*args, **kwargs)
+
+    monkeypatch.setattr(harness.store, "new_bundle", full_once)
+    second = harness.fire(400)
+    harness.tick(461)
+    assert [bundle.incident_id for bundle in harness.pruned] == [first]
+    assert harness.pruned[0].reason == "disk_full"
+    records = [r for r in harness.records if r["event_type"] in (INCIDENT, "pruned")]
+    assert [r["event_type"] for r in records] == [INCIDENT, "pruned", INCIDENT]
+    assert records[-1]["incident_id"] == second
+    assert records[-1]["bundle"] == f"incidents/{second}"

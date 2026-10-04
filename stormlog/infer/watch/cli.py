@@ -81,6 +81,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
         api_key=_api_key(args.api_key_env),
     )
     watcher = Watcher(config, Path(args.root), options=options)
+    for warning in watcher.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
     # The watch leaves SIGINT and SIGTERM ignored: the process is about to
     # exit with the code its report holds, and a late signal must not turn
     # that into an interrupt.
