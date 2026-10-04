@@ -284,6 +284,27 @@ def test_a_signal_to_the_harnesss_group_continues_the_target(
     )
 
 
+def test_the_termination_handler_continues_before_an_earlier_handler_runs(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    # An earlier handler may exit at once (os._exit skips finally and
+    # atexit), so the target is running before it is called.
+    from examples.qualification import pulser as pulser_module
+
+    target = Target.of(loop.pid)
+    seen: list[bool] = []
+    with Pulser(target, watchdog=False):
+        os.kill(loop.pid, signal.SIGSTOP)
+        assert wait_until(target.is_stopped)
+        with pytest.raises(SystemExit):
+            pulser_module._on_termination(
+                lambda *_: seen.append(_running_within(loop.pid, 0.5)),
+                signal.SIGTERM,
+                None,
+            )
+    assert seen == [True]
+
+
 def test_a_harness_group_killed_outright_leaves_the_watchdog_to_continue(
     loop: subprocess.Popen[bytes],
 ) -> None:
