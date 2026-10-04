@@ -52,7 +52,7 @@ The values are provisional until they are read from real runs.
 | `host_stall.stall_floor_ns` | 50 ms | and at least this long |
 | `host_stall.no_baseline_floor_ns` | 500 ms | or, with no earlier busy steps to compare with, at least this long |
 | `host_stall.baseline_window_ns` | 30 s | the window of earlier busy steps the cadence is taken from |
-| `host_stall.min_busy_steps` | 20 | busy steps that window needs |
+| `host_stall.min_busy_steps` | 20 | busy steps at least as large as the stall's that window needs |
 | `host_stall.matched_bin_min_steps` | 20 | steps of the stall's own work bucket (scheduled tokens within a factor of two) needed to compare it with steps of its size |
 | `host_stall.heartbeat_grace_ns` | 2 s | how recently the hook's writer must have been heard from to judge a stall still going on |
 
@@ -128,11 +128,14 @@ before it, and at least `stall_floor_ns`. Steps are compared with steps of
 their own size: the cadence is taken over earlier steps whose scheduled
 tokens lie within a factor of two of the stall's step when enough share it
 (`detail["baseline"]` is `matched`), so a step running a long prefill is not
-measured against decode-only steps. Otherwise it is taken over all busy
-steps (`unmatched`), provided some were at least that large, and otherwise
-replaced by `no_baseline_floor_ns` (`floor`). Only earlier steps count, so
-the decision never depends on what happened after the stall. With `config.now_wall_ns`, a stall still going on
-counts from the last completion (`detail["ongoing"]`).
+measured against decode-only steps. Otherwise it is taken over the earlier
+busy steps at least as large as the stall's (`unmatched`), when there are
+`min_busy_steps` of them, so a step is never measured against smaller ones;
+otherwise it is replaced by `no_baseline_floor_ns` (`floor`). A second long
+prefill a few seconds after the first therefore meets the floor, not the
+decode cadence. Only earlier steps count, so the decision never depends on
+what happened after the stall. With `config.now_wall_ns`, a stall still
+going on counts from the last completion (`detail["ongoing"]`).
 
 A stall is judged only where the records are known to be whole: between
 two heartbeats (the hello counting as one with nothing lost) whose drop
