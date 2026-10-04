@@ -178,9 +178,10 @@ class FakeProfiler(EngineObserver):
         assert directory is not None
         directory.mkdir(parents=True, exist_ok=True)
         host = socket.gethostname()
-        # Nanoseconds, as torch's trace handler names them, so two traces
-        # written in the same millisecond don't collide.
-        name = f"rank0.{host}_{os.getpid()}.{time.time_ns()}"
+        # As vLLM's worker names it: torch's handler takes the worker's rank
+        # suffix and the time in nanoseconds, so two traces written in the
+        # same millisecond don't collide (rank0.<ns>.pt.trace.json.gz).
+        name = f"rank0.{time.time_ns()}"
         path = directory / f"{name}.pt.trace.json.gz"
         data = json.dumps(self._document(steps, host)).encode()
         seconds = self.controls.trace_write_seconds

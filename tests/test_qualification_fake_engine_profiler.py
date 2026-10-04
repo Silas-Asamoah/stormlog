@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import http.client
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -52,7 +53,8 @@ def test_a_window_writes_a_trace_whose_gpu_work_links_to_steps(tmp_path: Path) -
     index_spans(trace)
     links = [link_gpu_event(trace, event) for event in trace.gpu_events]
     assert (started, stopped) == (200, 200)
-    assert path.name.startswith("rank0.")
+    # Named as vLLM's worker names it: rank0.<ns>.pt.trace.json.gz.
+    assert re.fullmatch(r"rank0\.\d+\.pt\.trace\.json\.gz", path.name)
     assert links and all(link.iteration_ref is not None for link in links)
 
 
