@@ -332,6 +332,28 @@ stormlog infer profile ... --extra-body '{"temperature": 0, "ignore_eos": true}'
 isn't passed is recorded as a server default. For each case, the report gives
 the prompt and output token distributions of the completed requests.
 
+### Server probe
+
+Before the first case and after the last, `infer profile` asks the server
+about itself and records the answers as `infer.server_probe` records:
+
+| `--server-probe` | Asks |
+| --- | --- |
+| `auto` (default) | `/version`, `/v1/models`, and vLLM's `/server_info`, which vLLM serves only with `VLLM_SERVER_DEV_MODE=1` |
+| `basic` | `/version` and `/v1/models` |
+| `none` | Nothing |
+
+vLLM's dev routes skip its API key check, so `auto` asks `/server_info` only
+of a loopback or private-network host; `--allow-remote-probe` asks a public
+one too. A dev-mode server must never face the public.
+
+`/server_info` runs vLLM's environment collector (`pip`, `nvidia-smi`) the
+first time it is asked, so it gets one 120-second deadline and is never
+asked twice. If it gives no answer in time, the collector may still be
+running in the server, and `infer profile` exits `5` before measuring and
+asks you to restart the server. See
+[Inference server descriptions](inference_server.md) for what is kept.
+
 ## Analyze an artifact
 
 ```bash

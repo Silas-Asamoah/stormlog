@@ -156,6 +156,23 @@ is not found. A log file can hold several start-ups, and only the last one
 counts. When workers disagree, for example on the attention backend, every
 value is kept with an issue.
 
+## What the server reports
+
+`infer profile` asks the server about itself over HTTP before the first case
+and after the last (`--server-probe`, see [Inference Profiling](inference.md)).
+Each route's answer is recorded with its status (`ok`, `http_error`,
+`unreachable`, `failed`, `timeout`, `too_large`, `invalid_json` or
+`skipped`), HTTP status, time and size:
+
+- every answer is capped at 4 MiB, and redirects are never followed;
+- the API key goes only to the endpoint's own origin;
+- `/version` and `/v1/models` get 60 seconds each, `/server_info` one 120-second deadline;
+- when the server cannot be reached, the other routes are skipped instead of each waiting out its deadline.
+
+`/server_info`'s answer is kept redacted, by the rules below: its
+`vllm_config`, its `vllm_env`, and a summary of `system_env`. vLLM caches
+`system_env`, so after the run it is labelled `cached` and says nothing new.
+
 ## What a description keeps
 
 Redaction follows vLLM's configuration schema, never a substring. A field
@@ -232,6 +249,7 @@ from stormlog.infer.server_model import describe_model, launch_arguments
 | `launch_arguments(cmdline)` | The model, revision, tokenizer, chat template and download directory the command line names |
 | `describe_model(launch, hub_cache=..., cwd=..., hash_weights=False, verify_blobs=False)` | The files, digests and `identity_evidence` above |
 | `stormlog.infer.server_log.read_server_log(path)` | The last start-up's choices from a server log |
+| `stormlog.infer.server_probe.probe_server(endpoint, mode="auto", ...)` | What the server reports about itself, as a `ServerProbe` |
 
 ## Related pages
 

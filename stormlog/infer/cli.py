@@ -42,6 +42,7 @@ from .server_collector import (
     NvmlUnavailableError,
     collect_server_telemetry,
 )
+from .server_probe import AUTO, PROBE_MODES
 from .slo import (
     CLIENT,
     SERVER,
@@ -315,6 +316,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_slo_arguments(profile_parser, "record in the artifact and judge the run by")
+    profile_parser.add_argument(
+        "--server-probe",
+        choices=PROBE_MODES,
+        default=AUTO,
+        help=(
+            "Ask the server about itself before and after the run: basic is "
+            "/version and /v1/models; auto adds vLLM's /server_info on a "
+            "loopback or private host (default: auto)"
+        ),
+    )
+    profile_parser.add_argument(
+        "--allow-remote-probe",
+        action="store_true",
+        help="Ask /server_info of a public host too; vLLM's dev routes skip its API key",
+    )
     _add_arrival_arguments(profile_parser)
     _add_prompt_arguments(profile_parser)
     _add_cache_arguments(profile_parser)
@@ -947,6 +963,8 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         ),
         slo=slo,
         slo_source=slo_source if slo is not None else None,
+        server_probe=args.server_probe,
+        allow_remote_probe=args.allow_remote_probe,
     )
 
 
