@@ -90,6 +90,26 @@ have changed since it started. So the description only names its evidence:
 None of these verifies the model's identity on its own; only a launch the
 experiment runner controls can do that.
 
+## The server's log
+
+Some settings are only decided once the engine runs, and vLLM's reported
+configuration does not hold all of them. vLLM logs them, so a description
+can read the server's log:
+
+| Field | vLLM 0.30.0 log line |
+| --- | --- |
+| `attention_backend`, `attention_candidates` | `Using FLASH_ATTN attention backend out of potential backends: [...]`, or `Using ... backend.` for a backend chosen by name |
+| `kv_cache_size_tokens`, `max_concurrency` | `GPU KV cache size: N tokens, Maximum concurrency for M tokens per request: Xx` |
+| `num_gpu_blocks_override` | `Overriding num_gpu_blocks=... with num_gpu_blocks_override=N` |
+| `cudagraph_captures` | `Capturing CUDA graphs (decode, FULL)` and the like, as `decode:FULL` |
+| `graph_capture_gib` | `Graph capturing finished in N secs, took X GiB` |
+
+The patterns are vLLM 0.30.0's own log statements (`patterns:
+vllm_0_30_0`); another version may word them differently, and then a field
+is not found. A log file can hold several start-ups, and only the last one
+counts. When workers disagree, for example on the attention backend, every
+value is kept with an issue.
+
 ## What a description keeps
 
 Redaction follows vLLM's configuration schema, never a substring. A field
@@ -165,6 +185,7 @@ from stormlog.infer.server_model import describe_model, launch_arguments
 | --- | --- |
 | `launch_arguments(cmdline)` | The model, revision, tokenizer, chat template and download directory the command line names |
 | `describe_model(launch, hub_cache=..., cwd=..., hash_weights=False, verify_blobs=False)` | The files, digests and `identity_evidence` above |
+| `stormlog.infer.server_log.read_server_log(path)` | The last start-up's choices from a server log |
 
 ## Related pages
 
