@@ -2,6 +2,7 @@
 
 import pytest
 
+from stormlog._export import envelope as envelope_module
 from stormlog._export.envelope import EnvelopeLimits, make_envelope
 
 
@@ -46,6 +47,26 @@ def test_content_fields_are_cut_by_utf8_bytes_not_characters() -> None:
     envelope = make_envelope("k", [("error", "日本語テキスト")], limits)
     assert envelope.get("error") == "日"  # 3 bytes; a second character needs 6
     assert envelope.truncated == 1
+
+
+def test_a_megabyte_content_field_is_cut_without_encoding_it_whole(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[int] = []
+    real = envelope_module.truncate_utf8
+
+    def counting(text: str, max_bytes: int) -> str:
+        seen.append(len(text))
+        return real(text, max_bytes)
+
+    monkeypatch.setattr(envelope_module, "truncate_utf8", counting)
+    limits = EnvelopeLimits(content_fields=frozenset({"error"}))
+    body = "é" * 1_000_000
+    envelope = make_envelope("k", [("error", body)], limits)
+    assert envelope.get("error") == "é" * 512  # 1,024 bytes
+    assert envelope.truncated == 1
+    # Only a cap's worth of characters is ever encoded, on the producer.
+    assert seen == [limits.max_content_bytes]
 
 
 def test_a_megabyte_field_cannot_make_a_big_envelope() -> None:
