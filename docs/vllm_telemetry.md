@@ -95,6 +95,21 @@ so batches leave every second, and keep
 `--vllm-spans-drain` at or above that delay. The report's `spans` block
 counts requests without a span, so a late batch is visible, never silent.
 
+### Ingestion limits
+
+A scrape never lets the endpoint grow the client's memory. Each limit is
+applied before the response is held whole, and each refusal is recorded as a
+failed scrape with its reason:
+
+| Collector | Limit | Default | When it is exceeded |
+| --- | --- | --- | --- |
+| `/metrics` scrape | response bytes read | 8 MiB | the scrape fails with `oversized`, and the rest of the response is never read |
+| `/metrics` scrape | series in one response | 20,000 | the scrape fails with `oversized`, before the compact record is built |
+
+A vLLM 0.30.0 response for one model is about 90 KB and 360 series, so
+these limits bind only on a misbehaving or hostile endpoint. Both are in the
+scraper's config record.
+
 Every request is sent with `X-Request-Id: stormlog-<run_id>-<request_id>`,
 recorded on its `infer.request` event as `x_request_id`. vLLM embeds that
 header in its own request id and in the span's `gen_ai.request.id`, so a span

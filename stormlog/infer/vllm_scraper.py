@@ -47,6 +47,11 @@ CAPABILITY_COMPONENT = "vllm.metrics"
 # The phase-end scrape of a run being stopped waits at most this long, so a
 # server that stopped answering cannot hold Ctrl+C back.
 INTERRUPT_SCRAPE_TIMEOUT_SECONDS = 2.0
+# A response is read at most this far, and parsed into records only below this
+# many series, so a misbehaving endpoint cannot grow the client's memory. A
+# vLLM 0.30.0 response for one model is about 90 KB and 360 series.
+MAX_SCRAPE_BYTES = 8 * 1024 * 1024
+MAX_SCRAPE_SERIES = 20_000
 
 
 def resolve_metrics_url(endpoint: str, requested: str | None) -> str | None:
@@ -135,9 +140,17 @@ _OPENER = urllib.request.build_opener(_NoRedirect())
 
 
 def fetch_metrics(
-    url: str, *, timeout_seconds: float, api_key: str | None = None
+    url: str,
+    *,
+    timeout_seconds: float,
+    api_key: str | None = None,
+    max_bytes: int = MAX_SCRAPE_BYTES,
 ) -> FetchResult:
-    """GET the metrics text; every failure becomes a result, never an exception."""
+    """GET the metrics text; every failure becomes a result, never an exception.
+
+    The body is read at most ``max_bytes + 1`` bytes far: a longer response
+    is a failed scrape, and the rest of it is never read.
+    """
     headers = {"Accept": "text/plain"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -147,7 +160,7 @@ def fetch_metrics(
         with _OPENER.open(request, timeout=timeout_seconds) as response:
             status = int(response.status)
             try:
-                body = response.read().decode("utf-8", errors="replace")
+                raw = _read_capped(response, max_bytes)
             except http.client.HTTPException as exc:
                 # A body cut short of its Content-Length (IncompleteRead) is
                 # an http.client error, not an OSError: still a failed
@@ -157,6 +170,10 @@ def fetch_metrics(
                     None, status, f"{type(exc).__name__}: {exc}", elapsed
                 )
             elapsed = (time.perf_counter() - started) * 1000.0
+            if len(raw) > max_bytes:
+                error = f"oversized: the response is over {max_bytes} bytes"
+                return FetchResult(None, status, error, elapsed)
+            body = raw.decode("utf-8", errors="replace")
             return FetchResult(body, status, None, elapsed)
     except urllib.error.HTTPError as exc:
         elapsed = (time.perf_counter() - started) * 1000.0
@@ -164,6 +181,20 @@ def fetch_metrics(
     except (urllib.error.URLError, OSError, ValueError) as exc:
         elapsed = (time.perf_counter() - started) * 1000.0
         return FetchResult(None, None, f"{type(exc).__name__}: {exc}", elapsed)
+
+
+def _read_capped(response: Any, max_bytes: int) -> bytes:
+    """At most ``max_bytes + 1`` bytes of the body.
+
+    A bounded read returns short at EOF instead of raising, so a body cut
+    short of its Content-Length is raised here as ``IncompleteRead``, as an
+    unbounded read would.
+    """
+    raw = bytes(response.read(max_bytes + 1))
+    remaining = getattr(response, "length", None)
+    if len(raw) <= max_bytes and remaining:
+        raise http.client.IncompleteRead(raw, remaining)
+    return raw
 
 
 def _http_error_text(exc: urllib.error.HTTPError) -> str:
@@ -175,23 +206,32 @@ def _http_error_text(exc: urllib.error.HTTPError) -> str:
 
 
 def _fetch_and_parse(
-    url: str, timeout_seconds: float, api_key: str | None
+    url: str,
+    timeout_seconds: float,
+    api_key: str | None,
+    max_bytes: int = MAX_SCRAPE_BYTES,
+    max_series: int = MAX_SCRAPE_SERIES,
 ) -> tuple[FetchResult, CompactScrape | None]:
     """Fetch and parse, touching no scraper state, so the work can run on a
     thread whose result may be dropped."""
-    result = fetch_metrics(url, timeout_seconds=timeout_seconds, api_key=api_key)
+    result = fetch_metrics(
+        url, timeout_seconds=timeout_seconds, api_key=api_key, max_bytes=max_bytes
+    )
     if result.text is None:
         return result, None
     try:
-        return result, compact_scrape(parse_prometheus_text(result.text))
+        families = parse_prometheus_text(result.text)
+        series = sum(len(family.samples) for family in families.values())
+        if series > max_series:
+            error = f"oversized: {series} series is over the {max_series}-series cap"
+            return _failed_fetch(result, error), None
+        return result, compact_scrape(families)
     except ValueError as exc:
-        failed = FetchResult(
-            None,
-            result.http_status,
-            f"unparseable response: {exc}",
-            result.duration_ms,
-        )
-        return failed, None
+        return _failed_fetch(result, f"unparseable response: {exc}"), None
+
+
+def _failed_fetch(result: FetchResult, error: str) -> FetchResult:
+    return FetchResult(None, result.http_status, error, result.duration_ms)
 
 
 T = TypeVar("T")
@@ -242,9 +282,13 @@ class VllmMetricsScraper:
         clock_domain: str,
         api_key: str | None = None,
         on_warning: Callable[[str], None] | None = None,
+        max_scrape_bytes: int = MAX_SCRAPE_BYTES,
+        max_scrape_series: int = MAX_SCRAPE_SERIES,
     ) -> None:
         self.url = url
         self.source_url = redact_url(url) or url
+        self.max_scrape_bytes = max_scrape_bytes
+        self.max_scrape_series = max_scrape_series
         self.interval_seconds = interval_seconds
         self.interval_ms = max(1, round(interval_seconds * 1000))
         self.timeout_seconds = timeout_seconds
@@ -272,9 +316,7 @@ class VllmMetricsScraper:
         the one taken on the way out of an interrupted run.
         """
         observed_at_ns = time.time_ns()
-        result, compact = _fetch_and_parse(
-            self.url, self._timeout(timeout_seconds), self.api_key
-        )
+        result, compact = self._fetch(timeout_seconds)()
         return self._record(observed_at_ns, marker, case_id, phase, result, compact)
 
     async def scrape_async(
@@ -292,10 +334,7 @@ class VllmMetricsScraper:
         written for it.
         """
         observed_at_ns = time.time_ns()
-        fetch = partial(
-            _fetch_and_parse, self.url, self._timeout(timeout_seconds), self.api_key
-        )
-        result, compact = await _off_loop(fetch)
+        result, compact = await _off_loop(self._fetch(timeout_seconds))
         return self._record(observed_at_ns, marker, case_id, phase, result, compact)
 
     def abandoned(
@@ -323,6 +362,19 @@ class VllmMetricsScraper:
 
     def _timeout(self, override: float | None) -> float:
         return self.timeout_seconds if override is None else override
+
+    def _fetch(
+        self, timeout_seconds: float | None
+    ) -> Callable[[], tuple[FetchResult, CompactScrape | None]]:
+        """One bounded fetch-and-parse, as a call that touches no scraper state."""
+        return partial(
+            _fetch_and_parse,
+            self.url,
+            self._timeout(timeout_seconds),
+            self.api_key,
+            self.max_scrape_bytes,
+            self.max_scrape_series,
+        )
 
     def _record(
         self,
@@ -419,6 +471,8 @@ class VllmMetricsScraper:
             "interval_seconds": self.interval_seconds,
             "timeout_seconds": self.timeout_seconds,
             "authorization": "bearer" if self.api_key else None,
+            "max_scrape_bytes": self.max_scrape_bytes,
+            "max_scrape_series": self.max_scrape_series,
         }
 
     def capability_event(self, context: CorrelationContext) -> CapabilityEvent:

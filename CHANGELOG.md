@@ -352,6 +352,11 @@ the flaky benchmark memory gates
   and recorded, not retried, and the record says the profiler may still be
   running.
   ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
+- `stormlog infer profile` reads a vLLM `/metrics` response at most 8 MiB
+  far and parses it only below 20,000 series; a larger one is a failed
+  scrape with the reason `oversized`. Before, the scrape read any response
+  whole. (`docs/vllm_telemetry.md`, "Ingestion limits")
+  ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
 
 ## [0.3.10] - 2026-10-01
 
