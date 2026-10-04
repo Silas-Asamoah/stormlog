@@ -494,7 +494,9 @@ def _model_fields(model: Mapping[str, Any]) -> dict[str, RunField]:
 
 
 # Only a launch the experiment runner controlled binds weights to a server.
-VERIFIED_EVIDENCE = frozenset({"pinned_commit_verified", "staged_snapshot_verified"})
+VERIFIED_EVIDENCE = frozenset(
+    {"pinned_commit_verified", "pinned_snapshot_verified", "staged_snapshot_verified"}
+)
 
 
 def _launch_bound_fields(

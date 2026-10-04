@@ -536,6 +536,7 @@ def test_a_staged_model_is_fixed_before_launch_and_recorded(tmp_path: Path) -> N
     source.mkdir()
     (source / "config.json").write_text("{}")
     (source / "model.safetensors").write_bytes(b"weights")
+    (source / "tokenizer.json").write_text("{}")
     document = _plan(_port(), blocks=1)
     document["arms"] = {"off": document["arms"]["off"]}
     document["order"] = {"kind": "explicit", "blocks": [["off"]]}
@@ -591,6 +592,7 @@ def test_the_runner_binds_the_weights_it_verified_to_the_server_it_launched(
     source.mkdir()
     (source / "config.json").write_text("{}")
     (source / "model.safetensors").write_bytes(b"weights")
+    (source / "tokenizer.json").write_text("{}")
     document = _plan(_port(), blocks=1)
     document["arms"] = {"off": document["arms"]["off"]}
     document["order"] = {"kind": "explicit", "blocks": [["off"]]}
