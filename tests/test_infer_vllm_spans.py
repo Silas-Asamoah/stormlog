@@ -968,7 +968,9 @@ class TestReceiverAdmission:
             with concurrent.futures.ThreadPoolExecutor(8) as pool:
                 statuses = list(pool.map(lambda job: export(*job), bodies))
             queued = len(receiver.drain())
-            left = receiver._inflight_bytes
+        # A handler releases its bytes after it answers, so they are all
+        # back only once stop() has waited for every handler to finish.
+        left = receiver._inflight_bytes
         assert statuses == [200] * 8
         assert queued == 8 * 512
         assert max(held) <= limits.max_inflight_bytes
