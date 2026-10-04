@@ -26,6 +26,7 @@ from stormlog.infer.manifest import (
     after_refusals,
     attach_manifest,
     compare_descriptions,
+    description_mismatches,
     description_record,
     load_declarations,
 )
@@ -403,6 +404,36 @@ def test_a_description_that_does_not_match_the_probed_server_is_a_protocol_failu
         "model",
         "engine.version",
     }
+
+
+@pytest.mark.parametrize(
+    ("origin", "shares", "mismatch"),
+    [
+        ("http://127.0.0.1:8013", True, False),
+        ("http://127.0.0.1:8014", True, True),
+        ("http://localhost:8014", True, True),
+        # Another network namespace may map the port, such as a container's.
+        ("http://127.0.0.1:18013", False, False),
+        # Through a remote address a proxy may map it too.
+        ("http://10.0.0.5:18013", True, False),
+    ],
+)
+def test_a_twin_server_on_another_port_fails_the_cross_check(
+    origin: str, shares: bool, mismatch: bool
+) -> None:
+    # Same model, version and driver: only the port it listens on tells a
+    # twin server on another GPU from the one the run measured.
+    description = _description()
+    description["server"].update(listen_ports=[8013], shares_network_namespace=shares)
+    probe = {
+        "event_type": "infer.server_probe",
+        "phase": "before",
+        "origin": origin,
+        "answers": {},
+    }
+    found = description_mismatches(description, [probe])
+    expected = [{"field": "server.port", "description": [8013], "server": [8014]}]
+    assert (found == expected) if mismatch else (found == [])
 
 
 def test_profile_refuses_a_description_it_cannot_read_before_sending(

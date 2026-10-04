@@ -29,7 +29,9 @@ a protocol failure.
 from __future__ import annotations
 
 import email.utils
+import ipaddress
 import json
+import urllib.parse
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -373,6 +375,9 @@ def description_mismatches(
 
     The model it serves, its vLLM version and the GPU driver: a description
     of another server, or a stale one, disagrees in at least one of them.
+    A twin server, the same model on another GPU, differs in the port it
+    listens on, compared when the probe reached it on this host's loopback
+    in the describer's own network namespace, where no port is mapped.
     """
     probe = next(
         (
@@ -384,7 +389,14 @@ def description_mismatches(
     )
     if probe is None:
         return []
-    answers = probe.get("answers") or {}
+    port = _port_mismatch(description, probe)
+    found = _field_mismatches(description, probe.get("answers") or {})
+    return found + ([port] if port is not None else [])
+
+
+def _field_mismatches(
+    description: Mapping[str, Any], answers: Mapping[str, Any]
+) -> list[dict[str, Any]]:
     checks = [
         ("model", _described_model(description), _served_models(answers)),
         ("engine.version", _described_vllm(description), _probed_vllm(answers)),
@@ -395,6 +407,31 @@ def description_mismatches(
         for name, described, served in checks
         if described is not None and served and described not in served
     ]
+
+
+def _port_mismatch(
+    description: Mapping[str, Any], probe: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    server = description.get("server") or {}
+    ports = server.get("listen_ports")
+    if not ports or server.get("shares_network_namespace") is not True:
+        return None
+    origin = urllib.parse.urlsplit(str(probe.get("origin") or ""))
+    if not _loopback(origin.hostname):
+        return None
+    port = origin.port or (443 if origin.scheme == "https" else 80)
+    if port in ports:
+        return None
+    return {"field": "server.port", "description": list(ports), "server": [port]}
+
+
+def _loopback(host: str | None) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host or "").is_loopback
+    except ValueError:
+        return False
 
 
 def _described_model(description: Mapping[str, Any]) -> Any:
