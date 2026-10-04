@@ -3,8 +3,15 @@
 One slot names everything: the producer label in the file, the file
 ``DIR/stormlog-<slot>.prom`` and its lock ``DIR/stormlog-<slot>.lock``. Two
 writers that would emit the same label in one directory therefore contend
-for one lock, and the second is refused. A lock whose process is gone, or
-whose process has a different start time, is stale and taken over.
+for one lock, and the second is refused.
+
+The lock is an ``flock`` on the lock file, held for the whole run, so the
+kernel drops it when its process ends, however it ends, and no lock on this
+host is ever judged stale: the next writer simply takes it. The file names
+its holder, for the refusal's message. A holder on another host is never
+displaced, since an ``flock`` may not reach across hosts. Where the system
+has no ``flock``, the lock is the file's existence, and one whose process
+is gone, or has a different start time, is stale and taken over.
 
 Each write goes to a temporary file that replaces the real one, so a reader
 never sees half a file; a failed write leaves the previous file in place,
@@ -28,6 +35,16 @@ import psutil
 
 from .registry import escape_label_value
 from .renders import RenderCache
+
+_flock: Callable[[int, int], None] | None
+try:
+    import fcntl
+
+    _flock = fcntl.flock
+    _LOCK_NOW = fcntl.LOCK_EX | fcntl.LOCK_NB
+except ImportError:  # no flock: the lock is the file's existence
+    _flock = None
+    _LOCK_NOW = 0
 
 SLOT = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 PRODUCER_LABEL = "stormlog_producer"
@@ -89,6 +106,8 @@ class TextfileWriter:
         self._active = True
         self._thread: threading.Thread | None = None
         self._lock_owned = False
+        # The descriptor holding the flock, while the lock is owned by one.
+        self._lock_descriptor: int | None = None
 
     def acquire(self) -> None:
         """Check the directory and take the slot's lock, before the run starts.
@@ -107,7 +126,7 @@ class TextfileWriter:
                     f"textfile directory {self.directory} holds {path.name}; "
                     "choose a directory of its own"
                 )
-        _take_lock(self.lock_path)
+        self._lock_descriptor = _take_lock(self.lock_path)
         self._lock_owned = True
 
     def start(self) -> None:
@@ -136,8 +155,9 @@ class TextfileWriter:
         if self.remove_on_exit:
             _unlink(self.path)
         if self._lock_owned:
-            _release_lock(self.lock_path)
+            _release_lock(self.lock_path, self._lock_descriptor)
             self._lock_owned = False
+            self._lock_descriptor = None
 
     def _run(self) -> None:
         try:
@@ -210,23 +230,64 @@ def _identity() -> dict[str, object]:
     }
 
 
-def _take_lock(path: Path) -> None:
+def _take_lock(path: Path) -> int | None:
+    """Take the slot's lock: the descriptor holding its flock, if one does."""
+    if _flock is None:
+        _take_exclusive(path)
+        return None
+    for _ in range(3):
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            if _flock_path(descriptor, path):
+                return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+        os.close(descriptor)
+    raise SlotInUse(f"{path.name} was taken by another writer while starting")
+
+
+def _flock_path(descriptor: int, path: Path) -> bool:
+    """Lock the file open at ``descriptor``; False if it is no longer ``path``."""
+    assert _flock is not None
+    try:
+        _flock(descriptor, _LOCK_NOW)
+    except BlockingIOError:
+        raise _in_use(path, _read_lock(path)) from None
+    try:
+        if not os.path.samestat(os.fstat(descriptor), os.stat(path)):
+            return False  # its last holder removed it after it was opened
+    except FileNotFoundError:
+        return False
+    holder = _read_lock(path)
+    if holder and holder.get("host") != socket.gethostname():
+        raise _in_use(path, holder)
+    os.ftruncate(descriptor, 0)
+    os.pwrite(descriptor, json.dumps(_identity()).encode(), 0)
+    return True
+
+
+def _take_exclusive(path: Path) -> None:
     for _ in range(2):
         try:
             descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
             holder = _read_lock(path)
             if not _stale(path, holder):
-                raise SlotInUse(
-                    f"{path.name} is held by pid {holder.get('pid')} on "
-                    f"{holder.get('host')}; choose another --prometheus-slot"
-                ) from None
+                raise _in_use(path, holder) from None
             _unlink(path)
             continue
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(_identity(), handle)
         return
     raise SlotInUse(f"{path.name} was taken by another writer while starting")
+
+
+def _in_use(path: Path, holder: dict[str, object]) -> SlotInUse:
+    return SlotInUse(
+        f"{path.name} is held by pid {holder.get('pid')} on "
+        f"{holder.get('host')}; choose another --prometheus-slot"
+    )
 
 
 def _read_lock(path: Path) -> dict[str, object]:
@@ -238,7 +299,9 @@ def _read_lock(path: Path) -> dict[str, object]:
 
 
 def _stale(path: Path, holder: dict[str, object]) -> bool:
-    """A lock whose writer is certainly gone. Another host's lock never is.
+    """Without flock: a lock whose writer is certainly gone.
+
+    Another host's lock never is.
 
     An unreadable lock is stale once it is older than a writer needs to
     fill it in.
@@ -260,10 +323,19 @@ def _stale(path: Path, holder: dict[str, object]) -> bool:
     return bool(started != holder.get("started"))
 
 
-def _release_lock(path: Path) -> None:
-    holder = _read_lock(path)
-    if holder.get("pid") == os.getpid():
-        _unlink(path)
+def _release_lock(path: Path, descriptor: int | None) -> None:
+    if descriptor is None:
+        if _read_lock(path).get("pid") == os.getpid():
+            _unlink(path)
+        return
+    try:
+        # Removed while still held, and only if it is still the file locked.
+        if os.path.samestat(os.fstat(descriptor), os.stat(path)):
+            _unlink(path)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
 
 
 def _unlink(path: Path) -> None:

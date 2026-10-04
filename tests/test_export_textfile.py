@@ -2,9 +2,13 @@
 
 import json
 import os
+import signal
 import socket
+import subprocess
+import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import psutil
@@ -123,7 +127,10 @@ def test_a_lock_whose_process_is_gone_is_taken_over(tmp_path: Path) -> None:
     assert writer.stats.writes_ok >= 1
 
 
-def test_a_reused_pid_is_recognised_by_its_start_time(tmp_path: Path) -> None:
+@pytest.mark.usefixtures("no_flock")
+def test_without_flock_a_reused_pid_is_recognised_by_its_start_time(
+    tmp_path: Path,
+) -> None:
     _, lock = slot_paths(tmp_path, "alpha")
     lock.write_text(
         json.dumps({"pid": os.getpid(), "started": 1.0, "host": socket.gethostname()})
@@ -133,7 +140,16 @@ def test_a_reused_pid_is_recognised_by_its_start_time(tmp_path: Path) -> None:
     writer.close()
 
 
-def test_a_live_lock_from_this_process_is_respected(tmp_path: Path) -> None:
+@pytest.fixture
+def no_flock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A system without flock: the lock is the file's existence."""
+    monkeypatch.setattr(textfile, "_flock", None)
+
+
+@pytest.mark.usefixtures("no_flock")
+def test_without_flock_a_live_lock_from_this_process_is_respected(
+    tmp_path: Path,
+) -> None:
     _, lock = slot_paths(tmp_path, "alpha")
     lock.write_text(
         json.dumps(
@@ -155,7 +171,10 @@ def test_another_hosts_lock_is_never_taken_over(tmp_path: Path) -> None:
         _writer(tmp_path).start()
 
 
-def test_an_unreadable_lock_is_stale_only_once_old(tmp_path: Path) -> None:
+@pytest.mark.usefixtures("no_flock")
+def test_without_flock_an_unreadable_lock_is_stale_only_once_old(
+    tmp_path: Path,
+) -> None:
     _, lock = slot_paths(tmp_path, "alpha")
     lock.write_text("")
     with pytest.raises(SlotInUse):
@@ -164,6 +183,88 @@ def test_an_unreadable_lock_is_stale_only_once_old(tmp_path: Path) -> None:
     os.utime(lock, (old, old))
     writer = _writer(tmp_path)
     writer.start()
+    writer.close()
+
+
+def test_two_writers_taking_over_a_stale_lock_never_both_hold_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fable's order: B judges the dead holder's lock stale and pauses; A
+    # takes the slot over; then B carries on with its takeover.
+    _, lock = slot_paths(tmp_path, "alpha")
+    lock.write_text(
+        json.dumps({"pid": 2**22 + 12345, "started": 1.0, "host": socket.gethostname()})
+    )
+    b_judged, a_done = threading.Event(), threading.Event()
+    real_stale: Callable[..., bool] | None = getattr(textfile, "_stale", None)
+
+    def pausing_stale(*args: object) -> bool:
+        assert real_stale is not None
+        stale = real_stale(*args)
+        if threading.current_thread().name == "B":
+            b_judged.set()
+            a_done.wait(5)
+        return stale
+
+    if real_stale is not None:
+        monkeypatch.setattr(textfile, "_stale", pausing_stale)
+    outcomes: dict[str, str] = {}
+
+    def take(name: str) -> None:
+        try:
+            _writer(tmp_path).acquire()
+            outcomes[name] = "holds"
+        except SlotInUse:
+            outcomes[name] = "refused"
+
+    b = threading.Thread(target=take, args=("B",), name="B")
+    b.start()
+    while not b_judged.is_set() and b.is_alive():
+        time.sleep(0.01)
+    take("A")
+    a_done.set()
+    b.join(5)
+    assert sorted(outcomes.values()) == ["holds", "refused"], outcomes
+
+
+_HOLD_THE_SLOT = """
+import sys, time
+from pathlib import Path
+from stormlog._export.renders import RenderCache
+from stormlog._export.textfile import TextfileWriter
+
+TextfileWriter(Path(sys.argv[1]), "alpha", RenderCache(lambda: b"")).acquire()
+print("held", flush=True)
+time.sleep(60)
+"""
+
+
+def test_a_slot_held_by_a_live_process_is_taken_once_it_is_killed(
+    tmp_path: Path,
+) -> None:
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _HOLD_THE_SLOT, str(tmp_path)],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None and holder.stdout.readline() == "held\n"
+        with pytest.raises(SlotInUse, match=f"pid {holder.pid} "):
+            _writer(tmp_path).acquire()
+    finally:
+        holder.send_signal(signal.SIGKILL)
+        holder.wait(10)
+    writer = _writer(tmp_path)
+    writer.acquire()  # no lock outlives its process on this host
+    writer.close()
+
+
+def test_a_lock_file_nobody_holds_is_taken_at_once(tmp_path: Path) -> None:
+    # Left by a writer that was killed: whatever it says, nobody holds it.
+    _, lock = slot_paths(tmp_path, "alpha")
+    lock.write_text("")
+    writer = _writer(tmp_path)
+    writer.acquire()
     writer.close()
 
 
