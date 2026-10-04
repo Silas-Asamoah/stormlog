@@ -163,6 +163,20 @@ def test_cohort_problems_invalidate_the_cohort(
     assert not population.cohort_valid
 
 
+def test_a_request_may_end_within_a_second_of_the_recorded_drain() -> None:
+    # The window record is written after the drain returns, so a request
+    # can end just after drained_at_ns; a second later it is outside.
+    drained = START + 2 * SECOND
+    late = [_request(i) for i in range(9)] + [
+        _request(9, ended_at_ns=drained + SECOND // 2)
+    ]
+    assert _case([*late, _window()]).population.cohort_valid
+    outside = [_request(i) for i in range(9)] + [
+        _request(9, ended_at_ns=drained + 3 * SECOND // 2)
+    ]
+    assert "outside_window: 1" in _case([*outside, _window()]).population.issues
+
+
 def test_stragglers_and_old_records_are_noted_without_invalidating() -> None:
     records = [_request(i) for i in range(10)]
     stragglers = _window(abandoned_requests={"still_running": 2})
@@ -350,6 +364,15 @@ def test_server_admission_is_separate_from_the_clients_view() -> None:
     assert population.server_evidence_coverage == pytest.approx(0.25)
 
 
+def test_a_dropped_request_is_never_admitted_even_with_a_known_id() -> None:
+    records = [_request(0), _request(1, "dropped")]
+    seen = {"stormlog-run-c1_measured_0", "stormlog-run-c1_measured_1"}
+    population = _case(
+        [*records, _window(scheduled_arrivals=2)], server_admitted_ids=seen
+    ).population
+    assert population.server_admitted == 1
+
+
 def test_evidence_coverage_never_exceeds_the_accepted_requests() -> None:
     records = [_request(0)] + [_request(i, "delivery_unknown") for i in range(1, 5)]
     seen = {f"stormlog-run-c1_measured_{i}" for i in range(5)}
@@ -489,6 +512,19 @@ def test_marginal_attainment_is_judged_per_criterion() -> None:
     assert evaluation.per_criterion["client.e2e"].attainment_lower == pytest.approx(
         2 / 3
     )
+
+
+def test_a_tpot_with_one_output_token_counts_as_good_and_as_judged() -> None:
+    requests = [
+        _ok(i, 100.0, output_tokens=1, output_token_source="server_usage")
+        for i in range(4)
+    ]
+    evaluation = goodput(requests, parse_slo_flags(["tpot:1"]), ONE_SECOND)
+    counts = evaluation.per_criterion["client.tpot"]
+    assert counts.not_applicable == 4
+    assert counts.attainment_lower == counts.attainment_upper == 1.0
+    assert evaluation.evidence_coverage == 1.0
+    assert evaluation.met == 4
 
 
 def test_goodput_without_an_interval_has_no_rate() -> None:

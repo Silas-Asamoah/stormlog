@@ -57,6 +57,27 @@ def test_le_boudecs_example_interval_for_the_95th_percentile() -> None:
     assert interval.coverage == pytest.approx(0.9509, abs=1e-4)
 
 
+@pytest.mark.parametrize(
+    ("n", "p", "expected"),
+    [
+        # Three intervals of width 8 reach 95%; the middle one is centred on
+        # rank (n + 1) p = 7, as Le Boudec's symmetric median intervals are.
+        (13, 0.5, (3, 11)),
+        (21, 0.5, (6, 16)),
+        (28, 0.5, (9, 20)),
+    ],
+)
+def test_narrowest_ties_go_to_the_more_central_interval(
+    n: int, p: float, expected: tuple[int, int]
+) -> None:
+    values = [float(v) for v in range(1, n + 1)]
+    interval = quantile_interval(
+        values, p, SufficiencyRule(margin=0, tails="narrowest")
+    )
+    assert interval is not None
+    assert (interval.lower_rank, interval.upper_rank) == expected
+
+
 @pytest.mark.parametrize(("p", "below", "at"), [(0.95, 229, 230), (0.99, 1163, 1164)])
 def test_sufficiency_turns_on_exactly_at_the_minimum(
     p: float, below: int, at: int

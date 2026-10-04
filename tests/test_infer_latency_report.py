@@ -69,6 +69,13 @@ def test_chunk_timing_stays_chunk_level_and_tpot_comes_from_tokens() -> None:
     assert tpot == pytest.approx(3.0)
 
 
+def test_tokens_per_chunk_uses_only_counts_the_server_reported() -> None:
+    local = [_streamed(i, output_token_source="tiktoken") for i in range(3)]
+    assert streaming_summary(local)["mean_tokens_per_chunk"] is None
+    mixed = [_streamed(0), _streamed(1, output_token_source="tiktoken")]
+    assert streaming_summary(mixed)["mean_tokens_per_chunk"] == 16.0
+
+
 def test_no_inter_token_latency_appears_outside_vllms_own_block(tmp_path: Path) -> None:
     path = tmp_path / "infer.jsonl"
     records = [{"event_type": "infer.session", "session_id": "s1"}] + [

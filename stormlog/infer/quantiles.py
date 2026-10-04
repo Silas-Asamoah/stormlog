@@ -333,18 +333,29 @@ def _symmetric_ranks(n: int, p: float, rule: SufficiencyRule) -> tuple[int, int]
 
 
 def _narrowest_ranks(n: int, p: float, rule: SufficiencyRule) -> tuple[int, int] | None:
-    """The narrowest ranks reaching the confidence; ties go to the more central."""
+    """The narrowest ranks reaching the confidence; ties go to the more central.
+
+    More central means a midpoint nearer rank ``(n + 1) p``, as Le Boudec's
+    symmetric median intervals are; then the higher coverage.
+    """
     top = n - rule.margin
     if top < 1 or _coverage(n, p, 1, top) < rule.confidence:
         return None
-    best: tuple[int, int] | None = None
+    candidates: list[tuple[int, int]] = []
     for upper in range(top, 0, -1):
         lower = _widest_lower(n, p, upper, rule.confidence)
         if lower is None:
             break
-        if best is None or upper - lower < best[1] - best[0]:
-            best = (lower, upper)
-    return best
+        candidates.append((lower, upper))
+    width = min(upper - lower for lower, upper in candidates)
+    centre = (n + 1) * p
+    return min(
+        (ranks for ranks in candidates if ranks[1] - ranks[0] == width),
+        key=lambda ranks: (
+            abs((ranks[0] + ranks[1]) / 2 - centre),
+            -_coverage(n, p, *ranks),
+        ),
+    )
 
 
 def _widest_lower(n: int, p: float, upper: int, confidence: float) -> int | None:

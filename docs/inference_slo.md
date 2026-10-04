@@ -375,7 +375,9 @@ An estimate below `n_min` has `interval: null`; `n_min` says how many
 requests it needs.
 
 `quantile_minimum_n(p, confidence, margin=..., tails=...)` computes any of
-these minimums.
+these minimums. With `tails="narrowest"`, equally narrow intervals that reach
+the confidence are told apart by centre: the one whose midpoint is nearer
+rank `(n + 1) p` wins, as Le Boudec's symmetric median intervals do.
 
 ### Two estimands
 
