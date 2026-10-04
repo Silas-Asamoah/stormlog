@@ -114,7 +114,9 @@ the flaky benchmark memory gates
   `completed`, `outcome_failure` (kept as data) or `protocol_failure` (set
   aside, retryable), recorded in `index.jsonl`; resumes refuse a changed
   plan or pre-registration, and secrets reach commands without being
-  written down. (#213)
+  written down. `sanitize_bundle` scans the finished bundle for the plan's
+  secret values and for bearer, `hf_` and `sk-` token shapes
+  (`sanitizer.json`). (#213)
 - `stormlog.infer.experiment_plan`: experiment plans
   (`stormlog.infer.experiment_plan` v1) with arms, workload steps (shared with
   `same_as:<arm>`), treatments, block preludes, a seeded `random`, `williams`

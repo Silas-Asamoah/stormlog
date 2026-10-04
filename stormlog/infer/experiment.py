@@ -72,6 +72,7 @@ from .experiment_process import (
 )
 from .manifest import attach_manifest
 from .model_identity import VerifiedModel, changed_files, prepare_model
+from .sanitize import sanitize_bundle
 from .server_collector import NvmlUnavailableError
 from .server_probe import AUTO, BEFORE, probe_server
 
@@ -158,6 +159,8 @@ def run_plan(
         written += _run_block(
             plan, block, arms, output_dir, env, resume, retry_incomplete, on_event
         )
+    report = sanitize_bundle(output_dir, env.secrets.values())
+    (output_dir / "sanitizer.json").write_text(json.dumps(report, indent=2) + "\n")
     return written
 
 
