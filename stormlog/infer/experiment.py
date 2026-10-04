@@ -31,6 +31,10 @@ Every run ends in one state, recorded in ``index.jsonl`` with its reasons:
 When both apply, the outcome wins unless the protocol fault came before the
 first workload step started.
 
+A cleanup that left processes, a run's or a prelude's, stops the
+experiment: nothing more starts beside them. Every planned run after it is
+indexed ``not_run``, and a resume runs them once the host is clean.
+
 A run whose runner was killed (a preempted box, an operator's abort) leaves
 its attempt in ``runs/<label>.partial`` with no state. A resume refuses to
 go on until each such attempt is explained: by an external cause with its
@@ -105,6 +109,8 @@ from .server_probe import AUTO, BEFORE, SERVER_INFO, probe_server
 COMPLETED = "completed"
 OUTCOME_FAILURE = "outcome_failure"
 PROTOCOL_FAILURE = "protocol_failure"
+# A planned run the runner never started: an earlier cleanup left processes.
+NOT_RUN = "not_run"
 INDEX = "index.jsonl"
 # What may set aside an interrupted attempt; anything else is an outcome.
 EXTERNAL_REASONS = ("spot_preemption", "operator_abort", "infra_fault")
@@ -217,7 +223,7 @@ def run_plan(
         env = replace(env, model=model)
     written: list[dict[str, Any]] = []
     for block, arms in enumerate(order.blocks):
-        written += _run_block(
+        records = _run_block(
             plan,
             block,
             arms,
@@ -226,6 +232,12 @@ def run_plan(
             _Resume(resume, retry_incomplete, causes),
             on_event,
         )
+        written += records
+        left = [r for r in records if _left_running(r)]
+        if left:
+            # Nothing more starts beside a process that would not stop.
+            written += _not_run(plan, order, left[0], output_dir, on_event)
+            break
     report = sanitize_bundle(output_dir, env.secrets.values())
     (output_dir / "sanitizer.json").write_text(json.dumps(report, indent=2) + "\n")
     return written
@@ -366,9 +378,42 @@ def _run_block(
             if on_event is not None:
                 on_event(record)
         written += records
-        if any("collector_cleanup_unverified" in r["reasons"] for r in records):
-            break  # never measure beside a process that would not stop
+        if any(_left_running(r) for r in records):
+            break
     return written
+
+
+def _not_run(
+    plan: ExperimentPlan,
+    order: RunOrder,
+    stopped: Mapping[str, Any],
+    output: Path,
+    on_event: Events | None,
+) -> list[dict[str, Any]]:
+    """Index every planned run after the one whose cleanup left processes.
+
+    A resume runs them, once the host is clean.
+    """
+    after = (stopped["block"], stopped["position_planned"])
+    records = [
+        {
+            "type": NOT_RUN,
+            "label": f"{plan.experiment_id}-b{block:02d}-p{position}-{arm}",
+            "arm": arm,
+            "block": block,
+            "position_planned": position,
+            "state": NOT_RUN,
+            "reasons": [f"stopped_after:{stopped['label']}"],
+        }
+        for block, arms in enumerate(order.blocks)
+        for position, arm in enumerate(arms)
+        if (block, position) > after
+    ]
+    for record in records:
+        _append_index(output, record)
+        if on_event is not None:
+            on_event(record)
+    return records
 
 
 def _attempts(
@@ -1071,28 +1116,52 @@ def _prelude(
             cpu_affinity=plan.server.cpu_affinity,
             log_path=directory / "server.log",
         )
-        if not _wait_healthy(plan.server.base_url, server, plan.server.start_timeout_s):
-            stop(server, signals=(2, 15), timeout_s=plan.server.stop_timeout_s)
-            return [prelude.step.name]
     try:
-        launched, timed_out = run_step(
-            prelude.step.name,
-            [expand(p, values) for p in prelude.step.command],
-            env={
-                **{k: expand(v, values) for k, v in prelude.step.env.items()},
-                **env.secrets,
-            },
-            cpu_affinity=prelude.step.cpu_affinity,
-            timeout_s=prelude.step.timeout_s,
-            log_path=directory / "step.log",
-        )
+        ran = _prelude_ran(plan, prelude, server, values, directory, env)
     finally:
-        if server is not None:
-            stop(server, signals=(2, 15), timeout_s=plan.server.stop_timeout_s)
-            verify_cleanup(server.pid, mark=server.mark)
-    if timed_out or launched.exit_code not in prelude.step.expect_exit:
-        return [prelude.step.name]
-    return []
+        left = server is not None and not _stop_prelude_server(plan, server, directory)
+    name = prelude.step.name
+    return ([] if ran else [name]) + ([f"{name}:cleanup_unverified"] if left else [])
+
+
+def _prelude_ran(
+    plan: ExperimentPlan,
+    prelude: Prelude,
+    server: Launched | None,
+    values: Mapping[str, Any],
+    directory: Path,
+    env: Environment,
+) -> bool:
+    """Whether the prelude's server came up and its step exited as expected."""
+    if server is not None and not _wait_healthy(
+        plan.server.base_url, server, plan.server.start_timeout_s
+    ):
+        return False
+    launched, timed_out = run_step(
+        prelude.step.name,
+        [expand(p, values) for p in prelude.step.command],
+        env={
+            **{k: expand(v, values) for k, v in prelude.step.env.items()},
+            **env.secrets,
+        },
+        cpu_affinity=prelude.step.cpu_affinity,
+        timeout_s=prelude.step.timeout_s,
+        log_path=directory / "step.log",
+    )
+    return not timed_out and launched.exit_code in prelude.step.expect_exit
+
+
+def _stop_prelude_server(
+    plan: ExperimentPlan, server: Launched, directory: Path
+) -> bool:
+    """Stop a prelude's server as a run's is stopped; whether nothing is left."""
+    remembered = remembered_tree(server.pid)
+    stop(server, signals=(2, 15), timeout_s=plan.server.stop_timeout_s)
+    cleanup = verify_cleanup(server.pid, remembered, mark=server.mark)
+    (directory / "cleanup.json").write_text(
+        json.dumps(cleanup.to_record(), indent=2) + "\n"
+    )
+    return cleanup.verified
 
 
 def _model_name(plan: ExperimentPlan, env: Environment) -> str:
