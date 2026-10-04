@@ -397,3 +397,49 @@ def test_the_watch_json_section_uses_the_same_settings(tmp_path: Path) -> None:
     assert config.prometheus_textfile_dir == tmp_path
     with pytest.raises(ValueError, match="unknown export settings"):
         ExportConfig.from_mapping({"prometheus_port": 1})
+
+
+class _RecordingLock:
+    """Wraps the registry's lock and notes every thread that takes it."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.takers: set[int] = set()
+
+    def __enter__(self) -> Any:
+        self.takers.add(threading.get_ident())
+        return self.inner.__enter__()
+
+    def __exit__(self, *exc: object) -> Any:
+        return self.inner.__exit__(*exc)
+
+
+def test_observe_takes_no_registry_lock_and_does_no_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import builtins
+    import os
+    import socket
+
+    pipeline = ExportPipeline(ExportConfig(prometheus_textfile_dir=tmp_path), LABELS)
+    lock = _RecordingLock(pipeline.registry._lock)
+    pipeline.registry._lock = lock  # type: ignore[assignment]
+
+    def no_io(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("observe did I/O")
+
+    with monkeypatch.context() as patched:
+        for target, name in (
+            (builtins, "open"),
+            (os, "write"),
+            (socket.socket, "send"),
+            (socket.socket, "sendall"),
+            (socket.socket, "connect"),
+        ):
+            patched.setattr(target, name, no_io)
+        for _ in range(10):
+            pipeline.observe(_request(), {"chunk_summary": ((0,) * 15, 0.0)})
+    assert threading.get_ident() not in lock.takers
+    assert pipeline.queue.stats().accepted == 10
+    assert pipeline.summary()["internal_errors"]["observe"] == 0
+    pipeline.close(1.0)
