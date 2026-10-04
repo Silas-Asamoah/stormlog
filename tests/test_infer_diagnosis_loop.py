@@ -574,12 +574,24 @@ def test_async_late_schedule_call_is_a_host_stall() -> None:
     assert signal.detail["locus"] == LOCUS_BETWEEN_STEPS
 
 
+def _fastest(records: list[dict[str, Any]], runs: int = 2) -> float:
+    times = []
+    for _ in range(runs):
+        started = time.perf_counter()
+        engine_loop_gap(records)
+        times.append(time.perf_counter() - started)
+    return min(times)
+
+
 def test_a_long_window_is_evaluated_in_linear_time() -> None:
-    records = _loop(20_000, stall_after=15_000, stall_ns=200 * MS)
-    started = time.perf_counter()
-    signal = engine_loop_gap(records)
-    assert time.perf_counter() - started < 5.0
-    assert signal.exceeds is True
+    """Four times the steps take about four times as long, never the
+    sixteen a quadratic search would: a ratio, so a loaded machine does not
+    fail it."""
+    short = _loop(5_000, stall_after=4_900, stall_ns=200 * MS)
+    long = _loop(20_000, stall_after=19_900, stall_ns=200 * MS)
+
+    assert engine_loop_gap(long).exceeds is True
+    assert _fastest(long) < 8 * _fastest(short)
 
 
 def test_a_long_prefill_step_is_not_measured_against_decode_steps() -> None:
