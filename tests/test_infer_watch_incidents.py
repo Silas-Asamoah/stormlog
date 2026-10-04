@@ -192,7 +192,7 @@ def test_firings_within_the_post_window_join_the_incident(harness: Harness) -> N
     assert [t["trigger_id"] for t in incident.joined] == ["kv"]
     assert incident.counts_toward_exit
     assert len(harness.of_type(INCIDENT_EVENT)) == 1
-    assert (harness.manager.detected, harness.manager.detected_counting) == (2, 1)
+    assert harness.manager.firings == 2
 
 
 def test_at_most_sixteen_triggers_join_one_incident(harness: Harness) -> None:
@@ -365,7 +365,7 @@ def test_a_health_event_records_without_counting(harness: Harness) -> None:
     assert record["trigger"]["kind"] == "health"
     assert record["capture"]["status"] == "health_only"
     assert record["counts_toward_exit"] is False
-    assert harness.manager.detected_counting == 0
+    assert harness.manager.recorded_counting == 0
 
 
 def test_a_test_trigger_records_when_it_was_requested(harness: Harness) -> None:
@@ -463,3 +463,36 @@ def test_a_bundle_that_cannot_be_created_still_records_its_incident(
     assert (harness.manager.persisted, harness.manager.persist_failures) == (0, 1)
     (sealed,) = harness.manager.sealed
     assert sealed["bundle_error"] == record["bundle_error"]
+
+
+def test_health_incidents_never_use_up_the_counting_budget(tmp_path: Path) -> None:
+    """A flapping exporter's restarts used up the hour's incidents, and a
+    real violation after them was turned away."""
+    harness = Harness(tmp_path, limits=IncidentLimits(max_incidents_per_hour=2))
+    harness.scrapes(0, 900)
+    for second in (100, 200, 300):
+        harness.now = second * S
+        harness.manager.on_event("exporter_restart", "restarted", harness.now)
+        harness.tick(second + 61)
+    queue = harness.fire(500)
+    assert queue is not None
+    harness.tick(561)
+    kinds = [r["trigger"]["kind"] for r in harness.of_type(INCIDENT)]
+    assert kinds == ["health", "health", "metric"]  # the third restart: refused
+    assert (harness.manager.recorded, harness.manager.recorded_counting) == (3, 1)
+
+
+def test_a_counting_firing_turned_away_is_not_counted_as_recorded(
+    tmp_path: Path,
+) -> None:
+    """A refused counting firing made the watch exit 3 with no counting
+    incident to show for it."""
+    harness = Harness(tmp_path, limits=IncidentLimits(max_incidents_per_hour=1))
+    harness.scrapes(0, 900)
+    assert harness.fire(100, counts=False) is not None
+    harness.tick(161)
+    assert harness.fire(300, trigger_id="kv", counts=True) is None  # rate_limit
+    assert harness.manager.firings == 2
+    assert (harness.manager.recorded, harness.manager.recorded_counting) == (1, 0)
+    snapshot = harness.stats.health()
+    assert counter_value(snapshot, "suppressed_total", ("rate_limit",)) == 1

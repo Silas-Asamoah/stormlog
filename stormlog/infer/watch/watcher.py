@@ -535,7 +535,9 @@ class Watcher:
     def _exit_code(self, unsound: list[str]) -> int:
         if unsound:
             return int(ExitCode.ERROR)
-        if self.incidents.detected_counting:
+        # Only an incident on record counts: a firing the limits turned away
+        # left nothing to look at.
+        if self.incidents.recorded_counting:
             return int(ExitCode.FINDINGS)
         return int(ExitCode.OK)
 
@@ -547,8 +549,8 @@ class Watcher:
         summary = (
             f"watch unsound: {', '.join(unsound)}"
             if unsound
-            else f"{self.incidents.detected} incident(s) detected, "
-            f"{self.incidents.detected_counting} counting toward the exit code"
+            else f"{self.incidents.recorded} incident(s) recorded, "
+            f"{self.incidents.recorded_counting} counting toward the exit code"
         )
         return build_report(
             report_kind=REPORT_KIND,
@@ -558,8 +560,9 @@ class Watcher:
             summary=summary,
             findings=findings,
             metrics={
-                "incidents_detected": self.incidents.detected,
-                "incidents_counting": self.incidents.detected_counting,
+                "incidents_detected": self.incidents.recorded,
+                "incidents_counting": self.incidents.recorded_counting,
+                "trigger_firings": self.incidents.firings,
                 "incidents_persisted": self.incidents.persisted,
                 "incident_write_failures": self.incidents.persist_failures,
                 "scrapes_ok": self._ok_scrapes,
