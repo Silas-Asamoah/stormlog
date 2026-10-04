@@ -98,8 +98,9 @@ _SPACED_KEY = re.compile(
 # A flag and its value as items of a quoted argument list, as Python prints
 # a command: ['vllm', '--api-key', 'value'].
 _ARGV_FLAG = re.compile(r"""(['"])(--?[A-Za-z0-9][A-Za-z0-9_.-]*)\1,[ \t]*(?=['"])""")
-_DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)(?:"|\\?\Z)')
-_SINGLE_QUOTED = re.compile(r"'((?:[^'\\]|\\.)*)(?:'|\\?\Z)")
+# An escape may be of any character, a line break included.
+_DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\[\s\S])*)(?:"|\\?\Z)')
+_SINGLE_QUOTED = re.compile(r"'((?:[^'\\]|\\[\s\S])*)(?:'|\\?\Z)")
 # A value in escaped quotes, as JSON inside a JSON string spells it: it ends
 # at the escaped closing quote, at the enclosing string's own quote, or at
 # the end of the text.

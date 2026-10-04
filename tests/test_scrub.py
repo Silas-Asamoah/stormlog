@@ -572,6 +572,14 @@ def test_a_flag_and_its_value_in_a_quoted_argument_list(
     assert scrub_text(text) == scrubbed
 
 
+def test_a_quoted_value_may_hold_an_escaped_line_break() -> None:
+    newline = chr(10)
+    text = 'password="abc' + BACKSLASH + newline + 'def-opaque" next'
+    assert scrub_text(text) == 'password="<redacted>" next'
+    single = "password='abc" + BACKSLASH + newline + "def-opaque' next"
+    assert scrub_text(single) == "password='<redacted>' next"
+
+
 def test_scrub_text_leaves_ordinary_text_alone() -> None:
     text = "This model's maximum context length is 32768 tokens; max_tokens 128."
     assert scrub_text(text) == text
