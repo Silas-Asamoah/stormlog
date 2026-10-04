@@ -277,7 +277,11 @@ def _take_lock(path: Path) -> int | None:
         _take_exclusive(path)
         return None
     for _ in range(3):
-        descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        except PermissionError:
+            # Another user's lock, or a read-only one: some other writer's.
+            raise _in_use(path, _read_lock(path)) from None
         try:
             if _flock_path(descriptor, path):
                 return descriptor

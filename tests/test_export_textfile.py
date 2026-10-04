@@ -291,6 +291,19 @@ def test_a_lock_file_removed_while_being_taken_is_not_held(
     c.close()
 
 
+def test_a_lock_file_this_user_cannot_open_is_a_slot_in_use(tmp_path: Path) -> None:
+    # Another user's lock in a shared node_exporter directory, or a
+    # read-only one: refused as a slot in use, not as an I/O error.
+    _, lock = slot_paths(tmp_path, "alpha")
+    lock.write_text(json.dumps({"pid": 1, "host": "elsewhere"}))
+    lock.chmod(0o444)
+    try:
+        with pytest.raises(SlotInUse, match="elsewhere"):
+            _writer(tmp_path).acquire()
+    finally:
+        lock.chmod(0o644)
+
+
 _HOLD_THE_SLOT = """
 import sys, time
 from pathlib import Path
