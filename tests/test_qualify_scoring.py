@@ -344,6 +344,34 @@ def test_l2_reads_218s_own_location_fields() -> None:
     assert other.correct(TOP1, 1) and not other.correct(TOP1, 2)
 
 
+def test_218s_burst_finding_meets_the_bursts_own_ground_truth() -> None:
+    # The scenario's burst: 300 requests 5 ms apart from 90 s on its clock
+    # (1.79e18 ns offset). #218 starts the finding at the incident's onset,
+    # 16.6 ms in, with the first flagged window's span as its resolution. A
+    # label timed by the burst itself, ending at its last arrival (the
+    # effect lasts at least that long), is diagnosed at top 1, L2.
+    real = json.loads(REAL_218.read_text(encoding="utf-8"))
+    (queue,) = [
+        detail
+        for detail in real["payload"]["findings_detail"].values()
+        if detail["kind"] == QUEUE
+    ]
+    burst_at = 1_790_000_090 * S
+    label = replace(
+        episode("F1", expects=(Expectation(QUEUE, "scheduler", engine=PRODUCER),)),
+        secondary=(),
+        clock_domain=queue["window"]["clock_domain"],
+        times=Times(
+            action_onset_ns=burst_at,
+            effect_onset_ns=burst_at,
+            effect_end_ns=burst_at + 299 * 5 * S // 1000,
+        ),
+    )
+    score = score_episode(label, real, CONFIG)
+    assert score.correct(TOP1, 2)
+    assert score.false_claims == ()
+
+
 def test_an_ineligible_finding_is_labelled_ineligible() -> None:
     observed = finding(
         "a",
