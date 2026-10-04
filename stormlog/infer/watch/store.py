@@ -541,12 +541,13 @@ class IncidentStore:
     def make_room_on_disk(self, protected: frozenset[str] = frozenset()) -> bool:
         """Remove the oldest sealed bundle not ``protected``, for a write the
         filesystem refused (ENOSPC) though the budget allowed it: the disk
-        holds less than ``max_total_bytes``. False when none could go."""
+        holds less than ``max_total_bytes``. False when none could go. A
+        bundle a reader holds is skipped, not deferred, as for the budget."""
         for path, manifest in self.bundles():  # oldest seal first
             if manifest.incident_id in protected:
                 continue
             size = _payload_bytes(path, seen=set())
-            if self._try_delete(path, path):
+            if self._try_delete(path, path, defer=False):
                 self._room_pruned.append(
                     PrunedBundle(manifest.incident_id, "disk_full", size)
                 )
