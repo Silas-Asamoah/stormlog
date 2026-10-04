@@ -280,6 +280,11 @@ def test_a_preempted_attempt_is_set_aside_with_its_evidence_and_retried(
         "evidence": "box paused without a release at 03:12",
     }
     assert (second["attempt"], second["state"]) == (2, "completed")
+    # The interrupted attempt keeps the slot it ran in; the retry is the
+    # block's third start.
+    planned = next(r["position_planned"] for r in records if r["label"] == label)
+    assert first["position_actual"] == planned
+    assert (second["position_planned"], second["position_actual"]) == (planned, 2)
     index = [
         json.loads(line) for line in (exp / "index.jsonl").read_text().splitlines()
     ]
@@ -600,6 +605,9 @@ def test_a_probe_that_does_not_finish_is_retried_once_on_a_fresh_server(
     assert first["cleanup"]["verified"] is True
     assert second["state"] == "completed" and second["attempt"] == 2
     assert second["order_broken"] is True
+    # The retry ran in the block's second slot, after the first attempt.
+    assert (first["position_actual"], second["position_actual"]) == (0, 1)
+    assert second["position_planned"] == 0
 
 
 def _survivor_on_calls(monkeypatch: pytest.MonkeyPatch, *calls: int) -> None:

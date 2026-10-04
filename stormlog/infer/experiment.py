@@ -114,6 +114,8 @@ PROTOCOL_FAILURE = "protocol_failure"
 # A planned run the runner never started: an earlier cleanup left processes.
 NOT_RUN = "not_run"
 INDEX = "index.jsonl"
+# Written when an attempt starts: the slot it runs in.
+ATTEMPT = "attempt.json"
 # What may set aside an interrupted attempt; anything else is an outcome.
 EXTERNAL_REASONS = ("spot_preemption", "operator_abort", "infra_fault")
 SUMS = "SHA256SUMS"
@@ -523,7 +525,7 @@ def _finish_interrupted(
         arm=arm.name,
         block=block,
         position_planned=position,
-        position_actual=position,
+        position_actual=_slot(leftover, position),
         attempt=attempt,
         run_dir=str(final),
         order_broken=attempt > 1,
@@ -543,6 +545,20 @@ def _finish_interrupted(
     _write_sums(leftover)
     leftover.rename(final)
     return record.to_record()
+
+
+def _started_in_block(runs: Path, experiment_id: str, block: int) -> int:
+    """How many attempts the block started, in this invocation or earlier."""
+    prefix = f"{experiment_id}-b{block:02d}-p"
+    return sum(1 for path in runs.iterdir() if path.name.startswith(prefix))
+
+
+def _slot(leftover: Path, planned: int) -> int:
+    """The slot an interrupted attempt ran in, as it recorded at its start."""
+    try:
+        return int(json.loads((leftover / ATTEMPT).read_text())["position_actual"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return planned
 
 
 def _session_artifacts(run_dir: Path) -> list[Path]:
@@ -690,17 +706,23 @@ class _Run:
         )
         self.final_dir = runs / self.label
         self.dir = runs / f"{self.label}.partial"
+        # The slot it runs in: every attempt the block started before it.
+        started = _started_in_block(runs, plan.experiment_id, block)
         self.dir.mkdir(parents=True)
         self.record = RunRecord(
             label=self.label,
             arm=arm.name,
             block=block,
             position_planned=position,
-            position_actual=position,
+            position_actual=started,
             attempt=attempt,
             run_dir=str(self.final_dir),
             started_at_ns=time.time_ns(),
             order_broken=attempt > 1,
+        )
+        # Kept should the runner be killed before the attempt ends.
+        (self.dir / ATTEMPT).write_text(
+            json.dumps({"position_actual": started}, indent=2) + "\n"
         )
         self.values: dict[str, Any] = {
             "run_dir": str(self.dir),
