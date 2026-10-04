@@ -19,7 +19,6 @@ from stormlog.infer.watch.store import (
     BundleManifest,
     GenerationWriter,
     IncidentStore,
-    StoreInUse,
     open_incident_bundle,
     read_manifest_snapshot,
 )
@@ -277,11 +276,46 @@ def test_one_store_owns_a_root(tmp_path: Path) -> None:
     """A second process's recover() deleted a live writer's generation, and
     that writer then published a manifest naming nothing."""
     store = IncidentStore(tmp_path, _limits())
-    with pytest.raises(StoreInUse, match="another process"):
+    # A RuntimeError, so the check is of the lock, not only of the name.
+    with pytest.raises(RuntimeError, match="another process") as refused:
         IncidentStore(tmp_path, _limits())
+    assert type(refused.value).__name__ == "StoreInUse"
     store.close()
     again = IncidentStore(tmp_path, _limits())
     again.close()
+
+
+def test_a_store_another_process_owns_is_refused_until_it_lets_go(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import sys
+
+    owner = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "from stormlog.infer.watch.store import IncidentStore\n"
+            "store = IncidentStore(sys.argv[1])\n"
+            "print('owned', flush=True)\n"
+            "sys.stdin.read()\n",
+            str(tmp_path),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    assert owner.stdin is not None and owner.stdout is not None
+    try:
+        assert owner.stdout.readline().strip() == "owned"
+        with pytest.raises(RuntimeError, match="another process holds"):
+            IncidentStore(tmp_path, _limits())
+    finally:
+        owner.stdin.close()
+        owner.wait(30)
+    IncidentStore(tmp_path, _limits()).close()
 
 
 def test_a_generation_being_written_is_never_deleted_under_it(
