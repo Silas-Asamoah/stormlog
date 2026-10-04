@@ -140,6 +140,23 @@ def test_only_eligible_fault_claims_at_warning_are_false() -> None:
     assert score_episode(episode(), diagnosis(right, stall()), CONFIG).false_claims
 
 
+def test_an_all_primary_payloads_downstream_info_finding_is_no_false_claim() -> None:
+    # Until #218's PR 2 adds its edge table, every finding is primary. A
+    # queue finding with KV pressure upstream can't claim fault: #218 leaves
+    # it at info ("an upstream cause is present"). Primary, it isn't neutral;
+    # at info, it isn't a false claim either. At warning it would be one.
+    def downstream(severity: str) -> dict[str, Any]:
+        return finding("q", QUEUE, 2, severity=severity, claim="condition")
+
+    right = finding("a", KV, 1)
+    score = score_episode(episode(), diagnosis(right, downstream("info")), CONFIG)
+    assert score.correct(TOP1, 1)
+    assert score.neutral == ()
+    assert score.false_claims == ()
+    warned = score_episode(episode(), diagnosis(right, downstream("warning")), CONFIG)
+    assert warned.false_claims == (downstream("warning")["id"],)
+
+
 def test_a_negative_runs_false_claim_must_be_eligible_and_at_warning() -> None:
     from tests.test_qualify_scoring import null_run
 
