@@ -449,10 +449,13 @@ def test_queue_episodes_recover_end_to_end(tmp_path: Path) -> None:
     # The twin is valid on a quiet host. On a loaded one (load average 20
     # in the full suite) the victim's own waits can pass the baseline's p95
     # for a window, and the harness rightly calls the twin not realized:
-    # its one check then fails, nothing else.
+    # its one check then fails, nothing else, and only just. The check's
+    # value, the highest window median over the p95, tells host noise from
+    # a twin that saturated the queue (F1's own waits read many times over).
     if twin.status != "valid":
-        twin_checks = {c["name"]: c["passed"] for c in twin.validity.checks}
-        assert twin_checks == {"waits_within_baseline": False}, twin.validity
+        (check,) = twin.validity.checks
+        assert (check["name"], check["passed"]) == ("waits_within_baseline", False)
+        assert check["value"] is not None and check["value"] < 3, twin.validity
 
 
 def test_a_baseline_too_thin_to_recover_is_named_not_a_bare_timeout(
