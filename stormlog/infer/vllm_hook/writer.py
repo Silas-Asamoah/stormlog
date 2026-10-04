@@ -430,11 +430,14 @@ def _write_key(path: Path) -> bytes:
 
 
 def _replace_json(path: Path, payload: dict[str, Any]) -> bool:
+    try:
+        data = _dumps(payload).encode()
+    except Exception:  # a status field json cannot write
+        return False
     temporary = path.with_name(path.name + ".tmp")
     try:
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            data = json.dumps(payload, separators=(",", ":")).encode()
             if not _write_all(fd, data):
                 return False
         finally:

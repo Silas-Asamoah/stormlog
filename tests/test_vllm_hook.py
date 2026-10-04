@@ -1121,6 +1121,24 @@ def test_an_escaped_record_over_the_limit_is_dropped(tmp_path: Path) -> None:
     assert status["dropped"] == {"alias_oversized": 1}
 
 
+def test_a_status_field_json_cannot_write_is_an_error(tmp_path: Path) -> None:
+    writer = EpochWriter(
+        tmp_path,
+        "worker",
+        limits=WriterLimits(heartbeat_seconds=0.02),
+        status_fields=lambda: {"bad": object()},
+    )
+    # Each heartbeat counts two errors: its record and its status file.
+    _wait(lambda: writer._status()["errors"] >= 4)
+    writer.emit("alias", {"internal": "x"})
+    writer.close()
+
+    # The writer thread lived on: the record after those heartbeats is written.
+    kinds = [record["kind"] for record in _epoch_records(writer.directory)]
+    assert kinds == ["alias", "goodbye"]
+    assert not (writer.directory / "status.json").exists()
+
+
 def test_goodbye_is_the_last_record(tmp_path: Path) -> None:
     # Every pass of the writer is past a zero heartbeat interval.
     writer = EpochWriter(tmp_path, "engine", limits=WriterLimits(heartbeat_seconds=0))
