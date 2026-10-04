@@ -40,7 +40,6 @@ from .compare import (
     compare_runs,
 )
 from .compare_metrics import (
-    RATE_METRICS,
     metric_names,
     metric_unit,
     vacuous_budget,
@@ -1318,7 +1317,6 @@ def _comparison_spec(args: argparse.Namespace) -> ComparisonSpec:
                 f"--fallback {pattern}: matches no gated metric, so it would "
                 "never apply"
             )
-    _check_overlap_rates(args, gates)
     return ComparisonSpec(
         confidence=args.confidence,
         design=args.design,
@@ -1337,29 +1335,6 @@ def _comparison_spec(args: argparse.Namespace) -> ComparisonSpec:
         seed=args.seed,
         fallbacks=fallbacks,
     )
-
-
-def _check_overlap_rates(
-    args: argparse.Namespace, gates: tuple[tuple[str, GateRule], ...]
-) -> None:
-    """Overlap segments count requests in flight, whose rate grows with latency."""
-    if not args.segment or args.segment_membership != "overlap":
-        return
-    rates = sorted(
-        {
-            name
-            for pattern, _rule in gates
-            for name in metric_names(pattern)
-            if name in RATE_METRICS
-        }
-    )
-    if rates:
-        raise InferUsageError(
-            f"--segment-membership overlap with a gate on {', '.join(rates)}: "
-            "requests in flight per second grow with latency, so a slower "
-            "candidate would look faster. Gate rates by arrival; overlap is "
-            "for latency and shares"
-        )
 
 
 def _gate(text: str, min_blocks: int | None) -> tuple[str, GateRule]:
