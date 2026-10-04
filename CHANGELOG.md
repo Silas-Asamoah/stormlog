@@ -38,7 +38,8 @@ the flaky benchmark memory gates
     vLLM's own TTFT, end-to-end and queue time when spans are joined;
   - for each quantile, its value over the successful requests and with
     failures ranked worst, its sample count, whether the case has enough
-    requests, and its order-statistic confidence interval;
+    requests, and its order-statistic confidence interval. The second has
+    no value, with a reason, when a successful request lacks the metric;
   - for each status other than `ok`, the count and the elapsed time observed
     before the request ended, kept apart from the latency quantiles;
   - a `streaming` block of chunk-level figures, never called inter-token

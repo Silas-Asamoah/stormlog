@@ -158,7 +158,12 @@ def _metric(
         "failure_penalized": {
             _level_key(p): _estimate_record(
                 penalized_quantile(
-                    successful, len(failures), p, rule, timeout_elapsed_ms=timeouts
+                    successful,
+                    len(failures),
+                    p,
+                    rule,
+                    timeout_elapsed_ms=timeouts,
+                    successful_missing=missing,
                 )
             )
             for p in levels
@@ -212,6 +217,7 @@ def _estimate_record(estimate: QuantileEstimate) -> dict[str, Any]:
         "n_min_exists": estimate.n_min_exists,
         "penalized": estimate.penalized,
         "observed_lower_bound_ms": estimate.observed_lower_bound_ms,
+        "reason": estimate.reason,
         "interval": _interval_record(estimate.interval),
     }
 

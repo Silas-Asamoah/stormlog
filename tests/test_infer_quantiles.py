@@ -142,10 +142,48 @@ def test_only_real_timeouts_give_an_observed_lower_bound() -> None:
     timeouts = [60_000.0] * 9 + [59_990.0]
     estimate = penalized_quantile(successful, 10, 0.95, timeout_elapsed_ms=timeouts)
     assert estimate.penalized
-    assert estimate.observed_lower_bound_ms == 59_990.0
+    assert estimate.observed_lower_bound_ms == 60_000.0
     # A count that does not cover every failure is not evidence of a bound.
     partial = penalized_quantile(successful, 10, 0.95, timeout_elapsed_ms=[60_000.0])
     assert partial.observed_lower_bound_ms is None
+
+
+def test_the_observed_bound_holds_for_the_interpolated_quantile() -> None:
+    # 227 successes and 12 timeouts: level 0.95 * 239 / 227 is just above 1,
+    # yet interpolation at rank 0.95 * 238 still weighs the largest success.
+    # Had each timeout ended when it was abandoned, p95 would be 6,204.3 ms,
+    # far below the shortest timeout; a later end can only raise it.
+    successful = [float(v) for v in range(1, 228)]
+    timeouts = [60_000.0] * 12
+    estimate = penalized_quantile(successful, 12, 0.95, timeout_elapsed_ms=timeouts)
+    assert estimate.penalized
+    assert estimate.observed_lower_bound_ms == pytest.approx(0.9 * 227 + 6_000)
+    assert estimate.observed_lower_bound_ms == quantile(successful + timeouts, 0.95)
+
+
+def test_a_missing_successful_value_leaves_the_penalized_quantile_undefined() -> None:
+    # The share that failed is over every offered request; a success whose
+    # value is missing cannot be ranked, so no level can be computed.
+    estimate = penalized_quantile(
+        [float(v) for v in range(1, 91)], 10, 0.5, successful_missing=5
+    )
+    assert estimate.value_ms is None
+    assert estimate.n == 105
+    assert not estimate.penalized
+    assert estimate.reason == "successful_values_missing"
+    assert estimate.interval is None
+    assert estimate.observed_lower_bound_ms is None
+
+
+def test_without_failures_nothing_is_penalized() -> None:
+    estimate = penalized_quantile([], 0, 0.5)
+    assert not estimate.penalized
+    assert estimate.value_ms is None
+    assert estimate.reason == "no_values"
+    assert estimate.n == 0
+    missing = penalized_quantile([], 0, 0.5, successful_missing=3)
+    assert not missing.penalized
+    assert missing.reason == "successful_values_missing"
 
 
 def test_a_case_with_no_successes_is_entirely_penalized() -> None:

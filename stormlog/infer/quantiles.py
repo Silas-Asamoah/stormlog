@@ -21,7 +21,11 @@ Two estimands describe a case's latency:
   succeed ranked worst. That is a policy penalty, not an observed latency.
   The p-quantile is the successful values' quantile at level p / (1 - f),
   where f is the share that did not succeed; above level 1 it falls in the
-  failure mass and has no value.
+  failure mass and has no value. That is the estimand's definition, not an
+  identity with interpolating over a sample padded with infinite values: it
+  stays finite at level 1, and otherwise differs from that by less than one
+  gap between order statistics. When a successful request has no value the
+  level cannot be computed, and the estimate has none.
 """
 
 from __future__ import annotations
@@ -98,6 +102,7 @@ class QuantileEstimate:
     interval: OrderStatisticInterval | None
     penalized: bool = False
     observed_lower_bound_ms: float | None = None
+    reason: str | None = None
 
 
 def quantile(values: Sequence[float], p: float) -> float | None:
@@ -185,20 +190,37 @@ def penalized_quantile(
     rule: SufficiencyRule = SufficiencyRule(),
     *,
     timeout_elapsed_ms: Sequence[float] | None = None,
+    successful_missing: int = 0,
 ) -> QuantileEstimate:
     """A quantile over every offered request, failures ranked worst.
 
+    ``successful_missing`` counts successful requests with no value. They
+    belong to the offered count but cannot be ranked, so the estimate is
+    then undefined (reason ``successful_values_missing``) rather than taken
+    over a smaller cohort that inflates the share that failed.
+
     ``timeout_elapsed_ms`` gives the elapsed time of each failure when every
     failure was a timeout; only then does a quantile in the failure mass get
-    an observed lower bound, the shortest of them. A request cancelled after
-    1 ms is no evidence of a 60 s latency.
+    an observed lower bound: the quantile had each timeout ended when it was
+    abandoned. A request cancelled after 1 ms is no evidence of a 60 s
+    latency.
     """
-    offered = len(successful) + failures
+    offered = len(successful) + successful_missing + failures
+    reason = _undefined_reason(len(successful), successful_missing, failures)
+    if reason is not None:
+        return QuantileEstimate(
+            estimand="failure_penalized",
+            p=p,
+            value_ms=None,
+            n=offered,
+            sufficient=offered >= _minimum_n(p, rule),
+            n_min=_minimum_n(p, rule),
+            n_min_exists=_minimum_n(p, _EXISTS),
+            interval=None,
+            reason=reason,
+        )
     level = p * offered / len(successful) if successful else math.inf
     in_failures = level > 1
-    bound = None
-    if in_failures and timeout_elapsed_ms and len(timeout_elapsed_ms) == failures:
-        bound = min(timeout_elapsed_ms)
     return QuantileEstimate(
         estimand="failure_penalized",
         p=p,
@@ -209,8 +231,37 @@ def penalized_quantile(
         n_min_exists=_minimum_n(p, _EXISTS),
         interval=quantile_interval(successful, p, rule, penalized=failures),
         penalized=in_failures,
-        observed_lower_bound_ms=bound,
+        observed_lower_bound_ms=(
+            _observed_bound(successful, failures, p, timeout_elapsed_ms)
+            if in_failures
+            else None
+        ),
     )
+
+
+def _undefined_reason(successful: int, missing: int, failures: int) -> str | None:
+    if missing:
+        return "successful_values_missing"
+    if not successful and not failures:
+        return "no_values"
+    return None
+
+
+def _observed_bound(
+    successful: Sequence[float],
+    failures: int,
+    p: float,
+    timeout_elapsed_ms: Sequence[float] | None,
+) -> float | None:
+    """The quantile had every timeout ended when it was abandoned.
+
+    A timed-out request took at least its elapsed time, and an order
+    statistic never falls when a value rises, so this bounds the quantile
+    from below under the report's own interpolation.
+    """
+    if not timeout_elapsed_ms or len(timeout_elapsed_ms) != failures:
+        return None
+    return quantile([*successful, *timeout_elapsed_ms], p)
 
 
 # Le Boudec's own tables: the narrowest interval, nothing required above it.

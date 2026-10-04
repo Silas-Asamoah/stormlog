@@ -141,6 +141,39 @@ def test_non_streamed_responses_have_no_client_ttft() -> None:
     assert streaming_summary(requests)["responses"] == 0
 
 
+def test_a_case_without_failures_is_never_penalized_for_missing_values() -> None:
+    requests = [
+        _streamed(i, stream=False, ttft_ms=None, chunk_interarrival_ms=[])
+        for i in range(30)
+    ]
+    ttft = latency_summary(requests)["metrics"]["client.ttft"]
+    p50 = ttft["failure_penalized"]["p50"]
+    assert p50["penalized"] is False
+    assert p50["value_ms"] is None
+    assert p50["n"] == 30
+    assert p50["reason"] == "successful_values_missing"
+
+
+def test_missing_values_do_not_change_the_share_that_failed() -> None:
+    # 95 successes and 5 errors; 47 successes have no span. The client e2e
+    # p95 is finite over 100 offered; the server one must not read as lying
+    # in the failure mass with n = 53.
+    requests = [_streamed(i, e2e_latency_ms=float(100 + i)) for i in range(95)] + [
+        _streamed(95 + i, status="error") for i in range(5)
+    ]
+    spans = JoinedSpans(
+        by_request={f"x{i}": {"gen_ai.latency.e2e": 0.1} for i in range(48)},
+        quarantined={},
+    )
+    metrics = latency_summary(requests, spans=spans)["metrics"]
+    assert metrics["client.e2e"]["failure_penalized"]["p95"]["value_ms"] == 194.0
+    server = metrics["server.e2e"]["failure_penalized"]["p95"]
+    assert server["penalized"] is False
+    assert server["value_ms"] is None
+    assert server["n"] == 100
+    assert server["reason"] == "successful_values_missing"
+
+
 def test_server_latency_comes_only_from_each_requests_own_span() -> None:
     requests = [_streamed(i) for i in range(3)]
     spans = JoinedSpans(

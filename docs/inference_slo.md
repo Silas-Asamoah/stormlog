@@ -338,12 +338,23 @@ these minimums.
 - **`failure_penalized`**: every offered request, with each one that did not
   succeed ranked worst. That is a policy penalty, not an observed latency.
   - The p-quantile is the successful values' quantile at level `p / (1 − f)`,
-    where `f` is the share of offered requests that did not succeed.
+    where `f` is the share of offered requests that did not succeed. That is
+    the estimand's definition. Interpolating over a sample padded with
+    infinite values differs from it by less than one gap between order
+    statistics, and is infinite at level 1 where this is not.
   - With 95 successes and 5 failures, p95 is the largest success.
   - Above level 1 the quantile falls in the failure mass (`penalized: true`)
-    and has no value.
+    and has no value. Only a case with failures is ever penalized.
+  - Its `n` is the offered count. When a successful request has no value for
+    the metric (no joined span, a non-streamed TTFT, a TPOT without server
+    usage), it cannot be ranked, so the estimate has no value and its
+    `reason` is `successful_values_missing`. A case with no requests at all
+    has reason `no_values`.
   - It gets an observed lower bound only when every failure was a real
-    timeout. A request cancelled after 1 ms is not evidence of a long latency.
+    timeout: the quantile had each timeout ended when it was abandoned. A
+    timed-out request took at least that long, so the bound holds under the
+    same interpolation. A request cancelled after 1 ms is not evidence of a
+    long latency.
 
 Both use the same linear interpolation between order statistics as the rest
 of the inference report.
