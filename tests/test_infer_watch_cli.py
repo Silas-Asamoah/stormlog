@@ -124,6 +124,14 @@ def test_a_second_watcher_on_a_root_exits_two(tmp_path: Path) -> None:
 def test_bad_arguments_exit_two(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: tuple[str, ...]
 ) -> None:
+    from stormlog.infer.watch import cli as watch_cli
+
+    def no_watch(*_args: object, **_kwargs: object) -> None:
+        # A bad argument let through would start an endless watch (with
+        # --duration inf, say) and hang the test: it fails here instead.
+        raise AssertionError("the watch started")
+
+    monkeypatch.setattr(watch_cli, "Watcher", no_watch)
     monkeypatch.delenv("STORMLOG_UNSET_KEY", raising=False)
     assert _watch(tmp_path, *extra) == 2
 

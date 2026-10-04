@@ -563,6 +563,28 @@ def test_a_scrape_larger_than_the_whole_history_is_counted_oversized(
     assert metrics["scrapes_ok"] == 0 and metrics["scrapes_oversized"] > 0
 
 
+def test_a_scrape_cut_short_by_the_stop_is_not_a_failed_scrape(
+    tmp_path: Path,
+) -> None:
+    """The stop cuts a scrape in flight short; recording it as failed (an
+    abandoned scrape) was never told apart, though no scrape failed."""
+    metrics = FakeMetrics()
+    metrics.dribble = 0.2
+    payload = watch_config("", scrape_timeout_seconds=5.0)
+    with serve_metrics(metrics) as base_url:
+        payload["server"]["base_url"] = base_url
+        outcome = _watch(
+            tmp_path,
+            payload,
+            options=WatchOptions(shutdown_deadline_seconds=10.0),
+            stop_after=0.8,
+        )
+    assert outcome.unsound == ["no_successful_scrape"]
+    health = of_type(read_ledger(tmp_path), WATCH_HEALTH)
+    assert "error" not in [record["scrape"]["status"] for record in health]
+    assert _report(tmp_path)["metrics"]["scrapes_failed"] == 0
+
+
 @pytest.mark.parametrize("ends_by", ["stop", "duration"])
 def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
     tmp_path: Path, ends_by: str
