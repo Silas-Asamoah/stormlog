@@ -157,6 +157,9 @@ def test_a_down_collector_never_fails_the_run(tmp_path: Path) -> None:
     spans = _capability(records, "export.otlp")["metadata"]["summary"]["spans"]
     assert spans["exported"] == 0 and _balanced(spans) and spans["in_flight"] == 0
     assert set(spans["dropped"]) <= {"connect_refused", "shutdown"}
+    # The close waited at most --otlp-flush-timeout for the dead collector.
+    summary = _capability(records, "export.otlp")["metadata"]["summary"]
+    assert summary["flush_seconds"] <= 1.5
     assert elapsed < 20
 
 
