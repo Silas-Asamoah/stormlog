@@ -223,6 +223,8 @@ class MetricComparison:
     degenerate: dict[str, Any] | None = None
     # A fraction's requests pooled per arm: model-based, never gated.
     pooled: dict[str, Any] | None = None
+    # A fraction's requests in each kept run, aligned with ``values``.
+    trials: dict[str, list[int | None]] | None = None
 
     @property
     def interval_valued(self) -> bool:
@@ -259,6 +261,7 @@ class MetricComparison:
             "reason": self.reason,
             "degenerate": self.degenerate,
             "pooled": self.pooled,
+            "trials": self.trials,
         }
 
 
@@ -920,6 +923,11 @@ def _shell(request: _Request, pairs: _Pairs) -> MetricComparison:
         attrition=pairs.attrition,
         worst=None,
         best=None,
+        trials=(
+            {"baseline": pairs.trials[0], "candidate": pairs.trials[1]}
+            if request.unit == FRACTION_UNIT and request.trials is not None
+            else None
+        ),
     )
 
 
