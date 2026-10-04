@@ -390,3 +390,21 @@ def test_a_final_update_lands_under_the_freeze() -> None:
     registry.freeze(final=lambda: requests.inc(("c1", "error"), 5))  # no-op
     exposition = check_exposition(_text(registry))
     assert exposition.value("stormlog_infer_requests_total", status="error") == 5
+
+
+def test_a_family_can_wait_for_values_instead_of_reading_zero() -> None:
+    registry = Registry(headroom=0)
+    family = registry.add(
+        FamilySpec(
+            "stormlog_up", "gauge", "h", labels=("state",), enums={"state": ("a", "b")}
+        ),
+        precreate=False,
+    )
+    budget = registry.budget()
+    assert _text(registry).count("stormlog_up{") == 0
+    family.set(("a",), 1.0)
+    family.set(("b",), 0.0)
+    exposition = check_exposition(_text(registry))
+    assert exposition.value("stormlog_up", state="a") == 1
+    assert len(_text(registry).encode()) <= budget.size
+    assert budget.samples == 2

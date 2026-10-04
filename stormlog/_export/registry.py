@@ -126,6 +126,7 @@ class Family:
         spec: FamilySpec,
         known: Sequence[Mapping[str, str]],
         headroom: int,
+        precreate: bool = True,
     ) -> None:
         self.registry = registry
         self.spec = spec
@@ -134,9 +135,11 @@ class Family:
         self._overflow_keys: set[LabelValues] = set()
         # Series other than overflow ones; the cap applies to these.
         self._regular = 0
-        for values in _known_label_sets(spec, known):
-            self._create(values)
-        self.cap = self._regular + (headroom if spec.bounded else 0)
+        expected = _known_label_sets(spec, known)
+        if precreate:
+            for values in expected:
+                self._create(values)
+        self.cap = len(expected) + (headroom if spec.bounded else 0)
 
     # ------------------------------------------------------------- updates
     # Each update takes the registry's lock itself; inside Registry.apply the
@@ -271,16 +274,25 @@ class Registry:
         self._frozen = False
         self.late_updates = 0
 
-    def add(self, spec: FamilySpec, known: Iterable[Mapping[str, str]] = ()) -> Family:
+    def add(
+        self,
+        spec: FamilySpec,
+        known: Iterable[Mapping[str, str]] = (),
+        *,
+        precreate: bool = True,
+    ) -> Family:
         """Declare a family and create its known series at 0.
 
         ``known`` lists the configured values of the bounded labels, one
-        mapping per combination; each is paired with every enum value.
+        mapping per combination; each is paired with every enum value. With
+        ``precreate`` off, the known series are budgeted but appear only
+        once they have a value, for sources whose missing values must not
+        read as 0.
         """
         for name in _sample_names(spec):
             if name in self._names:
                 raise ValueError(f"metric name {name!r} is already declared")
-        family = Family(self, spec, list(known), self.headroom)
+        family = Family(self, spec, list(known), self.headroom, precreate)
         with self._lock:
             self.families.append(family)
             self._names.update(_sample_names(spec))
@@ -520,9 +532,10 @@ def _extra_series(family: Family) -> int:
     """Series that may still appear: headroom, and overflow for counters and
     histograms, beyond those created already."""
     spec = family.spec
-    if not spec.bounded:
-        return 0
+    # Known series not created yet, and headroom.
     headroom = max(0, family.cap - family._regular)
+    if not spec.bounded:
+        return headroom
     overflow = 0
     if spec.kind != "gauge":
         overflow = math.prod(len(values) for values in spec.enums.values())
