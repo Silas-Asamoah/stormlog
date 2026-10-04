@@ -542,3 +542,23 @@ def test_a_watchdog_killed_then_its_harness_killed_leaves_the_target_running(
         os.killpg(harness.pid, signal.SIGKILL)
     harness.wait(timeout=10)
     assert _running_within(loop.pid, 1.0)
+
+
+def test_the_watchdog_outlives_signals_sent_to_it(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    # Fable's A2 delta N1: something may signal the watchdog itself (a
+    # `pkill -f qualification`, a cgroup-wide SIGTERM) while the harness is
+    # wedged mid-stop. It ignores those, and still continues the target
+    # when the harness then dies.
+    harness, watchdog = _pulsing_harness(loop.pid)
+    for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        os.kill(watchdog, signum)
+    time.sleep(0.3)
+    assert psutil.Process(watchdog).status() not in (
+        psutil.STATUS_ZOMBIE,
+        psutil.STATUS_DEAD,
+    )
+    os.killpg(harness.pid, signal.SIGKILL)
+    harness.wait(timeout=10)
+    assert _running_within(loop.pid, 1.0)
