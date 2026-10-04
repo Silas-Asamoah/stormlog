@@ -26,7 +26,7 @@ from typing import Any, Literal, Protocol, Union
 
 from .._export.envelope import Envelope
 from .._export.http_server import MetricsServer
-from .._export.queue import BoundedQueue
+from .._export.queue import BoundedQueue, QueueStats
 from .._export.registry import Family, FamilySpec, Registry, render
 from .._export.renders import RenderCache
 from .._export.textfile import PRODUCER_LABEL, SlotInUse, TextfileWriter
@@ -38,6 +38,7 @@ COMPONENT_PROMETHEUS = "export.prometheus"
 METRIC_QUEUE_ITEMS = 65_536
 METRIC_QUEUE_BYTES = 8 * 1024 * 1024
 HEALTH_INTERVAL_SECONDS = 1.0
+DROP_REASONS = ("queue_full", "closed", "shutdown", "error")
 # The textfile's final write gets at least this long, whatever is left of
 # the close's deadline: it renders once and writes one file.
 TEXTFILE_CLOSE_FLOOR_SECONDS = 0.5
@@ -93,6 +94,8 @@ class ExportUsageError(ValueError):
 class _Counts:
     applied: int = 0
     dropped_shutdown: int = 0
+    # Records whose update raised and was undone: an exporter bug.
+    dropped_error: int = 0
     internal_errors: dict[str, int] = field(
         default_factory=lambda: {"observe": 0, "apply": 0, "health": 0, "close": 0}
     )
@@ -255,7 +258,14 @@ class ExportPipeline:
             return self.registry.apply(update)
         except Exception:
             self._error("apply")
+            # Counted under the registry's lock, so the final counts see it
+            # either as this error or, if the freeze came first, as a
+            # shutdown drop, never as both.
+            self.registry.apply(self._note_apply_error)
             return True
+
+    def _note_apply_error(self) -> None:
+        self._counts.dropped_error += 1
 
     def _health_loop(self) -> None:
         while not self._stop_health.wait(HEALTH_INTERVAL_SECONDS):
@@ -283,11 +293,7 @@ class ExportPipeline:
         queue = self.queue.stats()
         self._own.update(
             applied=self._counts.applied,
-            dropped={
-                "queue_full": queue.dropped_full,
-                "closed": queue.dropped_closed,
-                "shutdown": self._counts.dropped_shutdown,
-            },
+            dropped=self._drop_counts(queue),
             families=self.registry.families,
             server=self.server,
             textfile=self.textfile,
@@ -354,7 +360,9 @@ class ExportPipeline:
         # what the queue accepted and the worker did not apply is exact.
         self.queue.drain()
         self._counts.dropped_shutdown = (
-            self.queue.stats().accepted - self._counts.applied
+            self.queue.stats().accepted
+            - self._counts.applied
+            - self._counts.dropped_error
         )
         self._update_own()
 
@@ -379,11 +387,7 @@ class ExportPipeline:
             "status": status,
             "applied": self._counts.applied,
             "queued": queue.depth,
-            "dropped": {
-                "queue_full": queue.dropped_full,
-                "closed": queue.dropped_closed,
-                "shutdown": self._counts.dropped_shutdown,
-            },
+            "dropped": self._drop_counts(queue),
             "frozen": self.registry.frozen,
         }
 
@@ -397,12 +401,8 @@ class ExportPipeline:
             "records": {
                 "offered": queue.offered,
                 "applied": self._counts.applied,
-                "dropped": {
-                    "queue_full": queue.dropped_full,
-                    "closed": queue.dropped_closed,
-                    "shutdown": self._counts.dropped_shutdown,
-                },
-                "exact": queue.dropped_full + self._counts.dropped_shutdown == 0,
+                "dropped": self._drop_counts(queue),
+                "exact": self._dropped_total() == 0,
                 "queue_high_water": queue.high_water,
             },
             "budget": {
@@ -455,9 +455,18 @@ class ExportPipeline:
         ]
 
     # ------------------------------------------------------------- helpers
+    def _drop_counts(self, queue: QueueStats) -> dict[str, int]:
+        return {
+            "queue_full": queue.dropped_full,
+            "closed": queue.dropped_closed,
+            "shutdown": self._counts.dropped_shutdown,
+            "error": self._counts.dropped_error,
+        }
+
     def _dropped_total(self) -> int:
-        queue = self.queue.stats()
-        return queue.dropped_full + self._counts.dropped_shutdown
+        """Records offered but not applied; 0 while the totals are exact."""
+        drops = self._drop_counts(self.queue.stats())
+        return drops["queue_full"] + drops["shutdown"] + drops["error"]
 
     def _health_age(self) -> float | None:
         last = self._counts.last_health_at
@@ -556,7 +565,7 @@ class _OwnMetrics:
                 "Records these metrics never saw, by why. While all are 0, the "
                 "totals are exact.",
                 labels=("reason",),
-                enums={"reason": ("queue_full", "closed", "shutdown")},
+                enums={"reason": DROP_REASONS},
             )
         )
         self.overflow = registry.add(

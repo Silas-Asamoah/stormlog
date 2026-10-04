@@ -97,7 +97,12 @@ def test_close_applies_what_was_queued_then_freezes(tmp_path: Path) -> None:
     pipeline.close(5.0)
     summary = pipeline.summary()["records"]
     assert summary["applied"] == 50 and summary["exact"]
-    assert summary["dropped"] == {"queue_full": 0, "closed": 0, "shutdown": 0}
+    assert summary["dropped"] == {
+        "queue_full": 0,
+        "closed": 0,
+        "shutdown": 0,
+        "error": 0,
+    }
     pipeline.observe(_request())  # after close: not taken, and harmless
     assert pipeline.summary()["records"]["offered"] == 50
     text = (tmp_path / "stormlog-default.prom").read_text()
@@ -178,6 +183,37 @@ def test_records_a_paused_worker_never_applied_are_dropped_at_shutdown(
     assert (
         frozen.value("stormlog_metrics_records_dropped_total", reason="shutdown") == 100
     )
+
+
+def test_a_record_that_fails_to_apply_is_dropped_as_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline = ExportPipeline(
+        ExportConfig(prometheus_textfile_dir=tmp_path, prometheus_slot="t"), LABELS
+    )
+    calls: list[int] = []
+    real_apply = pipeline.metrics.apply
+
+    def failing_second(envelope: Any) -> None:
+        calls.append(1)
+        real_apply(envelope)
+        if len(calls) == 2:
+            raise RuntimeError("a mapping bug")
+
+    monkeypatch.setattr(pipeline.metrics, "apply", failing_second)
+    pipeline.start(started_at=1_700_000_000.0)
+    for _ in range(3):
+        pipeline.observe(_request())
+    pipeline.close(2.0)
+    records = pipeline.summary()["records"]
+    assert records["applied"] == 2
+    assert records["dropped"]["error"] == 1 and records["dropped"]["shutdown"] == 0
+    assert records["offered"] == records["applied"] + sum(records["dropped"].values())
+    assert records["exact"] is False
+    # The failed record was undone whole: two requests counted, not three.
+    text = (tmp_path / "stormlog-t.prom").read_text()
+    assert sum(check_exposition(text).matching("stormlog_infer_requests_total")) == 2
+    pipeline.stop_serving()
 
 
 def test_a_full_queue_drops_counts_and_degrades_health(tmp_path: Path) -> None:
