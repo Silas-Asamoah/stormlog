@@ -382,6 +382,38 @@ def test_queue_episodes_recover_end_to_end(tmp_path: Path) -> None:
         assert twin_checks == {"waits_within_baseline": False}, twin.validity
 
 
+def test_a_baseline_too_thin_to_recover_is_named_not_a_bare_timeout(
+    tmp_path: Path,
+) -> None:
+    # fable-design's A2 delta 2, N0: a run whose baseline was too thin for a
+    # queue rule timed out with only "recovery_timeout" in its truth. Here
+    # /metrics fails, so the baseline has no waiting count: T1 can never
+    # recover, its record says which series was too thin, and the N it
+    # skips says baseline_too_thin.
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    record["timeline"].update(baseline=7, recovery_timeout=4)
+    record["thresholds"]["hold"] = 6
+    record["episodes"] = [
+        {"type": "T1", "dose": {"rate_per_second": 2, "input_tokens": 128,
+                                "output_tokens": 16}},
+        {"type": "N"},
+    ]  # fmt: skip
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps(record))
+    arguments = ["--step-seconds", "0.002", "--hook-dir", str(tmp_path / "hook")]
+    with FakeEngineProcess(arguments) as server:
+        controls = json.dumps({"metrics_mode": "fail"}).encode()
+        assert post(f"{server.base_url}/_fault/controls", controls)[0] == 200
+        _inject(server, tmp_path, plan)
+    run = tmp_path / "runs" / "q221-00000000000000bb"
+    assert verify(run) == []
+    twin, skipped = load_injections(run / "truth" / "injections.jsonl")
+    assert twin.injected["recovery_blocked"] == [
+        "baseline_too_thin: 0 waiting counts of the 5 a hold needs"
+    ]
+    assert skipped.injected["skipped"] == "baseline_too_thin"
+
+
 def _inject(server: FakeEngineProcess, tmp_path: Path, plan: Path, *extra: str) -> int:
     return main(
         [
