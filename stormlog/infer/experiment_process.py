@@ -37,11 +37,9 @@ from .server_process import (
     HELPER_ROLES,
     PROC,
     SERVER_ROLES,
-    boot_time_s,
     group_members,
     process_tree,
     read_process,
-    start_ns,
     still_running,
 )
 
@@ -49,11 +47,10 @@ KILL_WAIT_SECONDS = 10.0
 # Inherited by everything a launch starts; a fresh value per launch.
 MARK_VARIABLE = "STORMLOG_RUN_MARK"
 POLL_SECONDS = 0.1
-# A process started this long before a launch is not the launch's; the slack
-# covers /proc's boot time, which is in whole seconds.
-START_SLACK_NS = 2_000_000_000
-# What launchd starts of its own on macOS: no launch's escapee runs these.
-MACOS_SYSTEM_PREFIXES = ("/System/", "/usr/libexec/", "/usr/sbin/")
+# A process started this long before a launch is not the launch's. Start
+# times are compared in the processes' own clock (ticks since boot, or
+# psutil's creation time), never against the wall clock.
+START_SLACK_SECONDS = 2.0
 EXPECTED_ROLES = frozenset(SERVER_ROLES) | frozenset(HELPER_ROLES)
 
 
@@ -72,6 +69,8 @@ class Launched:
     ended_at_ns: int | None = None
     exit_code: int | None = None
     stopped_by: str | None = None
+    # Its PID and start time, read as it started (``identify``).
+    identity: dict[str, Any] = field(default_factory=dict)
     _log: IO[bytes] | None = field(default=None, repr=False)
 
     @property
@@ -155,6 +154,7 @@ def launch(
         affinity=cpu_affinity,
         _log=log,
     )
+    launched.identity = identify(process.pid)
     if cpus:
         launched.affinity_applied = affinity_matches(process.pid, cpus)
     return launched
@@ -226,8 +226,9 @@ class Cleanup:
     # mark to search for. The search is complete only when it read them all.
     unreadable: int | None = None
     # Processes that may be the launch's whose environment was unreadable or
-    # empty: nothing shows them unmarked, so the cleanup is not verified.
-    blind: tuple[int, ...] = ()
+    # held no variable: nothing shows them unmarked, so the cleanup is not
+    # verified. Each by PID and start time, so a resume can tell it still runs.
+    blind: tuple[dict[str, Any], ...] = ()
 
     def to_record(self) -> dict[str, Any]:
         search = None
@@ -253,17 +254,18 @@ def verify_cleanup(
     wait_s: float = KILL_WAIT_SECONDS,
     proc: Path = PROC,
     mark: str | None = None,
-    since_ns: int | None = None,
+    since: Mapping[str, Any] | None = None,
 ) -> Cleanup:
     """Wait until nothing of a group, its session or remembered tree runs.
 
     ``mark`` is the launch's environment mark: a process that carries it
     is the launch's, wherever it went. Survivors are killed by PID once;
     whatever outlives that and ``wait_s`` is listed, and the cleanup is not
-    verified. A process whose environment cannot be read, or was emptied,
-    cannot be shown unmarked: with ``since_ns``, the launch's start, one
-    that may be the launch's (``_may_be_launched``) keeps the cleanup from
-    verifying, and is never killed, since it may be another's.
+    verified. A process whose environment cannot be read, or holds no
+    variable, cannot be shown unmarked: with ``since``, the launch's
+    ``identify`` record, one that may be the launch's (``_may_be_launched``)
+    keeps the cleanup from verifying, and is never killed, since it may be
+    another's.
     """
     keys = list(remembered)
     method = "proc" if _linux() else "psutil"
@@ -272,7 +274,7 @@ def verify_cleanup(
     while True:
         search = _marked(mark, proc, method)
         survivors = _survivors(pgid, keys, proc, method) | search.found
-        blind = _blind(search.unclear, since_ns, proc, method)
+        blind = _blind(search.unclear, since, proc, method)
         if not survivors and not blind:
             return Cleanup(True, method, killed=killed, unreadable=search.unreadable)
         if survivors and not killed:
@@ -354,7 +356,8 @@ def _proc_marked(needle: bytes, proc: Path) -> _Search:
             continue
         except OSError:
             continue  # gone
-        if not environ:
+        if not any(b"=" in entry for entry in environ.split(b"\0")):
+            # Emptied, or overwritten in place by a process title.
             search = _unclear(search, pid, unreadable=False)
         elif (b"\0" + environ).find(b"\0" + needle) >= 0 and _alive(pid):
             search.found.add(pid)
@@ -389,44 +392,58 @@ def _unclear(search: _Search, pid: int, *, unreadable: bool) -> _Search:
 
 @dataclass(frozen=True)
 class _Process:
-    """What decides whether a process may be a launch's."""
+    """What decides whether a process may be a launch's: its start, in the
+    processes' own clock, its parent and its real user."""
 
-    start_ns: int | None
+    start: float | None
     ppid: int | None
     uid: int | None
-    exe: str | None
 
 
 def _blind(
-    unclear: set[int], since_ns: int | None, proc: Path, method: str
-) -> tuple[int, ...]:
-    if since_ns is None:
+    unclear: set[int], since: Mapping[str, Any] | None, proc: Path, method: str
+) -> tuple[dict[str, Any], ...]:
+    if since is None:
         return ()
-    found = (pid for pid in unclear if _may_be_launched(pid, since_ns, proc, method))
-    return tuple(sorted(found))
+    found = sorted(pid for pid in unclear if _may_be_launched(pid, since, proc, method))
+    return tuple(identify(pid, proc=proc) for pid in found)
 
 
-def _may_be_launched(pid: int, since_ns: int, proc: Path, method: str) -> bool:
+def _may_be_launched(
+    pid: int, since: Mapping[str, Any], proc: Path, method: str
+) -> bool:
     """Whether a live process may be the launch's, by what is readable
     without its environment.
 
-    It is not when another user runs it, when it started before the launch,
-    when its parent is neither the runner nor ``init`` (an escapee whose
-    parent died is adopted by ``init``), or, on macOS, when it is a system
-    executable launchd started. An orphan adopted by a subreaper other than
-    ``init`` is missed.
+    It is not when another user runs it (which includes anything run under
+    sudo), when it started more than ``START_SLACK_SECONDS`` before the
+    launch, or when its parent is neither the runner nor ``init``, which
+    adopts an escapee whose parent died. An orphan adopted by a subreaper
+    other than ``init`` is missed.
     """
     seen = _view(pid, proc, method)
     if seen is None:
         return False
     if seen.uid is not None and seen.uid != os.getuid():
         return False
-    if seen.start_ns is not None and seen.start_ns < since_ns - START_SLACK_NS:
+    if _older(seen.start, since, method):
         return False
-    if seen.ppid not in (1, os.getpid()):
+    return seen.ppid in (1, os.getpid())
+
+
+def _older(start: float | None, since: Mapping[str, Any], method: str) -> bool:
+    """Whether a start, in the processes' own clock, is before the launch's."""
+    if method == "proc":
+        launch, slack = since.get("start_ticks"), START_SLACK_SECONDS * _clock_ticks()
+    else:
+        launch, slack = since.get("create_time"), START_SLACK_SECONDS
+    if start is None or not isinstance(launch, (int, float)):
         return False
-    system = (seen.exe or "").startswith(MACOS_SYSTEM_PREFIXES)
-    return not (method == "psutil" and seen.ppid == 1 and system)
+    return start < launch - slack
+
+
+def _clock_ticks() -> int:
+    return int(os.sysconf("SC_CLK_TCK")) if hasattr(os, "sysconf") else 100
 
 
 def _view(pid: int, proc: Path, method: str) -> _Process | None:
@@ -434,25 +451,12 @@ def _view(pid: int, proc: Path, method: str) -> _Process | None:
         info = read_process(pid, proc)
         if info is None:
             return None
-        started = start_ns(info.start_ticks, boot_time_s(proc))
-        return _Process(started, info.ppid, _proc_uid(pid, proc), None)
+        return _Process(info.start_ticks, info.ppid, _proc_uid(pid, proc))
     try:
         process = psutil.Process(pid)
         with process.oneshot():
-            return _Process(
-                int(process.create_time() * 1e9),
-                process.ppid(),
-                process.uids().real,
-                _exe(process),
-            )
+            return _Process(process.create_time(), process.ppid(), process.uids().real)
     except psutil.Error:
-        return None
-
-
-def _exe(process: psutil.Process) -> str | None:
-    try:
-        return str(process.exe())
-    except (psutil.Error, OSError):
         return None
 
 
@@ -559,7 +563,11 @@ def run_step(
     Returns the launched process and whether it timed out.
     """
     launched = launch(
-        name, command, env=env, cpu_affinity=cpu_affinity, log_path=log_path
+        name,
+        command,
+        env=env,
+        cpu_affinity=cpu_affinity,
+        log_path=log_path,
     )
     try:
         launched.process.wait(timeout=timeout_s)

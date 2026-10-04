@@ -1006,7 +1006,7 @@ class _Run:
             self.server.pid,
             remembered,
             mark=self.server.mark,
-            since_ns=self.server.started_at_ns,
+            since=self.server.identity,
         )
         self.record.cleanup = cleanup.to_record()
         if not cleanup.verified:
@@ -1210,7 +1210,7 @@ class _Run:
                 self.record.outcome(f"treatment_failed:{name}:{code}")
             # Whatever it started must not run on into the next run.
             cleanup = verify_cleanup(
-                launched.pid, mark=launched.mark, since_ns=launched.started_at_ns
+                launched.pid, mark=launched.mark, since=launched.identity
             )
             if not cleanup.verified:
                 self.record.protocol(
@@ -1383,7 +1383,7 @@ def _stop_prelude_server(
     remembered = remembered_tree(server.pid)
     stop(server, signals=(2, 15), timeout_s=plan.server.stop_timeout_s)
     cleanup = verify_cleanup(
-        server.pid, remembered, mark=server.mark, since_ns=server.started_at_ns
+        server.pid, remembered, mark=server.mark, since=server.identity
     )
     (directory / "cleanup.json").write_text(
         json.dumps(cleanup.to_record(), indent=2) + "\n"
