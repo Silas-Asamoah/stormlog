@@ -117,6 +117,14 @@ failures**: faults of the measurement that exclude it, with a reason.
 Failed requests, timeouts, or a candidate that served nothing are outcomes,
 never protocol failures: they are compared, not excluded.
 
+The kept runs must have measured one server. Every run is checked against
+its arm's first run, and every run against the other arm's first, because
+comparability is not transitive once a value is unknown. A difference that
+blocks is invalid input (exit 5). If any pair is `unverified`, the
+comparison is, with every field that could not be shown equal, and
+`diagnostics.unverified_pairs` names each pair; every gate is then
+`not_evaluable: unverified`.
+
 ## Designs
 
 When runs carry block labels, the design is **paired**: each block holds one

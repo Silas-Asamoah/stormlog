@@ -238,6 +238,36 @@ def test_unverified_runs_cannot_pass_a_gate() -> None:
     assert explore.exit_code == 0
 
 
+@pytest.mark.parametrize("arm", ["baseline", "candidate"])
+def test_one_run_that_cannot_be_verified_leaves_the_arms_unverified(arm: str) -> None:
+    # Comparability is not transitive once a value is unknown: every run is
+    # checked, not only each arm's first.
+    baseline, candidate = _arms(SAME)
+    unknown = _fields()
+    del unknown["model.weights_digest"], unknown["gpu.name"]
+    runs = baseline if arm == "baseline" else candidate
+    runs[3] = _run(arm, 3, 100.0, fields=unknown, started=runs[3].started_at_ns or 0)
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    assert comparison.comparability.status == "unverified"
+    assert {item.name for item in comparison.comparability.unverified} >= {
+        "gpu.name",
+        "model.weights_digest",
+    }
+    assert any(
+        runs[3].name in pair for pair in comparison.diagnostics["unverified_pairs"]
+    )
+    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None and gate.reason == "unverified"
+
+
+def test_a_candidate_arm_mixing_two_configurations_is_refused() -> None:
+    baseline, candidate = _arms(SAME)
+    other = _fields(**{"vllm_config/scheduler_config/max_num_seqs": 64})
+    candidate[2] = _run("candidate", 2, 100.0, fields=other)
+    with pytest.raises(InferInputError, match="candidate runs are incompatible"):
+        compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+
+
 def _observer(requested: bool, healthy: bool | None = True) -> dict[str, Any]:
     return {
         "requested": requested,
