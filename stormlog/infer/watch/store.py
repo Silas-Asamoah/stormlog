@@ -374,6 +374,10 @@ class GenerationWriter:
         shutil.rmtree(self.directory, ignore_errors=True)
         self.allowance.release(keep=0)
         self._unpin()
+        if current is None:
+            # A new bundle's first generation: nothing in it was published,
+            # so the bundle goes too, and its id can be written again.
+            shutil.rmtree(self.directory.parent, ignore_errors=True)
 
     def _count_file(self) -> None:
         if len(self._written) >= MAX_GENERATION_FILES:
@@ -533,6 +537,21 @@ class IncidentStore:
                 continue
             removable.append((path, manifest.incident_id, freed))
         return removable
+
+    def make_room_on_disk(self, protected: frozenset[str] = frozenset()) -> bool:
+        """Remove the oldest sealed bundle not ``protected``, for a write the
+        filesystem refused (ENOSPC) though the budget allowed it: the disk
+        holds less than ``max_total_bytes``. False when none could go."""
+        for path, manifest in self.bundles():  # oldest seal first
+            if manifest.incident_id in protected:
+                continue
+            size = _payload_bytes(path, seen=set())
+            if self._try_delete(path, path):
+                self._room_pruned.append(
+                    PrunedBundle(manifest.incident_id, "disk_full", size)
+                )
+                return True
+        return False
 
     def take_pruned(self) -> list[PrunedBundle]:
         """Bundles removed to make room since the last call, for the ledger."""

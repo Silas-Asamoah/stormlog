@@ -254,7 +254,7 @@ def records() -> list[dict[str, Any]]:
     pruned = _envelope(INCIDENT_PRUNED, 3600)
     pruned.update(incident_id=OLDEST, reason="max_age_hours", bytes=41_783)
     return [
-        _session("started", 0, recovery=asdict(RecoveryReport())),
+        _session("started", 0, recovery=asdict(RecoveryReport()), warnings=[]),
         _trigger_state(40, "pending", "pending", None),
         _trigger_state(100, "fired", "firing", FIRST),
         _event(100, FIRST, "opened", "trigger_0"),

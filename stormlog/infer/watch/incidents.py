@@ -26,6 +26,7 @@ never crowds out an incident that counts toward the exit code.
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import socket
 import time
@@ -371,14 +372,38 @@ class IncidentManager:
         sealed_at: int,
         protected: frozenset[str],
     ) -> tuple[str | None, str | None]:
-        """The bundle's path, or None and why it could not be written."""
+        """The bundle's path, or None and why it could not be written.
+
+        A disk that fills before the store's budget does (ENOSPC) gets room
+        made on it: the oldest sealed bundle goes, as for the budget, and
+        the write is tried again, so the newest incidents are the ones kept.
+        """
+        while True:
+            path, error, disk_full = self._try_write(
+                incident_id, lines, status, sealed_at, protected
+            )
+            if not disk_full or not self.store.make_room_on_disk(
+                protected | {incident_id}
+            ):
+                return path, error
+
+    def _try_write(
+        self,
+        incident_id: str,
+        lines: _Lines,
+        status: str,
+        sealed_at: int,
+        protected: frozenset[str],
+    ) -> tuple[str | None, str | None, bool]:
+        """One attempt: the path, or None, why, and whether the disk was full."""
         reserve = _RESERVE_BASE + lines.nbytes
         try:
             writer = self.store.new_bundle(incident_id, reserve, protected=protected)
         except OSError as exc:  # creating the bundle: ENOSPC, EACCES
-            return None, _error_text(exc)
+            return None, _error_text(exc), exc.errno == errno.ENOSPC
         if writer is None:
-            return None, f"the store cannot hold {reserve} bytes within its limits"
+            reason = f"the store cannot hold {reserve} bytes within its limits"
+            return None, reason, False
         try:
             with writer.file("incident.jsonl") as out:
                 for line in lines:
@@ -391,8 +416,9 @@ class IncidentManager:
         except (BudgetExceeded, OSError) as exc:
             with contextlib.suppress(OSError):
                 writer.abandon()
-            return None, _error_text(exc)
-        return f"incidents/{incident_id}", None
+            disk_full = isinstance(exc, OSError) and exc.errno == errno.ENOSPC
+            return None, _error_text(exc), disk_full
+        return f"incidents/{incident_id}", None, False
 
     def _finish(
         self,
