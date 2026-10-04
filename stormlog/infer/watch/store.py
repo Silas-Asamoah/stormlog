@@ -593,13 +593,13 @@ class IncidentStore:
         """
         clock = time.time_ns() if now_ns is None else now_ns
         cutoff = clock - int(self.limits.max_age_hours * 3600 * 1e9)
+        pruned = self._prune_unreadable(cutoff, protected)
         candidates = [
             (path, manifest)
             for path, manifest in self.bundles()
             if manifest.incident_id not in protected
         ]
         count = len(self.bundles())
-        pruned: list[PrunedBundle] = []
         for path, manifest in candidates:
             reason = self._prune_reason(manifest, count, cutoff)
             if reason is None:
@@ -608,6 +608,23 @@ class IncidentStore:
             count -= 1  # deferred or not, it is on its way out
             if self._try_delete(path, path):
                 pruned.append(PrunedBundle(manifest.incident_id, reason, size))
+        return pruned
+
+    def _prune_unreadable(
+        self, cutoff_ns: int, protected: frozenset[str]
+    ) -> list[PrunedBundle]:
+        """Bundles whose manifest exists but cannot be read (corrupt, or a
+        future schema) are charged; they go by age, from their directory's
+        modification time, so they never hold their bytes for good."""
+        pruned = []
+        for path in self._bundle_dirs():
+            if path.name in protected or not _unreadable(path):
+                continue
+            if path.stat().st_mtime_ns >= cutoff_ns:
+                continue
+            size = _payload_bytes(path, seen=set())
+            if self._try_delete(path, path):
+                pruned.append(PrunedBundle(path.name, "max_age_hours", size))
         return pruned
 
     def _prune_reason(
@@ -834,6 +851,17 @@ def _payload_bytes(bundle: Path, *, seen: set[tuple[int, int]]) -> int:
     generation, and ``max_incidents`` how many bundles exist.
     """
     return bytes_on_disk(_generation_dirs(bundle), seen=seen)
+
+
+def _unreadable(bundle: Path) -> bool:
+    """A manifest is there, but cannot be read as one this store knows."""
+    try:
+        _read_manifest(bundle)
+    except FileNotFoundError:
+        return False  # unpublished: being written, or for recover()
+    except (OSError, ValueError):
+        return True
+    return False
 
 
 def _freed_by(path: Path, bundle: Path) -> int:

@@ -713,6 +713,27 @@ def test_bytes_a_deferred_deletion_will_free_count_as_freed(tmp_path: Path) -> N
     assert [m.incident_id for _p, m in store.bundles()] == [newer]
 
 
+def test_an_unreadable_bundle_is_pruned_by_age(tmp_path: Path) -> None:
+    """A bundle whose manifest cannot be read (corrupt, or a future schema)
+    was charged forever and never pruned."""
+    store = IncidentStore(tmp_path, _limits(max_age_hours=1.0))
+    now = time.time_ns()
+    old = _gen0(store, b"o" * 100, now_ns=now)
+    young = _gen0(store, b"y" * 100, now_ns=now)
+    for incident_id in (old, young):
+        manifest = tmp_path / "incidents" / incident_id / "manifest.json"
+        payload = json.loads(manifest.read_text())
+        payload["schema_version"] = 99
+        manifest.write_text(json.dumps(payload))
+    two_hours_ago = time.time() - 2 * 3600
+    os.utime(tmp_path / "incidents" / old, (two_hours_ago, two_hours_ago))
+
+    pruned = store.prune(now_ns=now)
+    assert [(p.incident_id, p.reason) for p in pruned] == [(old, "max_age_hours")]
+    assert (tmp_path / "incidents" / young).exists()
+    assert store.budget.used_bytes == store._scan_bytes() == 100
+
+
 def test_a_bundle_being_read_is_pruned_once_the_reader_leaves(
     tmp_path: Path,
 ) -> None:
