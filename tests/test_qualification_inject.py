@@ -4,6 +4,7 @@ process: priming, baseline, three episodes with recovery, and the truth."""
 from __future__ import annotations
 
 import json
+import re
 import signal
 import subprocess
 import sys
@@ -335,3 +336,16 @@ def test_the_reference_poller_survives_a_failed_poll_and_stops_cleanly(
     assert channel.polls == polls
     poller.join(timeout=5)
     assert not poller.is_alive()
+
+
+def test_neighbor_names_say_nothing_about_the_episode_order() -> None:
+    # The hook log a diagnosed configuration may import carries each
+    # neighbor's request IDs; they mustn't give away which episode ran when
+    # (C.4's blinding).
+    from examples.qualification.inject import neighbor_name
+
+    names = [neighbor_name("q221-0123456789abcdef", index) for index in range(3)]
+    assert len(set(names)) == 3
+    assert all(re.fullmatch(r"[0-9a-f]{12}", name) for name in names)
+    assert names == [neighbor_name("q221-0123456789abcdef", i) for i in range(3)]
+    assert neighbor_name("q221-fedcba9876543210", 0) != names[0]

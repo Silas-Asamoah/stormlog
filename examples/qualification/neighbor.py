@@ -109,7 +109,7 @@ class Neighbor:
 
     @property
     def run_id(self) -> str:
-        return f"neighbor-{self.name}"
+        return f"nb-{self.name}"
 
     @property
     def external_prefix(self) -> str:
