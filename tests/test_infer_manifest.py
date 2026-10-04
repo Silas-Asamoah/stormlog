@@ -22,8 +22,10 @@ from stormlog.infer.describe_server import (
 )
 from stormlog.infer.errors import InferInputError
 from stormlog.infer.manifest import (
+    after_refusals,
     attach_manifest,
     compare_descriptions,
+    description_record,
     load_declarations,
 )
 from tests.infer_workload_helpers import run_profile_with_fake_client
@@ -186,6 +188,89 @@ def test_attaching_needs_a_before_description_and_attaches_once(
         attach_manifest(artifact, path)
 
 
+@pytest.mark.parametrize(
+    "missing",
+    [{"log": None}, {"runtime": None}, {"gpus__devices__0__settings": {}}],
+    ids=["no_server_log", "no_python", "no_gpu_settings"],
+)
+def test_an_after_with_less_evidence_is_unverified_not_a_change(
+    missing: dict[str, Any],
+) -> None:
+    # The before had the server log, Python and NVML; the after did not.
+    before = _description(
+        log={"attention_backend": "FLASH_ATTN", "kv_cache_size_tokens": 890960}
+    )
+    after = _later(before, **missing)
+    compared = compare_descriptions(before, after)
+    assert compared["identity_changes"] == []
+    assert compared["identity_unverified"]
+
+
+def test_less_evidence_after_the_run_is_no_protocol_failure(tmp_path: Path) -> None:
+    before = _description(
+        log={"attention_backend": "FLASH_ATTN", "kv_cache_size_tokens": 890960}
+    )
+    artifact = _profile(tmp_path, server_description=before)
+    attach_manifest(artifact, _write(tmp_path / "after.json", _later(before, log=None)))
+    manifest = analyze_inference_events(artifact)["manifest"]
+    assert manifest["protocol_failure"] is None
+    assert [item["field"] for item in manifest["identity_unverified"]] == [
+        "log.attention_backend",
+        "log.kv_cache_size_tokens",
+    ]
+
+
+def test_the_before_description_cannot_be_attached_as_the_after(
+    tmp_path: Path,
+) -> None:
+    # Without a measured window (an interrupted run, or a server clock ahead
+    # of the client's) only the document's own identity gives it away.
+    before = _description()
+    artifact = _profile(tmp_path, server_description=before)
+    lines = artifact.read_text().splitlines()
+    kept = [line for line in lines if '"infer.phase_window"' not in line]
+    artifact.write_text("\n".join(kept) + "\n")
+    with pytest.raises(InferInputError, match="it is the before description"):
+        attach_manifest(artifact, _write(tmp_path / "after.json", before))
+
+
+SECOND = 1_000_000_000
+
+
+def _skewed_run(description: dict[str, Any]) -> list[dict[str, Any]]:
+    """A run whose measured phase took 10 s, by a client clock far behind."""
+    return [
+        description_record(description, role="before", session_id="s", run_id="r"),
+        {
+            "event_type": "infer.phase_window",
+            "phase": "measured",
+            "started_at_ns": 5 * SECOND,
+            "drained_at_ns": 15 * SECOND,
+        },
+    ]
+
+
+def test_an_after_must_be_taken_after_the_before() -> None:
+    before = _description(observed_at_ns=1_000 * SECOND)
+    earlier = _later(before, observed_at_ns=999 * SECOND)
+    refusals = after_refusals(_skewed_run(before), earlier, run_id="r")
+    assert refusals == ["it was taken before the before description"]
+
+
+def test_an_after_closer_to_the_before_than_the_run_lasted_is_refused() -> None:
+    # The server's clock is far ahead, so by the client's clock any after is
+    # late enough. Each clock's own interval still shows the run did not fit.
+    before = _description(observed_at_ns=1_000 * SECOND)
+    soon = _later(before, observed_at_ns=1_002 * SECOND)
+    refusals = after_refusals(_skewed_run(before), soon, run_id="r")
+    assert refusals == [
+        "it was taken 2.0 s after the before description, but the run's "
+        "measured phases took 10.0 s"
+    ]
+    late = _later(before, observed_at_ns=1_011 * SECOND)
+    assert after_refusals(_skewed_run(before), late, run_id="r") == []
+
+
 def test_settings_that_drift_are_not_identity() -> None:
     before = _description()
     after = _later(
@@ -234,6 +319,58 @@ def test_the_cli_attaches_or_refuses_with_exit_5(tmp_path: Path) -> None:
     fresh = _write(tmp_path / "after.json", _later(before))
     code, _err = _cli("attach-manifest", str(artifact), str(fresh), "--role", "after")
     assert code == ExitCode.OK
+
+
+def test_profile_refuses_a_description_of_another_run(tmp_path: Path) -> None:
+    other = _write(tmp_path / "before.json", _description(run_id="R1"))
+    code, err = _cli(
+        "profile",
+        "--endpoint",
+        "http://127.0.0.1:1/v1/chat/completions",
+        "--model",
+        "m",
+        "--system-sampler",
+        "none",
+        "--tokenizer",
+        "none",
+        "--server-probe",
+        "none",
+        "--run-id",
+        "R2",
+        "--describe-server",
+        str(other),
+        "--output",
+        str(tmp_path / "infer.jsonl"),
+    )
+    assert code == ExitCode.INVALID_INPUT
+    assert "it describes run R1, not R2" in err
+    assert not (tmp_path / "infer.jsonl").exists()
+
+
+def test_a_description_that_does_not_match_the_probed_server_is_a_protocol_failure(
+    tmp_path: Path,
+) -> None:
+    before = _description(runtime={"python": "3.12.3", "packages": {"vllm": "0.29.0"}})
+    artifact = _profile(tmp_path, server_description=before)
+    probe = {
+        "event_type": "infer.server_probe",
+        "phase": "before",
+        "answers": {
+            "/version": {"status": "ok", "body": {"version": "0.30.0"}},
+            "/v1/models": {
+                "status": "ok",
+                "body": {"data": [{"id": "other-model", "root": "Other/Model"}]},
+            },
+        },
+    }
+    with artifact.open("a") as handle:
+        handle.write(json.dumps(probe) + "\n")
+    manifest = analyze_inference_events(artifact)["manifest"]
+    assert manifest["protocol_failure"] == "description_mismatch"
+    assert {item["field"] for item in manifest["description_mismatches"]} == {
+        "model",
+        "engine.version",
+    }
 
 
 def test_profile_refuses_a_description_it_cannot_read_before_sending(

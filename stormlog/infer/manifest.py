@@ -8,13 +8,22 @@ An artifact carries ``infer.manifest`` records, appended and never changed:
 - ``declared``: what the operator states and nothing observed, given to
   ``infer profile --declare``.
 
-An ``after`` description must be of the same server lifetime as the
-``before`` one (same host boot, same API server PID and start), of the same
-run when it names one, and taken once the last measured phase had ended;
-otherwise it is refused. Between the two, a setting that identifies the
-server (GPU settings, driver, model files, launch arguments, packages,
-start-up choices) must not change; one that drifts (SM clock, temperature,
-clock event reasons) is reported as drift.
+A ``before`` description must not name another run. An ``after`` one must
+be of the same server lifetime as the ``before`` one (same host boot, same
+API server PID and start), of the same run when it names one, another
+document than any already recorded, and taken once the last measured phase
+had ended: later than the ``before`` one by at least as long as the
+measured phases took, each interval on its own clock. Otherwise it is
+refused. Between the two, a setting that identifies the server (GPU
+settings, driver, model files, launch arguments, packages, start-up
+choices) must not change; one that drifts (SM clock, temperature, clock
+event reasons) is reported as drift. A setting only one of them could read
+is unverified, not a change.
+
+The ``before`` description is also checked against what the server told
+the probe at the start of the run: the model it serves, its vLLM version
+and the GPU driver. A mismatch means the description is of another server,
+a protocol failure.
 """
 
 from __future__ import annotations
@@ -35,8 +44,11 @@ ROLES = (BEFORE, AFTER, DECLARED)
 DECLARED_FORMAT = "stormlog.infer.declared"
 DECLARED_VERSION = 1
 IDENTITY_CHANGED = "identity_changed"
+DESCRIPTION_MISMATCH = "description_mismatch"
 
 _MEASURED = "measured"
+# Clocks tick at slightly different rates; this much shortfall is allowed.
+_ELAPSED_TOLERANCE_NS = 1_000_000_000
 
 
 def description_record(
@@ -104,6 +116,14 @@ def manifests(
     return found
 
 
+def before_refusals(description: Mapping[str, Any], *, run_id: str) -> list[str]:
+    """Why a description cannot be a run's ``before`` one; empty when it can."""
+    named_run = description.get("run_id")
+    if named_run is not None and named_run != run_id:
+        return [f"it describes run {named_run}, not {run_id}"]
+    return []
+
+
 def after_refusals(
     records: Sequence[Mapping[str, Any]], description: Mapping[str, Any], *, run_id: str
 ) -> list[str]:
@@ -113,18 +133,85 @@ def after_refusals(
         return [
             "the artifact has no before description; profile with --describe-server"
         ]
-    refusals = _lifetime_refusals(
-        description, by_role[BEFORE][-1]["description"], run_id
-    )
-    ended = last_measured_end_ns(records)
-    observed = description.get("observed_at_ns")
-    if ended is not None and (not isinstance(observed, int) or observed < ended):
-        refusals.append("it was taken before the last measured phase ended")
-    if any(
-        record.get("sha256") == description.get("sha256") for record in by_role[AFTER]
-    ):
-        refusals.append("it is already attached")
+    before = by_role[BEFORE][-1]["description"]
+    refusals = _lifetime_refusals(description, before, run_id)
+    refusals.extend(_document_refusals(description, by_role))
+    refusals.extend(_timing_refusals(records, description, before))
     return refusals
+
+
+def _document_refusals(
+    description: Mapping[str, Any], by_role: Mapping[str, list[Mapping[str, Any]]]
+) -> list[str]:
+    sha = description.get("sha256")
+    if any(record.get("sha256") == sha for record in by_role[BEFORE]):
+        return ["it is the before description"]
+    if any(record.get("sha256") == sha for record in by_role[AFTER]):
+        return ["it is already attached"]
+    return []
+
+
+def _timing_refusals(
+    records: Sequence[Mapping[str, Any]],
+    description: Mapping[str, Any],
+    before: Mapping[str, Any],
+) -> list[str]:
+    """Taken after the run: by the client's end, and by each clock's interval.
+
+    The second check needs no agreement between the two clocks: the server's
+    interval between the descriptions must cover the client's measured run.
+    """
+    observed = description.get("observed_at_ns")
+    if not isinstance(observed, int):
+        return ["it has no observation time"]
+    ended = last_measured_end_ns(records)
+    if ended is not None and observed < ended:
+        return ["it was taken before the last measured phase ended"]
+    began = before.get("observed_at_ns")
+    if not isinstance(began, int):
+        return []
+    if observed <= began:
+        return ["it was taken before the before description"]
+    span = run_span_ns(records)
+    if span is not None and observed - began < span - _ELAPSED_TOLERANCE_NS:
+        return [
+            f"it was taken {(observed - began) / 1e9:.1f} s after the before "
+            f"description, but the run's measured phases took {span / 1e9:.1f} s"
+        ]
+    return []
+
+
+def run_span_ns(records: Iterable[Mapping[str, Any]]) -> int | None:
+    """How long the measured run took, by the client's clock.
+
+    The measured phases' start to their last drain end; without phase
+    windows (an interrupted run), the measured requests' first start to
+    their last end. Requests lie inside their windows, so both count.
+    """
+    bounds = [
+        found
+        for found in (_bounds(r) for r in records if r.get("phase") == _MEASURED)
+        if found is not None
+    ]
+    if not bounds:
+        return None
+    return max(end for _start, end in bounds) - min(start for start, _end in bounds)
+
+
+_SPAN_FIELDS = {
+    "infer.phase_window": ("started_at_ns", "drained_at_ns"),
+    "infer.request": ("started_at_ns", "ended_at_ns"),
+}
+
+
+def _bounds(record: Mapping[str, Any]) -> tuple[int, int] | None:
+    fields = _SPAN_FIELDS.get(str(record.get("event_type")))
+    if fields is None:
+        return None
+    start, end = record.get(fields[0]), record.get(fields[1])
+    if isinstance(start, int) and isinstance(end, int):
+        return start, end
+    return None
 
 
 def _lifetime_refusals(
@@ -188,14 +275,104 @@ def attach_manifest(artifact: Path, description_path: Path) -> dict[str, Any]:
 def compare_descriptions(
     before: Mapping[str, Any], after: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """What identifies the server and changed, and what drifted."""
+    """What identifies the server and changed, what only one side could read,
+    and what drifted.
+
+    A field one description could not read (taken without ``--server-log``,
+    ``--python``, or a GPU field NVML did not answer) is unverified: missing
+    evidence is no change.
+    """
     first, second = identity_fields(before), identity_fields(after)
-    changes = [
-        {"field": name, "before": first.get(name), "after": second.get(name)}
-        for name in sorted(set(first) | set(second))
-        if first.get(name) != second.get(name)
+    changes: list[dict[str, Any]] = []
+    unverified: list[dict[str, Any]] = []
+    for name in sorted(set(first) | set(second)):
+        a, b = first.get(name), second.get(name)
+        if a == b:
+            continue
+        item = {"field": name, "before": a, "after": b}
+        (changes if _read_value(a) and _read_value(b) else unverified).append(item)
+    return {
+        "identity_changes": changes,
+        "identity_unverified": unverified,
+        "drift": _drift(before, after),
+    }
+
+
+def _read_value(value: Any) -> bool:
+    return value is not None and not (
+        isinstance(value, Mapping) and "unavailable" in value
+    )
+
+
+def description_mismatches(
+    description: Mapping[str, Any], records: Iterable[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Where the before description disagrees with what the server told the probe.
+
+    The model it serves, its vLLM version and the GPU driver: a description
+    of another server, or a stale one, disagrees in at least one of them.
+    """
+    probe = next(
+        (
+            r
+            for r in records
+            if r.get("event_type") == "infer.server_probe" and r.get("phase") == BEFORE
+        ),
+        None,
+    )
+    if probe is None:
+        return []
+    answers = probe.get("answers") or {}
+    checks = [
+        ("model", _described_model(description), _served_models(answers)),
+        ("engine.version", _described_vllm(description), _probed_vllm(answers)),
+        ("gpu.driver_version", _described_driver(description), _probed_driver(answers)),
     ]
-    return {"identity_changes": changes, "drift": _drift(before, after)}
+    return [
+        {"field": name, "description": described, "server": sorted(served)}
+        for name, described, served in checks
+        if described is not None and served and described not in served
+    ]
+
+
+def _described_model(description: Mapping[str, Any]) -> Any:
+    return ((description.get("server") or {}).get("launch") or {}).get("model")
+
+
+def _described_vllm(description: Mapping[str, Any]) -> Any:
+    return ((description.get("runtime") or {}).get("packages") or {}).get("vllm")
+
+
+def _described_driver(description: Mapping[str, Any]) -> Any:
+    return (description.get("gpus") or {}).get("driver_version")
+
+
+def _body(answers: Mapping[str, Any], route: str) -> Mapping[str, Any]:
+    body = (answers.get(route) or {}).get("body")
+    return body if isinstance(body, Mapping) else {}
+
+
+def _served_models(answers: Mapping[str, Any]) -> set[str]:
+    served: set[str] = set()
+    for item in _body(answers, "/v1/models").get("data") or []:
+        if isinstance(item, Mapping):
+            served.update(str(item[key]) for key in ("id", "root") if item.get(key))
+    info = _body(answers, "/server_info?config_format=json")
+    model = ((info.get("vllm_config") or {}).get("model_config") or {}).get("model")
+    if model:
+        served.add(str(model))
+    return served
+
+
+def _probed_vllm(answers: Mapping[str, Any]) -> set[str]:
+    version = _body(answers, "/version").get("version")
+    return {str(version)} if version else set()
+
+
+def _probed_driver(answers: Mapping[str, Any]) -> set[str]:
+    info = _body(answers, "/server_info?config_format=json")
+    driver = (info.get("system_env") or {}).get("nvidia_driver_version")
+    return {str(driver)} if driver else set()
 
 
 def identity_fields(description: Mapping[str, Any]) -> dict[str, Any]:
@@ -235,13 +412,27 @@ def manifest_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any] | N
         for role in (BEFORE, AFTER)
     }
     summary[DECLARED] = by_role[DECLARED][-1]["fields"] if by_role[DECLARED] else None
-    if before is not None and after is not None:
-        compared = compare_descriptions(before["description"], after["description"])
-        summary.update(compared)
-        summary["protocol_failure"] = (
-            IDENTITY_CHANGED if compared["identity_changes"] else None
-        )
+    if before is not None:
+        summary.update(_checks(before["description"], after, records))
     return summary
+
+
+def _checks(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any] | None,
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """The before description against the probe, then against the after one."""
+    mismatches = description_mismatches(before, records)
+    checks: dict[str, Any] = {
+        "description_mismatches": mismatches,
+        "protocol_failure": DESCRIPTION_MISMATCH if mismatches else None,
+    }
+    if after is not None:
+        checks.update(compare_descriptions(before, after["description"]))
+        if checks["identity_changes"]:
+            checks["protocol_failure"] = IDENTITY_CHANGED
+    return checks
 
 
 def manifest_lines(summary: Any) -> list[str]:
@@ -251,11 +442,21 @@ def manifest_lines(summary: Any) -> list[str]:
     roles = [f"{role} {len(summary.get(role) or [])}" for role in (BEFORE, AFTER)]
     roles.append(f"declared {'yes' if summary.get(DECLARED) else 'no'}")
     lines = ["Server manifest: " + ", ".join(roles)]
-    changes = summary.get("identity_changes") or []
-    if changes:
-        names = ", ".join(str(change.get("field")) for change in changes)
-        lines.append(f"  identity changed during the run (protocol failure): {names}")
+    for key, heading in _FIELD_LISTS:
+        names = ", ".join(str(item.get("field")) for item in summary.get(key) or [])
+        if names:
+            lines.append(f"  {heading}: {names}")
     return lines + _drift_lines(summary.get("drift") or {})
+
+
+_FIELD_LISTS = (
+    ("identity_changes", "identity changed during the run (protocol failure)"),
+    (
+        "description_mismatches",
+        "the before description does not match the probed server " "(protocol failure)",
+    ),
+    ("identity_unverified", "read on one side only, unverified"),
+)
 
 
 def _drift_lines(drift: Mapping[str, Any]) -> list[str]:
@@ -324,13 +525,16 @@ __all__ = [
     "BEFORE",
     "DECLARED",
     "DECLARED_FORMAT",
+    "DESCRIPTION_MISMATCH",
     "IDENTITY_CHANGED",
     "MANIFEST_EVENT",
     "ROLES",
     "after_refusals",
     "attach_manifest",
+    "before_refusals",
     "compare_descriptions",
     "declared_record",
+    "description_mismatches",
     "description_record",
     "identity_fields",
     "last_measured_end_ns",
@@ -338,4 +542,5 @@ __all__ = [
     "manifest_lines",
     "manifest_summary",
     "manifests",
+    "run_span_ns",
 ]

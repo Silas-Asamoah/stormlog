@@ -77,15 +77,25 @@ stormlog infer describe-server --pid "$SERVER_PID" --run-id "$RUN_ID" --output a
 stormlog infer attach-manifest artifacts/infer.jsonl after.json
 ```
 
+`profile` refuses (exit `5`) a `before` description that names another
+run than its `--run-id`, and warns when it was taken more than an hour
+before the run started.
+
 `attach-manifest` refuses (exit `5`) an `after` description when:
 - the artifact has no `before` description;
 - it names another run;
 - it was taken on another host, or after a reboot;
 - its API server process is not the `before` one, by PID and start time:
   the server was restarted;
+- it is the `before` description itself, or is already attached;
 - it was taken before the last measured phase ended (the two hosts' clocks
   must agree, as with NTP);
-- it is already attached.
+- it was taken no later than the `before` one, or sooner after it than the
+  measured phases took. Each interval is read on its own clock, the
+  descriptions' on the server's and the phases' on the client's, so this
+  holds however far apart the clocks are; one second of shortfall is
+  allowed for clock rates. Without phase windows (an interrupted run), the
+  measured requests' first start to last end stands in for the phases.
 
 A declarations file is `stormlog.infer.declared` version 1:
 
@@ -95,8 +105,16 @@ A declarations file is `stormlog.infer.declared` version 1:
 ```
 
 The report's `manifest` block lists the `before` and `after` descriptions
-(digest, time, server process and GPUs) and the declared fields. With both
-descriptions, it compares them:
+(digest, time, server process and GPUs) and the declared fields.
+
+The `before` description is checked against what the server told the probe
+when the run began: the model it serves (`/v1/models` and `/server_info`),
+its vLLM version (`/version`) and the GPU driver (`/server_info`'s
+`system_env`). A disagreement is listed under `description_mismatches` and
+makes `protocol_failure: description_mismatch`: the description is of
+another server, or is stale.
+
+With both descriptions, it compares them:
 
 - `identity_changes`: settings that identify the server and changed during
   the run. Those are the driver and CUDA driver versions, the server's GPU
@@ -104,6 +122,10 @@ descriptions, it compares them:
   template digests, the launch arguments, the Python and package versions,
   and the start-up choices from the log. Any change makes
   `protocol_failure: identity_changed`: the run did not measure one server.
+- `identity_unverified`: settings only one description could read, such as
+  an `after` taken without `--server-log` or `--python`, or a GPU field
+  NVML did not answer. Missing evidence is not a change, so these are not a
+  protocol failure; describe both sides with the same options.
 - `drift`: for each of the server's GPUs, the SM clock, temperature and
   clock event reasons, before and after. Drift is reported, not a failure.
 
