@@ -131,8 +131,8 @@ written.
 
 A trigger asks a question of the server's recent `/metrics` scrapes once per
 tick (Δ, 1 s by default) and only fires when the answer stays bad for long
-enough. Each evaluation looks at a window of the last `W` seconds and is one
-of:
+enough. Each evaluation looks at a window of about the last `W` seconds and
+is one of:
 
 - **violating**;
 - **clear**;
@@ -151,12 +151,16 @@ of:
 
 The window's end scrape must have finished within one tick plus the scrape
 timeout of the evaluation, since a tick can land while a slow scrape is
-still in flight, and its start scrape within one tick of `t - W`. An outage is
-therefore a data gap while it covers the window's end, and again, `W`
-later, while it covers `t - W` (less a tick at either side). In between,
-while the outage lies inside the window, the window is judged on the
-scrapes around it. The failed-scrape share health trigger reports a scraper
-that fails now and then.
+still in flight, and its start scrape within one tick of `t - W`. The start
+scrape is the latest that qualifies, so at a steady cadence of one scrape
+per tick a window's samples span `W - Δ`: that is why the first full window
+of the example below is in at 29 s, not 30 s.
+
+An outage is therefore a data gap while it covers the window's end, and
+again, `W` later, while it covers `t - W` (less a tick at either side). In
+between, while the outage lies inside the window, the window is judged on
+the scrapes around it. The failed-scrape share health trigger reports a
+scraper that fails now and then.
 
 | State | On | Next |
 | --- | --- | --- |

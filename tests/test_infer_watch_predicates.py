@@ -85,6 +85,10 @@ def test_a_window_spans_its_start_and_end_scrapes() -> None:
     assert selection.reason is None
     assert len(selection.scrapes) == 30  # the scrapes finished at 5.004 .. 34.004
     assert selection.start_ns == 5 * S + 4_000_000
+    # The latest start scrape within a tick of t - W: at one scrape a tick,
+    # the samples span W - Δ, as the docs say.
+    assert selection.end_ns is not None
+    assert selection.end_ns - selection.start_ns == 29 * S
 
 
 def test_a_stale_or_failed_end_or_a_missing_start_is_a_data_gap() -> None:
