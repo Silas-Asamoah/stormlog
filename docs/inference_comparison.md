@@ -12,6 +12,26 @@ The run is the unit of replication. A request inside a run is not an
 independent sample of the server, so no interval here treats requests as
 independent unless it says so.
 
+## Runs
+
+Each run is summarized again from its artifact's raw records
+(`stormlog.infer.run_summary.summarize_run`), never from the summary the
+run wrote about itself. A summary carries the run's report, its experiment
+labels, its comparable fields (see
+[Inference server descriptions](inference_server.md)) and its **protocol
+failures**: faults of the measurement that exclude it, with a reason.
+
+| Protocol failure | When |
+| --- | --- |
+| `session_<status>` | The run did not finish: `interrupted`, `incomplete`, or no terminal record |
+| `identity_changed` | The server's identity changed between its before and after descriptions |
+| `probe_incomplete` | The server probe's `/server_info` did not answer in time |
+| `cohort_invalid` (a case) | The case's requests are not one whole cohort |
+| `cache_reset_not_acknowledged` (a case) | A cold cache was asked for and no reset was acknowledged |
+
+Failed requests, timeouts, or a candidate that served nothing are outcomes,
+never protocol failures: they are compared, not excluded.
+
 ## Designs
 
 When runs carry block labels, the design is **paired**: each block holds one
