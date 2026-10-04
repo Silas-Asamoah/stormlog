@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -31,16 +32,20 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from stormlog.infer.host_clock import host_boot_id, wall_clock_domain
 from stormlog.infer.qualify.ground_truth import (
     Impact,
     Injection,
+    Interval,
     PhaseWindow,
+    RunRecord,
     Times,
     Validity,
     assess_impact,
     decide_status,
     is_aligned,
     write_injections,
+    write_run,
 )
 from stormlog.infer.qualify.recovery import (
     SECOND,
@@ -58,6 +63,7 @@ from stormlog.infer.qualify.recovery import (
     priming_check,
     realization,
 )
+from stormlog.infer.server_clock import client_clock_domain
 
 from .capture import capture_window
 from .catalog import CAPTURE, NEIGHBOR, PULSE
@@ -70,9 +76,13 @@ from .reference import ReferenceChannel
 from .run_dir import RunDirectory
 from .victim import read_marker
 
-VICTIM_RUN_ID = "victim"
-VICTIM_PREFIX = f"chatcmpl-stormlog-{VICTIM_RUN_ID}-"
 MARKER_TIMEOUT_SECONDS = 120.0
+
+
+def victim_prefix(run_id: str) -> str:
+    """The victim's request IDs, as vLLM names them: the victim runs under the
+    run's own label, so its artifact names the run its truth belongs to."""
+    return f"chatcmpl-stormlog-{run_id}-"
 
 
 @dataclass(frozen=True)
@@ -107,6 +117,31 @@ class _Attempt:
     realized: bool
     checks: list[dict[str, Any]]
     clean_since_ns: int
+    actions_record: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _Windows:
+    """The run's own windows, on the victim's clock."""
+
+    measured_start: int
+    priming_end: int
+    baseline_end: int
+    final_start: int
+    measured_end: int
+
+    def run_record(
+        self, run_id: str, clock_domain: str | None, failure: str | None
+    ) -> RunRecord:
+        return RunRecord(
+            run_id=run_id,
+            clock_domain=clock_domain,
+            measured=Interval(self.measured_start, self.measured_end),
+            priming=Interval(self.measured_start, self.priming_end),
+            baseline=Interval(self.priming_end, self.baseline_end),
+            final_recovery=Interval(self.final_start, self.measured_end),
+            protocol_failure=failure,
+        )
 
 
 class InjectionRun:
@@ -146,32 +181,31 @@ class InjectionRun:
         poller.start()
         victim = self._start_victim()
         try:
-            attempts, window, priming = self._episodes(victim)
+            attempts, windows, priming = self._episodes(victim)
         finally:
             self._stop_victim(victim)
             self._stop_polling.set()
             poller.join(timeout=10)
-        self._write_truth(attempts, window, priming)
+        self._write_truth(attempts, windows, priming)
         return directory.publish()
 
     def _episodes(
         self, victim: subprocess.Popen[bytes]
-    ) -> tuple[list[_Attempt], PhaseWindow, tuple[bool, float | None]]:
+    ) -> tuple[list[_Attempt], _Windows, tuple[bool, float | None]]:
         t0 = self._wait_for_measured(victim)
         t = self.plan.timeline
-        self._sleep_until(t0 + int(t.priming * SECOND))
+        priming_end = t0 + int(t.priming * SECOND)
+        self._sleep_until(priming_end)
         priming = priming_check(self._signals(), self.clock(), self.thresholds)
-        baseline_end = t0 + int((t.priming + t.baseline) * SECOND)
+        baseline_end = priming_end + int(t.baseline * SECOND)
         self._sleep_until(baseline_end)
-        baseline = Baseline.measure(
-            self._signals(), t0 + int(t.priming * SECOND), baseline_end
-        )
+        baseline = Baseline.measure(self._signals(), priming_end, baseline_end)
         # The baseline itself is the first episode's clean time.
-        attempts = self._run_episodes(
-            baseline, clean_since=t0 + int(t.priming * SECOND)
-        )
+        attempts = self._run_episodes(baseline, clean_since=priming_end)
+        final_start = self.clock()
         self._sleep_for(t.final_recovery)
-        return attempts, PhaseWindow(t0, self.clock()), priming
+        windows = _Windows(t0, priming_end, baseline_end, final_start, self.clock())
+        return attempts, windows, priming
 
     def _run_episodes(self, baseline: Baseline, clean_since: int) -> list[_Attempt]:
         attempts: list[_Attempt] = []
@@ -189,9 +223,16 @@ class InjectionRun:
     ) -> _Attempt:
         # An episode starts only once its clean time has passed (alignment).
         self._sleep_until(clean_since + int(self.plan.timeline.min_clean * SECOND))
-        started = self.clock()
+        started, started_mono = self.clock(), time.monotonic_ns()
         actions, actuated, injected = self._actuate(index, episode)
-        ended = self.clock()
+        ended, ended_mono = self.clock(), time.monotonic_ns()
+        result = "ok" if actuated else str(injected.get("error", "failed"))
+        actions_record = [
+            {"kind": f"{episode.row.method}_start", "at_wall_ns": started,
+             "at_mono_ns": started_mono, "result": "ok"},
+            {"kind": f"{episode.row.method}_end", "at_wall_ns": ended,
+             "at_mono_ns": ended_mono, "result": result},
+        ]  # fmt: skip
         # The action's own span: a twin's realization is judged over all of
         # it, and a null run's slot is it.
         actions = replace(actions, action_end_ns=ended, slot_ns=(started, ended))
@@ -204,6 +245,7 @@ class InjectionRun:
         return _Attempt(
             index, episode, actions, onset, ended, actuated, injected, timing,
             decision, realized, [check.to_record() for check in checks], clean_since,
+            actions_record,
         )  # fmt: skip
 
     # ------------------------------------------------------------ actuation
@@ -329,22 +371,29 @@ class InjectionRun:
     def _write_truth(
         self,
         attempts: list[_Attempt],
-        window: PhaseWindow,
+        windows: _Windows,
         priming: tuple[bool, float | None],
     ) -> None:
         records = self._victim_records()
-        t = self.plan.timeline
-        baseline_start = window.start_ns + int(t.priming * SECOND)
-        baseline_end = baseline_start + int(t.baseline * SECOND)
-        slo = Slo(self.plan.victim.slo_ttft_ms, self.plan.victim.slo_e2e_ms)
-        injections = [
-            self._injection(
-                attempt, window, priming, slo, records, (baseline_start, baseline_end)
-            )
-            for attempt in attempts
-        ]
+        clock = _victim_clock(records)
+        truth = _Truth(
+            run_id=self.directory.label,
+            window=PhaseWindow(windows.measured_start, windows.measured_end),
+            priming=priming,
+            slo=Slo(self.plan.victim.slo_ttft_ms, self.plan.victim.slo_e2e_ms),
+            records=records,
+            baseline=(windows.priming_end, windows.baseline_end),
+            clock_domain=clock,
+            same_clock=clock is not None and clock == _harness_clock(),
+        )
+        failure = None if priming[0] else "priming_check_failed"
+        write_run(
+            self.directory.truth / "run.json",
+            windows.run_record(self.directory.label, clock, failure),
+        )
+        injections = [self._injection(attempt, truth) for attempt in attempts]
         injections += [
-            _skipped(self.directory.label, index, episode, priming)
+            _skipped(truth, index, episode)
             for index, episode in enumerate(self.plan.episodes)
             if index >= len(attempts)
         ]
@@ -362,15 +411,7 @@ class InjectionRun:
             json.dumps(episodes, indent=2, sort_keys=True)
         )
 
-    def _injection(
-        self,
-        attempt: _Attempt,
-        window: PhaseWindow,
-        priming: tuple[bool, float | None],
-        slo: Slo,
-        records: list[dict[str, Any]],
-        baseline: tuple[int, int],
-    ) -> Injection:
+    def _injection(self, attempt: _Attempt, truth: _Truth) -> Injection:
         row = attempt.plan.row
         times = Times(
             action_onset_ns=attempt.action_onset_ns,
@@ -379,15 +420,16 @@ class InjectionRun:
             effect_end_ns=attempt.timing.end_ns,
             effect_basis=attempt.timing.basis,
             recovery_held_at_ns=attempt.timing.recovery_held_at_ns,
-            priming_check={"passed": priming[0], "cached_fraction_median": priming[1]},
+            priming_check=truth.priming_record(),
         )
-        impact = _impact(attempt.timing, slo, records, baseline)
+        impact = _impact(attempt.timing, truth.slo, truth.records, truth.baseline)
         status = decide_status(
-            protocol_failure=not priming[0],
+            protocol_failure=not truth.priming[0],
+            same_clock=truth.same_clock,
             actuated=attempt.actuated,
             aligned=is_aligned(
                 times,
-                window,
+                truth.window,
                 clean_since_ns=attempt.clean_since_ns,
                 min_baseline_ns=int(self.plan.timeline.min_clean * SECOND),
             ),
@@ -402,8 +444,8 @@ class InjectionRun:
             checks=tuple(attempt.checks),
         )
         return Injection(
-            episode_id=f"{self.directory.label}-e{attempt.index}",
-            run_id=self.directory.label,
+            episode_id=f"{truth.run_id}-e{attempt.index}",
+            run_id=truth.run_id,
             episode_type=row.id,
             cause_class=row.cause_class,
             injected=attempt.injected,
@@ -411,9 +453,9 @@ class InjectionRun:
             secondary=row.secondary,
             allows=row.allows,
             times=times,
-            clock_domain=None,
+            clock_domain=truth.clock_domain,
             status=status,
-            actions=(),
+            actions=tuple(attempt.actions_record),
             validity=validity,
         )
 
@@ -423,7 +465,7 @@ class InjectionRun:
         return ReferenceChannel(
             hook_root=self.server.hook_root,
             metrics_url=f"{self.server.base_url}/metrics",
-            victim_prefix=VICTIM_PREFIX,
+            victim_prefix=victim_prefix(self.directory.label),
             shared_prefix_tokens=max(1, self.plan.victim.shared_prefix_tokens),
             reference_dir=self.directory.reference,
             probes_dir=self.directory.probes,
@@ -459,7 +501,7 @@ class InjectionRun:
             "--shared-prefix-ratio", str(victim.shared_prefix_ratio),
             "--prefix-groups", str(victim.prefix_groups),
             "--seed", str(self.plan.seed),
-            "--run-id", VICTIM_RUN_ID,
+            "--run-id", self.directory.label,
             "--output", str(self.directory.run / "victim.jsonl"),
             *self.victim_arguments,
         ]  # fmt: skip
@@ -536,29 +578,55 @@ def _impact(
     return assess_impact(effect, reference)
 
 
-def _skipped(
-    run_id: str, index: int, episode: EpisodePlan, priming: tuple[bool, float | None]
-) -> Injection:
+@dataclass(frozen=True)
+class _Truth:
+    """What every injection record of a run shares."""
+
+    run_id: str
+    window: PhaseWindow
+    priming: tuple[bool, float | None]
+    slo: Slo
+    records: list[dict[str, Any]]
+    baseline: tuple[int, int]
+    clock_domain: str | None
+    same_clock: bool
+
+    def priming_record(self) -> dict[str, Any]:
+        return {"passed": self.priming[0], "cached_fraction_median": self.priming[1]}
+
+
+def _victim_clock(records: list[dict[str, Any]]) -> str | None:
+    """The victim artifact's wall clock domain, from its first context."""
+    for record in records:
+        if "context" in record:
+            return client_clock_domain(record)
+    return None
+
+
+def _harness_clock() -> str:
+    """The clock the harness stamps its own times on: this host's."""
+    return wall_clock_domain(socket.gethostname(), host_boot_id())
+
+
+def _skipped(truth: _Truth, index: int, episode: EpisodePlan) -> Injection:
     """An episode skipped after a recovery timeout: published, never run."""
     row = episode.row
     return Injection(
-        episode_id=f"{run_id}-e{index}",
-        run_id=run_id,
+        episode_id=f"{truth.run_id}-e{index}",
+        run_id=truth.run_id,
         episode_type=row.id,
         cause_class=row.cause_class,
         injected={"method": row.method, "skipped": "recovery_timeout"},
         expects=row.expects,
         secondary=row.secondary,
         allows=row.allows,
-        times=Times(
-            priming_check={"passed": priming[0], "cached_fraction_median": priming[1]}
-        ),
-        clock_domain=None,
-        status=decide_status(protocol_failure=not priming[0], actuated=False),
+        times=Times(priming_check=truth.priming_record()),
+        clock_domain=truth.clock_domain,
+        status=decide_status(protocol_failure=not truth.priming[0], actuated=False),
         validity=Validity(
             actuation="skipped", realization="not_assessed", observation="not_assessed"
         ),
     )
 
 
-__all__ = ["VICTIM_PREFIX", "VICTIM_RUN_ID", "InjectionRun", "Server"]
+__all__ = ["InjectionRun", "Server", "victim_prefix"]

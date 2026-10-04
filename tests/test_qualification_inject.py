@@ -15,7 +15,7 @@ import pytest
 from examples.qualification.__main__ import main
 from examples.qualification.fake_engine.process import FakeEngineProcess, _environment
 from examples.qualification.run_dir import verify
-from stormlog.infer.qualify.ground_truth import load_injections
+from stormlog.infer.qualify.ground_truth import load_injections, load_run
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or not hasattr(signal, "SIGSTOP"),
@@ -108,6 +108,28 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     assert (run / "run" / "victim.jsonl").exists()
     assert (run / "truth" / "reference" / "scrapes.jsonl").exists()
     assert (run / "probes" / "hook-firstseen.jsonl").exists()
+    # The run record: its label, its windows and the victim's clock, which
+    # every episode shares; the victim ran under the same label.
+    record = load_run(run / "truth" / "run.json")
+    assert record.run_id == "q221-0123456789abcdef"
+    assert record.clock_domain is not None
+    assert record.priming is not None and record.final_recovery is not None
+    assert record.measured.start_ns == record.priming.start_ns
+    assert record.final_recovery.end_ns == record.measured.end_ns
+    for injection in injections.values():
+        assert injection.run_id == record.run_id
+        assert injection.clock_domain == record.clock_domain
+        assert [a["kind"].rsplit("_", 1)[1] for a in injection.actions] == [
+            "start",
+            "end",
+        ]
+    (artifact,) = [
+        json.loads(line)
+        for line in (run / "run" / "victim.jsonl").read_text().splitlines()
+        if '"infer.artifact"' in line
+    ]
+    assert artifact["context"]["run_id"] == record.run_id
+    assert artifact["context"]["clock_domain"] == record.clock_domain
 
 
 def test_a_bad_plan_is_refused_before_anything_runs(tmp_path: Path) -> None:
