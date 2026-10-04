@@ -58,6 +58,13 @@ the flaky benchmark memory gates
     quantiles leave it out.
   - There is no client inter-token latency; `docs/inference_slo.md` explains
     why. (#213)
+- `stormlog.infer.server_privacy`: schema-aware redaction for server
+  descriptions. Credential fields of vLLM 0.30.0's configuration
+  (`credential_paths_v1`) and environment names with a secret word are
+  replaced by a `{"redacted": true, "path": ...}` marker, URLs lose their
+  credentials and query, and `system_env` keeps only allowlisted scalars and
+  four runtime package versions. `max_num_batched_tokens` and
+  `long_prefill_token_threshold` survive. (#213)
 - `--slo KEY:MS` (repeatable) and `--slo-file FILE` on `stormlog infer
   profile` and `stormlog infer analyze`. `profile` records the policy in the
   artifact as `infer.slo`; `analyze` judges by the flags, or else by the
