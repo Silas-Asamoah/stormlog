@@ -73,6 +73,21 @@ the flaky benchmark memory gates
   judged per request in the run. When `analyze` options replace the policy
   the artifact recorded, `slo.overrides` keeps its name and digest, and a
   warning says so. (#213)
+- `stormlog infer watch --root DIR --base-url URL` runs beside a vLLM server
+  and records its incidents. Once per tick it scrapes `/metrics` into a
+  bounded history and evaluates metric, #218 signal and scrape-health
+  triggers; a trigger fires only once its condition has held for the hold
+  time, with data gaps and outages handled as documented, so a violation
+  shorter than `F - W` never fires. A firing opens an incident whose pre-
+  and post-windows of scrapes are sealed into a bundle under
+  `DIR/incidents`, published in generations under disk limits and
+  retention. Its records follow the frozen `stormlog.infer.watch/1` schema
+  (`tests/fixtures/watch/`) and go to a bounded ledger, and its own health
+  is kept as `stormlog_watch_*` counters. It writes a
+  `stormlog.report` with `report_kind: inference_watch` and exits 3 when a
+  counting incident was detected, 1 when the watch was unsound, else 0
+  (`docs/incident_capture.md`). Deep capture and SLO triggers come later.
+  ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
 - `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
   hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,
   `infer.membership`, `infer.request` and `infer.clock_alignment` records:
