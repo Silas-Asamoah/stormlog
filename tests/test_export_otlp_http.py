@@ -3,7 +3,9 @@
 import contextlib
 import gzip
 import json
+import os
 import socket
+import struct
 import threading
 import time
 from collections.abc import Iterator
@@ -24,6 +26,7 @@ from stormlog._export.otlp_http import (
     REDIRECT,
     REFUSED,
     RESET_AFTER_SEND,
+    SEND_FAILED,
     THROTTLED,
     TIMEOUT_AFTER_SEND,
     TLS,
@@ -200,6 +203,54 @@ def test_abort_ends_an_attempt_in_progress() -> None:
         # Aborting is final: nothing more is sent.
         assert transport.send(_body(), spans=3).kind == NOT_SENT
     assert len(collector.received) == 1
+
+
+def test_a_body_cut_off_part_way_was_not_sent() -> None:
+    # The collector resets the connection after a little of the request, so
+    # the body never all left: the collector cannot have stored it.
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+
+    def reset_early() -> None:
+        connection, _ = server.accept()
+        connection.recv(1024)
+        connection.setsockopt(
+            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+        )
+        connection.close()
+
+    resetter = threading.Thread(target=reset_early, daemon=True)
+    resetter.start()
+    try:
+        transport = _transport(f"http://127.0.0.1:{server.getsockname()[1]}")
+        incompressible = os.urandom(4 * 1024 * 1024)
+        out = transport.send(incompressible, spans=3)
+    finally:
+        resetter.join(5)
+        server.close()
+    assert (out.kind, out.category, out.retryable) == (NOT_SENT, SEND_FAILED, True)
+
+
+def test_an_abort_during_the_connect_sends_no_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Shutting down a socket that is still connecting does nothing, so only
+    # the abort check before the body keeps it from leaving.
+    with running() as collector:
+        transport = _transport(collector.url)
+        real_register = OtlpHttpTransport._register
+
+        def register_then_abort(
+            self: OtlpHttpTransport, sock: socket.socket, deadline: float
+        ) -> int:
+            token = real_register(self, sock, deadline)
+            assert transport.abort() is False  # nothing had begun to send
+            return token
+
+        monkeypatch.setattr(OtlpHttpTransport, "_register", register_then_abort)
+        out = transport.send(_body(), spans=3)
+    assert out.kind == NOT_SENT and collector.received == []
 
 
 def test_abort_before_anything_was_sent_says_so() -> None:
