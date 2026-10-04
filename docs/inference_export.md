@@ -348,9 +348,10 @@ identifier, an ID Stormlog made, a value from a closed set, or a number:
 Consented text passes through pattern scrubbing (bearer tokens, `key=`
 pairs, URL credentials, common key shapes). Every exported string, consented
 or not, has every credential the run was given replaced with `<redacted>`:
-the API key, the OTLP header values, and the user names, passwords and query
-values of the run's URLs, in raw, percent-encoded, JSON-escaped and base64
-forms.
+the API key, the OTLP header values (and, after an auth scheme such as
+`Bearer`, the credential alone; for `Basic`, its decoded user and
+password), and the user names, passwords and query values of the run's
+URLs, in raw, percent-encoded, JSON-escaped and base64 forms.
 
 ### The resource
 

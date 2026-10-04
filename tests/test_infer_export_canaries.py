@@ -31,7 +31,7 @@ pytest.importorskip("opentelemetry.proto.collector.trace.v1.trace_service_pb2")
 API_KEY = "sk-apikey-canary-0123456789"
 QUERY = "query-canary-0123456789"
 HEADER = "header-canary-0123456789"
-ENV_HEADER = "env-header-canary-0123456789"
+ENV_HEADER = "envTOKENcanary0123456789"
 BODY_TOKEN = "sk-bodytoken-canary-0123456789"
 PARAM = "param-canary-0123456789"
 COLLECTOR = "collector-canary-0123456789"
@@ -123,8 +123,10 @@ def _run(
         "OTEL_RESOURCE_ATTRIBUTES",
         ",".join(f"{key}={value}" for key, value in RESOURCE.items()),
     )
-    # The collector refuses the first export with a message of its own.
-    status = b"\x08\x03\x12" + bytes([len(COLLECTOR)]) + COLLECTOR.encode()
+    # The collector refuses the first export with a message of its own,
+    # which echoes the bare token of the Bearer header, as auth errors do.
+    message = f"{COLLECTOR} unknown credential {ENV_HEADER}".encode()
+    status = b"\x08\x03\x12" + bytes([len(message)]) + message
     replies = [Reply(400, status, store=False)]
     metrics = tmp_path / "metrics"
     metrics.mkdir()
