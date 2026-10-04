@@ -173,12 +173,47 @@ def test_settings_the_watcher_cannot_use_are_usage_errors(
         (_trigger(action="deep_capture"), "deep capture is not available yet"),
         (_trigger(action="page_someone"), "unknown action"),
         (_trigger(deep_capture_when="sometimes"), "deep_capture_when"),
+        (_trigger(deep_capture_when=1), "deep_capture_when must be a JSON string"),
+        # Any non-empty string was true: "no" made a trigger count.
+        (_trigger(counts_toward_exit="no"), "must be a JSON boolean"),
+        (
+            {
+                "id": "failures",
+                "kind": "health",
+                "window_seconds": 3,
+                "hold_seconds": 3,
+                "scrape_failures": {},
+                "counts_toward_exit": True,
+            },
+            "never count toward the exit code",
+        ),
         ("not an object", "must be an object"),
     ],
 )
 def test_bad_triggers_are_usage_errors(trigger: Any, message: str) -> None:
     with pytest.raises(InferUsageError, match=message):
         resolve_watch_config(_payload(triggers=[trigger]))
+
+
+def test_a_trigger_s_policy_defaults_to_its_kind_s() -> None:
+    config = resolve_watch_config(
+        _payload(
+            triggers=[
+                _trigger(),
+                _trigger(id="quiet", counts_toward_exit=False),
+                {
+                    "id": "failures",
+                    "kind": "health",
+                    "window_seconds": 3,
+                    "hold_seconds": 3,
+                    "scrape_failures": {},
+                },
+            ]
+        )
+    )
+    counts = {s.trigger_id: s.counts_toward_exit for s in config.triggers}
+    assert counts == {"queue": True, "quiet": False, "failures": False}
+    assert {s.deep_capture_when for s in config.triggers} == {"always"}
 
 
 def test_trigger_ids_are_unique() -> None:

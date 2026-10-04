@@ -32,8 +32,6 @@ from .evaluate import (
     KIND_HEALTH,
     KIND_METRIC,
     KIND_SIGNAL,
-    WHEN_ALWAYS,
-    WHEN_UNEXPLAINED,
     TriggerSpec,
 )
 from .predicates import (
@@ -356,25 +354,25 @@ def _trigger(
             sustain=sustain,
             predicate=_predicate(present[0], settings[present[0]], engine),
             action=str(settings.get("action", ACTION_RECORD)),
-            deep_capture_when=str(
-                settings.get(
-                    "deep_capture_when",
-                    (
-                        WHEN_UNEXPLAINED
-                        if settings.get("action") == ACTION_DEEP_CAPTURE
-                        else WHEN_ALWAYS
-                    ),
-                )
-            ),
-            counts_toward_exit=bool(
-                settings.get("counts_toward_exit", settings.get("kind") != KIND_HEALTH)
-            ),
+            # Left out, each takes its kind's default from TriggerSpec, which
+            # also refuses what the exit and capture policy forbids.
+            deep_capture_when=_optional(settings, "deep_capture_when", str),
+            counts_toward_exit=_optional(settings, "counts_toward_exit", bool),
             completion_recorded=_completion_recorded(settings),
         )
     except KeyError as exc:
         raise InferUsageError(f"trigger {name}: missing {exc}") from exc
     except (TypeError, ValueError) as exc:
         raise InferUsageError(f"trigger {name}: {exc}") from exc
+
+
+def _optional(settings: Mapping[str, Any], key: str, kind: type) -> Any:
+    """A setting given as a JSON ``kind``, or None when left out."""
+    value = settings.get(key)
+    if value is not None and not isinstance(value, kind):
+        name = "boolean" if kind is bool else "string"
+        raise TypeError(f"{key} must be a JSON {name}")
+    return value
 
 
 def _predicate(key: str, value: Any, engine: str | None) -> Any:
