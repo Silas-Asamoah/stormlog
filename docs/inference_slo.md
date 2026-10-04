@@ -296,7 +296,9 @@ its measured phase's start. A segment is clipped to the phase.
 `membership="arrival"`, the default, counts a request in the segment its
 intended arrival (or, without one, its send) falls in. `membership="overlap"`
 counts every request whose span meets the segment, for example the requests
-in flight during a profiler's stop.
+in flight during a profiler's stop. An overlap segment's report has no
+rates (`intervals.rate_reason: overlapping_cohort`): requests in flight per
+second grow with their latency.
 
 ## Attainment and goodput
 
