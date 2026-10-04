@@ -666,20 +666,43 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
 - **Window.** By default each case's measured phase is profiled
   (`--trace-phase warmup` profiles warmup instead). The window closes when the
   phase ends, when `--trace-max-seconds` elapses (the phase keeps running
-  unprofiled), or when the run is cancelled; the profiler is stopped in every
-  case.
-- **Ownership.** Stormlog calls `/stop_profile` only after its own
-  `/start_profile` succeeded; a failed start (for example, a server started
-  without a profiler) is recorded as not started and nothing is stopped. vLLM
-  0.30.0 answers 200 to a second `/start_profile` and to `/stop_profile` with
-  nothing running, so Stormlog cannot tell from HTTP whether another profile
-  was already active. Do not point two profilers at one server. If a worker
-  trace appears before Stormlog's stop, for example from a profile configured
-  with `max_iterations`, the window's `stop_reason` is `stopped_by_server`.
+  unprofiled), or when the run is cancelled. In every case Stormlog sends one
+  `/stop_profile`. A stop that fails is not retried: Stormlog warns, and the
+  window's record keeps the stop's status and error and says the profiler may
+  still be running.
+- **Ownership.** Stormlog stops every profile its own `/start_profile` may
+  have started. vLLM runs the start in the engine before it replies, so the
+  reply alone does not show whether profiling began. Each window's
+  `start_outcome` records what the reply established:
+  - `acknowledged` (2xx): the window runs, and is stopped at its end.
+  - `rejected` (404 or 405, a server started without the profiler routes; or
+    401, 403 or 407 from a proxy in front of it, since vLLM's own API key
+    does not cover these routes): the start never reached the engine, and
+    nothing is stopped. Any other 4xx is `unknown`: vLLM 0.30.0 answers 400
+    or 422 for an exception raised while it handles the start, which may
+    already have reached the engine, and a proxy can answer 408 after
+    forwarding it.
+  - `unknown` (5xx, a timeout, a dropped connection, a malformed reply, or a
+    redirect, which is never followed): Stormlog sends `/stop_profile` at
+    once, with `stop_reason` `start_unknown`, and waits for that call to
+    return (bounded by the control timeout). The phase then runs whether or
+    not the stop was confirmed: unprofiled if it took effect, and if it
+    failed, Stormlog warns and the record says the profiler may still be
+    running. A trace that stop writes is still listed.
+
+  vLLM 0.30.0 answers 200 to a second `/start_profile` and to `/stop_profile`
+  with nothing running, so Stormlog cannot tell from HTTP whether another
+  profile was already active. Do not point two profilers at one server: an
+  unknown start is stopped, so a proxy's 502 or a timeout while another
+  operator is profiling ends their profile too. If a worker trace appears
+  before Stormlog's stop, for example from a profile configured with
+  `max_iterations`, the window's `stop_reason` is `stopped_by_server`.
 - **Record.** Each window writes an `infer.trace_window` event, also when the
   run is cancelled: case, phase, control URL (credentials and query removed),
-  when the start was requested and when it was confirmed, start and stop HTTP
-  status or error, why it stopped, and the trace files found. A cancelled run
+  when the window was requested, when the `/start_profile` call itself was
+  sent and answered (`start_requested_at_ns`, `start_returned_at_ns`), the
+  `start_outcome`, when the start was confirmed, start and stop HTTP status or
+  error, why it stopped, and the trace files found. A cancelled run
   does not import its traces; import the listed files with
   `stormlog infer import-trace`. If `--trace` was requested and no trace could
   be imported, the trace collector's `infer.capabilities` record says so, with
