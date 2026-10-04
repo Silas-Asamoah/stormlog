@@ -731,10 +731,16 @@ attempted, the rest as skipped (`run_ended`, or `recovery_timeout` after a
 recovery timeout), with the reason as the run record's protocol failure. An
 episode interrupted mid-action is published `not_actuated` with actuation
 `interrupted`, its dose and, for pulses, every pulse that completed: the
-target was stopped, and the truth says so. `inject` then exits 1, or 130 when interrupted by Ctrl+C. SIGTERM and
-SIGHUP (a job's timeout, an ssh disconnect) interrupt it the same way from the
-moment the run starts, whether or not any pulse has run, and it exits
-128 plus the signal's number.
+target was stopped, and the truth says so. `inject` then exits 1, or 130
+when interrupted by Ctrl+C. SIGTERM and SIGHUP (a job's timeout, an ssh
+disconnect) interrupt it the same way from the moment the run starts,
+whether or not any pulse has run, and it exits 128 plus the signal's number.
+Once the run is being finished (the victim draining, the truth being
+written), SIGTERM, SIGHUP and SIGINT are held until it is published: the
+first cuts the victim's drain short with SIGINT, so the victim still records
+its end, and a second kills it. The run is then recorded as interrupted, and
+`inject` exits as the first such signal would have, once the run is
+published.
 
 **The run directory** is named by an opaque label, `q221-<16 hex>`, that says
 nothing about its episodes:

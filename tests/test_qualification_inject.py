@@ -21,7 +21,7 @@ from examples.qualification.__main__ import main
 from examples.qualification.fake_engine.process import FakeEngineProcess, _environment
 from examples.qualification.run_dir import verify
 from stormlog.infer.qualify.ground_truth import load_injections, load_run
-from tests.qualification_fake_engine_helpers import wait_until
+from tests.qualification_fake_engine_helpers import post, wait_until
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or not hasattr(signal, "SIGSTOP"),
@@ -520,6 +520,77 @@ def test_a_run_without_pulses_signalled_mid_run_is_published(
     assert load_run(run / "truth" / "run.json").protocol_failure == "interrupted"
     attempted = load_injections(run / "truth" / "injections.jsonl")
     assert [injection.episode_type for injection in attempted] == ["N", "N"]
+
+
+def _victims_of(label: str) -> list[psutil.Process]:
+    found = []
+    for process in psutil.process_iter(["cmdline"]):
+        command = " ".join(process.info["cmdline"] or [])
+        if "examples.qualification.victim" in command and label in command:
+            found.append(process)
+    return found
+
+
+@pytest.mark.parametrize("second", [signal.SIGTERM, signal.SIGINT])
+def test_a_second_signal_while_the_run_finishes_still_publishes_it(
+    tmp_path: Path, second: int
+) -> None:
+    # rev-220-a's second A2 delta, D1: SIGTERM to the harness alone, then
+    # another signal while it waited for its victim to drain. The second
+    # one ended the harness there: no truth, the run left in .partial and
+    # the victim still loading the engine. Now the second signal cuts the
+    # drain short, and the run is published before the harness exits.
+    hook = tmp_path / "hook"
+    plan = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan["timeline"]["episode"] = 6
+    plan["episodes"] = [{"type": "N"}, {"type": "N"}]
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    label = f"q221-{0xDD00 + second:016x}"  # one per case: they may run at once
+    engine = ["--step-seconds", "0.002", "--hook-dir", str(hook)]
+    try:
+        with FakeEngineProcess(engine) as server:
+            # fmt: off
+            argv = [
+                "inject", "--plan", str(tmp_path / "plan.json"),
+                "--out", str(tmp_path / "runs"), "--label", label,
+                "--base-url", server.base_url, "--model", "fake/qwen-0.5b",
+                "--reference-channel", str(hook),
+                "--", "--tokenizer", "none", "--system-sampler", "none",
+            ]
+            # fmt: on
+            harness = subprocess.Popen(
+                [sys.executable, "-m", "examples.qualification", *argv],
+                env=_environment(),
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            partial = tmp_path / "runs" / f".{label}.partial"
+            markers = partial / "probes" / "markers"
+            assert wait_until(
+                lambda: any(markers.glob("*measured_started*")), timeout=60
+            )
+            time.sleep(7)  # inside the first episode
+            # A held engine: the victim's requests sent from now on can't
+            # finish (about ten in the next second), so its drain lasts as
+            # long as a real victim's long outputs would.
+            assert post(f"{server.base_url}/_fault/pause?target=engine")[0] == 200
+            time.sleep(1)
+            os.kill(harness.pid, signal.SIGTERM)  # the harness alone
+            time.sleep(1)
+            assert harness.poll() is None  # still waiting for the victim
+            os.kill(harness.pid, second)
+            code = harness.wait(timeout=120)
+            left = [process.pid for process in _victims_of(label)]
+            post(f"{server.base_url}/_fault/resume?target=engine")
+    finally:
+        for process in _victims_of(label):
+            process.kill()
+    assert code == 128 + signal.SIGTERM
+    assert left == []
+    run = tmp_path / "runs" / label
+    assert not partial.exists() and verify(run) == []
+    assert load_run(run / "truth" / "run.json").protocol_failure == "interrupted"
 
 
 def test_an_episode_interrupted_mid_pulse_records_its_pulses(tmp_path: Path) -> None:
