@@ -115,7 +115,11 @@ the experiment, as a run's cleanup does (below). Each run then:
    experiment, arm and block, writes `commands.sh`, `run.json` and, last,
    `SHA256SUMS`, and renames `runs/<label>.partial` to `runs/<label>`.
 
-A run's label is `<experiment>-b<block>-p<position>-<arm>-a<attempt>`.
+A run's label is `<experiment>-b<block>-p<position>-<arm>-a<attempt>`,
+where the position is the planned one. The index also records the slot
+the attempt actually ran in (`position_actual`): how many attempts its
+block had started before it, so a retry, and every run after it, runs later
+than planned. Each attempt writes its slot to `attempt.json` when it starts.
 
 ### Treatments are observers
 
@@ -161,7 +165,7 @@ attempts are kept.
 | `prereg.json` | The pre-registration, when the plan has one |
 | `order.json` | Each block's arms in run order, whether positions balance, and each arm's position counts |
 | `index.jsonl` | One line per attempt: state, reasons, every process with its PID, times, exit code and affinity, the server's and each treatment's cleanup; and one per run a stop left unstarted (`not_run`) |
-| `runs/<label>/` | The run: its artifacts, `describe-*.json`, the logs of the server, every step and treatment, `commands.sh`, `run.json`, `SHA256SUMS` |
+| `runs/<label>/` | The run: its artifacts, `describe-*.json`, the logs of the server, every step and treatment, `attempt.json`, `commands.sh`, `run.json`, `SHA256SUMS` |
 | `preludes/` | Each block's preludes, their logs, and their server's cleanup (`cleanup.json`) |
 | `sanitizer.json` | Whether the bundle is publishable, and any secret found, by file and line |
 
