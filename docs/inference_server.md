@@ -405,8 +405,12 @@ in `NOT_SECRET_NAMES_V1`, and kept: removing them would hide a change in
 them from every comparison.
 
 The server's command line is never kept. Of its loading options
-(`--model`, `--revision`, `--tokenizer` and the rest), a URL loses its
-credentials and query, and any other value its query. When the Python
+(`--model`, `--revision`, `--tokenizer` and the rest), the recorded copy of a
+URL loses its credentials and query, as does a scheme-less one
+(`host/path?token=...`); a value with spaces or template braces, such as an
+inline `--chat-template`, is no URL and is kept whole. Files are resolved and
+the chat template digested from the values as given, never from the scrubbed
+copy. When the Python
 probe of `--python` fails, the description keeps its exit code, not its
 output.
 

@@ -52,7 +52,11 @@ _VALUE_OPTIONS = {
 
 @dataclass(frozen=True)
 class LaunchArguments:
-    """What the server's command line says it loads."""
+    """What the server's command line says it loads.
+
+    The values are as given, so files resolve and templates digest from
+    what the server read; only the recorded copy is scrubbed.
+    """
 
     model: str | None = None
     revision: str | None = None
@@ -63,7 +67,11 @@ class LaunchArguments:
     download_dir: str | None = None
 
     def to_record(self) -> dict[str, Any]:
-        return dict(self.__dict__)
+        return {key: _scrubbed(value) for key, value in self.__dict__.items()}
+
+
+def _scrubbed(value: str | None) -> str | None:
+    return None if value is None else scrub_argument(value)
 
 
 @dataclass(frozen=True)
@@ -102,7 +110,7 @@ def launch_arguments(cmdline: Sequence[str]) -> LaunchArguments:
             value = arguments[index + 1]
         if value:
             values.setdefault(key, value)
-    return LaunchArguments(**{key: scrub_argument(v) for key, v in values.items()})
+    return LaunchArguments(**values)
 
 
 def hub_cache_dir(environ: Mapping[str, str], download_dir: str | None) -> Path | None:
@@ -139,8 +147,8 @@ def describe_model(
     model = launch.model
     launch = _resolved_template(launch, cwd)
     record: dict[str, Any] = {
-        "configured": model,
-        "configured_revision": launch.revision,
+        "configured": _scrubbed(model),
+        "configured_revision": _scrubbed(launch.revision),
         "revision_immutable": bool(launch.revision and _COMMIT.match(launch.revision)),
     }
     local = _local_directory(model, cwd)

@@ -138,6 +138,10 @@ def scrub_value(value: str, path: str) -> Any:
     return value
 
 
+# A scheme-less URL (host/path?token=...): no spaces, no template braces.
+_URL_LIKE = re.compile(r"^[^\s{}%]+$")
+
+
 def scrub_argument(value: str) -> str:
     """A command-line value as it may be kept: no credentials, no query."""
     trimmed = value.strip()
@@ -149,7 +153,7 @@ def scrub_argument(value: str) -> str:
     found = _USERINFO.match(trimmed)
     if found:
         return "<redacted>@" + trimmed[found.end() :]
-    if "?" in trimmed:
+    if "?" in trimmed and _URL_LIKE.match(trimmed):
         return trimmed.partition("?")[0] + "?<redacted>"
     return value
 
