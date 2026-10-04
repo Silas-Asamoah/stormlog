@@ -177,7 +177,13 @@ A gate's unit must equal the metric's, or the gate is refused.
 
 A log ratio needs positive values:
 - a candidate value of 0 on a higher-is-better metric (a candidate that
-  served nothing) fails its gate: `candidate_zero`, the worst regression;
+  served nothing) fails its gate: `candidate_zero`, the worst regression.
+  It is read in the case the rule judges: the worst case for
+  non-inferiority, the best case for `significant` and `demonstrated`. A
+  zero only in the case the rule does not read (goodput known only as
+  `(0, 10.4)`, from unknown outcomes) shows no regression, and the gate is
+  `not_evaluable: undefined_in_arm`; a regression rule also waits for its
+  blockers (unverified comparability, too few blocks) first;
 - a baseline value of 0, both zero, or a candidate value of 0 on a
   lower-is-better metric leaves the log ratio undefined: the gate is
   `not_evaluable: undefined_in_arm`, unless a fallback budget was declared
@@ -195,6 +201,14 @@ probability at most `1 − (α/2)^(1/n)`, per arm. Such a metric's gate passes,
 with that reason.
 
 ## Missing evidence
+
+A run with no value for a metric says why, and that reason makes the
+metric's gate `not_evaluable`: a latency quantile with a successful
+request that lacks it (`successful_values_missing`), a rate with no
+interval (its `rate_reason`, or `rate_unavailable`), a population not
+recorded. A value that is not finite makes the gate `not_evaluable:
+non_finite_value`: an infinite latency is the worst value there is, and
+dropping it as missing would decide the gate on the runs left.
 
 A run's value can be an interval `(lower, upper)`, when some of its evidence
 is missing: SLO attainment and goodput with unknown outcomes. Each pair then
