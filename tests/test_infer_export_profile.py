@@ -17,7 +17,9 @@ from stormlog._export.textfile import PRODUCER_LABEL, TextfileWriter
 from stormlog.exit_codes import ExitCode
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
+from stormlog.infer.export import ExportPipeline
 from stormlog.infer.export_config import ExportConfig
+from stormlog.infer.export_metrics import ProfileMetrics
 from stormlog.infer.profile import InferenceProfiler
 from tests.export_conformance import check_exposition
 from tests.test_infer_profile import _fake_server
@@ -204,6 +206,61 @@ def test_ctrl_c_still_freezes_and_records_final_counts(tmp_path: Path) -> None:
     assert sum(exposition.matching("stormlog_infer_requests_total")) == len(sent)
 
 
+def test_a_ctrl_c_inside_the_close_still_finishes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reviewers' case: the exporter is behind at the end of the run, the
+    # user presses Ctrl+C once while its close waits for it.
+    output = tmp_path / "infer.jsonl"
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    real_apply = ProfileMetrics.apply
+
+    def slow_apply(self: ProfileMetrics, envelope: Any) -> None:
+        time.sleep(0.05)
+        real_apply(self, envelope)
+
+    monkeypatch.setattr(ProfileMetrics, "apply", slow_apply)
+    closing = threading.Event()
+    real_close = ExportPipeline.close
+
+    def noting_close(self: ExportPipeline, deadline: float) -> None:
+        closing.set()
+        real_close(self, deadline)
+
+    monkeypatch.setattr(ExportPipeline, "close", noting_close)
+
+    def ctrl_c_in_close() -> None:
+        if closing.wait(60):
+            time.sleep(0.3)
+            signal.raise_signal(signal.SIGINT)
+
+    presser = threading.Thread(target=ctrl_c_in_close, daemon=True)
+    presser.start()
+    with _fake_server() as endpoint:
+        config = _config(
+            endpoint,
+            output,
+            ExportConfig(prometheus_textfile_dir=metrics_dir),
+            concurrency=(4,),
+            request_count=40,
+            warmup_requests=0,
+            stream=False,
+        )
+        profiler = InferenceProfiler(config)
+        with pytest.raises(KeyboardInterrupt):
+            profiler.run()
+    presser.join(5)
+    export = profiler.export
+    assert export is not None and export.registry.frozen
+    records = _records(output)
+    summary = _capability(records)["metadata"]["summary"]["records"]
+    assert summary["offered"] == summary["applied"] + sum(summary["dropped"].values())
+    exposition = check_exposition((metrics_dir / "stormlog-default.prom").read_text())
+    assert exposition.value("stormlog_run_active") == 0
+    assert not (metrics_dir / "stormlog-default.lock").exists()
+
+
 # ------------------------------------------------------------------ CLI
 def _cli(endpoint: str, output: Path, *extra: str) -> int:
     return infer_main(
@@ -241,6 +298,24 @@ def test_a_held_slot_is_refused_before_it_sends(tmp_path: Path) -> None:
     finally:
         holder.close()
     assert code == ExitCode.USAGE and not output.exists()
+
+
+def test_a_run_that_fails_after_the_export_started_still_ends_it(
+    tmp_path: Path,
+) -> None:
+    # The artifact cannot be opened once the exporter has started, so the
+    # run's own close is the first one: it must still write the final file.
+    output = tmp_path / "infer.jsonl"
+    output.mkdir()
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    with _fake_server() as endpoint:
+        code = _cli(endpoint, output, "--prometheus-textfile-dir", str(metrics_dir))
+    assert code != 0
+    text = (metrics_dir / "stormlog-default.prom").read_text()
+    assert check_exposition(text).value("stormlog_run_active") == 0
+    assert not (metrics_dir / "stormlog-default.lock").exists()
+    assert not list(metrics_dir.glob("*.tmp"))
 
 
 def test_export_flags_without_an_output_are_refused(tmp_path: Path) -> None:
