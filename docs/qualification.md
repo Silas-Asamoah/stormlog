@@ -175,8 +175,9 @@ Two functions drive a run:
   fraction over the last 10 s of priming is at least 0.9. Otherwise the run
   is a protocol failure.
 - `next_episode` lets the next episode start once the previous one's recovery
-  has held, and no sooner than 60 s after its action ended. 150 s after the
-  action, it times out, and the run's remaining episodes are skipped.
+  has held, and no sooner than 60 s after its action ended. Recovery that
+  holds only after 150 s, or not by then, is a timeout, whenever the harness
+  asks, and the run's remaining episodes are skipped.
 
 The thresholds are frozen from `dev_v1` in `Thresholds`; the defaults are the
 design's.
