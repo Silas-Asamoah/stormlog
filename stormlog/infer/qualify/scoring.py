@@ -122,6 +122,12 @@ class Window:
     end_ns: int
     resolution_ns: int = 0
     uncertainty_ns: int = 0
+    clock_domain: str | None = None
+
+    def on_clock(self, clock_domain: str | None) -> bool:
+        """Whether the window can be compared with times on ``clock_domain``:
+        it names no clock, or that one."""
+        return self.clock_domain is None or self.clock_domain == clock_domain
 
     @property
     def pre_grace_ns(self) -> int:
@@ -190,6 +196,7 @@ def _window(record: Mapping[str, Any]) -> Window:
         end_ns=int(record["end_ns"]),
         resolution_ns=int(record.get("resolution_ns") or 0),
         uncertainty_ns=int(record.get("uncertainty_ns") or 0),
+        clock_domain=record.get("clock_domain"),
     )
 
 
@@ -212,10 +219,13 @@ def coverage_of(diagnosis: Mapping[str, Any]) -> Mapping[str, Any]:
 def in_scoring_window(
     finding: FindingView, injection: Injection, config: ScoreConfig
 ) -> bool:
-    """The temporal rule: start within ``S_e``, and at least half inside."""
+    """The temporal rule: start within ``S_e``, and at least half inside,
+    on the victim's clock."""
     window = finding.window
     onset, end = injection.times.effect_onset_ns, injection.times.effect_end_ns
     if window is None or onset is None or end is None:
+        return False
+    if not window.on_clock(injection.clock_domain):
         return False
     first = onset - window.pre_grace_ns
     last = end + config.grace(finding.kind)
@@ -698,7 +708,7 @@ def _negative_claims(
         for finding in findings
         if finding.scored_fault_claim
         and finding.id not in elsewhere
-        and _placed_in(finding.window, exposure)
+        and _placed_in(finding.window, exposure, unit.clock_domain)
         and not _allowed(finding, unit)
         and not (
             finding.id in qualifying and is_neutral(finding, qualifying, unit, config)
@@ -706,10 +716,12 @@ def _negative_claims(
     )
 
 
-def _placed_in(window: Window | None, exposure: Sequence[Interval]) -> bool:
-    """The temporal rule over the exposure: the window starts in it, and at
-    least half of the window lies in it."""
-    if window is None or not exposure:
+def _placed_in(
+    window: Window | None, exposure: Sequence[Interval], clock_domain: str | None
+) -> bool:
+    """The temporal rule over the exposure: the window is on the victim's
+    clock, starts in the exposure, and lies at least half in it."""
+    if window is None or not exposure or not window.on_clock(clock_domain):
         return False
     if not any(i.start_ns <= window.start_ns <= i.end_ns for i in exposure):
         return False
