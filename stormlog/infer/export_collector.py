@@ -4,9 +4,10 @@ The collector's own health is exported, never its measurements: memory
 values stay in its JSONL, where the analysis joins them to the run, and a
 DCGM or node exporter already reports device and process memory to
 Prometheus. ``stormlog_collector_info`` carries the identity the collector
-confirmed (host, boot, process, GPU or MIG instance, replica, group, rank)
+observed (host, boot, process, GPU or MIG instance, replica, group, rank)
 as labels on one series, so a dashboard can tell collectors apart and see
-which GPU each one watched. An identity part that is not known is empty,
+which GPU each one watched; ``gpu_process_match`` says whether NVML showed
+the server on that GPU. An identity part that is not known is empty,
 never guessed.
 
 Every label value is known once the collector has found its process and
@@ -29,6 +30,7 @@ from .._export.textfile import PRODUCER_LABEL, SlotInUse, TextfileWriter
 from .export import ExportUsageError
 from .export_config import ExportConfig
 from .server_collector import (
+    GPU_MATCH_UNKNOWN,
     STOP_DURATION_ELAPSED,
     STOP_GPU_IDENTITY_CHANGED,
     STOP_REQUESTED,
@@ -57,6 +59,7 @@ IDENTITY_LABELS = (
     "pid",
     "process_start_ns",
     "device_uuid",
+    "gpu_process_match",
     "gpu_instance_id",
     "replica_id",
     "group_id",
@@ -120,9 +123,13 @@ class CollectorExport:
             raise ExportUsageError(str(exc)) from exc
 
     # ------------------------------------------------------------- the run
-    def identify(self, identity: ServerIdentity) -> None:
+    def identify(
+        self, identity: ServerIdentity, gpu_process_match: str = GPU_MATCH_UNKNOWN
+    ) -> None:
         """Declare the series for this identity, check the budget, start serving."""
-        self._identity_values = _identity_values(self.run_id, self.version, identity)
+        self._identity_values = _identity_values(
+            self.run_id, self.version, identity, gpu_process_match
+        )
         self._declare()
         try:
             self.registry.check_budget()
@@ -179,8 +186,9 @@ class CollectorExport:
                 FamilySpec(
                     "stormlog_collector_info",
                     "gauge",
-                    "1 for the collector, labelled with the identity it confirmed. "
-                    "An unknown part is empty.",
+                    "1 for the collector, labelled with the identity it observed "
+                    "and whether NVML showed the server on its GPU "
+                    "(gpu_process_match). An unknown part is empty.",
                     labels=IDENTITY_LABELS,
                 ),
                 [dict(zip(IDENTITY_LABELS, self._identity_values))],
@@ -284,7 +292,7 @@ class CollectorExport:
 
 
 def _identity_values(
-    run_id: str, version: str, identity: ServerIdentity
+    run_id: str, version: str, identity: ServerIdentity, gpu_process_match: str
 ) -> tuple[str, ...]:
     def text(value: object) -> str:
         return "" if value is None else str(value)
@@ -296,6 +304,7 @@ def _identity_values(
         str(identity.pid),
         str(identity.process_start_ns),
         text(identity.device_uuid),
+        gpu_process_match,
         text(identity.gpu_instance_id),
         text(identity.replica_id),
         text(identity.group_id),

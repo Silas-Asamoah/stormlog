@@ -23,6 +23,10 @@ STOP_DURATION_ELAPSED = "duration_elapsed"
 STOP_REQUESTED = "stop_requested"
 STOP_SERVER_PROCESS_ENDED = "server_process_ended"
 STOP_GPU_IDENTITY_CHANGED = "gpu_identity_changed"
+# Whether NVML showed the server, or a child of it, on the GPU it watches.
+GPU_MATCH_CONFIRMED = "confirmed"
+GPU_MATCH_NOT_SEEN = "not_seen"
+GPU_MATCH_UNKNOWN = "unknown"
 
 _PROCESS_ENDED_DETAIL = "server process ended or its PID was reused"
 _NVML_SUCCESS = 0
@@ -176,10 +180,13 @@ class CollectionObserver(Protocol):
     """Told the collector's identity, each poll, and why it stopped.
 
     ``identify`` runs before anything is collected; its ``ValueError`` is
-    a usage error. ``poll`` and ``close`` must not raise.
+    a usage error. ``gpu_process_match`` says whether NVML showed the server
+    on the GPU it watches. ``poll`` and ``close`` must not raise.
     """
 
-    def identify(self, identity: ServerIdentity) -> None: ...
+    def identify(
+        self, identity: ServerIdentity, gpu_process_match: str = GPU_MATCH_UNKNOWN
+    ) -> None: ...
 
     def poll(self, samples: Sequence[TelemetrySample]) -> None: ...
 
@@ -311,14 +318,14 @@ def collect_server_telemetry(
         raise InferUsageError(str(exc)) from exc
     source, own_source = _gpu_source(gpu_source, no_gpu, device_index, device_uuid)
     try:
-        warnings = _gpu_process_warnings(process, source)
+        warnings, match = _gpu_process_check(process, source)
         for message in warnings:
             if on_warning is not None:
                 on_warning(message)
         identity = _server_identity(
             process, source, replica_id, (group_id, rank, world_size)
         )
-        _identify(observer, identity)
+        _identify(observer, identity, match)
         stop_reason = "error"
         try:
             polls, stop_reason, detail = _collect_loop(
@@ -341,11 +348,13 @@ def collect_server_telemetry(
             source.close()
 
 
-def _identify(observer: CollectionObserver | None, identity: ServerIdentity) -> None:
+def _identify(
+    observer: CollectionObserver | None, identity: ServerIdentity, match: str
+) -> None:
     if observer is None:
         return
     try:
-        observer.identify(identity)
+        observer.identify(identity, gpu_process_match=match)
     except ValueError as exc:
         raise InferUsageError(str(exc)) from exc
 
@@ -416,23 +425,26 @@ def _server_identity(
     )
 
 
-def _gpu_process_warnings(
+def _gpu_process_check(
     process: psutil.Process, source: GpuMemorySource | None
-) -> list[str]:
-    """Warn when NVML does not show the server PID on the sampled GPU.
+) -> tuple[list[str], str]:
+    """Whether NVML shows the server on the sampled GPU, and warnings if not.
 
     NVML numbers GPUs in its own order, and CUDA_VISIBLE_DEVICES renumbers them
     for the server, so an index can name a different GPU than the server uses.
     """
     list_compute_pids = getattr(source, "compute_pids", None)
     if source is None or list_compute_pids is None:
-        return []
-    return describe_gpu_process_match(
-        process.pid,
-        source.device_uuid,
-        list_compute_pids(),
-        _descendant_pids(process),
+        return [], GPU_MATCH_UNKNOWN
+    gpu_pids = list_compute_pids()
+    descendants = _descendant_pids(process)
+    warnings = describe_gpu_process_match(
+        process.pid, source.device_uuid, gpu_pids, descendants
     )
+    if gpu_pids is None:
+        return warnings, GPU_MATCH_UNKNOWN
+    seen = process.pid in gpu_pids or bool(descendants & gpu_pids)
+    return warnings, GPU_MATCH_CONFIRMED if seen else GPU_MATCH_NOT_SEEN
 
 
 def describe_gpu_process_match(

@@ -572,7 +572,8 @@ several GPUs: run one collector per GPU with the same `--pid`.
 Each collector can report its own health to Prometheus with
 `--prometheus-listen` or `--prometheus-textfile-dir` (give concurrent
 collectors different `--prometheus-slot` names). The health is labelled with
-the identity the collector confirmed; the memory values stay in its output.
+the identity the collector observed, and whether NVML showed the server on its
+GPU; the memory values stay in its output.
 See [Collector health](inference_export.md#collector-health).
 
 The analyzer joins a group only when every rank from 0 to N-1 appears exactly
