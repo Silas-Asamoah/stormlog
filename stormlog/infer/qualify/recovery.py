@@ -61,6 +61,8 @@ class Thresholds:
     # and waiting counts outside its range, as the same chance allows.
     min_wait_samples: int = 20
     min_gauge_samples: int = 5
+    # T3b: the engine-wide prefix hit ratio falls at least this far.
+    hit_ratio_drop: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,8 @@ class Signals:
     chunks, in seconds, at the later chunk. ``in_flight`` holds the sorted,
     disjoint intervals during which at least one victim request was in
     flight; None means unknown, and every step gap then counts as busy.
+    ``engine_hit_ratio`` is the engine-wide prefix-cache hit ratio between
+    consecutive scrapes.
     """
 
     waits: Sequence[Point] = ()
@@ -86,6 +90,7 @@ class Signals:
     step_starts: Sequence[int] = ()
     chunk_gaps: Sequence[Point] = ()
     in_flight: Sequence[tuple[int, int]] | None = None
+    engine_hit_ratio: Sequence[Point] = ()
 
     def step_gaps(self) -> list[Point]:
         """Each step's gap from the one before, in seconds, at its start."""
@@ -119,16 +124,22 @@ def _covered(
 
 @dataclass(frozen=True)
 class Actions:
-    """The injector's own times, on the victim's clock."""
+    """The injector's own times, on the victim's clock. ``slot_ns`` is a
+    null run's scheduled slot (N). ``peer_wait_extended`` says whether the
+    other rank's NCCL kernels lengthened during an F5 pulse, from Nsight
+    (C.6); None means it wasn't measured."""
 
     first_send_ns: int | None = None
     first_admission_ns: int | None = None
     first_stop_confirmed_ns: int | None = None
     last_continue_ns: int | None = None
+    capture_started_ns: int | None = None
     stop_requested_ns: int | None = None
     stop_returned_ns: int | None = None
     drain_ns: int = 0
     pulses: Sequence[tuple[int, int]] = ()  # (stopped confirmed, continued)
+    slot_ns: tuple[int, int] | None = None
+    peer_wait_extended: bool | None = None
 
 
 # ------------------------------------------------------------------ series
@@ -417,6 +428,7 @@ class Baseline:
     steps: GapStats
     chunks: GapStats
     cached_median: float
+    hit_ratio_median: float = 0.0
 
     @classmethod
     def measure(cls, signals: Signals, start_ns: int, end_ns: int) -> Baseline:
@@ -429,6 +441,9 @@ class Baseline:
             steps=GapStats.of(between(signals.busy_step_gaps(), start_ns, end_ns)),
             chunks=GapStats.of(between(signals.chunk_gaps, start_ns, end_ns)),
             cached_median=_median(between(signals.cached_fraction, start_ns, end_ns)),
+            hit_ratio_median=_median(
+                between(signals.engine_hit_ratio, start_ns, end_ns)
+            ),
         )
 
 
@@ -592,7 +607,14 @@ MECHANISMS: dict[str, Mechanism] = {
     "H0": Mechanism(_FIRST_STOP, _stall_recovery, "action_end", "cadence_hold_ns"),
     "P": Mechanism(_FIRST_STOP, _stall_recovery, "action_end", "cadence_hold_ns"),
     "W1": Mechanism(_FIRST_SEND, _load_recovery),
+    "F5": Mechanism(_FIRST_STOP, _stall_recovery, "action_end", "cadence_hold_ns"),
+    "R0": Mechanism(_FIRST_STOP, _stall_recovery, "action_end", "cadence_hold_ns"),
 }
+
+
+def base_type(episode_type: str) -> str:
+    """The fault whose rules a short twin (``S-<x>``) follows."""
+    return episode_type[2:] if episode_type.startswith("S-") else episode_type
 
 
 def effect_timing(episode_type: str, context: Context) -> Timing:
@@ -601,13 +623,16 @@ def effect_timing(episode_type: str, context: Context) -> Timing:
     Effect end is the start of the first interval over which the recovery
     criteria hold; recovery holds at its end. For pulses, recovery is sought
     from the last ``SIGCONT``. I1's effect runs from the stop request to the
-    stop's return plus #219's drain.
+    stop's return plus #219's drain, and N's is its scheduled slot. A short
+    twin follows its fault's rules.
 
     Raises:
         KeyError: for an episode type with no rule here.
+        ValueError: for N without a scheduled slot.
     """
-    if episode_type == "I1":
-        return _capture_timing(context)
+    episode_type = base_type(episode_type)
+    if episode_type in _TIMED_BY_ACTIONS:
+        return _TIMED_BY_ACTIONS[episode_type](context)
     mechanism = MECHANISMS[episode_type]
     onset, basis = mechanism.onset(context)
     if onset is None:
@@ -628,16 +653,32 @@ def _capture_timing(context: Context) -> Timing:
     return Timing(actions.stop_requested_ns, "capture_stop_requested", end, end)
 
 
+def _slot_timing(context: Context) -> Timing:
+    """N injects nothing: its scored window is the slot it was scheduled."""
+    slot = context.actions.slot_ns
+    if slot is None:
+        raise ValueError("a null run (N) needs its scheduled slot")
+    return Timing(slot[0], "scheduled_slot", slot[1], slot[1])
+
+
+_TIMED_BY_ACTIONS: dict[str, Callable[[Context], Timing]] = {
+    "I1": _capture_timing,
+    "N": _slot_timing,
+}
+
+
 # ------------------------------------------------------------------ realization
 
 
 @dataclass(frozen=True)
 class Check:
-    """One realization check, as recorded in the ground truth."""
+    """One realization check, as recorded in the ground truth. A check that
+    doesn't gate is recorded only, as when it adds a realized mechanism."""
 
     name: str
     passed: bool
     value: Any = None
+    gating: bool = True
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -645,6 +686,7 @@ class Check:
             "name": self.name,
             "passed": self.passed,
             "value": self.value,
+            "gating": self.gating,
         }
 
 
@@ -652,11 +694,27 @@ def realization(
     episode_type: str, context: Context, timing: Timing
 ) -> tuple[bool, list[Check]]:
     """Whether the mechanism occurred (A.4's realization column), with the
-    checks behind the verdict. An episode type the column leaves empty is
-    realized when its action took place."""
-    rule = _REALIZATION.get(episode_type)
-    checks = [] if rule is None else rule(context, timing)
-    return all(check.passed for check in checks), checks
+    checks behind the verdict. A short twin follows its fault's rule; a type
+    whose column is empty (W1, P, N) is realized when its action took place.
+
+    Raises:
+        KeyError: for a type with no rule here, a typo or X1–X3 (judged by
+            C.6's outage criteria) among them.
+    """
+    checks = _REALIZATION[base_type(episode_type)](context, timing)
+    return all(check.passed for check in checks if check.gating), checks
+
+
+def added_mechanisms(episode_type: str, checks: Sequence[Check]) -> tuple[str, ...]:
+    """Mechanisms an episode realized beyond its label (A.4): an API-server
+    pulse (F4b) whose engine stopped stepping also stalled the engine core."""
+    if base_type(episode_type) != "F4b":
+        return ()
+    stalled = any(
+        check.name == "engine_progress_during_pulse" and not check.passed
+        for check in checks
+    )
+    return ("host_stall@engine_core",) if stalled else ()
 
 
 def _window_of(context: Context, timing: Timing) -> tuple[int, int]:
@@ -696,6 +754,17 @@ def _realized_cache_loss(context: Context, timing: Timing) -> list[Check]:
     return [Check("cached_fraction_below_0.5", onset is not None)]
 
 
+def _hit_ratio_fell(context: Context, timing: Timing) -> list[Check]:
+    """T3b: the engine-wide hit ratio falls, though the victim's doesn't."""
+    start, end = _window_of(context, timing)
+    values = between(context.signals.engine_hit_ratio, start, end)
+    median = statistics.median(values) if values else None
+    ceiling = context.baseline.hit_ratio_median - context.thresholds.hit_ratio_drop
+    return [
+        Check("engine_hit_ratio_fell", median is not None and median <= ceiling, median)
+    ]
+
+
 def _cache_unchanged(context: Context, timing: Timing) -> list[Check]:
     start, end = _window_of(context, timing)
     values = between(context.signals.cached_fraction, start, end)
@@ -728,19 +797,52 @@ def _engine_stalled(context: Context, timing: Timing) -> list[Check]:
 
 
 def _engine_progressed(context: Context, timing: Timing) -> list[Check]:
-    """F4b: the engine kept stepping while the API server was stopped."""
-    steps = context.signals.step_starts
-    during = sum(
-        events_between(steps, stop, cont) for stop, cont in context.actions.pulses
-    )
-    return _stopped(context, timing) + [
-        Check("engine_progress_during_pulse", during > 0, during)
+    """F4b: whether the engine kept stepping in every pulse while a victim
+    request was in flight. It doesn't gate: an engine that stalled too adds
+    that mechanism instead (``added_mechanisms``)."""
+    signals = context.signals
+    judged = [
+        (stop, cont)
+        for stop, cont in context.actions.pulses
+        if signals.in_flight is None or _overlaps(signals.in_flight, stop, cont)
     ]
+    progressed = sum(
+        1
+        for stop, cont in judged
+        if events_between(signals.step_starts, stop + 1, cont - 1)
+    )
+    check = Check(
+        "engine_progress_during_pulse",
+        progressed == len(judged),
+        [progressed, len(judged)],
+        gating=False,
+    )
+    return _stopped(context, timing) + [check]
+
+
+def _overlaps(intervals: Sequence[tuple[int, int]], start: int, end: int) -> bool:
+    return any(left <= end and start <= right for left, right in intervals)
 
 
 def _captured(context: Context, timing: Timing) -> list[Check]:
     actions = context.actions
-    return [Check("capture_started_and_stopped", actions.stop_returned_ns is not None)]
+    both = (
+        actions.capture_started_ns is not None and actions.stop_returned_ns is not None
+    )
+    return [Check("capture_started_and_stopped", both)]
+
+
+def _peer_waited(context: Context, timing: Timing) -> list[Check]:
+    """F5: the stopped rank's peer waits longer in NCCL (C.6, from Nsight)."""
+    extended = context.actions.peer_wait_extended
+    return _stopped(context, timing) + [
+        Check("nccl_wait_asymmetry", extended is True, extended)
+    ]
+
+
+def _declared_empty(context: Context, timing: Timing) -> list[Check]:
+    """A.4's column is empty: realized when the action took place."""
+    return []
 
 
 _REALIZATION: dict[str, Callable[[Context, Timing], list[Check]]] = {
@@ -750,11 +852,17 @@ _REALIZATION: dict[str, Callable[[Context, Timing], list[Check]]] = {
     "T2": _no_preemption,
     "F3": _realized_cache_loss,
     "T3": _cache_unchanged,
-    "T3b": _cache_unchanged,
+    "T3b": lambda context, timing: _cache_unchanged(context, timing)
+    + _hit_ratio_fell(context, timing),
     "F4a": _engine_stalled,
     "F4b": _engine_progressed,
     "H0": _stopped,
     "I1": _captured,
+    "W1": _declared_empty,
+    "P": _declared_empty,
+    "N": _declared_empty,
+    "F5": _peer_waited,
+    "R0": _stopped,
 }
 
 
@@ -814,7 +922,9 @@ __all__ = [
     "Signals",
     "Thresholds",
     "Timing",
+    "added_mechanisms",
     "allowed_exceedances",
+    "base_type",
     "between",
     "effect_timing",
     "first_window",
