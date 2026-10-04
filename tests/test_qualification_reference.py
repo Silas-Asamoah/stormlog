@@ -6,6 +6,8 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig
 from examples.qualification.reference import (
     HookTailer,
@@ -220,6 +222,36 @@ def test_a_record_missing_a_field_is_skipped_not_fatal(tmp_path: Path) -> None:
     assert channel.bad_records == 1
     noted = (tmp_path / "probes" / "hook-problems.jsonl").read_text().splitlines()
     assert json.loads(noted[0])["kind"] == "bad_record"
+
+
+def test_a_bad_record_changes_nothing() -> None:
+    # rev-220-a's second A2 delta, D4: a record counted as bad was half
+    # applied. A victim alias without its internal ID left an admission
+    # that read as a victim request in flight until a finished record came;
+    # a step whose member lacked its ID, or whose cached count wasn't a
+    # number, left the step's start, schedule and earlier members' waits.
+    view = VictimView(victim_prefix=VICTIM, shared_prefix_tokens=4)
+    admitted = [(50, f"{VICTIM}1"), (60, f"{VICTIM}2")]
+    for at, external in admitted:
+        view.add({"epoch": "engine-1", "kind": "alias", "wall_ns": at,
+                  "internal": f"i{external[-1]}", "external": external})  # fmt: skip
+    bad = [
+        {"epoch": "engine-1", "kind": "alias", "external": f"{VICTIM}0",
+         "wall_ns": 100},
+        {"epoch": "engine-1", "kind": "scheduled", "iteration": 7,
+         "start_wall_ns": 200, "end_wall_ns": 210,
+         "members": [{"sighting": "first"}]},
+        {"epoch": "engine-1", "kind": "scheduled", "iteration": 8,
+         "start_wall_ns": 300, "end_wall_ns": 310,
+         "members": [{"internal": "i1", "sighting": "first"},
+                     {"internal": "i2", "sighting": "first",
+                      "cached_at_admission": "four"}]},
+    ]  # fmt: skip
+    for record in bad:
+        with pytest.raises((KeyError, TypeError, ValueError)):
+            view.add(record)
+    assert view.admissions == admitted
+    assert (view.step_starts, view.schedules, view.waits) == ([], {}, [])
 
 
 def test_a_segment_rewritten_shorter_is_read_again(tmp_path: Path) -> None:

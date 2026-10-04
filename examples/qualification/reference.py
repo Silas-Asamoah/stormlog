@@ -268,33 +268,54 @@ class VictimView:
         elif kind == "completed" and record.get("wall_ns") is not None:
             self.completions[str(record.get("iteration"))] = int(record["wall_ns"])
 
+    # Each record is read whole before any of it is applied: one that lacks
+    # a field raises with the view unchanged, and is skipped as bad.
+
     def _alias(self, record: dict[str, Any]) -> None:
         external = str(record.get("external") or "")
-        self.admissions.append((int(record["wall_ns"]), external))
-        if external.startswith(self.victim_prefix):
-            self._admitted[str(record["internal"])] = int(record["wall_ns"])
+        at = int(record["wall_ns"])
+        victim = external.startswith(self.victim_prefix)
+        internal = str(record["internal"]) if victim else None
+        self.admissions.append((at, external))
+        if internal is not None:
+            self._admitted[internal] = at
 
     def _scheduled(self, record: dict[str, Any]) -> None:
         start = int(record["start_wall_ns"])
-        self.step_starts.append(start)
         end = record.get("end_wall_ns")
-        if end is not None:
-            self.schedules[str(record.get("iteration"))] = (start, int(end))
-        for member in record.get("members") or ():
-            self._member(member, start)
-        for internal in record.get("preempted") or ():
+        schedule = None if end is None else (start, int(end))
+        firsts = [
+            self._first_sighting(member) for member in record.get("members") or ()
+        ]
+        preempted = list(record.get("preempted") or ())
+        self.step_starts.append(start)
+        if schedule is not None:
+            self.schedules[str(record.get("iteration"))] = schedule
+        self._first_schedules(start, firsts)
+        for internal in preempted:
             if internal in self._admitted:
                 self.preemptions.append(start)
 
-    def _member(self, member: dict[str, Any], start: int) -> None:
+    def _first_schedules(
+        self, start: int, firsts: list[tuple[str, float | None]]
+    ) -> None:
+        """Each victim request's wait and cached share at the step that
+        first schedules it."""
+        for internal, share in firsts:
+            admitted = self._admitted.get(internal)
+            if share is None or admitted is None:
+                continue
+            self.waits.append((start, (start - admitted) / 1e9))
+            self.cached_fraction.append((start, share))
+
+    def _first_sighting(self, member: dict[str, Any]) -> tuple[str, float | None]:
+        """A member's request, and its cached share of the victim's prefix at
+        its first sighting (None at a later one)."""
         internal = str(member["internal"])
-        admitted = self._admitted.get(internal)
-        if admitted is None or member.get("sighting") != "first":
-            return
-        self.waits.append((start, (start - admitted) / 1e9))
+        if member.get("sighting") != "first":
+            return internal, None
         cached = member.get("cached_at_admission") or 0
-        share = min(1.0, cached / self.shared_prefix_tokens)
-        self.cached_fraction.append((start, share))
+        return internal, min(1.0, cached / self.shared_prefix_tokens)
 
 
 def _victim_requests(
