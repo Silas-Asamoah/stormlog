@@ -80,7 +80,7 @@ from .records import (
 )
 from .stats import EVICTION_CAUSES, WatchStats, counter_value
 from .store import IncidentStore, PrunedBundle, StoreInUse
-from .triggers import EVENT_FIRED, VIOLATING
+from .triggers import EVENT_FIRED, EVENT_RESOLVED, VIOLATING
 
 REPORT_KIND = "inference_watch"
 # After a second stop signal, at most this long more before the report.
@@ -350,6 +350,8 @@ class Watcher:
         incident_id = (
             self.incidents.on_fired(result) if transition.event == EVENT_FIRED else None
         )
+        if transition.event == EVENT_RESOLVED:
+            self.incidents.on_resolved(result.spec.trigger_id, result.at_ns)
         record = envelope(
             TRIGGER_STATE,
             session_id=self.identity.session_id,
