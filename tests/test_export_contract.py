@@ -15,6 +15,7 @@ import pytest
 from stormlog._export import delivery, otlp_http, span_export
 from stormlog._export.filesink import FILE_DISABLED, FILE_ERROR, FILE_FULL
 from stormlog.infer import export as export_module
+from stormlog.infer import profile as profile_module
 from stormlog.infer.cli import build_parser
 from stormlog.infer.export_config import ExportConfig, export_config_from_args
 from stormlog.infer.export_metrics import ProfileLabels
@@ -102,22 +103,27 @@ def test_the_span_reasons_match_the_code() -> None:
 
 
 def test_the_defaults_match_the_code() -> None:
-    defaults = CONTRACT["defaults"]
+    # Every default the fixture declares, so none can go stale unchecked.
     retry = delivery.RetryPolicy()
-    assert defaults["attempt_seconds"] == otlp_http.DEFAULT_ATTEMPT_SECONDS
-    assert defaults["max_attempts"] == retry.max_attempts
-    assert defaults["retry_budget_seconds"] == retry.budget_seconds
-    assert defaults["backoff_initial_seconds"] == retry.initial_seconds
-    assert defaults["backoff_max_seconds"] == retry.max_seconds
-    assert defaults["schedule_delay_seconds"] == span_export.SCHEDULE_DELAY_SECONDS
-    assert defaults["batch_spans"] == span_export.MAX_BATCH_SPANS
-    assert defaults["batch_bytes"] == span_export.MAX_BATCH_BYTES
-    assert defaults["span_queue_spans"] == span_export.SPAN_QUEUE_ITEMS
-    assert defaults["span_queue_bytes"] == span_export.SPAN_QUEUE_BYTES
-    assert defaults["metric_queue_records"] == export_module.METRIC_QUEUE_ITEMS
-    assert defaults["metric_queue_bytes"] == export_module.METRIC_QUEUE_BYTES
-    assert defaults["otlp_file_max_bytes"] == span_export.MAX_FILE_BYTES
-    assert defaults["max_response_bytes"] == otlp_http.MAX_RESPONSE_BYTES
+    assert CONTRACT["defaults"] == {
+        "attempt_seconds": otlp_http.DEFAULT_ATTEMPT_SECONDS,
+        "max_attempts": retry.max_attempts,
+        "retry_budget_seconds": retry.budget_seconds,
+        "backoff_initial_seconds": retry.initial_seconds,
+        "backoff_max_seconds": retry.max_seconds,
+        "schedule_delay_seconds": span_export.SCHEDULE_DELAY_SECONDS,
+        "batch_spans": span_export.MAX_BATCH_SPANS,
+        "batch_bytes": span_export.MAX_BATCH_BYTES,
+        "span_queue_spans": span_export.SPAN_QUEUE_ITEMS,
+        "span_queue_bytes": span_export.SPAN_QUEUE_BYTES,
+        "metric_queue_records": export_module.METRIC_QUEUE_ITEMS,
+        "metric_queue_bytes": export_module.METRIC_QUEUE_BYTES,
+        "otlp_file_max_bytes": span_export.MAX_FILE_BYTES,
+        "max_response_bytes": otlp_http.MAX_RESPONSE_BYTES,
+        "interrupt_flush_timeout_seconds": (
+            profile_module.EXPORT_INTERRUPT_CLOSE_SECONDS
+        ),
+    }
 
 
 def test_the_summaries_carry_the_declared_keys(tmp_path: Path) -> None:
