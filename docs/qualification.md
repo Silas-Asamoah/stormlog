@@ -90,7 +90,9 @@ final-recovery windows, any run-level protocol failure (a failed priming
 check), and the run's actions. The scorer derives the run's negative
 exposure from it and the run's episodes (`negative_exposure`). Every
 sub-window must lie inside the measured one, and `score_run` refuses an
-episode on another clock than its run's: the two are compared.
+episode on another clock than its run's: the two are compared. `score_run`
+also checks a run and its episodes built in memory as if they had been read
+from files, and raises `GroundTruthError` on what parsing would refuse.
 
 ```json
 {"format": "stormlog.qualify.run/1", "run_id": "q221-dxoff-b03-r07",

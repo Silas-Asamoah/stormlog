@@ -663,6 +663,24 @@ def test_an_episode_of_another_run_is_refused() -> None:
         )
 
 
+def test_ground_truth_built_in_memory_is_checked_as_if_read() -> None:
+    # rev-220-b's delta D7: score_run took in-memory truth unchecked, so an
+    # info-severity label credited an info finding. It now refuses what
+    # parsing the files would refuse.
+    from stormlog.infer.qualify.ground_truth import GroundTruthError
+
+    info = replace(
+        episode(),
+        run_id="r1",
+        expects=(Expectation(KV, "kv_cache", min_severity="info"),),
+    )
+    with pytest.raises(GroundTruthError, match="warning"):
+        score_run(run_record("r1"), [info], diagnosis(), CONFIG)
+    backwards = replace(run_record("r1"), priming=Interval(30 * S, 0))
+    with pytest.raises(GroundTruthError, match="priming ends before"):
+        score_run(backwards, [replace(null_run(), run_id="r1")], diagnosis(), CONFIG)
+
+
 def test_an_episode_on_another_clock_than_its_run_is_refused() -> None:
     # The run's windows and its episodes' are compared: one clock for all.
     stray = replace(null_run(), run_id="r1", clock_domain="other/boot/unix_epoch_ns")
