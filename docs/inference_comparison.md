@@ -280,6 +280,9 @@ model); more requests per run do not help.
   one-sided 97.5% Clopper–Pearson lower bound of k/n is at least 0.5. That
   is exact when blocks are independent (a fresh server each run), however
   failures cluster inside a run.
+- **A baseline is required.** When no baseline run has a value, the gate
+  is `not_evaluable: baseline_unmeasured`: there is nothing to judge the
+  candidate against, and a failure would blame the wrong arm.
 - **Blocks are required.** Without them the gate is
   `not_evaluable: fraction_needs_blocks`. Judging every candidate run
   against one estimated baseline mean correlates the judgements, so the

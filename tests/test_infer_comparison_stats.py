@@ -210,6 +210,21 @@ def test_a_block_without_its_baseline_value_is_a_miss_unless_the_caller_says_why
     assert (told.gate.status, told.gate.reason) == ("not_evaluable", "control_failed")
 
 
+def test_a_baseline_with_no_measured_run_leaves_the_claim_unjudged() -> None:
+    # rev-213-a's R3-2, as the lead ruled: with no baseline value in any
+    # block there is nothing to judge the candidate against, so the claim
+    # is not evaluable rather than a candidate failure.
+    result = _fractions([0.0] * 8, baseline=[None] * 8)
+    assert result.gate is not None
+    assert (result.gate.status, result.gate.reason) == (
+        "not_evaluable",
+        "baseline_unmeasured",
+    )
+    # One measured baseline run keeps it a claim, with the rest misses.
+    one = _fractions([0.0] * 8, baseline=[0.0] + [None] * 7)
+    assert one.gate is not None and one.gate.status == "fail"
+
+
 def test_a_fraction_gate_honours_its_preregistered_block_count() -> None:
     # rev-213-a's D5 (mutant c13): eight runs, all within, against ten
     # pre-registered blocks.
