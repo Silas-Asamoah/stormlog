@@ -63,7 +63,7 @@ def test_a_sealed_bundle_names_gen0_with_digests(tmp_path: Path) -> None:
     assert writer.adopt(trace, "traces/rank0.1.pt.trace.json.gz") == 300
     manifest = writer.publish()
 
-    assert not trace.exists()  # moved, not copied
+    assert not trace.exists()  # linked in, then let go once published
     assert manifest.current == "gen-0" and manifest.complete
     assert [f.path for f in manifest.files] == [
         "gen-0/incident.jsonl",
@@ -94,10 +94,21 @@ def test_a_write_over_the_allowance_abandons_the_generation(tmp_path: Path) -> N
     assert store.manifest(incident_id) is None
 
 
+def _no_cross_device_links(monkeypatch: pytest.MonkeyPatch) -> None:
+    import errno
+
+    def link(source: Any, target: Any) -> None:
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr(store_module.os, "link", link)
+
+
 def test_a_cross_filesystem_adoption_copies_within_the_allowance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(store_module, "_same_filesystem", lambda a, b: False)
+    """A link across devices (EXDEV, also between two bind mounts of one
+    device) falls back to a copy charged chunk by chunk."""
+    _no_cross_device_links(monkeypatch)
     store = IncidentStore(tmp_path, _limits())
     big = tmp_path / "big.gz"
     big.write_bytes(b"b" * 5000)
@@ -110,8 +121,55 @@ def test_a_cross_filesystem_adoption_copies_within_the_allowance(
     writer = store.new_bundle(store.new_incident_id(), 6000)
     assert writer is not None
     assert writer.adopt(big, "traces/big.gz") == 5000
+    assert big.exists()  # until the generation is published
+    writer.publish()
     assert not big.exists()
     assert (writer.directory / "traces/big.gz").read_bytes() == b"b" * 5000
+
+
+def test_an_abandoned_generation_leaves_adopted_traces_where_they_were(
+    tmp_path: Path,
+) -> None:
+    """A seal over its allowance used to delete the trace it had moved in."""
+    store = IncidentStore(tmp_path, _limits())
+    trace = tmp_path / "rank0.pt.trace.json.gz"
+    trace.write_bytes(b"t" * 8 * KIB)
+    writer = store.new_bundle(store.new_incident_id(), 16 * KIB)
+    assert writer is not None
+    writer.adopt(trace, "traces/rank0.pt.trace.json.gz")
+    with pytest.raises(BudgetExceeded):
+        with writer.file("incident.jsonl") as out:
+            out.write(b"x" * 16 * KIB)
+    writer.abandon()
+    assert trace.read_bytes() == b"t" * 8 * KIB
+    assert store.budget.used_bytes == 0 == store._scan_bytes()
+
+
+def test_an_adopted_file_that_grows_is_charged_its_growth(tmp_path: Path) -> None:
+    """A producer still writing to the trace kept appending, uncharged."""
+    store = IncidentStore(tmp_path, _limits())
+    trace = tmp_path / "rank0.pt.trace.json"
+    trace.write_bytes(b"t" * 100)
+    writer = store.new_bundle(store.new_incident_id(), 2 * KIB)
+    assert writer is not None
+    assert writer.adopt(trace, "traces/rank0.pt.trace.json") == 100
+    with trace.open("ab") as producer:  # the exporter's still-open file
+        producer.write(b"g" * 900)
+    writer.publish()
+    assert store.budget.used_bytes == 1000 == store._scan_bytes()
+
+    trace = tmp_path / "rank1.pt.trace.json"
+    trace.write_bytes(b"t" * 100)
+    writer = store.new_bundle(store.new_incident_id(), KIB)
+    assert writer is not None
+    writer.adopt(trace, "traces/rank1.pt.trace.json")
+    with trace.open("ab") as producer:
+        producer.write(b"g" * 4 * KIB)
+    with pytest.raises(BudgetExceeded):
+        writer.publish()
+    writer.abandon()
+    assert trace.exists()
+    assert store.budget.used_bytes == 1000 == store._scan_bytes()
 
 
 def test_a_new_generation_links_traces_and_frees_only_what_it_replaced(

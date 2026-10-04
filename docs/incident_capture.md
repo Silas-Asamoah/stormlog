@@ -67,7 +67,10 @@ the manifest again: `read_manifest_snapshot` does this up to three times.
 
 Every byte a bundle's generations hold is charged to the store's budget
 before it is written:
-- A raw trace moved in is charged its actual size first.
+- A raw trace is hard-linked in (copied, where no link can be made) and
+  charged its actual size first. Its original name is removed only once the
+  generation is published, so an abandoned generation leaves it where it
+  was, and anything it grew by meanwhile is charged at publication.
 - A file written by the watcher is charged chunk by chunk, before each chunk
   reaches the disk.
 

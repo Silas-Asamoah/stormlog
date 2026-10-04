@@ -66,6 +66,8 @@ STATUSES = (STATUS_COMPLETED, STATUS_INTERRUPTED)
 # A bundle with no manifest and nothing recoverable is removed once it is
 # this old; a younger one may belong to a seal still in progress.
 JUNK_AGE_SECONDS = 3600.0
+# A hard link cannot be made: another device, or a filesystem without links.
+_NO_LINK_ERRNOS = frozenset({errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP})
 _COPY_CHUNK = 1024 * 1024
 
 
@@ -182,6 +184,8 @@ class GenerationWriter:
         self.directory = bundle / f"gen-{generation}"
         self.directory.mkdir(mode=0o700)
         self._done = False
+        # Adopted files: their source, their name here, and what was charged.
+        self._adopted: list[tuple[Path, Path, int]] = []
 
     @property
     def incident_id(self) -> str:
@@ -194,26 +198,48 @@ class GenerationWriter:
         return CappedWriter(target, self.allowance)
 
     def adopt(self, source: Path, relpath: str) -> int:
-        """Move a file in, charged by its actual size first; return its bytes.
+        """Bring a file in, charged by its actual size; return its bytes.
 
-        On the same filesystem the file is renamed in. Across filesystems it
-        is copied through the allowance and the source is removed only once
-        the copy is complete and synced.
+        The file is hard-linked in, or, where a link cannot be made (another
+        device, including a bind mount of the same one), copied through the
+        allowance. Its source is let go only once the generation is
+        published, so an abandoned generation leaves it where it was. A file
+        its producer is still writing is charged its growth at publication;
+        adopt only a file its producer has finished.
         """
         target = self._target(relpath)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         size = source.stat().st_size
-        if _same_filesystem(source, self.directory):
-            self.allowance.charge(size)
-            os.replace(source, target)
-            return size
+        try:
+            os.link(source, target)
+        except OSError as exc:
+            if exc.errno not in _NO_LINK_ERRNOS:
+                raise
+            size = self._copy_in(source, target, size)
+        else:
+            try:
+                self.allowance.charge(size)  # before anything else is written
+            except BudgetExceeded:
+                target.unlink()
+                raise
+        self._adopted.append((source, target, size))
+        return size
+
+    def _copy_in(self, source: Path, target: Path, size: int) -> int:
         with source.open("rb") as handle, CappedWriter(target, self.allowance) as out:
             while chunk := handle.read(_COPY_CHUNK):
                 out.write(chunk)
         if target.stat().st_size != size:
             raise OSError(errno.EIO, f"copy of {source} is incomplete")
-        source.unlink()
         return size
+
+    def _charge_growth(self) -> None:
+        """Charge what an adopted file gained since it was adopted."""
+        for index, (source, target, charged) in enumerate(self._adopted):
+            grown = target.stat().st_size - charged
+            if grown > 0:
+                self.allowance.charge(grown)
+                self._adopted[index] = (source, target, charged + grown)
 
     def link_previous(self, relpath: str) -> None:
         """Hard-link a file of the current generation into this one, uncharged."""
@@ -239,6 +265,7 @@ class GenerationWriter:
         if self._done:
             raise RuntimeError("generation already published or abandoned")
         previous = self.store.manifest(self.incident_id)
+        self._charge_growth()
         files = tuple(_describe_files(self.bundle, self.directory, digests=digests))
         _sync_tree(self.directory)
         manifest = BundleManifest(
@@ -260,10 +287,19 @@ class GenerationWriter:
         # Published from here on: whatever fails next, abandon() must not
         # delete what the manifest now names.
         self._done = True
-        self.allowance.release()
+        # What this generation adds, exactly: a file linked from the one
+        # before is already charged, and a copy may be a little smaller.
+        self.allowance.release(keep=_freed_by(self.directory, self.bundle))
+        self._release_sources()
         _fsync_dir(self.bundle)
         self.store._reclaim_old_generations(self.bundle, keep=self.generation)
         return manifest
+
+    def _release_sources(self) -> None:
+        """The adopted files' original names, now that the bundle holds them."""
+        for source, _target, _size in self._adopted:
+            with contextlib.suppress(OSError):
+                source.unlink()
 
     def abandon(self) -> None:
         """Remove this generation; nothing it wrote stays charged.
@@ -681,10 +717,6 @@ def _freed_by(path: Path, bundle: Path) -> int:
     seen: set[tuple[int, int]] = set()
     bytes_on_disk([g for g in _generation_dirs(bundle) if g != path], seen=seen)
     return bytes_on_disk([path], seen=seen)
-
-
-def _same_filesystem(source: Path, directory: Path) -> bool:
-    return source.stat().st_dev == directory.stat().st_dev
 
 
 @contextlib.contextmanager
