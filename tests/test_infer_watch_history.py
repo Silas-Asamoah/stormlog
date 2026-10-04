@@ -11,11 +11,11 @@ from pathlib import Path
 import pytest
 
 from stormlog.infer.vllm_telemetry import VllmScrapeRecord
+from stormlog.infer.watch import history as history_module
 from stormlog.infer.watch.history import (
     EVICT_AGE,
     EVICT_BYTES,
     EVICT_OVERSIZED,
-    ITEM_OVERHEAD_BYTES,
     BoundedRing,
     ScrapeHistory,
     Stamped,
@@ -110,8 +110,9 @@ def test_the_byte_bound_bounds_what_the_ring_retains() -> None:
         tracemalloc.stop()
     assert ring.evictions[EVICT_BYTES] > 0
     assert ring.bytes <= bound
-    assert retained <= ring.bytes
-    assert ring.bytes == len(ring) * (ITEM_OVERHEAD_BYTES + len(_blob({"ok": 1})))
+    assert retained <= ring.bytes  # what it holds, not only what it compressed
+    overhead = history_module.ITEM_OVERHEAD_BYTES
+    assert ring.bytes == len(ring) * (overhead + len(_blob({"ok": 1})))
 
 
 def _blob(record: dict[str, int]) -> bytes:
