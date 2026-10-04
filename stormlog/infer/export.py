@@ -937,6 +937,36 @@ class OtlpHealth:
                 "The most spans the queue holds; past it, spans are dropped.",
             ),
             HealthMetric(
+                "queued_bytes",
+                "stormlog_export_queue_bytes",
+                "gauge",
+                "bytes",
+                "Estimated bytes waiting in the exporter's queue.",
+            ),
+            HealthMetric(
+                "capacity_bytes",
+                "stormlog_export_queue_capacity_bytes",
+                "gauge",
+                "bytes",
+                "The most estimated bytes the queue holds.",
+            ),
+            HealthMetric(
+                "high_water",
+                "stormlog_export_queue_high_water_spans",
+                "gauge",
+                "",
+                "The most spans the queue has held at once.",
+            ),
+            HealthMetric(
+                "stalled",
+                "stormlog_export_stalled",
+                "gauge",
+                "",
+                "1 while a stage that cannot be cancelled has been stuck for 5 s.",
+                labels=("stage",),
+                enums={"stage": ("resolve", "write")},
+            ),
+            HealthMetric(
                 "requests",
                 "stormlog_export_requests_total",
                 "counter",
@@ -1001,6 +1031,13 @@ class OtlpHealth:
             "in_flight": accounting["in_flight"],
             "queued": accounting["queued"],
             "capacity": summary["queue"]["capacity_spans"],
+            "queued_bytes": summary["queue"]["bytes"],
+            "capacity_bytes": summary["queue"]["capacity_bytes"],
+            "high_water": summary["queue"]["high_water"],
+            "stalled": {
+                (stage,): 1 if stuck else 0
+                for stage, stuck in summary["stalled"].items()
+            },
             "requests": _by_reason(summary["transmissions"], TRANSMISSION_KINDS),
             "retries": summary["retries"],
             "up": 1 if destination["up"] else 0,

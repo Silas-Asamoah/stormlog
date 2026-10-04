@@ -27,11 +27,18 @@ from .._export.otlp_encoding import JsonEncoding, SpanEncoding, encoding_for
 from .._export.otlp_http import Destination, OtlpHttpTransport
 from .._export.span_export import FileSink, HttpSink, SpanExporter, SpanSink
 from .._export.spans import Attributes
-from ..scrub import KnownSecrets, is_forbidden_key_name, redact_url, truncate_utf8
+from ..scrub import (
+    KnownSecrets,
+    is_forbidden_key_name,
+    redact_url,
+    scrub_text,
+    truncate_utf8,
+)
 from .correlation_events import CapabilityEvent, CorrelationContext
 from .export_config import ExportConfig
 from .export_spans import (
     DIGESTS,
+    ERRORS,
     MAX_CONTENT_BYTES,
     OUTPUTS,
     PROMPTS,
@@ -75,6 +82,7 @@ RESOURCE_KEYS = (
 MAX_RESOURCE_VALUE_CHARS = 128
 MAX_RESOURCE_ATTRIBUTES = 32
 MAX_LISTED_KEYS = 32
+COLLECTOR_MESSAGE_BYTES = 256
 _HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
 
 
@@ -206,9 +214,15 @@ class OtlpExport:
             scope=scope(version),
             to_span=self.spans.to_span,
             breaker=Breaker(probe_interval=config.otlp_probe_interval_seconds),
+            keep_message=self._scrubbed if ERRORS in identity.content else None,
         )
         self.start_error: str | None = None
         self._environ = environ
+
+    def _scrubbed(self, message: str) -> str:
+        return scrub_text(
+            message, max_bytes=COLLECTOR_MESSAGE_BYTES, secrets=self.spans.secrets
+        )
 
     def _sink(self, version: str) -> tuple[SpanEncoding, SpanSink]:
         config = self.config

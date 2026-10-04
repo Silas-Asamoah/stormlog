@@ -356,3 +356,50 @@ def test_offers_never_wait_for_the_worker() -> None:
     assert time.perf_counter() - started < 1.0
     assert exporter.accounting()["queued"] == 2048
     assert not collector.received
+
+
+def test_collector_text_is_kept_only_through_the_consent_scrubber() -> None:
+    from stormlog.scrub import scrub_text
+
+    status = b"\x08\x03\x12\x1bbad: Bearer sk-abcdefghijkl"
+    warning = Reply(
+        body=b'{"partialSuccess":{"errorMessage":"slow down"}}',
+        content_type="application/json",
+    )
+    for keep, expected in ((None, None), (scrub_text, "bad: Bearer <redacted>")):
+        with running([Reply(400, status, store=False), warning]) as collector:
+            exporter = _exporter(collector.url, keep_message=keep, max_batch_spans=1)
+            exporter.start()
+            _offer(exporter, 2)
+            assert _wait(lambda: len(collector.received) == 2)
+            exporter.close(1.0)
+        summary = exporter.summary()
+        assert summary["collector_message"] == expected
+        assert summary["warnings"] == 1
+
+
+def test_a_write_stuck_past_the_stall_time_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from stormlog._export import span_export
+
+    release = threading.Event()
+    real = filesink._write
+
+    def stuck(fd: int, data: Any) -> int:
+        release.wait(10)
+        return real(fd, data)
+
+    monkeypatch.setattr(filesink, "_write", stuck)
+    monkeypatch.setattr(span_export, "STALL_SECONDS", 0.1)
+    exporter = _file_exporter(tmp_path / "spans.jsonl")
+    exporter.start()
+    _offer(exporter, 1)
+    assert _wait(lambda: exporter.summary()["stalled"] == {"write": True})
+    release.set()
+    exporter.close(2.0)
+    assert exporter.summary()["stalled"] == {"write": False}
+    assert exporter.accounting()["exported"] == 1
+    assert exporter.summary()["worker_cpu_seconds"] is not None
