@@ -1,6 +1,9 @@
 """The line file sink: whole lines, a cap, and a defined outcome for every error."""
 
 import errno
+import json
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -52,6 +55,63 @@ def test_reopening_counts_what_the_file_already_holds(tmp_path: Path) -> None:
     sink.open()
     assert sink.write_line(b"yy") == FILE_FULL
     sink.close()
+
+
+# A run killed in the middle of a line: the second write puts half its line
+# in the file, then the process exits at once, as SIGKILL or the OOM killer
+# would end it.
+_KILLED_MID_LINE = """
+import os, sys
+from pathlib import Path
+from stormlog._export import filesink
+
+real_write = filesink._write
+writes = []
+
+def write_half_then_exit(fd, view):
+    writes.append(len(view))
+    if len(writes) == 2:
+        real_write(fd, bytes(view[: len(view) // 2]))
+        os._exit(9)
+    return real_write(fd, view)
+
+filesink._write = write_half_then_exit
+sink = filesink.LineFileSink(Path(sys.argv[1]), max_bytes=1 << 20)
+sink.open()
+sink.write_line(b'{"batch": 1}')
+sink.write_line(b'{"batch": 2, "pad": "' + b"x" * 64 + b'"}')
+"""
+
+
+def test_a_line_written_after_a_killed_run_stays_readable(tmp_path: Path) -> None:
+    path = tmp_path / "spans.jsonl"
+    killed = subprocess.run(
+        [sys.executable, "-c", _KILLED_MID_LINE, str(path)], timeout=60
+    )
+    assert killed.returncode == 9
+    sink = LineFileSink(path, max_bytes=1 << 20)
+    sink.open()
+    assert sink.write_line(b'{"batch": 3}') == WRITTEN
+    sink.close()
+    readable = []
+    for line in path.read_bytes().splitlines():
+        try:
+            readable.append(json.loads(line)["batch"])
+        except ValueError:
+            pass  # the killed run's partial line
+    assert readable == [1, 3]
+    assert sink.stats.ended_partial
+
+
+def test_a_file_ending_in_a_newline_is_appended_to_as_it_is(tmp_path: Path) -> None:
+    path = tmp_path / "f"
+    path.write_bytes(b"old\n")
+    sink = LineFileSink(path, max_bytes=100)
+    sink.open()
+    assert sink.write_line(b"new") == WRITTEN
+    sink.close()
+    assert path.read_bytes() == b"old\nnew\n"
+    assert not sink.stats.ended_partial
 
 
 def test_a_failed_write_is_cut_back_so_the_line_is_absent(

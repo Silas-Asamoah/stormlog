@@ -6,6 +6,10 @@ to where the line began, so the line is absent; if even that fails, the
 file may end in a partial line, the outcome says so, and the sink stops
 writing rather than append after a broken line. Repeated errors also stop
 it. The caller settles each line from the outcome.
+
+A file that already ends in part of a line, left by a run that was killed
+while writing, gets a newline before the first new line, so the broken line
+stays a line of its own and nothing written later is lost in it.
 """
 
 from __future__ import annotations
@@ -35,6 +39,8 @@ class FileSinkStats:
     full: int = 0
     disabled: bool = False
     last_error: str | None = None
+    # The file ended in part of a line when opened; a newline ended it.
+    ended_partial: bool = False
 
 
 class LineFileSink:
@@ -61,6 +67,10 @@ class LineFileSink:
         """Open for appending; an ``OSError`` reaches the caller."""
         self._fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         self._size = os.fstat(self._fd).st_size
+        if self._size and _last_byte(self.path) != b"\n":
+            _write_all(self._fd, b"\n")
+            self._size += 1
+            self.stats.ended_partial = True
 
     def write_line(self, data: bytes) -> str:
         """Append ``data`` as one line and say how that went."""
@@ -104,6 +114,12 @@ class LineFileSink:
         if self._consecutive >= self.max_consecutive_errors:
             self.stats.disabled = True
         return FILE_ERROR
+
+
+def _last_byte(path: Path) -> bytes:
+    with open(path, "rb") as handle:
+        handle.seek(-1, os.SEEK_END)
+        return handle.read(1)
 
 
 def _write_all(fd: int, data: bytes) -> None:
