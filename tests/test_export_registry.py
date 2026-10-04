@@ -132,6 +132,23 @@ def test_a_family_name_is_reserved_whatever_its_kind(
         registry.add(spec(*second))
 
 
+def test_a_value_named_like_the_overflow_series_is_rejected() -> None:
+    # It took a headroom series of its own, which the redirects past the
+    # cap then shared, so the overflow series was not the overflow.
+    registry = Registry(headroom=1)
+    requests = _requests(registry, ["c1"])
+    requests.inc((OVERFLOW, "ok"), 5)
+    assert requests.stats.rejected == 1
+    requests.inc(("c2", "ok"), 1)  # the headroom series
+    requests.inc(("c3", "ok"), 2)  # past the cap
+    exposition = check_exposition(_text(registry))
+    assert (
+        exposition.value("stormlog_infer_requests_total", case=OVERFLOW, status="ok")
+        == 2
+    )
+    assert requests.stats.overflow_redirects == 1
+
+
 def test_a_family_label_cannot_repeat_a_constant_label() -> None:
     # It would render {model="m",model="a"}, which a scrape rejects whole.
     registry = Registry(const_labels={"model": "m"})

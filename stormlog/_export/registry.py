@@ -248,9 +248,15 @@ class Family:
         normalised = []
         for name, value in zip(spec.labels, labels):
             allowed = spec.enums.get(name)
-            if allowed is not None and value not in allowed:
+            if allowed is not None:
+                if value not in allowed:
+                    return None
+                normalised.append(value)
+                continue
+            bounded = bounded_value(value)
+            if bounded == OVERFLOW:  # only the overflow series is named so
                 return None
-            normalised.append(value if allowed is not None else bounded_value(value))
+            normalised.append(bounded)
         return tuple(normalised)
 
     def _overflow(self, values: LabelValues) -> _Series | None:
