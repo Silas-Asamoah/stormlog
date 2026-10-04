@@ -359,6 +359,48 @@ def test_a_writer_stuck_in_io_is_abandoned_with_its_lock_kept(
         _writer(tmp_path).start()
 
 
+def test_a_second_close_never_touches_the_next_writers_file(tmp_path: Path) -> None:
+    first = _writer(tmp_path, remove_on_exit=True)
+    first.start()
+    first.close()
+    second = _writer(tmp_path)
+    second.start()
+    try:
+        assert _wait_for(lambda: second.path.exists())
+        first.close()  # again: the slot is no longer the first writer's
+        assert second.path.exists() and second.lock_path.exists()
+    finally:
+        second.close()
+
+
+def test_close_returns_at_its_deadline_even_if_freeing_the_slot_is_stuck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = _writer(tmp_path)
+    writer.start()
+    assert _wait_for(lambda: writer.stats.writes_ok >= 1)
+    entered, proceed = threading.Event(), threading.Event()
+    real_unlink = textfile._unlink
+
+    def stuck_unlink(path: Path) -> None:
+        entered.set()
+        proceed.wait(10)
+        real_unlink(path)
+
+    monkeypatch.setattr(textfile, "_unlink", stuck_unlink)
+    closer = threading.Thread(target=writer.close, kwargs={"deadline": 0.05})
+    started = time.monotonic()
+    closer.start()
+    try:
+        assert entered.wait(5)
+        closer.join(1)
+        assert not closer.is_alive() and time.monotonic() - started < 1
+    finally:
+        proceed.set()
+        closer.join(5)
+    assert _wait_for(lambda: not writer.lock_path.exists())
+
+
 @pytest.mark.parametrize("slot", ["", "a b", "x" * 65, "../up", "a/b"])
 def test_slots_are_validated(slot: str) -> None:
     with pytest.raises(ValueError):

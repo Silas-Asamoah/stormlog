@@ -120,6 +120,11 @@ class TextfileWriter:
         self._lock_owned = False
         # The descriptor holding the flock, while the lock is owned by one.
         self._lock_descriptor: int | None = None
+        # close() decides, under this lock, whether the writer gave up its
+        # slot in time; the slot is then freed on the writer's thread.
+        self._closing = threading.Lock()
+        self._closed = False
+        self._freeing = False
 
     def acquire(self) -> None:
         """Check the directory and take the slot's lock, before the run starts.
@@ -152,24 +157,31 @@ class TextfileWriter:
     def close(self, deadline: float = 5.0) -> None:
         """Write the final file (``stormlog_run_active`` 0) within ``deadline``.
 
-        A writer still stuck in I/O at the deadline is left to finish; its
-        lock is kept, so no other writer can take the slot until this
-        process has exited.
+        The slot is then freed: the file removed if asked, and the lock
+        released. That I/O happens on the writer's thread, so ``close``
+        returns by its deadline whatever the file system does. A writer
+        still stuck in a write at the deadline keeps its lock, so no other
+        writer can take the slot until this process has exited. A second
+        ``close`` does nothing.
         """
+        with self._closing:
+            if self._closed:
+                return
+            self._closed = True
         self._active = False
         self._stop.set()
         self._wake.set()
-        if self._thread is not None:
-            self._thread.join(deadline)
-            if self._thread.is_alive():
+        if self._thread is None:  # never started: only the lock to free
+            self._thread = threading.Thread(
+                target=self._free_slot,
+                name=f"stormlog-textfile-{self.slot}",
+                daemon=True,
+            )
+            self._thread.start()
+        self._thread.join(deadline)
+        with self._closing:
+            if self._thread.is_alive() and not self._freeing:
                 self.stats.abandoned = True
-                return
-        if self.remove_on_exit:
-            _unlink(self.path)
-        if self._lock_owned:
-            _release_lock(self.lock_path, self._lock_descriptor)
-            self._lock_owned = False
-            self._lock_descriptor = None
 
     def _run(self) -> None:
         try:
@@ -180,6 +192,19 @@ class TextfileWriter:
         finally:
             # The final write, after the run ended: stormlog_run_active is 0.
             self._write_once()
+            self._free_slot()
+
+    def _free_slot(self) -> None:
+        """Remove the file if asked and release the lock, unless abandoned."""
+        with self._closing:
+            if self.stats.abandoned or not self._lock_owned:
+                return
+            self._freeing = True
+        if self.remove_on_exit:
+            _unlink(self.path)
+        _release_lock(self.lock_path, self._lock_descriptor)
+        self._lock_owned = False
+        self._lock_descriptor = None
 
     def _write_once(self) -> None:
         """One write; any failure is counted, never raised, so the writer lives."""
