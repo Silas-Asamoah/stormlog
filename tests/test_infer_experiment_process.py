@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -246,52 +247,137 @@ def test_an_unreadable_process_that_may_be_the_launchs_fails_the_cleanup() -> No
     # psutil cannot read a platform binary's environment either).
     import subprocess
 
-    since = time.time_ns()
     launched = launch("server", [sys.executable, "-c", "pass"])
     launched.process.wait(timeout=5)
     escapee = subprocess.Popen(["/bin/sleep", "60"], env={}, start_new_session=True)
     try:
         time.sleep(0.2)
         cleanup = verify_cleanup(
-            launched.pid, wait_s=0.5, mark=launched.mark, since_ns=since
+            launched.pid, wait_s=0.5, mark=launched.mark, since=launched.identity
         )
         assert not cleanup.verified
-        assert escapee.pid in cleanup.to_record()["mark_search"]["blind"]
+        # Listed by PID and start time, so a resume can tell it still runs.
+        (blind,) = [
+            item
+            for item in cleanup.to_record()["mark_search"]["blind"]
+            if item["pid"] == escapee.pid
+        ]
+        assert still_there(blind)
         # It may not be the launch's, so it is never killed.
         assert escapee.pid not in cleanup.killed and escapee.poll() is None
     finally:
         escapee.kill()
         escapee.wait()
-    cleanup = verify_cleanup(
-        launched.pid, wait_s=0.5, mark=launched.mark, since_ns=since
-    )
-    assert cleanup.verified
+
+
+def _table(monkeypatch: pytest.MonkeyPatch, table: dict[int, Any]) -> None:
+    from stormlog.infer import experiment_process as ep
+
+    monkeypatch.setattr(ep, "_view", lambda pid, proc, method: table.get(pid))
 
 
 def test_a_process_that_cannot_be_the_launchs_is_not_counted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Excluded: another user's, one older than the launch, another
-    # process's child, and on macOS a system executable launchd started.
-    # An orphan or the runner's own child may be the launch's.
+    # Excluded: another user's (sudo's too), one older than the launch, and
+    # another process's child. An orphan or the runner's own child may be
+    # the launch's, whatever it runs: rev-213-a's N6(a) found an escapee
+    # running /usr/sbin/iostat cleared by a rule for launchd's executables.
     from stormlog.infer import experiment_process as ep
 
-    since = 10**18
     runner, uid = os.getpid(), os.getuid()
-    table = {
-        10: ep._Process(since + 1, 1, uid, "/bin/sleep"),
-        11: ep._Process(since + 1, runner, uid, "/bin/sleep"),
-        12: ep._Process(since + 1, 999_999, uid, "/bin/zsh"),
-        13: ep._Process(since - 10 * 10**9, 1, uid, "/bin/sleep"),
-        14: ep._Process(since + 1, 1, uid + 1, "/bin/sleep"),
-        15: ep._Process(since + 1, 1, uid, "/System/Library/CoreServices/x"),
-    }
-    monkeypatch.setattr(ep, "_view", lambda pid, proc, method: table.get(pid))
+    launch_s = 1_000_000.0
+    _table(
+        monkeypatch,
+        {
+            10: ep._Process(launch_s + 1, 1, uid),
+            11: ep._Process(launch_s + 1, runner, uid),
+            12: ep._Process(launch_s + 1, 999_999, uid),
+            13: ep._Process(launch_s - 10, 1, uid),
+            14: ep._Process(launch_s + 1, 1, uid + 1),
+            # Within the slack before the launch: may still be its.
+            15: ep._Process(launch_s - 1, 1, uid),
+        },
+    )
+    since = {"pid": 1, "create_time": launch_s}
     found = {
-        pid: ep._may_be_launched(pid, since, Path("/proc"), "psutil") for pid in table
+        pid: ep._may_be_launched(pid, since, Path("/proc"), "psutil")
+        for pid in (10, 11, 12, 13, 14, 15, 16)
     }
-    assert found == {10: True, 11: True, 12: False, 13: False, 14: False, 15: False}
-    # launchd's prefixes mean nothing on Linux.
-    assert ep._may_be_launched(15, since, Path("/proc"), "proc") is True
-    # Gone is not there.
-    assert ep._may_be_launched(16, since, Path("/proc"), "proc") is False
+    assert found == {
+        10: True,
+        11: True,
+        12: False,
+        13: False,
+        14: False,
+        15: True,
+        16: False,
+    }
+
+
+def test_start_times_are_compared_in_the_processes_own_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # rev-213-a's N6(d): on Linux both starts are ticks since boot, so a
+    # wall-clock step between the launch and the check changes nothing.
+    from stormlog.infer import experiment_process as ep
+
+    ticks = ep._clock_ticks()
+    _table(
+        monkeypatch,
+        {
+            20: ep._Process(5_000 * ticks, 1, os.getuid()),
+            21: ep._Process(4_990 * ticks, 1, os.getuid()),
+        },
+    )
+    since = {"pid": 1, "start_ticks": 5_000 * ticks - 1}
+    assert ep._may_be_launched(20, since, Path("/proc"), "proc") is True
+    assert ep._may_be_launched(21, since, Path("/proc"), "proc") is False
+
+
+@pytest.mark.parametrize(
+    ("environ", "unreadable"),
+    [
+        (b"", False),
+        # py-setproctitle, which vLLM uses, overwrites it in place.
+        (b"\0\0\0\0\0\0", False),
+        (b"VLLM::EngineCore\0\0\0\0", False),
+        (None, True),
+    ],
+)
+def test_the_proc_search_cannot_judge_an_environment_it_cannot_read(
+    tmp_path: Path, environ: bytes | None, unreadable: bool
+) -> None:
+    # rev-213-a's N9 and N6(b): the Linux branch, through a fake /proc.
+    from stormlog.infer import experiment_process as ep
+
+    if environ is None and os.geteuid() == 0:
+        pytest.skip("root reads a file whatever its mode")
+    pid = os.getpid()  # alive, as a real entry would be
+    entry = tmp_path / str(pid)
+    entry.mkdir()
+    path = entry / "environ"
+    path.write_bytes(b"HOME=/root\0" if environ is None else environ)
+    if environ is None:
+        path.chmod(0)
+    try:
+        search = ep._proc_marked(b"STORMLOG_RUN_MARK=m\0", tmp_path)
+    finally:
+        path.chmod(0o600)
+    assert search.unclear == {pid} and search.found == set()
+    assert search.unreadable == (1 if unreadable else 0)
+
+
+def test_the_proc_search_finds_the_mark_and_passes_an_unmarked_environment(
+    tmp_path: Path,
+) -> None:
+    from stormlog.infer import experiment_process as ep
+
+    pid = os.getpid()
+    (tmp_path / str(pid)).mkdir()
+    environ = tmp_path / str(pid) / "environ"
+    environ.write_bytes(b"HOME=/root\0PATH=/bin\0")
+    search = ep._proc_marked(b"STORMLOG_RUN_MARK=m\0", tmp_path)
+    assert (search.found, search.unclear, search.unreadable) == (set(), set(), 0)
+    environ.write_bytes(b"HOME=/root\0STORMLOG_RUN_MARK=m\0")
+    assert ep._proc_marked(b"STORMLOG_RUN_MARK=m\0", tmp_path).found == {pid}
