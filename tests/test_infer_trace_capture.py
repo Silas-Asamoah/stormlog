@@ -1108,10 +1108,15 @@ class _BlockingControl(_FakeControl):
         return super().post(route)
 
 
-def _cancel_twice_while_blocked(
+def _cancel_while_blocked(
     windows: TraceWindows, control: _BlockingControl, *, first_cancel_opens: bool
 ) -> None:
-    """Cancel the window's task, then cancel it again inside the held call."""
+    """Cancel the window's task three times inside the held call.
+
+    With ``first_cancel_opens``, a first cancellation ends the phase, which
+    sends the held stop. Three, not two: a wait that shields only the first
+    cancellation and then awaits the call plainly survives two.
+    """
 
     async def scenario() -> None:
         async def body() -> None:
@@ -1123,11 +1128,11 @@ def _cancel_twice_while_blocked(
             await asyncio.sleep(0.05)
             task.cancel()
         assert await asyncio.to_thread(control.entered.wait, 5)
-        if not first_cancel_opens:
+        for _ in range(3):
             task.cancel()
             await asyncio.sleep(0.05)
-        task.cancel()
-        await asyncio.sleep(0.05)
+        # Nothing ends while the call is held: the window waits for its answer.
+        assert not task.done()
         control.release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -1142,7 +1147,7 @@ def test_repeated_cancellation_during_the_start_still_stops_and_records(
     control = _BlockingControl(tmp_path, "/start_profile", start_status=start_status)
     windows = TraceWindows(_config(tmp_path), control=control)
 
-    _cancel_twice_while_blocked(windows, control, first_cancel_opens=False)
+    _cancel_while_blocked(windows, control, first_cancel_opens=False)
 
     assert control.calls == ["/start_profile", "/stop_profile"]
     (window,) = windows.windows
@@ -1154,7 +1159,7 @@ def test_repeated_cancellation_during_the_stop_waits_for_it(tmp_path: Path) -> N
     control = _BlockingControl(tmp_path, "/stop_profile")
     windows = TraceWindows(_config(tmp_path), control=control)
 
-    _cancel_twice_while_blocked(windows, control, first_cancel_opens=True)
+    _cancel_while_blocked(windows, control, first_cancel_opens=True)
 
     assert control.calls == ["/start_profile", "/stop_profile"]
     (window,) = windows.windows
