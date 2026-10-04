@@ -406,6 +406,22 @@ def test_a_description_that_does_not_match_the_probed_server_is_a_protocol_failu
     }
 
 
+def test_a_served_model_name_is_matched_by_the_models_root() -> None:
+    # vLLM lists a --served-model-name deployment under its alias, with the
+    # model it loaded as root: the same server, never a mismatch.
+    probe = {
+        "event_type": "infer.server_probe",
+        "phase": "before",
+        "answers": {
+            "/v1/models": {
+                "status": "ok",
+                "body": {"data": [{"id": "my-alias", "root": "Qwen/Qwen2.5-0.5B"}]},
+            }
+        },
+    }
+    assert description_mismatches(_description(), [probe]) == []
+
+
 @pytest.mark.parametrize(
     ("origin", "shares", "mismatch"),
     [

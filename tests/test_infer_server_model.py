@@ -207,6 +207,30 @@ def test_a_file_is_named_by_the_blob_its_snapshot_links_to(
     assert model["weights_digest"] is not None
 
 
+def test_a_name_that_looks_like_a_digest_is_none_outside_the_blobs(
+    tmp_path: Path,
+) -> None:
+    # Only a link into the repository's blobs vouches for a digest: a copied
+    # file, or a link elsewhere, named like one has none.
+    cache = _hub(tmp_path)
+    snapshot = cache / ("models--" + REPO.replace("/", "--")) / "snapshots" / COMMIT
+    digest_like = "d" * 64
+    (snapshot / digest_like).write_bytes(b"copied")
+    elsewhere = cache / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / ("e" * 64)).write_bytes(b"linked")
+    (snapshot / "linked.bin").symlink_to(Path("../../../elsewhere") / ("e" * 64))
+    files = describe_model(LaunchArguments(model=REPO), hub_cache=cache)["files"]
+    assert (files[digest_like]["algorithm"], files[digest_like]["digest"]) == (
+        "none",
+        "",
+    )
+    assert (files["linked.bin"]["algorithm"], files["linked.bin"]["digest"]) == (
+        "none",
+        "",
+    )
+
+
 def test_verifying_blobs_hashes_their_content(tmp_path: Path) -> None:
     cache = _hub(tmp_path)
     model = describe_model(
