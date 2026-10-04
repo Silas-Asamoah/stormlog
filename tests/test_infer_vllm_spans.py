@@ -436,8 +436,9 @@ print(grew, vllm_spans.protobuf_parse_estimate(counts, len(body)))
 
 
 # A client's patience with an export decoded under tracemalloc, which slows
-# the receiver several times over: about 2 s of CPU with pure Python, and
-# more on a loaded machine. The receiver's own deadlines are unchanged.
+# the receiver several times over (about 2 s of CPU with pure Python), or
+# alongside seven others, and more on a loaded machine. The receiver's own
+# deadlines are unchanged.
 TRACED_POST_TIMEOUT_S = 30.0
 # The request deadline also bounds the protobuf wire scan, which tracemalloc
 # and a loaded machine slow down too; tests that measure memory, or scan a
@@ -1231,7 +1232,12 @@ class TestReceiverAdmission:
         )
         bodies = [(_export_request([span] * 512), "application/x-protobuf")] * 4
         bodies += [(_json_export(512), "application/json")] * 4
-        limits = ReceiverLimits(max_inflight_bytes=2 * MAX_BODY_BYTES)
+        # Eight exports decoding at once share the GIL: on a two-core CI
+        # runner one waited past the client's default 5 s.
+        limits = ReceiverLimits(
+            max_inflight_bytes=2 * MAX_BODY_BYTES,
+            request_deadline_seconds=TRACED_POST_TIMEOUT_S,
+        )
         held: list[int] = []
         with _receiver(limits=limits) as receiver:
             real_reserve = receiver._reserve
@@ -1249,7 +1255,7 @@ class TestReceiverAdmission:
                 # request is read, which can surface as a reset: retried too.
                 for _ in range(200):
                     try:
-                        status = _post(url, body, media)
+                        status = _post(url, body, media, timeout=TRACED_POST_TIMEOUT_S)
                     except (urllib.error.URLError, ConnectionError):
                         status = 503
                     if status != 503:
