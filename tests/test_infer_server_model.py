@@ -103,6 +103,23 @@ def test_launch_values_lose_credentials_and_queries() -> None:
     assert record["tokenizer"] == "https://h/t"
 
 
+def test_inline_templates_that_differ_after_a_question_mark_digest_apart(
+    tmp_path: Path,
+) -> None:
+    # The query rule for URLs cut an inline Jinja template at its first "?",
+    # so two templates agreeing up to it shared a chat_template_digest.
+    prefix = "{% for m in messages %}{{ m.content }}{% endfor %} Ready?"
+    templates = [prefix + " Go.", prefix + " Stop."]
+    digests = []
+    for index, template in enumerate(templates):
+        launch = launch_arguments(["vllm", "serve", REPO, "--chat-template", template])
+        model = describe_model(launch, hub_cache=_hub(tmp_path / str(index)))
+        digests.append(model["chat_template_digest"])
+        # A template is no URL: its recorded copy is kept whole.
+        assert launch.to_record()["chat_template"] == template
+    assert digests[0] != digests[1]
+
+
 def test_the_hub_cache_follows_the_servers_own_settings() -> None:
     assert hub_cache_dir({"HF_HUB_CACHE": "/c"}, None) == Path("/c")
     assert hub_cache_dir({"HF_HOME": "/h", "HOME": "/root"}, None) == Path("/h/hub")
