@@ -88,7 +88,9 @@ its `run_id`, and one run record holds what the harness measured on the
 victim's clock: the measured window, and the priming, baseline and
 final-recovery windows, any run-level protocol failure (a failed priming
 check), and the run's actions. The scorer derives the run's negative
-exposure from it and the run's episodes (`negative_exposure`).
+exposure from it and the run's episodes (`negative_exposure`). Every
+sub-window must lie inside the measured one, and `score_run` refuses an
+episode on another clock than its run's: the two are compared.
 
 ```json
 {"format": "stormlog.qualify.run/1", "run_id": "q221-dxoff-b03-r07",

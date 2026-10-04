@@ -641,6 +641,13 @@ def test_an_episode_of_another_run_is_refused() -> None:
         )
 
 
+def test_an_episode_on_another_clock_than_its_run_is_refused() -> None:
+    # The run's windows and its episodes' are compared: one clock for all.
+    stray = replace(null_run(), run_id="r1", clock_domain="other/boot/unix_epoch_ns")
+    with pytest.raises(ValueError, match="another clock"):
+        score_run(run_record("r1"), [stray], diagnosis(), CONFIG)
+
+
 # ------------------------------------------------------------------ a campaign
 
 

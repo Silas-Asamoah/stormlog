@@ -360,6 +360,12 @@ def test_a_run_record_round_trips(tmp_path: Path) -> None:
         parse_run(record)
     with pytest.raises(GroundTruthError, match="format"):
         parse_run({"format": "other"})
+    # Every sub-window lies inside the measured one: the exposure is cut
+    # from it.
+    record = run.to_record()
+    record["final_recovery"] = {"start_ns": 360 * S, "end_ns": 480 * S}
+    with pytest.raises(GroundTruthError, match="final_recovery lies outside"):
+        parse_run(record)
 
 
 def test_impact_without_baseline_outcomes_is_partial() -> None:
