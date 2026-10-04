@@ -136,7 +136,10 @@ When runs carry block labels, the design is **paired**: each block holds one
 baseline run and one candidate run, run close together, so that drift
 between blocks cancels. Only complete pairs count; a block missing an arm's
 run is listed with `block_incomplete:<arm>`, and the design stays paired. A
-block with two runs of one arm is refused.
+block with two runs of one arm is refused. A pair stands for one block's
+conditions, the same workload realization (the block's seed) in both arms:
+a block whose runs' `workload.realization_digest` differ is set aside, both
+runs listed with `block_realization_differs`.
 
 Without block labels, the arms are **independent** samples of runs.
 
