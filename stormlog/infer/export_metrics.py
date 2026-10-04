@@ -466,7 +466,8 @@ def _declare(registry: Registry, labels: ProfileLabels) -> _Families:
         held=registry.add(
             FamilySpec(
                 "stormlog_infer_requests_held_for_slot_total",
-                help="Open-loop arrivals that waited for a free in-flight slot.",
+                help="Open-loop arrivals that found every in-flight slot taken: "
+                "they waited for one, or with --overflow drop were dropped.",
                 kind="counter",
                 labels=("case",),
             ),

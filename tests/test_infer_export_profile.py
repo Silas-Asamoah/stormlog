@@ -436,6 +436,21 @@ def test_a_run_that_fails_after_the_export_started_still_ends_it(
     assert not list(metrics_dir.glob("*.tmp"))
 
 
+def test_a_textfile_directory_it_cannot_write_is_refused_before_it_sends(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "infer.jsonl"
+    metrics_dir = tmp_path / "read-only"
+    metrics_dir.mkdir()
+    metrics_dir.chmod(0o555)
+    try:
+        with _fake_server() as endpoint:
+            code = _cli(endpoint, output, "--prometheus-textfile-dir", str(metrics_dir))
+    finally:
+        metrics_dir.chmod(0o755)
+    assert code == ExitCode.USAGE and not output.exists()
+
+
 def test_export_flags_without_an_output_are_refused(tmp_path: Path) -> None:
     output = tmp_path / "infer.jsonl"
     with _fake_server() as endpoint:
