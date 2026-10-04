@@ -40,6 +40,7 @@ vllm_telemetry
 vllm_execution
 inference_diagnosis
 incident_capture
+inference_export
 tui
 cookbook/index
 cookbook/always_on
@@ -87,9 +88,10 @@ examples/test_guides/README
 3. [Inference SLOs and goodput](inference_slo.md)
 4. [Inference execution correlation](inference_correlation.md)
 5. [vLLM native telemetry](vllm_telemetry.md)
-6. [TUI](tui.md)
-7. [Production Cookbook](cookbook/index.md)
-8. [Troubleshooting](troubleshooting.md)
+6. [Exporting inference metrics](inference_export.md)
+7. [TUI](tui.md)
+8. [Production Cookbook](cookbook/index.md)
+9. [Troubleshooting](troubleshooting.md)
 
 ### Release or CI validation
 

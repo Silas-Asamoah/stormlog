@@ -753,6 +753,18 @@ It scrapes `/metrics` once per tick into a bounded history, and when a
 trigger's condition has been bad for long enough it seals the scrapes around
 it into an incident bundle. See [Inference incident capture](incident_capture.md).
 
+## Exporting to Prometheus
+
+`--prometheus-listen HOST:PORT` serves Stormlog's own measurements at
+`/metrics` while a profile runs, and `--prometheus-textfile-dir DIR` writes
+them to a node_exporter textfile. The measurements include client latencies,
+request outcomes, token counts by source, scrape health and the exporter's
+health. Engine series that Stormlog scraped are never re-exposed. Every label
+value comes from the run's configuration, so a matrix too large for the
+metric budget is refused before anything is sent. See
+[Exporting inference metrics](inference_export.md) for the metrics, labels,
+budget and failure behaviour.
+
 ## Profiler traces
 
 `stormlog infer profile --trace vllm-torch` opens a vLLM torch-profiler window
