@@ -234,8 +234,11 @@ be judged in. What the artifact cannot show is `null`, with the reason in
 hook is healthy in a phase only when its writer was beating through it: the
 import's liveness block for the hook's epochs (`heartbeat_gaps/1`, from
 `stormlog infer import-execution`) shows heartbeats from before the phase to
-after it, and no gap of 5 s or more inside it. The stamps are the server's
-wall clock, so the hosts' clocks must agree, as with NTP. An import without
+after it, and no gap of 5 s or more inside it. The writer beats once a
+second, and under load on an A30 its longest interval was 2.3 s with
+nothing lost, so a stricter limit would call a healthy hook unhealthy; the
+block records gaps from 5 s. The stamps are the server's wall clock, so the
+hosts' clocks must agree, as with NTP. An import without
 that block leaves the hook `null` (`unjudged: heartbeat_gaps`): not shown
 unhealthy, not shown healthy. The session record
 now keeps the system sampler's interval and the trace settings, which these
@@ -378,6 +381,12 @@ request and drops it before a byte of answer (`delivery_unknown`), vLLM's
 environment collector may still be running, so `profile` exits `5` before
 it measures.
 
+A basic route that gets no answer in time is different: `/version` hung for
+60 seconds skips `/server_info`, so no collector was started, the probe is
+not `incomplete`, and the run goes on to measure a server that could not
+answer `/version`. Its requests then fail as data. Check the probe's
+`/version` answer (`status: timeout`) before trusting such a run.
+
 A URL anywhere in the `/version` and `/v1/models` answers, such as a
 model's `root`, is recorded as its scheme, host and port: its credentials and
 query go, and its path becomes a short digest (`/<sha256:…>`), since a token
@@ -413,7 +422,10 @@ are removed, and `VLLM_MAX_TOKENS_PER_EXPERT` is kept. vLLM 0.30.0's
 `VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD` and
 `VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD` are integer thresholds, named
 in `NOT_SECRET_NAMES_V1`, and kept: removing them would hide a change in
-them from every comparison.
+them from every comparison. A description taken by a development build from
+before they were named holds them redacted, so a run it describes compares
+`unverified` with any other, itself included: describe such a server again.
+No released version wrote them redacted.
 
 The server's command line is never kept. Of its loading options
 (`--model`, `--revision`, `--tokenizer` and the rest), the recorded copy of a
