@@ -251,16 +251,16 @@ class InferenceProfiler:
         output_path = Path(self.config.output_path)
         try:
             await self._capture(output_path)
+            await self._import_server_evidence(output_path)
         except BaseException as exc:
             # A crash or Ctrl+C still ends the artifact with a session record,
             # once this run has opened it; an older file at the path is left be.
+            # The import of the server's evidence is covered too.
             if self._opened_artifact:
                 self._write_terminal_session(
                     output_path=output_path, report=None, status=_stop_status(exc)
                 )
             raise
-
-        await self._import_server_evidence(output_path)
         try:
             report = analyze_inference_events(output_path)
         except Exception:
