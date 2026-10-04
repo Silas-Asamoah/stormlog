@@ -242,18 +242,38 @@ busy share against a 5 s hold). #221's victims keep a request in flight
 nearly all the time, and G0 records each victim's busy share so a light one
 is caught before a campaign.
 
-**Rare long steps are normal.** When fewer than 1% of steps are prefill
-steps, twice the p99 falls below one, so a hold allows as many long gaps
-as the baseline's own share of them predicts. In 20 seeds each, an engine
-with 0.4–1.5% prefill steps of 250 ms among 20 ms decode steps recovers at
-the last `SIGCONT`. Without the allowance, 12–17 of 20 recovered within
-150 s at 0.6–1.0%, after a median of 19–35 s. The cost is that a stall no
-longer than the engine's own long steps is judged only by how many there
-are. On an engine with 0.8% prefill steps, 300 ms stalls that go on after
-the last pulse are missed when they come every 2 s or 5 s (the effect
-ends at the last `SIGCONT`, in median). Every 1 s, they end it about 4 s
-early. A 1 s stall, over twice the p99.9, holds recovery off until the
-last one.
+**Rare long steps are normal, up to the smallest dose.** When fewer than 1%
+of steps are prefill steps, twice the p99 falls below one. A hold may then
+have as many gaps over twice the p99 as the baseline's own share of them
+predicts: the 99% point of Binomial(n, share), about 2.8 times the
+baseline's rate over a 10 s hold. No gap may be longer than twice the
+baseline's p99.9, nor than `long_gap_tolerance_cap_s`, the smallest
+F4a/F4b dose (60 ms). Where twice the p99 is already longer than that,
+nothing is tolerated beyond it.
+
+With 5 ms decode steps and 25 ms prefill steps (under the cap, as G0
+checks real engines are), 20 seeds each:
+- engines with 0.4–1.5% prefill steps recover at the last `SIGCONT` in
+  19–20 of 20 (one seed at 1% took 6.2 s, a prefill step in the tail past
+  the cap). Without the tolerance, 12–17 of 20 recovered within 150 s at
+  0.6–1.0%, after a median of 19–35 s;
+- the blind spot is stalls shorter than the cap. At 0.8% prefill, 30–50 ms
+  stalls every 1–2 s after the last pulse are missed in 20 of 20, and
+  70 ms, 100 ms or 300 ms stalls in none.
+
+The cap also stops a contaminated baseline from widening the tolerance.
+Twice the p99.9 rests on a baseline's few largest gaps. Without the cap,
+three 1 s pauses in a 20 ms engine's baseline let 1–1.5 s stalls every
+10 s recover early in 16 of 20; with it, in none.
+
+An engine whose prefill steps are longer than the cap falls back to the
+strict rule, where each prefill step ends a hold. In rev-220-b's probe,
+0.8% prefill steps of 250 ms recover at the `SIGCONT` in 3 of 20. G0
+rules this out by checking every dose against the measured step times. If
+G0 fails that check, step kinds go into `Signals`, and prefill steps are
+left out of the hold instead. Where twice the p99 exceeds 300 ms (2%
+prefill steps of 250 ms), 300 ms stalls every 2 s pass in 15 of 20, as
+they did before the tolerance.
 
 **Cadence is blind while the victim is idle.** Only busy gaps count, so a
 stall that falls wholly in victim idle time (about a fifth of the time at

@@ -387,20 +387,30 @@ def test_an_engine_that_stalls_after_resuming_has_not_recovered(runs_s: float) -
         assert timing.end_ns - LAST >= (runs_s + 29) * S, seed
 
 
-def with_prefill(share: float) -> Gap:
-    """20 ms decode steps, with ``share`` of them 250 ms prefill steps."""
+def with_prefill(share: float, decode: float = 0.005, prefill: float = 0.025) -> Gap:
+    """5 ms decode steps, with ``share`` of them 25 ms prefill steps: each
+    prefill step longer than twice the p99, and shorter than the smallest
+    F4a/F4b dose (60 ms), which G0 checks the real engines are."""
 
     def gap(rng: random.Random, _t: float) -> float:
-        prefill = rng.random() < share
-        return (0.25 if prefill else 0.020) * rng.lognormvariate(0, 0.2)
+        length = prefill if rng.random() < share else decode
+        return length * rng.lognormvariate(0, 0.2)
 
     return gap
 
 
-def prefill_run(seed: int, share: float, stalls: list[tuple[int, int]]) -> Timing:
+def prefill_run(
+    seed: int,
+    share: float,
+    stalls: list[tuple[int, int]],
+    *,
+    decode: float = 0.005,
+    prefill: float = 0.025,
+) -> Timing:
     """F4a on an engine with prefill steps all along: baseline, ten pulses,
-    and ``stalls`` that nobody recorded."""
-    rng, gap, steps, at = random.Random(seed), with_prefill(share), [], 0
+    and ``stalls`` that nobody recorded (in the baseline too, if there)."""
+    rng, steps, at = random.Random(seed), [], 0
+    gap = with_prefill(share, decode, prefill)
     while at < LAST + 200 * S:
         steps.append(at)
         at += int(gap(rng, 0.0) * S)
@@ -427,16 +437,31 @@ def test_an_engine_with_rare_prefill_steps_recovers(share: float) -> None:
     # decode step's, so every prefill step was a long gap. A hold needed
     # 10 s without one, and a healthy engine took a median of 19-35 s to
     # recover, or timed out (12 of 20 recovered at 0.8%). Long gaps up to
-    # the baseline's own share of them are now normal.
-    for seed in range(20):
-        assert recovered_by(prefill_run(seed, share, []), 1.0), seed
+    # the baseline's own share of them are now normal. A prefill step in
+    # the tail past the 60 ms cap still ends a hold, so a seed may take a
+    # few seconds (one of 20 at 1%: 6.2 s).
+    timings = [prefill_run(seed, share, []) for seed in range(20)]
+    assert all(recovered_by(timing, 10.0) for timing in timings)
+    assert sum(recovered_by(timing, 1.0) for timing in timings) >= 19
 
 
-def test_stalls_longer_than_any_prefill_step_still_hold_recovery_off() -> None:
-    # The allowance is for gaps like the baseline's: a 1 s stall every 2 s
-    # for 40 s after the last SIGCONT is over twice the baseline's p99.9,
-    # so no hold can start until the last one ends.
-    stalls = [(LAST + k * 2 * S, LAST + k * 2 * S + S) for k in range(1, 20)]
+def test_stalls_as_long_as_a_dose_still_hold_recovery_off() -> None:
+    # The allowance is for gaps like the baseline's, and never for one as
+    # long as the smallest F4a/F4b dose: a 100 ms stall every 2 s for 40 s
+    # after the last SIGCONT keeps any hold from starting before the last.
+    stalls = [(LAST + k * 2 * S, LAST + k * 2 * S + 100 * MS) for k in range(1, 20)]
     for seed in range(20):
         timing = prefill_run(seed, 0.008, stalls)
+        assert timing.end_ns is not None and timing.end_ns >= stalls[-1][1], seed
+
+
+def test_a_baseline_with_long_pauses_never_widens_the_tolerance() -> None:
+    # rev-220-b's delta-3 closure, G2: twice the baseline's p99.9 rests on
+    # its few largest gaps, so three 1 s pauses in a 20 ms engine's
+    # baseline let 1 s stalls every 10 s recover early in 16 of 20 runs.
+    # The tolerance is capped at the smallest dose, 60 ms.
+    pauses = [(t * S, t * S + S) for t in (10, 20, 30)]
+    stalls = [(LAST + k * 10 * S + 2 * S, LAST + k * 10 * S + 3 * S) for k in range(6)]
+    for seed in range(20):
+        timing = prefill_run(seed, 0.0, pauses + stalls, decode=0.020)
         assert timing.end_ns is not None and timing.end_ns >= stalls[-1][1], seed
