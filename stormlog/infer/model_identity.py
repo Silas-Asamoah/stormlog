@@ -36,6 +36,7 @@ from .server_model import GIT_SHA1, SHA256, ModelFile
 from .server_model import git_sha1_file as git_sha1
 from .server_model import hub_snapshot
 from .server_model import sha256_file as sha256
+from .server_model import snapshot_blob
 from .server_model import walk_files as walk
 from .server_model import weights_digest
 
@@ -130,18 +131,26 @@ def _pinned(spec: Mapping[str, Any]) -> VerifiedModel:
 
 
 def _checked_blob(directory: Path, path: Path) -> ModelFile:
-    """A snapshot file whose content matches the digest its blob is named by."""
-    blob = path.resolve()
+    """A snapshot file whose content matches the digest its blob is named by.
+
+    The blob is the one the snapshot links to; a deduplicated cache may
+    link it on to a shared store under another name. The content is read
+    behind every link.
+    """
+    relative = path.relative_to(directory).as_posix()
+    blob = snapshot_blob(path)
+    if blob is None:
+        raise InferInputError(f"model file {relative}: not a link into the blobs")
+    content = path.resolve()
     expected = blob.name
     algorithm = SHA256 if len(expected) == 64 else GIT_SHA1
-    actual = sha256(blob) if algorithm == SHA256 else git_sha1(blob)
-    relative = path.relative_to(directory).as_posix()
+    actual = sha256(content) if algorithm == SHA256 else git_sha1(content)
     if actual != expected:
         raise InferInputError(
             f"model file {relative}: content {actual[:12]} does not match its "
             f"blob {expected[:12]}"
         )
-    return ModelFile(relative, algorithm, actual, blob.stat().st_size, checked=True)
+    return ModelFile(relative, algorithm, actual, content.stat().st_size, checked=True)
 
 
 def _staged(spec: Mapping[str, Any]) -> VerifiedModel:
@@ -185,10 +194,13 @@ def _stage(source: Path, target: Path, files: Sequence[ModelFile]) -> None:
     for item in files:
         destination = partial / item.path
         destination.parent.mkdir(parents=True, exist_ok=True)
+        # The file itself: os.link on Linux would link a hub snapshot's
+        # relative link, which dangles in the store.
+        content = (source / item.path).resolve()
         try:
-            os.link(source / item.path, destination)
+            os.link(content, destination)
         except OSError:
-            shutil.copy2(source / item.path, destination)
+            shutil.copy2(content, destination)
     _check_staged(partial, files)
     partial.rename(target)
     _read_only(target)

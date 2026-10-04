@@ -69,6 +69,36 @@ def test_a_blob_whose_content_is_not_its_name_is_refused(tmp_path: Path) -> None
         prepare_model({"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)})
 
 
+def _deduplicated(cache: Path) -> Path:
+    """The weights' blob made a link into a shared store under another
+    name, as the A30 box's hub cache has it."""
+    blob = (
+        cache
+        / ("models--" + REPO.replace("/", "--"))
+        / "blobs"
+        / hashlib.sha256(WEIGHTS).hexdigest()
+    )
+    store = cache / "blobs" / "bb"
+    store.mkdir(parents=True)
+    other = store / ("bb" + "5" * 62)
+    other.write_bytes(blob.read_bytes())
+    blob.unlink()
+    blob.symlink_to(Path("../../blobs/bb") / other.name)
+    return cache
+
+
+def test_a_blob_that_links_on_to_a_shared_store_is_checked_by_its_own_name(
+    tmp_path: Path,
+) -> None:
+    cache = _deduplicated(_hub(tmp_path))
+    model = prepare_model(
+        {"route": "pinned_hub", "repo": REPO, "hub_cache": str(cache)}
+    )
+    weights = model.record()["files"]["model.safetensors"]
+    assert weights["digest"] == hashlib.sha256(WEIGHTS).hexdigest()
+    assert weights["checked"] is True
+
+
 def test_a_revision_not_in_the_cache_is_refused(tmp_path: Path) -> None:
     with pytest.raises(InferInputError, match="no snapshot"):
         prepare_model(
@@ -112,6 +142,27 @@ def test_a_staged_snapshot_is_named_by_its_content_and_read_only(
     os.chmod(target, 0o644)
     target.write_bytes(b"{}")
     assert changed_files(model) == ["config.json"]
+
+
+def test_a_staged_hub_snapshot_stores_its_files_not_its_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Linux's link(2), which os.link calls, links a symlink itself, so a
+    # snapshot's relative links would dangle in the store; do the same here.
+    real_link = os.link
+
+    def link(src: str, dst: str) -> None:
+        real_link(src, dst, follow_symlinks=False)
+
+    monkeypatch.setattr(os, "link", link)
+    cache = _deduplicated(_hub(tmp_path))
+    snapshot = cache / ("models--" + REPO.replace("/", "--")) / "snapshots" / COMMIT
+    model = prepare_model(
+        {"route": "staged", "source": str(snapshot), "store": str(tmp_path / "s")}
+    )
+    stored = model.directory / "model.safetensors"
+    assert not stored.is_symlink()
+    assert stored.read_bytes() == WEIGHTS
 
 
 def test_an_unknown_route_is_refused() -> None:
