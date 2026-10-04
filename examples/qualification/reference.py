@@ -200,7 +200,8 @@ class VictimView:
     wait runs to the start of the step that first schedules it; its cached
     fraction is the prefix-cache hit at that step over the victim's shared
     prefix, at most 1. A preemption is the victim's ID in a step's
-    ``preempted``. Every engine step's start is kept for cadence.
+    ``preempted``. Every engine step's start is kept for cadence, and each
+    engine epoch's producer, from its hello, names the engine in the labels.
     """
 
     victim_prefix: str
@@ -214,6 +215,8 @@ class VictimView:
     # Each step's schedule() call and its completion, by iteration.
     schedules: dict[str, tuple[int, int]] = field(default_factory=dict)
     completions: dict[str, int] = field(default_factory=dict)
+    # Each engine epoch's producer, from its hello: (wall ns, producer).
+    producers: list[tuple[int, str]] = field(default_factory=list)
     _admitted: dict[str, int] = field(default_factory=dict)
 
     def landing(self, at_ns: int) -> str:
@@ -244,7 +247,10 @@ class VictimView:
         if not str(record.get("epoch", "")).startswith("engine-"):
             return
         kind = record.get("kind")
-        if kind == "alias":
+        if kind == "hello" and record.get("producer"):
+            clock = record.get("clock") or {}
+            self.producers.append((int(clock.get("wall_ns") or 0), record["producer"]))
+        elif kind == "alias":
             self._alias(record)
         elif kind == "scheduled":
             self._scheduled(record)

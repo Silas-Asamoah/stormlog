@@ -395,8 +395,11 @@ ranked by #218's total `rank`, and top-1 and top-3 are taken over it.
 - the label's location. At L1 that is the component; at L2 it also needs the
   rank and engine where the label names them. They are read from #218's
   location block: the engine is `location.engine_producer`, the hook
-  producer that names the engine, and the rank `location.rank`. A label
-  names the engine by the reference hook hello's producer.
+  producer that names the engine, and the rank `location.rank`. The
+  harness names the engine in every expectation at an engine component
+  (`scheduler`, `kv_cache`, `prefix_cache`, `engine_core`, `api_server`,
+  where #218 sets `engine_producer`): the producer of the engine epoch whose
+  hello the reference channel last saw before the episode's action.
 
 A secondary of the right kind never matches, because the diagnoser said the
 mechanism followed from something else. Nor is it a false claim, because it
