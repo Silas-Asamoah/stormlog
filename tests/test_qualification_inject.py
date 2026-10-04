@@ -352,6 +352,58 @@ def test_a_pulse_continued_by_someone_else_leaves_the_episode_not_actuated(
     assert _actuation(attempt) == "interrupted_by_other"
 
 
+@pytest.mark.parametrize("hung", [True, False])
+def test_the_next_episode_waits_while_the_engine_looks_hung(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hung: bool
+) -> None:
+    # rev-220-b's delta-3 closure, G4: the recovery was found in an idle
+    # stretch, and START came at once, although a victim request sent at
+    # 99 s has had no step since (an engine hung with an open-loop victim).
+    # Now the decision reads the present, and a hung engine runs into the
+    # recovery timeout instead.
+    from examples.qualification import inject as module
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+    from stormlog.infer.qualify.recovery import (
+        START,
+        TIMEOUT,
+        Actions,
+        Baseline,
+        Signals,
+        Timing,
+    )
+
+    second = 1_000_000_000
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "F4a"}]})
+    now = [100 * second]
+
+    def clock() -> int:
+        now[0] += second // 4
+        return now[0]
+
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-z"), Server("", "m", tmp_path, {}),
+        clock=clock,
+    )  # fmt: skip
+    last_step = 99 * second if hung else 1000 * second
+    steps = [tick * 20_000_000 for tick in range(last_step // 20_000_000)]
+    signals = Signals(in_flight=[(0, 10**18)], step_starts=steps)
+    baseline = Baseline.measure(signals, 0, 45 * second)
+    monkeypatch.setattr(run, "_signals", lambda: signals)
+    monkeypatch.setattr(
+        run,
+        "_timing",
+        lambda *_args: Timing(90 * second, "test", 90 * second, 95 * second),
+    )
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    decision, _timing = run._recover(
+        plan.episodes[0], baseline, Actions(), 90 * second, 95 * second
+    )
+    assert decision == (TIMEOUT if hung else START)
+
+
 def test_targets_are_bound_at_startup(tmp_path: Path) -> None:
     from examples.qualification.__main__ import _targets
 
