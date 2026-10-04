@@ -423,6 +423,21 @@ def test_values_are_formatted_for_the_text_format(value: float, text: str) -> No
     assert format_value(value) == text
 
 
+def test_a_final_update_that_fails_is_undone_and_the_registry_freezes() -> None:
+    registry = Registry()
+    done = registry.add(FamilySpec("stormlog_done_total", "counter", "h"))
+
+    def final() -> None:
+        done.inc((), 3)
+        raise RuntimeError("final update failed")
+
+    with pytest.raises(RuntimeError):
+        registry.freeze(final)
+    assert registry.frozen and registry.rolled_back == 1
+    assert registry.apply(lambda: done.inc((), 1)) is False
+    assert check_exposition(_text(registry)).value("stormlog_done_total") == 0
+
+
 def test_a_final_update_lands_under_the_freeze() -> None:
     registry = Registry()
     requests = _requests(registry, ["c1"])

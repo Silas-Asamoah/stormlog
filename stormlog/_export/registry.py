@@ -377,19 +377,7 @@ class Registry:
             if self._frozen:
                 self.late_updates += 1
                 return False
-            if self._journal is not None:  # nested inside another record
-                update()
-                return True
-            self._journal = []
-            try:
-                update()
-            except BaseException:
-                for values, index, old in reversed(self._journal):
-                    values[index] = old
-                self.rolled_back += 1
-                raise
-            finally:
-                self._journal = None
+            self._apply_locked(update)
             return True
 
     def freeze(self, final: Callable[[], None] | None = None) -> None:
@@ -397,12 +385,34 @@ class Registry:
 
         ``final`` runs under the same lock just before, so values computed
         from counts that only this lock keeps steady (such as how many
-        queued records were never applied) land in the frozen state.
+        queued records were never applied) land in the frozen state. It
+        applies whole, as a record does: if it raises, its changes are
+        undone and counted in ``rolled_back``, the registry freezes all the
+        same, and the exception propagates.
         """
         with self._lock:
-            if final is not None and not self._frozen:
-                final()
-            self._frozen = True
+            if self._frozen:
+                return
+            try:
+                if final is not None:
+                    self._apply_locked(final)
+            finally:
+                self._frozen = True
+
+    def _apply_locked(self, update: Callable[[], None]) -> None:
+        if self._journal is not None:  # nested inside another record
+            update()
+            return
+        self._journal = []
+        try:
+            update()
+        except BaseException:
+            for values, index, old in reversed(self._journal):
+                values[index] = old
+            self.rolled_back += 1
+            raise
+        finally:
+            self._journal = None
 
     @property
     def frozen(self) -> bool:
