@@ -14,6 +14,15 @@ from .errors import TokenizerUnavailableError
 
 logger = logging.getLogger(__name__)
 
+# Where a request's token count came from, in the order they are preferred.
+TOKEN_SOURCES: tuple[str, ...] = (
+    "server_usage",
+    "tiktoken",
+    "transformers",
+    "estimated",
+    "unknown",
+)
+
 
 @dataclass(frozen=True)
 class TokenCount:
