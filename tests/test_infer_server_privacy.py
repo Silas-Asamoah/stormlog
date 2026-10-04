@@ -147,6 +147,27 @@ def test_names_that_only_contain_a_secret_word_are_not_secrets(name: str) -> Non
     assert not secret_name(name)
 
 
+def test_settings_that_change_performance_are_kept_outside_the_prefixes() -> None:
+    # A profiler preloaded into one arm, or another thread count, compiler
+    # or kernel cache, changes what a run measures; dropping them hid it.
+    environ = {
+        "TORCH_COMPILE_DISABLE": "1",
+        "TORCHINDUCTOR_MAX_AUTOTUNE": "1",
+        "TRITON_CACHE_DIR": "/home/cache/triton",
+        "OMP_NUM_THREADS": "4",
+        "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+        "LD_PRELOAD": "/usr/lib/x86_64-linux-gnu/libtcmalloc.so.4",
+        "TORCH_HOME": "/root/.cache/torch",
+        "HOME": "/root",
+    }
+    kept = redact_environ(environ)
+    assert set(kept) == set(environ) - {"TORCH_HOME", "HOME"}
+    assert kept["LD_PRELOAD"] == environ["LD_PRELOAD"]
+    # Only a path that looks like a credential is redacted.
+    secret = redact_environ({"LD_PRELOAD": f"/opt/{PLANTED}/lib.so"})
+    assert is_redacted(secret["LD_PRELOAD"])
+
+
 def test_an_environment_keeps_only_its_settings_without_secrets() -> None:
     environ = {
         "PATH": "/usr/bin",

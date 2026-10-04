@@ -131,6 +131,8 @@ FIELD_CLASSES_V1: Mapping[str, str] = {
     "environ.CUDA_VISIBLE_DEVICES": LAUNCH,
     "environ.HF_HOME": LAUNCH,
     "environ.HF_HUB_CACHE": LAUNCH,
+    "environ.TORCHINDUCTOR_CACHE_DIR": LAUNCH,
+    "environ.TRITON_CACHE_DIR": LAUNCH,
     "environ.OTEL_": OBSERVATION,
     "environ.STORMLOG_": OBSERVATION,
     "workload.": IDENTITY,

@@ -42,8 +42,33 @@ CREDENTIAL_PATHS_V1: tuple[str, ...] = (
 
 # Environment the description keeps: vLLM's and its libraries' settings,
 # plus the Hugging Face settings that say where and how weights were loaded.
-ENVIRON_PREFIXES = ("VLLM_", "NCCL_", "OTEL_", "STORMLOG_", "CUDA_", "PYTORCH_")
-ENVIRON_NAMES = ("HF_HOME", "HF_HUB_CACHE", "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+ENVIRON_PREFIXES = (
+    "VLLM_",
+    "NCCL_",
+    "OTEL_",
+    "STORMLOG_",
+    "CUDA_",
+    "PYTORCH_",
+    # The compiler, kernels and BLAS a run uses change what it measures.
+    "TORCHINDUCTOR_",
+    "TRITON_",
+    "CUBLAS_",
+)
+ENVIRON_NAMES = (
+    "HF_HOME",
+    "HF_HUB_CACHE",
+    "HF_HUB_OFFLINE",
+    "TRANSFORMERS_OFFLINE",
+    "TORCH_COMPILE_DISABLE",
+    "OMP_NUM_THREADS",
+    # A library preloaded into one arm, such as a profiler or an allocator.
+    "LD_PRELOAD",
+)
+# A path segment shaped like a credential: a token, or a long encoded run.
+_SECRET_SHAPED = re.compile(
+    r"(hf_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}"
+    r"|[A-Za-z0-9+/=]{40,})"
+)
 
 # A whole word of the name, so VLLM_MAX_TOKENS_PER_X survives and
 # OTEL_EXPORTER_OTLP_HEADERS (which carries Authorization) does not.
@@ -172,6 +197,11 @@ def redact_vllm_config(config: Mapping[str, Any]) -> dict[str, Any]:
     return result if isinstance(result, dict) else {}
 
 
+def _secret_preload(name: str, value: str) -> bool:
+    """A preloaded library's path is kept, unless a segment looks like a key."""
+    return name == "LD_PRELOAD" and _SECRET_SHAPED.search(value) is not None
+
+
 def redact_environ(environ: Mapping[str, str]) -> dict[str, Any]:
     """The kept part of an environment, secrets removed and URLs stripped."""
     kept: dict[str, Any] = {}
@@ -179,7 +209,7 @@ def redact_environ(environ: Mapping[str, str]) -> dict[str, Any]:
         if not (name.startswith(ENVIRON_PREFIXES) or name in ENVIRON_NAMES):
             continue
         path = f"/environ/{_escape(name)}"
-        if _removed_name(name):
+        if _removed_name(name) or _secret_preload(name, environ[name]):
             kept[name] = redacted(path)
         else:
             kept[name] = scrub_value(environ[name], path)
