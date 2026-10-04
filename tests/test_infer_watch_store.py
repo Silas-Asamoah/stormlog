@@ -277,6 +277,24 @@ def test_a_crash_at_each_publication_boundary_leaves_one_whole_generation(
     assert [p.name for p in sorted(bundle.glob("gen-*"))] == [view.manifest.current]
 
 
+def test_recovery_keeps_the_deletions_a_reader_defers(tmp_path: Path) -> None:
+    store = IncidentStore(tmp_path, _limits())
+    incident_id = _gen0(store, b"first\n")
+    bundle = tmp_path / "incidents" / incident_id
+    left = store.next_generation(incident_id, KIB)  # a crash left it unnamed
+    assert left is not None
+    with left.file("incident.jsonl") as out:
+        out.write(b"orphan\n")
+    restarted = IncidentStore(tmp_path, _limits())
+    with open_incident_bundle(bundle):
+        report = restarted.recover()
+        assert report.generations_removed == 0
+        assert restarted.deferred == 1
+    assert restarted.reclaim_deferred() == 1
+    assert [p.name for p in bundle.glob("gen-*")] == ["gen-0"]
+    assert restarted.budget.used_bytes == restarted._scan_bytes()
+
+
 def test_recovery_removes_a_half_written_manifest(tmp_path: Path) -> None:
     store = IncidentStore(tmp_path, _limits())
     incident_id = _gen0(store, b"x\n")
