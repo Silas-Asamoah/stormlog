@@ -139,6 +139,9 @@ class ProfileMetrics:
     _families: _Families = field(init=False)
     # The metrics exporter's start time per server, from the last good scrape.
     _process_start: dict[str, float] = field(init=False, default_factory=dict)
+    # Token counts no counter can take (negative, or too large to add
+    # exactly): the token totals then differ from the artifact's.
+    tokens_rejected: int = field(init=False, default=0)
 
     def __post_init__(self) -> None:
         self._families = _declare(self.registry, self.labels)
@@ -227,7 +230,7 @@ class ProfileMetrics:
                 source = str(fields.get(f"{direction}_source"))
                 tokens.inc(base + (direction, source), count)
             else:
-                tokens.stats.rejected += 1
+                self.tokens_rejected += 1
 
     def _apply_from_intended(
         self, base: tuple[str, ...], fields: Mapping[str, Value]
