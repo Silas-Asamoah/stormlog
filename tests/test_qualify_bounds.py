@@ -8,6 +8,7 @@ import math
 import pytest
 
 from stormlog.infer.qualify.bounds import (
+    clopper_pearson_interval,
     clopper_pearson_lower,
     clopper_pearson_upper,
     fisher_greater,
@@ -76,3 +77,16 @@ def test_the_impact_test_is_one_sided_fishers_exact() -> None:
         for i in range(8, min(drawn, marked) + 1)
     ) / math.comb(total, drawn)
     assert strong == pytest.approx(expected, rel=1e-9)
+
+
+def test_exploratory_claims_get_the_two_sided_interval() -> None:
+    # C.5: DX-ON and TP2 are reported with two-sided 95% intervals: 6/6
+    # gives 0.54 and 8/8 gives 0.63 at the bottom, where the one-sided bound
+    # would say 0.61 and 0.69.
+    six_lower, six_upper = clopper_pearson_interval(6, 6)
+    assert six_lower == pytest.approx(0.5407, abs=5e-5)
+    assert six_upper == 1.0
+    assert clopper_pearson_interval(8, 8)[0] == pytest.approx(0.6306, abs=5e-5)
+    lower, upper = clopper_pearson_interval(3, 10)
+    assert _binomial_tail_at_least(3, 10, lower) == pytest.approx(0.025, rel=1e-6)
+    assert _binomial_tail_at_most(3, 10, upper) == pytest.approx(0.025, rel=1e-6)

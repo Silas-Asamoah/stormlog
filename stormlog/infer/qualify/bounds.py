@@ -1,7 +1,8 @@
 """Exact one-sided bounds and tests for the qualification's claims.
 
 Accuracy is claimed with a one-sided Clopper–Pearson lower bound, the
-false-positive rate with its upper bound, and a negative-hour rate with the
+false-positive rate with its upper bound, exploratory proportions with the
+two-sided interval, and a negative-hour rate with the
 exact Poisson upper bound. Victim impact is a one-sided Fisher exact test of
 violations in an effect window against a baseline.
 """
@@ -34,6 +35,18 @@ def clopper_pearson_upper(
     if successes == trials:
         return 1.0
     return float(stats.beta.ppf(confidence, successes + 1, trials - successes))
+
+
+def clopper_pearson_interval(
+    successes: int, trials: int, confidence: float = CONFIDENCE
+) -> tuple[float, float]:
+    """The two-sided exact interval, for exploratory claims (DX-ON, TP2):
+    each end is the one-sided bound at (1 + ``confidence``) / 2."""
+    each_side = (1.0 + confidence) / 2.0
+    return (
+        clopper_pearson_lower(successes, trials, each_side),
+        clopper_pearson_upper(successes, trials, each_side),
+    )
 
 
 def poisson_rate_upper(
@@ -70,6 +83,7 @@ def _check_counts(successes: int, trials: int) -> None:
 
 __all__ = [
     "CONFIDENCE",
+    "clopper_pearson_interval",
     "clopper_pearson_lower",
     "clopper_pearson_upper",
     "fisher_greater",
