@@ -261,8 +261,7 @@ class VictimView:
             return
         kind = record.get("kind")
         if kind == "hello" and record.get("producer"):
-            clock = record.get("clock") or {}
-            self.producers.append((int(clock.get("wall_ns") or 0), record["producer"]))
+            self._hello(record)
         elif kind == "alias":
             self._alias(record)
         elif kind == "scheduled":
@@ -272,6 +271,12 @@ class VictimView:
 
     # Each record is read whole before any of it is applied: one that lacks
     # a field raises with the view unchanged, and is skipped as bad.
+
+    def _hello(self, record: dict[str, Any]) -> None:
+        clock = record.get("clock") or {}
+        if not isinstance(clock, dict):
+            raise TypeError(f"a hello's clock is {type(clock).__name__}")
+        self.producers.append((int(clock.get("wall_ns") or 0), record["producer"]))
 
     def _alias(self, record: dict[str, Any]) -> None:
         external = str(record.get("external") or "")
