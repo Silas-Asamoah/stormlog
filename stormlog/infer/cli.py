@@ -32,6 +32,7 @@ from .arrivals import (
 from .cache_state import CACHE_STATES, COLD, RESET_RETRY_SECONDS, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
 from .errors import InferInputError, InferUsageError
+from .export_config import add_export_arguments, export_config_from_args
 from .profile import InferenceProfiler
 from .prompts import MIN_CONTROLLED_TOKENS, PROMPT_MODES, REPEAT, SHARED_PREFIX
 from .server_collector import (
@@ -316,6 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_prompt_arguments(profile_parser)
     _add_cache_arguments(profile_parser)
     _add_trace_arguments(profile_parser)
+    add_export_arguments(profile_parser)
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -903,6 +905,7 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
         ),
         slo=slo,
         slo_source=slo_source if slo is not None else None,
+        export=export_config_from_args(args),
     )
 
 

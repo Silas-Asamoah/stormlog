@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -32,6 +33,8 @@ from .cache_state import cache_state_record, reset_cache
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
+from .export import RECEIVER_HEALTH, ExportPipeline, ReceiverHealth
+from .export_metrics import ProfileLabels, summarize_chunk_gaps
 from .host_clock import host_boot_id, wall_clock_domain
 from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
 from .openai_client import (
@@ -118,6 +121,42 @@ class InferenceProfiler:
             else None
         )
         self.execution_dir = config.vllm_execution_dir
+        # Built now so a budget or slot problem stops the run before it sends.
+        self.export = self._build_export()
+
+    def _build_export(self) -> ExportPipeline | None:
+        config = self.config
+        if not config.export.enabled:
+            return None
+        labels = ProfileLabels(
+            model=config.model,
+            server=redact_url(config.endpoint, origin_only=True),
+            cases=tuple((case.case_id, case.arrival.mode) for case in config.cases()),
+            run_id=self.run_id,
+            session_id=self.session.session_id,
+            version=__version__,
+            metrics_server=(
+                redact_url(config.vllm_metrics_url, origin_only=True)
+                if config.vllm_metrics_url is not None
+                else None
+            ),
+            traces=config.trace is not None,
+            case_label=config.export.prometheus_case_label,
+        )
+        health = (
+            [(RECEIVER_HEALTH, ReceiverHealth.health_metrics())]
+            if config.vllm_spans_listen is not None
+            else []
+        )
+        pipeline = ExportPipeline(
+            config.export,
+            labels,
+            health=health,
+            forbidden_paths=[Path(config.output_path)],
+            on_warning=self.on_warning,
+        )
+        pipeline.prepare()
+        return pipeline
 
     def _build_vllm_scraper(self) -> VllmMetricsScraper | None:
         """The ``/metrics`` scraper when native vLLM telemetry is on."""
@@ -165,6 +204,21 @@ class InferenceProfiler:
             return asyncio.run(self._run_async())
         finally:
             self.request_executor.shutdown(wait=True, cancel_futures=True)
+            self._end_export(interrupted=sys.exc_info()[0] is not None)
+
+    def _end_export(self, *, interrupted: bool) -> None:
+        """Close (a no-op after the capture closed it), linger, stop serving."""
+        export = self.export
+        if export is None:
+            return
+        export.close(0.0)
+        linger = self.config.export.prometheus_linger_seconds
+        if linger > 0 and not interrupted and export.server is not None:
+            try:
+                time.sleep(linger)
+            except KeyboardInterrupt:
+                pass  # Ctrl+C during the linger only ends the linger
+        export.stop_serving()
 
     async def _run_async(self) -> dict[str, Any]:
         output_path = Path(self.config.output_path)
@@ -255,7 +309,9 @@ class InferenceProfiler:
 
     async def _capture(self, output_path: Path) -> None:
         self._start_span_receiver()
-        with JsonlEventWriter(output_path) as writer:
+        self._start_export()
+        observer = self.export.observe if self.export is not None else None
+        with JsonlEventWriter(output_path, observer=observer) as writer:
             self._opened_artifact = True
             writer.append(
                 {
@@ -358,10 +414,29 @@ class InferenceProfiler:
                     stop_spans.set()
                     await _wait_for(span_task)
                     self._stop_span_receiver(writer)
+                    # Before the capability records, so the export's counts
+                    # in them are final; synchronous, so a cancellation
+                    # cannot skip it.
+                    self._close_export(completed)
                     # Written on the way out of an interrupted run too, so
                     # the artifact says what the engine exposed before it
                     # says why the run stopped.
                     self._write_capabilities(writer)
+
+    def _start_export(self) -> None:
+        export = self.export
+        if export is None:
+            return
+        export.start(started_at=time.time())
+        if self.span_receiver is not None:
+            export.attach_health(RECEIVER_HEALTH, ReceiverHealth(self.span_receiver))
+
+    def _close_export(self, completed: bool) -> None:
+        if self.export is not None:
+            deadline = (
+                EXPORT_CLOSE_SECONDS if completed else EXPORT_INTERRUPT_CLOSE_SECONDS
+            )
+            self.export.close(deadline)
 
     async def _wait_for_late_spans(self) -> None:
         """Keep the receiver up after the last phase for the exporter's last batch.
@@ -424,10 +499,11 @@ class InferenceProfiler:
                 pass
 
     def _write_capabilities(self, writer: JsonlEventWriter) -> None:
-        """Say what the engine exposed, once the run knows."""
-        if self.vllm_scraper is None and self.config.vllm_spans_listen is None:
-            return
+        """Say what the engine exposed, and what was exported, once the run knows."""
         context = self._artifact_identity().context
+        if self.export is not None:
+            for event in self.export.capability_events(context):
+                writer.append(event.to_record())
         if self.vllm_scraper is not None:
             writer.append(self.vllm_scraper.capability_event(context).to_record())
         if self.config.vllm_spans_listen is not None:
@@ -926,7 +1002,7 @@ class InferenceProfiler:
         """Send one request and record it, or record that it was cancelled."""
         sent_at_ns = time.time_ns()
         try:
-            event = await self._run_one_request(
+            event, extras = await self._run_one_request(
                 request_id=request_id, request=request, arrival=arrival
             )
         except asyncio.CancelledError:
@@ -941,7 +1017,7 @@ class InferenceProfiler:
             raise
         # Keep only the prompt's digest once its request is done.
         request.prompts.forget(arrival.index)
-        request.writer.append(event.to_record())
+        request.writer.append(event.to_record(), extras)
 
     def _drain_timeout(self) -> float:
         if self.config.drain_timeout_seconds is not None:
@@ -1000,7 +1076,8 @@ class InferenceProfiler:
         request_id: str,
         request: "_PhaseRequest",
         arrival: Arrival,
-    ) -> InferenceRequestEvent:
+    ) -> tuple[InferenceRequestEvent, dict[str, Any] | None]:
+        """The request's event, and what an exporter may use beside it."""
         case = request.case
         prompt = request.prompts.take(arrival.index)
         call = self.request_executor.submit(
@@ -1017,12 +1094,18 @@ class InferenceProfiler:
         )
         self._track(call)
         outcome = await asyncio.wrap_future(call)
+        extras = (
+            {"chunk_summary": outcome.chunk_summary}
+            if outcome.chunk_summary is not None
+            else None
+        )
         if outcome.error is None:
             try:
-                return self._ok_event(request_id, request, arrival, prompt, outcome)
+                event = self._ok_event(request_id, request, arrival, prompt, outcome)
+                return event, extras
             except Exception as exc:
                 outcome = replace(outcome, error=exc)
-        return self._failure_event(request_id, request, arrival, prompt, outcome)
+        return self._failure_event(request_id, request, arrival, prompt, outcome), None
 
     def _call_and_count(
         self, prompt: Prompt, call: Callable[[], ChatCompletionResult]
@@ -1034,6 +1117,13 @@ class InferenceProfiler:
         """
         outcome = _timed_call(call)
         result = outcome.result
+        if result is not None and self.export is not None:
+            # Here, where the gaps were measured, so the event loop only
+            # copies a fixed-size summary for the exporter.
+            outcome = replace(
+                outcome,
+                chunk_summary=summarize_chunk_gaps(result.chunk_interarrival_ms),
+            )
         try:
             if result is None:
                 return replace(outcome, prompt_count=prompt.count)
@@ -1199,6 +1289,8 @@ class _TimedCall:
     error: Exception | None = None
     prompt_count: TokenCount | None = None
     output_count: TokenCount | None = None
+    # Chunk gaps summarized for an exporter; None when nothing exports.
+    chunk_summary: tuple[tuple[int, ...], float] | None = None
 
 
 def _timed_call(call: Callable[[], ChatCompletionResult]) -> _TimedCall:
@@ -1339,6 +1431,10 @@ def _lag_ms(arrival: Arrival, sent_at_ns: int) -> float:
     return (sent_at_ns - arrival.intended_at_ns) / 1_000_000.0
 
 
+# How long closing the exporters may take: they finish what is queued, then
+# freeze. Shorter after Ctrl+C.
+EXPORT_CLOSE_SECONDS = 5.0
+EXPORT_INTERRUPT_CLOSE_SECONDS = 2.0
 # The server declined the request: rate limited or overloaded.
 REJECTED_HTTP_STATUSES = frozenset({429, 503})
 # How long the finished run waits for the vLLM execution hook to seal its open
