@@ -784,6 +784,77 @@ def test_a_prelude_server_loads_the_verified_model(
     assert (server_env["HF_HUB_OFFLINE"], server_env["HF_HUB_CACHE"]) == ("1", "/hub")
 
 
+def _unhealthy_on(monkeypatch: pytest.MonkeyPatch, *calls: int) -> None:
+    """The server never becomes healthy on these runs (1-based, in order)."""
+    from stormlog.infer import experiment
+
+    real = experiment._wait_healthy
+    seen: list[int] = []
+
+    def wait(base_url: str, server: Any, timeout_s: float) -> bool:
+        seen.append(1)
+        return False if len(seen) in calls else real(base_url, server, timeout_s)
+
+    monkeypatch.setattr(experiment, "_wait_healthy", wait)
+
+
+def _against_control(order: list[str], *, args: bool) -> dict[str, Any]:
+    document = _plan(_port(), blocks=1, control_arm="off")
+    document["order"] = {"kind": "explicit", "blocks": [order]}
+    if args:
+        # The treatment is the arm's own launch.
+        document["arms"]["watch"]["server"] = {"args": ["--latency", "0"]}
+    return document
+
+
+@pytest.mark.parametrize("order", [["off", "watch"], ["watch", "off"]])
+def test_a_server_the_arms_own_launch_kept_from_starting_is_an_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, order: list[str]
+) -> None:
+    # The lead's ruling on rev-213-a's E7: a Stormlog arm that stops vLLM
+    # from starting must not read as a harness problem and be set aside,
+    # whether the control ran before it in the block or after.
+    _unhealthy_on(monkeypatch, order.index("watch") + 1)
+    records = _run(tmp_path, _against_control(order, args=True))
+    watch = next(r for r in records if r["arm"] == "watch")
+    off = next(r for r in records if r["arm"] == "off")
+    assert (watch["state"], watch["reasons"], watch["decided_by"]) == (
+        "outcome_failure",
+        ["server_never_healthy"],
+        "arm_launch_differs",
+    )
+    assert off["state"] == "completed"
+    index = [json.loads(line) for line in (tmp_path / "exp" / "index.jsonl").open()]
+    assert [r["state"] for r in index if r["arm"] == "watch"] == ["outcome_failure"]
+    recorded = json.loads((Path(watch["run_dir"]) / "run.json").read_text())
+    assert recorded["state"] == "outcome_failure"
+
+
+def test_a_server_that_fails_with_the_controls_own_launch_is_set_aside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _unhealthy_on(monkeypatch, 2)
+    records = _run(tmp_path, _against_control(["off", "watch"], args=False))
+    watch = records[-1]
+    assert (watch["state"], watch["decided_by"]) == (
+        "protocol_failure",
+        "identical_launch",
+    )
+
+
+def test_a_server_that_fails_when_the_controls_did_too_is_set_aside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _unhealthy_on(monkeypatch, 1, 2)
+    records = _run(tmp_path, _against_control(["off", "watch"], args=True))
+    by_arm = {r["arm"]: r for r in records}
+    assert (by_arm["watch"]["state"], by_arm["watch"]["decided_by"]) == (
+        "protocol_failure",
+        "control_also_unhealthy",
+    )
+    assert by_arm["off"]["decided_by"] == "identical_launch"
+
+
 def test_a_treatment_left_running_stops_the_experiment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
