@@ -679,9 +679,13 @@ def compare_values(
     metric's own unit otherwise. ``value_unit`` is the unit of the raw
     values, for a ``log_ratio`` metric's difference and fallback budget.
     ``unavailable`` names why the caller already knows the metric cannot be
-    gated (``censored``, ``unverified``, ...). A duplicate block label is a
-    ValueError.
+    gated (``censored``, ``unverified``, ...). A value that is not finite
+    makes it ``non_finite_value``: an infinite latency is the worst value
+    there is, and dropping it as missing would decide the gate on the runs
+    left. A duplicate block label is a ValueError.
     """
+    if unavailable is None and _non_finite([*baseline, *candidate]):
+        unavailable = "non_finite_value"
     request = _check(
         _Request(
             name,
@@ -700,6 +704,16 @@ def compare_values(
     # The candidate alone is measured on an absolute scale: no pairing.
     pairs = _pair(baseline, candidate, None if scale == ABSOLUTE else blocks)
     return _compare(request, pairs)
+
+
+def _non_finite(values: Sequence[RunValue]) -> bool:
+    for value in values:
+        if value is None:
+            continue
+        bounds = value if isinstance(value, tuple) else (value,)
+        if not all(math.isfinite(bound) for bound in bounds):
+            return True
+    return False
 
 
 def _check(request: _Request) -> _Request:
@@ -1088,13 +1102,42 @@ def _zero_rule(
     if gate is None:
         return result
     if blocked == "candidate_zero":
-        return _with(result, gate=GateOutcome(FAIL, "candidate_zero", gate))
+        outcome = _candidate_zero_gate(request, pairs, worst_case, best_case)
+        if outcome is not None:
+            return _with(result, gate=outcome)
+        blocked = "undefined_in_arm"
     blocker = _gate_blocker(request, pairs, Guards())
     if blocker is not None or gate.fallback_budget is None:
         return _with(result, gate=GateOutcome(NOT_EVALUABLE, blocker or blocked, gate))
     status = _decide(gate.rule, gate.fallback_budget, worst, best, request.direction)
     reason = "fallback_budget" if status == PASS else "exceeds_fallback_budget"
     return _with(result, gate=GateOutcome(status, reason, gate, "fallback"))
+
+
+def _candidate_zero_gate(
+    request: _Request,
+    pairs: _Pairs,
+    worst_case: tuple[list[float], list[float]],
+    best_case: tuple[list[float], list[float]],
+) -> GateOutcome | None:
+    """A candidate that served nothing, judged in the case its rule reads.
+
+    Non-inferiority reads the worst case, a regression rule the best: a
+    zero only in the case the rule does not read, from missing evidence,
+    shows no regression (None: the log ratio is undefined there). A
+    regression rule waits for the gate's blockers first.
+    """
+    gate = request.gate
+    assert gate is not None
+    regression = gate.rule != NON_INFERIORITY
+    if regression:
+        blocker = _gate_blocker(request, pairs, Guards())
+        if blocker is not None:
+            return GateOutcome(NOT_EVALUABLE, blocker, gate)
+    used = best_case if regression else worst_case
+    if any(value <= 0 for value in used[1]):
+        return GateOutcome(FAIL, "candidate_zero", gate)
+    return None
 
 
 # ------------------------------------------------------- proportions, plans

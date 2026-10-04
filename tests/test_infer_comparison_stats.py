@@ -451,3 +451,54 @@ def test_a_gate_budget_that_cannot_mean_anything_is_refused(
 ) -> None:
     with pytest.raises(InferUsageError):
         GateRule("non-inferiority", budget, unit)
+
+
+def _goodput(candidate: list[Any], rule: str, **options: Any) -> Any:
+    return compare_values(
+        "goodput_rps",
+        [10.0] * 6,
+        candidate,
+        direction="higher_is_better",
+        scale="log_ratio",
+        unit="relative",
+        blocks=(BLOCKS, BLOCKS),
+        gate=GateRule(rule, 0.05, "relative"),
+        **options,
+    )
+
+
+def test_a_zero_only_in_the_case_a_rule_does_not_use_is_no_regression() -> None:
+    # Goodput known only as (0, 10.4): unknown outcomes. The significant
+    # rule judges the best case, where the candidate served 10.4; missing
+    # evidence must not invent a regression.
+    candidate = [(0.0, 10.4)] * 6
+    claim = _goodput(candidate, "significant")
+    assert claim.gate is not None
+    assert (claim.gate.status, claim.gate.reason) == (
+        "not_evaluable",
+        "undefined_in_arm",
+    )
+    # Non-inferiority judges the worst case, where it served nothing.
+    safe = _goodput(candidate, "non-inferiority")
+    assert safe.gate is not None
+    assert (safe.gate.status, safe.gate.reason) == ("fail", "candidate_zero")
+
+
+def test_a_regression_rule_on_a_zero_waits_for_its_blockers() -> None:
+    result = _goodput([0.0] * 6, "significant", unavailable="unverified")
+    assert result.gate is not None
+    assert (result.gate.status, result.gate.reason) == ("not_evaluable", "unverified")
+
+
+def test_a_value_that_is_not_finite_blocks_the_gate() -> None:
+    # An infinite latency is the worst value there is; dropping it as
+    # missing would decide the gate on the blocks that are left.
+    candidate = [140.0, 143.0, 137.0, math.inf, math.inf, math.inf]
+    result = _latency(
+        candidate=candidate, gate=GateRule("non-inferiority", 0.05, "relative")
+    )
+    assert result.gate is not None
+    assert (result.gate.status, result.gate.reason) == (
+        "not_evaluable",
+        "non_finite_value",
+    )
