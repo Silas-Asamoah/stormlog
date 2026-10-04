@@ -50,6 +50,7 @@ def _case(
     attainment: float = 0.99,
     coverage: float = 1.0,
     penalized: bool = False,
+    slo_digest: str = "p" * 64,
 ) -> dict[str, Any]:
     return {
         "population": {"offered": 100, "successful": 99, "cohort_valid": True},
@@ -64,6 +65,7 @@ def _case(
             "evidence_coverage": coverage,
             "met": round(attainment * 100),
             "offered": 100,
+            "slo_digest": slo_digest,
         },
         "cache": {},
     }
@@ -354,6 +356,26 @@ def test_the_attainment_gate_obeys_the_same_blockers_as_the_others() -> None:
     gate = comparison.cases[CASE]["attainment_gate"]
     assert (gate["status"], gate["reason"]) == ("not_evaluable", "unverified")
     assert comparison.exit_code == 4
+
+
+def test_slo_metrics_judged_by_different_policies_cannot_be_gated() -> None:
+    # A candidate judged by a looser policy would meet it however much
+    # slower it was.
+    gates = (("goodput_rps", GateRule("non-inferiority", 0.05, "relative")),)
+    baseline, candidate = _arms(SLOWER, slo_digest="q" * 64)
+    comparison = compare_runs(
+        baseline, candidate, ComparisonSpec(gates=gates, min_attainment=0.9)
+    )
+    case = comparison.cases[CASE]
+    goodput = case["metrics"]["goodput_rps"]
+    assert goodput.gate is not None
+    assert (goodput.gate.status, goodput.gate.reason) == (
+        "not_evaluable",
+        "slo_policy_differs",
+    )
+    assert case["attainment_gate"]["reason"] == "slo_policy_differs"
+    # Latency is not judged by a policy and is still gated.
+    assert case["metrics"]["client.e2e.p95"].gate is None
 
 
 def test_pooled_requests_are_labelled_model_based() -> None:
