@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ..session import SESSION_STATUS_COMPLETED
 from .arrival_report import arrival_lines, arrival_summary, latency_from_intended_ms
 from .cache_state import cache_lines, cache_summary
 from .correlation_accounting import AlignedTimestamp
@@ -116,6 +117,7 @@ def analyze_inference_events(
             "failure_rate": (len(failed) / len(requests)) if requests else 0.0,
             "failures_by_status": _failures_by_status(failed),
             "case_count": len(cases),
+            "session_status": _session_status(records),
         },
         "cases": cases,
         "workload": workload_summary(records),
@@ -319,6 +321,16 @@ def _measured_windows(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]
     }
 
 
+def _session_status(records: list[dict[str, Any]]) -> str | None:
+    """How the run ended: the last status its session records."""
+    statuses = [
+        str(record["status"])
+        for record in records
+        if record.get("event_type") == "infer.session" and record.get("status")
+    ]
+    return statuses[-1] if statuses else None
+
+
 def _failures_by_status(failed: list[dict[str, Any]]) -> dict[str, int]:
     counts = Counter(str(record.get("status")) for record in failed)
     return dict(sorted(counts.items()))
@@ -336,6 +348,9 @@ def format_analysis_text(report: dict[str, Any]) -> str:
         + _failure_breakdown(summary.get("failures_by_status")),
         f"Failure rate: {float(summary.get('failure_rate', 0.0)):.2%}",
     ]
+    status = summary.get("session_status")
+    if status not in (None, SESSION_STATUS_COMPLETED):
+        lines.insert(2, f"Session status: {status}")
     cases = report.get("cases", {})
     telemetry = report.get("telemetry", {})
     join = telemetry.get("server_join", {})

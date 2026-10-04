@@ -187,7 +187,10 @@ the flaky benchmark memory gates
     `--duration` (`rate_reason: endpoint_undeclared`).
   - Each case gains a `population` block (offered, sent, accepted,
     successful, failed, timed out, cancelled and the rest, with cohort checks)
-    and an `intervals` block. (#213)
+    and an `intervals` block. A case whose phase was cut short, such as by
+    Ctrl+C, has an invalid cohort (`phase_window_missing`, with its missing
+    scheduled arrivals) and no rates, and `summary.session_status` says how
+    the run ended. (#213)
 - `stormlog infer profile` tells apart where a failed request stopped. Two
   new request statuses:
   - `unreachable`: the connection failed before any byte was sent. A connect

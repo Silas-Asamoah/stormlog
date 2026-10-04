@@ -30,6 +30,7 @@ from .arrivals import (
     RATE_MODES,
     REPLAY,
     ArrivalSpec,
+    arrival_offsets,
     scheduled_endpoint,
 )
 from .report_stats import int_value, is_number
@@ -165,9 +166,10 @@ class CaseIntervals:
 
     ``rate`` is the scheduled window for an open loop, the measured span for
     a closed loop, and the span of the recorded requests for an artifact
-    with no phase window. It is None for an open loop whose schedule has no
-    known end. ``rate_reason`` says why it is not the first choice when it
-    is not.
+    older than phase windows. It is None for an open loop whose schedule has
+    no known end, and for a phase that never recorded its window, or
+    recorded one without bounds. ``rate_reason`` says why it is not the
+    first choice when it is not.
     """
 
     rate: MeasuredInterval | None
@@ -319,7 +321,10 @@ def _case(
     server_ids: Collection[str] | None,
 ) -> CasePopulation:
     scheduled = _scheduled(window)
+    if window is None:
+        scheduled = _scheduled_from_workload(case_id, workload)
     hard, soft = _cohort_issues(requests, window, scheduled)
+    hard.extend(_window_issues(window, workload))
     population = count_population(
         requests,
         scheduled=scheduled,
@@ -366,6 +371,20 @@ def _cohort_issues(
     return hard, soft
 
 
+def _window_issues(
+    window: Mapping[str, Any] | None, workload: Mapping[str, Any] | None
+) -> list[str]:
+    """A phase that never recorded its end, or recorded it without bounds.
+
+    A run that records its workload also records each measured phase's
+    window once the phase drains, so a case without one was interrupted.
+    Only an artifact older than both has neither.
+    """
+    if window is None:
+        return [] if workload is None else ["phase_window_missing"]
+    return [] if _window_bounds(window) is not None else ["phase_window_incomplete"]
+
+
 def _duplicate_issues(requests: list[Mapping[str, Any]], key: str) -> list[str]:
     values = [r.get(key) for r in requests if r.get(key) is not None]
     repeated = sum(count - 1 for count in Counter(values).values() if count > 1)
@@ -382,7 +401,11 @@ def _index_issues(
         if isinstance(index, int) and not isinstance(index, bool)
     ]
     if len(indexes) != len(requests):
-        return []  # artifacts before request indexes; noted as a soft issue
+        # Artifacts before request indexes, noted as a soft issue; a known
+        # schedule still needs one record per arrival.
+        if scheduled is None or scheduled == len(requests):
+            return []
+        return [f"offered_differs_from_scheduled: {len(requests)} of {scheduled}"]
     return _coverage_issues(
         Counter(indexes), scheduled if scheduled is not None else len(requests)
     )
@@ -437,9 +460,13 @@ def _intervals(
     window: Mapping[str, Any] | None,
     workload: Mapping[str, Any] | None,
 ) -> CaseIntervals:
+    if window is None and workload is not None:
+        return CaseIntervals(rate=None, rate_reason="phase_window_missing")
     if window is None:
         span = _request_span(requests)
         return CaseIntervals(rate=span, rate_reason="no_phase_window")
+    if _window_bounds(window) is None:
+        return CaseIntervals(rate=None, rate_reason="phase_window_incomplete")
     base = _phase_intervals(requests, window)
     if str(window.get("arrival_mode", CLOSED)) == CLOSED:
         return base
@@ -487,6 +514,33 @@ def _phase_intervals(
         ),
         measured_span=measured,
     )
+
+
+def _window_bounds(window: Mapping[str, Any]) -> tuple[int, int] | None:
+    started, drained = window.get("started_at_ns"), window.get("drained_at_ns")
+    if not is_number(started) or not is_number(drained):
+        return None
+    return int_value(started), int_value(drained)
+
+
+def _scheduled_from_workload(
+    case_id: str, workload: Mapping[str, Any] | None
+) -> int | None:
+    """An open loop's scheduled arrivals, recomputed from its seeded spec."""
+    case, measurement = _workload_case(case_id, workload)
+    spec = _arrival_spec((case or {}).get("arrival"))
+    if spec is None or not spec.open_loop or workload is None or measurement is None:
+        return None
+    try:
+        offsets = arrival_offsets(
+            spec,
+            count=measurement.get("request_count"),
+            duration_seconds=measurement.get("duration_seconds"),
+            seed=int_value(workload.get("seed")),
+        )
+    except (TypeError, ValueError):
+        return None
+    return len(offsets)
 
 
 def _endpoint_ns(

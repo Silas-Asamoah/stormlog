@@ -247,6 +247,48 @@ def test_without_a_phase_window_the_span_covers_failed_requests_too() -> None:
     assert intervals.rate_reason == "no_phase_window"
 
 
+def test_an_interrupted_open_loop_is_not_a_complete_case() -> None:
+    # The run stopped after 6 of 10 scheduled arrivals, before its phase
+    # window was written. The workload record shows it is no old artifact.
+    records = [_request(i) for i in range(5)] + [_request(5, "cancelled")]
+    case = _case([*records, _workload()])
+    population = case.population
+    assert population.scheduled == 10
+    assert not population.cohort_valid
+    assert "phase_window_missing" in population.issues
+    assert "records_missing: 4 of 10" in population.issues
+    assert case.intervals.rate is None
+    assert case.intervals.rate_reason == "phase_window_missing"
+
+
+def test_an_interrupted_closed_loop_is_not_a_complete_case() -> None:
+    records = [_request(i) for i in range(6)]
+    case = _case([*records, _workload({"mode": "closed"})])
+    assert case.population.scheduled is None
+    assert case.population.issues == ("phase_window_missing",)
+    assert not case.population.cohort_valid
+    assert case.intervals.rate is None
+    assert case.intervals.rate_reason == "phase_window_missing"
+
+
+@pytest.mark.parametrize("missing", ["started_at_ns", "drained_at_ns"])
+def test_a_phase_window_without_its_bounds_gives_no_rate(missing: str) -> None:
+    # A missing start used to read as 0 ns: an interval of decades.
+    records = [_request(i) for i in range(10)]
+    case = _case([*records, _window(**{missing: None}), _workload()])
+    assert "phase_window_incomplete" in case.population.issues
+    assert not case.population.cohort_valid
+    assert case.intervals.rate is None
+    assert case.intervals.rate_reason == "phase_window_incomplete"
+
+
+def test_a_known_schedule_needs_one_record_per_arrival_without_indexes() -> None:
+    records = [{**_request(i), "request_index": None} for i in range(11)]
+    population = _case([*records, _window()]).population
+    assert "offered_differs_from_scheduled: 11 of 10" in population.issues
+    assert not population.cohort_valid
+
+
 def test_segments_count_by_arrival_or_by_overlap() -> None:
     records = [_request(i) for i in range(10)]
     first_half = Segment("first", 0, SECOND // 2)
@@ -425,9 +467,11 @@ def test_goodput_without_an_interval_has_no_rate() -> None:
 # --- in the analysis report -----------------------------------------------------
 
 
-def _analyze(tmp_path: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
+def _analyze(
+    tmp_path: Path, records: list[dict[str, Any]], status: str = "running"
+) -> dict[str, Any]:
     path = tmp_path / "infer.jsonl"
-    session = {"event_type": "infer.session", "session_id": "s1"}
+    session = {"event_type": "infer.session", "session_id": "s1", "status": status}
     path.write_text(
         "\n".join(json.dumps(record) for record in [session, *records]) + "\n",
         encoding="utf-8",
@@ -486,3 +530,21 @@ def test_an_invalid_cohort_is_shown_in_the_text_report(tmp_path: Path) -> None:
     assert "cohort invalid:" in text
     assert "request_index_repeated" in text
     assert "records_missing: 1 of 10" in text
+
+
+def test_the_report_says_how_the_session_ended(tmp_path: Path) -> None:
+    records = [_request(i) for i in range(6)]
+    ended = {"event_type": "infer.session", "session_id": "s1", "status": "interrupted"}
+    report = _analyze(tmp_path, [*records, _workload(), ended])
+    assert report["summary"]["session_status"] == "interrupted"
+    case = report["cases"]["c1"]
+    assert case["population"]["cohort_valid"] is False
+    text = format_analysis_text(report)
+    assert "Session status: interrupted" in text
+    assert "phase_window_missing" in text
+
+    finished = _analyze(
+        tmp_path, [*records, _window(scheduled_arrivals=6)], "completed"
+    )
+    assert finished["summary"]["session_status"] == "completed"
+    assert "Session status" not in format_analysis_text(finished)

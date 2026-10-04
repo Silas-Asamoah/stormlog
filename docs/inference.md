@@ -163,7 +163,10 @@ Ctrl+C stops a profile with exit code 130. Requests still running are
 recorded as `cancelled`, and the artifact ends with an `infer.session` record
 whose status is `interrupted`. A run that fails for another reason ends with
 status `incomplete`. Either way, the requests recorded before the stop can
-still be analyzed.
+still be analyzed. The report's `summary.session_status` gives that status,
+and a case whose phase never recorded its window is marked
+`phase_window_missing`, with an invalid cohort and no rates, instead of
+reading as a complete case.
 
 `infer profile` returns codes from the
 [exit-code contract](report_contract.md):
@@ -362,8 +365,12 @@ Throughput divides by the case's **rate interval**, named in
   the requests scheduled in it however late they finished;
 - for a closed loop, the phase start to the end of its drain
   (`measured_span`);
-- for an artifact without a phase window, the span of every measured request
-  that has both times, failed ones included (`request_span`).
+- for an artifact older than phase windows, the span of every measured
+  request that has both times, failed ones included (`request_span`).
+
+A case whose phase was cut short has no rate interval: the run recorded its
+workload, so it would have recorded the phase's window once the phase
+drained (`intervals.rate_reason: phase_window_missing`).
 
 A rate is `null` when its interval has no length, and for an open loop with
 no known endpoint, such as a replay without `--duration`: the span to the

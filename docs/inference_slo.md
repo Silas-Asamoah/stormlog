@@ -199,7 +199,7 @@ Every measured request lands in exactly one count, by status:
 | Field | Requests |
 | --- | --- |
 | `offered` | All of the case's measured requests |
-| `scheduled` | The arrivals an open loop scheduled (`infer.phase_window`); `null` for a closed loop |
+| `scheduled` | The arrivals an open loop scheduled (`infer.phase_window`, or recomputed from the seeded workload when the phase was cut short); `null` for a closed loop |
 | `dropped` | Never sent |
 | `sent` | `offered − dropped` |
 | `unreachable` | `connect()` failed; no byte was sent |
@@ -219,7 +219,14 @@ The cohort is checked for the records a run should have:
 - every scheduled arrival's `request_index` exactly once, so a duplicated
   record cannot stand in for a missing one;
 - one session;
-- every request's times inside its phase, start to drain end.
+- every request's times inside its phase, start to drain end;
+- the phase's window record, with its start and drain end. A run that
+  records its workload records each measured phase's window once the phase
+  drains, so a case without one was cut short (`phase_window_missing`), and
+  its scheduled arrivals are recomputed from the seeded workload to show how
+  many are missing. A window without its bounds is `phase_window_incomplete`;
+- without request indexes, one record per scheduled arrival
+  (`offered_differs_from_scheduled`).
 
 A failed check sets `cohort_valid: false` and names the problem in `issues`.
 Two notes don't invalidate the cohort:
@@ -235,7 +242,7 @@ Two notes don't invalidate the cohort:
 | `dispatch_window` | The first send to the last send. |
 | `drain` | The window end to the drain end. |
 | `measured_span` | The phase start to the drain end. |
-| `request_span` | First start to last end over **every** measured request, failed ones included. Only for artifacts with no phase window. |
+| `request_span` | First start to last end over **every** measured request, failed ones included. Only for artifacts older than phase windows. |
 | `segment` | A caller-defined slice; see below. |
 
 The **rate** interval, which every rate divides by, depends on the run:
@@ -244,7 +251,8 @@ The **rate** interval, which every rate divides by, depends on the run:
 | --- | --- | --- |
 | Open loop | `scheduled_window` | The arrival cohort: requests scheduled in the window, however late they finished |
 | Closed loop | `measured_span` | Every measured request |
-| No phase window | `request_span` | Every measured request |
+| Older than phase windows | `request_span` | Every measured request |
+| Cut short, or a window without bounds | none (`phase_window_missing`, `phase_window_incomplete`) | |
 
 An old open-loop artifact without a recorded endpoint has it recomputed from
 its seeded workload record. A replay without a duration has none, so it has
