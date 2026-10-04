@@ -263,6 +263,41 @@ def test_targets_are_bound_at_startup(tmp_path: Path) -> None:
         _targets(None, [f"sidecar={stand_in.pid}"])
 
 
+def test_queue_episodes_recover_end_to_end(tmp_path: Path) -> None:
+    # Fable's A2 deltas, N0: the e2e above has no queue episode, so a plan
+    # whose queue recovery could never hold passed CI. T1 and F1 with a
+    # baseline and hold long enough for the waits and the waiting gauge:
+    # each recovers, and F1's neighbor saturates the queue. 400 blocks keep
+    # F1's load from preempting the victim, which would make it invalid.
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    record["timeline"].update(baseline=7, recovery_timeout=20)
+    record["thresholds"]["hold"] = 6
+    shape = {"input_tokens": 128, "output_tokens": 16}
+    record["episodes"] = [
+        {"type": "T1", "dose": {"rate_per_second": 2, **shape}},
+        {"type": "F1", "dose": {"rate_per_second": 120, **shape}},
+    ]
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps(record))
+    arguments = [
+        "--step-seconds", "0.002",
+        "--decode-token-seconds", "0.0005",
+        "--num-gpu-blocks", "400",
+        "--max-num-seqs", "8",
+        "--hook-dir", str(tmp_path / "hook"),
+    ]  # fmt: skip
+    with FakeEngineProcess(arguments) as server:
+        assert _inject(server, tmp_path, plan) == 0
+    run = tmp_path / "runs" / "q221-00000000000000bb"
+    assert verify(run) == []
+    twin, fault = load_injections(run / "truth" / "injections.jsonl")
+    for injection in (twin, fault):
+        assert injection.status == "valid", injection.validity
+        assert injection.times.effect_end_ns is not None  # it recovered
+    checks = {c["name"]: c["passed"] for c in fault.validity.checks}
+    assert checks == {"onset_reached": True, "no_victim_preemption": True}
+
+
 def _inject(server: FakeEngineProcess, tmp_path: Path, plan: Path, *extra: str) -> int:
     return main(
         [
