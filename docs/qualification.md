@@ -474,7 +474,9 @@ reader:
   (`probes/hook-firstseen.jsonl`) and when each segment was sealed
   (`probes/seal-observations.jsonl`). A damaged line (a torn write) is
   skipped and counted, and a segment found shorter than what was read is
-  read again; both are noted in `probes/hook-problems.jsonl`. At the end of
+  read again; both are noted in `probes/hook-problems.jsonl`. So is a record
+  that parses but lacks a field the view reads (`bad_record`): it is skipped,
+  and the records after it in the same poll still arrive. At the end of
   the run every epoch it read is copied into `truth/reference/hook`, before
   the run is hashed, so the replay has the records its first-seen notes
   describe. Each epoch's pseudonym `key` is left behind: with it, anyone

@@ -197,6 +197,30 @@ def test_a_damaged_line_is_skipped_and_counted(tmp_path: Path) -> None:
     assert tailer.bad_lines == 2
 
 
+def test_a_record_missing_a_field_is_skipped_not_fatal(tmp_path: Path) -> None:
+    # A record that parses but lacks a field the view reads (an alias with
+    # no wall_ns): it is counted and noted, and the records after it in the
+    # same poll still arrive. It used to raise out of the poll, losing them.
+    part = _epoch_dir(tmp_path) / "000001.jsonl.part"
+    alias = {"epoch": "engine-1", "kind": "alias", "external": "x", "internal": "i"}
+    part.write_bytes(
+        _hook_line(1) + (json.dumps(alias) + "\n").encode() + _hook_line(3)
+    )
+    channel = ReferenceChannel(
+        hook_root=tmp_path / "hook",
+        metrics_url="http://127.0.0.1:9/metrics",
+        victim_prefix=VICTIM,
+        shared_prefix_tokens=4,
+        reference_dir=tmp_path / "reference",
+        probes_dir=tmp_path / "probes",
+    )
+    channel.poll(scrape=False)
+    assert channel.view.step_starts == [1, 3]
+    assert channel.bad_records == 1
+    noted = (tmp_path / "probes" / "hook-problems.jsonl").read_text().splitlines()
+    assert json.loads(noted[0])["kind"] == "bad_record"
+
+
 def test_a_segment_rewritten_shorter_is_read_again(tmp_path: Path) -> None:
     part = _epoch_dir(tmp_path) / "000001.jsonl.part"
     problems = tmp_path / "hook-problems.jsonl"

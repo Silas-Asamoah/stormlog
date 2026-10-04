@@ -461,11 +461,22 @@ class ReferenceChannel:
         self._victim_offset = 0
         self._victim_gaps: list[Point] = []
         self._victim_spans: list[tuple[int, int]] = []
+        self.bad_records = 0
 
     def poll(self, *, scrape: bool = True) -> None:
-        """Read new hook records, and take one scrape unless told not to."""
+        """Read new hook records, and take one scrape unless told not to. A
+        record that parses but lacks a field the view needs is skipped,
+        counted and noted, like a damaged line: the records after it in the
+        same poll are still read."""
         for record in self.tailer.poll():
-            self.view.add(record)
+            try:
+                self.view.add(record)
+            except (KeyError, TypeError, ValueError) as error:
+                self.bad_records += 1
+                note = {"kind": "bad_record", "epoch": record.get("epoch"),
+                        "record_kind": record.get("kind"), "error": repr(error),
+                        "seen_ns": time.time_ns()}  # fmt: skip
+                _append_lines(self.tailer.problems, [note])
         if scrape:
             taken = scrape_metrics(self.metrics_url)
             self.scrapes.append(taken)
