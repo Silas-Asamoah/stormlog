@@ -323,19 +323,38 @@ def test_a_run_scored_twice_is_refused() -> None:
         summarize([run, other], CONFIG)
 
 
-def test_findings_on_another_clock_make_no_clean_negative_run() -> None:
+def test_a_fault_claim_on_another_clock_counts_as_false() -> None:
     # rev-220-b's delta D4: a window clock spelled differently from the
     # run's hid every claim, and 60 N runs passed the FPR gate, 0 flagged,
-    # with no problem. Now each such run says so and is no unit.
+    # with no problem. Each run now says so, and its claim counts.
     from tests.test_qualify_scoring import null_run
 
     claim = finding("s", "host_stall", 1, component="engine_core", window=(110, 130))
     claim["window"]["clock_domain"] = "node/boot/UNIX_EPOCH_NS"
     runs = [run_of([null_run()], diagnosis(claim), run_id=f"n{i}") for i in range(60)]
     assert runs[0].problems == ("run n0: 1 findings on another clock",)
+    assert runs[0].false_claims == (claim["id"],)
     summary = summarize(runs, CONFIG)
-    assert summary.negative_runs == 0 and not summary.fpr_passes
-    assert summary.excluded_negatives == {"findings_off_clock": 60}
+    assert summary.negative_runs == 60 and summary.false_positive_runs == 60
+    assert not summary.fpr_passes and summary.excluded_negatives == {}
+
+
+def test_a_finding_off_the_clock_never_takes_a_flagged_run_out() -> None:
+    # rev-220-b's delta 2, E2: one off-clock info observation made its run
+    # no unit, so the one run with a false claim left the count: 1 of 60
+    # failing became 0 of 59 passing.
+    from tests.test_qualify_scoring import null_run
+
+    claim = finding("s", "host_stall", 1, component="engine_core", window=(110, 130))
+    aside = finding("o", "host_stall", 2, component="engine_core", severity="info")
+    aside["window"]["clock_domain"] = "node/boot/UNIX_EPOCH_NS"
+    clean = [run_of([null_run()], diagnosis(), run_id=f"n{i}") for i in range(59)]
+    flagged = run_of([null_run()], diagnosis(claim, aside), run_id="n59")
+    assert flagged.false_claims == (claim["id"],)
+    assert flagged.problems == ("run n59: 1 findings on another clock",)
+    summary = summarize([*clean, flagged], CONFIG)
+    assert summary.negative_runs == 60 and summary.false_positive_runs == 1
+    assert not summary.fpr_passes
 
 
 def test_a_fault_claim_without_a_window_in_a_negative_run() -> None:
