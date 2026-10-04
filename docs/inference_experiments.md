@@ -159,7 +159,13 @@ harness fault. Otherwise it is a `protocol_failure`. The run records which
 rule decided (`decided_by`): `arm_launch_differs`, `identical_launch`,
 `control_also_unhealthy`, `control_not_launched` (the control's server was
 not launched in the block), or `no_control_arm`. It is decided once the
-block's runs are done, whatever their order, and indexed then. Such a run
+block's runs are done, whatever their order, and indexed then; until then
+its `run.json` says `decided_by: pending`, so a runner that dies first
+leaves the decision to the resume, which makes it before anything else
+and never retries the attempt. Only control attempts from the same boot
+and the same epoch count: each stop for a host that was not clean starts a
+new epoch, so a control that came up before such a stop, or before the box
+was paused, says nothing about the run. Such a run
 has no artifact, since no workload ran, so a comparison sees its block
 without that arm's run and sets the block aside: pre-register
 `min_complete_blocks`, or use `--on-incomplete fail`, so the loss counts. The runner appends the state to
