@@ -531,7 +531,11 @@ def cadence_table(steps: Sequence[Step]) -> list[Cadence]:
 
 
 def cadence_baseline(
-    table: Sequence[Cadence], before_mono_ns: int, config: LoopGapConfig, bucket: int
+    table: Sequence[Cadence],
+    before_mono_ns: int,
+    config: LoopGapConfig,
+    bucket: int,
+    ends: Sequence[int] | None = None,
 ) -> tuple[float | None, str]:
     """The median completion cadence of the busy steps that completed in the
     window before a stall: those of the stall's own work bucket when there
@@ -542,7 +546,8 @@ def cadence_baseline(
     window, _ = resolve_threshold(LOOP_BASELINE_WINDOW_NS, config.thresholds)
     matched_min, _ = resolve_threshold(LOOP_MATCHED_BIN_MIN_STEPS, config.thresholds)
     busy_min, _ = resolve_threshold(LOOP_MIN_BUSY_STEPS, config.thresholds)
-    ends = [end for end, _bucket, _value in table]
+    if ends is None:
+        ends = [end for end, _bucket, _value in table]
     lo = bisect_left(ends, before_mono_ns - int(window))
     hi = bisect_right(ends, before_mono_ns)
     recent = table[lo:hi]
@@ -556,13 +561,18 @@ def cadence_baseline(
 
 
 def _limit(
-    stall: Stall, table: Sequence[Cadence], config: LoopGapConfig
+    stall: Stall,
+    table: Sequence[Cadence],
+    config: LoopGapConfig,
+    ends: Sequence[int] | None = None,
 ) -> tuple[float, str, float | None]:
     """The duration a stall must reach, how it was set, and the baseline."""
     factor, _ = resolve_threshold(LOOP_STALL_FACTOR, config.thresholds)
     floor, _ = resolve_threshold(LOOP_STALL_FLOOR_NS, config.thresholds)
     no_baseline, _ = resolve_threshold(LOOP_NO_BASELINE_FLOOR_NS, config.thresholds)
-    baseline, kind = cadence_baseline(table, stall.start_mono_ns, config, stall.bucket)
+    baseline, kind = cadence_baseline(
+        table, stall.start_mono_ns, config, stall.bucket, ends
+    )
     if baseline is None:
         return no_baseline, kind, None
     return max(factor * baseline, floor), kind, baseline
@@ -625,17 +635,18 @@ def _judged(
     coverage = Coverage.of(records)
     grace, _ = resolve_threshold(LOOP_HEARTBEAT_GRACE_NS, config.thresholds)
     covered = [s for s in stalls if coverage.covers(s, config.now_wall_ns, grace)]
-    best = _worst(covered, steps, config)
+    table = cadence_table(steps)
+    best = _worst(covered, table, config)
     if best is not None and best[0].duration_ns >= best[1]:
         return best, True
-    worst = _worst(stalls, steps, config)
+    worst = _worst(stalls, table, config)
     if worst is None:
         return None, True
     return worst, worst[0] in covered
 
 
 def _worst(
-    stalls: Sequence[Stall], steps: Sequence[Step], config: LoopGapConfig
+    stalls: Sequence[Stall], table: Sequence[Cadence], config: LoopGapConfig
 ) -> tuple[Stall, float, str, float | None] | None:
     """The stall furthest over its own limit, or the longest when none is.
 
@@ -649,10 +660,10 @@ def _worst(
     candidates = [stall for stall in stalls if stall.duration_ns >= lowest]
     if not candidates:
         candidates = [max(stalls, key=lambda stall: stall.duration_ns)]
-    table = cadence_table(steps)
+    ends = [end for end, _bucket, _value in table]
     ranked = []
     for stall in candidates:
-        limit, kind, baseline = _limit(stall, table, config)
+        limit, kind, baseline = _limit(stall, table, config, ends)
         ranked.append((stall.duration_ns / limit, stall, limit, kind, baseline))
     _ratio, stall, limit, kind, baseline = max(ranked, key=lambda item: item[0])
     return stall, limit, kind, baseline
