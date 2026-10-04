@@ -408,19 +408,32 @@ def test_windowless_claims_count_in_the_planned_negative_runs() -> None:
 
 def test_a_findings_pre_grace_is_capped() -> None:
     # rev-220-b's delta 2, E3: pre-grace was the finding's own resolution
-    # plus uncertainty, unbounded. With 100 s of uncertainty, a KV claim
-    # that ended 50 s before F2's onset was credited to F2.
+    # plus uncertainty, unbounded. With 200 s of uncertainty, a KV claim
+    # that ended 50 s before F2's onset was credited to F2. The uncertainty
+    # is now bounded at 5 s, the resolution at #218's 30 s span cap.
     early = finding("a", KV, 1, window=(40, 50))
-    early["window"]["uncertainty_ns"] = 100 * S
+    early["window"]["uncertainty_ns"] = 200 * S
     assert not score_episode(episode(), diagnosis(early), CONFIG).correct(TOP1, 2)
-    # The cap is the lead's fixed bound, one 5 s onset window: within it a
-    # finding's pre-grace counts in full, and a start 6 s early never does.
-    near = finding("a", KV, 1, window=(95, 140))
-    near["window"]["uncertainty_ns"] = 4 * S
-    assert score_episode(episode(), diagnosis(near), CONFIG).correct(TOP1, 2)
-    wide = finding("a", KV, 1, window=(94, 140))
+    # 20 s of uncertainty counts as 5 s: with 1 s of resolution, a start
+    # 7 s early is too early.
+    wide = finding("a", KV, 1, window=(93, 140))
     wide["window"]["uncertainty_ns"] = 20 * S
     assert not score_episode(episode(), diagnosis(wide), CONFIG).correct(TOP1, 2)
+    claimed = finding("a", KV, 1, window=(30, 140), resolution=200)
+    assert not score_episode(episode(), diagnosis(claimed), CONFIG).correct(TOP1, 2)
+
+
+@pytest.mark.parametrize("early_s", [0, 3, 5, 6, 8, 10])
+def test_a_218_shaped_finding_up_to_its_resolution_early_is_correct(
+    early_s: int,
+) -> None:
+    # rev-220-b's delta-3 closure, G1: the 5 s cap was below #218's own
+    # 10.1 s resolution, so a #218-shaped finding that began 6-10 s before
+    # the truth's onset (which lags a queue building over several 5 s
+    # windows) was a silent miss. Its resolution counts in full again.
+    start = 100 - early_s
+    real = finding("a", KV, 1, window=(start, 140), resolution=10.1)
+    assert score_episode(episode(), diagnosis(real), CONFIG).correct(TOP1, 2)
 
 
 def test_a_wide_pre_grace_never_hides_a_negative_runs_false_claim() -> None:
@@ -442,10 +455,26 @@ def test_a_wide_pre_grace_never_hides_a_negative_runs_false_claim() -> None:
         for i in range(60)
     ]
     assert runs[0].problems == (
-        "run g0: 1 findings with more uncertainty than max_pre_grace_ns",
+        "run g0: 1 findings with more uncertainty than max_uncertainty_ns",
     )
     summary = summarize(runs, CONFIG)
     assert summary.negative_runs == 60 and summary.false_positive_runs == 60
+
+
+def test_resolution_and_uncertainty_are_reported_apart() -> None:
+    # G1: the problem said only "uncertainty"; a window claiming more
+    # resolution than #218 can emit is reported on its own.
+    from tests.test_qualify_scoring import null_run
+
+    wide = finding("s", "host_stall", 1, component="engine_core", window=(250, 280))
+    wide["window"]["resolution_ns"] = 45 * S
+    vague = finding("v", "host_stall", 2, component="engine_core", window=(250, 280))
+    vague["window"]["uncertainty_ns"] = 6 * S
+    score = run_of([null_run()], diagnosis(wide, vague), run_id="r")
+    assert score.problems == (
+        "run r: 1 findings with more resolution than max_resolution_ns",
+        "run r: 1 findings with more uncertainty than max_uncertainty_ns",
+    )
 
 
 # ------------------------------------------------------------------ pinned by mutation
