@@ -86,7 +86,8 @@ the flaky benchmark memory gates
   is kept as `stormlog_watch_*` counters. It writes a
   `stormlog.report` with `report_kind: inference_watch` and exits 3 when a
   counting incident was detected, 1 when the watch was unsound, else 0
-  (`docs/incident_capture.md`). Deep capture and SLO triggers come later.
+  (`docs/incident_capture.md`). One watcher owns a root at a time; a second
+  exits 2. Deep capture and SLO triggers come later.
   ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
 - `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
   hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,

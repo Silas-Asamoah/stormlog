@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from stormlog import telemetry_sink
+from stormlog.infer.errors import InferUsageError
 from stormlog.infer.watch.config import resolve_watch_config
 from stormlog.infer.watch.records import (
     INCIDENT,
@@ -25,6 +26,7 @@ from stormlog.infer.watch.records import (
 )
 from stormlog.infer.watch.store import IncidentStore, open_incident_bundle
 from stormlog.infer.watch.watcher import (
+    LOCK_FILENAME,
     REPORT_KIND,
     Watcher,
     WatchOptions,
@@ -437,3 +439,34 @@ def test_retention_prunes_old_bundles_and_says_so(tmp_path: Path) -> None:
     assert stats["pruned_total"] == 1
     assert stats["retention_incidents"] == 0
     assert not (tmp_path / "incidents" / old_id).exists()
+
+
+def test_one_watcher_owns_a_root_and_a_second_is_refused(tmp_path: Path) -> None:
+    """Two watchers on one root would interleave their ledgers and delete
+    each other's bundles; the second is refused before it writes."""
+    config = resolve_watch_config(watch_config("http://127.0.0.1:9"))
+    first = Watcher(config, tmp_path)
+    before = sorted(tmp_path.rglob("*"))
+    with pytest.raises(InferUsageError, match="another watcher"):
+        Watcher(config, tmp_path)
+    assert sorted(tmp_path.rglob("*")) == before
+    first.close()
+    Watcher(config, tmp_path).close()  # the root is free once the first ends
+    assert (tmp_path / LOCK_FILENAME).exists()
+
+
+def test_a_store_another_process_owns_is_refused(tmp_path: Path) -> None:
+    other = IncidentStore(tmp_path)
+    config = resolve_watch_config(watch_config("http://127.0.0.1:9"))
+    with pytest.raises(InferUsageError, match="incident store"):
+        Watcher(config, tmp_path)
+    other.close()
+    Watcher(config, tmp_path).close()  # the refusal let the root go
+
+
+def test_a_finished_watch_lets_the_next_one_own_the_root(tmp_path: Path) -> None:
+    with serve_metrics(FakeMetrics()) as base_url:
+        payload = watch_config(base_url)
+        first = _watch(tmp_path, payload, options=WatchOptions(duration_seconds=0.3))
+        second = _watch(tmp_path, payload, options=WatchOptions(duration_seconds=0.3))
+    assert (first.exit_code, second.exit_code) == (0, 0)
