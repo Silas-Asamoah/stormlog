@@ -189,11 +189,17 @@ def ready(step: Step) -> frozenset[str]:
 
 
 def _finished(completed: Mapping[str, Any] | None) -> frozenset[str]:
+    """Members that finished in the step, by a finish reason or, under async
+    scheduling, by being discarded after their end of sequence."""
     members = (completed or {}).get("members") or []
     return frozenset(
         str(m.get("internal"))
         for m in members
-        if isinstance(m, Mapping) and m.get("finish_reason") is not None
+        if isinstance(m, Mapping)
+        and (
+            m.get("finish_reason") is not None
+            or m.get("outcome") == "discarded_finished"
+        )
     )
 
 
@@ -215,7 +221,10 @@ def engine_loop_gap(
     if not any(step.completed_mono_ns is not None for step in steps):
         reasons.append(REASON_TOO_FEW_STEPS if steps else REASON_REQUIRES_HOOK)
     blocked = [*pause_intervals(records), *config.exclude_wall]
-    stalls = find_stalls(steps, blocked, config.now_wall_ns)
+    # An epoch that said goodbye has nothing going on.
+    ended = any(record.get("kind") == "goodbye" for record in records)
+    now = None if ended else config.now_wall_ns
+    stalls = find_stalls(steps, blocked, now, _terminated(records))
     return _verdict(steps, stalls, reasons, records, config)
 
 
@@ -379,9 +388,14 @@ def _observes_pauses(
 
 # ------------------------------------------------------------------- stalls
 def find_stalls(
-    steps: Sequence[Step], blocked: Sequence[Interval], now_wall_ns: int | None
+    steps: Sequence[Step],
+    blocked: Sequence[Interval],
+    now_wall_ns: int | None,
+    terminated: frozenset[str] = frozenset(),
 ) -> list[Stall]:
-    """Every candidate stall with ready work, in each locus."""
+    """Every candidate stall with ready work, in each locus. ``terminated``
+    names requests the engine ended (a terminal record), which no longer
+    hold up a stall going on."""
     completions = _Completions(steps)
     stalls: list[Stall] = []
     for before, after in zip(steps, steps[1:]):
@@ -391,7 +405,7 @@ def find_stalls(
         if between is not None:
             stalls.append(between)
     stalls.extend(_stalls_within(steps))
-    ongoing = _ongoing(steps, now_wall_ns)
+    ongoing = _ongoing(steps, now_wall_ns, terminated)
     if ongoing is not None:
         stalls.append(ongoing)
     return [piece for stall in stalls for piece in _uncovered(stall, blocked)]
@@ -479,7 +493,9 @@ def _within(step: Step, previous: Step | None) -> Stall:
     )
 
 
-def _ongoing(steps: Sequence[Step], now_wall_ns: int | None) -> Stall | None:
+def _ongoing(
+    steps: Sequence[Step], now_wall_ns: int | None, terminated: frozenset[str]
+) -> Stall | None:
     """A stall still going on: work continues and nothing completed since.
 
     A step scheduled and not yet completed may be waiting on the GPU, so it
@@ -490,7 +506,7 @@ def _ongoing(steps: Sequence[Step], now_wall_ns: int | None) -> Stall | None:
         return None
     last = completed[-1]
     pending = _pending_after(steps, last)
-    if not _work_continues(last, pending):
+    if not _work_continues(last, pending, terminated):
         return None
     since = last.completed_wall_ns or 0
     host_only = not pending
@@ -520,12 +536,24 @@ def _pending_after(steps: Sequence[Step], last: Step) -> list[Step]:
     ]
 
 
-def _work_continues(last: Step, pending: Sequence[Step]) -> bool:
+def _work_continues(
+    last: Step, pending: Sequence[Step], terminated: frozenset[str]
+) -> bool:
     """Whether a request of the last completed step is still running: it is
-    in a step scheduled since, or it did not finish in that step."""
-    if any(last.members & step.members for step in pending):
+    in a step scheduled since, or it neither finished in that step nor was
+    ended by the engine (a cancel, say) since."""
+    running = last.members - terminated
+    if any(running & step.members for step in pending):
         return True
-    return bool(ready(last))
+    return bool(ready(last) - terminated)
+
+
+def _terminated(records: Sequence[Mapping[str, Any]]) -> frozenset[str]:
+    return frozenset(
+        str(record.get("internal"))
+        for record in records
+        if record.get("kind") == "terminal"
+    )
 
 
 def _uncovered(stall: Stall, blocked: Sequence[Interval]) -> list[Stall]:

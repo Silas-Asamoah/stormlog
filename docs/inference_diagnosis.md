@@ -143,7 +143,11 @@ otherwise it is replaced by `no_baseline_floor_ns` (`floor`). A second long
 prefill a few seconds after the first therefore meets the floor, not the
 decode cadence. Only earlier steps count, so the decision never depends on
 what happened after the stall. With `config.now_wall_ns`, a stall still
-going on counts from the last completion (`detail["ongoing"]`).
+going on counts from the last completion (`detail["ongoing"]`), while a
+request of that step is still running: not one that finished there (by a
+finish reason, or discarded after its end of sequence under async
+scheduling), was ended since (a `terminal` record, as for a cancel), or
+belongs to an epoch that said `goodbye`.
 
 A stall is judged only where the records are known to be whole: between
 two heartbeats (the hello counting as one with nothing lost) whose drop
