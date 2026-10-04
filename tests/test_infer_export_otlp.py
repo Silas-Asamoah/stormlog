@@ -122,6 +122,33 @@ def _otlp(content: frozenset[str] = frozenset(), **kw: Any) -> OtlpExport:
     )
 
 
+def _with_headers(endpoint: str, **kw: Any) -> OtlpExport:
+    identity = SpanIdentity(
+        run_id="r",
+        session_id="s",
+        model="m",
+        endpoint="http://127.0.0.1:8000/v1/chat/completions",
+    )
+    return OtlpExport(
+        ExportConfig(otlp_endpoint=endpoint, **kw),
+        identity,
+        host="h",
+        version="0",
+        secrets=KnownSecrets(),
+        environ={"OTEL_EXPORTER_OTLP_HEADERS": "authorization=Bearer%20saas-token"},
+    )
+
+
+def test_headers_are_refused_in_clear_text_off_this_host() -> None:
+    # Variables set up for a SaaS collector would otherwise hand their
+    # credentials, unencrypted, to whatever --otlp-endpoint names.
+    with pytest.raises(ValueError, match="clear text"):
+        _with_headers("http://collector.example:4318")
+    _with_headers("http://collector.example:4318", otlp_allow_insecure_headers=True)
+    _with_headers("https://collector.example:4318")
+    _with_headers("http://127.0.0.1:4318")
+
+
 def test_header_values_join_the_known_secrets() -> None:
     otlp = _otlp()
     assert otlp.spans.secrets.found_in("leaked secret-header-value")

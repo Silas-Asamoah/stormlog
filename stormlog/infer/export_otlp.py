@@ -124,6 +124,28 @@ def resolve_headers(flags: Sequence[str], environ: Mapping[str, str]) -> dict[st
     return headers
 
 
+def _check_header_transport(config: ExportConfig, headers: Mapping[str, str]) -> None:
+    """Refuse to send headers, which hold credentials, in clear text off this host.
+
+    ``OTEL_EXPORTER_OTLP_HEADERS`` set up for one collector would otherwise
+    go to whatever ``--otlp-endpoint`` names.
+    """
+    if not headers or config.otlp_endpoint is None:
+        return
+    destination = Destination.parse(config.otlp_endpoint)
+    if (
+        destination.scheme == "https"
+        or destination.loopback
+        or config.otlp_allow_insecure_headers
+    ):
+        return
+    raise ValueError(
+        f"the OTLP headers ({', '.join(sorted(headers))}) would go in clear text "
+        f"over http to {destination.host}; use https, or pass "
+        "--otlp-allow-insecure-headers"
+    )
+
+
 # An HTTP auth scheme, as in "Bearer <token>".
 _AUTH_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9._-]*\Z")
 
@@ -219,6 +241,7 @@ class OtlpExport:
         self.identity = identity
         self.on_warning = on_warning
         self.headers = resolve_headers(config.otlp_headers, environ)
+        _check_header_transport(config, self.headers)
         for value in self.headers.values():
             for part in header_secrets(value):
                 secrets.add(part)

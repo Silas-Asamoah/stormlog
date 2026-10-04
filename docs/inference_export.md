@@ -279,6 +279,7 @@ stormlog infer profile ... --otlp-file artifacts/spans.jsonl
 | `--otlp-file PATH` | Append spans to PATH as OTLP JSON, one export request per line, up to 256 MiB: the format of the OpenTelemetry Collector's file exporter, which its `otlpjsonfile` receiver reads. A line is written whole or not at all. Use this or `--otlp-endpoint`, not both. |
 | `--otlp-file-fsync` | fsync the file after each line. |
 | `--otlp-header NAME=VALUE` | A request header, such as an API key; repeatable. `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` are read too, flags winning. Values are sent, never recorded. |
+| `--otlp-allow-insecure-headers` | Send the headers over plain `http://` to a host other than this one. Without it, headers from the flags or the variables never go in clear text off the host: such a run exits 2. |
 | `--otlp-resource-attribute KEY=VALUE` | A resource attribute; repeatable. See "The resource" below. |
 | `--otlp-resource-attribute-allow KEY` | Accept one more resource key. |
 | `--otlp-sample-ratio RATIO` | Keep this fraction of the successful request spans sent without trace context (default 1). Failed and cancelled requests, and every request sent with a `traceparent`, are always kept. Under `--trace-context follow-sampling` it is also the flag's ratio; see "Trace context". |
@@ -545,7 +546,7 @@ silently. Anything else exits 2.
 | The collector is down, slow or refusing | Spans are retried, then counted as `dropped`, `unknown` or `refused`; the run waits at most `--otlp-flush-timeout` at its end | unchanged |
 | The span file cannot be opened | One warning; `export.otlp` says `available: false`; every span is `dropped{file_disabled}` | unchanged |
 | The span queue is full | The span is dropped and counted; the artifact has the record | unchanged |
-| A bad OTLP URL, header or content item, a forbidden `--otlp-resource-attribute-allow`, or both `--otlp-endpoint` and `--otlp-file` | Refused before anything is sent | 2 |
+| A bad OTLP URL, header or content item, a forbidden `--otlp-resource-attribute-allow`, both `--otlp-endpoint` and `--otlp-file`, or headers that would go in clear text to another host | Refused before anything is sent | 2 |
 
 ## Cost
 
