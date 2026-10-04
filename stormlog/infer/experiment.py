@@ -922,7 +922,12 @@ class _Run:
         if self.server.poll() is not None:
             self.record.outcome(f"server_exited:{self.server.exit_code}")
         stop(self.server, signals=(2, 15), timeout_s=self.plan.server.stop_timeout_s)
-        cleanup = verify_cleanup(self.server.pid, remembered, mark=self.server.mark)
+        cleanup = verify_cleanup(
+            self.server.pid,
+            remembered,
+            mark=self.server.mark,
+            since_ns=self.server.started_at_ns,
+        )
         self.record.cleanup = cleanup.to_record()
         if not cleanup.verified:
             self.record.protocol("collector_cleanup_unverified", before_treatment=False)
@@ -1124,7 +1129,9 @@ class _Run:
             if code not in treatment.expect_exit and not unhealthy:
                 self.record.outcome(f"treatment_failed:{name}:{code}")
             # Whatever it started must not run on into the next run.
-            cleanup = verify_cleanup(launched.pid, mark=launched.mark)
+            cleanup = verify_cleanup(
+                launched.pid, mark=launched.mark, since_ns=launched.started_at_ns
+            )
             if not cleanup.verified:
                 self.record.protocol(
                     f"treatment_cleanup_unverified:{name}", before_treatment=False
@@ -1295,7 +1302,9 @@ def _stop_prelude_server(
     """Stop a prelude's server as a run's is stopped; whether nothing is left."""
     remembered = remembered_tree(server.pid)
     stop(server, signals=(2, 15), timeout_s=plan.server.stop_timeout_s)
-    cleanup = verify_cleanup(server.pid, remembered, mark=server.mark)
+    cleanup = verify_cleanup(
+        server.pid, remembered, mark=server.mark, since_ns=server.started_at_ns
+    )
     (directory / "cleanup.json").write_text(
         json.dumps(cleanup.to_record(), indent=2) + "\n"
     )

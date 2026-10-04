@@ -215,7 +215,11 @@ def test_a_mark_search_that_could_not_read_an_environment_says_so(
     launched = launch("server", [sys.executable, "-c", "pass"])
     launched.process.wait(timeout=5)
     cleanup = verify_cleanup(launched.pid, wait_s=0.3, mark=launched.mark)
-    assert cleanup.to_record()["mark_search"] == {"complete": False, "unreadable": 1}
+    assert cleanup.to_record()["mark_search"] == {
+        "complete": False,
+        "unreadable": 1,
+        "blind": [],
+    }
 
     class Plain:
         pid = 4343
@@ -225,6 +229,69 @@ def test_a_mark_search_that_could_not_read_an_environment_says_so(
 
     monkeypatch.setattr(psutil, "process_iter", lambda: iter([Plain()]))
     cleanup = verify_cleanup(launched.pid, wait_s=0.3, mark=launched.mark)
-    assert cleanup.to_record()["mark_search"] == {"complete": True, "unreadable": 0}
+    assert cleanup.to_record()["mark_search"] == {
+        "complete": True,
+        "unreadable": 0,
+        "blind": [],
+    }
     # Without a mark there is no search to judge.
     assert verify_cleanup(launched.pid, wait_s=0.3).to_record()["mark_search"] is None
+
+
+def test_an_unreadable_process_that_may_be_the_launchs_fails_the_cleanup() -> None:
+    # The lead's ruling on rev-213-a's E6: a process whose environment
+    # cannot be read, or was emptied, and that may be the launch's cannot be
+    # shown unmarked, so the cleanup is not verified. The repro: /bin/sleep
+    # exec'd with an empty environment in a session of its own (on macOS
+    # psutil cannot read a platform binary's environment either).
+    import subprocess
+
+    since = time.time_ns()
+    launched = launch("server", [sys.executable, "-c", "pass"])
+    launched.process.wait(timeout=5)
+    escapee = subprocess.Popen(["/bin/sleep", "60"], env={}, start_new_session=True)
+    try:
+        time.sleep(0.2)
+        cleanup = verify_cleanup(
+            launched.pid, wait_s=0.5, mark=launched.mark, since_ns=since
+        )
+        assert not cleanup.verified
+        assert escapee.pid in cleanup.to_record()["mark_search"]["blind"]
+        # It may not be the launch's, so it is never killed.
+        assert escapee.pid not in cleanup.killed and escapee.poll() is None
+    finally:
+        escapee.kill()
+        escapee.wait()
+    cleanup = verify_cleanup(
+        launched.pid, wait_s=0.5, mark=launched.mark, since_ns=since
+    )
+    assert cleanup.verified
+
+
+def test_a_process_that_cannot_be_the_launchs_is_not_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Excluded: another user's, one older than the launch, another
+    # process's child, and on macOS a system executable launchd started.
+    # An orphan or the runner's own child may be the launch's.
+    from stormlog.infer import experiment_process as ep
+
+    since = 10**18
+    runner, uid = os.getpid(), os.getuid()
+    table = {
+        10: ep._Process(since + 1, 1, uid, "/bin/sleep"),
+        11: ep._Process(since + 1, runner, uid, "/bin/sleep"),
+        12: ep._Process(since + 1, 999_999, uid, "/bin/zsh"),
+        13: ep._Process(since - 10 * 10**9, 1, uid, "/bin/sleep"),
+        14: ep._Process(since + 1, 1, uid + 1, "/bin/sleep"),
+        15: ep._Process(since + 1, 1, uid, "/System/Library/CoreServices/x"),
+    }
+    monkeypatch.setattr(ep, "_view", lambda pid, proc, method: table.get(pid))
+    found = {
+        pid: ep._may_be_launched(pid, since, Path("/proc"), "psutil") for pid in table
+    }
+    assert found == {10: True, 11: True, 12: False, 13: False, 14: False, 15: False}
+    # launchd's prefixes mean nothing on Linux.
+    assert ep._may_be_launched(15, since, Path("/proc"), "proc") is True
+    # Gone is not there.
+    assert ep._may_be_launched(16, since, Path("/proc"), "proc") is False
