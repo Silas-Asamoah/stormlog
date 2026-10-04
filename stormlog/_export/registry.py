@@ -335,14 +335,14 @@ class Registry:
         once they have a value, for sources whose missing values must not
         read as 0.
         """
-        for name in _sample_names(spec):
+        for name in _reserved_names(spec):
             if name in self._names:
                 raise ValueError(f"metric name {name!r} is already declared")
         _check_const_labels(spec, self.const_labels)
         family = Family(self, spec, list(known), self.headroom, precreate)
         with self._lock:
             self.families.append(family)
-            self._names.update(_sample_names(spec))
+            self._names.update(_reserved_names(spec))
         return family
 
     def budget(self) -> Budget:
@@ -554,9 +554,15 @@ def _check_buckets(buckets: tuple[float, ...], kind: Kind) -> None:
         raise ValueError("bucket bounds must increase")
 
 
-def _sample_names(spec: FamilySpec) -> tuple[str, ...]:
+def _reserved_names(spec: FamilySpec) -> tuple[str, ...]:
+    """The family's name, its samples' names, and a counter's name without
+    _total, which readers take as its family name: no other family may use
+    any of them."""
     if spec.kind == "histogram":
-        return tuple(f"{spec.name}{suffix}" for suffix in ("_bucket", "_sum", "_count"))
+        suffixes = ("", "_bucket", "_sum", "_count")
+        return tuple(f"{spec.name}{suffix}" for suffix in suffixes)
+    if spec.kind == "counter":
+        return (spec.name, spec.name[: -len("_total")])
     return (spec.name,)
 
 

@@ -107,6 +107,31 @@ def test_a_name_cannot_be_declared_twice_even_through_histogram_suffixes() -> No
         )
 
 
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        # The review's case: a gauge on a histogram's base name gave the
+        # exposition two HELP and TYPE lines for one name.
+        (("stormlog_lat_seconds", "histogram"), ("stormlog_lat_seconds", "gauge")),
+        (("stormlog_lat_seconds", "gauge"), ("stormlog_lat_seconds", "histogram")),
+        # A counter and a gauge of its stem read as one family name.
+        (("stormlog_a_total", "counter"), ("stormlog_a", "gauge")),
+        (("stormlog_a", "gauge"), ("stormlog_a_total", "counter")),
+    ],
+)
+def test_a_family_name_is_reserved_whatever_its_kind(
+    first: tuple[str, str], second: tuple[str, str]
+) -> None:
+    def spec(name: str, kind: str) -> FamilySpec:
+        buckets = (1.0,) if kind == "histogram" else ()
+        return FamilySpec(name, kind, "h", buckets=buckets)  # type: ignore[arg-type]
+
+    registry = Registry()
+    registry.add(spec(*first))
+    with pytest.raises(ValueError, match="already declared"):
+        registry.add(spec(*second))
+
+
 def test_a_family_label_cannot_repeat_a_constant_label() -> None:
     # It would render {model="m",model="a"}, which a scrape rejects whole.
     registry = Registry(const_labels={"model": "m"})
