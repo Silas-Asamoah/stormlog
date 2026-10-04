@@ -167,9 +167,6 @@ def metric_names(pattern: str) -> list[str]:
     return _matching(pattern)
 
 
-RATE_METRICS = _RATE_METRICS
-
-
 def metric_unit(pattern: str) -> str | None:
     """The effect unit of the metrics a name or pattern matches, if it is one."""
     matched = _matching(pattern)

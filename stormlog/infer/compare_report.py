@@ -227,7 +227,10 @@ def comparison_lines(comparison: Comparison) -> list[str]:
         f"Warning: {warning}" for warning in comparison.diagnostics.get("warnings", [])
     ]
     for case_id, case in comparison.cases.items():
-        lines.append(f"- {case_id}:")
+        ungated = (
+            "" if case.get("gated", True) else " (overlap: diagnostics only, not gated)"
+        )
+        lines.append(f"- {case_id}{ungated}:")
         for name, metric in case["metrics"].items():
             lines.append("  " + _metric_line(name, metric))
         gate = case.get("attainment_gate")

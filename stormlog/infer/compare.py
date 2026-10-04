@@ -263,6 +263,9 @@ class Comparison:
                     "attainment_gate": case.get("attainment_gate"),
                     "attainment_mean": case.get("attainment_mean"),
                     "attrition": case.get("attrition", []),
+                    "set_aside": case.get("set_aside"),
+                    "membership": case.get("membership"),
+                    "gated": case.get("gated", True),
                 }
                 for case_id, case in self.cases.items()
             },
@@ -284,6 +287,10 @@ LIMITS = [
     "Guards flag; they do not certify coverage.",
     "The independent design's intervals are conservative by construction.",
     "Latency quantile screens assume independent requests, which queueing violates.",
+    "A fraction's interval under-covers when failures cluster within runs; its "
+    "gate is the run-level claim, exact under independent runs.",
+    "Segments by overlap are length-biased in rates and quantiles: diagnostics, "
+    "never gated.",
 ]
 
 
@@ -728,6 +735,10 @@ def _case(
     }
     attrition = [item for item in excluded if item["case"] == case_id]
     lost = _lost(case_id, arms, excluded, design)
+    membership = _membership(case_id, kept)
+    if membership == "overlap":
+        # Requests in flight during a segment are length-biased: diagnostics.
+        spec = replace(spec, gates=(), fallbacks=(), min_attainment=None)
     blocked = _case_blocker(compatibility, observer_issues, lost, spec)
     contrast = blocked or _control_failed(case_id, kept[BASELINE])
     metrics = _case_metrics(case_id, kept, design, spec, contrast)
@@ -736,11 +747,25 @@ def _case(
         "absent_gates": _absent_gates(metrics, spec),
         "attrition": attrition,
         "set_aside": lost,
+        "membership": membership,
+        "gated": membership != "overlap",
     }
     if spec.min_attainment is not None:
         slo_blocked = blocked or _slo_blocker(case_id, kept)
         case.update(_attainment_gate(case_id, kept[CANDIDATE], spec, slo_blocked))
     return case
+
+
+def _membership(case_id: str, kept: Mapping[str, list[RunSummary]]) -> str | None:
+    """A segment's membership, ``arrival`` or ``overlap``; None for a case."""
+    found = {
+        (run.comparable_cases[case_id].get("intervals") or {}).get("membership")
+        for runs in kept.values()
+        for run in runs
+        if case_id in run.comparable_cases
+    } - {None}
+    # A mix is read as overlap: any of it is length-biased.
+    return "overlap" if "overlap" in found else (found.pop() if found else None)
 
 
 def _check_cases_exist(

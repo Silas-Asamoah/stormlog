@@ -227,10 +227,10 @@ def test_a_fallback_that_no_gate_reaches_is_a_usage_error(
     assert "matches no gated metric" in err
 
 
-def test_overlap_segments_with_a_rate_gate_are_a_usage_error(
+def test_overlap_segments_are_compared_but_never_gated(
     arms: dict[str, list[str]]
 ) -> None:
-    code, _out, err = _compare(
+    code, out, _err = _compare(
         "--baseline",
         *arms["baseline"],
         "--candidate",
@@ -241,9 +241,15 @@ def test_overlap_segments_with_a_rate_gate_are_a_usage_error(
         "early=0:0.5",
         "--segment-membership",
         "overlap",
+        "--allow-not-evaluable",
+        "--format",
+        "json",
     )
-    assert code == ExitCode.USAGE
-    assert "overlap" in err and "throughput_rps" in err
+    assert code in (ExitCode.OK, ExitCode.GATE_FAILED)
+    cases = json.loads(out)["payload"]["cases"]
+    (segment,) = [case for case_id, case in cases.items() if "/" in case_id]
+    assert segment["membership"] == "overlap" and segment["gated"] is False
+    assert all(metric["gate"] is None for metric in segment["metrics"].values())
 
 
 def test_a_run_given_twice_is_invalid_input(arms: dict[str, list[str]]) -> None:

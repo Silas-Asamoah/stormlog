@@ -283,6 +283,43 @@ def test_a_retry_never_replaces_an_outcome_failure() -> None:
     ] == [(retry.name, ["retry_of_outcome_failure"], crashed.name)]
 
 
+def _with_segment(runs: list[RunSummary], membership: str) -> None:
+    for run in runs:
+        case = run.report["cases"][CASE]
+        segment = {key: value for key, value in case.items() if key != "segments"}
+        segment["intervals"] = {
+            "membership": membership,
+            "rate_reason": None if membership == "arrival" else "overlapping_cohort",
+        }
+        case["segments"] = {"early": segment}
+
+
+@pytest.mark.parametrize("membership", ["arrival", "overlap"])
+def test_an_overlap_segment_is_diagnostics_and_carries_no_gate(
+    membership: str,
+) -> None:
+    # Requests in flight during a segment are length-biased: their rates
+    # grow, and their quantiles stretch, with the arm's own latency.
+    baseline, candidate = _arms(SAME)
+    _with_segment(baseline, membership)
+    _with_segment(candidate, membership)
+    spec = ComparisonSpec(gates=E2E_GATE, min_attainment=0.9)
+    comparison = compare_runs(baseline, candidate, spec)
+    whole = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert whole is not None and whole.status == "pass"
+    segment = comparison.cases[f"{CASE}/early"]
+    gate = segment["metrics"]["client.e2e.p95"].gate
+    if membership == "arrival":
+        assert gate is not None and gate.status == "pass"
+        assert "attainment_gate" in segment
+        return
+    assert segment["membership"] == "overlap" and segment["gated"] is False
+    assert all(metric.gate is None for metric in segment["metrics"].values())
+    assert segment["absent_gates"] == {} and "attainment_gate" not in segment
+    lines = comparison_lines(comparison)
+    assert f"- {CASE}/early (overlap: diagnostics only, not gated):" in lines
+
+
 def test_a_case_no_run_offered_a_request_is_refused() -> None:
     # Such as a segment outside every run's measured phase.
     baseline, candidate = _arms(SLOWER)
