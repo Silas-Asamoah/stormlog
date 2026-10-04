@@ -339,3 +339,28 @@ def test_the_example_cli_runs_a_plan_and_says_how_it_ended(
         )
         == 5
     )
+
+
+def test_treatments_are_observers_a_comparison_can_see(tmp_path: Path) -> None:
+    records = _run(tmp_path, _plan(_port(), blocks=2))
+    by_arm: dict[str, list[Any]] = {"off": [], "watch": []}
+    for record in records:
+        by_arm[record["arm"]].append(
+            summarize_run(Path(record["run_dir"]) / "c1.jsonl")
+        )
+    watcher = by_arm["watch"][0].observers["treatment:watcher"]
+    assert (watcher["requested"], watcher["active"], watcher["healthy"]) == (
+        True,
+        True,
+        True,
+    )
+    assert "treatment:watcher" not in by_arm["off"][0].observers
+    # A comparison of off against watch has to declare the watcher.
+    with pytest.raises(InferInputError, match="--added-observers: treatment:watcher"):
+        compare_runs(by_arm["off"], by_arm["watch"], ComparisonSpec(mode="incremental"))
+    declared = compare_runs(
+        by_arm["off"],
+        by_arm["watch"],
+        ComparisonSpec(mode="incremental", added_observers=("treatment:watcher",)),
+    )
+    assert declared.observer_issues == []

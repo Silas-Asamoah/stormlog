@@ -72,6 +72,7 @@ from .experiment_process import (
 )
 from .manifest import attach_manifest
 from .model_identity import VerifiedModel, changed_files, prepare_model
+from .observers import TREATMENTS_EVENT
 from .sanitize import sanitize_bundle
 from .server_collector import NvmlUnavailableError
 from .server_probe import AUTO, BEFORE, probe_server
@@ -558,6 +559,7 @@ class _Run:
         write_description(document, self.dir / f"describe-{phase}.json")
 
     def _attach_after(self) -> None:
+        self._record_treatments()
         after = self.dir / "describe-after.json"
         if not after.exists():
             return
@@ -568,6 +570,42 @@ class _Run:
                 self.record.notes.append(
                     f"after description not attached to {path.name}: {exc}"
                 )
+
+    def _record_treatments(self) -> None:
+        """Tell each artifact which treatments ran beside it, and how they held up.
+
+        A treatment is an observer of the run, so a comparison's mode
+        contract sees it; the record says whether it was ready and stayed up.
+        """
+        if not self.treatments:
+            return
+        reasons = set(self.record.reasons)
+        entries = [
+            {
+                "name": treatment.name,
+                # The plan's template: the same in every run of the arm.
+                "command_sha256": hashlib.sha256(
+                    "\0".join(treatment.command).encode()
+                ).hexdigest(),
+                "cpu_affinity": treatment.cpu_affinity,
+                "ready": f"treatment_not_ready:{treatment.name}" not in reasons,
+                "healthy": not any(
+                    reason.split(":")[1:2] == [treatment.name]
+                    for reason in reasons
+                    if reason.startswith("treatment_")
+                ),
+                "exit_code": launched.exit_code,
+            }
+            for treatment, launched in self.treatments
+        ]
+        for path in self._infer_artifacts():
+            record = {
+                "event_type": TREATMENTS_EVENT,
+                "run_id": self.label,
+                "treatments": entries,
+            }
+            with path.open("a") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
 
     # Treatments -------------------------------------------------------------
 

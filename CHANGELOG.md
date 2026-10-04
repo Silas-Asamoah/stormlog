@@ -120,7 +120,9 @@ the flaky benchmark memory gates
   plan or pre-registration, and secrets reach commands without being
   written down. `sanitize_bundle` scans the finished bundle for the plan's
   secret values and for bearer, `hf_` and `sk-` token shapes
-  (`sanitizer.json`). (#213)
+  (`sanitizer.json`). The runner appends an `infer.treatments` record to
+  each artifact, and observers and comparisons see each treatment as an
+  observer, `treatment:<name>`. (#213)
 - `stormlog.infer.experiment_plan`: experiment plans
   (`stormlog.infer.experiment_plan` v1) with arms, workload steps (shared with
   `same_as:<arm>`), treatments, block preludes, a seeded `random`, `williams`
