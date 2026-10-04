@@ -128,6 +128,27 @@ def test_a_cross_filesystem_adoption_copies_within_the_allowance(
     assert (writer.directory / "traces/big.gz").read_bytes() == b"b" * 5000
 
 
+def test_a_copy_cut_short_leaves_nothing_in_the_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The partial copy stayed, not among the files the writer checks, and
+    a caller that went on after the failed adoption published it."""
+    _no_cross_device_links(monkeypatch)
+    store = IncidentStore(tmp_path, _limits())
+    big = tmp_path / "big.gz"
+    big.write_bytes(b"b" * 5000)
+    writer = store.new_bundle(store.new_incident_id(), 4000)
+    assert writer is not None
+    with pytest.raises(BudgetExceeded):
+        writer.adopt(big, "traces/big.gz")
+    assert not (writer.directory / "traces" / "big.gz").exists()
+    with writer.file("incident.jsonl") as out:
+        out.write(b"{}\n")
+    manifest = writer.publish()
+    assert [f.path for f in manifest.files] == ["gen-0/incident.jsonl"]
+    assert big.exists()
+
+
 def test_an_abandoned_generation_leaves_adopted_traces_where_they_were(
     tmp_path: Path,
 ) -> None:
