@@ -159,3 +159,36 @@ def test_a_survivor_is_known_by_its_start_time_as_well_as_its_pid() -> None:
     assert not still_there(survivor)
     # A survivor recorded without its start time cannot be told apart.
     assert not still_there({"pid": os.getpid()})
+
+
+STUBBORN = (
+    "import signal, time; "
+    "signal.signal(signal.SIGINT, signal.SIG_IGN); "
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+)
+
+
+def test_a_group_that_ignores_its_signals_is_killed() -> None:
+    # rev-213-a's mutant r6: nothing failed without the SIGKILL escalation.
+    launched = launch("server", [sys.executable, "-c", STUBBORN])
+    time.sleep(0.5)
+    code = stop(launched, signals=(2, 15), timeout_s=0.5)
+    assert (code, launched.stopped_by) == (-9, "SIGKILL")
+
+
+def test_a_survivor_that_outlives_its_kill_is_listed_and_not_verified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # rev-213-a's mutant r7: nothing failed when a survivor counted as clean.
+    from stormlog.infer import experiment_process
+
+    launched = launch("server", ["/bin/sleep", "60"])
+    monkeypatch.setattr(experiment_process, "_kill", lambda pid: None)
+    try:
+        cleanup = verify_cleanup(launched.pid, wait_s=0.3, mark=launched.mark)
+        assert not cleanup.verified
+        assert launched.pid in [s["pid"] for s in cleanup.survivors]
+        assert launched.pid in cleanup.killed
+    finally:
+        launched.process.kill()
+        launched.process.wait()
