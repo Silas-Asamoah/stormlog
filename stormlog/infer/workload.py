@@ -15,7 +15,7 @@ import hashlib
 import json
 from typing import Any
 
-from .cache_state import redact_url
+from ..scrub import redact_url
 from .config import ProfileConfig
 from .prompts import GENERATOR_VERSION, REPEAT, PromptSpec
 from .tokens import TokenCounter

@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
+
+# Re-exported: callers imported redact_url from here before it moved.
+from ..scrub import redact_url
 
 UNSPECIFIED = "unspecified"
 COLD = "cold"
@@ -53,7 +55,7 @@ def reset_cache(
     request, since the reset route usually sits behind the same server.
     """
     at_ns = time.time_ns()
-    recorded = _redact(url)
+    recorded = redact_url(url)
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     request = urllib.request.Request(url, data=b"", headers=headers, method="POST")
     try:
@@ -63,26 +65,6 @@ def reset_cache(
         return CacheReset(recorded, at_ns, status=exc.code, error=f"HTTP {exc.code}")
     except OSError as exc:
         return CacheReset(recorded, at_ns, error=f"{type(exc).__name__}: {exc}")
-
-
-def redact_url(url: str | None) -> str | None:
-    """A URL as it may be recorded: no credentials and no query string.
-
-    Either can carry a token, so an artifact keeps only the scheme, host,
-    port and path, and marks a removed query.
-    """
-    return None if url is None else _redact(url)
-
-
-def _redact(url: str) -> str:
-    parts = urllib.parse.urlsplit(url)
-    host = parts.hostname or ""
-    if ":" in host:
-        host = f"[{host}]"
-    if parts.port is not None:
-        host = f"{host}:{parts.port}"
-    query = "?<redacted>" if parts.query else ""
-    return f"{parts.scheme}://{host}{parts.path}{query}"
 
 
 def run_kind(

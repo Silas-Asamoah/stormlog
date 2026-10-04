@@ -8,6 +8,7 @@ Generated API Modules
    stormlog
    stormlog.exit_codes
    stormlog.report
+   stormlog.scrub
    stormlog.diagnose_report
    stormlog.profiler
    stormlog.tracker

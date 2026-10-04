@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__
+from ..scrub import redact_url
 from ..session import (
     SESSION_STATUS_INCOMPLETE,
     SESSION_STATUS_INTERRUPTED,
@@ -27,7 +28,7 @@ from ..session import (
 )
 from .analysis import analyze_inference_events
 from .arrivals import CLOSED, arrival_offsets
-from .cache_state import cache_state_record, redact_url, reset_cache
+from .cache_state import cache_state_record, reset_cache
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
