@@ -104,7 +104,7 @@ the flaky benchmark memory gates
   against the name of the blob it links to, then served with
   `--revision <commit>` and `HF_HUB_OFFLINE=1`; a `staged` directory, a hub
   snapshot included, is hashed into a read-only, content-addressed copy of
-  its files. Files are rechecked after each run
+  its files. Files are hashed again after each run
   (`model_changed`), and the runner's server descriptions carry
   `pinned_commit_verified` or `staged_snapshot_verified`, the only evidence
   that verifies a model's identity in a comparison. (#213)

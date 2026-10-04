@@ -16,8 +16,8 @@ the weights before it launches, and points the server at exactly them:
   content-addressed directory, ``<store>/<weights_digest>/``.
   The server loads that directory, whose name is its content.
 
-After each run the files are checked again, by size, modification time and
-inode; a change makes the run a protocol failure. The evidence is
+After each run every file is hashed again and its size, modification time
+and inode compared; a change makes the run a protocol failure. The evidence is
 ``pinned_commit_verified`` or ``staged_snapshot_verified``, and a server
 description taken by the runner carries it, bound to the server's process.
 """
@@ -100,17 +100,29 @@ def prepare_model(spec: Mapping[str, Any]) -> VerifiedModel:
 
 
 def changed_files(model: VerifiedModel) -> list[str]:
-    """Files whose size, modification time or inode moved since verification."""
-    changed = []
+    """Files changed since verification: added, gone, or with other bytes,
+    size, modification time or inode. Every file is hashed again."""
+    files = {item.path: item for item in model.files}
+    present = {
+        path.relative_to(model.directory).as_posix() for path in walk(model.directory)
+    }
+    changed = present - set(model.stats)
     for name, before in model.stats.items():
+        path = model.directory / name
         try:
-            now = _stat(model.directory / name)
+            same = _stat(path) == before and _same_content(path, files.get(name))
         except OSError:
-            changed.append(name)
-            continue
-        if now != before:
-            changed.append(name)
-    return changed
+            same = False
+        if not same:
+            changed.add(name)
+    return sorted(changed)
+
+
+def _same_content(path: Path, item: ModelFile | None) -> bool:
+    if item is None:
+        return True
+    digest = sha256(path) if item.algorithm == SHA256 else git_sha1(path)
+    return digest == item.digest
 
 
 def _pinned(spec: Mapping[str, Any]) -> VerifiedModel:
