@@ -1465,21 +1465,29 @@ def _ctrl_c_held() -> Iterator[None]:
     """Hold a Ctrl+C back until the block ends, then deliver it.
 
     The held signal goes to the handler that was in place, which during a
-    run raises KeyboardInterrupt (``_ctrl_c_raises``). Off the main thread,
-    where no handler can be set, or under a handler not set from Python,
-    the block runs as is.
+    run raises KeyboardInterrupt (``_ctrl_c_raises``). A second Ctrl+C goes
+    to it at once, so a write stuck in the block can still be broken off.
+    Off the main thread, where no handler can be set, or under a handler
+    not set from Python, the block runs as is.
     """
     previous = signal.getsignal(signal.SIGINT)
     if threading.current_thread() is not threading.main_thread() or previous is None:
         yield
         return
-    held: list[int] = []
-    signal.signal(signal.SIGINT, lambda signum, _frame: held.append(signum))
+    presses: list[int] = []
+
+    def hold(signum: int, _frame: FrameType | None) -> None:
+        presses.append(signum)
+        if len(presses) > 1:
+            signal.signal(signal.SIGINT, previous)
+            signal.raise_signal(signal.SIGINT)
+
+    signal.signal(signal.SIGINT, hold)
     try:
         yield
     finally:
         signal.signal(signal.SIGINT, previous)
-        if held:
+        if len(presses) == 1:
             signal.raise_signal(signal.SIGINT)
 
 
