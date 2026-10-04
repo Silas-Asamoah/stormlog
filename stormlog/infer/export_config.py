@@ -78,12 +78,52 @@ class ExportConfig:
         unknown = sorted(set(mapping) - names)
         if unknown:
             raise ValueError(f"unknown export settings: {', '.join(unknown)}")
+        for name, value in mapping.items():
+            _check_type(name, value)
         values = dict(mapping)
         if values.get("prometheus_textfile_dir") is not None:
             values["prometheus_textfile_dir"] = Path(values["prometheus_textfile_dir"])
         config = cls(**values)
         config.validate()
         return config
+
+
+# What each JSON setting must be, as the flags' parsers would make it.
+_TEXT, _FLAG, _COUNT, _SECONDS = "a string", "true or false", "an integer", "a number"
+_SETTING_TYPES = {
+    "prometheus_listen": _TEXT,
+    "prometheus_linger_seconds": _SECONDS,
+    "prometheus_textfile_dir": _TEXT,
+    "prometheus_slot": _TEXT,
+    "prometheus_textfile_interval_seconds": _SECONDS,
+    "prometheus_textfile_remove_on_exit": _FLAG,
+    "prometheus_max_series": _COUNT,
+    "prometheus_max_bytes": _COUNT,
+    "prometheus_series_headroom": _COUNT,
+    "prometheus_case_label": _FLAG,
+}
+
+
+# Settings that may be null, meaning not set.
+_NULLABLE = {
+    "prometheus_listen",
+    "prometheus_textfile_dir",
+    "prometheus_series_headroom",
+}
+
+
+def _check_type(name: str, value: Any) -> None:
+    if value is None and name in _NULLABLE:
+        return
+    kind = _SETTING_TYPES[name]
+    valid = {
+        _TEXT: isinstance(value, str),
+        _FLAG: isinstance(value, bool),
+        _COUNT: isinstance(value, int) and not isinstance(value, bool),
+        _SECONDS: isinstance(value, (int, float)) and not isinstance(value, bool),
+    }[kind]
+    if not valid:
+        raise ValueError(f"export setting {name} must be {kind}, not {value!r}")
 
 
 def _check_dependent(config: ExportConfig) -> None:
