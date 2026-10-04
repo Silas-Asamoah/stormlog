@@ -645,9 +645,18 @@ stormlog infer profile ... --vllm-spans-listen 127.0.0.1:4319 \
   unique spans to check Stormlog's collector-side bounds. Slower than
   Stormlog's 5 s attempt deadline, it gives `unknown{timeout_after_send}`.
 
-The configs follow the collector's documented syntax, but have only been
-checked by tests that read them: the filter's condition, in particular, is
-first run against a real collector in the GPU validation.
+These configs were run on an A30 with vLLM 0.30.0 and Qwen2.5-0.5B:
+- `otelcol.yaml`, with tail sampling on and off, and `otelcol-x1.yaml` ran
+  under otelcol-contrib 0.162.0. The analysis filter passed vLLM's spans
+  and nothing else, even with Stormlog's `service.name` set to `vllm` and an
+  unrelated service sending. So the request spans Stormlog joined were the
+  ones a direct receiver gives.
+- `jaeger.yaml` ran under Jaeger 2.21.0, beside the collector, which
+  exported to it without an error.
+- `prometheus.yml` scraped vLLM and Stormlog under Prometheus 3.15.0, and
+  `promtool check config` accepts it.
+
+`docker-compose.yml` has not been run.
 
 ## When something goes wrong
 
