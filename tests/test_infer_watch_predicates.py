@@ -256,6 +256,18 @@ def test_a_failed_scrape_inside_the_window_leaves_it_judged() -> None:
     assert judged.samples == 3
 
 
+def test_an_evaluation_records_the_failed_scrapes_it_judged_around() -> None:
+    """A window judged across failed scrapes says so, so an incident shows
+    on how much it was judged."""
+    engine = TriggerEngine([_queue_trigger()], tick_seconds=1)
+    texts = [_waiting(9)] * 20 + [None, None] + [_waiting(9)] * 15
+    (around,) = engine.tick(36 * S + 5_000_000, _entries(texts))
+    assert around.evaluation.classification == VIOLATING
+    assert around.evaluation.detail["failed_scrapes"] == 2
+    (clean,) = engine.tick(37 * S + 5_000_000, _entries([_waiting(9)] * 38))
+    assert clean.evaluation.detail["failed_scrapes"] == 0
+
+
 def test_scrapes_at_one_instant_are_a_data_gap() -> None:
     first, second = _scrapes([_waiting(9), _waiting(9)])
     rate = CounterRateAtLeast("vllm:generation_tokens_total", rate_per_s=0.0)

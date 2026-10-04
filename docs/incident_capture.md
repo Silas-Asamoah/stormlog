@@ -141,15 +141,21 @@ of:
   counter went backwards or was recreated, a series changed its labels, two
   scrapes were out of order or at one instant, a histogram's step was not
   itself a histogram, or the exporter restarted. A scrape that failed inside
-  the window only leaves fewer samples;
+  the window only leaves fewer samples: the window is judged on the others,
+  a counter is differenced across the failure, and the evaluation records
+  how many failed (`failed_scrapes` in its detail);
 - **masked**: what the evaluation read overlaps the watcher's own profiler
   start or stop and the recovery after it. That is the window from its
   first scrape, which can start up to a tick before `t - W`, and for a
   health trigger the scrapes it reads.
 
 The window's end scrape must have finished within one tick of the
-evaluation, and its start scrape within one tick of `t - W`. After an
-outage a window is a data gap until its start scrape follows the outage.
+evaluation, and its start scrape within one tick of `t - W`. An outage is
+therefore a data gap while it covers the window's end, and again, `W`
+later, while it covers `t - W` (less a tick at either side). In between,
+while the outage lies inside the window, the window is judged on the
+scrapes around it. The failed-scrape share health trigger reports a scraper
+that fails now and then.
 
 | State | On | Next |
 | --- | --- | --- |

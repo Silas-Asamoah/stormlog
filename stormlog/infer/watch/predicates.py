@@ -4,9 +4,9 @@
 the watcher's monotonic clock: the end scrape is the latest that finished at
 or before ``t``, and must have finished within one tick of it and succeeded;
 the start scrape is the latest successful one that finished within one tick
-of ``t - W``. When either is missing the evaluation is a data gap. After an
-outage, a window is informative again only once its start scrape postdates
-the outage.
+of ``t - W``. When either is missing the evaluation is a data gap. A scrape
+that failed between them only leaves the window fewer samples; the
+evaluation counts it in its ``failed_scrapes`` detail.
 
 The predicates aggregate the chosen scrapes with
 :mod:`stormlog.infer.scrape_window`, which differences consecutive scrapes, so
