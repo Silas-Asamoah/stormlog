@@ -558,6 +558,70 @@ def test_recovery_keeps_the_deletions_a_reader_defers(tmp_path: Path) -> None:
     assert restarted.budget.used_bytes == restarted._scan_bytes()
 
 
+def test_an_interrupt_just_after_publication_never_abandons_the_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A signal between the manifest's rename and the writer noting it left
+    publish() raising with the generation named; abandon() must keep it."""
+    store = IncidentStore(tmp_path, _limits())
+    incident_id = store.new_incident_id()
+    writer = store.new_bundle(incident_id, KIB)
+    assert writer is not None
+    with writer.file("incident.jsonl") as out:
+        out.write(b"{}\n")
+    real_replace = os.replace
+
+    def replace_then_interrupt(source: Any, target: Any) -> None:
+        real_replace(source, target)
+        if Path(target).name == "manifest.json":
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(store_module.os, "replace", replace_then_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        writer.publish()
+    monkeypatch.undo()
+    writer.abandon()
+    manifest = store.manifest(incident_id)
+    assert manifest is not None and manifest.current == "gen-0"
+    assert (writer.directory / "incident.jsonl").read_bytes() == b"{}\n"
+    assert store.budget.used_bytes == store._scan_bytes() == 3
+
+
+def test_a_pruned_bundle_s_rename_is_synced_before_it_is_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the store's directory synced after the rename, a crash could
+    bring the bundle back under its own name, half deleted."""
+    store = IncidentStore(tmp_path, _limits(max_incidents=1))
+    base = time.time_ns()
+    old = _gen0(store, b"o\n", now_ns=base)
+    _gen0(store, b"n\n", now_ns=base + 1)
+    events: list[tuple[str, str]] = []
+    real_rename, real_fsync_dir = os.rename, store_module._fsync_dir
+    real_rmtree = store_module.shutil.rmtree
+
+    def rename(source: Any, target: Any) -> None:
+        events.append(("rename", Path(target).name))
+        real_rename(source, target)
+
+    def fsync_dir(directory: Path) -> None:
+        events.append(("fsync", directory.name))
+        real_fsync_dir(directory)
+
+    def rmtree(path: Any, **kwargs: Any) -> None:
+        events.append(("rmtree", Path(path).name))
+        real_rmtree(path, **kwargs)
+
+    monkeypatch.setattr(store_module.os, "rename", rename)
+    monkeypatch.setattr(store_module, "_fsync_dir", fsync_dir)
+    monkeypatch.setattr(store_module.shutil, "rmtree", rmtree)
+    store.prune(now_ns=base + 2)
+    monkeypatch.undo()
+    trash = f"{store_module.TRASH_PREFIX}{old}"
+    renamed = events.index(("rename", trash))
+    assert ("fsync", "incidents") in events[renamed : events.index(("rmtree", trash))]
+
+
 def test_a_publish_that_fails_after_the_rename_stays_published(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -897,6 +961,9 @@ def test_a_deferred_generation_is_never_forgotten_twice(
         pruned = store.prune(now_ns=base + 10)
         assert [p.incident_id for p in pruned] == ([] if reader_at_prune else [first])
         _assert_charged_as_held(store)
+        # Removing the bundle took the deferred gen-0 inside it along; a
+        # reader at the prune defers the bundle as well.
+        assert store.deferred == (2 if reader_at_prune else 0)
     finally:
         leave.set()
         thread.join(5)
