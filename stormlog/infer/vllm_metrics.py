@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,12 +29,20 @@ _SAMPLE_LINE = re.compile(
     r"(?:\{(?P<labels>.*)\})?"
     r"\s+(?P<value>\S+)(?:\s+(?P<timestamp>-?\d+))?\s*$"
 )
+# The value as an unrolled loop: a run of plain characters needs no
+# backtracking state, so the regex's memory grows with escapes, not length.
 _LABEL = re.compile(
-    r'\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)="(?P<value>(?:\\.|[^"\\])*)"\s*,?'
+    r'\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)="(?P<value>[^"\\]*(?:\\.[^"\\]*)*)"\s*,?'
 )
+# No vLLM line comes near this; it bounds what one line can cost the parser.
+MAX_LINE_CHARS = 64 * 1024
 _UNESCAPE = {"\\\\": "\\", '\\"': '"', "\\n": "\n"}
 
 Labels = tuple[tuple[str, str], ...]
+
+
+class ScrapeTooLarge(ValueError):
+    """A line over ``MAX_LINE_CHARS``, or more series or families than allowed."""
 
 
 @dataclass(frozen=True)
@@ -55,24 +64,32 @@ class MetricFamily:
     samples: tuple[Sample, ...] = ()
 
 
-def parse_prometheus_text(text: str) -> dict[str, MetricFamily]:
+def parse_prometheus_text(
+    text: str, *, max_series: int | None = None
+) -> dict[str, MetricFamily]:
     """Parse a text scrape into families keyed by their ``# TYPE`` name.
 
     A sample without a preceding ``# TYPE`` line belongs to an ``untyped``
     family of its own name. A line that is neither a comment nor a sample
     raises ``ValueError`` naming the line, so a truncated or HTML response
     never passes as an empty scrape.
+
+    What parsing holds is bounded whatever the text: lines are read one at a
+    time, a line over ``MAX_LINE_CHARS`` raises ``ScrapeTooLarge`` before
+    any regex sees it, and so does a sample or family past ``max_series``.
     """
     kinds: dict[str, str] = {}
     helps: dict[str, str] = {}
     samples: dict[str, list[Sample]] = {}
     order: list[str] = []
-    for line_number, raw in enumerate(text.splitlines(), 1):
+    count = 0
+    for line_number, raw in _lines(text):
         line = raw.strip()
         if not line:
             continue
         if line.startswith("#"):
             _parse_comment(line, kinds, helps, order)
+            _check_cap(len(order), max_series)
             continue
         sample = _parse_sample(line, line_number)
         family = _family_of(sample.name, kinds)
@@ -80,12 +97,35 @@ def parse_prometheus_text(text: str) -> dict[str, MetricFamily]:
             kinds[family] = "untyped"
             order.append(family)
         samples.setdefault(family, []).append(sample)
+        count += 1
+        _check_cap(max(count, len(order)), max_series)
     return {
         name: MetricFamily(
             name, kinds[name], helps.get(name, ""), tuple(samples.get(name, ()))
         )
         for name in order
     }
+
+
+def _lines(text: str) -> Iterator[tuple[int, str]]:
+    """Each line with its number, one at a time; none over ``MAX_LINE_CHARS``."""
+    start, number = 0, 0
+    while start < len(text):
+        end = text.find("\n", start)
+        if end < 0:
+            end = len(text)
+        number += 1
+        if end - start > MAX_LINE_CHARS:
+            raise ScrapeTooLarge(
+                f"line {number} is over the {MAX_LINE_CHARS}-character cap"
+            )
+        yield number, text[start:end]
+        start = end + 1
+
+
+def _check_cap(count: int, max_series: int | None) -> None:
+    if max_series is not None and count > max_series:
+        raise ScrapeTooLarge(f"over the {max_series}-series cap")
 
 
 def _parse_comment(
@@ -96,9 +136,9 @@ def _parse_comment(
         return
     marker, name = parts[1], parts[2]
     if marker == "TYPE":
-        kinds[name] = parts[3].strip() if len(parts) > 3 else "untyped"
-        if name not in order:
+        if name not in kinds:  # every family in order is in kinds
             order.append(name)
+        kinds[name] = parts[3].strip() if len(parts) > 3 else "untyped"
     elif marker == "HELP":
         helps[name] = parts[3] if len(parts) > 3 else ""
 

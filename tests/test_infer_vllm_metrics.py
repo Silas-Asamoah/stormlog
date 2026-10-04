@@ -11,10 +11,12 @@ import pytest
 from stormlog.infer.vllm_metrics import (
     CATALOG,
     DEPRECATED_ALIASES,
+    MAX_LINE_CHARS,
     CompactScrape,
     HistogramValue,
     MetricFamily,
     Sample,
+    ScrapeTooLarge,
     bucket_boundary,
     compact_scrape,
     created_family_for,
@@ -104,6 +106,60 @@ class TestParser:
 
     def test_blank_scrape_is_empty_not_an_error(self) -> None:
         assert parse_prometheus_text("\n\n") == {}
+
+
+class TestParserBounds:
+    """What parsing may hold, whatever an 8 MiB response contains."""
+
+    @staticmethod
+    def _peak(text: str, **limits: int) -> tuple[int, BaseException | None]:
+        import tracemalloc
+
+        tracemalloc.start()
+        error: BaseException | None = None
+        try:
+            parse_prometheus_text(text, **limits)
+        except ValueError as exc:
+            error = exc
+        finally:
+            _current, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+        return peak, error
+
+    def test_a_line_over_the_cap_is_refused_before_the_label_regex(self) -> None:
+        """A 4 MiB label under the 8 MiB cap peaked at 930 MB in the regex."""
+        text = '# TYPE vllm:x gauge\nvllm:x{model_name="' + "x" * (4 << 20) + '"} 1\n'
+        peak, error = self._peak(text)
+        assert isinstance(error, ScrapeTooLarge)
+        assert str(error) == f"line 2 is over the {MAX_LINE_CHARS}-character cap"
+        assert peak < 2 * len(text)
+
+    def test_a_long_label_within_the_cap_parses_in_bounded_memory(self) -> None:
+        value = "x" * (MAX_LINE_CHARS - 64)
+        escapes = "\\\\" * ((MAX_LINE_CHARS - 64) // 2)
+        for label in (value, escapes):
+            text = f'vllm:x{{model_name="{label}"}} 1\n'
+            peak, error = self._peak(text)
+            assert error is None
+            assert peak < 16 * 1024 * 1024
+
+    def test_series_over_the_cap_stop_the_parse(self) -> None:
+        text = "vllm:x 1\n" * 1_000_000  # 9 MB of samples
+        peak, error = self._peak(text, max_series=20_000)
+        assert isinstance(error, ScrapeTooLarge)
+        assert str(error) == "over the 20000-series cap"
+        assert peak < 16 * 1024 * 1024
+
+    def test_families_count_toward_the_cap(self) -> None:
+        text = "".join(f"# TYPE f{i} gauge\n" for i in range(50_000))
+        _peak, error = self._peak(text, max_series=20_000)
+        assert isinstance(error, ScrapeTooLarge)
+
+    def test_lines_are_not_held_as_a_list(self) -> None:
+        text = "\n" * (512 << 10)  # a list of them alone took 4 MiB
+        peak, error = self._peak(text)
+        assert error is None
+        assert peak < 1024 * 1024
 
 
 class TestCompactScrape:

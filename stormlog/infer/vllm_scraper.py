@@ -30,6 +30,7 @@ from .vllm_metrics import (
     VERIFIED_VLLM_VERSION,
     CompactScrape,
     Discovery,
+    ScrapeTooLarge,
     compact_scrape,
     discover,
     parse_prometheus_text,
@@ -220,12 +221,10 @@ def _fetch_and_parse(
     if result.text is None:
         return result, None
     try:
-        families = parse_prometheus_text(result.text)
-        series = sum(len(family.samples) for family in families.values())
-        if series > max_series:
-            error = f"oversized: {series} series is over the {max_series}-series cap"
-            return _failed_fetch(result, error), None
+        families = parse_prometheus_text(result.text, max_series=max_series)
         return result, compact_scrape(families)
+    except ScrapeTooLarge as exc:
+        return _failed_fetch(result, f"oversized: {exc}"), None
     except ValueError as exc:
         return _failed_fetch(result, f"unparseable response: {exc}"), None
 

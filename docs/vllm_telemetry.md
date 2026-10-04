@@ -103,12 +103,20 @@ applied before the data is held whole, and each refusal is counted:
 | Collector | Limit | Default | When it is exceeded |
 | --- | --- | --- | --- |
 | `/metrics` scrape | response bytes read | 8 MiB | the scrape fails with `oversized`, and the rest of the response is never read |
-| `/metrics` scrape | series in one response | 20,000 | the scrape fails with `oversized`, before the compact record is built |
+| `/metrics` scrape | series in one response, and families declared | 20,000 | the scrape fails with `oversized` as soon as the parse passes the cap |
+| `/metrics` scrape | characters in one line | 65,536 | the scrape fails with `oversized` before the line is parsed |
 | span receiver | open connections | 8 | the next connection gets a bare 503 with `Retry-After: 1` and is closed, without a handler thread (`refused_connections`) |
 | span receiver | time to receive a whole request: request line, headers and body, from when the receiver starts waiting for it | 10 s | the connection is closed: with 408 when the body is late (`body_timeouts`), without an answer when the request line or headers are (`header_timeouts`); a kept-alive connection idle this long is closed, uncounted |
 | span receiver | memory charged to the exports being read and decoded at once | 128 MiB, each step charged before it runs (below) | 503 with `Retry-After: 1` when an export does not fit now (`busy`); 413 when it could never fit (`too_large`) |
 | span receiver | spans in one body | 10,000 | 413 (`too_many_spans`); a protobuf export is refused before any span is built |
 | span receiver | spans waiting in the queue | 100,000 spans and 64 MiB, each span charged what its record holds: 2 KiB, 256 bytes an attribute value and the size of its text, with the resource, scope and clock domain its export's spans share charged once | 503 with `Retry-After: 1`, and none of the body's spans is kept (`dropped_queue_full`, which counts spans the exporter may resend) |
+
+The scrape's parser reads one line at a time, and its label pattern needs
+memory only for escaped characters, so what a scrape holds is bounded by
+these caps: at most about ten times the 8 MiB it may read. Measured on
+CPython 3.10: 34 MB for 20,000 series with 400-byte labels filling the
+8 MiB, and 82 MB when every label also holds a character outside the Basic
+Multilingual Plane, which Python stores at 4 bytes a character.
 
 An export is charged, step by step and before each step runs:
 1. its body (at most 32 MiB) and, for gzip, the most it can inflate to: 1,032

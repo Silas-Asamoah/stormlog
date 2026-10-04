@@ -748,7 +748,7 @@ class TestScraperUnits:
             scraper.max_scrape_series = 50
             within = scraper.scrape(marker=MARKER_PHASE_END)
         assert capped.status == "error"
-        assert capped.error == "oversized: 50 series is over the 49-series cap"
+        assert capped.error == "oversized: over the 49-series cap"
         assert within.status == "ok"
         assert (scraper.ok_scrapes, scraper.failed_scrapes) == (1, 1)
         VALIDATOR.validate(capped.to_record())
