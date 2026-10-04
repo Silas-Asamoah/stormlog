@@ -550,10 +550,12 @@ def test_a_stall_still_open_at_a_holds_end_is_a_long_gap() -> None:
 def test_queue_recovery_doesnt_hold_through_recurring_bursts() -> None:
     # rev-220-b's D9: a chance allowance counts samples out of band, not
     # how far out. 10 of 100 waits at 30 s (375x the p95) passed as chance,
-    # and so did a saturated waiting gauge 1 sample in 10.
+    # and so did a saturated waiting gauge 1 sample in 10. The bursts start
+    # half a second into the hold, so the waits' ceiling decides, not the
+    # rule that a hold's first sample is in band.
     waits = every_second(0, 45, lambda s: 0.08 + 0.001 * (s % 7))
     burst_waits = [
-        (S * 50 + tenth * S // 10, 30.0 if tenth % 10 == 0 else 0.08)
+        (S * 50 + tenth * S // 10, 30.0 if tenth % 10 == 5 else 0.08)
         for tenth in range(100)
     ]
     waiting = every_second(0, 45, lambda s: float(s % 7))
