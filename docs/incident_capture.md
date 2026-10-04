@@ -62,7 +62,10 @@ writes anything; so does a watcher whose `incidents/` another process holds.
 6. Append an `infer.watch_health` record.
 
 At start, and then every 60 ticks, retention removes the bundles over the
-store's limits, and records each in an `infer.incident_pruned` record.
+store's limits, and records each in an `infer.incident_pruned` record. A
+seal the store cannot hold first removes the oldest sealed bundles to make
+room (see "Disk limits"), and each of those is recorded the same way,
+before the incident.
 
 An exporter restart between two scrapes is recorded as a health incident at
 once, without a sustain.

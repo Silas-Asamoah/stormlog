@@ -6,6 +6,7 @@ import asyncio
 import errno
 import json
 import threading
+import time
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -507,3 +508,39 @@ def test_the_parsed_tail_holds_what_every_health_trigger_reads(
         assert len(watcher.history.parsed()) >= 200
     finally:
         watcher.close()
+
+
+def test_bundles_removed_to_make_room_for_a_seal_are_recorded(tmp_path: Path) -> None:
+    """Three recent bundles of 100 KiB fill a 400 KiB store as far as
+    retention goes; the watch's own seal then needs the oldest gone."""
+    store = IncidentStore(tmp_path)
+    kept = []
+    for index in range(3):
+        incident_id = store.new_incident_id()
+        writer = store.new_bundle(incident_id, 200 * 1024)
+        assert writer is not None
+        with writer.file("incident.jsonl") as out:
+            out.write(b"x" * 100 * 1024)
+        sealed = time.time_ns() - (3 - index) * 1_000_000_000
+        writer.publish(status="completed", complete=True, sealed_at_ns=sealed)
+        kept.append(incident_id)
+    store.close()
+    metrics = FakeMetrics()
+    metrics.waiting = 20
+    limits = {"max_total_bytes": 400 * 1024, "max_incident_bytes": 380 * 1024}
+    with serve_metrics(metrics) as base_url:
+        outcome = _watch(
+            tmp_path,
+            watch_config(base_url, store=limits),
+            options=WatchOptions(duration_seconds=1.5),
+        )
+    assert outcome.exit_code == 3
+    records = read_ledger(tmp_path)
+    pruned = of_type(records, INCIDENT_PRUNED)
+    assert pruned and pruned[0]["incident_id"] == kept[0]
+    assert {record["reason"] for record in pruned} == {"max_total_bytes"}
+    (incident,) = of_type(records, INCIDENT)
+    assert incident["bundle"] is not None
+    assert records.index(pruned[-1]) < records.index(incident)
+    stats = _report(tmp_path)["payload"]["stats"]
+    assert stats["pruned_total"] == len(pruned)
