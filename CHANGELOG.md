@@ -95,8 +95,9 @@ the flaky benchmark memory gates
 - Segments: `infer compare --segment NAME=START:END` (and
   `analyze_inference_events(segments=...)`) compare a slice of each case's
   measured phase as a case of its own, `<case>/<segment>`, with its own
-  population, rates, latency and SLO; a segment by overlap has no rates,
-  which would grow with latency. (#213)
+  population, rates, latency and SLO. A segment by overlap is
+  length-biased in rates and quantiles alike, so it is compared as
+  diagnostics and never gated, and has no rates. (#213)
 - `examples/analysis/simulation_study.py` validates the comparison's rules
   with 20,000 replications per cell (results in
   `examples/analysis/simulation_results.json`, tables in
