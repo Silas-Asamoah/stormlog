@@ -285,6 +285,13 @@ model); more requests per run do not help.
   bound is no longer exact: where the nominal false-pass rate is at most
   1.3%, rev-213-a measured 9.4% with one baseline run, 3.7% with three, and
   1.5% with twelve (paired blocks: 0.9%).
+- **The mean beside it.** The claim also records the mean change in the
+  bad direction (`mean_change`). A claim about runs can pass while one run
+  moves the mean: nine runs at 0% failures and one at 50% pass at a 1-point
+  budget, with the mean 5 points up. When the mean change is beyond the
+  budget, the claim carries `warning: mean_exceeds_budget`, and the report
+  says so. The gate does not change: it is a claim about runs, not about
+  the mean.
 - **The thresholds.** 6 runs need 6 of 6 (lower bound 0.541; 5 of 6 gives
   0.359), 8 need 8 of 8 (0.631; 7 of 8 gives 0.474), 10 need 9 of 10
   (0.555). Fewer than 6 runs can never make the claim: the gate is
