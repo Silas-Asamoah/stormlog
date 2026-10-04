@@ -262,6 +262,53 @@ for `export.prometheus`:
 That record is written when the capture ends, after the exporter has
 stopped and frozen its values, and before the session's last record.
 
+## Trace context
+
+`--trace-context` sends a W3C `traceparent` header with each request, beside
+its `X-Request-Id`, so a server that traces records its span as a child of
+the request's own trace. It is off by default, and no other flag turns it
+on: runs compared with and without it would otherwise differ in what the
+server receives.
+
+```bash
+stormlog infer profile ... \
+  --trace-context preserve-engine --server-trace-sampler parentbased_always_on
+```
+
+Each request sent gets a random trace ID and span ID, recorded on its
+`infer.request` record as `trace_id` and `span_id`. A request never sent,
+such as one dropped at the in-flight limit, has neither. The session
+record's `config.trace_context` holds the policy, the ratio and the
+declared server sampler.
+
+vLLM 0.30 uses the header only while its own tracing is on
+(`--otlp-traces-endpoint`); otherwise it logs one warning and ignores it.
+Its tracer has no sampler of its own, so the server's `OTEL_TRACES_SAMPLER`
+decides what the sampled flag does:
+
+| Server sampler | `off` (no header) | `preserve-engine` (always sampled) | `follow-sampling` |
+| --- | --- | --- | --- |
+| `parentbased_always_on` (the default) | every request, in separate traces | every request, in Stormlog's traces | only the requests Stormlog sampled |
+| `parentbased_traceidratio:p` | a fraction p | every Stormlog request: its volume rises from p to all of them | Stormlog's ratio instead of p |
+| `always_on`, `traceidratio:p` | all, or p | the same; the header sets only the parent | the same; the flag is ignored |
+| `always_off` | none | none | none |
+
+- **`preserve-engine`** is the mode to use when propagation is on. The
+  server records what it would have recorded without the header, so
+  [vLLM span ingestion](vllm_telemetry.md) keeps every span.
+- **`follow-sampling`** sends Stormlog's own decision from
+  `--otlp-sample-ratio` (default 1). The server then drops its spans for
+  every request Stormlog did not sample, including the failed and slow ones
+  that Stormlog keeps after the fact.
+
+Stormlog's decision keeps a trace when the lowest 56 bits of its trace ID
+are at least (1 − ratio) · 2⁵⁶, the OpenTelemetry ProbabilitySampler's
+predicate, so it can be recomputed from the recorded ID. Stormlog sends no
+`th` threshold, so it claims no agreement with other samplers downstream.
+
+Stormlog cannot read the server's sampler. `--server-trace-sampler
+NAME[:ARG]` records it as you declare it, unverified.
+
 ## When something goes wrong
 
 | Situation | What happens | Exit code |

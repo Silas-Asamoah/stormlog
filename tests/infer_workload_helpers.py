@@ -25,6 +25,8 @@ class SleepingClient:
         self.first_latencies = list(first_latencies)
         self.calls = 0
         self.finished_at: list[float] = []
+        # The extra headers each call was given, by X-Request-Id.
+        self.headers: dict[str | None, dict[str, str]] = {}
         self.active = 0
         self.max_active = 0
         self.lock = threading.Lock()
@@ -37,10 +39,12 @@ class SleepingClient:
         stream: bool,
         stream_include_usage: bool,
         request_id: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> ChatCompletionResult:
         started_at_ns = time.time_ns()
         with self.lock:
             self.calls += 1
+            self.headers[request_id] = dict(headers or {})
             self.active += 1
             self.max_active = max(self.max_active, self.active)
             latency = (

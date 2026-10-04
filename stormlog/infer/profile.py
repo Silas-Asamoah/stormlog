@@ -53,6 +53,7 @@ from .samplers import SystemSampler, build_system_sampler
 from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
 from .trace_capture import TraceWindows
+from .trace_context import OFF, TRACEPARENT, TraceIds, new_trace_ids, traceparent
 from .vllm_execution_devices import WorkerIndex
 from .vllm_execution_import import (
     flush_execution_log,
@@ -127,6 +128,9 @@ class InferenceProfiler:
             else None
         )
         self.execution_dir = config.vllm_execution_dir
+        # The traceparent IDs of requests in flight, by request ID; empty
+        # unless --trace-context is on.
+        self._trace_ids: dict[str, TraceIds] = {}
         # Built now so a budget or slot problem stops the run before it sends.
         self.export = self._build_export()
 
@@ -397,6 +401,14 @@ class InferenceProfiler:
                             else None
                         ),
                         "environment_proxies": ignored_proxies(),
+                        "trace_context": {
+                            "policy": self.config.export.trace_context,
+                            "sample_ratio": self.config.export.sample_ratio,
+                            # As the operator declared it; never verified.
+                            "server_trace_sampler": (
+                                self.config.export.server_trace_sampler
+                            ),
+                        },
                     },
                 }
             )
@@ -1052,6 +1064,9 @@ class InferenceProfiler:
     ) -> None:
         """Send one request and record it, or record that it was cancelled."""
         sent_at_ns = time.time_ns()
+        export = self.config.export
+        if export.trace_context != OFF:
+            self._trace_ids[request_id] = new_trace_ids(export.sample_ratio)
         try:
             event, extras = await self._run_one_request(
                 request_id=request_id, request=request, arrival=arrival
@@ -1066,6 +1081,8 @@ class InferenceProfiler:
             request.writer.append(cancelled.to_record())
             request.prompts.forget(arrival.index)
             raise
+        finally:
+            self._trace_ids.pop(request_id, None)
         # Keep only the prompt's digest once its request is done.
         request.prompts.forget(arrival.index)
         request.writer.append(event.to_record(), extras)
@@ -1093,10 +1110,13 @@ class InferenceProfiler:
         never went out, which therefore carried no ``X-Request-Id``.
         """
         case = request.case
+        ids = self._trace_ids.get(request_id) if sent else None
         return {
             "session_id": self.session.session_id,
             "request_id": request_id,
             "x_request_id": self._x_request_id(request_id) if sent else None,
+            "trace_id": ids.trace_id if ids is not None else None,
+            "span_id": ids.span_id if ids is not None else None,
             "case_id": case.case_id,
             "phase": request.phase,
             "endpoint": self.config.endpoint,
@@ -1131,6 +1151,12 @@ class InferenceProfiler:
         """The request's event, and what an exporter may use beside it."""
         case = request.case
         prompt = request.prompts.take(arrival.index)
+        ids = self._trace_ids.get(request_id)
+        headers = (
+            {TRACEPARENT: traceparent(ids, self.config.export.trace_context)}
+            if ids is not None
+            else None
+        )
         call = self.request_executor.submit(
             self._call_and_count,
             prompt,
@@ -1141,6 +1167,7 @@ class InferenceProfiler:
                 stream=self.config.stream,
                 stream_include_usage=self.config.stream_include_usage,
                 request_id=self._x_request_id(request_id),
+                headers=headers,
             ),
         )
         self._track(call)
