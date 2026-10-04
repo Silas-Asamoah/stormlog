@@ -767,9 +767,10 @@ def compare_values(
     ``trials`` are the requests behind each run's value, for a ``fraction``
     metric: its gate is the run-level claim, and they floor its interval.
     A candidate run whose block has no baseline value is a miss for that
-    claim: values alone cannot tell a lost baseline outcome from a value
-    never measured. A caller that knows the baseline failed as an outcome
-    passes ``unavailable="control_failed"``, as ``compare_runs`` does.
+    claim, as in ``compare_runs``: values alone cannot tell a lost baseline
+    outcome from a value never measured, so a caller that knows the
+    baseline failed as an outcome passes ``unavailable="control_failed"``,
+    which ``compare_runs`` reads from the runs.
     """
     unavailable = unavailable or _non_finite_reason(direction, baseline, candidate)
     request = _check(
