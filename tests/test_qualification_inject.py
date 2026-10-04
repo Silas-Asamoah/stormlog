@@ -271,11 +271,23 @@ def test_the_pulse_a_failure_cut_short_is_in_what_was_done(tmp_path: Path) -> No
         stand_in.kill()
         stand_in.wait()
 
+    def kill_once_stopped() -> None:
+        # Inside the first 300 ms pulse, however long the watchdog took to
+        # start: a fixed timer killed the target before its first stop when
+        # the host was loaded.
+        process = psutil.Process(stand_in.pid)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if process.status() == psutil.STATUS_STOPPED:
+                break
+            time.sleep(0.002)
+        kill()
+
     try:
         target = Target.of(stand_in.pid, "engine_core")
         server = Server("http://127.0.0.1:9", "m", tmp_path, {"engine_core": target})
         run = InjectionRun(plan, RunDirectory(tmp_path / "runs", "q221-x"), server)
-        threading.Timer(0.15, kill).start()  # inside the first 300 ms pulse
+        threading.Thread(target=kill_once_stopped, daemon=True).start()
         with pytest.raises(PulseRefused, match="exited during the stop"):
             run._pulse(plan.episodes[0])
         done = run._done_so_far(plan.episodes[0])
@@ -306,7 +318,10 @@ def test_queue_episodes_recover_end_to_end(tmp_path: Path) -> None:
     # each recovers, and F1's neighbor saturates the queue. 400 blocks keep
     # F1's load from preempting the victim, which would make it invalid.
     record = json.loads(_plan(tmp_path / "plan.json").read_text())
-    record["timeline"].update(baseline=7, recovery_timeout=20)
+    # A timeout well past the 6 s hold: on a loaded host the waits take
+    # longer to settle back into the baseline's band, and the test asks
+    # that they do, not how soon.
+    record["timeline"].update(baseline=7, recovery_timeout=60)
     record["thresholds"]["hold"] = 6
     shape = {"input_tokens": 128, "output_tokens": 16}
     record["episodes"] = [
@@ -328,10 +343,18 @@ def test_queue_episodes_recover_end_to_end(tmp_path: Path) -> None:
     assert verify(run) == []
     twin, fault = load_injections(run / "truth" / "injections.jsonl")
     for injection in (twin, fault):
-        assert injection.status == "valid", injection.validity
+        assert injection.validity.actuation == "ok", injection.validity
         assert injection.times.effect_end_ns is not None  # it recovered
+    assert fault.status == "valid", fault.validity
     checks = {c["name"]: c["passed"] for c in fault.validity.checks}
     assert checks == {"onset_reached": True, "no_victim_preemption": True}
+    # The twin is valid on a quiet host. On a loaded one (load average 20
+    # in the full suite) the victim's own waits can pass the baseline's p95
+    # for a window, and the harness rightly calls the twin not realized:
+    # its one check then fails, nothing else.
+    if twin.status != "valid":
+        twin_checks = {c["name"]: c["passed"] for c in twin.validity.checks}
+        assert twin_checks == {"waits_within_baseline": False}, twin.validity
 
 
 def _inject(server: FakeEngineProcess, tmp_path: Path, plan: Path, *extra: str) -> int:
