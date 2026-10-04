@@ -420,12 +420,18 @@ print(grew, vllm_spans.protobuf_parse_estimate(counts, len(body)))
 """
 
 
-def _post(url: str, body: bytes, media: str) -> int:
+# A client's patience with an export decoded under tracemalloc, which slows
+# the receiver several times over: about 2 s of CPU with pure Python, and
+# more on a loaded machine. The receiver's own deadlines are unchanged.
+TRACED_POST_TIMEOUT_S = 30.0
+
+
+def _post(url: str, body: bytes, media: str, *, timeout: float = 5.0) -> int:
     request = urllib.request.Request(
         url, data=body, headers={"Content-Type": media}, method="POST"
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return int(response.status)
     except urllib.error.HTTPError as exc:
         return exc.code
@@ -951,7 +957,7 @@ class TestReceiverAdmission:
             url = f"http://{receiver.listen}/v1/traces"
             tracemalloc.start()
             try:
-                status = _post(url, body, media)
+                status = _post(url, body, media, timeout=TRACED_POST_TIMEOUT_S)
                 _current, peak = tracemalloc.get_traced_memory()
             finally:
                 tracemalloc.stop()
@@ -986,7 +992,9 @@ class TestReceiverAdmission:
             url = f"http://{receiver.listen}/v1/traces"
             tracemalloc.start()
             try:
-                status = _post(url, body, "application/json")
+                status = _post(
+                    url, body, "application/json", timeout=TRACED_POST_TIMEOUT_S
+                )
                 _current, peak = tracemalloc.get_traced_memory()
             finally:
                 tracemalloc.stop()
@@ -1183,7 +1191,7 @@ class TestReceiverAdmission:
             url = f"http://{receiver.listen}/v1/traces"
             tracemalloc.start()
             try:
-                status = _post(url, body, media)
+                status = _post(url, body, media, timeout=TRACED_POST_TIMEOUT_S)
                 _current, peak = tracemalloc.get_traced_memory()
             finally:
                 tracemalloc.stop()
@@ -1367,7 +1375,10 @@ class TestReceiverAdmission:
             url = f"http://{receiver.listen}/v1/traces"
             tracemalloc.start()
             try:
-                assert _post(url, body, "application/json") == 200
+                assert (
+                    _post(url, body, "application/json", timeout=TRACED_POST_TIMEOUT_S)
+                    == 200
+                )
                 retained, _peak = tracemalloc.get_traced_memory()
             finally:
                 tracemalloc.stop()
@@ -1405,7 +1416,10 @@ class TestReceiverAdmission:
             url = f"http://{receiver.listen}/v1/traces"
             tracemalloc.start()
             try:
-                assert _post(url, body, "application/json") == 200
+                assert (
+                    _post(url, body, "application/json", timeout=TRACED_POST_TIMEOUT_S)
+                    == 200
+                )
                 retained, _peak = tracemalloc.get_traced_memory()
             finally:
                 tracemalloc.stop()
