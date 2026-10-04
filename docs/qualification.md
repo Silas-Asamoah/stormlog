@@ -8,7 +8,10 @@ other issues' fixtures share one definition.
 
 ## Exact bounds
 
-Every claim is a one-sided bound at 95%, computed exactly:
+Every gated claim is a one-sided bound at 95%, computed exactly. The
+exploratory ones (DX-ON, TP2) are reported with the two-sided exact 95%
+interval, `clopper_pearson_interval(k, n)`: 6 of 6 gives [0.54, 1] and 8 of 8
+gives [0.63, 1].
 
 | Claim | Bound | Function |
 | --- | --- | --- |
