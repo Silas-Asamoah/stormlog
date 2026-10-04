@@ -27,13 +27,13 @@ stormlog infer compare \
 | --- | --- |
 | `--baseline`, `--candidate` | Each arm's artifacts |
 | `--case ID` | Only this case; repeatable |
-| `--slo KEY:MS`, `--slo-file FILE` | Judge both arms by this policy instead of each run's own. Without it, goodput and attainment are gated only when one policy (one `slo_digest`) judged every run of the case; otherwise their gates are `not_evaluable: slo_policy_differs`, since a candidate judged by a looser policy would meet it however slow it was |
+| `--slo KEY:MS`, `--slo-file FILE` | Judge both arms by this policy instead of each run's own. Without it, a goodput or attainment gate, or `--min-attainment`, over runs that recorded different policies (`slo_digest`) is invalid input (exit 5), since a candidate judged by a looser policy would meet it however slow it was; ungated, those metrics read `slo_policy_differs` |
 | `--mode config\|overhead\|incremental` | What may differ between the arms (see Modes) |
 | `--design auto\|paired_blocks\|independent` | `auto` pairs runs by block when every run is labelled |
 | `--allow FIELD` | A field (`engine.max_num_seqs`) or `vllm_config` JSON pointer (`/scheduler_config`) that may differ |
 | `--added-observers NAME,...` | The observers an `incremental` candidate adds |
 | `--gate METRIC=RULE:BUDGET` | Gate a metric, or every metric a pattern names (`client.*.p99`). A latency, goodput or throughput budget is relative (0.05 is 5%); an attainment or failure-fraction budget is a fraction (0.01 is one point). A budget that can never fail is a usage error: a fraction above 1, or a fall of 100% or more in a rate |
-| `--fallback METRIC=BUDGET:UNIT` | A pre-registered budget on the difference, for when a zero leaves the log ratio undefined. `METRIC` is the gate's own text, pattern included; a fallback that names no `--gate` is a usage error |
+| `--fallback METRIC=BUDGET:UNIT` | A pre-registered budget on the difference, for when a zero leaves the log ratio undefined. `METRIC` is a name or pattern, and the budget applies to every gated metric it matches, whichever gate pattern named it; one that matches no gated metric is a usage error |
 | `--min-complete-blocks N` | Every gate needs at least N complete pairs |
 | `--min-attainment X`, `--min-run-pass Q` | At least a share Q (0.5) of candidate runs reach attainment X: a claim about runs. Both are in (0, 1]. A candidate run whose SLO could not be judged counts as not reaching X, and the gate obeys the same blockers as the metric gates (unverified comparability, observers, `--on-incomplete fail`); when it cannot be evaluated, it exits 4 like they do. `--attainment-model bernoulli` pools requests instead, labelled model-based |
 | `--family all_budgets\|any_regression` | `any_regression` adjusts the regression tests with Holm's method; its gates use `significant` |
@@ -63,7 +63,8 @@ segment, clipped to the phase. A segment fails with its case.
 Under `--segment-membership overlap`, a segment has no rates (goodput,
 throughput, output tokens): its requests are those in flight during it,
 and their count per second grows with their latency, so a slower candidate
-would look faster. Those metrics read `overlapping_cohort`; its shares
+would look faster. Those metrics read `overlapping_cohort`, and a rate gate
+with overlap segments is a usage error; gate rates by arrival. Its shares
 (attainment, failure fraction) and latency are compared as usual. Any rate
 a run cannot give is read with its interval's reason (`rate_reason`), or
 `rate_unavailable`.
@@ -214,9 +215,12 @@ A run with no value for a metric says why, and that reason makes the
 metric's gate `not_evaluable`: a latency quantile with a successful
 request that lacks it (`successful_values_missing`), a rate with no
 interval (its `rate_reason`, or `rate_unavailable`), a population not
-recorded. A value that is not finite makes the gate `not_evaluable:
-non_finite_value`: an infinite latency is the worst value there is, and
-dropping it as missing would decide the gate on the runs left.
+recorded. An infinite candidate value of a lower-is-better metric, such as
+a latency that never finished, is the worst value there is: its gate fails
+(`candidate_censored_worst`), read like a zero candidate on a
+higher-is-better metric. Any other value that is not finite makes the gate
+`not_evaluable: non_finite_value`; dropping it as missing would decide the
+gate on the runs left.
 
 A run's value can be an interval `(lower, upper)`, when some of its evidence
 is missing: SLO attainment and goodput with unknown outcomes. Each pair then
@@ -264,9 +268,10 @@ A gate is `not_evaluable`, never passed, when:
   the case's `absent_gates`): a gate on something never measured gates
   nothing, and must not read as a pass.
 
-A `--case` that no run has is invalid input (exit 5). A case no kept run
-offered a request, such as a segment outside every run's phase, cannot be
-gated (`empty_case`).
+A `--case` that no run has is a usage error (exit 2). A case no run offered
+a request, such as a segment outside every run's phase, is invalid input
+(exit 5). A metric that is not compared says why in its `reason`, gated or
+not.
 
 ## Guards
 

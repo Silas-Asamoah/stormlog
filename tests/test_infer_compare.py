@@ -159,8 +159,8 @@ def test_a_gate_that_matches_no_metric_cannot_be_evaluated() -> None:
     assert (absent["status"], absent["reason"]) == ("not_evaluable", "metric_absent")
 
 
-def test_a_case_no_run_has_is_invalid_input() -> None:
-    with pytest.raises(InferInputError, match="case typo is in no run"):
+def test_a_case_no_run_has_is_a_usage_error() -> None:
+    with pytest.raises(InferUsageError, match="case typo is in no run"):
         compare_runs(*_arms(SLOWER), ComparisonSpec(gates=E2E_GATE, cases=("typo",)))
 
 
@@ -206,13 +206,36 @@ def test_a_retried_block_keeps_the_attempt_that_finished() -> None:
     assert [item["run"] for item in comparison.excluded] == [failed.name]
 
 
-def test_an_empty_segment_cannot_be_gated() -> None:
+def test_a_case_no_run_offered_a_request_is_refused() -> None:
+    # Such as a segment outside every run's measured phase.
     baseline, candidate = _arms(SLOWER)
     for run in [*baseline, *candidate]:
         run.report["cases"][CASE]["population"]["offered"] = 0
+    with pytest.raises(InferInputError, match="c1 holds no request in any run"):
+        compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+
+
+def test_a_fallback_follows_a_pattern_gate_to_each_metric_it_names() -> None:
+    gates = (("goodput*", GateRule("non-inferiority", 0.05, "relative")),)
+    spec = ComparisonSpec(
+        gates=gates, fallbacks=(("goodput_rps", 0.5, "requests_per_second"),)
+    )
+    rule = spec.gate_for("goodput_rps")
+    assert rule is not None
+    assert (rule.fallback_budget, rule.fallback_unit) == (0.5, "requests_per_second")
+
+
+def test_an_infinite_candidate_latency_fails_as_the_worst_value() -> None:
+    baseline, candidate = _arms(SLOWER[:3] + [100.0] * 3)
+    for run in candidate[3:]:
+        estimate = run.report["cases"][CASE]["latency"]["metrics"]["client.e2e"][
+            "failure_penalized"
+        ]["p95"]
+        estimate["value_ms"] = float("inf")
     comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
     gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
-    assert gate is not None and gate.reason == "empty_case"
+    assert gate is not None
+    assert (gate.status, gate.reason) == ("fail", "candidate_censored_worst")
 
 
 def test_a_block_whose_runs_sent_different_workloads_is_set_aside() -> None:
@@ -451,24 +474,34 @@ def test_the_attainment_gate_obeys_the_same_blockers_as_the_others() -> None:
     assert comparison.exit_code == 4
 
 
-def test_slo_metrics_judged_by_different_policies_cannot_be_gated() -> None:
+@pytest.mark.parametrize(
+    "spec",
+    [
+        ComparisonSpec(
+            gates=(("goodput_rps", GateRule("non-inferiority", 0.05, "relative")),)
+        ),
+        ComparisonSpec(min_attainment=0.9),
+    ],
+    ids=["goodput_gate", "min_attainment"],
+)
+def test_an_slo_gate_across_different_policies_is_invalid_input(
+    spec: ComparisonSpec,
+) -> None:
     # A candidate judged by a looser policy would meet it however much
-    # slower it was.
-    gates = (("goodput_rps", GateRule("non-inferiority", 0.05, "relative")),)
+    # slower it was: give one policy with --slo to judge both.
     baseline, candidate = _arms(SLOWER, slo_digest="q" * 64)
-    comparison = compare_runs(
-        baseline, candidate, ComparisonSpec(gates=gates, min_attainment=0.9)
+    with pytest.raises(InferInputError, match="judged by different SLO policies"):
+        compare_runs(baseline, candidate, spec)
+
+
+def test_ungated_slo_metrics_across_policies_say_why_they_are_not_compared() -> None:
+    baseline, candidate = _arms(SLOWER, slo_digest="q" * 64)
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    assert comparison.cases[CASE]["metrics"]["goodput_rps"].reason == (
+        "slo_policy_differs"
     )
-    case = comparison.cases[CASE]
-    goodput = case["metrics"]["goodput_rps"]
-    assert goodput.gate is not None
-    assert (goodput.gate.status, goodput.gate.reason) == (
-        "not_evaluable",
-        "slo_policy_differs",
-    )
-    assert case["attainment_gate"]["reason"] == "slo_policy_differs"
-    # Latency is not judged by a policy and is still gated.
-    assert case["metrics"]["client.e2e.p95"].gate is None
+    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None and gate.status == "fail"
 
 
 def test_pooled_requests_are_labelled_model_based() -> None:
