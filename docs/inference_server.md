@@ -7,6 +7,52 @@ Stormlog describes the server a run measured: its vLLM configuration, its
 environment, its runtime and its GPUs. A description is meant to be shared
 with the run's results, so it never keeps a credential.
 
+## Describing a server
+
+Run `describe-server` on the host that serves vLLM, with the API server's
+PID:
+
+```bash
+stormlog infer describe-server --pid "$(pgrep -f 'vllm serve' | head -1)" \
+  --server-log /var/log/vllm/server.log \
+  --output artifacts/server-before.json
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--pid PID` | vLLM's API server process. Another process is described with an issue, and only it and its descendants are covered. |
+| `--output FILE` | Where to write the description. |
+| `--server-log FILE` | The server's log, for the choices it made at start-up. |
+| `--python auto\|PATH\|none` | The interpreter asked for the Python and package versions (torch, triton, flashinfer, transformers, vllm). `auto` (the default) is the interpreter on the server's command line. |
+| `--hash-weights` | Hash every file of a local model directory. |
+| `--verify-model-files` | Hash every hub-cache blob to check it against its name. |
+| `--digest-cache FILE` | Where `--hash-weights` keeps digests between runs. |
+| `--no-gpu` | Describe without NVML. |
+
+The description is one JSON document, `stormlog.infer.server_description`
+version 1:
+
+| Field | Content |
+| --- | --- |
+| `observed_at_ns` | When it was taken |
+| `host` | Hostname, boot ID, boot time, `nproc`, and the describing process's CPU affinity |
+| `server` | The root PID and start ticks, the command line's model arguments, every process in the tree, the worker start method, and the kept environment |
+| `gpus` | The driver and each NVML device, with the server's processes on it |
+| `model` | The model files, their digests and `identity_evidence` |
+| `log` | The start-up choices from `--server-log`, or `null` |
+| `runtime` | The interpreter's Python and package versions, or `null` |
+| `nvidia_smi` | SHA-256 and size of `nvidia-smi -q -x`, never its text |
+| `issues` | What could not be described, such as an unreadable environment |
+| `sha256` | SHA-256 of the canonical JSON of everything else |
+
+A description whose `sha256` does not match its content is refused when it
+is read back.
+
+`describe-server` exits `0` when the description is written, and `2` when
+the PID is not a process this host can read (it needs Linux `/proc`) or NVML
+is missing without `--no-gpu`. A `--server-log` that cannot be read exits
+`5`.
+
 ## The server's processes
 
 A description reads the server's processes from Linux `/proc`, so it runs on

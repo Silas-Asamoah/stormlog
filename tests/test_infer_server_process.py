@@ -28,97 +28,12 @@ from stormlog.infer.server_process import (
     start_ns,
     still_running,
 )
-
-
-def _stat(
-    pid: int, comm: str, ppid: int, pgid: int, sid: int, start: int, state: str
-) -> str:
-    # Fields 3..22 of /proc/<pid>/stat; starttime is the twentieth after comm.
-    after = [state, ppid, pgid, sid] + [0] * 15 + [start] + [0] * 30
-    return f"{pid} ({comm}) " + " ".join(str(field) for field in after) + "\n"
-
-
-def _process(
-    proc: Path,
-    pid: int,
-    *,
-    ppid: int = 1,
-    pgid: int | None = None,
-    sid: int | None = None,
-    start: int = 1000,
-    comm: str = "python3",
-    cmdline: tuple[str, ...] = ("python3",),
-    cpus: str | None = "0-7",
-    environ: dict[str, str] | None = None,
-    state: str = "S",
-) -> None:
-    base = proc / str(pid)
-    base.mkdir(parents=True)
-    pgid = pid if pgid is None else pgid
-    sid = pid if sid is None else sid
-    (base / "stat").write_text(_stat(pid, comm, ppid, pgid, sid, start, state))
-    (base / "cmdline").write_bytes("\0".join(cmdline).encode() + b"\0")
-    status = f"Name:\t{comm}\n" + (f"Cpus_allowed_list:\t{cpus}\n" if cpus else "")
-    (base / "status").write_text(status)
-    if environ is not None:
-        raw = "\0".join(f"{k}={v}" for k, v in environ.items()) + "\0"
-        (base / "environ").write_bytes(raw.encode())
+from tests.infer_proc_helpers import fake_process, fake_server
 
 
 @pytest.fixture
 def server(tmp_path: Path) -> Path:
-    """A vLLM 0.30.0 server tree as /proc shows it, plus an unrelated process."""
-    proc = tmp_path / "proc"
-    proc.mkdir()
-    (proc / "stat").write_text("cpu 1 2 3\nbtime 1700000000\nprocesses 9\n")
-    serve = ("/usr/bin/python3", "/usr/local/bin/vllm", "serve", "Qwen/Qwen2.5-0.5B")
-    _process(proc, 100, start=500, cmdline=serve, environ={"VLLM_PORT": "8000"})
-    _process(
-        proc,
-        101,
-        ppid=100,
-        pgid=100,
-        sid=100,
-        start=510,
-        comm="VLLM::EngineCor",
-        cmdline=("VLLM::EngineCore",),
-    )
-    _process(
-        proc,
-        102,
-        ppid=101,
-        pgid=100,
-        sid=100,
-        start=520,
-        comm="VLLM::Worker_TP",
-        cmdline=("VLLM::Worker_TP0",),
-        cpus="0-3",
-    )
-    _process(
-        proc,
-        103,
-        ppid=100,
-        pgid=100,
-        sid=100,
-        start=505,
-        cmdline=(
-            "python3",
-            "-c",
-            "from multiprocessing.resource_tracker import main;main(9)",
-        ),
-    )
-    _process(
-        proc,
-        104,
-        ppid=100,
-        pgid=100,
-        sid=100,
-        start=600,
-        comm="pip",
-        cmdline=("/usr/bin/python3", "-m", "pip", "list", "--format=freeze"),
-    )
-    _process(proc, 200, start=50, comm="bash", cmdline=("bash",))
-    return proc
+    return fake_server(tmp_path)
 
 
 def test_a_process_is_read_with_its_group_session_and_start(server: Path) -> None:
@@ -134,7 +49,7 @@ def test_a_process_is_read_with_its_group_session_and_start(server: Path) -> Non
 
 def test_a_command_name_with_spaces_and_parentheses_is_parsed(tmp_path: Path) -> None:
     proc = tmp_path / "proc"
-    _process(proc, 7, comm="a) (b c", ppid=3, pgid=4, sid=5, start=99)
+    fake_process(proc, 7, comm="a) (b c", ppid=3, pgid=4, sid=5, start=99)
     info = read_process(7, proc)
     assert info is not None
     assert (info.comm, info.ppid, info.pgid, info.sid, info.start_ticks) == (
@@ -202,7 +117,7 @@ def test_the_tree_holds_the_root_and_every_descendant(server: Path) -> None:
 
 
 def test_group_members_include_the_session_when_asked(server: Path) -> None:
-    _process(server, 105, ppid=1, pgid=105, sid=100, start=700)
+    fake_process(server, 105, ppid=1, pgid=105, sid=100, start=700)
     by_group = {info.pid for info in group_members(100, proc=server)}
     by_both = {info.pid for info in group_members(100, 100, proc=server)}
     assert by_group == {100, 101, 102, 103, 104}
@@ -216,7 +131,7 @@ def test_still_running_matches_pid_and_start_time(server: Path) -> None:
 
 
 def test_a_zombie_is_neither_a_member_nor_a_survivor(server: Path) -> None:
-    _process(server, 106, ppid=100, pgid=100, sid=100, start=800, state="Z")
+    fake_process(server, 106, ppid=100, pgid=100, sid=100, start=800, state="Z")
     assert 106 not in {info.pid for info in group_members(100, 100, proc=server)}
     assert still_running([(106, 800)], server) == []
 

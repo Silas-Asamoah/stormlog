@@ -102,6 +102,8 @@ For controlled experiments, `--arrival` sends requests on a fixed-rate,
 Poisson, burst or replayed schedule instead of a closed loop. `--prompt-mode`
 chooses whether requests share prefixes, and `--cache-state cold` with
 `--cache-reset-url` asks for an empty prefix cache before each case.
+To record which server a run measured, run `stormlog infer describe-server`
+on the serving host (see [Inference server descriptions](inference_server.md)).
 For server memory, run `stormlog infer collect-server` on the serving host,
 pass the same `--run-id` to `infer profile`, and import the collector JSONL with
 `infer analyze --server-telemetry`. The guide explains the direct-route and
