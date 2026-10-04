@@ -320,22 +320,39 @@ def test_an_overlap_segment_is_diagnostics_and_carries_no_gate(
     assert f"- {CASE}/early (overlap: diagnostics only, not gated):" in lines
 
 
-@pytest.mark.parametrize(
-    "spec",
-    [
-        ComparisonSpec(gates=E2E_GATE, cases=(f"{CASE}/early",)),
-        ComparisonSpec(min_attainment=0.9, cases=(f"{CASE}/early",)),
-    ],
-    ids=["gate", "min_attainment"],
-)
-def test_gates_asked_only_of_overlap_segments_never_pass_vacuously(
-    spec: ComparisonSpec,
-) -> None:
+def test_gates_asked_only_of_overlap_segments_cannot_be_evaluated() -> None:
+    # fable-213's repro: a 40% slower candidate, gates asked, and --case
+    # naming only an overlap segment. It read "no gate configured", exit 0.
+    baseline, candidate = _arms(SLOWER)
+    _with_segment(baseline, "overlap")
+    _with_segment(candidate, "overlap")
+    spec = ComparisonSpec(gates=E2E_GATE, min_attainment=0.9, cases=(f"{CASE}/early",))
+    comparison = compare_runs(baseline, candidate, spec)
+    segment = comparison.cases[f"{CASE}/early"]
+    gate = segment["absent_gates"]["client.e2e.p95"]
+    assert (gate.status, gate.reason) == ("not_evaluable", "overlap_not_gated")
+    assert segment["attainment_gate"] == {
+        "status": "not_evaluable",
+        "reason": "overlap_not_gated",
+    }
+    assert comparison.failed == []
+    assert (f"{CASE}/early", "client.e2e.p95", "overlap_not_gated") in (
+        comparison.not_evaluable
+    )
+    assert comparison.exit_code == 4
+
+
+def test_with_whole_cases_too_overlap_segments_add_no_gates() -> None:
+    # The whole case carries every requested gate; the overlap segment stays
+    # diagnostics, counted in no gate summary.
     baseline, candidate = _arms(SAME)
     _with_segment(baseline, "overlap")
     _with_segment(candidate, "overlap")
-    with pytest.raises(InferUsageError, match="diagnostics only"):
-        compare_runs(baseline, candidate, spec)
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    segment = comparison.cases[f"{CASE}/early"]
+    assert segment["absent_gates"] == {} and "attainment_gate" not in segment
+    assert [case for case, _name, _gate in comparison.gates] == [CASE]
+    assert comparison.exit_code == 0
 
 
 def test_a_case_no_run_offered_a_request_is_refused() -> None:

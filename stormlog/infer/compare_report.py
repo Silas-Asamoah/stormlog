@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ..report import Evidence, Finding, build_report
-from .compare import Comparison
+from .compare import OVERLAP_NOT_GATED, Comparison
 from .comparison_stats import GateOutcome
 
 REPORT_KIND = "inference_comparison"
@@ -111,7 +111,10 @@ def _gate_findings(comparison: Comparison, path: str | None) -> list[Finding]:
         if gate.status == "pass":
             continue
         failed = gate.status == "fail"
-        where = "absent_gates" if gate.reason == "metric_absent" else "metrics"
+        # A gate on what was never measured, or on an overlap segment, is
+        # recorded beside the metrics, not in them.
+        unmatched = gate.reason in ("metric_absent", OVERLAP_NOT_GATED)
+        where = "absent_gates" if unmatched else "metrics"
         pointer = f"/payload/cases/{_escape(case_id)}/{where}/{_escape(name)}"
         findings.append(
             Finding(

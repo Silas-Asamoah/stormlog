@@ -275,6 +275,46 @@ def test_overlap_segments_are_compared_but_never_gated(
     assert "/early (overlap: diagnostics only, not gated):" in text
 
 
+def test_gates_on_overlap_segments_alone_point_at_why(
+    arms: dict[str, list[str]]
+) -> None:
+    # Only the overlap segment is compared: each requested gate is
+    # not_evaluable, exit 4, and its finding points at where it is recorded.
+    first = json.loads(
+        _compare(
+            "--baseline",
+            *arms["baseline"],
+            "--candidate",
+            *arms["slower"],
+            "--format",
+            "json",
+        )[1]
+    )
+    case_id = next(iter(first["payload"]["cases"]))
+    code, out, _err = _compare(
+        "--baseline",
+        *arms["baseline"],
+        "--candidate",
+        *arms["slower"],
+        "--segment",
+        "early=0:0.5",
+        "--segment-membership",
+        "overlap",
+        "--case",
+        f"{case_id}/early",
+        "--gate",
+        "client.e2e.p95=non-inferiority:0.05",
+        "--format",
+        "json",
+    )
+    report = json.loads(out)
+    assert code == ExitCode.GATE_FAILED
+    (finding,) = [f for f in report["findings"] if f["kind"] == "not_evaluable"]
+    assert finding["message"] == "overlap_not_gated"
+    for evidence in finding["evidence"]:
+        assert _resolve(report, evidence["pointer"])["reason"] == "overlap_not_gated"
+
+
 def test_a_run_given_twice_is_invalid_input(arms: dict[str, list[str]]) -> None:
     # A retried block's attempts are separate artifacts; one artifact twice
     # would count a single run as two.
