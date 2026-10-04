@@ -392,7 +392,8 @@ def _declare(registry: Registry, labels: ProfileLabels) -> _Families:
         duration=registry.add(
             _client_spec(
                 "stormlog_infer_request_duration_seconds",
-                "Client-observed end-to-end latency of completed requests.",
+                "Client-observed end-to-end latency of completed requests. Never "
+                "add to vllm:e2e_request_latency_seconds, the engine's residency.",
                 LATENCY_BUCKETS,
             ),
             known,
@@ -400,7 +401,8 @@ def _declare(registry: Registry, labels: ProfileLabels) -> _Families:
         first_token=registry.add(
             _client_spec(
                 "stormlog_infer_time_to_first_token_seconds",
-                "Client-observed time to the first non-empty content delta.",
+                "Client-observed time to the first non-empty content delta. Never "
+                "add to vllm:time_to_first_token_seconds.",
                 FIRST_TOKEN_BUCKETS,
             ),
             known,
@@ -416,7 +418,8 @@ def _declare(registry: Registry, labels: ProfileLabels) -> _Families:
         chunk_gaps=registry.add(
             _client_spec(
                 "stormlog_infer_chunk_interarrival_seconds",
-                "Gaps between streamed chunks; chunk timing, not token ITL.",
+                "Gaps between streamed chunks; chunk timing, not token ITL. Never "
+                "add to vllm:inter_token_latency_seconds.",
                 CHUNK_BUCKETS,
             ),
             known,
@@ -448,7 +451,8 @@ def _declare(registry: Registry, labels: ProfileLabels) -> _Families:
             FamilySpec(
                 "stormlog_infer_tokens_total",
                 help="Prompt and output tokens of completed requests, by the source "
-                "of each count.",
+                "of each count. Never add to vllm:prompt_tokens_total or "
+                "vllm:generation_tokens_total, which count every client.",
                 labels=("model", "server", "case", "phase", "direction", "source"),
                 enums={
                     "phase": REQUEST_PHASES,

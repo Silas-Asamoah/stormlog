@@ -302,6 +302,31 @@ def test_every_family_is_stormlogs_own() -> None:
     assert all(f.spec.name.startswith("stormlog_") for f in registry.families)
 
 
+@pytest.mark.parametrize(
+    ("family", "counterpart"),
+    [
+        ("stormlog_infer_requests_total", "vllm:request_success_total"),
+        ("stormlog_infer_request_duration_seconds", "vllm:e2e_request_latency_seconds"),
+        (
+            "stormlog_infer_time_to_first_token_seconds",
+            "vllm:time_to_first_token_seconds",
+        ),
+        (
+            "stormlog_infer_chunk_interarrival_seconds",
+            "vllm:inter_token_latency_seconds",
+        ),
+        ("stormlog_infer_tokens_total", "vllm:prompt_tokens_total"),
+        ("stormlog_infer_tokens_total", "vllm:generation_tokens_total"),
+    ],
+)
+def test_a_family_that_overlaps_vllm_says_never_to_add_them(
+    family: str, counterpart: str
+) -> None:
+    registry, _ = _metrics()
+    help_text = next(f.spec.help for f in registry.families if f.spec.name == family)
+    assert "Never add" in help_text and counterpart in help_text
+
+
 MAPPED_EVENT_TYPES = {
     "infer.request",
     "infer.phase_window",
