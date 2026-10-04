@@ -320,7 +320,13 @@ class IncidentStore:
             return None
         bundle = self.root / incident_id
         try:
+            # An existing bundle is never touched: only what this call made
+            # is removed on the way out.
             bundle.mkdir(mode=0o700)
+        except BaseException:
+            allowance.release(keep=0)
+            raise
+        try:
             (bundle / LOCK_FILENAME).touch(mode=0o600)
             return GenerationWriter(self, bundle, 0, allowance)
         except BaseException:
