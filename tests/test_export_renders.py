@@ -131,3 +131,67 @@ def test_the_limit_still_holds_after_an_invalidation() -> None:
     stale = cache.acquire()
     assert stale is held[-1] and not cache.is_fresh(stale)
     assert cache.alive() <= MAX_GENERATIONS
+
+
+def _blocked_build(cache: RenderCache, results: list[object]) -> threading.Thread:
+    def read() -> None:
+        try:
+            results.append(cache.acquire())
+        except Exception as exc:
+            results.append(exc)
+
+    builder = threading.Thread(target=read)
+    builder.start()
+    return builder
+
+
+def test_a_render_built_across_an_invalidation_is_stale_and_rebuilt() -> None:
+    # Fable's race: the build took its values before they changed for good,
+    # and published after the invalidation.
+    values = {"total": 0}
+    started, release = threading.Event(), threading.Event()
+
+    def render() -> bytes:
+        body = f"total {values['total']}".encode()
+        started.set()
+        release.wait(5)
+        return body
+
+    cache = RenderCache(render, min_interval=60.0, clock=_Clock())
+    results: list[object] = []
+    builder = _blocked_build(cache, results)
+    assert started.wait(5)
+    values["total"] = 7
+    cache.invalidate()
+    release.set()
+    builder.join(5)
+    (built,) = results
+    assert isinstance(built, Generation) and built.body == b"total 0"
+    assert not cache.is_fresh(built)
+    cache.release(built)
+    rebuilt = cache.acquire()
+    assert rebuilt.body == b"total 7" and cache.is_fresh(rebuilt)
+
+
+def test_a_failed_build_across_an_invalidation_leaves_the_next_build_fresh() -> None:
+    started, release = threading.Event(), threading.Event()
+    calls: list[int] = []
+
+    def render() -> bytes:
+        calls.append(1)
+        if len(calls) == 1:
+            started.set()
+            release.wait(5)
+            raise RuntimeError("render failed")
+        return b"after"
+
+    cache = RenderCache(render, min_interval=60.0, clock=_Clock())
+    results: list[object] = []
+    builder = _blocked_build(cache, results)
+    assert started.wait(5)
+    cache.invalidate()
+    release.set()
+    builder.join(5)
+    assert isinstance(results[0], RuntimeError)
+    after = cache.acquire()
+    assert after.body == b"after" and cache.is_fresh(after)

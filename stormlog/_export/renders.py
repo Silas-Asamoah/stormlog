@@ -28,6 +28,9 @@ class Generation:
     number: int
     created_at: float
     readers: int = 0
+    # The invalidation epoch when its build started: it is fresh while no
+    # invalidation has happened since.
+    epoch: int = 0
 
 
 @dataclass
@@ -45,9 +48,10 @@ class _State:
     newest: Generation | None = None
     held: set[Generation] = field(default_factory=set)
     building: bool = False
-    # Generations numbered up to this one are out of date: the values they
-    # rendered have changed for good (for example, the registry froze).
-    stale_through: int = 0
+    # Counts invalidations: each one means the values changed for good (for
+    # example, the registry froze), so every render started before it is
+    # out of date, including one still being built.
+    epoch: int = 0
 
 
 class RenderCache:
@@ -77,6 +81,7 @@ class RenderCache:
                 # The first render is being built by another reader.
                 self._cond.wait()
             self._state.building = True
+            epoch = self._state.epoch
             self._note_alive()
         try:
             body = self._render()
@@ -86,7 +91,7 @@ class RenderCache:
                 self.stats.failures += 1
                 self._cond.notify_all()
             raise
-        return self._publish(body)
+        return self._publish(body, epoch)
 
     def release(self, generation: Generation) -> None:
         with self._cond:
@@ -102,11 +107,12 @@ class RenderCache:
         whether it is out of date.
         """
         with self._cond:
-            self._state.stale_through = self._numbers
+            self._state.epoch += 1
 
     def is_fresh(self, generation: Generation) -> bool:
+        """No invalidation happened since ``generation``'s build started."""
         with self._cond:
-            return generation.number > self._state.stale_through
+            return generation.epoch == self._state.epoch
 
     def alive(self) -> int:
         """Generations alive now, including one being built."""
@@ -125,7 +131,7 @@ class RenderCache:
         state = self._state
         due = (
             state.newest is None
-            or state.newest.number <= state.stale_through
+            or state.newest.epoch != state.epoch
             or self._clock() - state.newest.created_at >= self.min_interval
         )
         if not due or state.building:
@@ -147,10 +153,12 @@ class RenderCache:
             self.stats.alive_high_water, self._alive_locked()
         )
 
-    def _publish(self, body: bytes) -> Generation:
+    def _publish(self, body: bytes, epoch: int) -> Generation:
         with self._cond:
             self._numbers += 1
-            generation = Generation(body, self._numbers, self._clock(), readers=1)
+            generation = Generation(
+                body, self._numbers, self._clock(), readers=1, epoch=epoch
+            )
             previous = self._state.newest
             if previous is not None and previous.readers > 0:
                 self._state.held.add(previous)
