@@ -621,7 +621,6 @@ def score_run(
     placement = _Placement(
         exposure,
         run.measured,
-        unit.clock_domain,
         unplaceable_counts=not any(
             i.cause_class in INJECTED_CLASSES for i in injections
         ),
@@ -820,17 +819,17 @@ class _Placement:
     lies in the exposure, wherever it starts: a claim over the whole run,
     from its priming on, is the plainest false positive there is. A claim
     with no window is placed only when the run injected nothing it could be
-    about; otherwise it is reported as unplaced."""
+    about; otherwise it is reported as unplaced. (A run with a finding on
+    another clock is no unit at all, so every window here is on its clock.)"""
 
     exposure: Sequence[Interval]
     measured: Interval
-    clock_domain: str | None
     unplaceable_counts: bool = False
 
     def placed(self, window: Window | None) -> bool:
         if window is None:
             return self.unplaceable_counts
-        if not self.exposure or not window.on_clock(self.clock_domain):
+        if not self.exposure:
             return False
         if window.end_ns < window.start_ns:
             return False
