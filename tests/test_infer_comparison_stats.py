@@ -490,10 +490,9 @@ def test_a_regression_rule_on_a_zero_waits_for_its_blockers() -> None:
     assert (result.gate.status, result.gate.reason) == ("not_evaluable", "unverified")
 
 
-def test_a_value_that_is_not_finite_blocks_the_gate() -> None:
-    # An infinite latency is the worst value there is; dropping it as
-    # missing would decide the gate on the blocks that are left.
-    candidate = [140.0, 143.0, 137.0, math.inf, math.inf, math.inf]
+def test_a_value_that_is_not_a_number_blocks_the_gate() -> None:
+    # Dropping it as missing would decide the gate on the blocks that are left.
+    candidate = [140.0, 143.0, 137.0, math.nan, math.nan, math.nan]
     result = _latency(
         candidate=candidate, gate=GateRule("non-inferiority", 0.05, "relative")
     )
@@ -502,6 +501,21 @@ def test_a_value_that_is_not_finite_blocks_the_gate() -> None:
         "not_evaluable",
         "non_finite_value",
     )
+
+
+@pytest.mark.parametrize("rule", ["non-inferiority", "significant"])
+def test_an_infinite_candidate_latency_is_the_worst_value(rule: str) -> None:
+    candidate = [101.0, 104.0, 98.0, math.inf, 102.0, 99.0]
+    result = _latency(candidate=candidate, gate=GateRule(rule, 0.05, "relative"))
+    assert result.gate is not None
+    assert (result.gate.status, result.gate.reason) == (
+        "fail",
+        "candidate_censored_worst",
+    )
+    # A baseline that never finished says nothing about the candidate.
+    baseline = [101.0, 104.0, 98.0, math.inf, 102.0, 99.0]
+    other = _latency(baseline=baseline, gate=GateRule(rule, 0.05, "relative"))
+    assert other.gate is not None and other.gate.reason == "non_finite_value"
 
 
 def test_the_run_gate_is_one_sided_at_97_5_percent() -> None:

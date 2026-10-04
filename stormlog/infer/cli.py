@@ -39,7 +39,12 @@ from .compare import (
     ComparisonSpec,
     compare_runs,
 )
-from .compare_metrics import metric_unit, vacuous_budget
+from .compare_metrics import (
+    RATE_METRICS,
+    metric_names,
+    metric_unit,
+    vacuous_budget,
+)
 from .compare_report import comparison_lines, comparison_report, error_report
 from .comparison_stats import INDEPENDENT, PAIRED, GateRule
 from .compatibility import CONFIG, MODES
@@ -1304,17 +1309,16 @@ def _emit_report(report: dict[str, Any], args: argparse.Namespace) -> None:
 
 
 def _comparison_spec(args: argparse.Namespace) -> ComparisonSpec:
-    fallbacks = dict(_fallback(item) for item in args.fallback)
-    named = {item.partition("=")[0] for item in args.gate}
-    for metric in fallbacks:
-        if metric not in named:
+    gates = tuple(_gate(item, args.min_complete_blocks) for item in args.gate)
+    fallbacks = tuple(_fallback(item) for item in args.fallback)
+    gated = {name for pattern, _rule in gates for name in metric_names(pattern)}
+    for pattern, _budget, _unit in fallbacks:
+        if not set(metric_names(pattern)) & gated:
             raise InferUsageError(
-                f"--fallback {metric}: names no --gate; give it the same METRIC "
-                "as the gate it belongs to"
+                f"--fallback {pattern}: matches no gated metric, so it would "
+                "never apply"
             )
-    gates = tuple(
-        _gate(item, args.min_complete_blocks, fallbacks) for item in args.gate
-    )
+    _check_overlap_rates(args, gates)
     return ComparisonSpec(
         confidence=args.confidence,
         design=args.design,
@@ -1331,12 +1335,34 @@ def _comparison_spec(args: argparse.Namespace) -> ComparisonSpec:
         evidence_floor=args.evidence_floor,
         cases=tuple(args.case) if args.case else None,
         seed=args.seed,
+        fallbacks=fallbacks,
     )
 
 
-def _gate(
-    text: str, min_blocks: int | None, fallbacks: dict[str, tuple[float, str]]
-) -> tuple[str, GateRule]:
+def _check_overlap_rates(
+    args: argparse.Namespace, gates: tuple[tuple[str, GateRule], ...]
+) -> None:
+    """Overlap segments count requests in flight, whose rate grows with latency."""
+    if not args.segment or args.segment_membership != "overlap":
+        return
+    rates = sorted(
+        {
+            name
+            for pattern, _rule in gates
+            for name in metric_names(pattern)
+            if name in RATE_METRICS
+        }
+    )
+    if rates:
+        raise InferUsageError(
+            f"--segment-membership overlap with a gate on {', '.join(rates)}: "
+            "requests in flight per second grow with latency, so a slower "
+            "candidate would look faster. Gate rates by arrival; overlap is "
+            "for latency and shares"
+        )
+
+
+def _gate(text: str, min_blocks: int | None) -> tuple[str, GateRule]:
     """``METRIC=RULE:BUDGET`` with the metric's own unit."""
     metric, _, rest = text.partition("=")
     rule, _, budget = rest.partition(":")
@@ -1351,23 +1377,15 @@ def _gate(
     vacuous = vacuous_budget(metric, amount)
     if vacuous is not None:
         raise InferUsageError(f"--gate {text!r}: {vacuous}")
-    fallback_budget, fallback_unit = fallbacks.get(metric, (None, None))
-    return metric, GateRule(
-        rule,
-        amount,
-        unit,
-        min_complete_blocks=min_blocks,
-        fallback_budget=fallback_budget,
-        fallback_unit=fallback_unit,
-    )
+    return metric, GateRule(rule, amount, unit, min_complete_blocks=min_blocks)
 
 
-def _fallback(text: str) -> tuple[str, tuple[float, str]]:
+def _fallback(text: str) -> tuple[str, float, str]:
     metric, _, rest = text.partition("=")
     budget, _, unit = rest.partition(":")
     if not metric or not budget or not unit:
         raise InferUsageError(f"--fallback {text!r}: use METRIC=BUDGET:UNIT")
-    return metric, (_number(budget, f"--fallback {text!r}"), unit)
+    return metric, _number(budget, f"--fallback {text!r}"), unit
 
 
 def _number(text: str, flag: str) -> float:
