@@ -554,7 +554,7 @@ def test_a_scrape_larger_than_the_whole_history_is_counted_oversized(
     """A history of 400 bytes holds no scrape: each is refused, counted as
     oversized rather than ok, and the watch could judge nothing."""
     with serve_metrics(FakeMetrics()) as base_url:
-        payload = watch_config(base_url, history={"seconds": 30, "bytes": 400})
+        payload = watch_config(base_url, history={"seconds": 60, "bytes": 400})
         outcome = _watch(tmp_path, payload, options=WatchOptions(duration_seconds=0.5))
     assert outcome.exit_code == 1
     assert "no_successful_scrape" in outcome.unsound
@@ -649,6 +649,7 @@ def test_history_evictions_are_counted_by_cause(tmp_path: Path) -> None:
             base_url,
             history={"seconds": 0.5},
             incident={"pre_seconds": 0.2, "post_seconds": 0.3},
+            default_health_triggers=False,
         )
         _watch(tmp_path, payload, options=WatchOptions(duration_seconds=1.5))
     stats = _report(tmp_path)["payload"]["stats"]
