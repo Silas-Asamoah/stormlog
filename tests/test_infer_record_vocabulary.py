@@ -18,7 +18,10 @@ from stormlog.infer.tokens import (
 
 
 def _keyword_literals(name: str, call: str | None = None) -> set[str]:
-    """String literals passed as ``name=`` in profile.py, to ``call`` if given."""
+    """Strings passed as ``name=`` in profile.py, to ``call`` if given.
+
+    A literal, or a module-level string constant named instead of one.
+    """
     tree = ast.parse(Path(profile.__file__).read_text(encoding="utf-8"))
     calls = [
         node
@@ -26,14 +29,19 @@ def _keyword_literals(name: str, call: str | None = None) -> set[str]:
         if isinstance(node, ast.Call)
         and (call is None or getattr(node.func, "id", None) == call)
     ]
-    return {
-        keyword.value.value
-        for node in calls
-        for keyword in node.keywords
-        if keyword.arg == name
-        and isinstance(keyword.value, ast.Constant)
-        and isinstance(keyword.value.value, str)
-    }
+    values = set()
+    for node in calls:
+        for keyword in node.keywords:
+            if keyword.arg != name:
+                continue
+            value = keyword.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                values.add(value.value)
+            elif isinstance(value, ast.Name):
+                constant = getattr(profile, value.id, None)
+                if isinstance(constant, str):
+                    values.add(constant)
+    return values
 
 
 def _classified_statuses() -> set[str]:

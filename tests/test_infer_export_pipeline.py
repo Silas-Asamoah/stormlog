@@ -1,6 +1,7 @@
 """The export pipeline: bounded, isolated, and closed in a fixed order."""
 
 import argparse
+import sys
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
@@ -475,6 +476,28 @@ def test_health_sources_become_metrics_and_none_stays_out(tmp_path: Path) -> Non
     pipeline.close(1.0)
 
 
+def test_the_close_reads_the_health_sources_once_more(tmp_path: Path) -> None:
+    # The frozen values are the sources' values at the end, not at the
+    # poller's last tick, up to a second earlier.
+    source = _Source()
+    pipeline = ExportPipeline(
+        ExportConfig(prometheus_textfile_dir=tmp_path, prometheus_slot="t"),
+        LABELS,
+        health=[("watch", source.health_metrics())],
+    )
+    pipeline.attach_health("watch", source)
+    source.values = {"depth": 1}
+    pipeline.start(started_at=1_700_000_000.0)
+    assert _wait_for(
+        lambda: _exposition(pipeline).matching("stormlog_watch_depth_bytes") == [1]
+    )
+    source.values = {"depth": 2}
+    pipeline.close(2.0)
+    text = (tmp_path / "stormlog-t.prom").read_text()
+    assert check_exposition(text).value("stormlog_watch_depth_bytes") == 2
+    pipeline.stop_serving()
+
+
 def test_a_failing_health_source_is_counted_not_raised(tmp_path: Path) -> None:
     class Broken(_Source):
         def health(self) -> Mapping[str, HealthValue]:
@@ -636,31 +659,39 @@ class _RecordingLock:
         return self.inner.__exit__(*exc)
 
 
+# Audit events that are I/O, from the thread under test while it records.
+_IO_EVENTS = ("open", "os.", "socket.", "subprocess.", "shutil.", "time.sleep")
+_audited: dict[str, Any] = {"thread": None, "events": []}
+
+
+def _audit(event: str, _args: tuple[Any, ...]) -> None:
+    if threading.get_ident() == _audited["thread"] and event.startswith(_IO_EVENTS):
+        _audited["events"].append(event)
+
+
+sys.addaudithook(_audit)  # audit hooks cannot be removed; this one is idle
+
+
 def test_observe_takes_no_registry_lock_and_does_no_io(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import builtins
     import os
-    import socket
 
     pipeline = ExportPipeline(ExportConfig(prometheus_textfile_dir=tmp_path), LABELS)
     lock = _RecordingLock(pipeline.registry._lock)
     pipeline.registry._lock = lock  # type: ignore[assignment]
-
-    def no_io(*_args: object, **_kwargs: object) -> Any:
-        raise AssertionError("observe did I/O")
-
+    unaudited: list[str] = []
     with monkeypatch.context() as patched:
-        for target, name in (
-            (builtins, "open"),
-            (os, "write"),
-            (socket.socket, "send"),
-            (socket.socket, "sendall"),
-            (socket.socket, "connect"),
-        ):
-            patched.setattr(target, name, no_io)
-        for _ in range(10):
-            pipeline.observe(_request(), {"chunk_summary": ((0,) * 15, 0.0)})
+        # Not audited by Python: a write to a descriptor, and a sleep.
+        patched.setattr(os, "write", lambda *_a: unaudited.append("os.write"))
+        patched.setattr(time, "sleep", lambda *_a: unaudited.append("time.sleep"))
+        _audited.update(thread=threading.get_ident(), events=[])
+        try:
+            for _ in range(10):
+                pipeline.observe(_request(), {"chunk_summary": ((0,) * 15, 0.0)})
+        finally:
+            _audited["thread"] = None
+    assert _audited["events"] == [] and unaudited == []
     assert threading.get_ident() not in lock.takers
     assert pipeline.queue.stats().accepted == 10
     assert pipeline.summary()["internal_errors"]["observe"] == 0
