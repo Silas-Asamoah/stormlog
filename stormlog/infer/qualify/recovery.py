@@ -263,28 +263,42 @@ class NoEvents:
 
 
 class MedianWithin:
-    """The interval's first sample and its median lie in [low, high]. A
-    hold that began with an outside sample would end the effect while it
-    was still under way: a short dip is a minority of a long hold."""
+    """The interval's first sample, the median of its first ``lead_ns``
+    and its median lie in [low, high]. A hold that began inside a dip, or
+    just before one, would end the effect while it was still under way: a
+    dip shorter than half the hold is a minority of it. The lead is the
+    window the onset was found in, so a hold begins only where a window
+    looks recovered at the resolution the dip was seen at."""
 
     def __init__(
         self,
         points: Sequence[Point],
         low: float = float("-inf"),
         high: float = float("inf"),
+        lead_ns: int = 0,
     ) -> None:
         self.times = [time for time, _value in points]
         self.values = [value for _time, value in points]
         self.low = low
         self.high = high
+        self.lead_ns = lead_ns
 
     def holds(self, start_ns: int, end_ns: int) -> bool:
         first = bisect.bisect_left(self.times, start_ns)
         last = bisect.bisect_right(self.times, end_ns)
         values = self.values[first:last]
-        if not values or not self.low <= values[0] <= self.high:
+        if not values or not self._within(values[0]):
             return False
-        return self.low <= statistics.median(values) <= self.high
+        lead_end = bisect.bisect_left(
+            self.times, min(start_ns + self.lead_ns, end_ns), first, last
+        )
+        lead = self.values[first:lead_end]
+        if lead and not self._within(statistics.median(lead)):
+            return False
+        return self._within(statistics.median(values))
+
+    def _within(self, value: float) -> bool:
+        return self.low <= value <= self.high
 
     def change_points(self) -> Sequence[int]:
         return self.times
@@ -648,8 +662,14 @@ def _kv_criteria(context: Context) -> list[Criterion]:
 
 
 def _cache_criteria(context: Context) -> list[Criterion]:
-    threshold = context.thresholds.cached_recovered_at
-    return [MedianWithin(context.signals.cached_fraction, low=threshold)]
+    thresholds = context.thresholds
+    return [
+        MedianWithin(
+            context.signals.cached_fraction,
+            low=thresholds.cached_recovered_at,
+            lead_ns=thresholds.window_ns,
+        )
+    ]
 
 
 def _cadence_criteria(context: Context, *, chunks: bool) -> list[Criterion]:
