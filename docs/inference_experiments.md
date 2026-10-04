@@ -99,8 +99,11 @@ a prelude that fails marks the block's runs `prelude_failed`. Each run then:
 3. starts the arm's treatments, and waits for each one's ready file;
 4. runs the workload steps in order, each to its exit code or its timeout;
 5. checks each treatment is still running, then stops it with its signal;
-6. describes the server again (`describe-after.json`) and attaches that to
-   each `infer` artifact the run made;
+6. describes the server again (`describe-after.json`), and gives each
+   `infer` artifact the run made both descriptions: the `before` one, unless
+   its workload step passed it already with `--describe-server`, then the
+   `after` one; and, with a verified model, the `infer.model_identity`
+   record (see Model identity);
 7. stops the server's whole process group and checks nothing is left;
 8. checks the promised artifacts exist and are labelled with this run's
    experiment, arm and block, writes `commands.sh`, `run.json` and, last,
@@ -214,10 +217,15 @@ exactly them. The plan's `server.model` says how:
 
 After each run the files are checked again, by size, modification time and
 inode; a change makes the run `protocol_failure: model_changed`. Each run's
-`model_identity.json` records the files and their digests, and the
-runner's server descriptions carry the evidence (`pinned_commit_verified` or
-`staged_snapshot_verified`), bound to the server's process. Only this
-evidence verifies a model's identity in a comparison.
+`model_identity.json` records the files and their digests, and the runner
+appends an `infer.model_identity` record to each artifact: the verified
+model, with its evidence (`pinned_commit_verified` or
+`staged_snapshot_verified`), bound to the API server it launched by boot,
+PID and start ticks, read as it started. Only this record verifies a model's
+identity in a comparison, and only for the server the run's `before`
+description shows; a description file alone never does, whatever evidence
+it names. Off Linux the start ticks cannot be read, so the record is not
+written and the identity stays unverified.
 
 Without `server.model`, `{model}` is the plan's `server.model.name` (or
 empty), and the model's identity stays unverified.
