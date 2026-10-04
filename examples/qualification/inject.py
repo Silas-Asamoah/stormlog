@@ -76,7 +76,7 @@ from .fake_engine.process import _environment
 from .neighbor import Neighbor
 from .outcomes import Slo, count_outcomes
 from .plan import EpisodePlan, Plan
-from .pulser import Pulser, Target
+from .pulser import Pulser, Target, handle_termination
 from .reference import ReferenceChannel
 from .run_dir import RunDirectory
 from .victim import read_marker
@@ -222,7 +222,9 @@ class InjectionRun:
         the run, every episode it attempted is written and published: an
         episode whose actuation raised is not actuated, and a run that fails
         or is interrupted records why in its run record (``self.failure``).
-        An interruption is re-raised once the run is published."""
+        An interruption is re-raised once the run is published: SIGTERM and
+        SIGHUP become one from the start, not only once a pulser exists."""
+        handle_termination()
         directory = self.directory.create()
         (directory.truth / "plan.json").write_text(
             json.dumps(self.plan.to_record(), indent=2, sort_keys=True)

@@ -192,7 +192,7 @@ class Pulser:
             self._watchdog = _start_watchdog(target, max_pulse_seconds)
         atexit.register(self.close)
         _LIVE.add(self)
-        _handle_termination()
+        handle_termination()
 
     @property
     def watchdog_pid(self) -> int | None:
@@ -384,10 +384,12 @@ _LIVE: weakref.WeakSet[Pulser] = weakref.WeakSet()
 _HANDLED: set[int] = set()
 
 
-def _handle_termination() -> None:
-    """On SIGTERM or SIGHUP, continue every target, then exit: their default
-    action would end the harness with no ``finally`` and no ``atexit``.
-    Handlers can be set only from the main thread."""
+def handle_termination() -> None:
+    """On SIGTERM or SIGHUP, continue every target, then exit
+    (``SystemExit``): their default action would end the harness with no
+    ``finally`` and no ``atexit``. A run installs them as it starts, before
+    any pulser exists, so that it is published however it ends. Handlers
+    can be set only from the main thread."""
     if threading.current_thread() is not threading.main_thread():
         return
     for signum in (signal.SIGTERM, signal.SIGHUP):
@@ -415,5 +417,6 @@ __all__ = [
     "ENGINE_TITLE",
     "WORKER_TITLE",
     "check_schedule",
+    "handle_termination",
     "discover_roles",
 ]

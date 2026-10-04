@@ -709,7 +709,10 @@ whose actuation raised (a stop that never took, a target gone) is published
 as `not_actuated` with the error. A run that fails part way (the victim
 exiting before it measures, say) or is interrupted publishes every episode it
 attempted, the rest as skipped, with the reason as the run record's protocol
-failure. `inject` then exits 1, or 130 when interrupted.
+failure. `inject` then exits 1, or 130 when interrupted by Ctrl+C. SIGTERM and
+SIGHUP (a job's timeout, an ssh disconnect) interrupt it the same way from the
+moment the run starts, whether or not any pulse has run, and it exits
+128 plus the signal's number.
 
 **The run directory** is named by an opaque label, `q221-<16 hex>`, that says
 nothing about its episodes:
