@@ -564,6 +564,45 @@ def test_a_probe_that_does_not_finish_is_retried_once_on_a_fresh_server(
     assert second["order_broken"] is True
 
 
+def _survivor_on_calls(monkeypatch: pytest.MonkeyPatch, *calls: int) -> None:
+    """verify_cleanup finds a survivor on these calls (1-based), in the order
+    the runner checks: within a run, its treatments, then its server."""
+    from stormlog.infer import experiment
+    from stormlog.infer.experiment_process import Cleanup
+
+    real = experiment.verify_cleanup
+    seen: list[int] = []
+
+    def verify(*args: Any, **kwargs: Any) -> Cleanup:
+        seen.append(1)
+        result = real(*args, **kwargs)
+        if len(seen) in calls:
+            return Cleanup(False, result.method, ({"pid": 1},))
+        return result
+
+    monkeypatch.setattr(experiment, "verify_cleanup", verify)
+
+
+def test_a_probe_retry_never_starts_beside_an_unverified_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # fable-213's repro: the probe times out, and the server's group leaves
+    # a survivor; a second server must not start beside it.
+    from stormlog.infer import experiment
+    from stormlog.infer.server_probe import SERVER_INFO, ProbeAnswer, ServerProbe
+
+    def probe(endpoint: str, **_: Any) -> ServerProbe:
+        answer = ProbeAnswer(SERVER_INFO, "timeout")
+        return ServerProbe("before", "auto", endpoint, 0, {SERVER_INFO: answer})
+
+    monkeypatch.setattr(experiment, "probe_server", probe)
+    _survivor_on_calls(monkeypatch, 1)
+    document = _plan(_port(), blocks=1)
+    document["order"] = {"kind": "explicit", "blocks": [["off", "watch"]]}
+    (only,) = _run(tmp_path, document)
+    assert only["reasons"] == ["probe_incomplete", "collector_cleanup_unverified"]
+
+
 def test_the_bundle_is_scanned_for_the_plans_secrets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
