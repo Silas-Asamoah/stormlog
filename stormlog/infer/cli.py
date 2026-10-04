@@ -799,6 +799,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
         )
     with _usage_errors():
         profiler = InferenceProfiler(_profile_config(args), on_warning=_print_warning)
+        profiler.prepare()
     _warn_about_unjudgeable_criteria(profiler.config)
     report = profiler.run()
     print(format_analysis_text(report))

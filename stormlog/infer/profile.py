@@ -155,7 +155,6 @@ class InferenceProfiler:
             forbidden_paths=[Path(config.output_path)],
             on_warning=self.on_warning,
         )
-        pipeline.prepare()
         return pipeline
 
     def _build_vllm_scraper(self) -> VllmMetricsScraper | None:
@@ -198,9 +197,20 @@ class InferenceProfiler:
                     seed=config.seed,
                 )
 
+    def prepare(self) -> None:
+        """Take what the run will hold, before it sends anything.
+
+        That is the textfile's slot, so a clash is an ``ExportUsageError``
+        here rather than mid-run. ``run`` does it too; building a profiler
+        takes nothing, so one that never runs holds nothing.
+        """
+        if self.export is not None:
+            self.export.prepare()
+
     def run(self) -> dict[str, Any]:
         """Run profiling and return an aggregate report."""
         try:
+            self.prepare()
             return asyncio.run(self._run_async())
         finally:
             self.request_executor.shutdown(wait=True, cancel_futures=True)
