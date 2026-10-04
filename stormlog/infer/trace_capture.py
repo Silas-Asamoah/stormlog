@@ -596,13 +596,18 @@ async def _finish_timer(timer: asyncio.Task[None] | None, window: TraceWindow) -
     """Cancel a time bound that has not fired; let one that is stopping finish.
 
     ``asyncio.wait`` does not raise the timer's own cancellation, while a
-    cancellation of the caller still goes through.
+    cancellation of the caller still goes through. What the timer raised, a
+    warning that failed say, is raised here, as it would be from the phase;
+    the window is still closed and recorded.
     """
     if timer is None:
         return
     if window.stop_reason is None:
         timer.cancel()
     await asyncio.wait({timer})
+    error = None if timer.cancelled() else timer.exception()
+    if error is not None:
+        raise error
 
 
 def _worker_traces(directory: Path) -> list[Path]:
