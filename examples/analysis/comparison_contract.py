@@ -105,7 +105,7 @@ def gate(rule: str, budget: float, unit: str, **extra: Any) -> dict[str, Any]:
 
 def build() -> list[dict[str, Any]]:
     cases = []
-    # A 40% latency regression fails a 5% non-inferiority budget (Astra R3 on #221).
+    # A 40% latency regression fails a 5% non-inferiority budget (the units contract with #221).
     base = [100.0, 102.0, 98.0, 101.0, 99.0, 100.0]
     slow = [140.0, 143.0, 137.0, 141.0, 138.5, 140.5]
     cases.append(
