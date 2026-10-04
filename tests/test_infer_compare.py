@@ -26,6 +26,7 @@ def _fields(**overrides: Any) -> dict[str, RunField]:
         "gpu.name": "NVIDIA A30",
         "gpu.driver_version": "580.82.07",
         "workload.spec_digest": "s" * 64,
+        "workload.realization_digest": "r" * 64,
         # The server answered /server_info, so its configuration was read.
         "scope.vllm_config": True,
         "vllm_config/scheduler_config/max_num_seqs": 256,
@@ -212,6 +213,23 @@ def test_an_empty_segment_cannot_be_gated() -> None:
     comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
     gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
     assert gate is not None and gate.reason == "empty_case"
+
+
+def test_a_block_whose_runs_sent_different_workloads_is_set_aside() -> None:
+    # Pairing assumes both runs of a block sent the same realization (the
+    # block's seed); a block that did not is no pair.
+    baseline, candidate = _arms(SLOWER)
+    other = _fields(**{"workload.realization_digest": "other"})
+    candidate[1] = _run("candidate", 1, SLOWER[1], fields=other, started=3)
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    reasons = {
+        (item["arm"], item["run"]): item["reasons"] for item in comparison.excluded
+    }
+    assert reasons == {
+        ("baseline", baseline[1].name): ["block_realization_differs"],
+        ("candidate", candidate[1].name): ["block_realization_differs"],
+    }
+    assert comparison.cases[CASE]["metrics"]["client.e2e.p95"].n_pairs == 5
 
 
 def test_a_block_with_two_runs_of_an_arm_is_refused() -> None:

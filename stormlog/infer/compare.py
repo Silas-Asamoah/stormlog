@@ -281,6 +281,8 @@ def compare_runs(
     compatibility, unverified_pairs = _compatibility(usable, spec)
     observer_issues = _observer_contract(usable, spec)
     design = _design(arms, spec)
+    if design == PAIRED:
+        excluded += _unpaired_blocks(arms, spec, excluded)
     cases = {
         case_id: _case(
             case_id, arms, excluded, design, spec, compatibility, observer_issues
@@ -327,6 +329,47 @@ def _excluded(
                         }
                     )
     return excluded
+
+
+def _unpaired_blocks(
+    arms: Mapping[str, list[RunSummary]],
+    spec: ComparisonSpec,
+    excluded: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Blocks whose two runs sent different workload realizations.
+
+    A pair stands for one block's conditions: the same realization (the
+    block's seed) in both arms. Runs already set aside are left alone.
+    """
+    blocks: dict[str, dict[str, RunSummary]] = {}
+    for arm, runs in arms.items():
+        for run in _usable(runs):
+            blocks.setdefault(_block_key(run), {})[arm] = run
+    found = []
+    for pair in blocks.values():
+        if len(pair) != 2 or _same_realization(pair[BASELINE], pair[CANDIDATE]):
+            continue
+        for arm, run in pair.items():
+            for case_id in _case_ids(arms, spec):
+                if not _set_aside(excluded, run, case_id):
+                    found.append(
+                        {
+                            "arm": arm,
+                            "run": run.name,
+                            "case": case_id,
+                            "reasons": ["block_realization_differs"],
+                        }
+                    )
+    return found
+
+
+def _same_realization(first: RunSummary, second: RunSummary) -> bool:
+    """Unknown on either side is not shown different."""
+    a = first.fields.get("workload.realization_digest")
+    b = second.fields.get("workload.realization_digest")
+    if a is None or b is None or not (a.known and b.known):
+        return True
+    return bool(a.value == b.value)
 
 
 def _usable(runs: list[RunSummary]) -> list[RunSummary]:
