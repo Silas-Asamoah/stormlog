@@ -98,8 +98,14 @@ Kinds that metrics alone cannot decide answer `requires_hook`,
 `stormlog.infer.diagnosis_loop.engine_loop_gap(records, config)` reads one
 engine epoch's raw [execution hook](vllm_execution.md) records (the
 `scheduled`, `completed`, `heartbeat` and, from hooks that record them,
-`pause` records, in `seq` order) and returns a `SignalValue` for the longest
-stretch in which the engine made no progress while it had work it could run.
+`pause` records, in `seq` order) and returns a `SignalValue` for its stalls:
+stretches in which the engine made no progress while it had work it could
+run. `value` is the stall furthest over its own limit, or the longest when
+none is over, so a long stall against a lenient limit can be reported below
+a shorter one against a strict limit. Only stalls of at least the lowest
+floor are compared with a baseline, which keeps a window of fast steps
+linear in its steps; a window in which every step is that slow takes time in
+proportion to its steps times the steps in a baseline window.
 It needs no import, so an online trigger can run it on the records it tails;
 the diagnoser runs the same rules on imported steps. `LoopGapConfig` refuses
 a threshold override with a key the table lacks, a value that is not a

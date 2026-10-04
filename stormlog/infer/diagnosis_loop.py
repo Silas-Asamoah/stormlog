@@ -2,8 +2,8 @@
 
 ``engine_loop_gap`` reads one engine epoch's raw hook records
 (``stormlog.vllm_hook/1``; see ``docs/vllm_execution.md``) and reports the
-longest stretch in which the engine made no progress while it had work it
-could run. The same rules serve an online trigger, which tails the raw log,
+stretch in which the engine made no progress while it had work it could run
+that is furthest over its own limit. The same rules serve an online trigger, which tails the raw log,
 and the offline diagnoser, which feeds imported steps back through the same
 adapter, so the two cannot disagree about what a stall is.
 
@@ -212,7 +212,8 @@ def _int(record: Mapping[str, Any] | None, key: str) -> int | None:
 def engine_loop_gap(
     records: Sequence[Mapping[str, Any]], config: LoopGapConfig | None = None
 ) -> SignalValue:
-    """The longest stall with ready work in one epoch's records, in seq order."""
+    """The stall with ready work furthest over its limit in one epoch's
+    records, in seq order: the longest when none is over."""
     config = config or LoopGapConfig()
     reasons = record_reasons(records)
     if (config.status or {}).get("capped"):
@@ -728,7 +729,8 @@ def _worst(
     """The stall furthest over its own limit, or the longest when none is.
 
     No stall shorter than the lowest floor can reach its limit, so only
-    longer ones are ranked; this keeps a long window linear in its steps."""
+    longer ones are ranked: a window of fast steps stays linear in its
+    steps, while one where every step is that slow ranks each of them."""
     if not stalls:
         return None
     floor, _ = resolve_threshold(LOOP_STALL_FLOOR_NS, config.thresholds)
