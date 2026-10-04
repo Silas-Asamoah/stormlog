@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import replace
 from typing import Callable
 
@@ -21,6 +22,7 @@ from stormlog.infer.qualify.recovery import (
     GapStats,
     MostlyWithin,
     NoEvents,
+    Point,
     Signals,
     Thresholds,
     Timing,
@@ -725,10 +727,75 @@ def test_the_gauges_mean_slack_is_relative_on_a_wide_band() -> None:
     assert isinstance(empty_gauge, MostlyWithin) and empty_gauge.mean_ceiling == 1.0
 
 
+def _half_second(start: int, end: int, value: Callable[[int], float]) -> list[Point]:
+    return [(half * S // 2, value(half)) for half in range(2 * start, 2 * end)]
+
+
+def test_the_gauge_ceiling_alone_refuses_a_spike_beyond_it() -> None:
+    # rev-220-b's delta-3 closure, G6: with the gauge's 2x ceiling removed
+    # no test failed, since every spike fixture also moved the mean. Here
+    # one scrape of 13 (over the ceiling of 12) among 20 at 3 keeps the
+    # mean at 3.5, under 1.25x the baseline's 3, and one outside sample is
+    # within the chance allowance: only the ceiling refuses it.
+    waits = [(tenth * S // 10, 0.08) for tenth in range(600)]
+    baseline = _half_second(0, 45, lambda half: float(half % 7))
+    spike = _half_second(50, 60, lambda half: 13.0 if half == 111 else 3.0)
+    calm = _half_second(50, 60, lambda half: 6.0 if half == 111 else 3.0)
+    for hold, holds in ((spike, False), (calm, True)):
+        signals = Signals(in_flight=None, waits=waits, waiting=baseline + hold)
+        _waits, gauge = _queue_criteria_of(
+            context(signals, Actions(first_send_ns=48 * S))
+        )
+        assert gauge.holds(50 * S, 60 * S) is holds
+
+
+def test_the_chance_allowance_alone_refuses_too_many_mild_waits() -> None:
+    # G6: MostlyWithin's allowance, set unlimited, survived. 15 of 100
+    # waits just over the baseline's p95 (0.09 s against 0.086 s) are too
+    # many for chance (the 99% point of Binomial(100, 0.05) is 11), yet
+    # under the ceiling (0.172 s) and the mean bound; 8 are within chance.
+    baseline = [(tenth * S // 10, 0.08 + 0.001 * (tenth % 7)) for tenth in range(450)]
+    waiting = every_second(0, 60, lambda s: float(s % 7))
+    for mild, holds in ((15, False), (8, True)):
+        hold = [
+            (S * 50 + tenth * S // 10, 0.09 if 0 < tenth <= mild else 0.083)
+            for tenth in range(100)
+        ]
+        signals = Signals(in_flight=None, waits=baseline + hold, waiting=waiting)
+        waits_rule, _gauge = _queue_criteria_of(
+            context(signals, Actions(first_send_ns=48 * S))
+        )
+        assert waits_rule.holds(50 * S, 60 * S) is holds
+
+
 def _queue_criteria_of(ctx: Context) -> list[Criterion]:
     from stormlog.infer.qualify.recovery import _queue_criteria
 
     return _queue_criteria(ctx)
+
+
+def test_the_long_gap_allowance_alone_refuses_too_many_long_gaps() -> None:
+    # G6: with the allowance unlimited no test failed. A baseline with 10
+    # long gaps in 2,000 (twice its p99 is 42 ms; the cap 60 ms) allows
+    # about 7 in a 500-gap hold. Nine 50 ms gaps among 20 ms ones are under
+    # the cap, keep the mean under 1.25x and the p95 count within chance:
+    # only the allowance refuses them. Five are fine.
+    baseline = GapStats(
+        count=2000, mean=0.020, p95=0.021, p99=0.021, long_count=10, p999=0.2
+    )
+    for long, holds in ((9, False), (5, True)):
+        gaps = [
+            0.05 if index % 50 == 25 and index < 50 * long else 0.02
+            for index in range(500)
+        ]
+        steps = list(itertools.accumulate((round(g * S) for g in gaps), initial=0))
+        cadence = CadenceWithin(
+            Signals(in_flight=ALWAYS, step_starts=steps).busy_step_gaps(),
+            baseline,
+            Thresholds(),
+            ALWAYS,
+        )
+        assert cadence.holds(0, steps[-1]) is holds
 
 
 def test_a_hold_needs_its_minimum_samples() -> None:

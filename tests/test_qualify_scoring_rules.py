@@ -339,6 +339,20 @@ def test_a_fault_claim_on_another_clock_counts_as_false() -> None:
     assert not summary.fpr_passes and summary.excluded_negatives == {}
 
 
+def test_an_off_clock_claim_counts_even_where_it_seems_to_miss_the_exposure() -> None:
+    # rev-220-b's delta-3 closure, G6: E2's rule (an off-clock window is
+    # placed) survived its removal, because the fixture's window also lay
+    # in the exposure. This one lies in the priming on its own clock: off
+    # the run's, it can't be compared, so it counts; on the run's clock the
+    # same window is priming and doesn't.
+    from tests.test_qualify_scoring import null_run
+
+    claim = finding("s", "host_stall", 1, component="engine_core", window=(10, 20))
+    assert run_of([null_run()], diagnosis(claim)).false_claims == ()
+    claim["window"]["clock_domain"] = "node/boot/UNIX_EPOCH_NS"
+    assert run_of([null_run()], diagnosis(claim)).false_claims == (claim["id"],)
+
+
 def test_a_finding_off_the_clock_never_takes_a_flagged_run_out() -> None:
     # rev-220-b's delta 2, E2: one off-clock info observation made its run
     # no unit, so the one run with a false claim left the count: 1 of 60
