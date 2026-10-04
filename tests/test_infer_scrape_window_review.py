@@ -135,6 +135,29 @@ def test_an_interior_failed_scrape_does_not_blank_the_window() -> None:
     assert (signal.detail["scrapes"], signal.detail["failed_scrapes"]) == (4, 1)
 
 
+def test_a_failed_scrape_s_interval_does_not_order_the_window() -> None:
+    # The failed scrape timed out after 60 s, so its interval would place a
+    # midpoint at 31 s, after the next scrape's; it sampled nothing, so its
+    # stamp orders the window and its midpoint does not.
+    texts = [exposition(counters={PREEMPTIONS: float(n)}) for n in (1, 2, 4)]
+    window = [
+        scrape(texts[0], 0.0),
+        scrape(None, 1.0, duration_ms=60_000),
+        scrape(texts[1], 30.0),
+        scrape(texts[2], 62.0),
+    ]
+    check = check_window(window)
+    assert (check.sufficient, check.reasons, check.failed) == (True, (), 1)
+    assert counter_window(window, PREEMPTIONS).delta == 3.0
+    assert evaluate_signal("kv_preemption_pressure", window).exceeds is True
+
+
+def test_a_failed_scrape_stamped_out_of_order_still_refuses_the_window() -> None:
+    window = series([exposition(counters={PREEMPTIONS: 1.0})] * 3)
+    window.insert(2, scrape(None, 0.5))
+    assert REASON_OUT_OF_ORDER in check_window(window).reasons
+
+
 def test_a_failed_boundary_scrape_still_blanks_the_window() -> None:
     texts: list[str | None] = [exposition(gauges={WAITING: 9})] * 3
     for window in (series([None, *texts]), series([*texts, None])):

@@ -178,7 +178,7 @@ def _window_reasons(
         reasons.append(REASON_SCRAPE_FAILED)
     if len(ok) < min_scrapes:
         reasons.append(REASON_TOO_FEW_SCRAPES)
-    reasons.extend(order_reasons(scrapes))
+    reasons.extend(order_reasons(scrapes, sampled=ok))
     reasons.extend(window_identity_reasons(ok))
     reasons.extend(_engine_reasons(ok, engine))
     return reasons
@@ -195,27 +195,33 @@ def _engine_reasons(ok: Sequence[VllmScrapeRecord], engine: str | None) -> list[
     return [REASON_ENGINE_REQUIRED] if several else []
 
 
-def order_reasons(scrapes: Sequence[VllmScrapeRecord]) -> list[str]:
+def order_reasons(
+    scrapes: Sequence[VllmScrapeRecord],
+    sampled: Sequence[VllmScrapeRecord] | None = None,
+) -> list[str]:
     """Scrapes must be in strictly increasing stamp order: an earlier stamp
     after a later one is out of order, and two at one instant give a window
-    of no length. Durations run between sample midpoints, so a later stamp
-    whose midpoint is no later (a quick scrape inside a slow one's interval)
-    is out of order too: which sampled first is unknown."""
+    of no length. Durations run between sample midpoints, so of the scrapes
+    that sampled (``sampled``, by default all of them) a later one whose
+    midpoint is no later (a quick scrape inside a slow one's interval) is
+    out of order too: which sampled first is unknown. A failed scrape has no
+    sample, so its midpoint orders nothing."""
     pairs = list(zip(scrapes, scrapes[1:]))
+    sampled = scrapes if sampled is None else sampled
     reasons = []
-    if any(_inverted(a, b) for a, b in pairs):
+    inverted = any(b.observed_at_ns < a.observed_at_ns for a, b in pairs)
+    if inverted or any(map(_sampled_out_of_order, sampled, sampled[1:])):
         reasons.append(REASON_OUT_OF_ORDER)
     if any(b.observed_at_ns == a.observed_at_ns for a, b in pairs):
         reasons.append(REASON_DUPLICATE_TIME)
     return reasons
 
 
-def _inverted(a: VllmScrapeRecord, b: VllmScrapeRecord) -> bool:
-    """``b`` is stamped before ``a``, or after it with no later midpoint."""
-    if b.observed_at_ns == a.observed_at_ns:
-        return False  # a duplicate, not an inversion
-    stamped_before = b.observed_at_ns < a.observed_at_ns
-    return stamped_before or sum(sample_interval(b)) <= sum(sample_interval(a))
+def _sampled_out_of_order(a: VllmScrapeRecord, b: VllmScrapeRecord) -> bool:
+    """``b`` is stamped after ``a`` with no later sample midpoint."""
+    if b.observed_at_ns <= a.observed_at_ns:
+        return False  # a duplicate, or an inversion of stamps
+    return sum(sample_interval(b)) <= sum(sample_interval(a))
 
 
 def window_identity_reasons(ok: Sequence[VllmScrapeRecord]) -> list[str]:
