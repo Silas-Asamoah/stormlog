@@ -1447,10 +1447,9 @@ def _run_level_blocker(
     """Why the run-level claim cannot be made, before any run is judged."""
     gate = request.gate
     assert gate is not None
-    if request.unavailable is not None:
-        return request.unavailable
-    if blocks is None:
-        return "fraction_needs_blocks"
+    missing = _missing_evidence(request, baseline, blocks)
+    if missing is not None:
+        return missing
     counts = _measured_counts(request.trials, baseline, candidate)
     if counts is None:
         return "requests_per_run_unrecorded"
@@ -1464,6 +1463,22 @@ def _run_level_blocker(
     # n of n runs reach the share only when (alpha / 2) ** (1 / n) >= q.
     if (1 - request.confidence) / 2 < RUN_PASS_SHARE ** len(candidate):
         return "too_few_runs_for_claim"
+    return None
+
+
+def _missing_evidence(
+    request: _Request,
+    baseline: Sequence[RunValue],
+    blocks: tuple[Sequence[Hashable], Sequence[Hashable]] | None,
+) -> str | None:
+    """What the claim lacks: the metric, blocks to pair runs, or a baseline."""
+    if request.unavailable is not None:
+        return request.unavailable
+    if blocks is None:
+        return "fraction_needs_blocks"
+    if all(_bounds(value) is None for value in baseline):
+        # Nothing to judge the candidate against: not the candidate's fault.
+        return "baseline_unmeasured"
     return None
 
 
