@@ -221,6 +221,7 @@ to the end of its drain), not once for the run:
 | `vllm_spans` | A span joined to one of its requests | Spans joined for at least 99% of its accepted requests, and no decode or receiver errors in the run |
 | `trace` | A trace started for it | The trace stopped cleanly, wrote a file, and that file was imported |
 | `execution` | An iteration of the hook in it | No dropped records, errors or disk cap in any epoch |
+| `treatment:<name>` | Ready before the workload (from the experiment runner's `infer.treatments` record) | Still running when the workload ended, and stopped as expected; judged over the whole run |
 
 The execution hook is `requested` when the client imports its log
 (`--vllm-execution-dir`), and also when the `before` description shows it
