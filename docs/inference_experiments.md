@@ -347,23 +347,24 @@ is a label to comparisons.
 The mark search cannot see into a process whose environment it cannot
 read (as another user; on macOS, `psutil` cannot read a platform binary's;
 in a container without `CAP_SYS_PTRACE`, root cannot read a non-dumpable
-process's), nor tell a process that exec'd with an empty environment from
-an unmarked one. Each cleanup records `mark_search`: how many environments
-it could not read (`complete` only when it read them all), and `blind`,
-the processes it could not judge that may be the launch's. Any `blind`
-process keeps the cleanup from verifying, and it is never killed, since it
-may be another's. A process is not the launch's when another user runs
-it, when it started more than 2 s before the launch, when its parent is
-neither the runner nor `init` (an escapee whose parent died is adopted by
-`init`), or, on macOS, when it is a system executable (`/System/`,
-`/usr/libexec/`, `/usr/sbin/`) that launchd started. An orphan adopted by a
+process's), nor tell a process whose environment holds no variable (emptied,
+or overwritten in place by a process title, as `setproctitle` does) from an
+unmarked one. Each cleanup records `mark_search`: how many environments it
+could not read (`complete` only when it read them all), and `blind`, each
+process it could not judge that may be the launch's, by PID and start time.
+Any `blind` process keeps the cleanup from verifying, holds a resume like a
+survivor, and is never killed, since it may be another's. A process is not
+the launch's when another user runs it (so anything run under `sudo` is
+excluded too, and `sudo` strips the mark anyway), when it started more than
+2 s before the launch, or when its parent is neither the runner nor `init`
+(an escapee whose parent died is adopted by `init`). Start times are
+compared in the processes' own clock (ticks since boot, or `psutil`'s
+creation time), so a wall-clock step does not matter. An orphan adopted by a
 subreaper other than `init` is missed, and so is a descendant that exec'd
-with a fresh, non-empty environment and left the group, the session and
-the remembered tree. vLLM, `pip` and `nvidia-smi` keep their environment. Second, a
-descendant that execs with a fresh environment drops the mark. It is still
-found if it stayed in the group or the session, or was remembered by PID
-and start time, but not otherwise. vLLM, `pip` and `nvidia-smi` keep their
-environment.
+with a fresh, non-empty environment and left the group, the session and the
+remembered tree. vLLM, `pip` and `nvidia-smi` keep their environment. On a
+shared Mac, any orphaned platform binary of the same user started during a
+run makes that run's cleanup unverified.
 
 ## Python API
 
