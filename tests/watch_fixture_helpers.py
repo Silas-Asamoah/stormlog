@@ -224,7 +224,11 @@ def _health(at_s: float, open_incidents: list[str]) -> dict[str, Any]:
     record.update(
         scrape={"status": "ok", "duration_ms": 4.25, "error": None},
         loop_lag_seconds=0.001,
-        history={"bytes": 3_400_000, "seconds": 600.0, "evictions": {"age": 12}},
+        history={
+            "bytes": 3_400_000,
+            "seconds": 600.0,
+            "evictions": {"age": 12, "bytes": 0, "oversized": 0},
+        },
         open_incidents=open_incidents,
     )
     return record

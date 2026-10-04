@@ -114,7 +114,7 @@
           "bytes"
         ]
       },
-      "help": "Scrapes evicted from history, by cause.",
+      "help": "Scrapes evicted from history, by cause; one too large for the whole history is counted in scrapes_total as oversized.",
       "key": "history_evictions_total",
       "kind": "counter",
       "labels": [
