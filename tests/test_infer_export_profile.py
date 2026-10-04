@@ -341,7 +341,9 @@ def test_a_ctrl_c_inside_the_close_still_finishes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The reviewers' case: the exporter is behind at the end of the run, the
-    # user presses Ctrl+C once while its close waits for it.
+    # user presses Ctrl+C once while its close waits for it. The close then
+    # stops waiting, though the backlog (40 records at 0.2 s) would outlast
+    # its 5 s deadline, and the run is recorded as interrupted.
     output = tmp_path / "infer.jsonl"
     metrics_dir = tmp_path / "metrics"
     metrics_dir.mkdir()
@@ -352,22 +354,30 @@ def test_a_ctrl_c_inside_the_close_still_finishes_it(
         # Nothing is applied before the close starts, so the exporter is
         # seconds behind when the Ctrl+C comes, however fast the run was.
         closing.wait(60)
-        time.sleep(0.05)
+        time.sleep(0.2)
         real_apply(self, envelope)
 
     monkeypatch.setattr(ProfileMetrics, "apply", slow_apply)
     real_close = ExportPipeline.close
+    closes: list[float] = []
 
     def noting_close(self: ExportPipeline, deadline: float) -> None:
         closing.set()
-        real_close(self, deadline)
+        started = time.perf_counter()
+        try:
+            real_close(self, deadline)
+        finally:
+            closes.append(time.perf_counter() - started)
 
     monkeypatch.setattr(ExportPipeline, "close", noting_close)
+    main = threading.main_thread().ident
+    assert main is not None
 
     def ctrl_c_in_close() -> None:
         if closing.wait(60):
             time.sleep(0.3)
-            signal.raise_signal(signal.SIGINT)
+            # To the main thread, as a terminal's Ctrl+C reaches it.
+            signal.pthread_kill(main, signal.SIGINT)
 
     presser = threading.Thread(target=ctrl_c_in_close, daemon=True)
     presser.start()
@@ -387,9 +397,13 @@ def test_a_ctrl_c_inside_the_close_still_finishes_it(
     presser.join(5)
     export = profiler.export
     assert export is not None and export.registry.frozen
+    assert closes and closes[0] < 2.5
     records = _records(output)
+    assert records[-1]["event_type"] == "infer.session"
+    assert records[-1]["status"] == "interrupted"
     summary = _capability(records)["metadata"]["summary"]["records"]
     assert summary["offered"] == summary["applied"] + sum(summary["dropped"].values())
+    assert summary["dropped"]["shutdown"] > 0
     exposition = check_exposition((metrics_dir / "stormlog-default.prom").read_text())
     assert exposition.value("stormlog_run_active") == 0
     assert not (metrics_dir / "stormlog-default.lock").exists()

@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
 import sys
 import threading
 import time
 import urllib.error
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 from .. import __version__
@@ -214,7 +216,8 @@ class InferenceProfiler:
         """Run profiling and return an aggregate report."""
         try:
             self.prepare()
-            return asyncio.run(self._run_async())
+            with _ctrl_c_raises():
+                return asyncio.run(self._run_async())
         finally:
             self.request_executor.shutdown(wait=True, cancel_futures=True)
             self._end_export(interrupted=sys.exc_info()[0] is not None)
@@ -1420,6 +1423,36 @@ async def _wait_for(task: asyncio.Task[Any], timeout: float | None = None) -> bo
     if task in done and not task.cancelled():
         task.result()
     return task in done
+
+
+def _raise_keyboard_interrupt(_signum: int, _frame: FrameType | None) -> None:
+    raise KeyboardInterrupt
+
+
+@contextmanager
+def _ctrl_c_raises() -> Iterator[None]:
+    """Keep Ctrl+C a KeyboardInterrupt where it lands, on every Python.
+
+    From 3.11, asyncio.run swaps the default SIGINT handler for one that
+    cancels the main task, and a cancel only lands at the next await. The
+    run's last steps (the export's close, the capability records) are
+    synchronous, so a Ctrl+C there would wait out the close's deadline and
+    leave the run recorded as completed. asyncio.run keeps any other
+    handler, so this one, which raises as the default does, keeps 3.10's
+    behaviour. Off the main thread, or under another handler, it does
+    nothing.
+    """
+    if (
+        threading.current_thread() is not threading.main_thread()
+        or signal.getsignal(signal.SIGINT) is not signal.default_int_handler
+    ):
+        yield
+        return
+    signal.signal(signal.SIGINT, _raise_keyboard_interrupt)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
 
 
 @asynccontextmanager
