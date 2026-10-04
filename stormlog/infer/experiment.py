@@ -46,7 +46,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from .describe_server import DescribeOptions, describe_server, write_description
+from .describe_server import (
+    DescribeOptions,
+    describe_server,
+    load_description,
+    write_description,
+)
 from .errors import InferInputError, InferUsageError
 from .experiment_plan import (
     Arm,
@@ -63,6 +68,7 @@ from .experiment_process import (
     Launched,
     launch,
     parse_cpu_list,
+    process_key,
     remembered_tree,
     run_step,
     stop,
@@ -70,7 +76,15 @@ from .experiment_process import (
     verify_cleanup,
     wait_for_file,
 )
-from .manifest import attach_manifest
+from .host_clock import host_boot_id
+from .manifest import BEFORE as MANIFEST_BEFORE
+from .manifest import (
+    attach_manifest,
+    before_refusals,
+    description_record,
+    manifests,
+    model_identity_record,
+)
 from .model_identity import VerifiedModel, changed_files, prepare_model
 from .observers import TREATMENTS_EVENT
 from .sanitize import sanitize_bundle
@@ -419,6 +433,7 @@ class _Run:
         }
         self.commands: list[str] = []
         self.server: Launched | None = None
+        self.server_key: tuple[int, int] | None = None
         self.treatments: list[tuple[Treatment, Launched]] = []
         self.steps_started = False
 
@@ -478,6 +493,8 @@ class _Run:
             env.update(model.env)
         self.server = self._launch("server", command, env, server.cpu_affinity)
         self.values["server_pid"] = self.server.pid
+        # Read now: the start ticks name this process, and no restart.
+        self.server_key = process_key(self.server.pid)
         if self.server.affinity_applied is False:
             self.record.protocol("affinity_not_applied:server", before_treatment=True)
             return False
@@ -560,6 +577,8 @@ class _Run:
 
     def _attach_after(self) -> None:
         self._record_treatments()
+        self._attach_before()
+        self._record_model_identity()
         after = self.dir / "describe-after.json"
         if not after.exists():
             return
@@ -570,6 +589,61 @@ class _Run:
                 self.record.notes.append(
                     f"after description not attached to {path.name}: {exc}"
                 )
+
+    def _attach_before(self) -> None:
+        """Give each artifact the runner's before description, unless it has it.
+
+        A workload step need not pass ``--describe-server``: the runner took
+        the description, and the artifact needs it for its after
+        description, and for the weights the runner verified to bind.
+        """
+        path = self.dir / "describe-before.json"
+        if not path.exists():
+            return
+        description = load_description(path)
+        refusals = before_refusals(description, run_id=self.label)
+        if refusals:
+            self.record.notes.append(f"before description: {'; '.join(refusals)}")
+            return
+        for artifact in self._infer_artifacts():
+            records = _artifact_records(artifact)
+            if manifests(records)[MANIFEST_BEFORE]:
+                continue
+            record = description_record(
+                description,
+                role=MANIFEST_BEFORE,
+                session_id=_artifact_session(records),
+                run_id=self.label,
+            )
+            with artifact.open("a") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+    def _record_model_identity(self) -> None:
+        """Bind the weights verified before launch to the server launched.
+
+        The record names the server by boot, PID and start ticks; a
+        comparison counts the weights as observed only for the server the
+        run's before description shows.
+        """
+        model = self.env.model
+        if model is None:
+            return
+        if self.server_key is None:
+            self.record.notes.append(
+                "model identity not bound: the server's start time was not read"
+            )
+            return
+        pid, start_ticks = self.server_key
+        record = model_identity_record(
+            model.record(),
+            session_id=self.label,
+            run_id=self.label,
+            server={"pid": pid, "start_ticks": start_ticks},
+            boot_id=host_boot_id(),
+        )
+        for path in self._infer_artifacts():
+            with path.open("a") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
 
     def _record_treatments(self) -> None:
         """Tell each artifact which treatments ran beside it, and how they held up.
@@ -782,6 +856,24 @@ def _model_name(plan: ExperimentPlan, env: Environment) -> str:
     if env.model is not None:
         return env.model.model
     return str((plan.server.model or {}).get("name", ""))
+
+
+def _artifact_records(path: Path) -> list[dict[str, Any]]:
+    records = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
+def _artifact_session(records: list[dict[str, Any]]) -> str:
+    return next(
+        (str(r["session_id"]) for r in records if r.get("session_id")), "unknown"
+    )
 
 
 def _without_gpu(options: DescribeOptions) -> DescribeOptions:
