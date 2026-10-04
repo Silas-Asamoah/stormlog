@@ -276,7 +276,8 @@ model); more requests per run do not help.
 - **Requests per run.** Each run needs at least `3 / b` requests (300 at
   1%), so that a single failure cannot breach the budget; with fewer, the
   gate is `not_evaluable: too_few_requests_per_run`, and without counts
-  `requests_per_run_unrecorded`. Pre-register `m` accordingly.
+  `requests_per_run_unrecorded`. Pre-register `m` accordingly. The metric's
+  `trials` lists each run's requests, aligned with its `values`.
 - **What it says.** The gate's `claim` reads, for example, "8 of 8
   candidate runs within 0.01 of the block baseline; run-pass rate at least
   0.631 with 97.5% confidence". It is never a bound on the fraction.

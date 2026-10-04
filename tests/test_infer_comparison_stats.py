@@ -212,6 +212,14 @@ def test_the_fraction_interval_floors_its_se_at_the_pooled_binomial_se() -> None
     assert result.worst.upper == pytest.approx(d.mean() + _t(0.95, 7) * se)
 
 
+def test_a_fraction_records_each_runs_requests_beside_its_value() -> None:
+    # A caller can check m >= 3 / b run by run, as the gate does.
+    record = _fractions([0.0] * 7 + [None]).to_record()
+    assert record["trials"] == {"baseline": [300] * 7, "candidate": [300] * 7}
+    assert len(record["values"]["candidate"]) == 7
+    assert _latency().to_record()["trials"] is None
+
+
 def test_pooled_requests_are_reported_and_labelled_model_based() -> None:
     result = _fractions([0.0] * 8)
     assert result.pooled is not None
