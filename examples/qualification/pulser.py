@@ -16,6 +16,7 @@ from __future__ import annotations
 import atexit
 import functools
 import os
+import re
 import select
 import signal
 import subprocess
@@ -108,28 +109,58 @@ class Pulse:
         }
 
 
-# vLLM 0.30 titles its processes; a role is found by its title.
-ROLE_TITLES = {
-    "engine_core": "EngineCore",
-    "worker_tp0": "Worker_TP0",
-    "worker_tp1": "Worker_TP1",
-}
+# vLLM 0.30 retitles its processes (setproctitle replaces argv): EngineCore
+# under the API server, and each TP worker under EngineCore.
+ENGINE_TITLE = re.compile(r"^VLLM::EngineCore(?:_DP\d+)?$")
+WORKER_TITLE = re.compile(r"^VLLM::Worker_TP(\d+)$")
 
 
 def discover_roles(api_server_pid: int) -> dict[str, Target]:
-    """The API server and the processes under it, by role: each named by
-    its pid and start time, so a later signal reaches the same process."""
-    server = psutil.Process(api_server_pid)
+    """The API server, its EngineCore and EngineCore's TP workers, by role,
+    each named by its pid and start time so a later signal reaches the same
+    process. Titles must match exactly: a helper whose arguments mention
+    EngineCore is not it, and Worker_TP10 is rank 10, not rank 1.
+
+    Raises:
+        ValueError: when not exactly one child carries EngineCore's title,
+            or two workers claim the same rank.
+    """
     roles = {"api_server": Target.of(api_server_pid, "api_server")}
-    for child in server.children(recursive=True):
-        try:
-            title = " ".join([child.name(), *child.cmdline()])
-        except psutil.Error:
-            continue
-        for role, marker in ROLE_TITLES.items():
-            if marker in title and role not in roles:
-                roles[role] = Target.of(child.pid, role)
+    engines = _titled(psutil.Process(api_server_pid).children(), ENGINE_TITLE)
+    if len(engines) != 1:
+        raise ValueError(
+            f"expected one VLLM::EngineCore under pid {api_server_pid},"
+            f" found {len(engines)}"
+        )
+    engine, _match = engines[0]
+    roles["engine_core"] = Target.of(engine.pid, "engine_core")
+    for worker, match in _titled(engine.children(), WORKER_TITLE):
+        role = f"worker_tp{int(match.group(1))}"
+        if role in roles:
+            raise ValueError(f"two processes are titled {match.group(0)}")
+        roles[role] = Target.of(worker.pid, role)
     return roles
+
+
+def _titled(
+    processes: list[psutil.Process], pattern: re.Pattern[str]
+) -> list[tuple[psutil.Process, re.Match[str]]]:
+    found = []
+    for process in processes:
+        match = pattern.match(_title(process))
+        if match is not None:
+            found.append((process, match))
+    return found
+
+
+def _title(process: psutil.Process) -> str:
+    """A retitled process's title is its argv[0]; the 15-character comm
+    would truncate it."""
+    try:
+        arguments: list[str] = process.cmdline()
+    except psutil.Error:
+        return ""
+    return str(arguments[0]).strip() if arguments else ""
 
 
 def check_schedule(pulse_seconds: float, period_seconds: float) -> None:
@@ -381,7 +412,8 @@ __all__ = [
     "PulseRefused",
     "Pulser",
     "Target",
-    "ROLE_TITLES",
+    "ENGINE_TITLE",
+    "WORKER_TITLE",
     "check_schedule",
     "discover_roles",
 ]
