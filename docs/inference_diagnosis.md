@@ -129,7 +129,9 @@ stretch the scheduler spent paused with
 `PAUSED_ALL` (from the hook's `pause` records), or one the caller excludes
 with `exclude_wall` (for example its own profiler stop), has no ready work;
 only the part of a stall such an interval covers is removed, and what
-remains on either side is still a stall.
+remains on either side is still a stall. Work waiting to be admitted is not
+ready: a host gap while only queued requests exist, with none running, is
+not a stall by this rule, so the signal cannot see it.
 Where a stall sits decides what it can be blamed on:
 
 | `detail["locus"]` | Stretch | `detail["attribution"]` |
@@ -181,4 +183,6 @@ writer is capped (`hook_capped`): no heartbeat ever does.
 it a pause of every running request (vLLM's `PAUSED_ALL`, as for an RL
 weight sync) looks like a stall with ready work, so a stall over its limit is
 no verdict (`pause_state_unknown`). A pause can only remove stalls, so
-records with no stall over its limit still say none exceeded.
+records with no stall over its limit still say none exceeded. A log from
+#217's hook, which records no pauses, can therefore say only that no stall
+exceeded or give no verdict, never that one did.
