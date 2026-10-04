@@ -239,7 +239,9 @@ age, scrapes by outcome, missed and frozen ticks, incidents by trigger kind
 and capture status, windows by fidelity, suppressions, bundles removed by
 reason (the `infer.incident_pruned` reasons, `disk_full` included), and
 records each sink dropped. `report.json` carries a copy at the end of the
-watch. The families grow with the commands that fill them (deep capture,
+watch, with the store operations that raised on the store's worker (a
+retention pass, say) counted in `metrics.store_operations_failed` and the
+last one's error in `payload.store_last_error`. The families grow with the commands that fill them (deep capture,
 the span ring, finalization), so a newer fixture has more; none is renamed
 or removed within version 1.
 

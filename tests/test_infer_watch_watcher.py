@@ -811,6 +811,39 @@ def test_a_stalled_store_leaves_the_ledger_its_share(
     watcher.close()
 
 
+def test_a_store_operation_that_raises_is_in_the_report(tmp_path: Path) -> None:
+    """A retention pass that raised on the store's worker was swallowed
+    there: with store.max_age_hours at 1e300, no retention ever ran."""
+    with serve_metrics(FakeMetrics()) as base_url:
+        watcher = Watcher(
+            resolve_watch_config(watch_config(base_url)),
+            tmp_path,
+            options=WatchOptions(duration_seconds=0.5),
+        )
+
+        def broken(**_kwargs: Any) -> list[Any]:
+            raise OverflowError("cannot convert float infinity to integer")
+
+        watcher.store.prune = broken  # type: ignore[method-assign]
+        outcome = asyncio.run(watcher.run(asyncio.Event()))
+    assert outcome.exit_code == 0
+    report = _report(tmp_path)
+    assert report["metrics"]["store_operations_failed"] >= 1
+    assert report["payload"]["store_last_error"] == (
+        "OverflowError: cannot convert float infinity to integer"
+    )
+    assert _quiet_report_metrics(tmp_path)["store_operations_failed"] == 0
+
+
+def _quiet_report_metrics(tmp_path: Path) -> dict[str, Any]:
+    root = tmp_path / "quiet"
+    with serve_metrics(FakeMetrics()) as base_url:
+        _watch(root, watch_config(base_url), options=WatchOptions(duration_seconds=0.5))
+    metrics: dict[str, Any] = _report(root)["metrics"]
+    assert _report(root)["payload"]["store_last_error"] is None
+    return metrics
+
+
 def test_a_ledger_left_behind_keeps_the_root(tmp_path: Path) -> None:
     """Only the store's writer kept the root locked: a ledger writer left
     behind still appending under it let a second watcher take the root."""
