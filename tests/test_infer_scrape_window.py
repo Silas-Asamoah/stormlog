@@ -311,6 +311,12 @@ def test_quantile_bounds_and_the_overflow_bucket() -> None:
         histogram_quantile_bounds(scrapes, E2E, 1.5)
 
 
+def test_a_quantile_whose_rank_is_a_bucket_s_count_is_in_that_bucket() -> None:
+    # 2 of the 9 observations are at or below 0.1, so the 2/9 quantile is.
+    tie = histogram_quantile_bounds(_histogram_scrapes(START, END), E2E, 2 / 9)
+    assert (tie.lo, tie.hi, tie.reasons) == (None, 0.1, ())
+
+
 def test_a_share_above_nan_is_refused() -> None:
     # As a quantile outside 0 to 1 is: NaN would give bounds of 0 to 1.
     with pytest.raises(ValueError, match="NaN"):

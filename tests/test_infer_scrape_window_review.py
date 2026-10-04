@@ -188,6 +188,18 @@ def test_a_counter_delta_across_an_interior_failure_is_valid() -> None:
     assert (counter.delta, counter.reasons) == (3.0, ())
 
 
+def test_a_histogram_whose_sum_falls_has_been_reset() -> None:
+    # The count and every bucket grow, but a cumulative _sum never falls.
+    window = series(
+        [
+            exposition(histograms={E2E: ((("1.0", 1), ("+Inf", 2)), 5.0)}),
+            exposition(histograms={E2E: ((("1.0", 3), ("+Inf", 4)), 2.0)}),
+        ]
+    )
+    share = histogram_share_above(window, E2E, 1.0)
+    assert (share.lo, share.hi, share.reasons) == (None, None, (REASON_COUNTER_RESET,))
+
+
 def test_a_histogram_whose_count_disagrees_with_its_inf_bucket_is_refused() -> None:
     start = exposition(histograms={E2E: ((("0.1", 1), ("+Inf", 2)), 1.0)})
     end = exposition(histograms={E2E: ((("0.1", 3), ("+Inf", 11)), 9.0)}).replace(
