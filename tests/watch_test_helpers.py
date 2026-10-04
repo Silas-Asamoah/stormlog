@@ -30,6 +30,7 @@ class FakeMetrics:
         self.tokens = 0.0
         self.advance = True
         self.start = START
+        self.engines = 1
         self.status = 200
         self.delay = 0.0
         self.scrapes = 0
@@ -39,7 +40,19 @@ class FakeMetrics:
         with self._lock:
             self.scrapes += 1
             self.tokens += 5 if self.advance else 0
+            # vLLM with data parallelism labels each engine's series apart.
+            extra = [
+                f'{name}{{engine="{engine}",model_name="m"}} {value}'
+                for engine in range(1, self.engines)
+                for name, value in (
+                    ("vllm:num_requests_waiting", self.waiting),
+                    ("vllm:num_requests_running", self.running),
+                    ("vllm:generation_tokens_total", self.tokens),
+                    ("vllm:prompt_tokens_total", self.tokens),
+                )
+            ]
             return exposition(
+                extra=extra,
                 start=self.start,
                 gauges={
                     "vllm:num_requests_waiting": self.waiting,

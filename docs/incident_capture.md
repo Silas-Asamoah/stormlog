@@ -102,9 +102,9 @@ config, exits 5.
 ```
 
 A trigger has an `id`, a `kind` (`metric`, `signal` or `health`), optional
-`window_seconds` (`W`), `hold_seconds` (`F`), `clear_seconds` (`C`) and
-`counts_toward_exit` (true except for health triggers), and exactly one
-predicate:
+`window_seconds` (`W`), `hold_seconds` (`F`), `clear_seconds` (`C`),
+`counts_toward_exit` (true except for health triggers) and `engine`, and
+exactly one predicate:
 
 | Key | Settings |
 | --- | --- |
@@ -119,6 +119,14 @@ Without `triggers`, the defaults (`watch_defaults/1`) watch the
 `queue_saturation` and `kv_preemption_pressure` signals, three consecutive
 failed scrapes, and a frozen exporter. The `export` section belongs to the
 exporter (#220) and is passed through.
+
+A server running several engines (vLLM's data parallelism) labels each
+engine's series apart, and a trigger judges one engine. Name it with
+`server.engine` for every trigger, or with a trigger's own `engine`, as the
+`engine` label gives it (`"0"`, `"1"`). A trigger that names none, on such a
+server, is never judged: every window is a data gap with the reason
+`engine_required`, and the watch ends unsound (exit 1). To watch every
+engine, give each its own trigger.
 
 The session record in the ledger holds the resolved configuration, its
 SHA-256 digest, and for each trigger the shortest violation that can fire it
@@ -166,7 +174,7 @@ watch.
 | --- | --- |
 | 0 | The watch ended and no incident counted toward the exit code. |
 | 3 | At least one incident from a counting trigger (`metric` or `signal` by default) was detected. |
-| 1 | The watch was unsound: no scrape ever succeeded, the ledger lost records, every incident write failed, the store or ledger did not finish within the shutdown deadline, or the report could not be written. `report.json`, when written, lists the reasons under `payload.unsound`. |
+| 1 | The watch was unsound: no scrape ever succeeded, a trigger needed an engine named, the ledger lost records, every incident write failed, the store or ledger did not finish within the shutdown deadline, or the report could not be written. `report.json`, when written, lists the reasons under `payload.unsound`. |
 | 2 | A setting it cannot use. |
 | 5 | A config file it cannot read. |
 

@@ -36,6 +36,7 @@ from ...report import (
     build_report,
     write_report,
 )
+from ..scrape_window import REASON_ENGINE_REQUIRED
 from ..trace_capture import server_root
 from ..vllm_scraper import VllmMetricsScraper
 from ..vllm_telemetry import MARKER_INTERVAL, SCRAPE_OK, VllmScrapeRecord
@@ -146,6 +147,9 @@ class Watcher:
         )
         self._previous_ok: VllmScrapeRecord | None = None
         self._ticks = 0
+        # Triggers refused a window because the server runs several engines
+        # and they name none; such a watch could not judge them.
+        self._engine_required: set[str] = set()
         self._lag_max = 0.0
         self._next_test: int | None = None
 
@@ -229,6 +233,8 @@ class Watcher:
 
     def _on_result(self, result: TickResult) -> None:
         self.stats.set_trigger_state(result.spec.trigger_id, result.state)
+        if REASON_ENGINE_REQUIRED in result.evaluation.reasons:
+            self._engine_required.add(result.spec.trigger_id)
         transition = result.transition
         if transition is None:
             return
@@ -400,6 +406,8 @@ class Watcher:
         reasons = []
         if self._ok_scrapes == 0:
             reasons.append("no_successful_scrape")
+        if self._engine_required:
+            reasons.append("engine_required")
         if self.incidents.persist_failures and not self.incidents.persisted:
             reasons.append("incident_writes_failing")
         if not drained:

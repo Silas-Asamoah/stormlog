@@ -67,6 +67,7 @@ FINALIZED_OUTCOMES = ("ok", "failed", "timeout", "deferred")
 SESSION_PHASES = ("started", "ended")
 UNSOUND_REASONS = (
     "no_successful_scrape",
+    "engine_required",
     "ledger_failing",
     "ledger_close_timeout",
     "incident_writes_failing",

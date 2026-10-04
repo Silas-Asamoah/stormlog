@@ -207,6 +207,36 @@ def test_completion_recorded_histograms_are_marked() -> None:
     assert marked == {"e2e": True, "ttft": False}
 
 
+def test_an_engine_is_named_for_the_server_or_per_trigger() -> None:
+    config = resolve_watch_config(
+        _payload(
+            server={"base_url": BASE, "engine": "0"},
+            triggers=[
+                _trigger(),
+                {"id": "q", "kind": "signal", "signal": "queue_saturation"},
+                {**_trigger(id="other"), "engine": 1},
+            ],
+        )
+    )
+    engines = [
+        getattr(spec.predicate, "engine", None)
+        or getattr(getattr(spec.predicate, "config", None), "engine", None)
+        for spec in config.triggers
+    ]
+    assert engines == ["0", "0", "1"]
+    assert config.resolved()["server"]["engine"] == "0"
+    unnamed = resolve_watch_config(_payload(triggers=[_trigger()]))
+    assert getattr(unnamed.triggers[0].predicate, "engine") is None
+
+
+@pytest.mark.parametrize("engine", ["", True, 1.5, ["0"]])
+def test_an_engine_is_a_label_value(engine: Any) -> None:
+    with pytest.raises(InferUsageError, match="engine label"):
+        resolve_watch_config(_payload(server={"base_url": BASE, "engine": engine}))
+    with pytest.raises(InferUsageError, match="engine label"):
+        resolve_watch_config(_payload(triggers=[{**_trigger(), "engine": engine}]))
+
+
 def test_export_is_passed_through_for_the_exporter() -> None:
     config = resolve_watch_config(_payload(export={"otlp": {"endpoint": "x"}}))
     assert config.export == {"otlp": {"endpoint": "x"}}
