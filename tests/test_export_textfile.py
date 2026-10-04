@@ -254,6 +254,43 @@ def test_two_writers_taking_over_a_stale_lock_never_both_hold_it(
     assert sorted(outcomes.values()) == ["holds", "refused"], outcomes
 
 
+def test_a_lock_file_removed_while_being_taken_is_not_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # B opens the lock file A holds; before B locks it, A frees the slot
+    # (removing the file) and C takes a new one. B's lock is then on a file
+    # no longer in the directory, so B must not count it as the slot.
+    a = _writer(tmp_path)
+    a.acquire()
+    c = _writer(tmp_path)
+    real_flock = textfile._flock
+    assert real_flock is not None
+    interleaved: list[str] = []
+
+    def flock_after_a_and_c(descriptor: int, operation: int) -> None:
+        if threading.current_thread().name == "B" and not interleaved:
+            interleaved.append("A frees, C takes")
+            a.close()
+            c.acquire()
+        real_flock(descriptor, operation)
+
+    monkeypatch.setattr(textfile, "_flock", flock_after_a_and_c)
+    outcome: list[str] = []
+
+    def take() -> None:
+        try:
+            _writer(tmp_path).acquire()
+            outcome.append("holds")
+        except SlotInUse:
+            outcome.append("refused")
+
+    b = threading.Thread(target=take, name="B")
+    b.start()
+    b.join(10)
+    assert interleaved and outcome == ["refused"]
+    c.close()
+
+
 _HOLD_THE_SLOT = """
 import sys, time
 from pathlib import Path
@@ -395,6 +432,9 @@ def test_close_returns_at_its_deadline_even_if_freeing_the_slot_is_stuck(
         assert entered.wait(5)
         closer.join(1)
         assert not closer.is_alive() and time.monotonic() - started < 1
+        started = time.monotonic()
+        writer.close(deadline=5)  # a second close does not wait again
+        assert time.monotonic() - started < 1
     finally:
         proceed.set()
         closer.join(5)
