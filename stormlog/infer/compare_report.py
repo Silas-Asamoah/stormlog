@@ -224,20 +224,7 @@ def comparison_lines(comparison: Comparison) -> list[str]:
     if comparison.spec.gates:
         floor = comparison.spec.block_floor()["statement"]
         lines.append(f"min_complete_blocks: {floor}")
-    lines += [
-        f"Set aside: {item['run']} for {item['case']} ({_set_aside_reasons(item)})"
-        for item in comparison.excluded
-    ]
-    lines += [f"Observer: {issue}" for issue in comparison.observer_issues]
-    lines += [
-        f"Within an arm: {first} and {second} differ in {', '.join(fields)} (allowed)"
-        for first, second, fields in comparison.diagnostics.get(
-            "within_arm_allowed", []
-        )
-    ]
-    lines += [
-        f"Warning: {warning}" for warning in comparison.diagnostics.get("warnings", [])
-    ]
+    lines += _notes(comparison)
     for case_id, case in comparison.cases.items():
         ungated = (
             "" if case.get("gated", True) else " (overlap: diagnostics only, not gated)"
@@ -250,6 +237,25 @@ def comparison_lines(comparison: Comparison) -> list[str]:
             lines.append(
                 f"  min attainment: {gate.get('status')} ({gate.get('runs_meeting')} of {gate.get('runs')} runs)"
             )
+    return lines
+
+
+def _notes(comparison: Comparison) -> list[str]:
+    """What was set aside, observer issues, allowed mixes within an arm, and
+    warnings."""
+    lines = [
+        f"Set aside: {item['run']} for {item['case']} ({_set_aside_reasons(item)})"
+        for item in comparison.excluded
+    ]
+    lines += [f"Observer: {issue}" for issue in comparison.observer_issues]
+    lines += [
+        f"Within an arm (allowed): {item['arm']} runs differ in {item['field']}: "
+        + ", ".join(f"{run}={value}" for run, value in item["values"].items())
+        for item in comparison.diagnostics.get("allowed_within_arm", [])
+    ]
+    lines += [
+        f"Warning: {warning}" for warning in comparison.diagnostics.get("warnings", [])
+    ]
     return lines
 
 
