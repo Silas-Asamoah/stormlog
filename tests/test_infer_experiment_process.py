@@ -192,3 +192,39 @@ def test_a_survivor_that_outlives_its_kill_is_listed_and_not_verified(
     finally:
         launched.process.kill()
         launched.process.wait()
+
+
+def test_a_mark_search_that_could_not_read_an_environment_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # rev-213-a's E6: an environment psutil cannot read (macOS hides a
+    # platform binary's) was skipped as unmarked, and the search called
+    # complete.
+    import psutil
+
+    from stormlog.infer import experiment_process
+
+    class Hidden:
+        pid = 4242
+
+        def environ(self) -> dict[str, str]:
+            raise psutil.AccessDenied(4242)
+
+    monkeypatch.setattr(experiment_process, "_linux", lambda: False)
+    monkeypatch.setattr(psutil, "process_iter", lambda: iter([Hidden()]))
+    launched = launch("server", [sys.executable, "-c", "pass"])
+    launched.process.wait(timeout=5)
+    cleanup = verify_cleanup(launched.pid, wait_s=0.3, mark=launched.mark)
+    assert cleanup.to_record()["mark_search"] == {"complete": False, "unreadable": 1}
+
+    class Plain:
+        pid = 4343
+
+        def environ(self) -> dict[str, str]:
+            return {}
+
+    monkeypatch.setattr(psutil, "process_iter", lambda: iter([Plain()]))
+    cleanup = verify_cleanup(launched.pid, wait_s=0.3, mark=launched.mark)
+    assert cleanup.to_record()["mark_search"] == {"complete": True, "unreadable": 0}
+    # Without a mark there is no search to judge.
+    assert verify_cleanup(launched.pid, wait_s=0.3).to_record()["mark_search"] is None
