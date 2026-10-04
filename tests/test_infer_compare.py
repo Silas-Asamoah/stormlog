@@ -619,6 +619,29 @@ def test_a_candidate_arm_mixing_two_configurations_is_refused() -> None:
         compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
 
 
+def test_an_allowed_difference_is_allowed_within_an_arm_too() -> None:
+    # On the A30 box, the first launch of a model after a resume compiled
+    # cold and got a smaller KV cache; the error says to allow the field,
+    # so allowing it must work for the runs of one arm as well.
+    baseline, candidate = _arms(SAME)
+    cold = _fields(**{"effective.kv_cache_size_tokens": 855088})
+    warm = _fields(**{"effective.kv_cache_size_tokens": 890960})
+    baseline = [
+        _run("baseline", i, e, fields=cold if i == 0 else warm, started=2 * i)
+        for i, e in enumerate(BASE_E2E)
+    ]
+    candidate = [
+        _run("candidate", i, e, fields=warm, started=2 * i + 1)
+        for i, e in enumerate(SAME)
+    ]
+    with pytest.raises(InferInputError, match="allow a difference with --allow"):
+        compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    allowed = ComparisonSpec(gates=E2E_GATE, allow=("effective.kv_cache_size_tokens",))
+    comparison = compare_runs(baseline, candidate, allowed)
+    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None and gate.status == "pass"
+
+
 def _observer(requested: bool, healthy: bool | None = True) -> dict[str, Any]:
     return {
         "requested": requested,
