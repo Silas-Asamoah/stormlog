@@ -70,9 +70,11 @@ fable-213's simulation of a 2 s arm). An overlap segment is therefore
 `gated: false`, and never gated, whatever `--gate` or `--min-attainment`
 asks; the whole cases, and segments by arrival, are gated as usual. The text
 report marks each one `(overlap: diagnostics only, not gated)`, and the gate
-summary counts none of them. Gates asked of a comparison whose every case is
-an overlap segment (`--case <case>/<segment>`) are a usage error rather than
-a pass that gated nothing. Its
+summary counts none of them. When only overlap segments are compared
+(`--case <case>/<segment>`), no case can carry a requested gate, so each one
+is recorded on each segment as `not_evaluable: overlap_not_gated` (under
+`absent_gates`, and `--min-attainment` as its `attainment_gate`), and the
+comparison exits 4 like any gate that cannot be evaluated, never 0. Its
 rates (goodput, throughput, output tokens) read `overlapping_cohort`. Any
 rate a run cannot give is read with its interval's reason (`rate_reason`),
 or `rate_unavailable`.
