@@ -8,6 +8,7 @@ import pytest
 
 from stormlog.infer.diagnosis_signals import SignalConfig
 from stormlog.infer.diagnosis_vocabulary import QUEUE_SATURATION
+from stormlog.infer.scrape_window import REASON_ENGINE_REQUIRED
 from stormlog.infer.vllm_telemetry import VllmScrapeRecord
 from stormlog.infer.watch.evaluate import (
     ACTION_DEEP_CAPTURE,
@@ -28,6 +29,7 @@ from stormlog.infer.watch.predicates import (
     HistogramShareAbove,
     ScrapeFailures,
     SignalExceeds,
+    WindowPredicate,
     exporter_restarted,
     overlaps,
     select_window,
@@ -159,6 +161,64 @@ def test_a_signal_predicate_uses_218s_threshold_and_says_suspected() -> None:
     assert idle.classification == CLEAR
     one = queue.evaluate(_scrapes([_waiting(500)]))
     assert one.classification == DATA_GAP
+
+
+def _two_engines(waiting: float) -> str:
+    """vLLM with data parallelism: one series per engine."""
+    base = _waiting(waiting)
+    extra = f'{WAITING}{{engine="1",model_name="m"}} {waiting}'
+    return base.replace(f"# TYPE {RUNNING} gauge", extra + f"\n# TYPE {RUNNING} gauge")
+
+
+@pytest.mark.parametrize(
+    ("unnamed", "named"),
+    [
+        (GaugeAtLeast(WAITING, threshold=8), GaugeAtLeast(WAITING, 8, engine="1")),
+        (
+            SignalExceeds(QUEUE_SATURATION),
+            SignalExceeds(QUEUE_SATURATION, SignalConfig(engine="1")),
+        ),
+    ],
+    ids=["gauge", "signal"],
+)
+def test_several_engines_need_one_named(
+    unnamed: WindowPredicate, named: WindowPredicate
+) -> None:
+    """Without an engine, a figure could mix two engines' series."""
+    scrapes = _scrapes([_two_engines(500)] * 5)
+    refused = unnamed.evaluate(scrapes)
+    assert refused.classification == DATA_GAP
+    assert refused.reasons == (REASON_ENGINE_REQUIRED,)
+    assert named.evaluate(scrapes).classification == VIOLATING
+
+
+def test_a_series_whose_labels_change_is_a_data_gap() -> None:
+    def preempted(total: float, model: str) -> str:
+        return exposition(counters={PREEMPTIONS: total}).replace(
+            'model_name="m"', f'model_name="{model}"'
+        )
+
+    rate = CounterRateAtLeast(PREEMPTIONS, rate_per_s=1.0)
+    swapped = rate.evaluate(_scrapes([preempted(0, "a"), preempted(9, "b")]))
+    assert swapped.classification == DATA_GAP
+    assert "series_labels_changed" in swapped.reasons
+
+
+def test_a_failed_scrape_inside_the_window_leaves_it_judged() -> None:
+    """Only the window's ends must have succeeded; inside, a failure only
+    leaves fewer samples, and a counter is differenced across it."""
+    gauge = GaugeAtLeast(WAITING, threshold=8)
+    judged = gauge.evaluate(_scrapes([_waiting(9), None, _waiting(9), _waiting(9)]))
+    assert judged.classification == VIOLATING
+    assert judged.samples == 3
+
+
+def test_scrapes_at_one_instant_are_a_data_gap() -> None:
+    first, second = _scrapes([_waiting(9), _waiting(9)])
+    rate = CounterRateAtLeast("vllm:generation_tokens_total", rate_per_s=0.0)
+    duplicate = rate.evaluate([first, first, second])
+    assert duplicate.classification == DATA_GAP
+    assert "duplicate_scrape_time" in duplicate.reasons
 
 
 def test_scrape_failures_count_failed_scrapes_as_evidence() -> None:

@@ -124,8 +124,11 @@ of:
 - **violating**;
 - **clear**;
 - **data gap**: the window cannot be judged. A scrape failed or is missing at
-  either end, too few samples arrived, a counter went backwards or was
-  recreated, or the exporter restarted, anywhere inside the window;
+  either end, or too few samples arrived; or anywhere inside the window a
+  counter went backwards or was recreated, a series changed its labels, two
+  scrapes were out of order or at one instant, a histogram's step was not
+  itself a histogram, or the exporter restarted. A scrape that failed inside
+  the window only leaves fewer samples;
 - **masked**: the window overlaps the watcher's own profiler start or stop
   and the recovery after it.
 
@@ -178,7 +181,11 @@ A test reproduces this from scrapes.
 
 ### Predicates
 
-Every figure is engine-wide: it covers all of the server's traffic.
+Every figure is engine-wide: it covers all of the server's traffic. A
+server running several engines (vLLM's data parallelism) labels each
+engine's series apart, and a predicate reads one engine's: without an
+engine named, every window over such a server is a data gap, with the
+reason `engine_required`.
 
 | Predicate | Fires when | Judged on |
 | --- | --- | --- |
