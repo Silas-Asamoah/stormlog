@@ -9,6 +9,22 @@ from typing import Any, TextIO
 
 INFER_SCHEMA_VERSION = 1
 
+# Every status an infer.request record can have. Exporters pre-create one
+# series per status, so a new status is added here, not only where it is set.
+REQUEST_STATUSES: tuple[str, ...] = (
+    "ok",
+    "timeout",
+    "rejected",
+    "error",
+    "dropped",
+    "cancelled",
+    # The request never reached the server, or may have: see classify_failure.
+    "unreachable",
+    "delivery_unknown",
+)
+# The phases a request runs in.
+REQUEST_PHASES: tuple[str, ...] = ("warmup", "measured")
+
 
 @dataclass(frozen=True)
 class InferenceRequestEvent:
