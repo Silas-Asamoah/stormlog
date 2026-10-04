@@ -1000,6 +1000,7 @@ def _engine_step(writer: EpochWriter, members: int) -> Callable[[], None]:
     return step
 
 
+@pytest.mark.benchmark
 def test_the_engine_step_cost_is_reported(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1007,9 +1008,10 @@ def test_the_engine_step_cost_is_reported(
 ) -> None:
     """Report the engine thread's cost per scheduler step; never assert it.
 
-    CI timing is too noisy for a bound. ``-rP`` prints the figures, and the
-    JUnit XML keeps them as properties. ``emit`` is the time spent in
-    ``EpochWriter.emit``, queueing the step's two records.
+    CI timing is too noisy for a bound, so it runs only when selected:
+    ``pytest -m benchmark -rP`` prints the figures, and the JUnit XML keeps
+    them as properties. ``emit`` is the time spent in ``EpochWriter.emit``,
+    queueing the step's two records.
     """
     writer = EpochWriter(tmp_path, "engine")
     silent = EpochWriter(tmp_path, "worker")
