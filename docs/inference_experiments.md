@@ -324,6 +324,17 @@ read `/proc`; elsewhere they use `psutil`, which reads the mark too, and
 remembered processes are not tracked. The mark differs from run to run and
 is a label to comparisons.
 
+The mark search has two blind spots, and the cleanup record names the
+first. A process whose environment cannot be read cannot be told unmarked:
+each cleanup records `mark_search` with how many environments it could not
+read, and it is `complete` only when it read them all. Root on Linux reads
+every one; as another user, other users' processes are unreadable; and on
+macOS, `psutil` cannot read a platform binary's environment. Second, a
+descendant that execs with a fresh environment drops the mark. It is still
+found if it stayed in the group or the session, or was remembered by PID
+and start time, but not otherwise. vLLM, `pip` and `nvidia-smi` keep their
+environment.
+
 ## Python API
 
 ```python
