@@ -422,7 +422,11 @@ satisfy:
 After 3 batches in a row end without a confirmed attempt, the destination is
 marked down. While it is down, new spans queue up to the bounds, and the
 batch at the head is retried once per `--otlp-probe-interval`; one
-confirmed attempt marks it up again. The `export.otlp` record lists the
+confirmed attempt marks it up again. Retries within a batch back off
+exponentially, but never wait longer than the probe interval, unless the
+collector asks for longer with `Retry-After`: so a collector that comes
+back is used within one probe interval, whether or not it was marked down.
+The `export.otlp` record lists the
 transitions (`first_failure`, `breaker_open`, `first_success`,
 `breaker_closed`, at most 64), each with its time and reason.
 

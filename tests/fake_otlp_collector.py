@@ -149,10 +149,12 @@ def _handler(collector: FakeCollector) -> type[BaseHTTPRequestHandler]:
 
 @contextlib.contextmanager
 def running(
-    script: Sequence[Reply] | Callable[[int], Reply] = (), host: str = "127.0.0.1"
+    script: Sequence[Reply] | Callable[[int], Reply] = (),
+    host: str = "127.0.0.1",
+    port: int = 0,
 ) -> Iterator[FakeCollector]:
     collector = FakeCollector(script)
-    server = ThreadingHTTPServer((host, 0), _handler(collector))
+    server = ThreadingHTTPServer((host, port), _handler(collector))
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

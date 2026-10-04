@@ -380,11 +380,16 @@ class SpanExporter(Generic[T]):
     def _retry_delay(
         self, history: BatchHistory, transmission: Transmission
     ) -> float | None:
-        """The wait before the next attempt; None when the budget cannot cover it."""
+        """The wait before the next attempt; None when the budget cannot cover it.
+
+        The backoff never exceeds the probe interval, so a destination that
+        comes back is used again within one interval, whether the outage
+        opened the breaker or not. A server's Retry-After is kept as given.
+        """
         delay = (
             transmission.retry_after
             if transmission.retry_after is not None
-            else self.retry.delay(history.attempts)
+            else min(self.retry.delay(history.attempts), self.breaker.probe_interval)
         )
         if delay > self.retry.remaining(history, time.monotonic()):
             return None

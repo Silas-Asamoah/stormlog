@@ -4,7 +4,9 @@ import errno
 import json
 import random
 import socket
+import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -296,6 +298,69 @@ def test_a_down_collector_drops_within_the_close_deadline() -> None:
     assert accounting["exported"] == 0 and _balanced(accounting)
     assert set(accounting["dropped"]) <= {"connect_refused", "shutdown"}
     assert sum(accounting["dropped"].values()) == 6
+
+
+def _first_success_ns(exporter: SpanExporter[int]) -> int | None:
+    for transition in exporter.summary()["destination"]["transitions"]:
+        if transition["event"] == "first_success":
+            return int(transition["at_ns"])
+    return None
+
+
+@dataclass(frozen=True)
+class _UnluckyRetries(RetryPolicy):
+    """The default policy, with every jitter drawn at its ceiling."""
+
+    def delay(self, attempt: int, *, rng: Any = None) -> float:
+        return super().delay(attempt, rng=lambda _low, high: high)
+
+
+@pytest.mark.parametrize("outage", [6.0, 30.0])
+def test_a_collector_back_from_an_outage_is_used_within_a_probe_interval(
+    outage: float,
+) -> None:
+    # Contract X1: at --otlp-probe-interval 1, the first success comes within
+    # 1 s and an attempt of the collector's return, whether the outage left
+    # the breaker closed (6 s) or opened it (30 s). Retries inside a batch
+    # once waited out exponential backoff, up to 8 s.
+    port = _closed_port()
+    transport = OtlpHttpTransport(
+        Destination.parse(f"http://127.0.0.1:{port}/v1/traces"),
+        media_type="application/x-protobuf",
+    )
+    exporter: SpanExporter[int] = SpanExporter(
+        HttpSink(transport),
+        ProtobufEncoding(),
+        resource=(("service.name", "t"),),
+        scope=Scope("t", "0"),
+        to_span=_span,
+        retry=_UnluckyRetries(),
+        breaker=Breaker(probe_interval=1.0),
+    )
+    exporter.start()
+    stop = threading.Event()
+
+    def feed() -> None:
+        index = 0
+        while not stop.wait(0.1):
+            exporter.offer(index, 64)
+            index += 1
+
+    feeder = threading.Thread(target=feed, daemon=True)
+    feeder.start()
+    time.sleep(outage)
+    try:
+        with running(port=port):
+            returned_ns = time.time_ns()
+            assert _wait(lambda: _first_success_ns(exporter) is not None, 10)
+    finally:
+        stop.set()
+        feeder.join(5)
+        exporter.close(1.0)
+    first = _first_success_ns(exporter)
+    assert first is not None and (first - returned_ns) / 1e9 <= 1.5
+    events = [t["event"] for t in exporter.summary()["destination"]["transitions"]]
+    assert ("breaker_open" in events) is (outage > 10)
 
 
 def test_a_full_queue_drops_and_counts() -> None:
