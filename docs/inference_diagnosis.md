@@ -46,6 +46,13 @@ refused. The values are provisional until they are read from real runs.
 | `queue_saturation.median_waiting_requests` | 1 | requests waiting in the window's median scrape |
 | `kv_preemption_pressure.preemptions` | 1 | preemptions counted in the window |
 | `prefix_cache_loss.hit_ratio_drop` | 0.2 | fall of the prefix-cache hit ratio below the caller's reference |
+| `host_stall.stall_factor` | 10 | an engine-loop stall is at least this many times the median completion cadence before it |
+| `host_stall.stall_floor_ns` | 50 ms | and at least this long |
+| `host_stall.no_baseline_floor_ns` | 500 ms | or, with no earlier busy steps to compare with, at least this long |
+| `host_stall.baseline_window_ns` | 30 s | the window of earlier busy steps the cadence is taken from |
+| `host_stall.min_busy_steps` | 20 | busy steps at least as large as the stall's that window needs |
+| `host_stall.matched_bin_min_steps` | 20 | steps of the stall's own work bucket (scheduled tokens within a factor of two) needed to compare it with steps of its size |
+| `host_stall.heartbeat_grace_ns` | 3 s | how recently the hook's writer must have been heard from to judge a stall still going on |
 
 ## Online signals
 
@@ -79,3 +86,105 @@ figure of one signal comes from one engine: behind an exporter with several,
 `config.engine` names it, and without it the window is `engine_required`.
 Kinds that metrics alone cannot decide answer `requires_hook`,
 `requires_trace` or `requires_client`.
+
+## Engine-loop stalls
+
+`stormlog.infer.diagnosis_loop.engine_loop_gap(records, config)` reads one
+engine epoch's raw [execution hook](vllm_execution.md) records (the
+`scheduled`, `completed`, `heartbeat` and, from hooks that record them,
+`pause` records, in `seq` order) and returns a `SignalValue` for its stalls:
+stretches in which the engine made no progress while it had work it could
+run. `value` is the stall furthest over its own limit, or the longest when
+none is over, so a long stall against a lenient limit can be reported below
+a shorter one against a strict limit. Only stalls of at least the lowest
+floor are compared with a baseline, which keeps a window of fast steps
+linear in its steps; a window in which every step is that slow takes time in
+proportion to its steps times the steps in a baseline window.
+It needs no import, so an online trigger can run it on the records it tails;
+the diagnoser runs the same rules on imported steps. `LoopGapConfig` refuses
+a threshold override with a key the table lacks, a value that is not a
+finite number, or a loop threshold that is not positive. A trigger that
+evaluates a later window of a long log, such as its tail, passes the epoch's
+hello as `config.hello`, or prepends it: the hello says whether pauses are
+recorded, and is neither a sequence gap nor a zero point for that window's
+coverage.
+
+Work is *ready* during a stretch when a request ran in the step before it
+and in the step after it. The step before a gap between steps is the one
+whose completion starts it, without the request finishing there: under
+async scheduling a request's second step is scheduled before its first
+completes, so the step scheduled just before it may come after an idle
+stretch in which nothing was ready. A memberless, zero-token step (which
+vLLM schedules to send finished IDs) runs nothing and is passed over: the gap
+runs from the step before it. A request prefilled in chunks is ready
+between them. A streaming-input request (`resumable`) is ready within a
+turn, where it decodes like any other, but not across a gap after which its
+prompt grew: then it was waiting for its client's next input. A
+stretch the scheduler spent paused with
+`PAUSED_ALL` (from the hook's `pause` records), or one the caller excludes
+with `exclude_wall` (for example its own profiler stop), has no ready work;
+only the part of a stall such an interval covers is removed, and what
+remains on either side is still a stall. Work waiting to be admitted is not
+ready: a host gap while only queued requests exist, with none running, is
+not a stall by this rule, so the signal cannot see it.
+Where a stall sits decides what it can be blamed on:
+
+| `detail["locus"]` | Stretch | `detail["attribution"]` |
+| --- | --- | --- |
+| `between_steps` | a step's completion to the next `schedule()` entry | `host` |
+| `in_schedule` | inside `schedule()` | `host` |
+| `within_step` | a step's own time after `schedule()` returned (or after the previous completion, under async scheduling) | `host_or_gpu`: without a GPU trace the two cannot be told apart |
+
+A stall exceeds when it is at least `stall_factor` times the median
+completion cadence of the busy steps that completed in the `baseline_window`
+before it, and at least `stall_floor_ns`. Steps are compared with steps of
+their own size: the cadence is taken over earlier steps whose scheduled
+tokens lie within a factor of two of the stall's step when enough share it
+(`detail["baseline"]` is `matched`), so a step running a long prefill is not
+measured against decode-only steps. Otherwise it is taken over the earlier
+busy steps at least as large as the stall's (`unmatched`), when there are
+`min_busy_steps` of them, so a step is never measured against smaller ones;
+otherwise it is replaced by `no_baseline_floor_ns` (`floor`). A second long
+prefill a few seconds after the first therefore meets the floor, not the
+decode cadence. Only earlier steps count, so the decision never depends on
+what happened after the stall. With `config.now_wall_ns`, a stall still
+going on counts from the last completion (`detail["ongoing"]`), while a
+request of that step is still running: not one that finished there (by a
+finish reason, or discarded after its end of sequence under async
+scheduling), was ended since (a `terminal` record, as for a cancel), or
+belongs to an epoch that said `goodbye`.
+
+A stall is judged only where the records are known to be whole: between
+two heartbeats (the hello counting as one with nothing lost) whose drop
+counts and errors did not change, one at or before the stall's start and one
+at or after its end. A stall still going on also needs a heartbeat since it
+began, the last within `heartbeat_grace_ns` (3 s: the writer beats once a
+second, but under load its beats slip, 2.3 s apart on a real vLLM 0.30.0
+run) of the evaluation time. A capped or killed writer stops writing records
+and heartbeats alike, so the engine running on unrecorded looks like a stall
+with no heartbeat around it. A host stall that holds Python's GIL stops the
+writer's thread too, so while it lasts it is no verdict, and it is judged
+once it ends and the heartbeats resume. A stall over its limit
+outside that coverage gives no verdict (`hook_coverage_unknown`) instead of
+exceeding; `detail["covered"]` says which the reported stall was.
+
+The records also give no verdict (`sufficient` is False) when they come from
+two epochs (`epoch_changed`), skip a `seq` or show drop counts (of any kind,
+oversized records included) rising between heartbeats
+(`hook_records_dropped`), show write errors rising between heartbeats
+(`hook_writer_errors`), hold no completed step (`too_few_steps`) or are
+absent (`requires_hook`). Write errors also count failed seals and
+`status.json` writes, which lose nothing, so this abstains more than it
+must. Only the epoch's `status.json`, passed as `config.status`, says the
+writer is capped (`hook_capped`): no heartbeat ever does.
+`detail["pause_capability"]` says whether the hook records pauses. Without
+it, a pause of every running request (vLLM's `PAUSED_ALL`, as for an RL
+weight sync) looks like a stall with ready work wherever a pause can act: a
+gap between steps, or, under async scheduling, a step scheduled before the
+one before it completed, whose output waits for an engine step() call that
+a paused scheduler skips. Such a stall over its limit is no verdict
+(`pause_state_unknown`). A pause changes only what schedule() returns and
+whether the engine steps, so a long schedule() call or a step run within
+one call keeps its verdict. A pause can only remove stalls, so records with
+no stall over its limit still say none exceeded. On a log from #217's hook,
+which records no pauses, spec5's 1,315.5 ms first step still exceeds.
