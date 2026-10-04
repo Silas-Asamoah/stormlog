@@ -65,7 +65,7 @@ class FakeCollector:
         status: int = 200,
         refuse_first: int = 0,
         partial_rejected: int = 0,
-        retry_after: float | None = None,
+        retry_after: int | None = None,
     ) -> None:
         self.store = Path(store)
         self.delay_seconds = delay_seconds
@@ -194,13 +194,13 @@ def _handler(collector: FakeCollector) -> type[BaseHTTPRequestHandler]:
             status: int,
             body: bytes = b"",
             json_body: bool = False,
-            retry_after: float | None = None,
+            retry_after: int | None = None,
         ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", JSON if json_body else PROTOBUF)
             self.send_header("Content-Length", str(len(body)))
             if retry_after is not None and status in (429, 503):
-                self.send_header("Retry-After", f"{retry_after:g}")
+                self.send_header("Retry-After", str(retry_after))
             self.end_headers()
             try:
                 self.wfile.write(body)
@@ -254,7 +254,14 @@ def count_store(path: Path) -> dict[str, int]:
     return {"raw_spans": raw, "unique_spans": len(unique)}
 
 
-def main(argv: list[str] | None = None) -> int:
+def _delay_seconds(text: str) -> int:
+    """RFC 9110's delay-seconds: digits only, so never 1.5, -1 or inf."""
+    if not text.isascii() or not text.isdigit():
+        raise argparse.ArgumentTypeError(f"whole seconds, not {text!r}")
+    return int(text)
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--listen", default="127.0.0.1:4318", metavar="HOST:PORT")
     parser.add_argument("--store", type=Path, metavar="PATH")
@@ -276,13 +283,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--retry-after",
-        type=float,
+        type=_delay_seconds,
         metavar="SECONDS",
-        help="Add Retry-After to each 429 or 503.",
+        help="Add Retry-After, in whole seconds, to each 429 or 503.",
     )
     parser.add_argument(
         "--count", type=Path, metavar="PATH", help="Print a store file's counts."
     )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     if args.count is not None:
         print(json.dumps(count_store(args.count)))

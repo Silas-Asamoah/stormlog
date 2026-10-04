@@ -186,6 +186,32 @@ def test_a_refusal_can_carry_retry_after(tmp_path: Path) -> None:
         status, headers, _ = _post(
             collector, "/v1/traces", _json_export(1), "application/json"
         )
+        stored, stored_headers, _ = _post(
+            collector, "/v1/traces", _json_export(1), "application/json"
+        )
     finally:
         collector.stop()
     assert status == 503 and headers["Retry-After"] == "2"
+    # Only a 429 or 503 carries it: not an export it stored, nor a 500.
+    assert stored == 200 and "Retry-After" not in stored_headers
+    failing = fake_collector.FakeCollector(
+        "127.0.0.1:0", tmp_path / "f.jsonl", status=500, retry_after=2
+    )
+    failing.start()
+    try:
+        status, headers, _ = _post(
+            failing, "/v1/traces", _json_export(1), "application/json"
+        )
+    finally:
+        failing.stop()
+    assert status == 500 and "Retry-After" not in headers
+
+
+@pytest.mark.parametrize("value", ["1.5", "-1", "inf"])
+def test_retry_after_takes_whole_seconds_only(value: str) -> None:
+    # RFC 9110's delay-seconds are digits; Stormlog ignores "1.5", so an
+    # episode given it would silently test no Retry-After at all.
+    with pytest.raises(SystemExit):
+        fake_collector.build_parser().parse_args(["--retry-after", value])
+    args = fake_collector.build_parser().parse_args(["--retry-after", "2"])
+    assert args.retry_after == 2
