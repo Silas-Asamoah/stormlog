@@ -529,21 +529,26 @@ class InferenceProfiler:
                 pass
 
     def _write_capabilities(self, writer: JsonlEventWriter) -> None:
-        """Say what the engine exposed, and what was exported, once the run knows."""
-        context = self._artifact_identity().context
-        if self.export is not None:
-            for event in self.export.capability_events(context):
+        """Say what the engine exposed, and what was exported, once the run knows.
+
+        A Ctrl+C while these are written takes effect once they are, so an
+        interrupted run still records its export's final counts.
+        """
+        with _ctrl_c_held():
+            context = self._artifact_identity().context
+            if self.export is not None:
+                for event in self.export.capability_events(context):
+                    writer.append(event.to_record())
+            if self.vllm_scraper is not None:
+                writer.append(self.vllm_scraper.capability_event(context).to_record())
+            if self.config.vllm_spans_listen is not None:
+                event = span_capability_event(
+                    context,
+                    receiver=self.span_receiver,
+                    listen=self.config.vllm_spans_listen,
+                    error=self._span_receiver_error,
+                )
                 writer.append(event.to_record())
-        if self.vllm_scraper is not None:
-            writer.append(self.vllm_scraper.capability_event(context).to_record())
-        if self.config.vllm_spans_listen is not None:
-            event = span_capability_event(
-                context,
-                receiver=self.span_receiver,
-                listen=self.config.vllm_spans_listen,
-                error=self._span_receiver_error,
-            )
-            writer.append(event.to_record())
 
     def _artifact_identity(self) -> ArtifactIdentityEvent:
         session = self.session
@@ -1453,6 +1458,29 @@ def _ctrl_c_raises() -> Iterator[None]:
         yield
     finally:
         signal.signal(signal.SIGINT, signal.default_int_handler)
+
+
+@contextmanager
+def _ctrl_c_held() -> Iterator[None]:
+    """Hold a Ctrl+C back until the block ends, then deliver it.
+
+    The held signal goes to the handler that was in place, which during a
+    run raises KeyboardInterrupt (``_ctrl_c_raises``). Off the main thread,
+    where no handler can be set, or under a handler not set from Python,
+    the block runs as is.
+    """
+    previous = signal.getsignal(signal.SIGINT)
+    if threading.current_thread() is not threading.main_thread() or previous is None:
+        yield
+        return
+    held: list[int] = []
+    signal.signal(signal.SIGINT, lambda signum, _frame: held.append(signum))
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+        if held:
+            signal.raise_signal(signal.SIGINT)
 
 
 @asynccontextmanager
