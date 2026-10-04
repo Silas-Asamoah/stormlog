@@ -103,9 +103,10 @@ the flaky benchmark memory gates
   independent design; missing outcomes only make it more careful, the
   independent design covers at least 0.958, the run-level attainment gate
   holds at the supremum of a false claim and under correlated failures where
-  pooled requests do not, and the skew screen flags 5% of normal noise. Every
-  run-gate cell is one the gate can pass. Strong right skew (8–12%) and pooled
-  requests are published as limits. (#213)
+  pooled requests do not, and the skew screen flags 5% of normal noise. A
+  run-gate cell the gate cannot pass at all is reported as one, with the
+  fewest runs that could, never as a pass rate of 0. Strong right skew
+  (8–12%) and pooled requests are published as limits. (#213)
 - `tests/fixtures/infer/comparison_contract_v1.json`: the comparison's
   units contract, 21 cases whose expected effects, intervals and gate
   outcomes are computed from the formulas and the gate rules by
