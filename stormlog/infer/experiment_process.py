@@ -33,6 +33,7 @@ from .server_process import (
     SERVER_ROLES,
     group_members,
     process_tree,
+    read_process,
     still_running,
 )
 
@@ -294,6 +295,14 @@ def unexpected_roles(pid: int, *, proc: Path = PROC) -> list[dict[str, Any]] | N
         for info in process_tree(pid, proc)
         if info.role not in EXPECTED_ROLES
     ]
+
+
+def process_key(pid: int, *, proc: Path = PROC) -> tuple[int, int] | None:
+    """A process's PID and start ticks, its name for its lifetime; None off Linux."""
+    if not _linux():
+        return None
+    info = read_process(pid, proc)
+    return None if info is None else info.key
 
 
 def remembered_tree(pid: int, *, proc: Path = PROC) -> list[tuple[int, int]]:
