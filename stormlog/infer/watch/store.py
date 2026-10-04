@@ -746,7 +746,10 @@ def read_manifest_snapshot(path: str | Path, *, attempts: int = 3) -> BundleView
     """A manifest whose files all exist, for readers that do not take the lock.
 
     When a file the manifest names has gone, a newer generation was published
-    in between: the manifest is read again, up to ``attempts`` times.
+    in between: the manifest is read again, up to ``attempts`` times. This
+    guards against a stale manifest only: a file can still go before the
+    caller reads it. :func:`read_bundle_file` reads one file safely without
+    the lock, and :func:`open_incident_bundle` pins the whole bundle.
     """
     bundle = Path(path)
     for _ in range(max(1, attempts)):
@@ -755,6 +758,22 @@ def read_manifest_snapshot(path: str | Path, *, attempts: int = 3) -> BundleView
             return BundleView(bundle, manifest)
     raise FileNotFoundError(
         f"{bundle}: files changed under {attempts} manifest reads; "
+        "use open_incident_bundle to pin the bundle"
+    )
+
+
+def read_bundle_file(path: str | Path, name: str, *, attempts: int = 3) -> bytes:
+    """One file of the current generation, by its name inside it, read
+    without the lock: a file that vanishes while it is read means a newer
+    generation was published, so the manifest is read again."""
+    for _ in range(max(1, attempts)):
+        view = read_manifest_snapshot(path, attempts=attempts)
+        try:
+            return view.file(name).read_bytes()
+        except FileNotFoundError:
+            continue
+    raise FileNotFoundError(
+        f"{path}: {name} changed under {attempts} reads; "
         "use open_incident_bundle to pin the bundle"
     )
 
@@ -929,5 +948,6 @@ __all__ = [
     "StoreInUse",
     "STATUS_INTERRUPTED",
     "open_incident_bundle",
+    "read_bundle_file",
     "read_manifest_snapshot",
 ]

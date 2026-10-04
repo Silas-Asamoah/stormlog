@@ -69,6 +69,9 @@ While the bundle is pinned, no generation it names is deleted. A tool that
 cannot take the lock reads `manifest.json`, then the files it names. If one
 of them has gone, a newer generation was published in between, so it reads
 the manifest again: `read_manifest_snapshot` does this up to three times.
+That only guards against a stale manifest, since a file can still go before
+it is read; `read_bundle_file(bundle, "incident.jsonl")` reads one file
+without the lock and retries when it vanishes.
 
 ### Disk limits
 

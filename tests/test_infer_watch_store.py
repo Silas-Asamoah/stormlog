@@ -408,6 +408,33 @@ def test_a_reader_without_the_lock_retries_on_a_vanished_file(
     assert view.manifest.current == "gen-1"
 
 
+def test_a_lockless_read_retries_when_a_file_vanishes_while_it_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A snapshot only says the files existed when the manifest was read;
+    one can still go before it is read, which read_bundle_file retries."""
+    store = IncidentStore(tmp_path, _limits())
+    incident_id = _gen0(store, b"first\n")
+    bundle = tmp_path / "incidents" / incident_id
+    real_snapshot = store_module.read_manifest_snapshot
+    calls = {"n": 0}
+
+    def snapshot(path: Any, *, attempts: int = 3) -> Any:
+        view = real_snapshot(path, attempts=attempts)
+        calls["n"] += 1
+        if calls["n"] == 1:  # a new generation lands right after the snapshot
+            second = store.next_generation(incident_id, KIB)
+            assert second is not None
+            with second.file("incident.jsonl") as out:
+                out.write(b"second\n")
+            second.publish()
+        return view
+
+    monkeypatch.setattr(store_module, "read_manifest_snapshot", snapshot)
+    assert store_module.read_bundle_file(bundle, "incident.jsonl") == b"second\n"
+    assert calls["n"] == 2
+
+
 # ----------------------------------------------------------------- recovery
 
 
