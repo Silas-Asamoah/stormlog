@@ -102,26 +102,34 @@ class Signals:
         ]
 
     def busy_step_gaps(self) -> list[Point]:
-        """The step gaps that lie wholly inside an in-flight interval. A gap
-        that spans an idle period measures the idling, not the engine; with
-        the intervals unknown, no gap can be shown busy."""
+        """Each step gap's busy part, in seconds, at its later step: from the
+        later of the earlier step and the opening of the in-flight interval
+        the later step falls in. Idle time measures the traffic, not the
+        engine, so it is left out; but a request that arrived in idle time
+        and waited for a step felt that wait, so it counts. A gap whose later
+        step falls in idle time is dropped. With the intervals unknown, no
+        gap can be shown busy."""
         intervals = self.in_flight
         if intervals is None:
             return []
         opens = [start for start, _end in intervals]
-        starts = self.step_starts
-        return [
-            (later, (later - earlier) / SECOND)
-            for earlier, later in zip(starts, starts[1:])
-            if _covered(intervals, opens, earlier, later)
-        ]
+        gaps = []
+        for earlier, later in zip(self.step_starts, self.step_starts[1:]):
+            opened = busy_since(intervals, opens, later)
+            if opened is not None and later > max(earlier, opened):
+                gaps.append((later, (later - max(earlier, opened)) / SECOND))
+        return gaps
 
 
-def _covered(
-    intervals: Sequence[tuple[int, int]], opens: Sequence[int], start: int, end: int
-) -> bool:
-    index = bisect.bisect_right(opens, start) - 1
-    return index >= 0 and intervals[index][1] >= end
+def busy_since(
+    intervals: Sequence[tuple[int, int]], opens: Sequence[int], at_ns: int
+) -> int | None:
+    """When the in-flight interval holding ``at_ns`` opened, or None if no
+    victim request was in flight then."""
+    index = bisect.bisect_right(opens, at_ns) - 1
+    if index >= 0 and intervals[index][1] >= at_ns:
+        return intervals[index][0]
+    return None
 
 
 @dataclass(frozen=True)
