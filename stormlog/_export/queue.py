@@ -1,14 +1,18 @@
-"""A FIFO bounded by item count and by estimated bytes, whose offers never block.
+"""A FIFO bounded by item count and by bytes, whose offers never block.
 
 The producer is the code being measured: an inference client's event loop,
 or a watcher's tick. It appends and moves on. When either bound is reached
 the new item is dropped and counted, so queued items keep their order and
 nothing already accepted is ever evicted. Consumers take short batches, so
 a producer waiting for the lock waits for at most one of them.
+
+Each item is charged the size its producer gives plus ``ENTRY_BYTES``, what
+the queue itself holds for it, so the byte bound is a bound on memory.
 """
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from collections import deque
@@ -19,6 +23,13 @@ T = TypeVar("T")
 
 # The most items a consumer removes per lock acquisition.
 TAKE_LIMIT = 64
+# Per item: its (item, charge) entry, the charge's int, and a deque pointer.
+ENTRY_BYTES = (
+    sys.getsizeof((None, None))
+    + sys.getsizeof(2**30 - 1)
+    + sys.getsizeof((None,))
+    - sys.getsizeof(())
+)
 
 
 @dataclass(frozen=True)
@@ -58,7 +69,8 @@ class BoundedQueue(Generic[T]):
         self._high_water_bytes = 0
 
     def offer(self, item: T, size: int) -> bool:
-        """Queue ``item`` of estimated ``size`` bytes, or drop it and count why."""
+        """Queue ``item`` of ``size`` bytes, or drop it and count why."""
+        charge = size + ENTRY_BYTES
         with self._cond:
             self._offered += 1
             if self._closed:
@@ -66,12 +78,12 @@ class BoundedQueue(Generic[T]):
                 return False
             if (
                 len(self._items) >= self.max_items
-                or self._bytes + size > self.max_bytes
+                or self._bytes + charge > self.max_bytes
             ):
                 self._dropped_full += 1
                 return False
-            self._items.append((item, size))
-            self._bytes += size
+            self._items.append((item, charge))
+            self._bytes += charge
             self._accepted += 1
             self._high_water = max(self._high_water, len(self._items))
             self._high_water_bytes = max(self._high_water_bytes, self._bytes)
@@ -124,7 +136,7 @@ class BoundedQueue(Generic[T]):
     def _pop_locked(self, limit: int) -> list[T]:
         taken: list[T] = []
         while self._items and len(taken) < limit:
-            item, size = self._items.popleft()
-            self._bytes -= size
+            item, charge = self._items.popleft()
+            self._bytes -= charge
             taken.append(item)
         return taken

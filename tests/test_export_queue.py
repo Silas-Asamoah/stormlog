@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from stormlog._export.queue import TAKE_LIMIT, BoundedQueue
+from stormlog._export.queue import ENTRY_BYTES, TAKE_LIMIT, BoundedQueue
 
 
 def test_offers_past_the_item_bound_are_dropped_and_counted() -> None:
@@ -18,14 +18,16 @@ def test_offers_past_the_item_bound_are_dropped_and_counted() -> None:
 
 
 def test_offers_past_the_byte_bound_are_dropped_and_counted() -> None:
-    queue: BoundedQueue[str] = BoundedQueue(max_items=100, max_bytes=25)
+    # Each item is charged its size and the queue's own entry for it.
+    bound = 25 + 3 * ENTRY_BYTES
+    queue: BoundedQueue[str] = BoundedQueue(max_items=100, max_bytes=bound)
     assert queue.offer("a", 10) and queue.offer("b", 10)
     assert not queue.offer("big", 10)
     assert queue.offer("small", 5)
     stats = queue.stats()
     assert stats.dropped_full == 1
-    assert (stats.depth, stats.depth_bytes) == (3, 25)
-    assert (stats.high_water, stats.high_water_bytes) == (3, 25)
+    assert (stats.depth, stats.depth_bytes) == (3, bound)
+    assert (stats.high_water, stats.high_water_bytes) == (3, bound)
 
 
 def test_take_returns_at_most_the_limit_per_call() -> None:

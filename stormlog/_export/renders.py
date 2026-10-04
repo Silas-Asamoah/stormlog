@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 MAX_GENERATIONS = 3
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, slots=True)
 class Generation:
     """One rendered exposition and the readers still holding it."""
 

@@ -106,7 +106,7 @@ class FamilyStats:
     rejected: int = 0
 
 
-@dataclass
+@dataclass(slots=True)
 class _Series:
     prefixes: tuple[bytes, ...]
     # Counter or gauge: one value. Histogram: per-bucket counts (the last is

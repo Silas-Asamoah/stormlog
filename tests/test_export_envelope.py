@@ -57,9 +57,11 @@ def test_a_megabyte_field_cannot_make_a_big_envelope() -> None:
 
 
 def test_trailing_fields_past_the_byte_budget_are_left_out() -> None:
-    limits = EnvelopeLimits(max_string=100, max_bytes=300)
+    # A field of 100 characters holds about 220 bytes: its string object,
+    # its pair and its pointer; the envelope itself about 100.
+    limits = EnvelopeLimits(max_string=100, max_bytes=600)
     envelope = make_envelope("k", [(f"f{i}", "y" * 100) for i in range(5)], limits)
-    assert envelope.size <= 300
+    assert envelope.size <= 600
     assert len(envelope.fields) == 2 and envelope.truncated == 3
 
 
