@@ -18,7 +18,7 @@ from stormlog._export.registry import render
 from stormlog._export.renders import RenderCache
 from stormlog._export.textfile import PRODUCER_LABEL, TextfileWriter, slot_paths
 from stormlog.exit_codes import ExitCode
-from stormlog.infer import export_collector
+from stormlog.infer import export_collector, server_collector
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.export_collector import CollectorExport
 from stormlog.infer.export_config import ExportConfig
@@ -132,16 +132,65 @@ class _GpuShowing(_FakeGpu):
         (_FakeGpu(), "unknown"),
     ],
 )
-def test_the_info_series_says_whether_the_server_was_seen_on_its_gpu(
+def test_a_series_says_whether_the_server_was_seen_on_its_gpu(
     tmp_path: Path, gpu: _FakeGpu, match: str
 ) -> None:
     # device_uuid is the GPU the collector watched; whether the server was
     # on it is a separate fact, never implied.
     export = _export(tmp_path)
     _collect(tmp_path, export, duration_seconds=0.05, gpu_source=gpu)
-    ((labels, value),) = _series(_textfile(tmp_path), "stormlog_collector_info")
-    assert labels["device_uuid"] == "GPU-live"
-    assert labels["gpu_process_match"] == match and value == 1
+    exposition = _textfile(tmp_path)
+    ((labels, value),) = _series(exposition, "stormlog_collector_info")
+    assert labels["device_uuid"] == "GPU-live" and value == 1
+    assert "gpu_process_match" not in labels
+    assert _match_states(exposition) == {
+        state: float(state == match) for state in ("confirmed", "not_seen", "unknown")
+    }
+
+
+def _match_states(exposition: Exposition) -> dict[str, float]:
+    return {
+        labels["state"]: value
+        for labels, value in _series(exposition, "stormlog_collector_gpu_process_match")
+    }
+
+
+class _GpuLater(_GpuShowing):
+    """NVML lists the server only from its second listing on, as when the
+    collector starts while the engine is still loading its model."""
+
+    def __init__(self) -> None:
+        super().__init__(set())
+        self.calls = 0
+
+    def compute_pids(self) -> set[int] | None:
+        self.calls += 1
+        return set() if self.calls == 1 else {os.getpid()}
+
+
+def test_a_server_that_reaches_its_gpu_later_is_confirmed_then(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server_collector, "MATCH_RECHECK_SECONDS", 0.0)
+    gpu = _GpuLater()
+    export = _export(tmp_path)
+    _collect(tmp_path, export, duration_seconds=0.2, gpu_source=gpu)
+    assert gpu.calls >= 2
+    assert _match_states(_textfile(tmp_path))["confirmed"] == 1
+
+
+def test_a_child_of_the_server_on_its_gpu_confirms_it(tmp_path: Path) -> None:
+    # vLLM's EngineCore is a child of the API server: NVML shows the child.
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        export = _export(tmp_path)
+        _collect(
+            tmp_path, export, duration_seconds=0.05, gpu_source=_GpuShowing({child.pid})
+        )
+        assert _match_states(_textfile(tmp_path))["confirmed"] == 1
+    finally:
+        child.kill()
+        child.wait()
 
 
 def test_a_gpu_identity_change_is_the_recorded_stop(tmp_path: Path) -> None:
@@ -285,6 +334,9 @@ class _Recording:
         self.closed: list[str] = []
 
     def identify(self, identity: Any, gpu_process_match: str = "unknown") -> None:
+        pass
+
+    def matched(self, gpu_process_match: str) -> None:
         pass
 
     def poll(self, samples: Any) -> None:

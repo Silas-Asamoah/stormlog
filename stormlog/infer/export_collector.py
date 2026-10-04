@@ -6,9 +6,9 @@ DCGM or node exporter already reports device and process memory to
 Prometheus. ``stormlog_collector_info`` carries the identity the collector
 observed (host, boot, process, GPU or MIG instance, replica, group, rank)
 as labels on one series, so a dashboard can tell collectors apart and see
-which GPU each one watched; ``gpu_process_match`` says whether NVML showed
-the server on that GPU. An identity part that is not known is empty,
-never guessed.
+which GPU each one watched. ``stormlog_collector_gpu_process_match`` says
+whether NVML showed the server on that GPU, checked again until it did. An
+identity part that is not known is empty, never guessed.
 
 Every label value is known once the collector has found its process and
 GPU, so the series and the budget are fixed then, before anything is
@@ -30,6 +30,7 @@ from .._export.textfile import PRODUCER_LABEL, SlotInUse, TextfileWriter
 from .export import ExportUsageError
 from .export_config import ExportConfig
 from .server_collector import (
+    GPU_MATCH_STATES,
     GPU_MATCH_UNKNOWN,
     STOP_DURATION_ELAPSED,
     STOP_GPU_IDENTITY_CHANGED,
@@ -59,7 +60,6 @@ IDENTITY_LABELS = (
     "pid",
     "process_start_ns",
     "device_uuid",
-    "gpu_process_match",
     "gpu_instance_id",
     "replica_id",
     "group_id",
@@ -110,6 +110,7 @@ class CollectorExport:
         )
         self._families: dict[str, Family] = {}
         self._identity_values: tuple[str, ...] = ()
+        self._match = GPU_MATCH_UNKNOWN
         self.polls = 0
         self._closed = False
 
@@ -127,9 +128,8 @@ class CollectorExport:
         self, identity: ServerIdentity, gpu_process_match: str = GPU_MATCH_UNKNOWN
     ) -> None:
         """Declare the series for this identity, check the budget, start serving."""
-        self._identity_values = _identity_values(
-            self.run_id, self.version, identity, gpu_process_match
-        )
+        self._identity_values = _identity_values(self.run_id, self.version, identity)
+        self._match = gpu_process_match
         self._declare()
         try:
             self.registry.check_budget()
@@ -140,6 +140,14 @@ class CollectorExport:
         self._start_server()
         if self.textfile is not None:
             self.textfile.start()
+
+    def matched(self, gpu_process_match: str) -> None:
+        """A later check's answer: the server is now seen on its GPU."""
+        try:
+            self._match = gpu_process_match
+            self.registry.apply(self._set_match)
+        except Exception:
+            pass
 
     def poll(self, samples: Sequence[TelemetrySample]) -> None:
         """Count one poll and the state of each sample in it. Never raises."""
@@ -186,12 +194,22 @@ class CollectorExport:
                 FamilySpec(
                     "stormlog_collector_info",
                     "gauge",
-                    "1 for the collector, labelled with the identity it observed "
-                    "and whether NVML showed the server on its GPU "
-                    "(gpu_process_match). An unknown part is empty.",
+                    "1 for the collector, labelled with the identity it "
+                    "observed. An unknown part is empty.",
                     labels=IDENTITY_LABELS,
                 ),
                 [dict(zip(IDENTITY_LABELS, self._identity_values))],
+            ),
+            "gpu_match": add(
+                FamilySpec(
+                    "stormlog_collector_gpu_process_match",
+                    "gauge",
+                    "1 for whether NVML showed the server, or a child of it, on "
+                    "the GPU the collector watches: confirmed, not_seen or "
+                    "unknown. Checked again until confirmed.",
+                    labels=("state",),
+                    enums={"state": GPU_MATCH_STATES},
+                )
             ),
             "running": add(
                 FamilySpec(
@@ -253,8 +271,13 @@ class CollectorExport:
     def _started(self) -> None:
         families = self._families
         families["info"].set(self._identity_values, 1.0)
+        self._set_match()
         families["running"].set((), 1.0)
         families["start"].set((), time.time())
+
+    def _set_match(self) -> None:
+        for state in GPU_MATCH_STATES:
+            self._families["gpu_match"].set((state,), float(state == self._match))
 
     def _count(self, samples: Sequence[TelemetrySample]) -> None:
         families = self._families
@@ -292,7 +315,7 @@ class CollectorExport:
 
 
 def _identity_values(
-    run_id: str, version: str, identity: ServerIdentity, gpu_process_match: str
+    run_id: str, version: str, identity: ServerIdentity
 ) -> tuple[str, ...]:
     def text(value: object) -> str:
         return "" if value is None else str(value)
@@ -304,7 +327,6 @@ def _identity_values(
         str(identity.pid),
         str(identity.process_start_ns),
         text(identity.device_uuid),
-        gpu_process_match,
         text(identity.gpu_instance_id),
         text(identity.replica_id),
         text(identity.group_id),
