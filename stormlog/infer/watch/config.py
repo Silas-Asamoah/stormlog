@@ -116,8 +116,9 @@ _DEFAULT_HEALTH_IDS = frozenset(
 
 
 # Incidents are admitted in lanes, each with the limits above: one for
-# metric and signal triggers, one for health and test triggers, so either
-# can be full without turning the other's away.
+# metric and signal triggers, and one side lane that health and test
+# triggers share, so either lane can be full without turning the other's
+# away.
 INCIDENT_LANES = 2
 
 
