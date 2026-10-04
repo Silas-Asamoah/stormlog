@@ -573,8 +573,9 @@ def test_queue_recovery_doesnt_hold_through_recurring_bursts() -> None:
     # rev-220-b's D9: a chance allowance counts samples out of band, not
     # how far out. 10 of 100 waits at 30 s (375x the p95) passed as chance,
     # and so did a saturated waiting gauge 1 sample in 10. The bursts start
-    # half a second into the hold, so the waits' ceiling decides, not the
-    # rule that a hold's first sample is in band.
+    # half a second into the hold, so the first-sample rule doesn't decide.
+    # The mean bound refuses these 30 s waits too; the F1 test above is the
+    # one where only the ceiling sees its bursts.
     waits = every_second(0, 45, lambda s: 0.08 + 0.001 * (s % 7))
     burst_waits = [
         (S * 50 + tenth * S // 10, 30.0 if tenth % 10 == 5 else 0.08)
@@ -597,6 +598,37 @@ def test_queue_recovery_doesnt_hold_through_recurring_bursts() -> None:
     )
     calm_waits, calm_gauge = _queue_criteria_of(context(calm, ctx.actions))
     assert calm_waits.holds(50 * S, 60 * S) and calm_gauge.holds(50 * S, 60 * S)
+
+
+def test_f1_recovery_waits_out_wait_bursts_beyond_the_ceiling() -> None:
+    # rev-220-b's delta-2 mutation run and Fable's P2-2: with the waits'
+    # 2x p99 ceiling set to infinity every test passed, because each burst
+    # fixture also failed the gauge, the first-sample rule or the mean.
+    # Here only the ceiling can see the bursts. After F1's overload
+    # (45-75 s), one wait in 30 is 0.5 s (about 3x the 0.17 s ceiling)
+    # until 135 s: few enough for the chance allowance, a hold's mean
+    # stays under 1.25x the baseline's, and the waiting gauge is in band
+    # throughout. The effect can't end before the last burst.
+    def wait_at(tenth: int) -> float:
+        if 450 <= tenth < 750:
+            return 2.0
+        if 750 <= tenth < 1350 and tenth % 30 == 15:
+            return 0.5
+        return 0.08 + 0.001 * (tenth % 7)
+
+    waits = [(tenth * S // 10, wait_at(tenth)) for tenth in range(3000)]
+    waiting = every_second(0, 300, lambda s: 20.0 if 45 <= s < 75 else float(s % 7))
+    signals = Signals(in_flight=None, waits=waits, waiting=waiting)
+    context = Context(
+        signals,
+        Baseline.measure(signals, 0, 45 * S),
+        Actions(),
+        start_ns=45 * S,
+        until_ns=300 * S,
+    )
+    timing = effect_timing("F1", context)
+    last_burst = 1335 * S // 10
+    assert timing.end_ns is not None and timing.end_ns > last_burst
 
 
 def test_queue_recovery_doesnt_hold_through_bursts_under_the_ceilings() -> None:
