@@ -267,7 +267,7 @@ stopped and frozen its values, and before the session's last record.
 | The textfile writer is stuck in I/O at the end | Left to finish, with its lock kept until the process exits | unchanged |
 | The exporter's queue is full | The record is dropped from the metrics only and counted; the artifact has it | unchanged |
 | The matrix is over the budget, or the slot is held | Refused before anything is sent | 2 |
-| Ctrl+C | The exporter stops within 2 s, writes its final textfile and capability record, and skips the linger. A second Ctrl+C while it stops ends its waiting, not its steps: the values still freeze and the final file and record are still written. A Ctrl+C while the record is written takes effect once it is | 130, as before |
+| Ctrl+C | The exporter stops within 2 s, writes its final textfile and capability record, and skips the linger. A second Ctrl+C while it stops ends its waiting, not its steps: the values still freeze and the final file and record are still written. A Ctrl+C while the record is written takes effect once it is, and a second one at once, so a write stuck on a hung filesystem can still be broken off | 130, as before |
 | The run fails after the exporter started | The exporter is stopped the same way, within 2 s, so the final file says the run ended | unchanged |
 
 ## Cost

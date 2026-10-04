@@ -479,6 +479,29 @@ def test_a_held_ctrl_c_is_delivered_once_the_block_ends() -> None:
     assert signal.getsignal(signal.SIGINT) is before
 
 
+def test_a_second_ctrl_c_breaks_a_held_block_off() -> None:
+    # A write stuck inside the hold, as on a hung filesystem: the first
+    # press is held, the second goes through at once.
+    before = signal.getsignal(signal.SIGINT)
+    main = threading.main_thread().ident
+    assert main is not None
+
+    def press_twice() -> None:
+        for _ in range(2):
+            time.sleep(0.2)
+            signal.pthread_kill(main, signal.SIGINT)
+
+    presser = threading.Thread(target=press_twice, daemon=True)
+    started = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        with _ctrl_c_held():
+            presser.start()
+            time.sleep(10)  # stands in for a write that does not return
+    assert time.monotonic() - started < 3
+    presser.join(5)
+    assert signal.getsignal(signal.SIGINT) is before
+
+
 def test_without_a_python_handler_a_ctrl_c_is_not_held(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
