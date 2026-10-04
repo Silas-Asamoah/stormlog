@@ -373,11 +373,14 @@ def test_a_fault_claim_without_a_window_in_a_negative_run() -> None:
         ),
     )
     named = finding("k", KV, 1, window=None)
-    mixed = run_of([episode(), late_null], diagnosis(windowless, named))
-    assert mixed.false_claims == (windowless["id"],)
+    # F2 declares the queue a secondary, but only the fault it expects
+    # (KV pressure) makes a windowless claim unplaced: the lead's ruling.
+    secondary_kind = finding("q", QUEUE, 2, window=None)
+    mixed = run_of([episode(), late_null], diagnosis(windowless, named, secondary_kind))
+    assert set(mixed.false_claims) == {windowless["id"], secondary_kind["id"]}
     assert mixed.problems == (
         "run q221-run: 1 fault claims without a window,"
-        " of kinds its injected episodes name",
+        " of kinds its injected faults expect",
     )
 
 
