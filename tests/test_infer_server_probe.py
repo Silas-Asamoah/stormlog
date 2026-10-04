@@ -201,6 +201,28 @@ def test_the_deadline_bounds_the_whole_exchange(
     assert time.monotonic() - began < 1.5
 
 
+def test_an_answer_cut_off_at_its_deadline_stops_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The abandoned exchange kept its connection reading for as long as the
+    # server trickled: a client connection the run never planned.
+    monkeypatch.setattr(server_probe, "BASIC_DEADLINE_SECONDS", 0.5)
+    routes = {**_dev_routes(), VERSION: _trickle(head=True)}
+    with _server(routes) as endpoint:
+        probe = probe_server(endpoint, mode="basic")
+        assert probe.answers[VERSION].status == "timeout"
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and _probing():
+            time.sleep(0.05)
+        assert not _probing()
+
+
+def _probing() -> bool:
+    return any(
+        t.name == "stormlog-probe" and t.is_alive() for t in threading.enumerate()
+    )
+
+
 def test_after_a_route_times_out_the_others_are_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
