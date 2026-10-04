@@ -281,8 +281,9 @@ model); more requests per run do not help.
 - **What it says.** The gate's `claim` reads, for example, "8 of 8
   candidate runs within 0.01 of the block baseline; run-pass rate at least
   0.631 with 97.5% confidence". It is never a bound on the fraction.
-- **Only non-inferiority.** `significant` and `demonstrated` are not defined
-  for a fraction: a usage error.
+- **Only non-inferiority.** `significant` and `demonstrated` on a fraction
+  are a usage error, whose message says so: v1 supports only the run-level
+  claim, which has no regression form.
 - **Alongside it,** never gated: the paired t on the fractions with its
   standard error floored at the pooled binomial one (`p = (x + 1)/(N + 2)`
   per arm; nominal under independent requests, under-covering when failures
