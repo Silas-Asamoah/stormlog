@@ -10,8 +10,8 @@ which also finds one that left the group with ``setsid``. Every launch also
 carries a mark in its environment (``STORMLOG_RUN_MARK``), which every
 descendant inherits unless it execs with a fresh environment, so a process
 forked after the tree was remembered and then moved to a session of its own
-is found too. An environment that cannot be read cannot be told unmarked;
-the cleanup record counts them.
+is found too. A process whose environment cannot be read, or was emptied,
+and that may be the launch's keeps the cleanup from verifying.
 
 On Linux the checks read ``/proc`` (``server_process``). Elsewhere they use
 ``psutil`` and say so, since the session of another process cannot be read
@@ -37,9 +37,11 @@ from .server_process import (
     HELPER_ROLES,
     PROC,
     SERVER_ROLES,
+    boot_time_s,
     group_members,
     process_tree,
     read_process,
+    start_ns,
     still_running,
 )
 
@@ -47,6 +49,11 @@ KILL_WAIT_SECONDS = 10.0
 # Inherited by everything a launch starts; a fresh value per launch.
 MARK_VARIABLE = "STORMLOG_RUN_MARK"
 POLL_SECONDS = 0.1
+# A process started this long before a launch is not the launch's; the slack
+# covers /proc's boot time, which is in whole seconds.
+START_SLACK_NS = 2_000_000_000
+# What launchd starts of its own on macOS: no launch's escapee runs these.
+MACOS_SYSTEM_PREFIXES = ("/System/", "/usr/libexec/", "/usr/sbin/")
 EXPECTED_ROLES = frozenset(SERVER_ROLES) | frozenset(HELPER_ROLES)
 
 
@@ -218,11 +225,18 @@ class Cleanup:
     # Environments the mark search could not read; None when there was no
     # mark to search for. The search is complete only when it read them all.
     unreadable: int | None = None
+    # Processes that may be the launch's whose environment was unreadable or
+    # empty: nothing shows them unmarked, so the cleanup is not verified.
+    blind: tuple[int, ...] = ()
 
     def to_record(self) -> dict[str, Any]:
         search = None
         if self.unreadable is not None:
-            search = {"complete": self.unreadable == 0, "unreadable": self.unreadable}
+            search = {
+                "complete": self.unreadable == 0,
+                "unreadable": self.unreadable,
+                "blind": list(self.blind),
+            }
         return {
             "verified": self.verified,
             "method": self.method,
@@ -239,31 +253,35 @@ def verify_cleanup(
     wait_s: float = KILL_WAIT_SECONDS,
     proc: Path = PROC,
     mark: str | None = None,
+    since_ns: int | None = None,
 ) -> Cleanup:
     """Wait until nothing of a group, its session or remembered tree runs.
 
     ``mark`` is the launch's environment mark: a process that carries it
     is the launch's, wherever it went. Survivors are killed by PID once;
     whatever outlives that and ``wait_s`` is listed, and the cleanup is not
-    verified. A process whose environment cannot be read cannot be told
-    unmarked, so the record says how many there were.
+    verified. A process whose environment cannot be read, or was emptied,
+    cannot be shown unmarked: with ``since_ns``, the launch's start, one
+    that may be the launch's (``_may_be_launched``) keeps the cleanup from
+    verifying, and is never killed, since it may be another's.
     """
     keys = list(remembered)
     method = "proc" if _linux() else "psutil"
     deadline = time.monotonic() + wait_s
     killed: tuple[int, ...] = ()
     while True:
-        marked, unreadable = _marked(mark, proc, method)
-        survivors = _survivors(pgid, keys, proc, method) | marked
-        if not survivors:
-            return Cleanup(True, method, killed=killed, unreadable=unreadable)
-        if not killed:
+        search = _marked(mark, proc, method)
+        survivors = _survivors(pgid, keys, proc, method) | search.found
+        blind = _blind(search.unclear, since_ns, proc, method)
+        if not survivors and not blind:
+            return Cleanup(True, method, killed=killed, unreadable=search.unreadable)
+        if survivors and not killed:
             killed = tuple(sorted(survivors))
             for pid in killed:
                 _kill(pid)
         if time.monotonic() >= deadline:
             left = tuple(identify(pid, proc=proc) for pid in sorted(survivors))
-            return Cleanup(False, method, left, killed, unreadable)
+            return Cleanup(False, method, left, killed, search.unreadable, blind)
         time.sleep(POLL_SECONDS)
 
 
@@ -303,36 +321,48 @@ def _survivors(
     return _psutil_group(pgid) | {pid for pid, _ in keys if _alive(pid)}
 
 
-def _marked(mark: str | None, proc: Path, method: str) -> tuple[set[int], int | None]:
-    """Live processes whose environment carries the launch's mark, and how
-    many environments could not be read (None without a mark)."""
+@dataclass(frozen=True)
+class _Search:
+    """What the mark search found: marked processes, those whose environment
+    was unreadable or empty, and how many could not be read."""
+
+    found: set[int] = field(default_factory=set)
+    unclear: set[int] = field(default_factory=set)
+    unreadable: int | None = None
+
+
+def _marked(mark: str | None, proc: Path, method: str) -> _Search:
+    """Live processes whose environment carries the launch's mark."""
     if not mark:
-        return set(), None
+        return _Search()
     needle = f"{MARK_VARIABLE}={mark}"
     if method == "proc":
         return _proc_marked(needle.encode() + b"\0", proc)
     return _psutil_marked(mark)
 
 
-def _proc_marked(needle: bytes, proc: Path) -> tuple[set[int], int]:
-    found, unreadable = set(), 0
+def _proc_marked(needle: bytes, proc: Path) -> _Search:
+    search = _Search(unreadable=0)
     for entry in proc.iterdir() if proc.is_dir() else ():
         if not entry.name.isdigit():
             continue
+        pid = int(entry.name)
         try:
             environ = (entry / "environ").read_bytes()
         except PermissionError:
-            unreadable += 1
+            search = _unclear(search, pid, unreadable=True)
             continue
         except OSError:
             continue  # gone
-        if (b"\0" + environ).find(b"\0" + needle) >= 0 and _alive(int(entry.name)):
-            found.add(int(entry.name))
-    return found, unreadable
+        if not environ:
+            search = _unclear(search, pid, unreadable=False)
+        elif (b"\0" + environ).find(b"\0" + needle) >= 0 and _alive(pid):
+            search.found.add(pid)
+    return search
 
 
-def _psutil_marked(mark: str) -> tuple[set[int], int]:
-    found, unreadable = set(), 0
+def _psutil_marked(mark: str) -> _Search:
+    search = _Search(unreadable=0)
     for process in psutil.process_iter():
         try:
             environ = process.environ()
@@ -340,11 +370,102 @@ def _psutil_marked(mark: str) -> tuple[set[int], int]:
             continue
         # psutil on macOS may raise SystemError for a process it cannot read.
         except (psutil.Error, OSError, SystemError):
-            unreadable += 1
+            search = _unclear(search, process.pid, unreadable=True)
             continue
-        if environ.get(MARK_VARIABLE) == mark and _alive(process.pid):
-            found.add(process.pid)
-    return found, unreadable
+        if not environ:
+            search = _unclear(search, process.pid, unreadable=False)
+        elif environ.get(MARK_VARIABLE) == mark and _alive(process.pid):
+            search.found.add(process.pid)
+    return search
+
+
+def _unclear(search: _Search, pid: int, *, unreadable: bool) -> _Search:
+    if _alive(pid):
+        search.unclear.add(pid)
+    if not unreadable:
+        return search
+    return _Search(search.found, search.unclear, (search.unreadable or 0) + 1)
+
+
+@dataclass(frozen=True)
+class _Process:
+    """What decides whether a process may be a launch's."""
+
+    start_ns: int | None
+    ppid: int | None
+    uid: int | None
+    exe: str | None
+
+
+def _blind(
+    unclear: set[int], since_ns: int | None, proc: Path, method: str
+) -> tuple[int, ...]:
+    if since_ns is None:
+        return ()
+    found = (pid for pid in unclear if _may_be_launched(pid, since_ns, proc, method))
+    return tuple(sorted(found))
+
+
+def _may_be_launched(pid: int, since_ns: int, proc: Path, method: str) -> bool:
+    """Whether a live process may be the launch's, by what is readable
+    without its environment.
+
+    It is not when another user runs it, when it started before the launch,
+    when its parent is neither the runner nor ``init`` (an escapee whose
+    parent died is adopted by ``init``), or, on macOS, when it is a system
+    executable launchd started. An orphan adopted by a subreaper other than
+    ``init`` is missed.
+    """
+    seen = _view(pid, proc, method)
+    if seen is None:
+        return False
+    if seen.uid is not None and seen.uid != os.getuid():
+        return False
+    if seen.start_ns is not None and seen.start_ns < since_ns - START_SLACK_NS:
+        return False
+    if seen.ppid not in (1, os.getpid()):
+        return False
+    system = (seen.exe or "").startswith(MACOS_SYSTEM_PREFIXES)
+    return not (method == "psutil" and seen.ppid == 1 and system)
+
+
+def _view(pid: int, proc: Path, method: str) -> _Process | None:
+    if method == "proc":
+        info = read_process(pid, proc)
+        if info is None:
+            return None
+        started = start_ns(info.start_ticks, boot_time_s(proc))
+        return _Process(started, info.ppid, _proc_uid(pid, proc), None)
+    try:
+        process = psutil.Process(pid)
+        with process.oneshot():
+            return _Process(
+                int(process.create_time() * 1e9),
+                process.ppid(),
+                process.uids().real,
+                _exe(process),
+            )
+    except psutil.Error:
+        return None
+
+
+def _exe(process: psutil.Process) -> str | None:
+    try:
+        return str(process.exe())
+    except (psutil.Error, OSError):
+        return None
+
+
+def _proc_uid(pid: int, proc: Path) -> int | None:
+    """The real user ID, from ``status``, which is readable when ``environ``
+    is not."""
+    try:
+        for line in (proc / str(pid) / "status").read_text().splitlines():
+            if line.startswith("Uid:"):
+                return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
 
 
 def _psutil_group(pgid: int) -> set[int]:
