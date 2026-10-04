@@ -14,7 +14,9 @@ firing never changes a sealed bundle.
 Incidents are bounded three ways, and every firing they turn away is counted
 by reason: at most ``max_open_incidents`` collect at once, at most
 ``max_incidents_per_hour`` open in any trailing hour, and at most 16
-triggers join one incident.
+triggers join one incident. Health and test incidents have open and hourly
+budgets of their own, the same sizes, so a flapping exporter or a test run
+never crowds out an incident that counts toward the exit code.
 """
 
 from __future__ import annotations
@@ -90,6 +92,29 @@ class OpenIncident:
     loss_at_open: dict[str, int] = field(default_factory=dict)
 
 
+@dataclass
+class _Lane:
+    """The incidents one kind of firing has open, and when it opened each in
+    the trailing hour."""
+
+    open: set[str] = field(default_factory=set)
+    opened: deque[int] = field(default_factory=deque)
+
+    def refusal(self, at_mono: int, limits: IncidentLimits) -> str | None:
+        """Why a new incident may not open now, or None."""
+        while self.opened and self.opened[0] <= at_mono - _HOUR_NS:
+            self.opened.popleft()
+        if len(self.opened) >= limits.max_incidents_per_hour:
+            return "rate_limit"
+        if len(self.open) >= limits.max_open_incidents:
+            return "open_limit"
+        return None
+
+
+# Health and test incidents are budgeted apart from the triggers' own.
+_SIDE_KINDS = frozenset({KIND_HEALTH, KIND_TEST})
+
+
 @dataclass(frozen=True)
 class _HeldScrapes:
     """The scrapes a seal writes, as the history holds them: compressed.
@@ -162,9 +187,12 @@ class IncidentManager:
         self._on_pruned = on_pruned
         self._slack_seconds = _FIRST_TICK_SLACK * tick_seconds
         self.open: dict[str, OpenIncident] = {}
-        self._opened: deque[int] = deque()
-        self.detected = 0
-        self.detected_counting = 0
+        self._lanes = {False: _Lane(), True: _Lane()}  # keyed by "is a side kind"
+        # Every firing, joins and refusals included.
+        self.firings = 0
+        # Incidents recorded, and those of them that count toward exit 3.
+        self.recorded = 0
+        self.recorded_counting = 0
         self.persisted = 0
         self.persist_failures = 0
         self.sealed: list[dict[str, Any]] = []
@@ -211,8 +239,7 @@ class IncidentManager:
     def _admit(
         self, trigger: dict[str, Any], *, counts: bool, at_mono: int, reach_mono: int
     ) -> str | None:
-        self.detected += 1
-        self.detected_counting += int(counts)
+        self.firings += 1
         joinable = [i for i in self.open.values() if at_mono <= i.post_end_mono]
         if joinable:
             incident = joinable[0]
@@ -223,19 +250,16 @@ class IncidentManager:
             incident.joined.append(trigger)
             incident.counts_toward_exit |= counts
             return incident.incident_id
-        while self._opened and self._opened[0] <= at_mono - _HOUR_NS:
-            self._opened.popleft()
-        reason = None
-        if len(self._opened) >= self.limits.max_incidents_per_hour:
-            reason = "rate_limit"
-        elif len(self.open) >= self.limits.max_open_incidents:
-            reason = "open_limit"
+        reason = self._lane(trigger).refusal(at_mono, self.limits)
         if reason is not None:
             self.stats.add("suppressed_total", labels=(reason,))
             return None
         return self._open(
             trigger, counts=counts, at_mono=at_mono, reach_mono=reach_mono
         )
+
+    def _lane(self, trigger: Mapping[str, Any]) -> _Lane:
+        return self._lanes[trigger["kind"] in _SIDE_KINDS]
 
     def _open(
         self, trigger: dict[str, Any], *, counts: bool, at_mono: int, reach_mono: int
@@ -252,7 +276,9 @@ class IncidentManager:
             loss_at_open=self._loss(),
         )
         self.open[incident_id] = incident
-        self._opened.append(at_mono)
+        lane = self._lane(trigger)
+        lane.open.add(incident_id)
+        lane.opened.append(at_mono)
         record = envelope(
             INCIDENT_EVENT,
             session_id=self.identity.session_id,
@@ -285,6 +311,7 @@ class IncidentManager:
 
     def _seal(self, incident: OpenIncident, at_mono: int, *, interrupted: bool) -> None:
         del self.open[incident.incident_id]
+        self._lane(incident.trigger).open.discard(incident.incident_id)
         end_mono = min(at_mono, incident.post_end_mono)
         held = _HeldScrapes.of(
             self.history.ring.compressed(incident.pre_start_mono, end_mono)
@@ -355,6 +382,8 @@ class IncidentManager:
         persisted = record.get("bundle") is not None
         self.persisted += int(persisted)
         self.persist_failures += int(not persisted)
+        self.recorded += 1
+        self.recorded_counting += int(incident.counts_toward_exit)
         capture = record["capture"]["status"]
         self.stats.add("incidents_total", labels=(record["trigger"]["kind"], capture))
         for name in ("pre_window", "post_window"):

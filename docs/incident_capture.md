@@ -175,9 +175,12 @@ null and `bundle_error` says why. A watch whose every incident write failed
 is unsound (exit 1).
 
 At most `max_open_incidents` collect at once, and at most
-`max_incidents_per_hour` open in any trailing hour. A firing turned away is
-counted by reason in `stormlog_watch_suppressed_total`. When the watch
-stops, open incidents are sealed as `interrupted`.
+`max_incidents_per_hour` open in any trailing hour. Health and test
+incidents have budgets of their own of the same sizes, so an exporter that
+restarts over and over, or a qualification run, never turns away an
+incident from a metric or signal trigger. A firing turned away is counted
+by reason in `stormlog_watch_suppressed_total`. When the watch stops, open
+incidents are sealed as `interrupted`.
 
 ### Records and health
 
@@ -203,7 +206,7 @@ watch.
 | Code | When |
 | --- | --- |
 | 0 | The watch ended and no incident counted toward the exit code. |
-| 3 | At least one incident from a counting trigger (`metric` or `signal` by default) was detected. |
+| 3 | At least one incident from a counting trigger (`metric` or `signal` by default) was recorded. A firing the limits turned away does not count: it left no incident to look at. |
 | 1 | The watch was unsound: no scrape ever succeeded, a trigger needed an engine named, the ledger lost records, every incident write failed, the store or ledger did not finish within the shutdown deadline, or the report could not be written. `report.json`, when written, lists the reasons under `payload.unsound`. |
 | 2 | A setting it cannot use, or a root another watcher is using. |
 | 5 | A config file it cannot read. |
