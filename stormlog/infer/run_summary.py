@@ -8,13 +8,19 @@ analyze`` does, and adds what a comparison needs on top:
 - its comparable fields and their provenance (``compatibility``);
 - its observers' states;
 - the protocol failures that exclude it from a comparison, each with its
-  reason.
+  reason, and the outcome failures that never do.
 
 A protocol failure is a fault of the measurement, not of the server under
-test: the run did not finish, a case's cohort is invalid, the server's
-identity changed during the run, a required cache reset was not
-acknowledged, or the server probe did not complete. Failed requests, or a
-server that served nothing, are outcomes, never protocol failures.
+test: a case's cohort is invalid, the server's identity changed during the
+run, the before description is of another server, a required cache reset
+was not acknowledged, the server probe did not complete, or an experiment
+runner recorded an external cause (``infer.run_state``: a server that never
+became healthy, a failed prelude, a preemption). A run that did not finish
+is an outcome, like failed requests or a server that served nothing: the
+treatment may have caused it, so it is compared, never set aside, unless
+an external cause is recorded. Outcome beats protocol: without an external
+cause, such a run's other run-level faults, and a cohort it cut short, are
+outcomes too.
 """
 
 from __future__ import annotations
@@ -35,6 +41,11 @@ from .slo import SloSpec
 
 COMPLETED = "completed"
 SEGMENT_SEPARATOR = "/"
+# Written by an experiment runner: how the run ended, and why.
+RUN_STATE_EVENT = "infer.run_state"
+PROTOCOL_FAILURE = "protocol_failure"
+# Cohort issues an unfinished run leaves behind: outcomes, not faults.
+_CUT_SHORT = ("phase_window_missing", "records_missing")
 
 
 @dataclass(frozen=True)
@@ -52,6 +63,8 @@ class RunSummary:
     protocol_failures: tuple[str, ...] = ()
     case_failures: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     started_at_ns: int | None = None
+    # Kept as data: what went wrong with the run that the treatment may cause.
+    outcome_failures: tuple[str, ...] = ()
 
     @property
     def cases(self) -> Mapping[str, Mapping[str, Any]]:
@@ -133,6 +146,7 @@ def summary_from_records(
     )
     context = (identity or {}).get("context") or {}
     status = _session_status(records)
+    protocol, outcomes = _run_failures(records, report, status)
     return RunSummary(
         path=path,
         sha256=sha256,
@@ -142,9 +156,10 @@ def summary_from_records(
         labels=_labels(records),
         fields=run_fields(records),
         report=report,
-        protocol_failures=tuple(_run_failures(records, report, status)),
-        case_failures=_case_failures(report),
+        protocol_failures=tuple(protocol),
+        case_failures=_case_failures(report, finished=status == COMPLETED),
         started_at_ns=_started_at(records),
+        outcome_failures=tuple(outcomes),
     )
 
 
@@ -190,26 +205,50 @@ def _labels(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 def _run_failures(
     records: Sequence[Mapping[str, Any]], report: Mapping[str, Any], status: str | None
-) -> list[str]:
-    failures = []
-    if status != COMPLETED:
-        failures.append(f"session_{status or 'unknown'}")
+) -> tuple[list[str], list[str]]:
+    """The run's protocol failures, which set it aside, and its outcomes.
+
+    Outcome beats protocol: in a run that did not finish, with no external
+    cause recorded, the run's faults are outcomes too, since the treatment
+    that stopped the server may also have cut its probe short or restarted
+    it with a new identity.
+    """
+    protocol: list[str] = []
     manifest = report.get("manifest") or {}
     if manifest.get("protocol_failure"):
-        failures.append(str(manifest["protocol_failure"]))
+        protocol.append(str(manifest["protocol_failure"]))
     if any(
         r.get("event_type") == "infer.server_probe" and r.get("incomplete")
         for r in records
     ):
-        failures.append("probe_incomplete")
-    return failures
+        protocol.append("probe_incomplete")
+    external = _external_causes(records)
+    if status == COMPLETED:
+        return protocol + external, []
+    unfinished = [f"session_{status or 'unknown'}"]
+    if not external:
+        return [], unfinished + protocol
+    return protocol + external, unfinished
 
 
-def _case_failures(report: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+def _external_causes(records: Sequence[Mapping[str, Any]]) -> list[str]:
+    """A runner's protocol failure: the external cause a set-aside needs."""
+    state = next(
+        (r for r in reversed(records) if r.get("event_type") == RUN_STATE_EVENT),
+        None,
+    )
+    if state is None or state.get("state") != PROTOCOL_FAILURE:
+        return []
+    return [f"external:{reason}" for reason in state.get("reasons") or ["unstated"]]
+
+
+def _case_failures(
+    report: Mapping[str, Any], *, finished: bool
+) -> dict[str, tuple[str, ...]]:
     failures: dict[str, tuple[str, ...]] = {}
     for case_id, case in (report.get("cases") or {}).items():
         reasons = []
-        if not (case.get("population") or {}).get("cohort_valid", True):
+        if _cohort_invalid(case.get("population") or {}, finished=finished):
             reasons.append("cohort_invalid")
         cache = case.get("cache") or {}
         if cache.get("requested") == "cold" and cache.get("acknowledged") is False:
@@ -219,8 +258,26 @@ def _case_failures(report: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
     return failures
 
 
+def _cohort_invalid(population: Mapping[str, Any], *, finished: bool) -> bool:
+    """An invalid cohort, unless an unfinished run cut it short: an outcome."""
+    if population.get("cohort_valid", True):
+        return False
+    return finished or not _cut_short(population)
+
+
+def _cut_short(population: Mapping[str, Any]) -> bool:
+    """Every hard cohort issue is what an unfinished run leaves behind."""
+    issues = [
+        str(issue)
+        for issue in population.get("issues") or []
+        if not str(issue).startswith(("request_index_unrecorded", "abandoned"))
+    ]
+    return bool(issues) and all(issue.startswith(_CUT_SHORT) for issue in issues)
+
+
 __all__ = [
     "COMPLETED",
+    "RUN_STATE_EVENT",
     "SEGMENT_SEPARATOR",
     "RunSummary",
     "summarize_run",

@@ -3,7 +3,13 @@
 ``compare_runs`` takes run summaries (``run_summary``) and:
 
 1. sets aside each run that cannot stand for a case, with its protocol
-   failure, and lists it; outcome failures are never set aside;
+   failure, and lists it. In a paired design the whole block goes, both
+   arms, and more than one block set aside leaves the case's gates
+   ``not_evaluable``. Outcome failures are never set aside: a run that did
+   not finish, or a case a run lacks, is compared, and a value it lost
+   fails the candidate's gate (``outcome_unrecoverable``). A retried block
+   keeps its last attempt and lists the others; a retry never replaces an
+   outcome failure;
 2. checks the runs are comparable (``compatibility``): within each arm,
    and across arms in the comparison's mode. ``incompatible`` is an input
    error; ``unverified`` leaves every gate ``not_evaluable``;
@@ -67,6 +73,13 @@ ANY_REGRESSION = "any_regression"
 FAMILIES = (ALL_BUDGETS, ANY_REGRESSION)
 EXCLUDE = "exclude"
 FAIL_INCOMPLETE = "fail"
+# More blocks (or runs) set aside than this leave a case's gates unjudged.
+SET_ASIDE_LIMIT = 1
+OUTCOME_UNRECOVERABLE = "outcome_unrecoverable"
+BASELINE_OUTCOME_UNRECOVERABLE = "baseline_outcome_unrecoverable"
+PROTOCOL_FAILURE = "protocol_failure"
+# Reasons that fail a gate outright rather than leave it unjudged.
+_FAILING = (PROTOCOL_FAILURE, OUTCOME_UNRECOVERABLE)
 
 
 @dataclass(frozen=True)
@@ -283,21 +296,23 @@ def compare_runs(
     if not baseline or not candidate:
         raise InferInputError("each arm needs at least one run")
     arms = {BASELINE: list(baseline), CANDIDATE: list(candidate)}
+    _check_each_run_once(arms)
     _check_cases_exist(arms, spec)
     _check_cases_hold_requests(arms, spec)
     _check_one_slo_policy(arms, spec)
-    excluded = _excluded(arms, spec)
-    usable = {arm: _usable(runs) for arm, runs in arms.items()}
+    design = _design(arms, spec)
+    excluded, standing = _standing(arms, spec, design)
+    usable = {arm: _usable(runs) for arm, runs in standing.items()}
     if not usable[BASELINE] or not usable[CANDIDATE]:
         raise InferInputError("an arm has no usable run: every run was excluded")
     compatibility, unverified_pairs = _compatibility(usable, spec)
     observer_issues = _observer_contract(usable, spec)
-    design = _design(arms, spec)
     if design == PAIRED:
-        excluded += _unpaired_blocks(arms, spec, excluded)
+        excluded += _unpaired_blocks(standing, spec, excluded)
+        excluded += _partners(standing, spec, excluded)
     cases = {
         case_id: _case(
-            case_id, arms, excluded, design, spec, compatibility, observer_issues
+            case_id, standing, excluded, design, spec, compatibility, observer_issues
         )
         for case_id in _case_ids(arms, spec)
     }
@@ -320,27 +335,160 @@ def compare_runs(
 # ---------------------------------------------------------- set-asides
 
 
+def _check_each_run_once(arms: Mapping[str, list[RunSummary]]) -> None:
+    """One artifact given twice in an arm would count a single run as two."""
+    for runs in arms.values():
+        seen: set[str] = set()
+        for run in runs:
+            keys = {run.name} | ({run.sha256} if run.sha256 else set())
+            if keys & seen:
+                raise InferInputError(f"run {run.name} is given twice")
+            seen |= keys
+
+
+def _item(arm: str, run: RunSummary, case_id: str, reasons: list[str]) -> dict:
+    return {"arm": arm, "run": run.name, "case": case_id, "reasons": reasons}
+
+
+def _standing(
+    arms: Mapping[str, list[RunSummary]], spec: ComparisonSpec, design: str
+) -> tuple[list[dict[str, Any]], dict[str, list[RunSummary]]]:
+    """Each arm's runs once superseded attempts are listed, and every
+    (run, case) set aside so far."""
+    excluded = _superseded(arms, spec, design)
+    replaced = {item["run"] for item in excluded}
+    standing = {
+        arm: [run for run in runs if run.name not in replaced]
+        for arm, runs in arms.items()
+    }
+    return excluded + _excluded(standing, spec), standing
+
+
 def _excluded(
     arms: Mapping[str, list[RunSummary]], spec: ComparisonSpec
 ) -> list[dict[str, Any]]:
-    """Every (run, case) a protocol failure sets aside, with its reasons."""
-    excluded = []
+    """Every (run, case) a protocol failure sets aside, with its reasons.
+
+    A case the run lacks is an outcome, not a set-aside: the treatment may
+    have stopped the run before it.
+    """
+    return [
+        _item(arm, run, case_id, list(run.failures_for(case_id)))
+        for arm, runs in arms.items()
+        for run in runs
+        for case_id in _case_ids(arms, spec)
+        if run.failures_for(case_id)
+    ]
+
+
+def _superseded(
+    arms: Mapping[str, list[RunSummary]], spec: ComparisonSpec, design: str
+) -> list[dict[str, Any]]:
+    """Every attempt at a block that another attempt of its arm replaces.
+
+    A block's arm keeps its last attempt, except that a retry never
+    replaces an outcome failure: the first attempt that failed as an
+    outcome stands, and each later one is listed as
+    ``retry_of_outcome_failure``. Every attempt is listed, never dropped.
+    """
+    if design != PAIRED:
+        return []
+    found = []
+    for arm, attempts in _repeated_blocks(arms):
+        kept = _kept_attempt(attempts)
+        for index, run in enumerate(attempts):
+            if run is kept:
+                continue
+            after = index > attempts.index(kept)
+            reason = "retry_of_outcome_failure" if after else "superseded"
+            for case_id in _case_ids(arms, spec):
+                item = _item(arm, run, case_id, [reason, *run.failures_for(case_id)])
+                item["attempt_kept"] = kept.name
+                found.append(item)
+    return found
+
+
+def _repeated_blocks(
+    arms: Mapping[str, list[RunSummary]],
+) -> list[tuple[str, list[RunSummary]]]:
+    """Each arm's attempts at a block it ran more than once, in start order."""
+    found: dict[tuple[str, str], list[RunSummary]] = {}
     for arm, runs in arms.items():
         for run in runs:
-            for case_id in _case_ids(arms, spec):
-                reasons = list(run.failures_for(case_id))
-                if case_id not in run.comparable_cases:
-                    reasons.append("case_missing")
-                if reasons:
-                    excluded.append(
-                        {
-                            "arm": arm,
-                            "run": run.name,
-                            "case": case_id,
-                            "reasons": reasons,
-                        }
-                    )
-    return excluded
+            found.setdefault((arm, _block_key(run)), []).append(run)
+    return [
+        (arm, _in_start_order(attempts))
+        for (arm, _), attempts in found.items()
+        if len(attempts) > 1
+    ]
+
+
+def _in_start_order(attempts: list[RunSummary]) -> list[RunSummary]:
+    """By start time, or as given when any start is unknown."""
+    if any(run.started_at_ns is None for run in attempts):
+        return attempts
+    return sorted(attempts, key=lambda run: run.started_at_ns or 0)
+
+
+def _kept_attempt(attempts: list[RunSummary]) -> RunSummary:
+    outcome = next(
+        (run for run in attempts if run.outcome_failures and not run.protocol_failures),
+        None,
+    )
+    return outcome or attempts[-1]
+
+
+def _partners(
+    arms: Mapping[str, list[RunSummary]],
+    spec: ComparisonSpec,
+    excluded: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """The other run of each block set aside: the block goes, both arms."""
+    found = []
+    for case_id in _case_ids(arms, spec):
+        lost = _blocks_set_aside(arms, excluded, case_id)
+        found += [
+            _item(arm, run, case_id, ["block_set_aside"])
+            for arm, runs in arms.items()
+            for run in runs
+            if _block_key(run) in lost and not _set_aside(excluded, run, case_id)
+        ]
+    return found
+
+
+def _blocks_set_aside(
+    arms: Mapping[str, list[RunSummary]], excluded: list[dict[str, Any]], case_id: str
+) -> set[str]:
+    return {
+        _block_key(run)
+        for runs in arms.values()
+        for run in runs
+        if _set_aside(excluded, run, case_id)
+    }
+
+
+def _lost(
+    case_id: str,
+    arms: Mapping[str, list[RunSummary]],
+    excluded: list[dict[str, Any]],
+    design: str,
+) -> dict[str, Any]:
+    """The blocks (or runs) this case lost: set aside, or missing an arm's run.
+
+    A block given for one arm only lost its other run without a recorded
+    cause, so it counts like one set aside.
+    """
+    if design != PAIRED:
+        items = {
+            run.name
+            for runs in arms.values()
+            for run in runs
+            if _set_aside(excluded, run, case_id)
+        }
+        return {"unit": "run", "items": sorted(items), "limit": SET_ASIDE_LIMIT}
+    blocks = [{_block_key(run) for run in arms[arm]} for arm in (BASELINE, CANDIDATE)]
+    items = _blocks_set_aside(arms, excluded, case_id) | (blocks[0] ^ blocks[1])
+    return {"unit": "block", "items": sorted(items), "limit": SET_ASIDE_LIMIT}
 
 
 def _unpaired_blocks(
@@ -530,24 +678,7 @@ def _design(arms: Mapping[str, list[RunSummary]], spec: ComparisonSpec) -> str:
         raise InferInputError("a paired design needs every run labelled with --block")
     if spec.design == INDEPENDENT or not labelled:
         return INDEPENDENT
-    _check_one_run_per_block(arms)
     return PAIRED
-
-
-def _check_one_run_per_block(arms: Mapping[str, list[RunSummary]]) -> None:
-    """A block holds one usable run of each arm: a second one is an input error.
-
-    A run its protocol set aside (a retried attempt) is listed, not counted.
-    """
-    seen: set[tuple[Any, Any, str]] = set()
-    for arm, group in arms.items():
-        for run in _usable(group):
-            key = (run.label("experiment"), run.label("block"), arm)
-            if key in seen:
-                raise InferInputError(
-                    f"block {key[1]!r} of experiment {key[0]!r} has two {arm} runs"
-                )
-            seen.add(key)
 
 
 def _block_key(run: RunSummary) -> str:
@@ -581,12 +712,14 @@ def _case(
         for arm, runs in arms.items()
     }
     attrition = [item for item in excluded if item["case"] == case_id]
-    blocked = _case_blocker(compatibility, observer_issues, attrition, spec)
+    lost = _lost(case_id, arms, excluded, design)
+    blocked = _case_blocker(compatibility, observer_issues, lost, spec)
     metrics = _case_metrics(case_id, kept, design, spec, blocked)
     case: dict[str, Any] = {
         "metrics": metrics,
         "absent_gates": _absent_gates(metrics, spec),
         "attrition": attrition,
+        "set_aside": lost,
     }
     if spec.min_attainment is not None:
         slo_blocked = blocked or _slo_blocker(case_id, kept)
@@ -633,7 +766,13 @@ def _case_metrics(
     blocked: str | None,
 ) -> dict[str, MetricComparison]:
     reference = next(
-        (run.comparable_cases[case_id] for runs in kept.values() for run in runs), None
+        (
+            run.comparable_cases[case_id]
+            for runs in kept.values()
+            for run in runs
+            if case_id in run.comparable_cases
+        ),
+        None,
     )
     if reference is None:
         return {}
@@ -664,7 +803,7 @@ def _check_cases_hold_requests(
 def _case_blocker(
     compatibility: Compatibility,
     observer_issues: list[str],
-    attrition: list[dict[str, Any]],
+    lost: Mapping[str, Any],
     spec: ComparisonSpec,
 ) -> str | None:
     """Why no gate of this case can be decided, before any metric is read."""
@@ -672,8 +811,10 @@ def _case_blocker(
         return "unverified"
     if observer_issues:
         return "observer_not_active"
-    if attrition and spec.on_incomplete == FAIL_INCOMPLETE:
-        return "protocol_failure"
+    if lost["items"] and spec.on_incomplete == FAIL_INCOMPLETE:
+        return PROTOCOL_FAILURE
+    if len(lost["items"]) > lost["limit"]:
+        return f"{lost['unit']}s_set_aside"
     return None
 
 
@@ -685,10 +826,12 @@ def _metric(
     spec: ComparisonSpec,
     blocked: str | None,
 ) -> MetricComparison:
-    first, second, reasons = _readings(metric, case_id, kept)
+    first, second, reasons, lost = _readings(metric, case_id, kept)
     gate = spec.gate_for(metric.name)
-    # With --on-incomplete fail, a set-aside run fails the contrast outright.
-    protocol_gate = gate if blocked == "protocol_failure" else None
+    unavailable = _lost_outcome(lost, blocked) or _metric_blocker(
+        metric, case_id, kept, reasons, spec
+    )
+    failing = unavailable in _FAILING
     compared = compare_values(
         metric.name,
         first,
@@ -699,34 +842,52 @@ def _metric(
         value_unit=metric.value_unit,
         blocks=_blocks(kept, design),
         confidence=spec.confidence,
-        gate=None if protocol_gate else gate,
+        gate=None if failing else gate,
         bootstrap_min_n=spec.bootstrap_min_n,
         seed=spec.seed,
-        unavailable=blocked or _metric_blocker(metric, case_id, kept, reasons, spec),
+        unavailable=unavailable,
     )
-    unavailable = blocked or _metric_blocker(metric, case_id, kept, reasons, spec)
     if unavailable is not None and compared.reason is None:
         # Why it was not compared, gated or not.
         compared = replace(compared, reason=unavailable)
-    if protocol_gate is None:
+    if not failing or gate is None:
         return compared
-    return replace(compared, gate=GateOutcome(FAIL, "protocol_failure", protocol_gate))
+    return replace(compared, gate=GateOutcome(FAIL, str(unavailable), gate))
+
+
+def _lost_outcome(lost: set[str], blocked: str | None) -> str | None:
+    """A candidate outcome lost, or a set-aside run under --on-incomplete
+    fail, fails the contrast outright; a lost baseline one leaves it
+    unjudged."""
+    if CANDIDATE in lost:
+        return OUTCOME_UNRECOVERABLE
+    if blocked is not None:
+        return blocked
+    return BASELINE_OUTCOME_UNRECOVERABLE if BASELINE in lost else None
 
 
 def _readings(
     metric: MetricSpec, case_id: str, kept: Mapping[str, list[RunSummary]]
-) -> tuple[list[Any], list[Any], list[str]]:
-    """Each arm's values for a metric, and every reason a run gave for none."""
+) -> tuple[list[Any], list[Any], list[str], set[str]]:
+    """Each arm's values for a metric, every reason a run gave for none, and
+    the arms that lost an outcome: a value missing from a run that did not
+    finish, or from a run that lacks the case."""
     values: dict[str, list[Any]] = {}
     reasons: list[str] = []
+    lost: set[str] = set()
     for arm, runs in kept.items():
         values[arm] = []
         for run in runs:
-            value, reason = metric.read(run.comparable_cases[case_id])
+            case = run.comparable_cases.get(case_id)
+            value, reason = (
+                (None, "case_missing") if case is None else metric.read(case)
+            )
             values[arm].append(value)
             if reason:
                 reasons.append(reason)
-    return values[BASELINE], values[CANDIDATE], reasons
+            if value is None and (case is None or run.outcome_failures):
+                lost.add(arm)
+    return values[BASELINE], values[CANDIDATE], reasons, lost
 
 
 def _metric_blocker(
@@ -747,6 +908,7 @@ def _metric_blocker(
             evidence_coverage(run.comparable_cases[case_id])
             for runs in kept.values()
             for run in runs
+            if case_id in run.comparable_cases
         ]
         if any(c is None or c < spec.evidence_floor for c in coverages):
             return "evidence_coverage_below_floor"
@@ -760,11 +922,14 @@ def _slo_blocker(case_id: str, kept: Mapping[str, list[RunSummary]]) -> str | No
     candidate judged by a looser one would meet it however slow it was.
     """
     digests = {
-        (run.comparable_cases[case_id].get("slo") or {}).get("slo_digest")
-        for runs in kept.values()
-        for run in runs
+        _slo(run, case_id).get("slo_digest") for runs in kept.values() for run in runs
     }
     return "slo_policy_differs" if len(digests - {None}) > 1 else None
+
+
+def _slo(run: RunSummary, case_id: str) -> Mapping[str, Any]:
+    """A case's SLO evaluation; empty when the run lacks the case."""
+    return (run.comparable_cases.get(case_id) or {}).get("slo") or {}
 
 
 def _check_one_slo_policy(
@@ -821,19 +986,17 @@ def _attainment_gate(
 
     It obeys the case's blockers like any gate. A candidate run whose SLO
     could not be judged counts as not meeting the target: leaving it out
-    would keep only the runs that met it.
+    would keep only the runs that met it. Pooling requests would leave a
+    lost run's requests out of both counts, so a lost one fails a
+    ``bernoulli`` gate.
     """
     target = spec.min_attainment
     assert target is not None
-    if blocked is not None:
-        status = FAIL if blocked == "protocol_failure" else NOT_EVALUABLE
-        return {"attainment_gate": {"status": status, "reason": blocked}}
     lowers = _attainment_lowers(case_id, candidate)
     known = [x for x in lowers if x is not None]
-    if not known:
-        return {
-            "attainment_gate": {"status": NOT_EVALUABLE, "reason": "no_slo_evaluation"}
-        }
+    undecided = _attainment_undecided(case_id, candidate, spec, blocked, known)
+    if undecided is not None:
+        return {"attainment_gate": undecided}
     if spec.attainment_model == "bernoulli":
         gate = _pooled_attainment(case_id, candidate, target, spec)
     else:
@@ -844,27 +1007,48 @@ def _attainment_gate(
     return {"attainment_gate": gate, "attainment_mean": _mean_interval(known, spec)}
 
 
+def _attainment_undecided(
+    case_id: str,
+    candidate: list[RunSummary],
+    spec: ComparisonSpec,
+    blocked: str | None,
+    known: list[float],
+) -> dict[str, Any] | None:
+    """The attainment gate when the runs cannot decide it."""
+    if blocked is not None:
+        status = FAIL if blocked == PROTOCOL_FAILURE else NOT_EVALUABLE
+        return {"status": status, "reason": blocked}
+    if spec.attainment_model == "bernoulli" and _lost_slo(case_id, candidate):
+        return {"status": FAIL, "reason": OUTCOME_UNRECOVERABLE}
+    if not known:
+        return {"status": NOT_EVALUABLE, "reason": "no_slo_evaluation"}
+    return None
+
+
 def _attainment_lowers(case_id: str, runs: list[RunSummary]) -> list[float | None]:
     """Each run's attainment lower bound, or None where its SLO was not judged."""
     lowers: list[float | None] = []
     for run in runs:
-        value = (run.comparable_cases[case_id].get("slo") or {}).get("attainment_lower")
+        value = _slo(run, case_id).get("attainment_lower")
         lowers.append(float(value) if isinstance(value, (int, float)) else None)
     return lowers
+
+
+def _lost_slo(case_id: str, runs: list[RunSummary]) -> bool:
+    """A run lacks the case, or did not finish and has no SLO evaluation."""
+    return any(
+        case_id not in run.comparable_cases
+        or (run.outcome_failures and not _slo(run, case_id))
+        for run in runs
+    )
 
 
 def _pooled_attainment(
     case_id: str, candidate: list[RunSummary], target: float, spec: ComparisonSpec
 ) -> dict[str, Any]:
     """Requests as independent trials: model-based, and only when asked for."""
-    met = sum(
-        int((r.comparable_cases[case_id].get("slo") or {}).get("met") or 0)
-        for r in candidate
-    )
-    offered = sum(
-        int((r.comparable_cases[case_id].get("slo") or {}).get("offered") or 0)
-        for r in candidate
-    )
+    met = sum(int(_slo(r, case_id).get("met") or 0) for r in candidate)
+    offered = sum(int(_slo(r, case_id).get("offered") or 0) for r in candidate)
     bound = clopper_pearson(
         met, max(offered, 1), spec.confidence, model="independent_requests"
     )
@@ -966,6 +1150,7 @@ def _run_record(arm: str, run: RunSummary) -> dict[str, Any]:
         "labels": dict(run.labels),
         "session_status": run.session_status,
         "protocol_failures": list(run.protocol_failures),
+        "outcome_failures": list(run.outcome_failures),
         "started_at_ns": run.started_at_ns,
     }
 

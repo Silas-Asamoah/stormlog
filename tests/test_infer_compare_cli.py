@@ -246,18 +246,18 @@ def test_overlap_segments_with_a_rate_gate_are_a_usage_error(
     assert "overlap" in err and "throughput_rps" in err
 
 
-def test_two_runs_of_one_arm_in_a_block_are_invalid_input(
-    arms: dict[str, list[str]],
-) -> None:
+def test_a_run_given_twice_is_invalid_input(arms: dict[str, list[str]]) -> None:
+    # A retried block's attempts are separate artifacts; one artifact twice
+    # would count a single run as two.
     code, _out, err = _compare(
         "--baseline",
-        arms["baseline"][0],
-        arms["baseline"][0],
+        *arms["baseline"],
         "--candidate",
         *arms["slower"],
+        arms["slower"][0],
     )
     assert code == ExitCode.INVALID_INPUT
-    assert "two baseline runs" in err
+    assert f"{arms['slower'][0]} is given twice" in err
 
 
 @pytest.mark.parametrize(

@@ -8,6 +8,7 @@ import pytest
 
 from stormlog.infer.compare import ComparisonSpec, compare_runs
 from stormlog.infer.compare_metrics import default_metrics
+from stormlog.infer.compare_report import comparison_lines
 from stormlog.infer.comparison_stats import GateRule
 from stormlog.infer.compatibility import RunField
 from stormlog.infer.errors import InferInputError, InferUsageError
@@ -82,6 +83,7 @@ def _run(
     observers: dict[str, Any] | None = None,
     status: str = "completed",
     started: int = 0,
+    protocol: tuple[str, ...] = (),
     **case: Any,
 ) -> RunSummary:
     labels = (
@@ -90,7 +92,7 @@ def _run(
     return RunSummary(
         path=None,
         sha256=None,
-        run_id=f"{arm}-{block}-{e2e}",
+        run_id=f"{arm}-{block}-{e2e}" if block is not None else f"{arm}-{started}",
         session_id="s",
         session_status=status,
         labels=labels,
@@ -99,8 +101,9 @@ def _run(
             "cases": {CASE: _case(e2e, **case)},
             "observers": {"observers": observers or {}},
         },
-        protocol_failures=() if status == "completed" else (f"session_{status}",),
+        protocol_failures=protocol,
         started_at_ns=started,
+        outcome_failures=() if status == "completed" else (f"session_{status}",),
     )
 
 
@@ -197,13 +200,57 @@ def test_unlabelled_runs_are_independent_samples() -> None:
     assert metric.worst is not None and metric.worst.df == 5
 
 
-def test_a_retried_block_keeps_the_attempt_that_finished() -> None:
-    # The runner retries a run its protocol set aside; the first attempt is
-    # listed, not a second run of the arm in that block.
+def test_a_retried_block_keeps_the_last_attempt_and_marks_the_first() -> None:
+    # The runner retries a run an external cause set aside; the first
+    # attempt is listed, not a second run of the arm in that block.
     baseline, candidate = _arms(SAME)
-    failed = _run("candidate", 2, 100.0, status="interrupted")
-    comparison = compare_runs(baseline, [*candidate, failed], ComparisonSpec())
-    assert [item["run"] for item in comparison.excluded] == [failed.name]
+    preempted = _run(
+        "candidate", 2, 100.0, status="interrupted", protocol=("external:preempted",)
+    )
+    comparison = compare_runs(baseline, [preempted, *candidate], ComparisonSpec())
+    assert comparison.excluded == [
+        {
+            "arm": "candidate",
+            "run": preempted.name,
+            "case": CASE,
+            "reasons": ["superseded", "external:preempted"],
+            "attempt_kept": candidate[2].name,
+        }
+    ]
+    assert comparison.cases[CASE]["metrics"]["client.e2e.p95"].n_pairs == 6
+    assert (
+        f"Set aside: {preempted.name} for c1 (superseded, external:preempted; "
+        f"kept {candidate[2].name})"
+    ) in comparison_lines(comparison)
+
+
+def test_a_block_run_twice_keeps_the_last_attempt() -> None:
+    baseline, candidate = _arms(SAME)
+    again = _run("candidate", 0, 100.0, started=100)
+    comparison = compare_runs(baseline, [*candidate, again], ComparisonSpec())
+    assert [
+        (item["run"], item["reasons"], item["attempt_kept"])
+        for item in comparison.excluded
+    ] == [(candidate[0].name, ["superseded"], again.name)]
+
+
+def test_a_run_given_twice_is_refused() -> None:
+    baseline, candidate = _arms(SAME)
+    with pytest.raises(InferInputError, match="is given twice"):
+        compare_runs(baseline, [*candidate, candidate[0]], ComparisonSpec())
+
+
+def test_a_retry_never_replaces_an_outcome_failure() -> None:
+    # Otherwise a treatment that crashes half its runs passes once retried.
+    baseline, candidate = _arms(SAME)
+    crashed = _run("candidate", 2, 140.0, status="interrupted", started=5)
+    retry = _run("candidate", 2, 100.0, started=100)
+    candidate[2] = crashed
+    comparison = compare_runs(baseline, [*candidate, retry], ComparisonSpec())
+    assert [
+        (item["run"], item["reasons"], item["attempt_kept"])
+        for item in comparison.excluded
+    ] == [(retry.name, ["retry_of_outcome_failure"], crashed.name)]
 
 
 def test_a_case_no_run_offered_a_request_is_refused() -> None:
@@ -255,20 +302,138 @@ def test_a_block_whose_runs_sent_different_workloads_is_set_aside() -> None:
     assert comparison.cases[CASE]["metrics"]["client.e2e.p95"].n_pairs == 5
 
 
-def test_a_block_with_two_runs_of_an_arm_is_refused() -> None:
+def test_an_unfinished_run_is_kept_as_data() -> None:
+    # The treatment may have caused it: setting it aside would let a
+    # treatment that crashes runs pass on the blocks left.
     baseline, candidate = _arms(SAME)
-    candidate[1] = _run("candidate", 0, 100.0)
-    with pytest.raises(InferInputError, match="has two candidate runs"):
-        compare_runs(baseline, candidate, ComparisonSpec())
-
-
-def test_an_unfinished_run_is_set_aside_and_listed() -> None:
-    baseline, candidate = _arms(SLOWER)
-    candidate[5] = _run("candidate", 5, 140.0, status="interrupted")
+    candidate[5] = _run("candidate", 5, 100.0, status="interrupted", started=11)
     comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
     metric = comparison.cases[CASE]["metrics"]["client.e2e.p95"]
-    assert metric.n_pairs == 5
-    assert comparison.excluded[0]["reasons"] == ["session_interrupted"]
+    assert comparison.excluded == []
+    assert metric.n_pairs == 6
+    assert metric.gate is not None and metric.gate.status == "pass"
+
+
+def _lose_case(run: RunSummary, how: str) -> None:
+    if how == "missing":
+        del run.report["cases"][CASE]
+    else:
+        run.report["cases"][CASE]["latency"] = _latency(0.0, penalized=True)
+
+
+@pytest.mark.parametrize("how", ["missing", "unreadable"])
+def test_an_outcome_the_candidate_lost_fails_its_gates(how: str) -> None:
+    baseline, candidate = _arms(SAME)
+    candidate[3] = _run("candidate", 3, 100.0, status="interrupted", started=7)
+    _lose_case(candidate[3], how)
+    spec = ComparisonSpec(gates=E2E_GATE, min_attainment=0.9)
+    comparison = compare_runs(baseline, candidate, spec)
+    metric = comparison.cases[CASE]["metrics"]["client.e2e.p95"]
+    assert metric.gate is not None
+    assert (metric.gate.status, metric.gate.reason) == ("fail", "outcome_unrecoverable")
+    assert comparison.excluded == []
+    if how == "missing":
+        # It cannot have met the target either.
+        assert comparison.cases[CASE]["attainment_gate"]["runs_unmeasurable"] == 1
+    assert comparison.exit_code == 4
+
+
+def test_a_case_a_completed_candidate_run_lacks_is_an_outcome() -> None:
+    baseline, candidate = _arms(SAME)
+    del candidate[1].report["cases"][CASE]
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None
+    assert (gate.status, gate.reason) == ("fail", "outcome_unrecoverable")
+
+
+def test_an_outcome_the_baseline_lost_cannot_be_evaluated() -> None:
+    baseline, candidate = _arms(SAME)
+    baseline[3] = _run("baseline", 3, 100.0, status="interrupted", started=6)
+    _lose_case(baseline[3], "missing")
+    comparison = compare_runs(baseline, candidate, ComparisonSpec(gates=E2E_GATE))
+    gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None
+    assert (gate.status, gate.reason) == (
+        "not_evaluable",
+        "baseline_outcome_unrecoverable",
+    )
+
+
+def test_a_bernoulli_attainment_gate_fails_on_a_lost_candidate_case() -> None:
+    # Pooling requests would drop the run's requests from both counts.
+    baseline, candidate = _arms(SAME)
+    candidate[3] = _run("candidate", 3, 100.0, status="interrupted", started=7)
+    _lose_case(candidate[3], "missing")
+    spec = ComparisonSpec(min_attainment=0.9, attainment_model="bernoulli")
+    gate = compare_runs(baseline, candidate, spec).cases[CASE]["attainment_gate"]
+    assert (gate["status"], gate["reason"]) == ("fail", "outcome_unrecoverable")
+
+
+@pytest.mark.parametrize("paired", [True, False])
+def test_an_external_cause_sets_aside_its_block_and_two_leave_gates_unjudged(
+    paired: bool,
+) -> None:
+    baseline, candidate = _arms(SAME, paired=paired)
+    block = 2 if paired else None
+    candidate[2] = _run(
+        "candidate",
+        block,
+        100.0,
+        status="interrupted",
+        started=5,
+        protocol=("external:preempted",),
+    )
+    spec = ComparisonSpec(gates=E2E_GATE, min_attainment=0.9)
+    one = compare_runs(baseline, candidate, spec)
+    reasons = {(item["arm"], item["run"]): item["reasons"] for item in one.excluded}
+    expected = {("candidate", candidate[2].name): ["external:preempted"]}
+    if paired:
+        expected[("baseline", baseline[2].name)] = ["block_set_aside"]
+    assert reasons == expected
+    metric = one.cases[CASE]["metrics"]["client.e2e.p95"]
+    assert metric.gate is not None and metric.gate.status == "pass"
+    assert one.cases[CASE]["set_aside"] == {
+        "unit": "block" if paired else "run",
+        "items": ["e/2" if paired else candidate[2].name],
+        "limit": 1,
+    }
+
+    baseline[4] = _run(
+        "baseline",
+        4 if paired else None,
+        100.0,
+        started=8,
+        protocol=("external:operator_abort",),
+    )
+    two = compare_runs(baseline, candidate, spec)
+    reason = "blocks_set_aside" if paired else "runs_set_aside"
+    gate = two.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None
+    assert (gate.status, gate.reason) == ("not_evaluable", reason)
+    attainment = two.cases[CASE]["attainment_gate"]
+    assert (attainment["status"], attainment["reason"]) == ("not_evaluable", reason)
+
+
+def test_a_block_given_for_one_arm_only_counts_as_lost() -> None:
+    # Its other run is gone with no cause recorded: leaving out two such
+    # blocks must not shrink the contrast quietly.
+    baseline, candidate = _arms(SAME)
+    one = compare_runs(baseline, candidate[:5], ComparisonSpec(gates=E2E_GATE))
+    assert one.cases[CASE]["set_aside"]["items"] == ["e/5"]
+    gate = one.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None and gate.status == "pass"
+    two = compare_runs(baseline, candidate[:4], ComparisonSpec(gates=E2E_GATE))
+    gate = two.cases[CASE]["metrics"]["client.e2e.p95"].gate
+    assert gate is not None
+    assert (gate.status, gate.reason) == ("not_evaluable", "blocks_set_aside")
+
+
+def test_a_set_aside_run_fails_its_contrasts_when_asked() -> None:
+    baseline, candidate = _arms(SAME)
+    candidate[5] = _run(
+        "candidate", 5, 100.0, started=11, protocol=("probe_incomplete",)
+    )
     strict = compare_runs(
         baseline, candidate, ComparisonSpec(gates=E2E_GATE, on_incomplete="fail")
     )
@@ -434,9 +599,10 @@ def test_min_attainment_is_a_claim_about_runs(missing: int, status: str) -> None
 
 def test_a_candidate_run_whose_slo_was_not_judged_does_not_meet_it() -> None:
     # Dropping the unmeasurable runs would keep only the ones that met it.
-    baseline, _ = _arms(SAME + SAME[:4])
-    candidate = [_run("candidate", i, 100.0, attainment=0.995) for i in range(6)] + [
-        _run("candidate", 6 + i, 100.0, attainment=0.995) for i in range(4)
+    baseline = [_run("baseline", i, 100.0, started=2 * i) for i in range(10)]
+    candidate = [
+        _run("candidate", i, 100.0, attainment=0.995, started=2 * i + 1)
+        for i in range(10)
     ]
     for run in candidate[6:]:
         run.report["cases"][CASE]["slo"]["attainment_lower"] = None
