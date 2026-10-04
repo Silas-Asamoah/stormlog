@@ -169,6 +169,27 @@ def test_a_hash_cached_twice_keeps_its_hit_while_either_copy_stays() -> None:
     assert pool.lookup([block_hash], 5) == [second]
 
 
+def test_freed_blocks_are_queued_for_reuse_as_in_vllm() -> None:
+    # vLLM's BlockPool.free_blocks: a block without a hash is reused first
+    # (prepended), so it never costs a cached block its place; cached
+    # blocks queue at the tail, a request's last block first, so its tail
+    # blocks are evicted before its head (Fable's #267 gate, P3-1 and M10).
+    pool = BlockPool(4, 4, caching=True)
+    prompt = pool.allocate(2)
+    assert prompt == [0, 1]
+    hashes = pool.block_hashes([str(n) for n in range(8)])
+    pool.cache(0, hashes[0])
+    pool.cache(1, hashes[1])
+    scratch = pool.allocate(2)
+    pool.free(prompt)
+    pool.free(scratch or [])
+    assert pool.allocate(1) == [3]
+    assert pool.evictions == 0 and pool.lookup(hashes, 9) == [0, 1]
+    # Then the uncached block, then the prompt's last block before its first.
+    assert pool.allocate(2) == [2, 1]
+    assert pool.lookup(hashes, 9) == [0]
+
+
 def test_descriptive_routes_answer_like_vllm() -> None:
     with FakeEngine(FAST) as engine:
         version = json.loads(get(f"{engine.base_url}/version")[1])

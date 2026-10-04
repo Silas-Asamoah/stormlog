@@ -154,8 +154,10 @@ series vLLM exports:
   included, when its slots are allocated, as vLLM's `allocate_slots` does: a
   request admitted later in the same step already hits the blocks an earlier
   one will compute. A request resumed after preemption reuses blocks past its
-  prompt. Freed blocks keep their hashes in an LRU queue, so a shared prefix
-  is reused until other traffic evicts it. A waiting request takes its hits
+  prompt. Freed blocks keep their hashes in an LRU queue, a request's last
+  block first, so a shared prefix is reused until other traffic evicts it;
+  a freed block with no hash is reused first, as in vLLM, so it never costs a
+  cached block its place. A waiting request takes its hits
   only once its whole allocation fits, so a refused admission leaves them
   where they were in the queue. Two requests that compute the same
   block before either is cached (the second's lookup ran first) each cache a
