@@ -3,7 +3,11 @@
 Once per tick the watcher scrapes the server's ``/metrics`` (one scrape in
 flight; a tick that comes due during a slow scrape is skipped and counted),
 keeps the scrape in its bounded history, evaluates every trigger, and opens,
-joins or seals incidents. Between ticks it polls its control files every
+joins or seals incidents. A scrape has ``scrape_timeout_seconds`` in all,
+not per read: past that it is given up as failed, its fetch left to finish
+on its own thread, and no other fetch starts until that one has; the ticks
+in between still evaluate the triggers and seal incidents. A stop, or the
+end of the duration, cuts a scrape short at once. Between ticks it polls its control files every
 0.1 s. Blocking I/O runs on serial workers: the ledger on its own, bundle
 writes on the store's. Nothing it does can block vLLM, which only sees
 ``GET /metrics``.
@@ -181,22 +185,33 @@ class Watcher:
         recovery = self.store.recover()
         self._session("started", {"recovery": recovery.__dict__})
         self._prune()
-        start = self.clock.mono_ns()
-        tick_ns = int(self.config.tick_seconds * _NS)
-        deadline = (
-            start + int(self.options.duration_seconds * _NS)
+        # Set by ``stop`` or by the end of the duration, so either can cut
+        # a scrape short.
+        ending = asyncio.Event()
+        relay = asyncio.ensure_future(_relay(stop, ending))
+        timer = (
+            self._loop.call_later(self.options.duration_seconds, ending.set)
             if self.options.duration_seconds is not None
             else None
         )
+        try:
+            await self._watch(ending)
+        finally:
+            relay.cancel()
+            if timer is not None:
+                timer.cancel()
+        return await self._shutdown()
+
+    async def _watch(self, ending: asyncio.Event) -> None:
+        start = self.clock.mono_ns()
+        tick_ns = int(self.config.tick_seconds * _NS)
         if self.options.test_trigger_every is not None:
             self._next_test = start + int(self.options.test_trigger_every * _NS)
         next_tick = start
-        while not stop.is_set():
+        while not ending.is_set():
             now = self.clock.mono_ns()
-            if deadline is not None and now >= deadline:
-                break
             if now >= next_tick:
-                await self._tick((now - next_tick) / _NS)
+                await self._tick((now - next_tick) / _NS, ending)
                 scheduled = next_tick + tick_ns
                 next_tick = _next_poll(next_tick, tick_ns, self.clock.mono_ns())
                 missed = (next_tick - scheduled) // tick_ns
@@ -204,26 +219,72 @@ class Watcher:
                     self.stats.add("ticks_missed_total", missed)
             self._poll_controls()
             await _sleep_until(
-                stop, min(CONTROL_POLL_SECONDS, _seconds(next_tick, self.clock))
+                ending, min(CONTROL_POLL_SECONDS, _seconds(next_tick, self.clock))
             )
-        return await self._shutdown()
 
-    async def _tick(self, lag_seconds: float) -> None:
+    async def _tick(self, lag_seconds: float, ending: asyncio.Event) -> None:
         self._ticks += 1
+        if self.scraper.fetching():
+            # A scrape given up at its deadline is still being read: start
+            # no other, count the tick missed, and judge what is held.
+            self.stats.add("ticks_missed_total")
+            now = self.clock.mono_ns()
+            self._judge(now, None, Stamped(now, now, self.clock.wall_ns()), lag_seconds)
+            return
         started = self.clock.mono_ns()
         wall = self.clock.wall_ns()
-        record = await self.scraper.scrape_async(marker=MARKER_INTERVAL)
+        record = await self._scrape(wall, ending)
+        if record is None:
+            return  # the watch is ending
         done = max(started, self.clock.mono_ns())
         stamp = Stamped(started, done, wall)
         self._account_scrape(record, kept=self.history.add(stamp, record))
         self._check_exporter(record, done)
-        results = list(self.engine.tick(done, self.history.parsed()))
+        self._judge(done, record, stamp, lag_seconds)
+
+    async def _scrape(
+        self, wall_ns: int, ending: asyncio.Event
+    ) -> VllmScrapeRecord | None:
+        """One scrape within ``scrape_timeout_seconds`` in all, or None when
+        the watch ends first; either way an unfinished fetch is abandoned."""
+        timeout = self.config.scrape_timeout_seconds
+        fetch = asyncio.ensure_future(self.scraper.scrape_async(marker=MARKER_INTERVAL))
+        stopping = asyncio.ensure_future(ending.wait())
+        try:
+            await asyncio.wait(
+                {fetch, stopping}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            stopping.cancel()
+        if fetch.done():
+            return fetch.result()
+        fetch.cancel()  # its thread reads on; its result is dropped
+        if ending.is_set():
+            return None
+        return self.scraper.abandoned(
+            marker=MARKER_INTERVAL,
+            case_id=None,
+            phase=None,
+            observed_at_ns=wall_ns,
+            deadline_seconds=timeout,
+            reason=f"no whole response within the {timeout:g} s scrape timeout",
+        )
+
+    def _judge(
+        self,
+        at_mono: int,
+        record: VllmScrapeRecord | None,
+        stamp: Stamped,
+        lag_seconds: float,
+    ) -> None:
+        """Evaluate the triggers at ``at_mono`` and act on what they found."""
+        results = list(self.engine.tick(at_mono, self.history.parsed()))
         if any(_frozen(result) for result in results):
             self.stats.add("frozen_ticks_total")
         for result in results:
             self._on_result(result)
-        self.incidents.on_tick(done)
-        self._maybe_test(done)
+        self.incidents.on_tick(at_mono)
+        self._maybe_test(at_mono)
         if self._ticks % PRUNE_EVERY_TICKS == 0:
             self._prune()
         self._health(record, stamp, lag_seconds)
@@ -343,7 +404,9 @@ class Watcher:
 
     # -------------------------------------------------------------- health
 
-    def _health(self, record: VllmScrapeRecord, stamp: Stamped, lag: float) -> None:
+    def _health(
+        self, record: VllmScrapeRecord | None, stamp: Stamped, lag: float
+    ) -> None:
         ring = self.history.ring
         self.stats.set("history_bytes", ring.bytes)
         self.stats.set("history_capacity_bytes", ring.max_bytes)
@@ -359,11 +422,19 @@ class Watcher:
             timestamp_ns=stamp.wall_ns,
         )
         health.update(
-            scrape={
-                "status": record.status,
-                "duration_ms": finite(record.duration_ms),
-                "error": record.error,
-            },
+            scrape=(
+                {
+                    "status": record.status,
+                    "duration_ms": finite(record.duration_ms),
+                    "error": record.error,
+                }
+                if record is not None
+                else {
+                    "status": "skipped",
+                    "duration_ms": None,
+                    "error": "the previous scrape is still being read",
+                }
+            ),
             loop_lag_seconds=lag,
             history={
                 "bytes": ring.bytes,
@@ -614,6 +685,11 @@ def _next_poll(previous: int, interval: int, now: int) -> int:
 
 def _seconds(target_ns: int, clock: WatchClock) -> float:
     return max(0.0, (target_ns - clock.mono_ns()) / _NS)
+
+
+async def _relay(stop: asyncio.Event, ending: asyncio.Event) -> None:
+    await stop.wait()
+    ending.set()
 
 
 async def _sleep_until(stop: asyncio.Event, seconds: float) -> None:

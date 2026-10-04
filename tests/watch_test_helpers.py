@@ -33,8 +33,22 @@ class FakeMetrics:
         self.engines = 1
         self.status = 200
         self.delay = 0.0
+        # Seconds between body bytes: the answer trickles, each read within
+        # any socket timeout, the whole never in time.
+        self.dribble = 0.0
         self.scrapes = 0
+        self.in_flight = 0
+        self.max_in_flight = 0
         self._lock = threading.Lock()
+
+    def enter(self) -> None:
+        with self._lock:
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+
+    def leave(self) -> None:
+        with self._lock:
+            self.in_flight -= 1
 
     def body(self) -> bytes:
         with self._lock:
@@ -71,6 +85,15 @@ def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 (http.server's name)
+            metrics.enter()
+            try:
+                self._answer()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the watcher gave up on this scrape
+            finally:
+                metrics.leave()
+
+        def _answer(self) -> None:
             time.sleep(metrics.delay)
             if metrics.status != 200:
                 self.send_response(metrics.status)
@@ -82,7 +105,13 @@ def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
             self.send_header("Content-Type", "text/plain; version=0.0.4")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if not metrics.dribble:
+                self.wfile.write(body)
+                return
+            for index in range(len(body)):
+                self.wfile.write(body[index : index + 1])
+                self.wfile.flush()
+                time.sleep(metrics.dribble)
 
         def log_message(self, *args: Any) -> None:
             return None
