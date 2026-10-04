@@ -101,7 +101,9 @@ engine epoch's raw [execution hook](vllm_execution.md) records (the
 `pause` records, in `seq` order) and returns a `SignalValue` for the longest
 stretch in which the engine made no progress while it had work it could run.
 It needs no import, so an online trigger can run it on the records it tails;
-the diagnoser runs the same rules on imported steps.
+the diagnoser runs the same rules on imported steps. `LoopGapConfig` refuses
+a threshold override with a key the table lacks, a value that is not a
+finite number, or a loop threshold that is not positive.
 
 Work is *ready* during a stretch when a request ran in the step before it
 and in the step after it. The step before a gap between steps is the one

@@ -26,6 +26,7 @@ last completion.
 
 from __future__ import annotations
 
+import math
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ from typing import Any
 
 from .diagnosis_signals import SignalValue
 from .diagnosis_thresholds import (
+    DEFAULT_THRESHOLDS,
     LOOP_BASELINE_WINDOW_NS,
     LOOP_HEARTBEAT_GRACE_NS,
     LOOP_MATCHED_BIN_MIN_STEPS,
@@ -86,6 +88,19 @@ class LoopGapConfig:
     exclude_wall: Sequence[Interval] = ()
     thresholds: Mapping[str, float] = field(default_factory=dict)
     status: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        """Refuse overrides that could never decide: a key the table lacks
+        (never read), a value that is not finite (never exceeded), or a
+        loop threshold that is not positive (no limit at all)."""
+        unknown = sorted(set(self.thresholds) - set(DEFAULT_THRESHOLDS))
+        if unknown:
+            raise ValueError(f"unknown threshold keys: {', '.join(unknown)}")
+        if not all(math.isfinite(value) for value in self.thresholds.values()):
+            raise ValueError("threshold overrides must be finite numbers")
+        bad = sorted(k for k in _LOOP_KEYS if self.thresholds.get(k, 1.0) <= 0)
+        if bad:
+            raise ValueError(f"loop thresholds must be positive: {', '.join(bad)}")
 
 
 @dataclass(frozen=True)

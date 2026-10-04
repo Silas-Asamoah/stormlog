@@ -592,6 +592,23 @@ def test_larger_earlier_steps_set_the_limit_of_a_rarer_size(
     assert signal.detail["baseline"] == "unmatched"
 
 
+@pytest.mark.parametrize(
+    ("thresholds", "message"),
+    [
+        ({"host_stall.stall_factr": 1.0}, "unknown"),
+        ({LOOP_STALL_FACTOR: float("nan")}, "finite"),
+        ({LOOP_STALL_FACTOR: 0.0}, "positive"),
+        ({"host_stall.stall_floor_ns": 0.0}, "positive"),
+        ({"host_stall.heartbeat_grace_ns": -1.0}, "positive"),
+    ],
+)
+def test_a_threshold_override_that_could_not_decide_is_refused(
+    thresholds: dict[str, float], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        LoopGapConfig(thresholds=thresholds)
+
+
 def test_writer_errors_rising_between_heartbeats_give_no_verdict() -> None:
     """A failed write is cut back and counted as an error, not always as a
     drop, so rising errors also mean the records may be incomplete."""
