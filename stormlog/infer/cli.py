@@ -31,6 +31,7 @@ from .arrivals import (
 )
 from .cache_state import CACHE_STATES, COLD, RESET_RETRY_SECONDS, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
+from .describe_server import DescribeOptions, describe_server, write_description
 from .errors import InferInputError, InferUsageError
 from .profile import InferenceProfiler
 from .prompts import MIN_CONTROLLED_TOKENS, PROMPT_MODES, REPEAT, SHARED_PREFIX
@@ -89,6 +90,8 @@ def _run_command(
         return cmd_analyze(args)
     if args.infer_command == "collect-server":
         return cmd_collect_server(args)
+    if args.infer_command == "describe-server":
+        return cmd_describe_server(args)
     if args.infer_command == "import-trace":
         return cmd_import_trace(args)
     if args.infer_command == "import-execution":
@@ -432,10 +435,51 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Number of group members; each rank 0..N-1 needs a collector",
     )
+    _add_describe_server_parser(subparsers)
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
     add_watch_parser(subparsers)
     return parser
+
+
+def _add_describe_server_parser(subparsers: Any) -> None:
+    parser = subparsers.add_parser(
+        "describe-server",
+        help="Describe a running vLLM server from the host that serves it",
+    )
+    parser.add_argument(
+        "--pid", required=True, type=int, help="vLLM's API server process"
+    )
+    parser.add_argument("--output", required=True, help="JSON path to write")
+    parser.add_argument(
+        "--server-log",
+        default=None,
+        help="The server's log file, for the choices it made at start-up",
+    )
+    parser.add_argument(
+        "--python",
+        default="auto",
+        help=(
+            "Interpreter to ask for Python and package versions: auto (the "
+            "server's own, from its command line), a path, or none"
+        ),
+    )
+    parser.add_argument(
+        "--hash-weights",
+        action="store_true",
+        help="Hash every file of a local model directory (SHA-256, cached)",
+    )
+    parser.add_argument(
+        "--verify-model-files",
+        action="store_true",
+        help="Hash every hub-cache blob to check it against its name",
+    )
+    parser.add_argument(
+        "--digest-cache",
+        default=None,
+        help="Where --hash-weights keeps digests between runs",
+    )
+    parser.add_argument("--no-gpu", action="store_true", help="Describe without NVML")
 
 
 def _add_slo_arguments(parser: argparse.ArgumentParser, purpose: str) -> None:
@@ -976,6 +1020,28 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         print(f"Analysis report saved to: {output_path}")
     else:
         print(payload, end="")
+    return int(ExitCode.OK)
+
+
+def cmd_describe_server(args: argparse.Namespace) -> int:
+    """Write one description of a running vLLM server."""
+    options = DescribeOptions(
+        pid=args.pid,
+        server_log=Path(args.server_log) if args.server_log else None,
+        python=args.python,
+        hash_weights=args.hash_weights,
+        verify_model_files=args.verify_model_files,
+        digest_cache=Path(args.digest_cache) if args.digest_cache else None,
+        no_gpu=args.no_gpu,
+    )
+    try:
+        document = describe_server(options)
+    except NvmlUnavailableError as exc:
+        raise InferUsageError(f"{exc}; pass --no-gpu to describe without it") from exc
+    write_description(document, Path(args.output))
+    for issue in document.get("issues", []):
+        _print_warning(issue)
+    print(f"Server description saved to: {Path(args.output)}")
     return int(ExitCode.OK)
 
 
