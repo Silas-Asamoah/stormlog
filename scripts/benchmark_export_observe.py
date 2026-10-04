@@ -2,7 +2,8 @@
 
 Reported, never asserted: the numbers depend on the machine and its load.
 The worker applies records and four threads scrape the shared render
-meanwhile, as in a run. Under the GIL a producer can wait a whole switch
+meanwhile, as in a run; with ``--spans``, the span exporter also builds
+every request's span and writes the batches to an OTLP JSON file. Under the GIL a producer can wait a whole switch
 interval (``sys.getswitchinterval()``) whenever another thread is running
 Python; the lock discipline only limits how often that happens.
 
@@ -22,6 +23,7 @@ from pathlib import Path
 from stormlog.infer.export import ExportPipeline
 from stormlog.infer.export_config import ExportConfig
 from stormlog.infer.export_metrics import ProfileLabels, summarize_chunk_gaps
+from stormlog.infer.export_spans import SpanIdentity
 
 
 def main() -> int:
@@ -42,10 +44,16 @@ def main() -> int:
         default=1.0,
         help="Seconds between one scraper's requests (Prometheus uses 15-60).",
     )
+    parser.add_argument(
+        "--spans",
+        action="store_true",
+        help="Export spans too, to an OTLP JSON file in a temporary directory.",
+    )
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as directory:
+        spans_file = Path(directory) / "spans.jsonl" if args.spans else None
         pipeline = ExportPipeline(
-            ExportConfig(prometheus_textfile_dir=Path(directory)),
+            ExportConfig(prometheus_textfile_dir=Path(directory), otlp_file=spans_file),
             ProfileLabels(
                 model="m",
                 server="http://127.0.0.1:8000",
@@ -53,6 +61,12 @@ def main() -> int:
                 run_id="r",
                 session_id="s",
                 version="0",
+            ),
+            spans=SpanIdentity(
+                run_id="r",
+                session_id="s",
+                model="m",
+                endpoint="http://127.0.0.1:8000/v1/chat/completions",
             ),
         )
         pipeline.start(started_at=time.time())
@@ -62,6 +76,10 @@ def main() -> int:
             "case_id": "c1",
             "phase": "measured",
             "status": "ok",
+            "request_id": "c1_measured_0",
+            "x_request_id": "stormlog-r-c1_measured_0",
+            "started_at_ns": time.time_ns(),
+            "ended_at_ns": time.time_ns() + 120_000_000,
             "e2e_latency_ms": 120.0,
             "ttft_ms": 20.0,
             "arrival_mode": "closed",
@@ -106,7 +124,7 @@ def main() -> int:
     print(
         f"observe() over {args.records} records "
         f"({'a tight loop' if not args.rate else f'{args.rate:g}/s'}), "
-        f"{args.gaps} chunk gaps each, "
+        f"{args.gaps} chunk gaps each, {'spans and ' if args.spans else ''}"
         f"{args.scrapers} scrapers every {args.scrape_interval:g} s, "
         f"switch interval {sys.getswitchinterval() * 1e3:g} ms"
     )
