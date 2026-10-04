@@ -354,6 +354,48 @@ def test_a_window_overlapping_a_perturbation_is_masked() -> None:
     assert later.evaluation.classification != MASKED  # [71, 101] misses it
 
 
+def test_a_window_that_reaches_back_past_t_minus_w_is_masked_there_too() -> None:
+    """The scrape after a pause failed, so the window starts at the one
+    before it, earlier than t - W: the pause is inside the window, and its
+    counter jump made the trigger violating, unmasked."""
+    history = []
+    for second in range(100):
+        total = 0 if second <= 60 else 50
+        text = None if second == 61 else exposition(counters={PREEMPTIONS: total})
+        mono = second * S
+        history.append((Stamped(mono, mono + 4_000_000, mono), scrape(text, second)))
+    pause = [(round(60.2 * S), round(60.8 * S))]
+    spec = TriggerSpec(
+        "preemptions",
+        KIND_METRIC,
+        Sustain.with_defaults(window=30, hold=60, clear=None, tick=1),
+        CounterRateAtLeast(PREEMPTIONS, rate_per_s=1.0),
+    )
+    at = round(91.003 * S)
+    done = [entry for entry in history if entry[0].done_mono_ns <= at]
+    (result,) = TriggerEngine([spec], tick_seconds=1).tick(
+        at, done, perturbations=pause
+    )
+    assert result.evaluation.classification == MASKED
+
+
+def test_a_health_predicate_is_masked_over_the_tail_it_reads() -> None:
+    """FrozenExporter reads its last ticks + 1 scrapes, more than its window."""
+    spec = TriggerSpec(
+        "frozen",
+        KIND_HEALTH,
+        Sustain.with_defaults(window=2, hold=2, clear=None, tick=1),
+        FrozenExporter(ticks=5),
+    )
+    history = _entries([_waiting(3, running=2, tokens=7)] * 10)
+    at = 9 * S + 5_000_000
+    pause = [(round(4.5 * S), round(4.6 * S))]  # inside the tail, before t - W
+    (result,) = TriggerEngine([spec], tick_seconds=1).tick(
+        at, history, perturbations=pause
+    )
+    assert result.evaluation.classification == MASKED
+
+
 def test_a_completion_recorded_trigger_is_masked_for_the_horizon_too() -> None:
     history = _entries([_waiting(9)] * 200)
     spec = _queue_trigger(completion_recorded=True)

@@ -129,8 +129,10 @@ of:
   scrapes were out of order or at one instant, a histogram's step was not
   itself a histogram, or the exporter restarted. A scrape that failed inside
   the window only leaves fewer samples;
-- **masked**: the window overlaps the watcher's own profiler start or stop
-  and the recovery after it.
+- **masked**: what the evaluation read overlaps the watcher's own profiler
+  start or stop and the recovery after it. That is the window from its
+  first scrape, which can start up to a tick before `t - W`, and for a
+  health trigger the scrapes it reads.
 
 The window's end scrape must have finished within one tick of the
 evaluation, and its start scrape within one tick of `t - W`. After an

@@ -62,6 +62,8 @@ class Selection:
     start_ns: int | None = None
     end_ns: int | None = None
     reason: str | None = None
+    # When the window's first fetch began: the earliest instant it reads.
+    sample_start_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -96,7 +98,7 @@ def select_window(
         for stamp, record in done
         if first <= stamp.done_mono_ns <= last
     )
-    return Selection(scrapes, first, last)
+    return Selection(scrapes, first, last, sample_start_ns=start[0].mono_ns)
 
 
 def on_monotonic_clock(stamp: Stamped, record: VllmScrapeRecord) -> VllmScrapeRecord:
@@ -270,6 +272,10 @@ class ScrapeFailures:
 
     consecutive: int = 3
 
+    @property
+    def tail_scrapes(self) -> int:
+        return self.consecutive
+
     def evaluate_history(self, history: Sequence[Entry]) -> Evaluation:
         tail = history[-self.consecutive :]
         if len(tail) < self.consecutive:
@@ -302,6 +308,10 @@ class ScrapeFailureShare:
         if self.scrapes < 1:
             raise ValueError("failed-scrape share needs scrapes >= 1")
 
+    @property
+    def tail_scrapes(self) -> int:
+        return self.scrapes
+
     def evaluate_history(self, history: Sequence[Entry]) -> Evaluation:
         tail = history[-self.scrapes :]
         if len(tail) < self.scrapes:
@@ -329,6 +339,10 @@ class FrozenExporter:
 
     ticks: int = 5
     engine: str | None = None
+
+    @property
+    def tail_scrapes(self) -> int:
+        return self.ticks + 1
 
     def evaluate_history(self, history: Sequence[Entry]) -> Evaluation:
         tail = self._tail(history)
