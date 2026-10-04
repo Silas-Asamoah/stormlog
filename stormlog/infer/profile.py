@@ -31,6 +31,7 @@ from .arrivals import CLOSED, arrival_offsets, scheduled_endpoint
 from .cache_state import cache_state_record, reset_cache
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
+from .errors import InferInputError
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .host_clock import host_boot_id, wall_clock_domain
 from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
@@ -45,6 +46,9 @@ from .openai_client import (
 )
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
+from .server_probe import AFTER, BEFORE
+from .server_probe import NONE as NONE_PROBE
+from .server_probe import SERVER_INFO_DEADLINE_SECONDS, ServerProbe, probe_server
 from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
 from .trace_capture import TraceWindows
@@ -73,9 +77,12 @@ class InferenceProfiler:
         *,
         run_id: str | None = None,
         on_warning: Callable[[str], None] | None = None,
+        prober: Callable[[str], ServerProbe] | None = None,
     ) -> None:
         self.config = config
         self.on_warning = on_warning
+        self.prober = prober or self._probe_server
+        self._before_probe: ServerProbe | None = None
         self.session = create_session_summary(source="stormlog.infer.profile")
         self.run_id = run_id or config.run_id or new_session_id()
         self.token_counter = build_token_counter(
@@ -168,6 +175,16 @@ class InferenceProfiler:
 
     async def _run_async(self) -> dict[str, Any]:
         output_path = Path(self.config.output_path)
+        # Before the artifact is opened: a server still collecting its
+        # environment is not measured, and no artifact says otherwise.
+        self._before_probe = await asyncio.to_thread(self.prober, BEFORE)
+        if self._before_probe.incomplete:
+            raise InferInputError(
+                f"the server's /server_info gave no answer within "
+                f"{SERVER_INFO_DEADLINE_SECONDS:g} s, so vLLM's environment "
+                "collector (pip, nvidia-smi) may still be running in it; "
+                "restart the server before profiling, or pass --server-probe basic"
+            )
         try:
             await self._capture(output_path)
         except BaseException as exc:
@@ -253,6 +270,27 @@ class InferenceProfiler:
         if self.on_warning is not None:
             self.on_warning(message)
 
+    def _probe_server(self, phase: str) -> ServerProbe:
+        return probe_server(
+            self.config.endpoint,
+            mode=self.config.server_probe,
+            phase=phase,
+            api_key=self.config.api_key,
+            allow_remote=self.config.allow_remote_probe,
+        )
+
+    async def _probe_after(self, writer: JsonlEventWriter) -> None:
+        """Ask again after the last case, so drift shows in the artifact."""
+        if self.config.server_probe == NONE_PROBE:
+            return
+        probe = await asyncio.to_thread(self.prober, AFTER)
+        writer.append(probe.to_record(session_id=self.session.session_id))
+        if probe.incomplete:
+            self._warn(
+                "the server's /server_info gave no answer after the run; the "
+                "after-run probe is incomplete"
+            )
+
     async def _capture(self, output_path: Path) -> None:
         self._start_span_receiver()
         with JsonlEventWriter(output_path) as writer:
@@ -309,23 +347,7 @@ class InferenceProfiler:
                     },
                 }
             )
-            writer.append(self._artifact_identity().to_record())
-            writer.append(
-                workload_record(
-                    self.config,
-                    session_id=self.session.session_id,
-                    counter=self.token_counter,
-                    prompt_spec=self.prompt_spec,
-                )
-            )
-            if self.config.slo is not None:
-                writer.append(
-                    slo_record(
-                        self.config.slo,
-                        session_id=self.session.session_id,
-                        source=self.config.slo_source or "flags",
-                    )
-                )
+            self._write_run_records(writer)
             stop_sampling = asyncio.Event()
             sample_task = asyncio.create_task(
                 self._sample_system_loop(
@@ -342,6 +364,7 @@ class InferenceProfiler:
             try:
                 for case in self.config.cases():
                     await self._run_case(case=case, writer=writer)
+                await self._probe_after(writer)
                 completed = True
             finally:
                 # The helpers are waited for, never awaited: under a real
@@ -362,6 +385,30 @@ class InferenceProfiler:
                     # the artifact says what the engine exposed before it
                     # says why the run stopped.
                     self._write_capabilities(writer)
+
+    def _write_run_records(self, writer: JsonlEventWriter) -> None:
+        """What the run is: its identity, workload, SLO policy and server probe."""
+        writer.append(self._artifact_identity().to_record())
+        writer.append(
+            workload_record(
+                self.config,
+                session_id=self.session.session_id,
+                counter=self.token_counter,
+                prompt_spec=self.prompt_spec,
+            )
+        )
+        if self.config.slo is not None:
+            writer.append(
+                slo_record(
+                    self.config.slo,
+                    session_id=self.session.session_id,
+                    source=self.config.slo_source or "flags",
+                )
+            )
+        if self._before_probe is not None and self._before_probe.answers:
+            writer.append(
+                self._before_probe.to_record(session_id=self.session.session_id)
+            )
 
     async def _wait_for_late_spans(self) -> None:
         """Keep the receiver up after the last phase for the exporter's last batch.

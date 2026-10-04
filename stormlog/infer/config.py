@@ -147,6 +147,11 @@ class ProfileConfig:
     # came from a file or from --slo flags. None records none.
     slo: SloSpec | None = None
     slo_source: str | None = None
+    # What to ask the server about itself before and after the run: auto,
+    # basic or none (see server_probe). /server_info is asked of a public
+    # host only when allow_remote_probe is set.
+    server_probe: str = "auto"
+    allow_remote_probe: bool = False
 
     def prompt_spec(self) -> PromptSpec:
         return PromptSpec(

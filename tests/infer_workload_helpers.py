@@ -81,6 +81,8 @@ def run_profile_with_fake_client(
         "stream": False,
         "system_sampler": "none",
         "tokenizer": "none",
+        # The probe asks the endpoint over HTTP; a test opts in by name.
+        "server_probe": "none",
     }
     values.update(changes)
     profiler = InferenceProfiler(ProfileConfig(**values))
