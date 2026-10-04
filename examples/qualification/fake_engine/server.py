@@ -10,6 +10,7 @@ import threading
 import time
 import traceback
 import typing
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
@@ -274,7 +275,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _dispatch(self, routes: dict[str, Route]) -> None:
         handler = routes.get(self.route)
         if handler is None:
-            self.send_json(404, {"error": f"no route {self.route}"})
+            self.send_json(404, {"detail": "Not Found"})  # FastAPI's answer
             return
         if not self.route.startswith("/_fault/"):
             self.fake.wait_frontend()
@@ -297,6 +298,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def send_empty(self, status: int) -> None:
+        """An answer with no body, as Starlette's bare ``Response`` sends."""
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def log_message(self, _format: str, *_args: object) -> None:
         return None
@@ -464,7 +471,7 @@ def _metrics(handler: _Handler) -> None:
     text = render_metrics(
         fake.engine.metrics_snapshot(), fake.config, fake.engine.start_ns / 1e9
     )
-    handler.send_bytes(200, text.encode(), "text/plain; version=0.0.4")
+    handler.send_bytes(200, text.encode(), "text/plain; version=0.0.4; charset=utf-8")
 
 
 def _start_profile(handler: _Handler) -> None:
@@ -477,7 +484,7 @@ def _start_profile(handler: _Handler) -> None:
         handler.close_connection = True
         handler.connection.shutdown(socket.SHUT_RDWR)
         return
-    handler.send_json(status, {} if status == 200 else {"error": "not configured"})
+    _profile_answer(handler, status)
 
 
 def _stop_profile(handler: _Handler) -> None:
@@ -485,7 +492,17 @@ def _stop_profile(handler: _Handler) -> None:
     profiler = handler.fake.profiler
     assert profiler is not None
     status = profiler.stop()
-    handler.send_json(status, {} if status == 200 else {"error": "not configured"})
+    _profile_answer(handler, status)
+
+
+def _profile_answer(handler: _Handler, status: int) -> None:
+    """vLLM answers an empty 200. Without --profiler-config its routes don't
+    exist, and FastAPI answers {"detail": "Not Found"}; another status gets
+    FastAPI's body for it."""
+    if status == 200:
+        handler.send_empty(200)
+    else:
+        handler.send_json(status, {"detail": HTTPStatus(status).phrase})
 
 
 def _reset_prefix_cache(handler: _Handler) -> None:
