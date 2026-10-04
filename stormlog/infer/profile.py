@@ -48,9 +48,17 @@ from .openai_client import (
 )
 from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
-from .server_probe import AFTER, BEFORE
+from .server_probe import (
+    AFTER,
+    BEFORE,
+)
 from .server_probe import NONE as NONE_PROBE
-from .server_probe import SERVER_INFO_DEADLINE_SECONDS, ServerProbe, probe_server
+from .server_probe import (
+    SERVER_INFO,
+    SERVER_INFO_DEADLINE_SECONDS,
+    ServerProbe,
+    probe_server,
+)
 from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
 from .trace_capture import TraceCaptureConfig, TraceWindows
@@ -202,11 +210,12 @@ class InferenceProfiler:
         # environment is not measured, and no artifact says otherwise.
         self._before_probe = await asyncio.to_thread(self.prober, BEFORE)
         if self._before_probe.incomplete:
+            answer = self._before_probe.answers[SERVER_INFO]
             raise InferInputError(
-                f"the server's /server_info gave no answer within "
-                f"{SERVER_INFO_DEADLINE_SECONDS:g} s, so vLLM's environment "
-                "collector (pip, nvidia-smi) may still be running in it; "
-                "restart the server before profiling, or pass --server-probe basic"
+                f"the server's /server_info gave no answer ({answer.status}, "
+                f"deadline {SERVER_INFO_DEADLINE_SECONDS:g} s), so vLLM's "
+                "environment collector (pip, nvidia-smi) may still be running in "
+                "it; restart the server before profiling, or pass --server-probe basic"
             )
         try:
             await self._capture(output_path)

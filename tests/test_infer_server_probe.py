@@ -161,6 +161,88 @@ def test_a_slow_server_info_leaves_the_probe_incomplete_without_a_retry(
     assert calls == 1
 
 
+def _trickle(head: bool) -> Any:
+    """Send an answer one byte every 50 ms: the headers, or only the body."""
+
+    def answer(handler: BaseHTTPRequestHandler) -> None:
+        body = json.dumps({"version": "0.30.0"}).encode()
+        lines = (
+            b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+        )
+        if not head:
+            handler.wfile.write(lines)
+            lines = b""
+        try:
+            for byte in lines + body:
+                handler.wfile.write(bytes([byte]))
+                handler.wfile.flush()
+                time.sleep(0.05)
+        except OSError:
+            return
+
+    return answer
+
+
+@pytest.mark.parametrize("head", [False, True], ids=["body", "headers"])
+def test_the_deadline_bounds_the_whole_exchange(
+    monkeypatch: pytest.MonkeyPatch, head: bool
+) -> None:
+    # A server that trickles its answer kept the probe for as long as each
+    # read made progress: the deadline was checked only between reads.
+    monkeypatch.setattr(server_probe, "BASIC_DEADLINE_SECONDS", 0.5)
+    routes = {**_dev_routes(), VERSION: _trickle(head)}
+    began = time.monotonic()
+    with _server(routes) as endpoint:
+        probe = probe_server(endpoint, mode="basic")
+    assert probe.answers[VERSION].status == "timeout"
+    assert time.monotonic() - began < 1.5
+
+
+def test_after_a_route_times_out_the_others_are_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server_probe, "BASIC_DEADLINE_SECONDS", 0.3)
+
+    def hung(handler: BaseHTTPRequestHandler) -> None:
+        time.sleep(1.0)
+
+    routes = {**_dev_routes(), VERSION: hung}
+    with _server(routes) as endpoint:
+        probe = probe_server(endpoint)
+        calls = _Handler.server_info_calls
+    assert probe.answers[VERSION].status == "timeout"
+    for route in (MODELS, SERVER_INFO):
+        assert (probe.answers[route].status, probe.answers[route].detail) == (
+            "skipped",
+            "no answer to an earlier route",
+        )
+    # Nothing was asked of /server_info, so no collector can be running.
+    assert calls == 0 and not probe.incomplete
+
+
+def test_a_server_info_lost_after_it_was_sent_leaves_the_probe_incomplete() -> None:
+    # The server took the request and closed without a byte of answer: its
+    # collector may still be running.
+    def close(handler: BaseHTTPRequestHandler) -> None:
+        handler.close_connection = True
+        handler.wfile.flush()
+        handler.connection.shutdown(2)
+
+    routes = {**_dev_routes(), SERVER_INFO: close}
+    with _server(routes) as endpoint:
+        probe = probe_server(endpoint)
+    assert probe.answers[SERVER_INFO].status == "delivery_unknown"
+    assert probe.incomplete
+
+
+def test_an_answer_nested_too_deeply_is_invalid_json() -> None:
+    routes = {**_dev_routes(), VERSION: b"[" * 100_000 + b"]" * 100_000}
+    with _server(routes) as endpoint:
+        probe = probe_server(endpoint, mode="basic")
+    assert probe.answers[VERSION].status == "invalid_json"
+
+
 def test_an_oversized_answer_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server_probe, "RESPONSE_CAP_BYTES", 1024)
     routes = {**_dev_routes(), MODELS: b"x" * 4096}
