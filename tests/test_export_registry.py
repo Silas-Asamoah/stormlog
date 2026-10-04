@@ -381,3 +381,12 @@ def test_help_text_is_escaped() -> None:
 )
 def test_values_are_formatted_for_the_text_format(value: float, text: str) -> None:
     assert format_value(value) == text
+
+
+def test_a_final_update_lands_under_the_freeze() -> None:
+    registry = Registry()
+    requests = _requests(registry, ["c1"])
+    registry.freeze(final=lambda: requests.inc(("c1", "error"), 5))
+    registry.freeze(final=lambda: requests.inc(("c1", "error"), 5))  # no-op
+    exposition = check_exposition(_text(registry))
+    assert exposition.value("stormlog_infer_requests_total", status="error") == 5

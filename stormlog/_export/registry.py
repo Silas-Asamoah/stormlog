@@ -314,9 +314,16 @@ class Registry:
             update()
             return True
 
-    def freeze(self) -> None:
-        """Stop every later update; the values now are the final ones."""
+    def freeze(self, final: Callable[[], None] | None = None) -> None:
+        """Stop every later update; the values now are the final ones.
+
+        ``final`` runs under the same lock just before, so values computed
+        from counts that only this lock keeps steady (such as how many
+        queued records were never applied) land in the frozen state.
+        """
         with self._lock:
+            if final is not None and not self._frozen:
+                final()
             self._frozen = True
 
     @property
