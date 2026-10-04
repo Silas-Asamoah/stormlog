@@ -180,12 +180,22 @@ def test_a_request_never_sent_and_engine_records_are_not_spans() -> None:
 
 
 def test_sampling_keeps_every_failure() -> None:
+    # Requests sent without trace context: the ratio samples their spans.
     spans = _spans(sample_ratio=0.0)
-    assert spans.envelope(_request(), None) is None
+    assert spans.envelope(_request(trace_id=None, span_id=None), None) is None
     assert spans.sampled_out == 1
     for status in ("timeout", "rejected", "error", "cancelled"):
-        assert spans.envelope(_request(status=status), None) is not None
+        failed = _request(status=status, trace_id=None, span_id=None)
+        assert spans.envelope(failed, None) is not None
     assert spans.sampled_out == 1
+
+
+def test_a_request_span_that_carried_a_traceparent_is_always_exported() -> None:
+    # The server may have recorded a child of it: left out, that child's
+    # parent would never reach the backend.
+    spans = _spans(sample_ratio=0.0)
+    assert spans.envelope(_request(), None) is not None
+    assert spans.sampled_out == 0
 
 
 @pytest.mark.parametrize(

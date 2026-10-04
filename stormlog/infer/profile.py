@@ -37,6 +37,7 @@ from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
 from .export import RECEIVER_HEALTH, ExportPipeline, ReceiverHealth
+from .export_config import sampler_warnings
 from .export_metrics import ProfileLabels
 from .export_spans import SpanIdentity
 from .host_clock import host_boot_id, wall_clock_domain
@@ -135,6 +136,8 @@ class InferenceProfiler:
         self._trace_ids: dict[str, TraceIds] = {}
         # Built now so a budget or slot problem stops the run before it sends.
         self.export = self._build_export()
+        for message in sampler_warnings(config.export):
+            self._warn(message)
 
     def _build_export(self) -> ExportPipeline | None:
         config = self.config

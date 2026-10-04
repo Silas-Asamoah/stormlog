@@ -6,14 +6,22 @@ child of Stormlog's client span, in the same trace. The header is never
 sent unless asked for; matched runs with and without it would otherwise
 differ in what the server receives.
 
-The sampled flag decides more than it seems. vLLM's tracer has no sampler
-of its own, so the OpenTelemetry SDK's default applies: parent-based, so a
-parent marked not sampled stops vLLM recording the request's span at all.
-``preserve-engine`` therefore always sends ``01``: vLLM records what it
-would have without the header, and Stormlog decides only which of its own
-spans to export. ``follow-sampling`` sends Stormlog's head decision, which
-saves engine spans and loses them for every request not sampled, including
-the failed and slow ones Stormlog keeps after the fact.
+The sampled flag decides more than it seems. vLLM's tracer takes its
+sampler from ``OTEL_TRACES_SAMPLER``, by default ``parentbased_always_on``:
+under a parent-based sampler a remote parent's flag decides, so a parent
+marked not sampled stops vLLM recording the request's span at all, and one
+marked sampled makes it record the span whatever its own ratio says.
+``preserve-engine`` always sends ``01``: under the default sampler vLLM
+records what it would have without the header, but under a parent-based
+ratio sampler it records every Stormlog request, more than its ratio; the
+profiler warns when the declared server sampler says so.
+``follow-sampling`` sends Stormlog's head decision at the server's declared
+ratio, which keeps the engine's volume, and loses the engine spans of every
+request not sampled, including the failed and slow ones Stormlog keeps.
+
+Every request span that carried a ``traceparent`` is exported, whatever
+Stormlog's own ratio: the server may have recorded a child of it, which
+would otherwise point at a parent no backend ever receives.
 
 Stormlog's own decision is the ProbabilitySampler's predicate on the trace
 ID's lowest 56 bits, so it is reproducible from the recorded ID. Stormlog
@@ -45,6 +53,58 @@ class TraceIds:
     trace_id: str
     span_id: str
     sampled: bool = True
+
+
+# The OpenTelemetry SDK's OTEL_TRACES_SAMPLER names. The ratio samplers
+# take a ratio from 0 to 1 (1 when none is given); always_on and always_off,
+# parent-based or not, take no argument; the remote samplers take their own.
+RATIO_SAMPLERS = ("traceidratio", "parentbased_traceidratio")
+FIXED_SAMPLERS = {
+    "always_on": 1.0,
+    "always_off": 0.0,
+    "parentbased_always_on": 1.0,
+    "parentbased_always_off": 0.0,
+}
+REMOTE_SAMPLERS = ("jaeger_remote", "parentbased_jaeger_remote", "xray")
+
+
+@dataclass(frozen=True)
+class ServerSampler:
+    """A server's declared sampler: its name, and the share of new traces it keeps."""
+
+    name: str
+    # None when the sampler decides remotely, so the share is unknown.
+    ratio: float | None
+
+    @property
+    def parent_based(self) -> bool:
+        return self.name.startswith("parentbased_")
+
+
+def parse_server_sampler(value: str) -> ServerSampler:
+    """``NAME[:ARG]`` as ``OTEL_TRACES_SAMPLER`` and its argument; ValueError if unknown."""
+    name, separator, argument = value.partition(":")
+    if name in RATIO_SAMPLERS:
+        return ServerSampler(name, _ratio(value, argument) if separator else 1.0)
+    if name in FIXED_SAMPLERS and not separator:
+        return ServerSampler(name, FIXED_SAMPLERS[name])
+    if name in REMOTE_SAMPLERS:
+        return ServerSampler(name, None)
+    known = ", ".join(RATIO_SAMPLERS + tuple(FIXED_SAMPLERS) + REMOTE_SAMPLERS)
+    raise ValueError(
+        f"--server-trace-sampler {value!r} is not NAME[:ARG] with NAME one of "
+        f"{known}; only the ratio samplers take a ratio"
+    )
+
+
+def _ratio(value: str, argument: str) -> float:
+    try:
+        ratio = float(argument)
+    except ValueError:
+        ratio = float("nan")
+    if not 0.0 <= ratio <= 1.0:  # nan fails too
+        raise ValueError(f"--server-trace-sampler {value!r} needs a ratio from 0 to 1")
+    return ratio
 
 
 def keeps(trace_id: str, ratio: float) -> bool:

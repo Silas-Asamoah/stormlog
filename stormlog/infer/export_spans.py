@@ -212,13 +212,21 @@ class ProfileSpans:
     ) -> Envelope | None:
         if record.get("x_request_id") is None:
             return None  # never sent: there is nothing to trace
-        trace_id = record.get("trace_id")
-        span_id = record.get("span_id")
-        if not isinstance(trace_id, str) or not isinstance(span_id, str):
+        sent_trace, sent_span = record.get("trace_id"), record.get("span_id")
+        # Sent with a traceparent: the server may have recorded a child of
+        # this span, so it is exported whatever the ratio.
+        carried = isinstance(sent_trace, str) and isinstance(sent_span, str)
+        if carried:
+            trace_id, span_id = str(sent_trace), str(sent_span)
+        else:
             ids = derived_ids(self.identity.session_id, str(record.get("request_id")))
             trace_id, span_id = ids.trace_id, ids.span_id
         status = record.get("status")
-        if status == "ok" and not keeps(trace_id, self.identity.sample_ratio):
+        if (
+            status == "ok"
+            and not carried
+            and not keeps(trace_id, self.identity.sample_ratio)
+        ):
             self.sampled_out += 1
             return None
         return make_envelope(

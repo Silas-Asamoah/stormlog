@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import math
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,7 +21,13 @@ from .._export.registry import DEFAULT_MAX_BYTES, DEFAULT_MAX_SAMPLES
 from .._export.textfile import validate_slot
 from ..scrub import is_forbidden_key_name
 from .export_spans import CONTENT_ITEMS
-from .trace_context import FOLLOW_SAMPLING, OFF, POLICIES
+from .trace_context import (
+    FOLLOW_SAMPLING,
+    OFF,
+    POLICIES,
+    PRESERVE_ENGINE,
+    parse_server_sampler,
+)
 
 Command = Literal["profile", "watch"]
 # Every label value of a profile comes from its configuration, so nothing
@@ -104,9 +110,10 @@ class ExportConfig:
         if self.prometheus_listen is not None:
             parse_listen(self.prometheus_listen)
         validate_slot(self.prometheus_slot)
-        _check_dependent(self, _given(self) if given is None else set(given))
+        settings = _given(self) if given is None else set(given)
+        _check_dependent(self, settings)
         _check_numbers(self)
-        _check_trace_context(self, command)
+        _check_trace_context(self, command, settings)
         _check_otlp(self)
 
     @classmethod
@@ -137,7 +144,7 @@ class ExportConfig:
                 values[name] = tuple(values[name])
         if "export_content" in values:
             values["export_content"] = frozenset(values["export_content"])
-        config = cls(**values)
+        config = _with_server_ratio(cls(**values), set(mapping))
         config.validate(command, given=set(mapping))
         return config
 
@@ -237,7 +244,9 @@ def _check_dependent(config: ExportConfig, given: set[str]) -> None:
                 raise ValueError(f"{flag} only applies with --prometheus-textfile-dir")
 
 
-def _check_trace_context(config: ExportConfig, command: Command) -> None:
+def _check_trace_context(
+    config: ExportConfig, command: Command, given: set[str]
+) -> None:
     if config.trace_context not in POLICIES:
         raise ValueError(f"--trace-context must be one of {', '.join(POLICIES)}")
     if command == "watch" and config.trace_context != OFF:
@@ -256,6 +265,76 @@ def _check_trace_context(config: ExportConfig, command: Command) -> None:
             "--otlp-sample-ratio only applies with --otlp-endpoint, --otlp-file "
             "or --trace-context follow-sampling"
         )
+    if config.trace_context == PRESERVE_ENGINE and config.sample_ratio != 1.0:
+        raise ValueError(
+            "--otlp-sample-ratio has no effect with --trace-context "
+            "preserve-engine: every request carries a sampled traceparent, and "
+            "every request span that did is exported"
+        )
+    _check_server_sampler(config, given)
+
+
+def _check_server_sampler(config: ExportConfig, given: set[str]) -> None:
+    if config.server_trace_sampler is None:
+        return
+    sampler = parse_server_sampler(config.server_trace_sampler)
+    if (
+        config.trace_context == FOLLOW_SAMPLING
+        and sampler.parent_based
+        and sampler.ratio is not None
+        and "sample_ratio" in given
+        and config.sample_ratio > sampler.ratio
+    ):
+        raise ValueError(
+            f"--otlp-sample-ratio {config.sample_ratio:g} is above the "
+            f"{sampler.ratio:g} the server's sampler declares: follow-sampling "
+            "would raise the server's tracing volume"
+        )
+
+
+def _with_server_ratio(config: ExportConfig, given: set[str]) -> ExportConfig:
+    """Under follow-sampling, Stormlog's ratio defaults to the server's declared one.
+
+    Only a parent-based sampler follows the flag; any other keeps its own
+    share whatever Stormlog sends, so the ratio is left as it is.
+    """
+    if (
+        config.trace_context != FOLLOW_SAMPLING
+        or config.server_trace_sampler is None
+        or "sample_ratio" in given
+    ):
+        return config
+    try:
+        sampler = parse_server_sampler(config.server_trace_sampler)
+    except ValueError:
+        return config  # refused by validate
+    if not sampler.parent_based or sampler.ratio is None:
+        return config
+    return replace(config, sample_ratio=sampler.ratio)
+
+
+def sampler_warnings(config: ExportConfig) -> list[str]:
+    """Why the trace context would make the server record more, if it would.
+
+    A parent-based server sampler follows a sampled parent, so each request
+    marked sampled is recorded whatever the server's own ratio.
+    """
+    if config.trace_context == OFF or config.server_trace_sampler is None:
+        return []
+    sampler = parse_server_sampler(config.server_trace_sampler)
+    if not sampler.parent_based:
+        return []
+    marked = 1.0 if config.trace_context == PRESERVE_ENGINE else config.sample_ratio
+    if sampler.ratio is not None and marked <= sampler.ratio:
+        return []
+    declared = "an unknown share" if sampler.ratio is None else f"{sampler.ratio:g}"
+    return [
+        f"--trace-context {config.trace_context} marks {marked:g} of requests "
+        f"sampled, and the server's declared sampler "
+        f"{config.server_trace_sampler} follows a sampled parent: the server will "
+        f"record that share of Stormlog's requests, not the {declared} it keeps "
+        "on its own"
+    ]
 
 
 def _check_otlp(config: ExportConfig) -> None:
@@ -353,22 +432,27 @@ def add_trace_context_arguments(parser: argparse.ArgumentParser) -> None:
         "--trace-context",
         choices=POLICIES,
         help="off (default) sends no traceparent. preserve-engine always "
-        "marks it sampled, so the server records every request as it would "
-        "without the header; follow-sampling sends Stormlog's own decision.",
+        "marks it sampled: a server with a parent-based sampler then records "
+        "every Stormlog request, which is what its default sampler does "
+        "anyway but more than a parent-based ratio sampler would (a warning "
+        "says so). follow-sampling sends Stormlog's own decision, at the "
+        "server's declared ratio by default.",
     )
     group.add_argument(
         "--server-trace-sampler",
         metavar="NAME[:ARG]",
-        help="The server's OTEL_TRACES_SAMPLER, such as "
-        "parentbased_traceidratio:0.1, recorded as declared; Stormlog cannot "
-        "read it.",
+        help="The server's OTEL_TRACES_SAMPLER and its ratio, such as "
+        "parentbased_traceidratio:0.1: checked against the SDK's sampler names "
+        "and recorded as declared, since Stormlog cannot read it.",
     )
     group.add_argument(
         "--otlp-sample-ratio",
         type=float,
         metavar="RATIO",
-        help="Stormlog's own sampling ratio, 0 to 1 (default 1): what "
-        "follow-sampling sends, and which request spans are exported.",
+        help="Stormlog's own sampling ratio, 0 to 1: what follow-sampling "
+        "sends (default: the ratio --server-trace-sampler declares, else 1), "
+        "and which request spans sent without trace context are exported. "
+        "A request span that carried a traceparent is always exported.",
     )
 
 
@@ -539,7 +623,9 @@ def export_config_from_args(args: argparse.Namespace) -> ExportConfig:
         server_trace_sampler=getattr(args, "server_trace_sampler", None),
         **_otlp_from_args(args, defaults),
     )
-    config.validate(given=_given_flags(args))
+    given = _given_flags(args)
+    config = _with_server_ratio(config, given)
+    config.validate(given=given)
     return config
 
 

@@ -210,6 +210,14 @@ def test_the_flags_set_the_policy_ratio_and_declared_sampler() -> None:
             {"trace_context": PRESERVE_ENGINE, "sample_ratio": 0.5},
             "only applies with --otlp-endpoint",
         ),
+        (
+            {
+                "trace_context": PRESERVE_ENGINE,
+                "sample_ratio": 0.5,
+                "otlp_endpoint": "http://127.0.0.1:4318",
+            },
+            "no effect with --trace-context preserve-engine",
+        ),
         ({"trace_context": "always"}, "must be one of"),
     ],
 )
@@ -223,6 +231,92 @@ def test_unusable_trace_settings_are_refused(
 def test_the_ratio_also_samples_exported_spans() -> None:
     ExportConfig(sample_ratio=0.5, otlp_endpoint="http://127.0.0.1:4318").validate()
     ExportConfig(sample_ratio=0.5, trace_context=FOLLOW_SAMPLING).validate()
+
+
+@pytest.mark.parametrize(
+    "sampler",
+    [
+        "parent_based_always_on",  # not the SDK's name
+        "parentbased_traceidratio:abc",
+        "traceidratio:1.5",
+        "traceidratio:nan",
+        "parentbased_always_on:0.1",  # takes no ratio
+    ],
+)
+def test_a_server_sampler_the_sdk_does_not_know_is_refused(sampler: str) -> None:
+    # Arms of a comparison that declare it would otherwise differ silently.
+    with pytest.raises(ValueError, match="--server-trace-sampler"):
+        _parse(
+            ["--trace-context", "preserve-engine", "--server-trace-sampler", sampler]
+        )
+
+
+@pytest.mark.parametrize(
+    "sampler",
+    [
+        "always_on",
+        "always_off",
+        "traceidratio",
+        "parentbased_traceidratio:0.1",
+        "parentbased_always_off",
+        "parentbased_jaeger_remote:endpoint=http://jaeger:14250",
+        "xray",
+    ],
+)
+def test_the_sdks_sampler_names_are_accepted(sampler: str) -> None:
+    _parse(["--trace-context", "preserve-engine", "--server-trace-sampler", sampler])
+
+
+def test_follow_sampling_takes_the_servers_declared_ratio() -> None:
+    declared = ["--server-trace-sampler", "parentbased_traceidratio:0.1"]
+    follow = ["--trace-context", "follow-sampling", *declared]
+    assert _parse(follow).sample_ratio == 0.1
+    assert _parse([*follow, "--otlp-sample-ratio", "0.05"]).sample_ratio == 0.05
+    with pytest.raises(ValueError, match="above the 0.1"):
+        _parse([*follow, "--otlp-sample-ratio", "0.5"])
+
+
+@pytest.mark.parametrize("sampler", ["traceidratio:0.1", "always_off"])
+def test_a_sampler_that_ignores_the_parent_leaves_the_ratio_alone(sampler: str) -> None:
+    # Not parent-based: the server keeps its own share whatever the flag
+    # says, so the flag's ratio neither follows nor is bounded by it.
+    follow = ["--trace-context", "follow-sampling", "--server-trace-sampler", sampler]
+    assert _parse(follow).sample_ratio == 1.0
+    assert _parse([*follow, "--otlp-sample-ratio", "0.5"]).sample_ratio == 0.5
+
+
+@pytest.mark.parametrize(
+    ("sampler", "warned"),
+    [
+        ("parentbased_traceidratio:0.1", True),
+        ("parentbased_always_off", True),
+        ("parentbased_always_on", False),  # the SDK's default: no change
+        ("traceidratio:0.1", False),  # not parent-based: ignores the flag
+        (None, False),
+    ],
+)
+def test_preserve_engine_warns_when_it_raises_the_servers_volume(
+    tmp_path: Path, sampler: str | None, warned: bool
+) -> None:
+    warnings: list[str] = []
+    config = ProfileConfig(
+        endpoint="http://127.0.0.1:9/v1/chat/completions",
+        model="m",
+        concurrency=(1,),
+        input_tokens=(8,),
+        output_tokens=(4,),
+        output_path=str(tmp_path / "infer.jsonl"),
+        tokenizer="none",
+        system_sampler="none",
+        export=ExportConfig(
+            trace_context=PRESERVE_ENGINE, server_trace_sampler=sampler
+        ),
+    )
+    InferenceProfiler(config, on_warning=warnings.append)
+    found = [w for w in warnings if "preserve-engine" in w]
+    assert bool(found) is warned
+    if warned:
+        assert sampler is not None and sampler in found[0]
 
 
 def test_a_watcher_refuses_trace_context() -> None:
