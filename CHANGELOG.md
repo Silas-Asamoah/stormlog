@@ -63,7 +63,8 @@ the flaky benchmark memory gates
   latency quantiles), paired by block when runs are labelled. Gates are
   `--gate METRIC=RULE:BUDGET` with `non-inferiority`, `significant` or
   `demonstrated`, and a budget that can never fail is a usage error;
-  `--min-attainment` judges the share of runs that meet a target;
+  `--min-attainment` judges the share of runs that meet a target, a run
+  whose SLO was not judged counting as not meeting it;
   `--family any_regression` applies Holm. Modes `config`, `overhead`
   and `incremental` check what may differ and the observers' contract. Exit
   0, 4 (a gate failed or could not be evaluated, unless
