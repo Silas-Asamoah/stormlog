@@ -41,14 +41,33 @@ def test_a_completed_run_is_summarized_with_its_labels(tmp_path: Path) -> None:
     assert summary.fields["workload.spec_digest"].known
 
 
-def test_an_unfinished_run_is_a_protocol_failure(tmp_path: Path) -> None:
+def test_an_unfinished_run_is_an_outcome_kept_as_data(tmp_path: Path) -> None:
+    # A crash before the terminal record may be the treatment's doing: it is
+    # compared, never set aside, unless an external cause is recorded.
     path = _run(tmp_path)
     lines = path.read_text().splitlines()
-    # Drop the terminal session record, as a crash before it would.
     path.write_text("\n".join(lines[:-1]) + "\n")
     summary = summarize_run(path)
     assert summary.session_status == "running"
-    assert summary.protocol_failures == ("session_running",)
+    assert summary.protocol_failures == ()
+    assert summary.outcome_failures == ("session_running",)
+
+
+def test_an_external_cause_the_runner_recorded_sets_the_run_aside(
+    tmp_path: Path,
+) -> None:
+    path = _run(tmp_path)
+    lines = path.read_text().splitlines()
+    state = {
+        "event_type": "infer.run_state",
+        "state": "protocol_failure",
+        "reasons": ["server_never_healthy"],
+        "before_treatment": ["server_never_healthy"],
+    }
+    path.write_text("\n".join([*lines[:-1], json.dumps(state)]) + "\n")
+    summary = summarize_run(path)
+    assert summary.protocol_failures == ("external:server_never_healthy",)
+    assert summary.outcome_failures == ("session_running",)
 
 
 def test_a_cold_case_whose_reset_failed_cannot_stand_for_its_case(
@@ -96,6 +115,30 @@ def _summary(report: dict[str, Any], *extra: dict[str, Any]) -> Any:
     return summary_from_records([session, *extra], report)
 
 
+def test_a_cohort_cut_short_by_an_unfinished_run_is_an_outcome() -> None:
+    interrupted = {
+        "event_type": "infer.session",
+        "session_id": "s",
+        "status": "interrupted",
+    }
+    cut: dict[str, Any] = {
+        "c1": {
+            "population": {
+                "cohort_valid": False,
+                "issues": ["phase_window_missing", "records_missing: 24 of 50"],
+            }
+        }
+    }
+    summary = summary_from_records([interrupted], {"cases": cut})
+    assert summary.failures_for("c1") == ()
+    assert summary.outcome_failures == ("session_interrupted",)
+    # A duplicate is a fault of the harness, whatever ended the run.
+    cut["c1"]["population"]["issues"].append("duplicate_request_id: 1")
+    assert summary_from_records([interrupted], {"cases": cut}).failures_for("c1") == (
+        "cohort_invalid",
+    )
+
+
 def test_each_protocol_failure_sets_its_run_or_case_aside() -> None:
     cases = {"c1": {"population": {"cohort_valid": False}}}
     assert _summary({"cases": cases}).failures_for("c1") == ("cohort_invalid",)
@@ -103,3 +146,33 @@ def test_each_protocol_failure_sets_its_run_or_case_aside() -> None:
     assert changed.protocol_failures == ("identity_changed",)
     probe = {"event_type": "infer.server_probe", "phase": "before", "incomplete": True}
     assert _summary({}, probe).protocol_failures == ("probe_incomplete",)
+
+
+def test_an_unfinished_run_keeps_its_run_faults_as_outcomes() -> None:
+    # Outcome beats protocol: a treatment that kills the server also cuts
+    # the probe short and may restart it with a new identity.
+    interrupted = {
+        "event_type": "infer.session",
+        "session_id": "s",
+        "status": "interrupted",
+    }
+    probe = {"event_type": "infer.server_probe", "phase": "after", "incomplete": True}
+    report = {"manifest": {"protocol_failure": "identity_changed"}}
+    summary = summary_from_records([interrupted, probe], report)
+    assert summary.protocol_failures == ()
+    assert summary.outcome_failures == (
+        "session_interrupted",
+        "identity_changed",
+        "probe_incomplete",
+    )
+    state = {
+        "event_type": "infer.run_state",
+        "state": "protocol_failure",
+        "reasons": ["preempted"],
+    }
+    external = summary_from_records([interrupted, probe, state], report)
+    assert external.protocol_failures == (
+        "identity_changed",
+        "probe_incomplete",
+        "external:preempted",
+    )

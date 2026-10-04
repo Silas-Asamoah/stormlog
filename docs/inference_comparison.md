@@ -37,7 +37,7 @@ stormlog infer compare \
 | `--min-complete-blocks N` | Every gate needs at least N complete pairs |
 | `--min-attainment X`, `--min-run-pass Q` | At least a share Q (0.5) of candidate runs reach attainment X: a claim about runs. Both are in (0, 1]. A candidate run whose SLO could not be judged counts as not reaching X, and the gate obeys the same blockers as the metric gates (unverified comparability, observers, `--on-incomplete fail`); when it cannot be evaluated, it exits 4 like they do. `--attainment-model bernoulli` pools requests instead, labelled model-based |
 | `--family all_budgets\|any_regression` | `any_regression` adjusts the regression tests with Holm's method; its gates use `significant` |
-| `--on-incomplete exclude\|fail` | A run set aside by a protocol failure is listed (`exclude`), or fails its contrasts (`fail`) |
+| `--on-incomplete exclude\|fail` | A block (or run) lost to a protocol failure, or given for one arm only, is listed (`exclude`), or fails its contrasts (`fail`) |
 | `--allow-not-evaluable` | Exit 0 although a gate could not be evaluated: for exploration, and recorded. The summary then says how many could not be evaluated, never that every gate passed |
 | `--evidence-floor F` | The `evidence_coverage` SLO metrics need in every run (1.0), in [0, 1] |
 | `--segment NAME=START:END` | Also compare this slice of each case's measured phase, in seconds from its start; repeatable |
@@ -84,7 +84,7 @@ a run cannot give is read with its interval's reason (`rate_reason`), or
 | --- | --- |
 | 0 | No gate, or every gate passed |
 | 4 | A gate failed, or one could not be evaluated without `--allow-not-evaluable` |
-| 5 | The runs could not be compared: an artifact missing, a block with two runs of one arm, incompatible arms, an arm with no usable run, an observer contract broken |
+| 5 | The runs could not be compared: an artifact missing, one artifact given twice in an arm, incompatible arms, an arm with no usable run, an observer contract broken |
 | 2 | Flags it cannot read |
 
 `--format json` and `--report` give a `stormlog.report` v1 envelope with
@@ -103,25 +103,47 @@ Each run is summarized again from its artifact's raw records
 (`stormlog.infer.run_summary.summarize_run`), never from the summary the
 run wrote about itself. A summary carries the run's report, its experiment
 labels, its comparable fields (see
-[Inference server descriptions](inference_server.md)) and its **protocol
-failures**: faults of the measurement that exclude it, with a reason.
+[Inference server descriptions](inference_server.md)), its **protocol
+failures**, faults of the measurement that set it aside with a reason, and
+its **outcome failures**, which never do.
 
 | Protocol failure | When |
 | --- | --- |
-| `session_<status>` | The run did not finish: `interrupted`, `incomplete`, or no terminal record |
+| `external:<reason>` | An experiment runner recorded an external cause in an `infer.run_state` record: a preemption, an operator abort, a server that never became healthy, a failed prelude |
 | `identity_changed` | The server's identity changed between its before and after descriptions |
 | `description_mismatch` | The before description disagrees with the server the probe reached: its model, vLLM version or driver |
 | `probe_incomplete` | The server probe's `/server_info` did not answer in time, or the server dropped it unanswered |
 | `cohort_invalid` (a case) | The case's requests are not one whole cohort |
 | `cache_reset_not_acknowledged` (a case) | A cold cache was asked for and no reset was acknowledged |
 
-Failed requests, timeouts, or a candidate that served nothing are outcomes,
-never protocol failures: they are compared, not excluded.
+A run that did not finish (`session_<status>`: `interrupted`, `incomplete`,
+or no terminal record) is an **outcome**, like failed requests, timeouts or
+a candidate that served nothing: the treatment may have stopped it, so it
+is compared, not set aside. Outcome beats protocol: unless an external
+cause is recorded, such a run's run-level faults (`identity_changed`,
+`probe_incomplete`, `description_mismatch`) are outcomes too, as is a
+cohort it cut short (`phase_window_missing`, `records_missing`). A case a
+run lacks is an outcome as well. Where such a run has no value for a
+metric, the outcome cannot be recovered: a candidate's gate on it fails
+(`outcome_unrecoverable`), and a baseline's leaves it `not_evaluable`
+(`baseline_outcome_unrecoverable`). Under `--min-attainment`, such a
+candidate run counts as not reaching the target, and a `bernoulli` gate
+fails. Otherwise a treatment that crashed runs could pass on the blocks
+left.
 
-A block holds one usable run of each arm; a second is invalid input. A run
-its protocol set aside does not count, so a block retried after a protocol
-failure (`--attempt 2`) keeps the attempt that finished, and lists the one
-that did not.
+A protocol failure sets aside the whole block, both arms' runs, for the
+cases it touches; the partner is listed with `block_set_aside`. A block
+given for one arm only also counts as lost. Each case lists what it lost
+under `set_aside` (blocks, or runs in an independent design); more than one
+leaves every gate of the case `not_evaluable` (`blocks_set_aside` or
+`runs_set_aside`), so attrition cannot quietly shrink a contrast.
+
+A block an arm ran more than once keeps its last attempt (by start time)
+and lists the others with `superseded` and `attempt_kept`, so a block
+retried after a protocol failure (`--attempt 2`) is compared once. A retry
+never replaces an outcome failure: the first attempt that failed as an
+outcome stands, and later ones are listed with `retry_of_outcome_failure`.
+The same artifact given twice in an arm is invalid input.
 
 The kept runs must have measured one server. Every run is checked against
 its arm's first run, and every run against the other arm's first, because
@@ -136,11 +158,11 @@ comparison is, with every field that could not be shown equal, and
 When runs carry block labels, the design is **paired**: each block holds one
 baseline run and one candidate run, run close together, so that drift
 between blocks cancels. Only complete pairs count; a block missing an arm's
-run is listed with `block_incomplete:<arm>`, and the design stays paired. A
-block with two runs of one arm is refused. A pair stands for one block's
-conditions, the same workload realization (the block's seed) in both arms:
-a block whose runs' `workload.realization_digest` differ is set aside, both
-runs listed with `block_realization_differs`.
+run is listed with `block_incomplete:<arm>`, counts as lost (see Runs), and
+the design stays paired. A pair stands for one block's conditions, the same
+workload realization (the block's seed) in both arms: a block whose runs'
+`workload.realization_digest` differ is set aside, both runs listed with
+`block_realization_differs`.
 
 Without block labels, the arms are **independent** samples of runs.
 
@@ -257,6 +279,8 @@ A gate is `not_evaluable`, never passed, when:
   interval is always undetermined;
 - fewer remain than the gate's pre-registered `min_complete_blocks`, so an
   excluded run cannot quietly turn six blocks into two;
+- more than one block (or run) of the case was set aside or lost
+  (`blocks_set_aside`, see Runs);
 - the log ratio is undefined (see Zeros);
 - removing any single block (or run) changes the gate's decision
   (`decision_unstable`); only samples that could still be gated count, so
