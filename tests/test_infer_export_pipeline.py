@@ -514,6 +514,24 @@ def test_unusable_settings_are_refused(argv: tuple[str, ...]) -> None:
         export_config_from_args(_args(*argv))
 
 
+@pytest.mark.parametrize("value", ["nan", "inf", "1e300", "3601"])
+@pytest.mark.parametrize(
+    "flag",
+    [
+        ("--prometheus-linger", "--prometheus-listen", "127.0.0.1:1"),
+        ("--prometheus-textfile-interval", "--prometheus-textfile-dir", "."),
+    ],
+)
+def test_a_time_must_be_finite_and_at_most_an_hour(
+    flag: tuple[str, str, str], value: str
+) -> None:
+    # nan passes every comparison; inf and 1e300 overflow the waits that use
+    # them, which killed the textfile writer or failed a finished run.
+    name, destination, where = flag
+    with pytest.raises(ValueError, match="finite"):
+        export_config_from_args(_args(name, value, destination, where))
+
+
 def test_the_watch_json_section_uses_the_same_settings(tmp_path: Path) -> None:
     config = ExportConfig.from_mapping(
         {"prometheus_textfile_dir": str(tmp_path), "prometheus_slot": "watch-1"}

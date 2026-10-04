@@ -9,6 +9,7 @@ exporter cannot use is a usage error (exit 2).
 from __future__ import annotations
 
 import argparse
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -23,6 +24,8 @@ Command = Literal["profile", "watch"]
 # needs room to appear later; a watcher's trigger IDs can change.
 DEFAULT_HEADROOM: dict[str, int] = {"profile": 0, "watch": 64}
 MIN_MAX_BYTES = 4096
+# The longest linger or textfile interval.
+MAX_SECONDS = 3600.0
 
 
 @dataclass(frozen=True)
@@ -112,10 +115,12 @@ def _check_dependent(config: ExportConfig) -> None:
 
 
 def _check_numbers(config: ExportConfig) -> None:
-    if config.prometheus_linger_seconds < 0:
-        raise ValueError("--prometheus-linger must be >= 0")
-    if config.prometheus_textfile_interval_seconds < 1:
-        raise ValueError("--prometheus-textfile-interval must be >= 1 second")
+    _check_time("--prometheus-linger", config.prometheus_linger_seconds, 0.0)
+    _check_time(
+        "--prometheus-textfile-interval",
+        config.prometheus_textfile_interval_seconds,
+        1.0,
+    )
     if config.prometheus_max_series < 1:
         raise ValueError("--prometheus-max-series must be >= 1")
     if config.prometheus_max_bytes < MIN_MAX_BYTES:
@@ -123,6 +128,15 @@ def _check_numbers(config: ExportConfig) -> None:
     headroom = config.prometheus_series_headroom
     if headroom is not None and headroom < 0:
         raise ValueError("--prometheus-series-headroom must be >= 0")
+
+
+def _check_time(flag: str, value: float, lowest: float) -> None:
+    # A wait on nan returns at once and one on inf or 1e300 overflows; both
+    # would break the run's end instead of its start.
+    if not (math.isfinite(value) and lowest <= value <= MAX_SECONDS):
+        raise ValueError(
+            f"{flag} must be finite, from {lowest:g} to {MAX_SECONDS:g} seconds"
+        )
 
 
 def add_export_arguments(parser: argparse.ArgumentParser) -> None:
