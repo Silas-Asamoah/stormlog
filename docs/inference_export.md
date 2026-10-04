@@ -464,7 +464,7 @@ worker's CPU time. A collector's own message is kept, as
 was sent, so it is scrubbed and cut to 256 bytes first.
 
 With Prometheus on too, the same figures are metrics:
-`stormlog_export_spans_{offered,exported,rejected,sampled_out,possibly_duplicated}_total`,
+`stormlog_export_spans_{offered,exported,rejected,sampled_out,max_extra_copies}_total`,
 `stormlog_export_spans_refused_total{status_class}`,
 `stormlog_export_spans_dropped_total{reason}`,
 `stormlog_export_spans_unknown_total{reason}`,
@@ -477,7 +477,6 @@ With Prometheus on too, the same figures are metrics:
 `stormlog_export_last_success_timestamp_seconds`,
 `stormlog_export_sent_bytes_total` and
 `stormlog_export_late_results_total{outcome}`.
-`possibly_duplicated` is `max_extra_copies`.
 
 ## Trace context
 
