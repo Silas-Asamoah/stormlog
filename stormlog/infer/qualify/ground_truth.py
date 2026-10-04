@@ -527,19 +527,25 @@ class RunRecord:
 
     def problems(self) -> list[str]:
         found = [] if self.run_id else ["a run needs its run_id"]
+        if not (isinstance(self.clock_domain, str) and self.clock_domain):
+            # Without it no finding's window can be compared with the run's.
+            found.append("a run needs its clock_domain")
         if self.measured.end_ns == self.measured.start_ns:
             found.append("measured has no length")
         for name in ("measured", "priming", "baseline", "final_recovery"):
-            interval = getattr(self, name)
-            if interval is None:
-                continue
-            if not (_is_time(interval.start_ns) and _is_time(interval.end_ns)):
-                found.append(f"{name}: times must be integers")
-            elif interval.end_ns < interval.start_ns:
-                found.append(f"{name} ends before it begins")
-            elif name != "measured" and not self._inside_measured(interval):
-                found.append(f"{name} lies outside the measured window")
+            found += self._interval_problems(name, getattr(self, name))
         return found
+
+    def _interval_problems(self, name: str, interval: Interval | None) -> list[str]:
+        if interval is None:
+            return []
+        if not (_is_time(interval.start_ns) and _is_time(interval.end_ns)):
+            return [f"{name}: times must be integers"]
+        if interval.end_ns < interval.start_ns:
+            return [f"{name} ends before it begins"]
+        if name != "measured" and not self._inside_measured(interval):
+            return [f"{name} lies outside the measured window"]
+        return []
 
     def _inside_measured(self, interval: Interval) -> bool:
         measured = self.measured

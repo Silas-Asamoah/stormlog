@@ -94,8 +94,8 @@ episode on another clock than its run's: the two are compared. `score_run`
 also checks a run and its episodes built in memory as if they had been read
 from files, and raises `GroundTruthError` on what parsing would refuse. It
 refuses an episode outside the run's measured window, and `summarize` a run
-scored twice. A run record needs its `run_id` and a measured window with
-length.
+scored twice. A run record needs its `run_id`, its `clock_domain` and a
+measured window with length.
 
 ```json
 {"format": "stormlog.qualify.run/1", "run_id": "q221-dxoff-b03-r07",
