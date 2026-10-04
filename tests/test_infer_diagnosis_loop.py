@@ -737,6 +737,63 @@ def test_a_threshold_override_that_could_not_decide_is_refused(
         LoopGapConfig(thresholds=thresholds)
 
 
+def test_a_slow_step_under_async_scheduling_is_one_stall() -> None:
+    """Under async scheduling a step is scheduled while the one before it
+    runs, so its own time runs from that completion, not from its schedule()
+    call: the slow step's stall is 205 ms (its 200 ms plus its 5 ms), and
+    the step scheduled during it waited, not stalled."""
+    records = _async_loop(60)
+    for record in records:
+        if record["kind"] == "completed" and int(record["iteration"]) >= 40:
+            record["mono_ns"] += 200 * MS
+            record["wall_ns"] += 200 * MS
+        if record["kind"] == "scheduled" and int(record["iteration"]) >= 42:
+            for key in ("start_mono_ns", "start_wall_ns", "end_mono_ns", "end_wall_ns"):
+                record[key] += 200 * MS
+    slow = next(
+        r for r in records if r["kind"] == "completed" and r["iteration"] == "40"
+    )
+    records = [r for r in records if r["kind"] != "heartbeat"]  # beat afresh
+    signal = engine_loop_gap(_sequenced(records))
+    assert signal.exceeds is True
+    assert signal.detail["end_wall_ns"] == slow["wall_ns"]
+    assert signal.value == pytest.approx(205 * MS)
+
+
+def test_an_oversized_record_dropped_is_a_drop() -> None:
+    """The writer counts a record too large to queue under <kind>_oversized;
+    only that count rising still means a record is missing."""
+    records = _loop(20, beats=False) + [
+        heartbeat(T, 0),
+        heartbeat(T + 200 * MS, 0, dropped={"scheduled": 0, "completed_oversized": 1}),
+    ]
+    signal = engine_loop_gap(_sequenced(records, beats=False))
+    assert signal.reason == REASON_RECORDS_DROPPED
+
+
+def test_a_stall_must_reach_the_floor_however_fast_the_loop() -> None:
+    """At a 1 ms cadence ten times the cadence is 10 ms: a 30 ms stall
+    meets the 50 ms floor, not that."""
+    fast: list[dict[str, Any]] = [_hello()]
+    clock = T
+    for index in range(400):
+        fast.append(scheduled(index, clock, _decode("a", "b"), duration_ns=100_000))
+        clock += 31 * MS if index == 300 else MS
+        fast.append(completed(index, clock, [done("a"), done("b")]))
+    signal = engine_loop_gap(_sequenced(fast))
+    assert signal.threshold == pytest.approx(50 * MS)
+    assert signal.exceeds is False
+
+
+def test_the_stall_furthest_over_its_limit_is_the_one_reported() -> None:
+    """A 400 ms first prefill meets the 500 ms floor; a later 60 ms decode
+    stall is over its 50 ms limit. The shorter stall is the verdict."""
+    prefills = {5: (2_048, 400 * MS), 300: (2, 60 * MS)}
+    signal = engine_loop_gap(_prefills_in_decode(400, prefills))
+    assert signal.exceeds is True
+    assert signal.value == pytest.approx(60 * MS, abs=MS)
+
+
 def test_writer_errors_rising_between_heartbeats_give_no_verdict() -> None:
     """A failed write is cut back and counted as an error, not always as a
     drop, so rising errors also mean the records may be incomplete."""
