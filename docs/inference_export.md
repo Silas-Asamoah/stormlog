@@ -46,8 +46,8 @@ registry of Prometheus exporter ports is crowded around 9100–9999.
 | Flag | What it does |
 | --- | --- |
 | `--prometheus-listen HOST:PORT` | Serve `GET /metrics` (text format 0.0.4) while the run lasts. Loopback is the safe choice: the endpoint has no authentication, and a non-loopback address prints one warning saying so. |
-| `--prometheus-linger SECONDS` | Keep `/metrics` up this long after the run, serving the final values (default 0). Skipped after Ctrl+C; a Ctrl+C during the linger ends only the linger. |
-| `--prometheus-textfile-dir DIR` | Write `DIR/stormlog-<slot>.prom` at start, every `--prometheus-textfile-interval` seconds (default 15), and once more at the end. |
+| `--prometheus-linger SECONDS` | Keep `/metrics` up this long after the run, serving the final values (default 0, at most 3600). Skipped after Ctrl+C; a Ctrl+C during the linger ends only the linger. |
+| `--prometheus-textfile-dir DIR` | Write `DIR/stormlog-<slot>.prom` at start, every `--prometheus-textfile-interval` seconds (default 15, from 1 to 3600), and once more at the end. |
 | `--prometheus-slot NAME` | This producer's name (default `default`), 1–64 of `A-Z a-z 0-9 _ . -`. It is the `stormlog_producer` label on every series, at the endpoint and in the textfile, and it names the textfile and its lock. |
 | `--prometheus-textfile-remove-on-exit` | Remove the textfile at the end instead of keeping its final values. |
 | `--prometheus-max-series N` | Refuse a run whose metrics need more than N samples per scrape (default 50,000). |
