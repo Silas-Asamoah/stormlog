@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import timeit
 import types
 from collections import Counter
 from collections.abc import Callable, Iterator
@@ -23,7 +24,7 @@ import pytest
 import stormlog.infer.vllm_hook as hook
 from stormlog.infer.vllm_hook import gate
 from stormlog.infer.vllm_hook import writer as writer_module
-from stormlog.infer.vllm_hook.engine import ITERATION_ATTRIBUTE
+from stormlog.infer.vllm_hook.engine import ITERATION_ATTRIBUTE, EngineRecorder
 from stormlog.infer.vllm_hook.worker import RunnerRecorder
 from stormlog.infer.vllm_hook.writer import EpochWriter, WriterLimits
 
@@ -733,6 +734,65 @@ def test_a_record_is_never_sized_below_its_json(text: str) -> None:
     encoded = json.dumps(fields, separators=(",", ":")).encode()
 
     assert writer_module._estimate(fields, 1 << 30) >= len(encoded)
+
+
+def _engine_step(writer: EpochWriter, members: int) -> Callable[[], None]:
+    """One scheduler step of ``members`` decoding requests, through the recorder."""
+    ids = [
+        f"chatcmpl-stormlog-run-1-c1_measured_0_{n}-0f3a9c1d" for n in range(members)
+    ]
+    scheduler = types.SimpleNamespace(
+        requests={internal: FakeRequest(internal, 512) for internal in ids},
+        num_sampled_tokens_per_step=1,
+    )
+    output = SchedulerOutput(
+        [], CachedRequestData(ids, [600] * members), dict.fromkeys(ids, 1), members
+    )
+    sampled = ModelRunnerOutput(
+        {internal: index for index, internal in enumerate(ids)}, [[7] for _ in ids]
+    )
+    result = {0: EngineCoreOutputs([EngineCoreOutput(i, [7]) for i in ids])}
+    recorder = EngineRecorder(writer, "vllm:h:b:1:1")
+
+    def step() -> None:
+        recorder.on_schedule(scheduler, output, (time.time_ns(), time.monotonic_ns()))
+        before = recorder.before_update(scheduler, output, sampled)
+        recorder.after_update(scheduler, output, before, result=result)
+
+    return step
+
+
+def test_the_engine_step_cost_is_reported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Callable[[str, object], None],
+) -> None:
+    """Report the engine thread's cost per scheduler step; never assert it.
+
+    CI timing is too noisy for a bound. ``-rP`` prints the figures, and the
+    JUnit XML keeps them as properties. ``emit`` is the time spent in
+    ``EpochWriter.emit``, queueing the step's two records.
+    """
+    writer = EpochWriter(tmp_path, "engine")
+    silent = EpochWriter(tmp_path, "worker")
+    monkeypatch.setattr(silent, "emit", lambda kind, fields: None)
+    report = []
+    for members in (8, 64, 256):
+        step = _best_seconds(_engine_step(writer, members))
+        emit = step - _best_seconds(_engine_step(silent, members))
+        record_property(f"step_us_{members}_members", round(step * 1e6, 1))
+        record_property(f"emit_us_{members}_members", round(emit * 1e6, 1))
+        report.append(f"{members} members {step * 1e6:.0f} us (emit {emit * 1e6:.0f})")
+    writer.close()
+    silent.close()
+    print("engine thread per step:", "; ".join(report))
+
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert (status["dropped"], status["errors"]) == ({}, 0)
+
+
+def _best_seconds(step: Callable[[], None]) -> float:
+    return min(timeit.repeat(step, number=3, repeat=10)) / 3
 
 
 def test_an_escaped_record_over_the_limit_is_dropped(tmp_path: Path) -> None:
