@@ -168,11 +168,14 @@ class Comparison:
 
     @property
     def gates(self) -> list[tuple[str, str, GateOutcome]]:
+        """Every gate outcome, a requested gate that matched no metric included."""
         found = []
         for case_id, case in self.cases.items():
             for name, metric in case["metrics"].items():
                 if metric.gate is not None:
                     found.append((case_id, name, metric.gate))
+            for pattern, outcome in case.get("absent_gates", {}).items():
+                found.append((case_id, pattern, outcome))
         return found
 
     @property
@@ -220,6 +223,10 @@ class Comparison:
                         name: metric.to_record()
                         for name, metric in case["metrics"].items()
                     },
+                    "absent_gates": {
+                        pattern: outcome.to_record()
+                        for pattern, outcome in case.get("absent_gates", {}).items()
+                    },
                     "attainment_gate": case.get("attainment_gate"),
                     "attainment_mean": case.get("attainment_mean"),
                     "attrition": case.get("attrition", []),
@@ -259,6 +266,7 @@ def compare_runs(
     if not baseline or not candidate:
         raise InferInputError("each arm needs at least one run")
     arms = {BASELINE: list(baseline), CANDIDATE: list(candidate)}
+    _check_cases_exist(arms, spec)
     excluded = _excluded(arms, spec)
     usable = {arm: _usable(runs) for arm, runs in arms.items()}
     if not usable[BASELINE] or not usable[CANDIDATE]:
@@ -469,13 +477,46 @@ def _case(
     }
     attrition = [item for item in excluded if item["case"] == case_id]
     blocked = _case_blocker(compatibility, observer_issues, attrition, spec)
+    metrics = _case_metrics(case_id, kept, design, spec, blocked)
     case: dict[str, Any] = {
-        "metrics": _case_metrics(case_id, kept, design, spec, blocked),
+        "metrics": metrics,
+        "absent_gates": _absent_gates(metrics, spec),
         "attrition": attrition,
     }
     if spec.min_attainment is not None:
         case.update(_attainment_gate(case_id, kept[CANDIDATE], spec))
     return case
+
+
+def _check_cases_exist(
+    arms: Mapping[str, list[RunSummary]], spec: ComparisonSpec
+) -> None:
+    """Every case asked for is in some run: a misspelled one compares nothing."""
+    present = {
+        case for runs in arms.values() for run in runs for case in run.comparable_cases
+    }
+    missing = [case for case in spec.cases or () if case not in present]
+    if missing:
+        raise InferInputError(
+            f"case {', '.join(missing)} is in no run; the runs have "
+            + (", ".join(sorted(present)) or "no case")
+        )
+
+
+def _absent_gates(
+    metrics: Mapping[str, MetricComparison], spec: ComparisonSpec
+) -> dict[str, GateOutcome]:
+    """Each requested gate that matched no metric this case has.
+
+    A gate on what the runs never measured (server latency without spans)
+    gated nothing; reading that as a pass would hide the change it asked
+    about.
+    """
+    return {
+        pattern: GateOutcome(NOT_EVALUABLE, "metric_absent", rule)
+        for pattern, rule in spec.gates
+        if not any(fnmatch.fnmatchcase(name, pattern) for name in metrics)
+    }
 
 
 def _case_metrics(

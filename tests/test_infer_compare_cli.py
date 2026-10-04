@@ -229,6 +229,28 @@ def test_shares_outside_their_range_are_usage_errors(
     assert "is not valid" in err
 
 
+def test_a_gate_on_a_metric_the_runs_lack_points_at_its_absence(
+    arms: dict[str, list[str]]
+) -> None:
+    code, out, _err = _compare(
+        "--baseline",
+        *arms["baseline"],
+        "--candidate",
+        *arms["slower"],
+        "--gate",
+        "server.e2e.p95=non-inferiority:0.05",
+        "--format",
+        "json",
+    )
+    report = json.loads(out)
+    assert code == ExitCode.GATE_FAILED
+    absent = [f for f in report["findings"] if f["kind"] == "not_evaluable"]
+    pointers = [e["pointer"] for f in absent for e in f["evidence"]]
+    assert any("/absent_gates/server.e2e.p95" in pointer for pointer in pointers)
+    for pointer in pointers:
+        _resolve(report, pointer)
+
+
 def test_segments_are_compared_as_cases_of_their_own(
     arms: dict[str, list[str]],
 ) -> None:
