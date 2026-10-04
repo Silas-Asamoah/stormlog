@@ -20,7 +20,7 @@ from stormlog.infer.config import ProfileConfig
 from stormlog.infer.export import ExportPipeline
 from stormlog.infer.export_config import ExportConfig
 from stormlog.infer.export_metrics import ProfileMetrics
-from stormlog.infer.profile import InferenceProfiler
+from stormlog.infer.profile import InferenceProfiler, _ctrl_c_held
 from tests.export_conformance import check_exposition
 from tests.test_infer_profile import _fake_server
 
@@ -407,6 +407,83 @@ def test_a_ctrl_c_inside_the_close_still_finishes_it(
     exposition = check_exposition((metrics_dir / "stormlog-default.prom").read_text())
     assert exposition.value("stormlog_run_active") == 0
     assert not (metrics_dir / "stormlog-default.lock").exists()
+
+
+def test_a_ctrl_c_while_the_capability_record_is_written_waits_for_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The Ctrl+C lands after the close, as the export's capability record
+    # is built: the record is still written, then the run stops.
+    real_events = ExportPipeline.capability_events
+
+    def ctrl_c_then_events(self: ExportPipeline, context: Any) -> Any:
+        signal.raise_signal(signal.SIGINT)
+        return real_events(self, context)
+
+    monkeypatch.setattr(ExportPipeline, "capability_events", ctrl_c_then_events)
+    output = tmp_path / "infer.jsonl"
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    with _fake_server() as endpoint:
+        config = _config(
+            endpoint,
+            output,
+            ExportConfig(prometheus_textfile_dir=metrics_dir),
+            request_count=4,
+            warmup_requests=0,
+            stream=False,
+        )
+        with pytest.raises(KeyboardInterrupt):
+            InferenceProfiler(config).run()
+    records = _records(output)
+    summary = _capability(records)["metadata"]["summary"]["records"]
+    assert summary["offered"] == summary["applied"] + sum(summary["dropped"].values())
+    assert records[-1]["event_type"] == "infer.session"
+    assert records[-1]["status"] == "interrupted"
+
+
+def test_a_held_ctrl_c_is_delivered_once_the_block_ends() -> None:
+    before = signal.getsignal(signal.SIGINT)
+    finished = False
+    with pytest.raises(KeyboardInterrupt):
+        with _ctrl_c_held():
+            signal.raise_signal(signal.SIGINT)
+            time.sleep(0.05)  # time for the handler to run, were it not held
+            finished = True
+    assert finished
+    assert signal.getsignal(signal.SIGINT) is before
+
+
+def test_without_a_python_handler_a_ctrl_c_is_not_held(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A handler set from C cannot be put back, so the block runs as is.
+    monkeypatch.setattr(signal, "getsignal", lambda _signum: None)
+    finished = False
+    with pytest.raises(KeyboardInterrupt):
+        with _ctrl_c_held():
+            signal.raise_signal(signal.SIGINT)
+            time.sleep(0.05)
+            finished = True
+    assert not finished
+
+
+def test_off_the_main_thread_the_block_runs_as_is() -> None:
+    before = signal.getsignal(signal.SIGINT)
+    errors: list[BaseException] = []
+
+    def hold() -> None:
+        try:
+            with _ctrl_c_held():
+                pass
+        except BaseException as exc:  # noqa: B036 - reported below
+            errors.append(exc)
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    thread.join(5)
+    assert not errors
+    assert signal.getsignal(signal.SIGINT) is before
 
 
 # ------------------------------------------------------------------ CLI
