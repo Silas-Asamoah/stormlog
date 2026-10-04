@@ -627,7 +627,8 @@ def _queue_criteria(context: Context) -> list[Criterion]:
     (or 1), as cadence bounds its gaps. Nor may they be near those bounds
     too often: the hold's mean wait is at most the baseline's over
     ``1 - rate_tolerance`` (1.25 times), as cadence bounds its mean gap, and
-    its mean waiting count too, or at most one more. A
+    its mean waiting count too, or at most 1 for a near-empty queue (a "+1"
+    allowance would swamp the 1.25 on a 0-6 band). A
     baseline with fewer samples than a criterion needs in its hold never
     holds."""
     baseline, thresholds = context.baseline, context.thresholds
@@ -654,7 +655,7 @@ def _queue_criteria(context: Context) -> list[Criterion]:
             low=baseline.waiting_low,
             high=baseline.waiting_high,
             ceiling=factor * max(baseline.waiting_high, 1.0),
-            mean_ceiling=max(slack * baseline.waiting_mean, baseline.waiting_mean + 1),
+            mean_ceiling=max(slack * baseline.waiting_mean, 1.0),
         )
     return [waits, waiting]
 
