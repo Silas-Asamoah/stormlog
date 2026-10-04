@@ -122,9 +122,11 @@ def test_prefix_loss_follows_the_victims_cached_fraction() -> None:
     signals = Signals(in_flight=None, cached_fraction=cached)
     timing = effect_timing("F3", context(signals))
     assert timing.onset_ns == 60 * S
-    # The 10 s from 80 s to 90 s already hold more recovered samples than
-    # dipped ones, so their median is back.
-    assert timing.end_ns == 80 * S
+    # The effect ends with the dip, just after its last sample at 84 s: the
+    # 10 s from 80 s already hold more recovered samples than dipped ones,
+    # but a hold that begins with a dipped sample would end the effect
+    # while it was still under way.
+    assert timing.end_ns == 84 * S + 1
     assert realization("F3", context(signals), timing)[0]
     twin = Signals(in_flight=None, cached_fraction=every_second(0, 200, lambda s: 0.95))
     twin_timing = effect_timing("T3", context(twin, Actions(first_send_ns=60 * S)))
