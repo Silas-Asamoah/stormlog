@@ -12,12 +12,13 @@ import threading
 import time
 import urllib.error
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
 from examples.qualification.fake_engine import FakeEngine, FakeEngineConfig, hook_log
 from examples.qualification.fake_engine.__main__ import config_from_args
+from examples.qualification.fake_engine.engine import Engine
 from examples.qualification.fake_engine.process import (
     ROOT,
     FakeEngineProcess,
@@ -216,6 +217,52 @@ def test_a_failed_bind_stops_everything_started_before_it(tmp_path: Path) -> Non
     ]
     assert [thread.name for thread in threads if thread.is_alive()] == []
     engine.stop()  # safe again, and for parts that never started
+
+
+def _returns_within(seconds: float, action: Callable[[], object]) -> bool:
+    """Whether ``action`` returned (or raised) within ``seconds``; what it
+    raised is kept in ``_RAISED``."""
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            action()
+        except Exception as error:
+            _RAISED.append(error)
+        done.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    return done.wait(seconds)
+
+
+_RAISED: list[Exception] = []
+
+
+def test_a_second_start_is_refused_and_stop_still_returns() -> None:
+    # Fable's #267 gate, P3-3: a second start() raised from deep inside, its
+    # cleanup called stop(), and stop() waited forever in shutdown() on a
+    # server whose serve_forever never ran.
+    engine = FakeEngine(FAST).start()
+    _RAISED.clear()
+    try:
+        assert _returns_within(10, engine.start)
+        assert "already started" in str(_RAISED[-1])
+    finally:
+        assert _returns_within(10, engine.stop)
+
+
+def test_a_start_that_fails_after_the_bind_still_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Any failure between building the server and serving it took the same
+    # path: stop() then hung in shutdown().
+    def broken(self: object) -> None:
+        raise RuntimeError("the engine loop would not start")
+
+    monkeypatch.setattr(Engine, "start", broken)
+    engine = FakeEngine(FAST)
+    assert _returns_within(10, engine.start)
+    assert _returns_within(10, engine.stop)
 
 
 def test_a_hook_log_that_fails_to_open_stops_the_writer_it_started(

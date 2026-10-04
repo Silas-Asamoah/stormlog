@@ -50,7 +50,13 @@ class FakeEngine:
 
     def start(self) -> FakeEngine:
         """Start every part; if one fails, such as the bind, stop the parts
-        already started before raising."""
+        already started before raising.
+
+        Raises:
+            RuntimeError: when it was already started.
+        """
+        if self._server is not None:
+            raise RuntimeError("the fake engine is already started")
         try:
             self._start_parts()
         except BaseException:
@@ -93,7 +99,9 @@ class FakeEngine:
         self._frontend.resume()
         self.engine.stop()
         if self._server is not None:
-            self._server.shutdown()
+            # shutdown() waits for serve_forever to end, so only once it ran.
+            if self._thread is not None:
+                self._server.shutdown()
             self._server.server_close()
         if self._thread is not None:
             self._thread.join(timeout=10)
