@@ -11,6 +11,7 @@ import pytest
 
 from stormlog._export.queue import BoundedQueue
 from stormlog._export.registry import BudgetExceeded
+from stormlog.infer import export as export_module
 from stormlog.infer.correlation_events import CorrelationContext
 from stormlog.infer.export import (
     ExportPipeline,
@@ -153,6 +154,51 @@ def test_a_first_close_with_no_time_left_still_writes_the_final_file(
     assert check_exposition(text).value("stormlog_run_active") == 0
     assert not (tmp_path / "stormlog-t.lock").exists()
     assert pipeline.summary()["textfile"]["abandoned"] is False
+    pipeline.stop_serving()
+
+
+def test_the_final_file_has_the_frozen_values_when_a_render_was_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reviewer's case, with no scrape: the textfile writer's periodic
+    # render takes its values, the run's last records land, and the close
+    # freezes, all before that render publishes.
+    pipeline = ExportPipeline(
+        ExportConfig(
+            prometheus_textfile_dir=tmp_path,
+            prometheus_slot="t",
+            prometheus_textfile_interval_seconds=0.2,
+        ),
+        LABELS,
+    )
+    pipeline.start(started_at=1_700_000_000.0)
+    for _ in range(3):
+        pipeline.observe(_request())
+    assert _wait_for(lambda: pipeline.summary()["records"]["applied"] == 3)
+    entered, gate = threading.Event(), threading.Event()
+    real_render = export_module.render
+
+    def held_render(snapshot: Any) -> bytes:
+        if not entered.is_set():
+            entered.set()
+            gate.wait(10)
+        return real_render(snapshot)
+
+    monkeypatch.setattr(export_module, "render", held_render)
+    assert entered.wait(10)
+    for _ in range(2):
+        pipeline.observe(_request())
+    assert _wait_for(lambda: pipeline.summary()["records"]["applied"] == 5)
+    closer = threading.Thread(target=pipeline.close, args=(5.0,))
+    closer.start()
+    assert _wait_for(lambda: pipeline.registry.frozen)
+    time.sleep(0.1)  # the close has invalidated the renders
+    gate.set()
+    closer.join(10)
+    final = check_exposition((tmp_path / "stormlog-t.prom").read_text())
+    assert sum(final.matching("stormlog_infer_requests_total")) == 5
+    assert final.value("stormlog_run_active") == 0
+    assert pipeline.summary()["textfile"]["final_stale"] is False
     pipeline.stop_serving()
 
 
