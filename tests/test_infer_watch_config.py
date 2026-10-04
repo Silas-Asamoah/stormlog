@@ -19,6 +19,7 @@ from stormlog.infer.watch.config import (
 from stormlog.infer.watch.predicates import (
     FrozenExporter,
     ScrapeFailures,
+    ScrapeFailureShare,
     SignalExceeds,
 )
 
@@ -58,7 +59,16 @@ def test_defaults_resolve_to_the_documented_settings() -> None:
         t["id"] for t in DEFAULT_TRIGGERS
     ]
     predicates = [type(spec.predicate) for spec in config.triggers]
-    assert predicates == [SignalExceeds, SignalExceeds, ScrapeFailures, FrozenExporter]
+    assert predicates == [
+        SignalExceeds,
+        SignalExceeds,
+        ScrapeFailures,
+        ScrapeFailureShare,
+        FrozenExporter,
+    ]
+    share = config.triggers[3].predicate
+    assert isinstance(share, ScrapeFailureShare)
+    assert (share.share, share.scrapes) == (0.05, 60)
     health = [spec for spec in config.triggers if spec.kind == "health"]
     assert health and not any(spec.counts_toward_exit for spec in health)
     resolved = config.resolved()
@@ -188,6 +198,10 @@ def test_settings_the_watcher_cannot_use_are_usage_errors(
             "never count toward the exit code",
         ),
         ("not an object", "must be an object"),
+        (
+            {"id": "h", "kind": "health", "scrape_failure_share": {"share": 2}},
+            "share must be in",
+        ),
     ],
 )
 def test_bad_triggers_are_usage_errors(trigger: Any, message: str) -> None:
