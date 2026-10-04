@@ -256,3 +256,81 @@ def test_the_vocabulary_matches_218s_when_present() -> None:
     assert dict(vocabulary.KIND_COMPONENTS) == dict(theirs.KIND_COMPONENTS)
     assert vocabulary.CAUSES == theirs.CAUSES
     assert vocabulary.WORKLOAD_KINDS == theirs.WORKLOAD_KINDS
+
+
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        (
+            lambda r: r["validity"].update(actuation="failed"),
+            "status valid, but actuation is 'failed'",
+        ),
+        (
+            lambda r: r["validity"].update(realization="not_realized"),
+            "status valid, but realization is 'not_realized'",
+        ),
+        (lambda r: r.update(expects=[]), "a fault episode expects exactly one finding"),
+        (
+            lambda r: r["expects"][0].update(min_severity="info"),
+            "expects[0]: a fault is claimed at warning",
+        ),
+        (
+            lambda r: r["expects"][0].update(cause="undetermined"),
+            "expects[0]: a fault episode expects cause 'fault'",
+        ),
+        (
+            lambda r: r.update(cause_class="none"),
+            "a none episode expects no fault",
+        ),
+        (
+            lambda r: r["times"].update(effect_onset_ns=160 * S),
+            "the effect ends before it begins",
+        ),
+        (
+            lambda r: r["times"].update(effect_onset_ns=None),
+            "a valid episode needs its effect onset and end",
+        ),
+        (
+            lambda r: r["times"].update(effect_end_ns="150"),
+            "times.effect_end_ns must be an integer or null",
+        ),
+        (
+            lambda r: r["expects"][0].update(
+                kind="load_increase", component="workload"
+            ),
+            "expects[0]: load_increase is a workload kind, claimed as workload_change"
+            " at info",
+        ),
+    ],
+)
+def test_ground_truth_that_would_misscore_is_refused(change: Any, problem: str) -> None:
+    assert problem in _broken(change)
+
+
+def test_a_negative_may_expect_its_workload_kind() -> None:
+    record = f2_record()
+    record.update(
+        episode_type="T1",
+        cause_class="workload_change",
+        secondary=[],
+        expects=[
+            {
+                "kind": "load_increase",
+                "component": "workload",
+                "rank": None,
+                "engine": None,
+                "role": "primary",
+                "cause": "workload_change",
+                "min_severity": "info",
+            }
+        ],
+    )
+    assert parse_injection(record).expects[0].kind == "load_increase"
+
+
+def test_an_episode_written_twice_is_refused(tmp_path: Path) -> None:
+    injection = parse_injection(f2_record())
+    path = tmp_path / "injections.jsonl"
+    write_injections(path, [injection, injection])
+    with pytest.raises(GroundTruthError, match="line 2: episode q221-0f3a9c1b2d4e5f60"):
+        load_injections(path)
