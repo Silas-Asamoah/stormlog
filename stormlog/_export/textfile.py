@@ -45,6 +45,8 @@ class TextfileStats:
     last_error: str | None = None
     last_write_at: float | None = None
     abandoned: bool = False
+    # The final write could only use a render from before the last change.
+    final_stale: bool = False
 
 
 def validate_slot(slot: str) -> str:
@@ -151,6 +153,8 @@ class TextfileWriter:
         generation = self.renders.acquire()
         try:
             data = generation.body + self._own_lines()
+            if not self._active and not self.renders.is_fresh(generation):
+                self.stats.final_stale = True
         finally:
             self.renders.release(generation)
         temporary = self.directory / f".stormlog-{self.slot}.prom.{os.getpid()}.tmp"

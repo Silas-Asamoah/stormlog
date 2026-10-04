@@ -106,3 +106,28 @@ def test_an_unread_older_generation_is_dropped_at_once() -> None:
     clock.now = 1.0
     second = cache.acquire()
     assert cache.alive() == 1 and second is not first
+
+
+def test_an_invalidated_render_is_rebuilt_at_once() -> None:
+    clock = _Clock()
+    values = iter([b"before", b"after"])
+    cache = RenderCache(lambda: next(values), min_interval=60.0, clock=clock)
+    first = cache.acquire()
+    cache.release(first)
+    cache.invalidate()
+    assert not cache.is_fresh(first)
+    second = cache.acquire()
+    assert second.body == b"after" and cache.is_fresh(second)
+
+
+def test_the_limit_still_holds_after_an_invalidation() -> None:
+    clock = _Clock()
+    cache = _cache(clock=clock)
+    held = [cache.acquire()]
+    for tick in (1.0, 2.0):
+        clock.now = tick
+        held.append(cache.acquire())
+    cache.invalidate()
+    stale = cache.acquire()
+    assert stale is held[-1] and not cache.is_fresh(stale)
+    assert cache.alive() <= MAX_GENERATIONS

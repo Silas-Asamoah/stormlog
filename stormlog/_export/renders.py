@@ -45,6 +45,9 @@ class _State:
     newest: Generation | None = None
     held: set[Generation] = field(default_factory=set)
     building: bool = False
+    # Generations numbered up to this one are out of date: the values they
+    # rendered have changed for good (for example, the registry froze).
+    stale_through: int = 0
 
 
 class RenderCache:
@@ -91,6 +94,20 @@ class RenderCache:
             if generation is not self._state.newest and generation.readers <= 0:
                 self._state.held.discard(generation)
 
+    def invalidate(self) -> None:
+        """Make the next reader get a fresh render, whatever the interval.
+
+        The publication limit still applies: while three generations are
+        alive, readers keep getting the newest one, and ``is_fresh`` says
+        whether it is out of date.
+        """
+        with self._cond:
+            self._state.stale_through = self._numbers
+
+    def is_fresh(self, generation: Generation) -> bool:
+        with self._cond:
+            return generation.number > self._state.stale_through
+
     def alive(self) -> int:
         """Generations alive now, including one being built."""
         with self._cond:
@@ -108,6 +125,7 @@ class RenderCache:
         state = self._state
         due = (
             state.newest is None
+            or state.newest.number <= state.stale_through
             or self._clock() - state.newest.created_at >= self.min_interval
         )
         if not due or state.building:
