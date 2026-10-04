@@ -149,6 +149,7 @@ when requests were actually sent.
 | --- | --- |
 | Limited by `--duration` | The duration |
 | Counted with `--requests` | One whole slot after the last scheduled arrival: the next offset the schedule would have produced |
+| Ended early by `--stop-file` | When the file was seen; its scheduled arrivals are those due by then |
 
 With a count, two requests at 10/s span 0.2 s, not the 0.1 s between their
 arrivals, and a Poisson count gives the usual N/T_N rate. A replay without

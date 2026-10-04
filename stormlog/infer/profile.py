@@ -999,6 +999,9 @@ class InferenceProfiler:
             dispatch.ended_at_ns,
             time.time_ns(),
             scheduled_arrivals=dispatch.scheduled,
+            # The schedule's window ends at the stop, with the arrivals due
+            # by then, not where the whole schedule would have ended.
+            scheduled_endpoint_offset_ns=dispatch.ended_at_ns - dispatch.started_at_ns,
             stopped_early=True,
         )
 

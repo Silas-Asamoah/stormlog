@@ -135,6 +135,39 @@ def test_a_stop_file_ends_the_measured_window_cleanly(
     assert sessions[-1]["status"] == "completed"
 
 
+def test_a_stopped_open_loop_divides_by_the_window_it_ran(tmp_path: Path) -> None:
+    # The phase records the arrivals due by the stop; without its own
+    # endpoint, populations recomputed the full 60 s schedule's and divided
+    # those arrivals by it, as if the victim's load had been a sixtieth.
+    import threading
+
+    from stormlog.infer.populations import case_populations
+
+    output, stop = tmp_path / "infer.jsonl", tmp_path / "stop"
+    threading.Timer(1.0, stop.touch).start()
+    with FakeEngine(FakeEngineConfig(step_seconds=0.001)) as engine:
+        config = _config(
+            engine,
+            output,
+            request_count=None,
+            duration_seconds=60.0,
+            stop_file=str(stop),
+            arrival_mode="poisson",
+            rates=(40.0,),
+        )
+        InferenceProfiler(config).run()
+    window = _phase_windows(output)["measured"]
+    ran = window["window_ended_at_ns"] - window["started_at_ns"]  # type: ignore[operator]
+    assert window["scheduled_endpoint_offset_ns"] == ran
+    records = [json.loads(line) for line in output.read_text().splitlines() if line]
+    (case,) = case_populations(records).values()
+    assert case.intervals.scheduled_window is not None
+    assert case.intervals.scheduled_window.ended_at_ns == window["window_ended_at_ns"]
+    assert case.intervals.realized_offered_rate_per_second == pytest.approx(
+        window["scheduled_arrivals"] / (ran / 1e9)
+    )
+
+
 def test_the_command_line_passes_the_stop_file(tmp_path: Path) -> None:
     from stormlog.infer.cli import _profile_config, build_parser
 
