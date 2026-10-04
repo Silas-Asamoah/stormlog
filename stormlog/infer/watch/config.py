@@ -61,6 +61,7 @@ _PREDICATE_KEYS = (
 _TRIGGER_KEYS = {
     "id",
     "kind",
+    "engine",
     "window_seconds",
     "hold_seconds",
     "clear_seconds",
@@ -106,6 +107,7 @@ class WatchConfig:
 
     base_url: str
     metrics_url: str | None
+    engine: str | None
     tick_seconds: float
     scrape_timeout_seconds: float
     history_seconds: float
@@ -122,7 +124,11 @@ class WatchConfig:
             "format": CONFIG_FORMAT,
             "version": CONFIG_VERSION,
             "defaults": DEFAULTS_VERSION,
-            "server": {"base_url": self.base_url, "metrics_url": self.metrics_url},
+            "server": {
+                "base_url": self.base_url,
+                "metrics_url": self.metrics_url,
+                "engine": self.engine,
+            },
             "tick_seconds": self.tick_seconds,
             "scrape_timeout_seconds": self.scrape_timeout_seconds,
             "history": {"seconds": self.history_seconds, "bytes": self.history_bytes},
@@ -189,10 +195,11 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
         },
         "config",
     )
-    server = _section(payload, "server", {"base_url", "metrics_url"})
+    server = _section(payload, "server", {"base_url", "metrics_url", "engine"})
     base_url = server.get("base_url")
     if not isinstance(base_url, str) or not base_url:
         raise InferUsageError("server.base_url is required")
+    engine = _engine(server.get("engine"), "server.engine")
     tick = _positive(payload.get("tick_seconds", 1.0), "tick_seconds")
     history = _section(payload, "history", {"seconds", "bytes"})
     history_seconds = _positive(history.get("seconds", 600.0), "history.seconds")
@@ -203,11 +210,12 @@ def resolve_watch_config(payload: Mapping[str, Any]) -> WatchConfig:
     if not isinstance(export, Mapping):
         raise InferUsageError("export must be an object")
     settings = tuple(triggers)
-    specs = tuple(_trigger(t, tick) for t in settings)
+    specs = tuple(_trigger(t, tick, engine) for t in settings)
     _check_triggers(specs, history_seconds)
     return WatchConfig(
         base_url=base_url,
         metrics_url=server.get("metrics_url", "auto"),
+        engine=engine,
         tick_seconds=tick,
         scrape_timeout_seconds=_positive(
             payload.get("scrape_timeout_seconds", min(2.0, tick)),
@@ -314,7 +322,18 @@ def _store(payload: Mapping[str, Any]) -> StoreLimits:
         raise InferUsageError(f"store: {exc}") from exc
 
 
-def _trigger(settings: Mapping[str, Any], tick: float) -> TriggerSpec:
+def _engine(value: Any, name: str) -> str | None:
+    """An engine label value, as vLLM's ``engine`` label gives it, or None."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "":
+        raise InferUsageError(f'{name} must be an engine label, such as "0"')
+    return str(value)
+
+
+def _trigger(
+    settings: Mapping[str, Any], tick: float, default_engine: str | None
+) -> TriggerSpec:
     if not isinstance(settings, Mapping):
         raise InferUsageError("each trigger must be an object")
     name = str(settings.get("id") or "")
@@ -322,6 +341,7 @@ def _trigger(settings: Mapping[str, Any], tick: float) -> TriggerSpec:
     present = [key for key in _PREDICATE_KEYS if key in settings]
     if len(present) != 1:
         raise InferUsageError(f"trigger {name}: give exactly one predicate")
+    engine = _engine(settings.get("engine", default_engine), f"trigger {name}: engine")
     try:
         sustain = Sustain.with_defaults(
             window=float(settings.get("window_seconds", 30.0)),
@@ -333,7 +353,7 @@ def _trigger(settings: Mapping[str, Any], tick: float) -> TriggerSpec:
             trigger_id=name,
             kind=str(settings.get("kind", "")),
             sustain=sustain,
-            predicate=_predicate(present[0], settings[present[0]]),
+            predicate=_predicate(present[0], settings[present[0]], engine),
             action=str(settings.get("action", ACTION_RECORD)),
             deep_capture_when=str(
                 settings.get(
@@ -356,23 +376,25 @@ def _trigger(settings: Mapping[str, Any], tick: float) -> TriggerSpec:
         raise InferUsageError(f"trigger {name}: {exc}") from exc
 
 
-def _predicate(key: str, value: Any) -> Any:
+def _predicate(key: str, value: Any, engine: str | None) -> Any:
     options = value if isinstance(value, Mapping) else {}
     if key == "signal":
         if value not in SIGNALS:
             raise ValueError(f"signal must be one of {', '.join(SIGNALS)}")
-        return SignalExceeds(str(value), SignalConfig())
+        return SignalExceeds(str(value), SignalConfig(engine=engine))
     if key == "gauge":
         return GaugeAtLeast(
             family=str(options["family"]),
             threshold=float(options["at_least"]),
             share=float(options.get("share", 1.0)),
             min_samples=int(options.get("min_samples", 2)),
+            engine=engine,
         )
     if key == "counter_rate":
         return CounterRateAtLeast(
             family=str(options["family"]),
             rate_per_s=float(options["at_least_per_s"]),
+            engine=engine,
         )
     if key == "histogram_share":
         return HistogramShareAbove(
@@ -380,10 +402,11 @@ def _predicate(key: str, value: Any) -> Any:
             value=float(options["above"]),
             share=float(options["share"]),
             min_samples=int(options.get("min_samples", 20)),
+            engine=engine,
         )
     if key == "scrape_failures":
         return ScrapeFailures(consecutive=int(options.get("consecutive", 3)))
-    return FrozenExporter(ticks=int(options.get("ticks", 5)))
+    return FrozenExporter(ticks=int(options.get("ticks", 5)), engine=engine)
 
 
 _COMPLETION_FAMILIES = (

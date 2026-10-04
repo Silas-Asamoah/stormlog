@@ -389,6 +389,31 @@ def test_a_slow_scrape_skips_ticks_and_counts_them(tmp_path: Path) -> None:
     assert incident["loss"]["scrape_ticks_missed"] > 0
 
 
+def test_several_engines_with_none_named_cannot_be_judged(tmp_path: Path) -> None:
+    metrics = FakeMetrics()
+    metrics.engines = 2
+    metrics.waiting = 20
+    with serve_metrics(metrics) as base_url:
+        outcome = _watch(
+            tmp_path, watch_config(base_url), options=WatchOptions(duration_seconds=1.0)
+        )
+    assert outcome.exit_code == 1
+    assert outcome.unsound == ["engine_required"]
+    assert of_type(read_ledger(tmp_path), INCIDENT) == []
+
+
+def test_a_named_engine_is_judged_on_a_server_with_several(tmp_path: Path) -> None:
+    metrics = FakeMetrics()
+    metrics.engines = 2
+    metrics.waiting = 20
+    payload = watch_config("")
+    with serve_metrics(metrics) as base_url:
+        payload["server"] = {"base_url": base_url, "engine": "1"}
+        outcome = _watch(tmp_path, payload, options=WatchOptions(duration_seconds=2.0))
+    assert outcome.exit_code == 3
+    assert outcome.unsound == []
+
+
 def test_retention_prunes_old_bundles_and_says_so(tmp_path: Path) -> None:
     store = IncidentStore(tmp_path)
     old_id = store.new_incident_id(1_000_000_000_000_000_000)
