@@ -6,12 +6,7 @@ from typing import Any
 
 import pytest
 
-from stormlog.infer.compatibility import (
-    RunField,
-    classify,
-    compatible,
-    run_fields,
-)
+from stormlog.infer.compatibility import RunField, classify, compatible, run_fields
 from stormlog.infer.config_classes import (
     IDENTITY,
     LABEL,
@@ -21,6 +16,7 @@ from stormlog.infer.config_classes import (
     config_class,
     field_class,
 )
+from stormlog.infer.manifest import model_identity_record
 from stormlog.infer.server_privacy import redacted
 
 
@@ -310,8 +306,10 @@ def _records(
     *, max_num_seqs: int = 256, evidence: str = "inferred"
 ) -> list[dict[str, Any]]:
     description = {
-        "host": {"hostname": "box", "nproc": 32},
+        "host": {"hostname": "box", "nproc": 32, "boot_id": "boot-1"},
         "server": {
+            "pid": 100,
+            "start_ticks": 500,
             "environ": {"CUDA_VISIBLE_DEVICES": "0", "VLLM_PORT": "8000"},
             "start_method": {"configured": "spawn"},
         },
@@ -326,7 +324,12 @@ def _records(
                 {"uuid": "GPU-idle", "server_pids": [], "settings": {"name": "Other"}},
             ],
         },
-        "model": {"weights_digest": "w" * 64, "identity_evidence": evidence},
+        "model": {
+            "weights_digest": "w" * 64,
+            "identity_evidence": evidence,
+            "resolved_snapshot": "c" * 40,
+            "chat_template_digest": "t" * 64,
+        },
         "runtime": {"python": "3.12.3", "packages": {"torch": "2.9.0"}},
     }
     probe = {
@@ -386,11 +389,64 @@ def test_a_runs_fields_come_from_its_artifact() -> None:
     assert fields["scope.vllm_config"].known and fields["scope.environ"].known
 
 
+def _bound(
+    *, pid: int = 100, start_ticks: int = 500, evidence: str = "pinned_commit_verified"
+) -> dict[str, Any]:
+    """The runner's record: weights verified before it launched this server."""
+    return model_identity_record(
+        {
+            "weights_digest": "w" * 64,
+            "resolved_snapshot": "c" * 40,
+            "identity_evidence": evidence,
+        },
+        session_id="s",
+        run_id="r",
+        server={"pid": pid, "start_ticks": start_ticks},
+        boot_id="boot-1",
+    )
+
+
 def test_runs_from_artifacts_compare_by_their_configuration() -> None:
     same = compatible(run_fields(_records()), run_fields(_records()))
     other = compatible(run_fields(_records()), run_fields(_records(max_num_seqs=64)))
     assert same.status == "unverified"
-    assert [item.name for item in same.unverified] == ["model.weights_digest"]
+    assert [item.name for item in same.unverified] == [
+        "model.resolved_snapshot",
+        "model.weights_digest",
+        "server.chat_template_digest",
+    ]
     assert other.status == "incompatible"
-    verified = run_fields(_records(evidence="pinned_commit_verified"))
-    assert verified["model.weights_digest"].known
+    bound = [*_records(), _bound()]
+    assert compatible(run_fields(bound), run_fields(bound)).status == "compatible"
+
+
+def test_a_description_alone_never_verifies_its_weights() -> None:
+    # describe-server never claims verified evidence; an edited description
+    # that does is still a digest taken after launch.
+    edited = run_fields(_records(evidence="pinned_commit_verified"))
+    assert not edited["model.weights_digest"].known
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _bound(pid=101),
+        _bound(start_ticks=999),
+        _bound(evidence="inferred"),
+    ],
+    ids=["another_pid", "a_restarted_server", "not_verified"],
+)
+def test_the_runners_record_verifies_only_the_server_it_launched(
+    record: dict[str, Any]
+) -> None:
+    fields = run_fields([*_records(), record])
+    assert not fields["model.weights_digest"].known
+
+
+def test_weights_the_runner_verified_but_the_description_disagrees_with_are_unknown() -> (
+    None
+):
+    records = _records()
+    records[1]["description"]["model"]["weights_digest"] = "x" * 64
+    fields = run_fields([*records, _bound()])
+    assert not fields["model.weights_digest"].known
