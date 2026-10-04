@@ -636,10 +636,14 @@ stormlog infer profile ... --vllm-spans-listen 127.0.0.1:4319 \
   `--otlp-probe-interval 1`.
 - For exact bounds, run the episode against `fake_collector.py` instead.
 - `fake_collector.py` stores each export's spans, fsynced, before it
-  answers, after `--delay-seconds`, with `--status`. `GET /counts`, or
-  `--count FILE` after it has gone, gives the raw and unique spans to check
-  Stormlog's collector-side bounds. Slower than Stormlog's 5 s attempt
-  deadline, it gives `unknown{timeout_after_send}`.
+  answers, after `--delay-seconds`, with `--status`, in the request's
+  encoding. `--partial-rejected N` keeps all but the last N spans of each
+  export, as a partial success, and `--retry-after S` adds that header to
+  its 429 and 503 answers. Like a collector, it answers 404 off
+  `/v1/traces` and 415 for a body that is neither protobuf nor JSON.
+  `GET /counts`, or `--count FILE` after it has gone, gives the raw and
+  unique spans to check Stormlog's collector-side bounds. Slower than
+  Stormlog's 5 s attempt deadline, it gives `unknown{timeout_after_send}`.
 
 The configs follow the collector's documented syntax, but have only been
 checked by tests that read them: the filter's condition, in particular, is

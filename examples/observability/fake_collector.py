@@ -5,9 +5,14 @@ per span, flushed and fsynced before any answer is sent. A span counted
 here was therefore really stored, even when its answer never reaches the
 exporter: that is what the collector-side bounds compare against.
 
-Then it waits ``--delay-seconds`` and answers ``--status``. ``GET /counts``
-returns the requests, raw spans and unique spans so far, and ``--count``
-reads them back from a store file after the collector has gone.
+Then it waits ``--delay-seconds`` and answers ``--status``, in the
+request's encoding, as an OTLP/HTTP collector does: with
+``--partial-rejected N`` it keeps all but the last N spans of each export
+and says so in a partial success, and ``--retry-after S`` adds that header
+to its refusals. Like a collector, it answers 404 off ``/v1/traces`` and
+415 for a body that is neither protobuf nor JSON. ``GET /counts`` returns
+the requests, raw spans and unique spans so far, and ``--count`` reads them
+back from a store file after the collector has gone.
 
 X3 of the #220 qualification, a collector slower than Stormlog's 5 s attempt
 deadline, which Stormlog must count as ``unknown{timeout_after_send}``::
@@ -43,6 +48,9 @@ from stormlog.infer.vllm_spans import (
 )
 
 MAX_BODY_BYTES = 64 * 1024 * 1024
+TRACES_PATH = "/v1/traces"
+PROTOBUF = "application/x-protobuf"
+JSON = "application/json"
 
 
 class FakeCollector:
@@ -56,11 +64,15 @@ class FakeCollector:
         delay_seconds: float = 0.0,
         status: int = 200,
         refuse_first: int = 0,
+        partial_rejected: int = 0,
+        retry_after: float | None = None,
     ) -> None:
         self.store = Path(store)
         self.delay_seconds = delay_seconds
         self.status = status
         self.refuse_first = refuse_first
+        self.partial_rejected = partial_rejected
+        self.retry_after = retry_after
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._requests = 0
@@ -98,17 +110,20 @@ class FakeCollector:
                 "unique_spans": len(self._unique),
             }
 
-    def receive(self, body: bytes, media: str) -> int:
-        """Store an export's spans, fsynced; the status to answer with.
+    def receive(self, body: bytes, media: str) -> tuple[int, int]:
+        """Store an export's spans, fsynced; the status, and the spans rejected.
 
         One of the first ``refuse_first`` exports is refused with 503 and
-        not stored, as a conformant collector that is unavailable does.
+        not stored, as a conformant collector that is unavailable does. The
+        last ``partial_rejected`` spans of an export are not stored.
         """
         spans = (
             decode_otlp_json(json.loads(body))
-            if media == "application/json"
+            if media == JSON
             else decode_otlp_protobuf(body)
         )
+        rejected = min(self.partial_rejected, len(spans))
+        spans = spans[: len(spans) - rejected]
         lines = [
             json.dumps(
                 {
@@ -124,7 +139,7 @@ class FakeCollector:
         with self._lock:
             self._requests += 1
             if self._requests <= self.refuse_first:
-                return 503
+                return 503, 0
             with self.store.open("a", encoding="utf-8") as handle:
                 handle.writelines(lines)
                 handle.flush()
@@ -132,7 +147,7 @@ class FakeCollector:
             self._raw += len(spans)
             self._unique.update((s.trace_id or "", s.span_id or "") for s in spans)
         self._stop.wait(self.delay_seconds)
-        return self.status
+        return self.status, rejected
 
 
 def _handler(collector: FakeCollector) -> type[BaseHTTPRequestHandler]:
@@ -143,7 +158,7 @@ def _handler(collector: FakeCollector) -> type[BaseHTTPRequestHandler]:
             if self.path != "/counts":
                 self._answer(404)
                 return
-            self._answer(200, json.dumps(collector.counts()).encode(), "json")
+            self._answer(200, json.dumps(collector.counts()).encode(), True)
 
         def do_POST(self) -> None:  # noqa: N802
             length = int(self.headers.get("Content-Length", "0"))
@@ -151,6 +166,13 @@ def _handler(collector: FakeCollector) -> type[BaseHTTPRequestHandler]:
                 self._answer(413)
                 return
             body = self.rfile.read(length)
+            media = self.headers.get_content_type()
+            if self.path.split("?", 1)[0] != TRACES_PATH:
+                self._answer(404)
+                return
+            if media not in (PROTOBUF, JSON):
+                self._answer(415)
+                return
             try:
                 if self.headers.get("Content-Encoding", "").lower() == "gzip":
                     inflated = gunzip_capped(body, MAX_BODY_BYTES)
@@ -158,17 +180,27 @@ def _handler(collector: FakeCollector) -> type[BaseHTTPRequestHandler]:
                         self._answer(413)
                         return
                     body = inflated
-                status = collector.receive(body, self.headers.get_content_type())
+                status, rejected = collector.receive(body, media)
             except (ValueError, zlib.error, ProtobufDecodeError):
                 self._answer(400)
                 return
-            self._answer(status)
+            if status == 200:
+                self._answer(200, _export_response(media, rejected), media == JSON)
+                return
+            self._answer(status, retry_after=collector.retry_after)
 
-        def _answer(self, status: int, body: bytes = b"", kind: str = "") -> None:
+        def _answer(
+            self,
+            status: int,
+            body: bytes = b"",
+            json_body: bool = False,
+            retry_after: float | None = None,
+        ) -> None:
             self.send_response(status)
-            media = "application/json" if kind else "application/x-protobuf"
-            self.send_header("Content-Type", media)
+            self.send_header("Content-Type", JSON if json_body else PROTOBUF)
             self.send_header("Content-Length", str(len(body)))
+            if retry_after is not None and status in (429, 503):
+                self.send_header("Retry-After", f"{retry_after:g}")
             self.end_headers()
             try:
                 self.wfile.write(body)
@@ -179,6 +211,33 @@ def _handler(collector: FakeCollector) -> type[BaseHTTPRequestHandler]:
             return None
 
     return Handler
+
+
+def _export_response(media: str, rejected: int) -> bytes:
+    """An ExportTraceServiceResponse in the request's encoding."""
+    message = f"{rejected} spans rejected by the fake collector" if rejected else ""
+    if media == JSON:
+        partial = (
+            {"rejectedSpans": str(rejected), "errorMessage": message}
+            if rejected
+            else {}
+        )
+        return json.dumps({"partialSuccess": partial} if partial else {}).encode()
+    if not rejected:
+        return b""
+    # partial_success (1) { rejected_spans (1): int64, error_message (2) }
+    text = message.encode()
+    inner = b"\x08" + _varint(rejected) + b"\x12" + _varint(len(text)) + text
+    return b"\x0a" + _varint(len(inner)) + inner
+
+
+def _varint(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        low, value = value & 0x7F, value >> 7
+        out.append(low | (0x80 if value else 0))
+        if not value:
+            return bytes(out)
 
 
 def count_store(path: Path) -> dict[str, int]:
@@ -209,6 +268,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Answer the first N exports with 503, without storing them.",
     )
     parser.add_argument(
+        "--partial-rejected",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Keep all but the last N spans of each export, as a partial success.",
+    )
+    parser.add_argument(
+        "--retry-after",
+        type=float,
+        metavar="SECONDS",
+        help="Add Retry-After to each 429 or 503.",
+    )
+    parser.add_argument(
         "--count", type=Path, metavar="PATH", help="Print a store file's counts."
     )
     args = parser.parse_args(argv)
@@ -223,6 +295,8 @@ def main(argv: list[str] | None = None) -> int:
         delay_seconds=args.delay_seconds,
         status=args.status,
         refuse_first=args.refuse_first,
+        partial_rejected=args.partial_rejected,
+        retry_after=args.retry_after,
     )
     collector.start()
     print(f"fake collector on http://{collector.address}/v1/traces", flush=True)

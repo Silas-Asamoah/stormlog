@@ -2,6 +2,7 @@
 
 import json
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -70,6 +71,9 @@ def test_x3_a_slow_collector_leaves_spans_unknown_within_the_bounds(
     assert accounting["exported"] == 0
     unknown = sum(accounting["unknown"].values())
     unique, raw = counts["unique_spans"], counts["raw_spans"]
+    # The fake stores before it answers: every span offered is stored, so
+    # the bounds are met, not merely by storing nothing.
+    assert unique == 4
     assert accounting["exported"] <= unique <= accounting["exported"] + unknown
     assert raw - unique <= accounting["max_extra_copies"]
     # The store was fsynced before each answer, so the file agrees.
@@ -107,3 +111,81 @@ def test_counting_a_store_skips_a_broken_last_line(
     )
     assert fake_collector.main(["--count", str(store)]) == 0
     assert json.loads(capsys.readouterr().out) == {"raw_spans": 3, "unique_spans": 2}
+
+
+def _post(
+    collector: fake_collector.FakeCollector, path: str, body: bytes, media: str
+) -> tuple[int, dict[str, str], bytes]:
+    request = urllib.request.Request(
+        f"http://{collector.address}{path}",
+        data=body,
+        headers={"Content-Type": media},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, dict(response.headers), response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers), exc.read()
+
+
+def _json_export(count: int, start: int = 100) -> bytes:
+    spans = [
+        {"traceId": f"{i + 1:032x}", "spanId": f"{i + 1:016x}", "name": "t"}
+        for i in range(start, start + count)
+    ]
+    return json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}).encode()
+
+
+def test_it_answers_as_a_collector_does(tmp_path: Path) -> None:
+    collector = fake_collector.FakeCollector("127.0.0.1:0", tmp_path / "s.jsonl")
+    collector.start()
+    try:
+        body = _json_export(2)
+        assert _post(collector, "/v1/metrics", body, "application/json")[0] == 404
+        assert _post(collector, "/", body, "application/json")[0] == 404
+        assert _post(collector, "/v1/traces", body, "text/plain")[0] == 415
+        status, headers, answer = _post(
+            collector, "/v1/traces", body, "application/json"
+        )
+    finally:
+        collector.stop()
+    # A JSON request is answered in JSON.
+    assert status == 200 and headers["Content-Type"] == "application/json"
+    assert json.loads(answer) == {}
+    assert collector.counts()["raw_spans"] == 2
+
+
+def test_it_can_reject_part_of_each_export(tmp_path: Path) -> None:
+    store = tmp_path / "spans.jsonl"
+    collector = fake_collector.FakeCollector("127.0.0.1:0", store, partial_rejected=1)
+    collector.start()
+    try:
+        exporter = _exporter(f"http://{collector.address}/v1/traces")
+        for index in range(3):
+            exporter.offer(index, 64)
+        exporter.start()
+        exporter.close(3.0)
+        status, _, answer = _post(
+            collector, "/v1/traces", _json_export(2), "application/json"
+        )
+    finally:
+        collector.stop()
+    accounting = exporter.accounting()
+    assert (accounting["exported"], accounting["rejected"]) == (2, 1)
+    assert json.loads(answer)["partialSuccess"]["rejectedSpans"] == "1"
+    assert fake_collector.count_store(store)["unique_spans"] == 3  # 2 + 1
+
+
+def test_a_refusal_can_carry_retry_after(tmp_path: Path) -> None:
+    collector = fake_collector.FakeCollector(
+        "127.0.0.1:0", tmp_path / "s.jsonl", refuse_first=1, retry_after=2
+    )
+    collector.start()
+    try:
+        status, headers, _ = _post(
+            collector, "/v1/traces", _json_export(1), "application/json"
+        )
+    finally:
+        collector.stop()
+    assert status == 503 and headers["Retry-After"] == "2"
