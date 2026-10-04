@@ -636,7 +636,7 @@ def test_a_bounded_sink_holds_at_most_its_buffer_under_sustained_failure(
     # The backoff spaces the retries out: not one write per append.
     assert disk.calls < 100
     assert grown < 256 * 1024
-    sink.close()  # never raises in bounded mode
+    sink.close()
     assert sink.failure_diagnostics()["dropped_records"] == 5000
     assert sink.failure_diagnostics()["buffered_records"] == 0
 
@@ -681,6 +681,71 @@ def test_a_bounded_sink_counts_a_manifest_failure_instead_of_raising(
     segment = next(tmp_path.glob("segment-*.jsonl"))
     assert _segment_records(segment) == [{"seq": 1}, {"seq": 2}]
     sink._stop_flush_thread()
+
+
+def _failing_manifest(sink: AppendOnlyTelemetrySink) -> None:
+    """Every manifest write fails, as ENOSPC on manifest.tmp would."""
+
+    def fail() -> None:
+        raise OSError(28, "No space left on device")
+
+    sink._write_manifest_locked = fail  # type: ignore[method-assign]
+
+
+def test_a_bounded_sink_closes_without_raising_when_the_manifest_fails(
+    tmp_path: Path,
+) -> None:
+    sink = _bounded_sink(tmp_path)
+    sink.append({"seq": 1})
+    _failing_manifest(sink)
+    sink.close()
+    health = sink.failure_diagnostics()
+    assert health["flush_failures"] == 1
+    assert "No space left" in str(health["last_flush_error"])
+    assert sink._flush_thread is None
+
+
+def test_a_bounded_sink_starts_a_session_without_raising_when_the_manifest_fails(
+    tmp_path: Path,
+) -> None:
+    sink = _bounded_sink(tmp_path)
+    _failing_manifest(sink)
+    session = sink.start_session()
+    assert sink.current_session() == session
+    assert sink.failure_diagnostics()["flush_failures"] == 1
+    sink._stop_flush_thread()
+
+
+def test_a_bounded_sink_retries_a_segment_it_could_not_prune(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sink = _bounded_sink(
+        tmp_path,
+        rollover_max_events=1,
+        retention_max_files=1,
+        rollover_max_bytes=1 << 20,
+        retention_max_total_bytes=1 << 21,
+    )
+    real_unlink = Path.unlink
+    stuck = {"on": True}
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if stuck["on"] and self.name.startswith("segment-"):
+            raise PermissionError(13, "Permission denied")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    sink.append({"seq": 1})  # segment 1, closed by rollover
+    sink.append({"seq": 2})  # segment 2: segment 1 cannot be pruned
+    health = sink.failure_diagnostics()
+    assert health["flush_failures"] == 1
+    assert "Permission denied" in str(health["last_flush_error"])
+    assert (tmp_path / "segment-000001.jsonl").exists()
+    stuck["on"] = False
+    time.sleep(0.06)  # past the backoff
+    sink.append({"seq": 3})  # pruned now, on the next flush
+    assert not (tmp_path / "segment-000001.jsonl").exists()
+    sink.close()
 
 
 def test_bounded_mode_settings_are_validated(tmp_path: Path) -> None:
