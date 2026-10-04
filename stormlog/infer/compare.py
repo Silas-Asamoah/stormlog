@@ -278,7 +278,7 @@ def compare_runs(
     usable = {arm: _usable(runs) for arm, runs in arms.items()}
     if not usable[BASELINE] or not usable[CANDIDATE]:
         raise InferInputError("an arm has no usable run: every run was excluded")
-    compatibility = _compatibility(usable, spec)
+    compatibility, unverified_pairs = _compatibility(usable, spec)
     observer_issues = _observer_contract(usable, spec)
     design = _design(arms, spec)
     cases = {
@@ -295,7 +295,10 @@ def compare_runs(
         comparability=compatibility,
         observer_issues=observer_issues,
         cases=cases,
-        diagnostics=_diagnostics(arms, compatibility),
+        diagnostics={
+            **_diagnostics(arms, compatibility),
+            "unverified_pairs": unverified_pairs,
+        },
     )
     return _with_family(comparison)
 
@@ -340,23 +343,60 @@ def _set_aside(excluded: list[dict[str, Any]], run: RunSummary, case_id: str) ->
 
 def _compatibility(
     usable: Mapping[str, list[RunSummary]], spec: ComparisonSpec
-) -> Compatibility:
-    """Within each arm in config mode, then across arms in the spec's mode."""
+) -> tuple[Compatibility, list[list[Any]]]:
+    """Every run within its arm (config mode), and every run across arms.
+
+    Comparability is not transitive once a value is unknown, so each run is
+    checked, not only each arm's first. The reported result is the first
+    runs' across the arms, made unverified, with every unverified field,
+    when any pair was; the unverified pairs are returned with their fields.
+    """
+    within: list[tuple[str, str, Compatibility]] = []
     for arm, runs in usable.items():
-        reference = runs[0]
         for run in runs[1:]:
-            within = compatible(reference.fields, run.fields)
-            if within.status == INCOMPATIBLE:
-                raise InferInputError(_incompatible(f"{arm} runs", within))
-    across = compatible(
-        usable[BASELINE][0].fields,
-        usable[CANDIDATE][0].fields,
-        allowed=spec.allow,
-        mode=spec.mode,
-    )
-    if across.status == INCOMPATIBLE:
-        raise InferInputError(_incompatible("the arms", across))
-    return across
+            result = compatible(runs[0].fields, run.fields)
+            if result.status == INCOMPATIBLE:
+                raise InferInputError(_incompatible(f"{arm} runs", result))
+            within.append((runs[0].name, run.name, result))
+    across: list[tuple[str, str, Compatibility]] = []
+    for first, second in _cross_pairs(usable):
+        result = compatible(
+            first.fields, second.fields, allowed=spec.allow, mode=spec.mode
+        )
+        if result.status == INCOMPATIBLE:
+            raise InferInputError(_incompatible("the arms", result))
+        across.append((first.name, second.name, result))
+    results = [*within, *across]
+    pairs = [
+        [a, b, sorted(item.name for item in result.unverified)]
+        for a, b, result in results
+        if result.status == UNVERIFIED
+    ]
+    return _worst(across[0][2], [result for _a, _b, result in results]), pairs
+
+
+def _cross_pairs(
+    usable: Mapping[str, list[RunSummary]]
+) -> list[tuple[RunSummary, RunSummary]]:
+    """The first runs, then each other run against the other arm's first."""
+    baseline, candidate = usable[BASELINE], usable[CANDIDATE]
+    return [
+        (baseline[0], candidate[0]),
+        *((baseline[0], run) for run in candidate[1:]),
+        *((run, candidate[0]) for run in baseline[1:]),
+    ]
+
+
+def _worst(reference: Compatibility, results: list[Compatibility]) -> Compatibility:
+    """``reference``, made unverified with every unverified field if any was."""
+    unverified = [result for result in results if result.status == UNVERIFIED]
+    if not unverified:
+        return reference
+    names: dict[str, Any] = {}
+    for result in unverified:
+        for item in result.unverified:
+            names.setdefault(item.name, item)
+    return replace(reference, status=UNVERIFIED, unverified=tuple(names.values()))
 
 
 def _incompatible(what: str, result: Compatibility) -> str:
