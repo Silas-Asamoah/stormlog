@@ -19,7 +19,8 @@ among the first k candidates.
   window ± grace. Any other secondary is scored as if it were primary.
 - **Match.** The label's kind, ``role: primary``, the label's cause, at least
   its severity, and an eligible claim, at the same location: the component
-  (L1), and the rank and engine where the label names them (L2). A
+  (L1), and the rank and engine where the label names them (L2), read from
+  #218's ``location.rank`` and ``location.engine_producer``. A
   secondary of the right kind never matches: the diagnoser said the
   mechanism followed from something else.
 - **Runs.** Findings and false positives are counted per run
@@ -158,8 +159,10 @@ class FindingView:
             cause=str(detail["cause"]),
             claim=str(detail["claim"]),
             component=str(location["component"]),
+            # #218's location names the engine by its hook producer and
+            # carries the TP rank where it knows it.
             location_rank=location.get("rank"),
-            engine=location.get("engine"),
+            engine=location.get("engine_producer"),
             window=None if window is None else _window(window),
             secondary_to=tuple(detail.get("secondary_to") or ()),
             eligibility_failed=tuple(eligibility.get("failed") or ()),

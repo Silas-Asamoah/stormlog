@@ -257,7 +257,10 @@ ranked by #218's total `rank`, and top-1 and top-3 are taken over it.
 - the label's cause;
 - at least the label's severity;
 - the label's location. At L1 that is the component; at L2 it also needs the
-  rank and engine where the label names them.
+  rank and engine where the label names them. They are read from #218's
+  location block: the engine is `location.engine_producer`, the hook
+  producer that names the engine, and the rank `location.rank`. A label
+  names the engine by the reference hook hello's producer.
 
 A secondary of the right kind never matches, because the diagnoser said the
 mechanism followed from something else. Nor is it a false claim, because it

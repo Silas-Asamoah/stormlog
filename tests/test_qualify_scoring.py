@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Sequence
 
 import pytest
@@ -40,6 +42,11 @@ S = 1_000_000_000
 CONFIG = ScoreConfig(default_grace_ns=20 * S, supported_types=frozenset({"F2"}))
 KV = "kv_preemption_pressure"
 QUEUE = "queue_saturation"
+PRODUCER = "vllm:node-7:boot-aaaa:2600:1790000000000000000"
+# A real #218 payload (PR 1b): a queue saturation finding and its coverage.
+REAL_218 = (
+    Path(__file__).parent / "fixtures" / "qualify" / "diagnosis_218_queue_burst.json"
+)
 
 
 def finding(
@@ -73,7 +80,7 @@ def finding(
         "location": {
             "component": component or sorted(KIND_COMPONENTS[kind])[0],
             "rank": location_rank,
-            "engine": "0",
+            "engine_producer": PRODUCER,
         },
         "window": (
             None
@@ -306,6 +313,34 @@ def test_a_rank_delay_on_the_wrong_rank_matches_only_at_l1() -> None:
     assert score.correct(TOP1, 1)
     assert not score.correct(TOP1, 2)
     assert score.miss == MISS_MISMATCH
+
+
+def test_l2_reads_218s_own_location_fields() -> None:
+    # #218 names the engine as location.engine_producer; a label naming that
+    # engine matches at L2, and one naming another engine only at L1.
+    real = json.loads(REAL_218.read_text(encoding="utf-8"))
+    (queue,) = [
+        detail
+        for detail in real["payload"]["findings_detail"].values()
+        if detail["kind"] == QUEUE
+    ]
+    window = queue["window"]
+    label = replace(
+        episode("F1", expects=(Expectation(QUEUE, "scheduler", engine=PRODUCER),)),
+        secondary=(),
+        times=Times(
+            action_onset_ns=window["start_ns"],
+            effect_onset_ns=window["start_ns"],
+            effect_end_ns=window["end_ns"],
+        ),
+    )
+    assert queue["location"]["engine_producer"] == PRODUCER
+    assert score_episode(label, real, CONFIG).correct(TOP1, 2)
+    elsewhere = replace(
+        label, expects=(Expectation(QUEUE, "scheduler", engine="vllm:other:1:1:1"),)
+    )
+    other = score_episode(elsewhere, real, CONFIG)
+    assert other.correct(TOP1, 1) and not other.correct(TOP1, 2)
 
 
 def test_an_ineligible_finding_is_labelled_ineligible() -> None:
