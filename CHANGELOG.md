@@ -121,7 +121,9 @@ the flaky benchmark memory gates
 - `stormlog.infer.server_model`: the model files a vLLM server was started
   with, from its command line and its Hugging Face cache (each file's
   algorithm, digest and size: SHA-256 for LFS blobs, git SHA-1 for the
-  rest, and none for a copied file a blob name does not vouch for) or, for
+  rest, named by the blob the snapshot links to even when that blob links
+  on into a shared store, and none for a copied file a blob name does not
+  vouch for) or, for
   a local directory, cached SHA-256 digests. It names its
   evidence (`pinned_commit`, `inferred`, `post_launch_digest`, `size_only`)
   and never claims the weights were the ones loaded. (#213)
