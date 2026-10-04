@@ -492,6 +492,11 @@ reader:
   `truth/reference/scrapes.jsonl`.
 - **`chunk_gaps`** rebuilds the victim's gaps between streamed chunks from its
   client records.
+- **`request_spans`** takes each finished victim request's send and end from
+  the same records, and `merge_spans` makes them the in-flight intervals
+  that busy-time cadence needs (`Signals.in_flight`). A request still in
+  flight counts once it ends, so it can delay a recovery, never hasten one.
+  The victim artifact is read incrementally for both.
 
 `ReferenceChannel.signals()` returns them as the `Signals` that
 `stormlog.infer.qualify.recovery` reads.

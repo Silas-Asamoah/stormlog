@@ -11,6 +11,8 @@ from examples.qualification.reference import (
     ReferenceChannel,
     VictimView,
     chunk_gaps,
+    merge_spans,
+    request_spans,
     scrape_metrics,
 )
 from tests.qualification_fake_engine_helpers import (
@@ -229,9 +231,26 @@ def test_the_victims_chunk_gaps_are_read_incrementally(tmp_path: Path) -> None:
     early = channel.signals().chunk_gaps
     # Blank out what was read: a reader that starts over would lose it.
     artifact.write_bytes(b" " * (len(first) - 1) + b"\n" + rest)
-    late = channel.signals().chunk_gaps
+    late = channel.signals()
     records = [json.loads(line) for line in (first + rest).splitlines()]
-    assert early and late == chunk_gaps(records, VICTIM)
+    assert early and late.chunk_gaps == chunk_gaps(records, VICTIM)
+    # And the victim's requests become the in-flight intervals cadence needs.
+    spans = request_spans(records, VICTIM)
+    assert len(spans) == 4
+    assert late.in_flight == merge_spans(spans)
+
+
+def test_in_flight_intervals_merge_overlapping_requests() -> None:
+    victim = [
+        {"event_type": "infer.request", "x_request_id": f"{VICTIM[9:]}-{i}",
+         "started_at_ns": start, "ended_at_ns": end}
+        for i, (start, end) in enumerate([(10, 20), (15, 30), (40, 50)])
+    ]  # fmt: skip
+    other = {"event_type": "infer.request", "x_request_id": "neighbor-1",
+             "started_at_ns": 0, "ended_at_ns": 100}  # fmt: skip
+    spans = request_spans(victim + [other], VICTIM)
+    assert spans == [(10, 20), (15, 30), (40, 50)]
+    assert merge_spans(spans) == [(10, 30), (40, 50)]
 
 
 def test_the_tailer_copies_the_epochs_it_read(tmp_path: Path) -> None:
