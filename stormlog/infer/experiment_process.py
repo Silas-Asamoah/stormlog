@@ -8,8 +8,10 @@ checks that nothing it started is left: no process in the group or the
 session, and none of the processes it remembered by PID and start time,
 which also finds one that left the group with ``setsid``. Every launch also
 carries a mark in its environment (``STORMLOG_RUN_MARK``), which every
-descendant inherits, so a process forked after the tree was remembered and
-then moved to a session of its own is found too.
+descendant inherits unless it execs with a fresh environment, so a process
+forked after the tree was remembered and then moved to a session of its own
+is found too. An environment that cannot be read cannot be told unmarked;
+the cleanup record counts them.
 
 On Linux the checks read ``/proc`` (``server_process``). Elsewhere they use
 ``psutil`` and say so, since the session of another process cannot be read
@@ -213,13 +215,20 @@ class Cleanup:
     method: str
     survivors: tuple[dict[str, Any], ...] = ()
     killed: tuple[int, ...] = ()
+    # Environments the mark search could not read; None when there was no
+    # mark to search for. The search is complete only when it read them all.
+    unreadable: int | None = None
 
     def to_record(self) -> dict[str, Any]:
+        search = None
+        if self.unreadable is not None:
+            search = {"complete": self.unreadable == 0, "unreadable": self.unreadable}
         return {
             "verified": self.verified,
             "method": self.method,
             "survivors": list(self.survivors),
             "killed": list(self.killed),
+            "mark_search": search,
         }
 
 
@@ -236,23 +245,25 @@ def verify_cleanup(
     ``mark`` is the launch's environment mark: a process that carries it
     is the launch's, wherever it went. Survivors are killed by PID once;
     whatever outlives that and ``wait_s`` is listed, and the cleanup is not
-    verified.
+    verified. A process whose environment cannot be read cannot be told
+    unmarked, so the record says how many there were.
     """
     keys = list(remembered)
     method = "proc" if _linux() else "psutil"
     deadline = time.monotonic() + wait_s
     killed: tuple[int, ...] = ()
     while True:
-        survivors = _survivors(pgid, keys, proc, method) | _marked(mark, proc, method)
+        marked, unreadable = _marked(mark, proc, method)
+        survivors = _survivors(pgid, keys, proc, method) | marked
         if not survivors:
-            return Cleanup(True, method, killed=killed)
+            return Cleanup(True, method, killed=killed, unreadable=unreadable)
         if not killed:
             killed = tuple(sorted(survivors))
             for pid in killed:
                 _kill(pid)
         if time.monotonic() >= deadline:
             left = tuple(identify(pid, proc=proc) for pid in sorted(survivors))
-            return Cleanup(False, method, left, killed)
+            return Cleanup(False, method, left, killed, unreadable)
         time.sleep(POLL_SECONDS)
 
 
@@ -292,39 +303,48 @@ def _survivors(
     return _psutil_group(pgid) | {pid for pid, _ in keys if _alive(pid)}
 
 
-def _marked(mark: str | None, proc: Path, method: str) -> set[int]:
-    """Live processes whose environment carries the launch's mark."""
+def _marked(mark: str | None, proc: Path, method: str) -> tuple[set[int], int | None]:
+    """Live processes whose environment carries the launch's mark, and how
+    many environments could not be read (None without a mark)."""
     if not mark:
-        return set()
+        return set(), None
     needle = f"{MARK_VARIABLE}={mark}"
     if method == "proc":
         return _proc_marked(needle.encode() + b"\0", proc)
     return _psutil_marked(mark)
 
 
-def _proc_marked(needle: bytes, proc: Path) -> set[int]:
-    found = set()
+def _proc_marked(needle: bytes, proc: Path) -> tuple[set[int], int]:
+    found, unreadable = set(), 0
     for entry in proc.iterdir() if proc.is_dir() else ():
         if not entry.name.isdigit():
             continue
         try:
             environ = (entry / "environ").read_bytes()
-        except OSError:
+        except PermissionError:
+            unreadable += 1
             continue
+        except OSError:
+            continue  # gone
         if (b"\0" + environ).find(b"\0" + needle) >= 0 and _alive(int(entry.name)):
             found.add(int(entry.name))
-    return found
+    return found, unreadable
 
 
-def _psutil_marked(mark: str) -> set[int]:
-    found = set()
+def _psutil_marked(mark: str) -> tuple[set[int], int]:
+    found, unreadable = set(), 0
     for process in psutil.process_iter():
         try:
-            if process.environ().get(MARK_VARIABLE) == mark and _alive(process.pid):
-                found.add(process.pid)
-        except (OSError, psutil.Error):
+            environ = process.environ()
+        except (psutil.NoSuchProcess, ProcessLookupError):
             continue
-    return found
+        # psutil on macOS may raise SystemError for a process it cannot read.
+        except (psutil.Error, OSError, SystemError):
+            unreadable += 1
+            continue
+        if environ.get(MARK_VARIABLE) == mark and _alive(process.pid):
+            found.add(process.pid)
+    return found, unreadable
 
 
 def _psutil_group(pgid: int) -> set[int]:
