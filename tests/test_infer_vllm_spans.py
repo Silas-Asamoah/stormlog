@@ -600,10 +600,10 @@ class TestReceiverRobustness:
     def test_a_handler_bug_is_counted_not_fatal(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def explode(body: bytes, media: str) -> list[RawSpan]:
+        def explode(document: Any) -> list[RawSpan]:
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(vllm_spans, "_decode_export", explode)
+        monkeypatch.setattr(vllm_spans, "decode_otlp_json", explode)
         with _receiver() as receiver:
             url = f"http://{receiver.listen}/v1/traces"
             assert _post(url, JSON_EXPORT, "application/json") == 400
@@ -631,6 +631,14 @@ class TestReceiverRobustness:
                 == 200
             )
             assert receiver.drain()[0].clock_domain == "::1/unix_epoch_ns"
+
+
+def _json_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, int):
+        return {"intValue": str(value)}
+    if isinstance(value, list):
+        return {"arrayValue": {"values": [{"stringValue": v} for v in value]}}
+    return {"stringValue": value}
 
 
 def _json_export(count: int) -> bytes:
@@ -823,6 +831,176 @@ class TestReceiverAdmission:
             metadata = receiver.capability_metadata()
         assert status == 200
         assert metadata["busy"] == 0
+
+    @pytest.mark.parametrize("media", ["application/json", "application/x-protobuf"])
+    def test_an_export_too_large_to_decode_is_refused_before_it_is(
+        self, media: str
+    ) -> None:
+        """150,000 minimal spans in under 2 MB: decoding them whole peaked
+        near 100 MB before the span limit was checked."""
+        import tracemalloc
+
+        if media == "application/json":
+            body = _json_export(150_000)
+        else:
+            _otlp()
+            body = _export_request(
+                [_span_message("s", attributes={}, start=1, end=2)] * 150_000
+            )
+        with _receiver() as receiver:
+            url = f"http://{receiver.listen}/v1/traces"
+            tracemalloc.start()
+            try:
+                status = _post(url, body, media)
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            metadata = receiver.capability_metadata()
+        assert status == 413
+        assert peak < 4 * len(body) + 4 * 1024 * 1024
+        assert metadata["spans"] == 0
+        assert metadata["too_large"] + metadata["too_many_spans"] == 1
+
+    @pytest.mark.parametrize("media", ["application/json", "application/x-protobuf"])
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            {"spans": 2_000, "attributes": {}},
+            {"spans": 512, "attributes": {"k" + str(i): i for i in range(13)}},
+            {"spans": 1, "attributes": {f"a{i}": i for i in range(20_000)}},
+            {"spans": 1, "attributes": {"arr": ["a"] * 50_000}},
+            {"spans": 32, "attributes": {"big": "x" * 100_000}},
+        ],
+        ids=["minimal", "realistic", "attributes", "array", "text"],
+    )
+    def test_decoding_stays_within_what_the_export_was_charged(
+        self, media: str, shape: dict[str, Any]
+    ) -> None:
+        """The in-flight charge covers the decoded spans, not only the bytes.
+
+        tracemalloc sees Python's allocations; upb's own parse arena, which it
+        does not, is charged from its measured cost on top.
+        """
+        import tracemalloc
+
+        attributes, count = shape["attributes"], shape["spans"]
+        if media == "application/json":
+            spans = [
+                {
+                    "name": "llm_request",
+                    "traceId": TRACE_ID.hex(),
+                    "spanId": SPAN_ID.hex(),
+                    "attributes": [
+                        {"key": k, "value": _json_value(v)}
+                        for k, v in attributes.items()
+                    ],
+                }
+                for _ in range(count)
+            ]
+            body = json.dumps(
+                {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
+            ).encode()
+        else:
+            _otlp()
+            span = _span_message(
+                "llm_request", attributes=attributes, start=START_NS, end=END_NS
+            )
+            body = _export_request([span] * count)
+        charged: list[int] = []
+        with _receiver() as receiver:
+            real_reserve = receiver._reserve
+
+            def spy(handler: Any, reservation: Any, amount: int) -> bool:
+                taken = real_reserve(handler, reservation, amount)
+                charged.append(reservation.bytes)
+                return taken
+
+            receiver._reserve = spy  # type: ignore[method-assign]
+            url = f"http://{receiver.listen}/v1/traces"
+            tracemalloc.start()
+            try:
+                status = _post(url, body, media)
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            queued = len(receiver.drain())
+        assert status == 200
+        assert queued == count
+        assert peak <= max(charged)
+
+    def test_concurrent_exports_never_hold_more_than_the_budget(self) -> None:
+        """Eight exporters at once, each resending on 503 as OTLP asks."""
+        import concurrent.futures
+
+        _otlp()
+        span = _span_message(
+            "llm_request", attributes=REQUEST_ATTRIBUTES, start=START_NS, end=END_NS
+        )
+        bodies = [(_export_request([span] * 512), "application/x-protobuf")] * 4
+        bodies += [(_json_export(512), "application/json")] * 4
+        limits = ReceiverLimits(max_inflight_bytes=2 * MAX_BODY_BYTES)
+        held: list[int] = []
+        with _receiver(limits=limits) as receiver:
+            real_reserve = receiver._reserve
+
+            def spy(handler: Any, reservation: Any, amount: int) -> bool:
+                taken = real_reserve(handler, reservation, amount)
+                held.append(receiver._inflight_bytes)
+                return taken
+
+            receiver._reserve = spy  # type: ignore[method-assign]
+            url = f"http://{receiver.listen}/v1/traces"
+
+            def export(body: bytes, media: str) -> int:
+                # A connection over max_connections is refused before its
+                # request is read, which can surface as a reset: retried too.
+                for _ in range(200):
+                    try:
+                        status = _post(url, body, media)
+                    except (urllib.error.URLError, ConnectionError):
+                        status = 503
+                    if status != 503:
+                        return status
+                    time.sleep(0.01)
+                return 503
+
+            with concurrent.futures.ThreadPoolExecutor(8) as pool:
+                statuses = list(pool.map(lambda job: export(*job), bodies))
+            queued = len(receiver.drain())
+            left = receiver._inflight_bytes
+        assert statuses == [200] * 8
+        assert queued == 8 * 512
+        assert max(held) <= limits.max_inflight_bytes
+        assert left == 0
+
+    def test_a_body_read_in_tiny_pieces_is_held_once(self) -> None:
+        """Each read lands in one buffer of the announced length; a list of
+        one-byte chunks joined at the end held over 90 MB for 1 MiB."""
+        import io as std_io
+        import tracemalloc
+
+        length = 256 * 1024
+
+        class _Trickle(std_io.RawIOBase):
+            def readable(self) -> bool:
+                return True
+
+            def readinto(self, buffer: Any) -> int:
+                buffer[:1] = b"x"
+                return 1
+
+        class _Handler:
+            rfile = std_io.BufferedReader(_Trickle(), buffer_size=1)
+
+        with _receiver() as receiver:
+            tracemalloc.start()
+            try:
+                body = receiver._read_within_deadline(_Handler(), length)  # type: ignore[arg-type]
+                _current, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+        assert len(body) == length
+        assert peak < 2 * length + 64 * 1024
 
     def test_too_many_spans_in_one_body_is_refused(self) -> None:
         with _receiver(limits=ReceiverLimits(max_spans_per_body=3)) as receiver:

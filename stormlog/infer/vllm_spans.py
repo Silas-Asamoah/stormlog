@@ -134,15 +134,65 @@ def otlp_protobuf_available() -> bool:
     return _otlp_request_class() is not None
 
 
+def protobuf_parse_bytes() -> int:
+    """What parsing one body byte costs with the installed protobuf backend."""
+    try:
+        from google.protobuf.internal import api_implementation
+    except ImportError:
+        return PROTOBUF_PARSE_BYTES_OTHER
+    return PROTOBUF_PARSE_BYTES.get(
+        api_implementation.Type(), PROTOBUF_PARSE_BYTES_OTHER
+    )
+
+
 def decode_otlp_protobuf(data: bytes) -> list[RawSpan]:
     """Decode an ``ExportTraceServiceRequest`` with the generated classes."""
+    return spans_from_message(parse_otlp_protobuf(data))
+
+
+def parse_otlp_protobuf(data: bytes | bytearray) -> Any:
+    """The ``ExportTraceServiceRequest`` message, before any span is built."""
     request_class = _otlp_request_class()
     if request_class is None:
         raise OtlpProtobufUnavailable(OTLP_EXTRA_HINT)
     try:
-        message = request_class.FromString(data)
+        return request_class.FromString(bytes(data))
     except Exception as exc:  # google.protobuf.message.DecodeError and friends
         raise ProtobufDecodeError(f"not an OTLP trace export: {exc}") from exc
+
+
+def message_span_count(message: Any) -> int:
+    return sum(
+        len(scope_spans.spans)
+        for resource_spans in message.resource_spans
+        for scope_spans in resource_spans.scope_spans
+    )
+
+
+def message_value_count(message: Any) -> int:
+    """Attribute values the spans will hold, nested ones included."""
+    values = 0
+    for resource_spans in message.resource_spans:
+        values += _value_count(resource_spans.resource.attributes)
+        for scope_spans in resource_spans.scope_spans:
+            values += sum(_value_count(span.attributes) for span in scope_spans.spans)
+    return values
+
+
+def _value_count(key_values: Any) -> int:
+    return sum(1 + _nested_value_count(item.value) for item in key_values)
+
+
+def _nested_value_count(value: Any) -> int:
+    kind = value.WhichOneof("value")
+    if kind == "array_value":
+        return sum(1 + _nested_value_count(item) for item in value.array_value.values)
+    if kind == "kvlist_value":
+        return _value_count(value.kvlist_value.values)
+    return 0
+
+
+def spans_from_message(message: Any) -> list[RawSpan]:
     spans: list[RawSpan] = []
     for resource_spans in message.resource_spans:
         resource = _message_attributes(resource_spans.resource.attributes)
@@ -425,6 +475,7 @@ class ReceiverStats:
     protobuf_unavailable: int = 0
     grpc_attempts: int = 0
     oversized: int = 0
+    too_large: int = 0
     bad_requests: int = 0
     handler_errors: int = 0
     after_stop: int = 0
@@ -438,6 +489,22 @@ class ReceiverStats:
 
 
 MAX_BODY_BYTES = 32 * 1024 * 1024
+# What decoding an export costs in memory, so it is charged before it
+# happens. Measured on CPython 3.10 with protobuf 4.24, and rounded up:
+# json.loads peaked at 90 bytes a structural token, and a protobuf parse at
+# 19 bytes a body byte with the upb backend and 135 with the pure-Python
+# one; a decoded span with its record but without attributes took 2 KB, and
+# an attribute value 190 bytes. Text decoded out of a body takes at most 4
+# bytes a byte (a str holding one character outside the Basic Multilingual
+# Plane stores every character in 4 bytes), and JSON is decoded to text
+# whole before it is parsed.
+JSON_TOKEN_BYTES = 128
+PROTOBUF_PARSE_BYTES = {"upb": 24}
+# Any other backend is charged as the pure-Python one.
+PROTOBUF_PARSE_BYTES_OTHER = 160
+SPAN_BYTES = 2048
+VALUE_BYTES = 256
+TEXT_BYTES = 4
 # DEFLATE's largest expansion: a gzip body inflates to at most this many
 # times its own length.
 GZIP_MAX_RATIO = 1032
@@ -451,17 +518,20 @@ class ReceiverLimits:
     handler thread. Each request, its request line, headers and body, must
     arrive within ``request_deadline_seconds`` of when the receiver starts
     waiting for it; a kept-alive connection idle that long is closed. The
-    bodies being read and decoded at once may hold at most
-    ``max_inflight_bytes``, a gzip body counted with the most it can inflate
-    to. A body
-    with more than ``max_spans_per_body`` spans is refused, and one that does
-    not fit the queue whole is refused with 503, so the exporter can resend
-    it; spans are never queued in part.
+    exports being read and decoded at once may be charged at most
+    ``max_inflight_bytes``, each step charged before it runs: the body, with
+    the most a gzip body can inflate to, then an estimate of decoding it
+    (``json_decode_estimate``, or for protobuf its parse and then the spans
+    it holds). An export that does not fit now is answered 503; one that
+    never could, 413. A body with more than ``max_spans_per_body`` spans is
+    refused, a protobuf one before any span is built, and one that does not
+    fit the queue whole is refused with 503, so the exporter can resend it;
+    spans are never queued in part.
     """
 
     max_connections: int = 8
     request_deadline_seconds: float = 10.0
-    max_inflight_bytes: int = 64 * 1024 * 1024
+    max_inflight_bytes: int = 128 * 1024 * 1024
     max_spans_per_body: int = 10_000
     max_queued_spans: int = 100_000
     max_queued_bytes: int = 64 * 1024 * 1024
@@ -485,7 +555,26 @@ _BUSY_RESPONSE = (
 STOP_GRACE_SECONDS = 2.0
 
 
-def gunzip_capped(body: bytes, cap: int) -> bytes | None:
+def json_decode_estimate(content: bytes | bytearray) -> int:
+    """An upper bound on what decoding this OTLP JSON export holds at once.
+
+    Counted on the bytes, before anything is parsed: structural tokens
+    (every value is opened by one, or follows a comma or colon), spans (each
+    has a ``"name"``), and attribute values (each has one ``*Value`` key).
+    A count can only be too high: inside a JSON string a quote is escaped.
+    """
+    tokens = 1 + sum(content.count(mark) for mark in (b"{", b"[", b",", b":"))
+    spans = content.count(b'"name"')
+    values = content.count(b'Value"')
+    return (
+        2 * TEXT_BYTES * len(content)
+        + tokens * JSON_TOKEN_BYTES
+        + spans * SPAN_BYTES
+        + values * VALUE_BYTES
+    )
+
+
+def gunzip_capped(body: bytes | bytearray, cap: int) -> bytes | None:
     """Inflate a gzip body, or None when its output would exceed ``cap``.
 
     A gzip member a few hundred kilobytes long can hold gigabytes of zeros,
@@ -579,6 +668,7 @@ class OtlpSpanReceiver:
         self.run_id = run_id
         self.limits = limits or ReceiverLimits()
         self.protobuf_available = otlp_protobuf_available()
+        self._parse_bytes = protobuf_parse_bytes()
         self.stats = ReceiverStats()
         # Each queued span with the bytes it is charged; guarded by _lock.
         self._queue: deque[tuple[VllmSpanRecord, int]] = deque()
@@ -751,65 +841,118 @@ class OtlpSpanReceiver:
             _respond(handler, 404, b"", "text/plain")
             return
         self._count("requests")
-        reserved = self._admit(handler)
-        if reserved is None:
-            return
+        reservation = _Reservation()
         try:
-            self._handle_admitted(handler)
+            if self._reserve(handler, reservation, _admission_bytes(handler)):
+                self._handle_admitted(handler, reservation)
         finally:
             with self._lock:
-                self._inflight_bytes -= reserved
+                self._inflight_bytes -= reservation.bytes
 
-    def _admit(self, handler: BaseHTTPRequestHandler) -> int | None:
-        """Reserve the bytes this request may hold while it is read and
-        decoded; None after answering 503 when they do not fit."""
-        try:
-            length = max(0, int(handler.headers.get("Content-Length") or 0))
-        except ValueError:
-            length = 0  # _read_body answers the malformed length
-        encoding = (handler.headers.get("Content-Encoding") or "").strip().lower()
-        reserve = min(length, MAX_BODY_BYTES)
-        if encoding == "gzip":
-            reserve += min(MAX_BODY_BYTES, GZIP_MAX_RATIO * reserve)
+    def _reserve(
+        self, handler: BaseHTTPRequestHandler, reservation: _Reservation, amount: int
+    ) -> bool:
+        """Charge ``amount`` more to this request before it is held; False
+        after answering 503 when it does not fit now, or 413 when it never
+        could."""
+        never = reservation.bytes + amount > self.limits.max_inflight_bytes
         with self._lock:
-            fits = self._inflight_bytes + reserve <= self.limits.max_inflight_bytes
+            fits = (
+                not never
+                and self._inflight_bytes + amount <= self.limits.max_inflight_bytes
+            )
             if fits:
-                self._inflight_bytes += reserve
+                self._inflight_bytes += amount
+                reservation.bytes += amount
+            elif never:
+                self.stats.too_large += 1
             else:
                 self.stats.busy += 1
-        if not fits:
+        if never:
+            handler.close_connection = True
+            _try_respond(handler, 413)
+        elif not fits:
             _respond_busy(handler)
-            return None
-        return reserve
+        return fits
 
-    def _handle_admitted(self, handler: BaseHTTPRequestHandler) -> None:
+    def _settle(self, reservation: _Reservation, held: int) -> None:
+        with self._lock:
+            self._inflight_bytes -= reservation.bytes - held
+            reservation.bytes = held
+
+    def _handle_admitted(
+        self, handler: BaseHTTPRequestHandler, reservation: _Reservation
+    ) -> None:
         media = (handler.headers.get("Content-Type") or "").split(";")[0].strip()
         body = self._read_body(handler)
         if body is None:
             return
-        if media not in _RECEIVER_CAPABILITIES:
-            self._count("unsupported_media")
-            _respond(handler, 415, b"", "text/plain")
-            return
-        if media == PROTOBUF_MEDIA and not self.protobuf_available:
-            self._count("protobuf_unavailable")
-            _respond(handler, 415, OTLP_EXTRA_HINT.encode(), "text/plain")
+        # Only the content is held now: a body shorter than announced, the
+        # compressed bytes and unused inflation are let go.
+        self._settle(reservation, len(body))
+        if not self._media_served(handler, media):
             return
         try:
-            spans = _decode_export(body, media)
+            spans = self._decode(handler, body, media, reservation)
         except (ValueError, UnicodeDecodeError):
             self._count("decode_failures")
             _respond(handler, 400, b"", "text/plain")
             return
+        if spans is None:
+            return
         if len(spans) > self.limits.max_spans_per_body:
-            self._count("too_many_spans")
-            _respond(handler, 413, b"too many spans in one body", "text/plain")
+            self._refuse_too_many(handler)
             return
         if not self._enqueue(spans, media, handler.client_address[0], len(body)):
             _respond_busy(handler)
             return
         # An empty ExportTraceServiceResponse is valid in either encoding.
         _respond(handler, 200, b"" if media == PROTOBUF_MEDIA else b"{}", media)
+
+    def _decode(
+        self,
+        handler: BaseHTTPRequestHandler,
+        body: bytes | bytearray,
+        media: str,
+        reservation: _Reservation,
+    ) -> list[RawSpan] | None:
+        """The export's spans, each step charged before it runs; None after
+        answering an export that does not fit."""
+        if media != PROTOBUF_MEDIA:
+            if not self._reserve(handler, reservation, json_decode_estimate(body)):
+                return None
+            return decode_otlp_json(json.loads(body.decode("utf-8")))
+        if not self._reserve(handler, reservation, self._parse_bytes * len(body)):
+            return None
+        message = parse_otlp_protobuf(body)
+        spans = message_span_count(message)
+        if spans > self.limits.max_spans_per_body:
+            self._refuse_too_many(handler)  # before a single span is built
+            return None
+        built = (
+            spans * SPAN_BYTES
+            + message_value_count(message) * VALUE_BYTES
+            + TEXT_BYTES * len(body)
+        )
+        if not self._reserve(handler, reservation, built):
+            return None
+        return spans_from_message(message)
+
+    def _media_served(self, handler: BaseHTTPRequestHandler, media: str) -> bool:
+        """True, or False after answering 415 for a media type not served."""
+        if media not in _RECEIVER_CAPABILITIES:
+            self._count("unsupported_media")
+            _respond(handler, 415, b"", "text/plain")
+            return False
+        if media == PROTOBUF_MEDIA and not self.protobuf_available:
+            self._count("protobuf_unavailable")
+            _respond(handler, 415, OTLP_EXTRA_HINT.encode(), "text/plain")
+            return False
+        return True
+
+    def _refuse_too_many(self, handler: BaseHTTPRequestHandler) -> None:
+        self._count("too_many_spans")
+        _respond(handler, 413, b"too many spans in one body", "text/plain")
 
     def _body_length(self, handler: BaseHTTPRequestHandler) -> int | None:
         """The announced length, or None after answering one we cannot take."""
@@ -836,7 +979,7 @@ class OtlpSpanReceiver:
             return None
         return length
 
-    def _read_body(self, handler: BaseHTTPRequestHandler) -> bytes | None:
+    def _read_body(self, handler: BaseHTTPRequestHandler) -> bytes | bytearray | None:
         """The decoded body, or None after answering a request we cannot take."""
         length = self._body_length(handler)
         if length is None:
@@ -861,24 +1004,28 @@ class OtlpSpanReceiver:
 
     def _read_within_deadline(
         self, handler: BaseHTTPRequestHandler, length: int
-    ) -> bytes:
+    ) -> bytearray:
         """The body, or ``TimeoutError`` once the request's deadline passed.
 
         The handler's reader holds the deadline, so a sender trickling bytes
         cannot hold a connection and its reserved bytes open by meeting a
-        per-read timeout.
+        per-read timeout. The bytes go straight into one buffer of the
+        announced length, already charged, whatever the size of each read.
         """
-        chunks: list[bytes] = []
-        remaining = length
-        while remaining:
-            chunk = handler.rfile.read1(min(remaining, 64 * 1024))  # type: ignore[attr-defined]
-            if not chunk:
-                break  # a short body fails to decode and is answered 400
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        return b"".join(chunks)
+        body = bytearray(length)
+        with memoryview(body) as view:
+            received = 0
+            while received < length:
+                count = handler.rfile.readinto(view[received:])  # type: ignore[attr-defined]
+                if not count:
+                    break  # a short body fails to decode and is answered 400
+                received += count
+        del body[received:]
+        return body
 
-    def _gunzip(self, handler: BaseHTTPRequestHandler, body: bytes) -> bytes | None:
+    def _gunzip(
+        self, handler: BaseHTTPRequestHandler, body: bytes | bytearray
+    ) -> bytes | None:
         """The inflated body, within the same cap as a plain one."""
         try:
             inflated = gunzip_capped(body, MAX_BODY_BYTES)
@@ -950,6 +1097,7 @@ class OtlpSpanReceiver:
                 "protobuf_unavailable": self.stats.protobuf_unavailable,
                 "grpc_attempts": self.stats.grpc_attempts,
                 "oversized": self.stats.oversized,
+                "too_large": self.stats.too_large,
                 "bad_requests": self.stats.bad_requests,
                 "handler_errors": self.stats.handler_errors,
                 "after_stop": self.stats.after_stop,
@@ -969,10 +1117,24 @@ class OtlpSpanReceiver:
         return metadata
 
 
-def _decode_export(body: bytes, media: str) -> list[RawSpan]:
-    if media == PROTOBUF_MEDIA:
-        return decode_otlp_protobuf(body)
-    return decode_otlp_json(json.loads(body.decode("utf-8")))
+@dataclass
+class _Reservation:
+    """What one request has been charged against ``max_inflight_bytes``."""
+
+    bytes: int = 0
+
+
+def _admission_bytes(handler: BaseHTTPRequestHandler) -> int:
+    """The body's own bytes and, for gzip, the most it can inflate to."""
+    try:
+        length = max(0, int(handler.headers.get("Content-Length") or 0))
+    except ValueError:
+        length = 0  # _read_body answers the malformed length
+    encoding = (handler.headers.get("Content-Encoding") or "").strip().lower()
+    reserve = min(length, MAX_BODY_BYTES)
+    if encoding == "gzip":
+        reserve += min(MAX_BODY_BYTES, GZIP_MAX_RATIO * reserve)
+    return reserve
 
 
 def _respond(
