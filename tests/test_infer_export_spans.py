@@ -10,6 +10,8 @@ from stormlog.infer.export_spans import (
     DIGESTS,
     ERRORS,
     FIRST_TOKEN_EVENT,
+    GENAI_ATTRIBUTES,
+    GENAI_CONVENTIONS,
     OUTPUTS,
     PHASE_SPAN,
     PROMPTS,
@@ -329,6 +331,25 @@ def _window(**changes: Any) -> dict[str, Any]:
     }
     record.update(changes)
     return record
+
+
+def test_the_gen_ai_attributes_are_those_checked_against_the_pinned_conventions() -> (
+    None
+):
+    # The 1.44.0 schema marks gen_ai.* deprecated, moved to the GenAI
+    # conventions repository; the names are checked against a pinned commit.
+    assert GENAI_CONVENTIONS.startswith(
+        "https://github.com/open-telemetry/semantic-conventions-genai/"
+    )
+    stream = _request(first_chunk_latency_ms=35.0, max_tokens=64)
+    span = _span(_spans(), stream)
+    used = {key for key, _ in span.attributes if key.startswith("gen_ai.")}
+    used |= {
+        key
+        for key, _ in _span(_spans(), _window()).attributes
+        if key.startswith("gen_ai.")
+    }
+    assert used <= set(GENAI_ATTRIBUTES) and "gen_ai.request.model" in used
 
 
 def test_a_failed_profiler_window_is_an_error_with_its_message_if_consented() -> None:

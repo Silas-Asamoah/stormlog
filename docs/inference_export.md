@@ -342,6 +342,17 @@ identifier, an ID Stormlog made, a value from a closed set, or a number:
   never exported.
 - No `gen_ai.usage.*`: token counts come from Stormlog's records, with
   their sources.
+- **The `gen_ai.*` names** follow the OpenTelemetry GenAI conventions as of
+  commit `e07f4eb` of
+  [semantic-conventions-genai](https://github.com/open-telemetry/semantic-conventions-genai/tree/e07f4ebacb08f56db8c4c882d117720333fbca04)
+  (2026-10-02), where they moved from the core conventions; the scope's
+  `schema_url` (1.44.0) covers the rest, and marks `gen_ai.*` deprecated
+  there for that reason. The GenAI conventions are still in development.
+  Two of their recommendations are not followed: the span keeps Stormlog's
+  name, `stormlog.infer.request`, rather than `{operation} {model}`, so it
+  is found the same way whatever the model; and `gen_ai.provider.name` is
+  left out, since Stormlog cannot know what serves an OpenAI-compatible
+  endpoint.
 
 `--export-content` adds free text, each item cut to 1 KiB:
 - `digests`: the prompt's digest, from the artifact, and the output's;
