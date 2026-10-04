@@ -367,8 +367,9 @@ the flaky benchmark memory gates
   in the capability records (`docs/vllm_telemetry.md`, "Ingestion
   limits").
   ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
-- The append-only telemetry sink cuts a segment back to its last whole line
-  when a write fails partway, for example on a full disk. Before, the next
+- The append-only telemetry sink cuts a segment back to where it stood when
+  a write fails partway, for example on a full disk, and, if that cut-back
+  fails too, before the segment is written again. Before, the next
   successful flush extended the partial line into a corrupt record. A new
   opt-in bound, `TelemetrySinkConfig(max_buffer_bytes=...)`, keeps a sink on
   a failing disk from growing memory: a full buffer is flushed first, and

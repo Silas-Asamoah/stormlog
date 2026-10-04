@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -823,6 +824,103 @@ def test_a_failed_cut_back_is_repaired_from_the_file_itself(
     segment = next(tmp_path.glob("segment-*.jsonl"))
     lines = segment.read_bytes().splitlines()
     assert [json.loads(line)["seq"] for line in lines] == [1, 2, 3, 4, 5]
+
+
+def test_a_failing_disk_never_rereads_the_open_segment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each failed write used to close the descriptor, so every retry
+    reopened the segment and read the whole of it into memory: up to 64 MiB
+    a retry against a buffer bound of 64 KiB."""
+    import tracemalloc
+
+    from stormlog import telemetry_sink
+
+    sink = _bounded_sink(
+        tmp_path,
+        max_buffer_bytes=64 * 1024,
+        failure_backoff_seconds=0.0001,
+        failure_backoff_max_seconds=0.0001,
+    )
+    for seq in range(4000):  # a 4 MB open segment
+        sink.append({"seq": seq, "pad": "p" * 1000})
+    opened: list[object] = []
+    real_open = telemetry_sink.os.open
+
+    def open_segment(path: Any, *args: Any) -> int:
+        opened.append(path)
+        return real_open(path, *args)
+
+    monkeypatch.setattr(telemetry_sink.os, "open", open_segment)
+    disk = _FailingDisk(monkeypatch, partial=True)
+    tracemalloc.start()
+    baseline = tracemalloc.get_traced_memory()[0]
+    for seq in range(4000, 4300):
+        time.sleep(0.0002)  # past the backoff: every append retries
+        sink.append({"seq": seq, "pad": "q" * 100})
+    peak = tracemalloc.get_traced_memory()[1] - baseline
+    tracemalloc.stop()
+    assert disk.calls >= 250
+    assert opened == []
+    assert peak < 64 * 1024 + 256 * 1024
+    disk.failing = False
+    time.sleep(0.001)
+    sink.close()
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    seqs = [int(str(r["seq"])) for r in _segment_records(segment)]
+    assert seqs[:4000] == list(range(4000))
+    assert seqs == sorted(set(seqs))
+
+
+def test_a_failed_cut_back_is_finished_before_the_segment_is_written_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write that failed on a line boundary leaves whole lines, which the
+    old repair, trimming only a partial line, kept: the retry wrote them
+    again. The segment is now cut back to its size before the write, and
+    not read to do it."""
+    import errno
+    import os
+
+    from stormlog import telemetry_sink
+
+    sink = _bounded_sink(tmp_path, max_buffer_bytes=1 << 20, flush_every_events=2)
+    sink.append({"seq": 1})
+    sink.append({"seq": 2})
+    real_write, real_ftruncate = os.write, os.ftruncate
+    state = {"fail": True}
+
+    def write(fd: int, data: bytes | memoryview) -> int:
+        if not state["fail"]:
+            return real_write(fd, data)
+        first_line = bytes(data[: bytes(data).index(b"\n") + 1])
+        real_write(fd, first_line)  # one whole record of two, then the disk fails
+        del data
+        raise OSError(errno.EIO, "Input/output error")
+
+    def ftruncate(fd: int, length: int) -> None:
+        if state["fail"]:
+            raise OSError(errno.EIO, "Input/output error")
+        real_ftruncate(fd, length)
+
+    read: list[object] = []
+    monkeypatch.setattr(telemetry_sink.os, "write", write)
+    monkeypatch.setattr(telemetry_sink.os, "ftruncate", ftruncate)
+    monkeypatch.setattr(
+        AppendOnlyTelemetrySink,
+        "_recover_segment_tail_locked",
+        lambda self, path, current: read.append(path),
+    )
+    sink.append({"seq": 3})
+    sink.append({"seq": 4})  # fails with seq 3 on disk and not cut back
+    state["fail"] = False
+    time.sleep(0.02)  # past the backoff
+    sink.append({"seq": 5})
+    sink.append({"seq": 6})
+    sink.close()
+    segment = next(tmp_path.glob("segment-*.jsonl"))
+    assert [r["seq"] for r in _segment_records(segment)] == [1, 2, 3, 4, 5, 6]
+    assert read == []
 
 
 def test_an_interrupted_write_is_cut_back_too(
