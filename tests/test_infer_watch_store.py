@@ -678,6 +678,22 @@ def test_a_crash_while_pruning_never_brings_a_bundle_back(
     assert old not in {p.name for p in (tmp_path / "incidents").iterdir()}
 
 
+def test_bytes_a_deferred_deletion_will_free_count_as_freed(tmp_path: Path) -> None:
+    """With the oldest bundle's deletion deferred by a reader, retention
+    must not also remove the next one to make up the same bytes."""
+    store = IncidentStore(tmp_path, _limits())
+    base = time.time_ns()
+    oldest = _gen0_exact(store, b"a" * 6000, now_ns=base)
+    newer = _gen0_exact(store, b"b" * 3000, now_ns=base + 1)
+    store.limits = _limits(max_total_bytes=7000, max_incident_bytes=7000)
+    with open_incident_bundle(tmp_path / "incidents" / oldest):
+        assert store.prune(now_ns=base + 2) == []
+        assert store.deferred == 1
+        assert store.manifest(newer) is not None
+    assert store.reclaim_deferred() == 1
+    assert [m.incident_id for _p, m in store.bundles()] == [newer]
+
+
 def test_a_bundle_being_read_is_pruned_once_the_reader_leaves(
     tmp_path: Path,
 ) -> None:
