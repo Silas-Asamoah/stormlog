@@ -4,170 +4,170 @@
     {
       "claims": {
         "amd": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         }
@@ -183,177 +183,185 @@
       "id": "pytorch-kineto",
       "name": "PyTorch/Kineto",
       "unverified_assumptions": [
-        "Stormlog workload overhead and trace completeness are unmeasured.",
-        "No compatible accelerator trial was executed on the control host."
-      ]
+        "Full-window public-engine stop/export/teardown and paired overhead remain unqualified."
+      ],
+      "validation_context": {
+        "detail": "A bounded stack-free public-engine run retained useful CPU/GPU signals but missed its exact resource-row check; the full run failed stop/export/teardown. No capability field qualified.",
+        "evidence": [
+          "benchmarks/native_probes/decision_defer_2026-10-04.md",
+          "benchmarks/native_probes/evidence/preflight-public-engine-stack-free-l4-525216-22.json",
+          "benchmarks/native_probes/evidence/preflight-public-engine-stack-free-full-l4-525237-25.json"
+        ],
+        "status": "PARTIAL_PREFLIGHTS"
+      }
     },
     {
       "claims": {
         "amd": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         }
@@ -369,177 +377,183 @@
       "id": "vllm-proton",
       "name": "vLLM Triton Proton",
       "unverified_assumptions": [
-        "Whether Proton already answers every intended Stormlog question is unmeasured.",
-        "No compatible accelerator trial was executed on the control host."
-      ]
+        "Full-window Proton attribution, completeness, and overhead remain unqualified."
+      ],
+      "validation_context": {
+        "detail": "A Proton smoke retained a teardown error. No full-workload Proton preflight or capability field qualified.",
+        "evidence": [
+          "benchmarks/native_probes/decision_defer_2026-10-04.md"
+        ],
+        "status": "FAILED_SMOKE"
+      }
     },
     {
       "claims": {
         "amd": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         }
@@ -561,177 +575,184 @@
       "id": "direct-cupti",
       "name": "Direct CUPTI Activity",
       "unverified_assumptions": [
-        "Stormlog fidelity, overhead, loss behavior, and coexistence are unmeasured.",
-        "No compatible accelerator trial was executed on the control host."
-      ]
+        "Request/phase attribution, paired memory effect, pinned host memory, collector-buffer memory, and coexistence remain unqualified."
+      ],
+      "validation_context": {
+        "detail": "One full direct-CUPTI capacity preflight passed with STOP acknowledgment and zero reported drops; it did not qualify request/phase attribution, total memory, or a paired comparison.",
+        "evidence": [
+          "benchmarks/native_probes/decision_defer_2026-10-04.md",
+          "benchmarks/native_probes/evidence/preflight-vllm-capacity-4g-stop300-l4-524654-08.json"
+        ],
+        "status": "PARTIAL_PREFLIGHTS"
+      }
     },
     {
       "claims": {
         "amd": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         }
@@ -759,177 +780,183 @@
       "id": "ebpf-semantic",
       "name": "USDT/uprobe/eBPF semantic probes",
       "unverified_assumptions": [
-        "ProfInfer's llama.cpp probes have not been reproduced on vLLM.",
-        "No compatible accelerator trial was executed on the control host."
-      ]
+        "Stormlog host probe fidelity, privileges, packaging, and overhead remain unmeasured."
+      ],
+      "validation_context": {
+        "detail": "No Stormlog host USDT/uprobe/eBPF candidate trial was run.",
+        "evidence": [
+          "benchmarks/native_probes/decision_defer_2026-10-04.md"
+        ],
+        "status": "NOT_RUN"
+      }
     },
     {
       "claims": {
         "amd": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         }
@@ -951,177 +978,183 @@
       "id": "cupti-ebpf-hybrid",
       "name": "CUPTI to USDT/eBPF hybrid",
       "unverified_assumptions": [
-        "Stormlog has not reproduced the published overhead or transport advantage.",
-        "No compatible accelerator trial was executed on the control host."
-      ]
+        "Stormlog correlation, two-domain loss visibility, privileges, packaging, and overhead remain unmeasured."
+      ],
+      "validation_context": {
+        "detail": "No Stormlog CUPTI/eBPF hybrid candidate trial was run.",
+        "evidence": [
+          "benchmarks/native_probes/decision_defer_2026-10-04.md"
+        ],
+        "status": "NOT_RUN"
+      }
     },
     {
       "claims": {
         "amd": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was PAPER_RESULT_NOT_REPRODUCED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         }
@@ -1143,178 +1176,183 @@
       "id": "neutrino",
       "name": "Neutrino programmable GPU probes",
       "unverified_assumptions": [
-        "No named Stormlog incident currently proves instruction-level evidence is required.",
-        "Published overhead varies by probe and is not a Stormlog result.",
-        "No compatible accelerator trial was executed on the control host."
-      ]
+        "No named Stormlog incident establishes a need for instruction-level evidence; workload behavior remains unmeasured."
+      ],
+      "validation_context": {
+        "detail": "No Stormlog Neutrino candidate trial was run.",
+        "evidence": [
+          "benchmarks/native_probes/decision_defer_2026-10-04.md"
+        ],
+        "status": "NOT_RUN"
+      }
     },
     {
       "claims": {
         "amd": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNSUPPORTED; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         }
@@ -1336,177 +1374,183 @@
       "id": "rocprofiler",
       "name": "ROCProfiler SDK and rocprofv3",
       "unverified_assumptions": [
-        "No supported AMD hardware is available in the current environment.",
-        "No compatible accelerator trial was executed on the control host."
-      ]
+        "No AMD hardware trial or Stormlog ROCProfiler qualification has been completed."
+      ],
+      "validation_context": {
+        "detail": "No compatible AMD trial was run. ROCProfiler remains a separate unqualified lane under #235.",
+        "evidence": [
+          "benchmarks/native_probes/decision_defer_2026-10-04.md"
+        ],
+        "status": "NOT_RUN_AMD_HARDWARE_UNAVAILABLE"
+      }
     },
     {
       "claims": {
         "amd": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was VERSION_DEPENDENT; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was INFERENCE; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "UNTESTED - COMPATIBLE HARDWARE UNAVAILABLE. Source-backed status was UNKNOWN; no Stormlog trial ran.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was UNKNOWN. See candidate validation_context.",
           "evidence": [
-            "benchmarks/native_probes/evidence/control-macos-arm64/environment.json"
+            "benchmarks/native_probes/decision_defer_2026-10-04.md"
           ],
           "status": "UNKNOWN"
         }
@@ -1528,12 +1572,20 @@
       "id": "no-native-collector",
       "name": "No new native collector",
       "unverified_assumptions": [
-        "The intended Stormlog debugging questions may already be answered adequately by supported public imports.",
-        "No compatible accelerator trial was executed on the control host."
-      ]
+        "No paired comparison establishes that existing telemetry and imported traces answer all attribution needs."
+      ],
+      "validation_context": {
+        "detail": "A full profiler-off L4 preflight passed. It does not qualify imported-trace attribution or establish a comparative winner.",
+        "evidence": [
+          "benchmarks/native_probes/decision_defer_2026-10-04.md",
+          "benchmarks/native_probes/evidence/preflight-off-full-shutdown-l4-525221-23.json"
+        ],
+        "status": "PARTIAL_PREFLIGHT"
+      }
     }
   ],
   "matrix_kind": "stormlog_validated",
-  "reviewed_on": "2026-09-23",
+  "qualification_rule": "UNKNOWN means no qualifying Stormlog result for that capability field; it does not mean unsupported or that no preflight was attempted. Candidate-level preflights do not automatically promote field-level claims.",
+  "reviewed_on": "2026-10-04",
   "schema_version": 1
 }
