@@ -19,7 +19,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -863,6 +863,19 @@ def test_a_record_json_cannot_serialize_is_an_error_and_takes_no_number(
     writer = EpochWriter(tmp_path, "engine")
     for value in (object(), circular, deep):
         writer.emit("alias", {"internal": value})  # never raises
+    writer.emit("alias", {"internal": "x"})
+    writer.close()
+
+    records = _epoch_records(writer.directory)
+    assert [(r["kind"], r["seq"]) for r in records] == [("alias", 0), ("goodbye", 1)]
+    status = json.loads((writer.directory / "status.json").read_text())
+    assert (status["errors"], status["dropped"]) == (3, {})
+
+
+def test_fields_that_are_not_one_object_are_an_error(tmp_path: Path) -> None:
+    writer = EpochWriter(tmp_path, "engine")
+    for fields in (["a", "list"], "text", None):
+        writer.emit("alias", cast(Any, fields))  # never a malformed line
     writer.emit("alias", {"internal": "x"})
     writer.close()
 

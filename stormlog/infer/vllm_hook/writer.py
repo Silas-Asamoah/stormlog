@@ -203,13 +203,15 @@ class EpochWriter:
                 self._counters.dropped[kind] += 1
             return refused
 
-    def _body(self, fields: dict[str, Any]) -> str | None:
+    def _body(self, fields: object) -> str | None:
         """The fields as one JSON object, or None and an error counted."""
-        try:
-            return _dumps(fields)
-        except (TypeError, ValueError, RecursionError):
-            self.count_error()
-            return None
+        if isinstance(fields, dict):  # _join splices objects only
+            try:
+                return _dumps(fields)
+            except (TypeError, ValueError, RecursionError):
+                pass
+        self.count_error()
+        return None
 
     def _write(self, kind: str, body: str) -> None:
         with self._condition:
