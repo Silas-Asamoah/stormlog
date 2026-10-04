@@ -186,6 +186,8 @@ class GenerationWriter:
         self._done = False
         # Adopted files: their source, their name here, and what was charged.
         self._adopted: list[tuple[Path, Path, int]] = []
+        # Bytes linked from the generation before, part of the bundle's total.
+        self._linked = 0
 
     @property
     def incident_id(self) -> str:
@@ -242,11 +244,18 @@ class GenerationWriter:
                 self._adopted[index] = (source, target, charged + grown)
 
     def link_previous(self, relpath: str) -> None:
-        """Hard-link a file of the current generation into this one, uncharged."""
+        """Hard-link a file of the current generation into this one.
+
+        The link is not charged again, but it counts toward
+        ``max_incident_bytes``, which bounds the whole bundle: what this
+        generation may still write shrinks by the linked file's size.
+        """
         current = self.store.manifest(self.incident_id)
         if current is None:
             raise FileNotFoundError(f"{self.incident_id} has no published generation")
         source = self.bundle / current.current / relpath
+        self._linked += source.stat().st_size
+        self.allowance.cap(self.store.limits.max_incident_bytes - self._linked)
         target = self._target(relpath)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.link(source, target)
