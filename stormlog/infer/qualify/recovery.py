@@ -781,14 +781,16 @@ def next_episode(
     thresholds: Thresholds = Thresholds(),
 ) -> str:
     """Whether the next episode may start: once the previous one's recovery
-    has held, and no sooner than 60 s after its action ended; a timeout 150 s
-    after it skips the run's remaining episodes."""
+    has held, and no sooner than 60 s after its action ended. Recovery that
+    holds only after 150 s, or not by then, is a timeout, which skips the
+    run's remaining episodes, whenever the harness asks."""
+    deadline = action_end_ns + thresholds.recovery_timeout_ns
+    if recovery_held_at_ns is not None and recovery_held_at_ns > deadline:
+        return TIMEOUT
     earliest = action_end_ns + thresholds.min_recovery_ns
     if recovery_held_at_ns is not None and now_ns >= max(earliest, recovery_held_at_ns):
         return START
-    if now_ns >= action_end_ns + thresholds.recovery_timeout_ns:
-        return TIMEOUT
-    return WAIT
+    return TIMEOUT if now_ns >= deadline else WAIT
 
 
 __all__ = [

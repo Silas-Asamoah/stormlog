@@ -205,6 +205,10 @@ def test_the_priming_check_needs_a_warm_cache() -> None:
         (170, 165, WAIT),  # 60 s passed, but recovery holds only at 170 s
         (None, 249, WAIT),
         (None, 250, TIMEOUT),  # 150 s after the action
+        # Recovery that held only after the timeout is a timeout, whenever
+        # the harness asks.
+        (255, 250, TIMEOUT),
+        (255, 256, TIMEOUT),
     ],
 )
 def test_the_next_episode_waits_for_recovery_within_its_limits(
