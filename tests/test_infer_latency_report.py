@@ -268,5 +268,12 @@ def test_a_cancelled_request_keeps_how_long_it_ran() -> None:
     assert cancelled["elapsed_ms"] == {"min": 700.0, "p50": 700.0, "max": 700.0}
 
 
+def test_the_rule_states_what_the_intervals_assume() -> None:
+    rule = latency_summary([_streamed(0)])["rule"]
+    assert (rule["confidence"], rule["margin"], rule["tails"]) == (0.95, 5, "symmetric")
+    assert "independent" in rule["assumptions"]
+    assert "queueing" in rule["assumptions"]
+
+
 def test_a_case_where_everything_succeeded_has_no_unsuccessful_entries() -> None:
     assert latency_summary([_streamed(0), _streamed(1)])["unsuccessful"] == {}

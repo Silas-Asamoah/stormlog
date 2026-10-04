@@ -114,7 +114,10 @@ Each case's `arrivals` block in the report counts what was offered, sent,
 completed, dropped and held. It also gives failures by status, peak
 in-flight, the offered rate and dispatch-lag percentiles. The offered rate is
 measured from the arrivals actually scheduled, so a Poisson case shows the
-rate it drew rather than `--rate`. It is null for a closed loop, and for a
+rate it drew rather than `--rate`: the gaps between the first and last
+intended arrivals, `(N − 1)` over that span. It is not the rate throughput
+divides by; see the realized offered rate in
+[Inference SLOs and goodput](inference_slo.md). It is null for a closed loop, and for a
 case whose arrivals all came at one instant, such as a single request or a
 single burst. When requests were held, latency measured from the send leaves
 out the time they waited.
@@ -389,7 +392,16 @@ Before `analysis_version` 2, throughput divided by
 `throughput.duration_seconds`: the span of the case's **successful**
 requests. That span shrank when the last requests failed or timed out, which
 flattered a failing run. The old key is gone, so a consumer that reads it
-fails rather than misreading the new figures.
+fails rather than misreading the new figures. The rate keys kept their names
+and changed their meaning, so a consumer must check `analysis_version` before
+reading any rate:
+
+| Version 1 | Version 2 | How to tell |
+| --- | --- | --- |
+| `throughput.duration_seconds`: first successful start to last successful end | `throughput.interval_seconds`, with `interval_kind` (`scheduled_window`, `measured_span`, `request_span`) and `numerator_cohort` | `duration_seconds` is absent in version 2 |
+| `requests_per_second`, `output_tokens_per_second`, `total_tokens_per_second` over `duration_seconds` | The same keys over `interval_seconds` | `analysis_version` is 2 |
+| A rate over an empty span was `0.0` | `null`, and `null` for an open loop with no known endpoint or a phase cut short (`intervals.rate_reason`) | `analysis_version` is 2 |
+| No populations | `population` and `intervals` blocks per case | The blocks are present |
 
 `infer analyze` exits `5` when the artifact, a `--server-telemetry` file, a
 `--vllm-spans` file or the `--slo-file` policy is missing, unparsable, or invalid, which includes an

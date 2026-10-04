@@ -43,6 +43,11 @@ Estimand = Literal["successful", "failure_penalized"]
 
 DEFAULT_CONFIDENCE = 0.95
 DEFAULT_MARGIN = 5
+ASSUMPTIONS = (
+    "requests are independent and identically distributed, with continuous "
+    "latencies; the dependence queueing creates between requests is not "
+    "covered, and sufficiency is no precision in milliseconds"
+)
 # Beyond this the minimum is searched in steps, then refined.
 _SEARCH_LIMIT = 10_000_000
 
@@ -66,6 +71,7 @@ class SufficiencyRule:
             "confidence": self.confidence,
             "margin": self.margin,
             "tails": self.tails,
+            "assumptions": ASSUMPTIONS,
         }
 
 

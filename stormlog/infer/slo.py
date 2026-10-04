@@ -482,8 +482,10 @@ class SloEvaluation:
     ``attainment_lower`` counts unknown outcomes as missed and
     ``attainment_upper`` as met, so missing evidence widens the bounds and
     never moves a single figure. Goodput is SLO goodput at the offered load:
-    good requests per second of the case's rate interval, as vLLM's benchmark
-    computes it, not the highest rate that meets a target. An unmeasurable
+    good requests per second of the case's rate interval, judged by vLLM's
+    per-request rule, not the highest rate that meets a target. For an open
+    loop the interval is the arrival window without the drain, where vLLM's
+    benchmark divides by its whole duration. An unmeasurable
     evaluation (a criterion no successful request could be judged on, or one
     that is aggregate-only) has no attainment or goodput, never zero.
     ``cohort_valid`` and ``cohort_issues`` repeat the case's cohort checks

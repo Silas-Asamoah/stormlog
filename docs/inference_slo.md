@@ -282,7 +282,12 @@ endpoint_undeclared`. Its attainment is still judged. Dividing by
 requests finished.
 
 The intervals also give the configured rate and the realized offered rate
-(scheduled arrivals per second of the scheduled window).
+(scheduled arrivals per second of the scheduled window). The `arrivals`
+block's `offered_rate_per_second` is another figure: the gaps between the
+first and last intended arrivals, `(N − 1)` over that span. The scheduled
+window ends one slot after the last arrival, so for a short schedule the two
+differ: 8 Poisson arrivals at 10/s can show 19.9/s in one and 15.0/s in the
+other. Rates divide by the realized one's window.
 
 ### Segments
 
@@ -315,7 +320,12 @@ Missing evidence widens the bounds instead of moving a single figure. A lost
 span therefore cannot look like an SLO violation, and cannot hide one either.
 
 This is **SLO goodput at the offered load**: good requests per second at one
-offered load, as vLLM's benchmark computes it. It is not DistServe's goodput,
+offered load. A request is good by vLLM's benchmark rule: inclusive limits,
+its TPOT formula, and one output token counting as passing. The denominator
+differs: it is the case's rate interval, which for an open loop is the
+arrival window without the drain, where vLLM's benchmark divides by its whole
+duration, drain included. A 90 s window with a 2 s drain gives a goodput
+about 2% above vLLM's figure for the same run. It is not DistServe's goodput,
 which is the highest request rate that still meets an attainment target, and
 one run does not establish that capacity.
 
@@ -353,10 +363,16 @@ rank. That needs at least:
 `n_min_exists` is the smallest n for which any interval exists; it matches
 Le Boudec's own tables. `sufficient` certifies that statement and nothing
 else. It is not a precision in milliseconds, and it assumes independent
-requests, which queueing does not give. Every estimate reports:
+requests, which queueing does not give; the `latency` block's `rule` states
+these `assumptions` next to the confidence and margin. Every estimate
+reports its `n`, `sufficient`, `n_min` and `n_min_exists`. One whose
+interval exists also reports:
 - the ranks;
 - the coverage the ranks achieve;
 - the interval's width in milliseconds.
+
+An estimate below `n_min` has `interval: null`; `n_min` says how many
+requests it needs.
 
 `quantile_minimum_n(p, confidence, margin=..., tails=...)` computes any of
 these minimums.

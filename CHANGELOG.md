@@ -39,7 +39,8 @@ the flaky benchmark memory gates
   - for each quantile, its value over the successful requests and with
     failures ranked worst, its sample count, whether the case has enough
     requests, and its order-statistic confidence interval. The second has
-    no value, with a reason, when a successful request lacks the metric;
+    no value, with a reason, when a successful request lacks the metric. The
+    block's `rule` states what the intervals assume;
   - for each status other than `ok`, the count and the elapsed time observed
     before the request ended (for a cancelled request, its send to its
     cancellation), kept apart from the latency quantiles;
@@ -190,7 +191,9 @@ the flaky benchmark memory gates
     the drain end. It used to be the span of the case's successful requests,
     which shrank when the last requests failed.
   - `throughput.duration_seconds` is replaced by `interval_seconds`,
-    `interval_kind` and `numerator_cohort`.
+    `interval_kind` and `numerator_cohort`. The rate keys keep their names
+    with the new denominator, so a consumer must check `analysis_version`
+    before reading any rate; `docs/inference.md` has a migration table.
   - A rate over an empty interval is `null`, not `0.0`, and so is every rate
     of an open loop with no known endpoint, such as a replay without
     `--duration` (`rate_reason: endpoint_undeclared`).
