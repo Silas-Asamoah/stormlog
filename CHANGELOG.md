@@ -95,6 +95,16 @@ the flaky benchmark memory gates
   comparison: its report, labels, comparable fields, and protocol failures
   (unfinished session, identity change, incomplete probe, invalid cohort,
   unacknowledged cold-cache reset). (#213)
+- `stormlog.infer.experiment.run_plan`: the experiment runner. Each run
+  starts the arm's server in a process group of its own, checks it holds
+  only vLLM's processes, describes it before and after, runs the treatments
+  and workload steps, stops the whole group and verifies nothing is left
+  (through `/proc` on Linux, so a process that left with `setsid` is found),
+  then checks artifacts and labels and writes `SHA256SUMS`. Each run ends
+  `completed`, `outcome_failure` (kept as data) or `protocol_failure` (set
+  aside, retryable), recorded in `index.jsonl`; resumes refuse a changed
+  plan or pre-registration, and secrets reach commands without being
+  written down. (#213)
 - `stormlog.infer.experiment_plan`: experiment plans
   (`stormlog.infer.experiment_plan` v1) with arms, workload steps (shared with
   `same_as:<arm>`), treatments, block preludes, a seeded `random`, `williams`
