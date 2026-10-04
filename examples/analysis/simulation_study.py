@@ -23,11 +23,21 @@ Carlo standard error of a 2.5% rate is about 0.11 points):
    Only cells where the gate can pass at all are kept: 6 runs need 6 of 6
    at q = 0.5, and no 10 runs can show q = 0.9.
 5. **The skew screen:** under normal noise it must flag 0.05 +- 0.005.
+6. **A fraction's descriptive interval** (failure fraction, 1% budget, a
+   true difference equal to it): the paired t with its standard error
+   floored at the pooled binomial one must be false-safe at most 0.0283
+   when failures are independent, at 6-10 blocks of 300 requests and 8 of
+   1000. Its gate is the run-level claim, exact under independent runs
+   (item 4's arithmetic), so each cell also reports how often the claim
+   passed and the true share of runs within the budget.
 
-Two scenarios are outside what the rules claim, and are measured as limits:
-paired t under strongly skewed noise (standardized lognormal, sigma 0.8),
-and pooled requests (``--attainment-model bernoulli``) under correlation
-within a run.
+Three scenarios are outside what the rules claim, and are measured as
+limits: paired t under strongly skewed noise (standardized lognormal, sigma
+0.8), pooled requests (``--attainment-model bernoulli``) under correlation
+within a run, and a fraction's intervals under failures correlated within
+a run (beta-binomial, intra-run correlation 0.02 and 0.05): there the
+floored t and the pooled requests' bound are false-safe far above 2.5%,
+which is why neither gates.
 
 The rules are restated here vectorized, for speed; ``check_against_module``
 runs a sample of replications through ``compare_values`` and requires the
@@ -402,6 +412,119 @@ def _agrees_independent(rng: np.random.Generator, n: int) -> int:
 # ----------------------------------------------------------------- report
 
 
+# --------------------------------------------------------------- fractions
+
+FRACTION_BUDGET = 0.01
+
+
+def failure_counts(
+    rng: np.random.Generator, shape: tuple[int, int], m: int, p: float, rho: float
+) -> np.ndarray:
+    """Failures per run: binomial, or beta-binomial with correlation rho."""
+    if p == 0:
+        return np.zeros(shape, dtype=int)
+    if rho == 0:
+        return rng.binomial(m, p, shape)
+    a, b = p * (1 - rho) / rho, (1 - p) * (1 - rho) / rho
+    return rng.binomial(m, rng.beta(a, b, shape))
+
+
+def _floored_upper(xb: np.ndarray, xc: np.ndarray, m: int) -> np.ndarray:
+    """The upper bound of the paired t on fractions, se floored at the
+    pooled binomial se with p = (x + 1) / (N + 2) per arm."""
+    n = xb.shape[1]
+    d = (xc - xb) / m
+    total = n * m
+    shares = [(x.sum(axis=1) + 1) / (total + 2) for x in (xb, xc)]
+    floor = np.sqrt(sum(p * (1 - p) / total for p in shares))
+    se = np.maximum(d.std(axis=1, ddof=1) / math.sqrt(n), floor)
+    return np.asarray(d.mean(axis=1) + stats.t.ppf(0.975, n - 1) * se)
+
+
+def _run_claim(xb: np.ndarray, xc: np.ndarray, m: int) -> np.ndarray:
+    """k of n runs within the budget of their block; CP lower bound >= 0.5."""
+    n = xb.shape[1]
+    k = ((xc - xb) / m <= FRACTION_BUDGET).sum(axis=1)
+    lower = np.where(k == 0, 0.0, stats.beta.ppf(0.025, np.maximum(k, 1), n - k + 1))
+    return np.asarray(lower >= 0.5)
+
+
+def fraction_cell(
+    rng: np.random.Generator,
+    n: int,
+    m: int,
+    rho: float,
+    reps: int,
+    baseline: float = 0.0,
+) -> dict[str, Any]:
+    """At a true difference equal to the budget: how often each method
+    passes, and the true share of runs within the budget."""
+    xb = failure_counts(rng, (reps, n), m, baseline, rho)
+    xc = failure_counts(rng, (reps, n), m, baseline + FRACTION_BUDGET, rho)
+    total = n * m
+    upper_c = stats.beta.ppf(0.975, xc.sum(axis=1) + 1, total - xc.sum(axis=1))
+    lower_b = np.where(
+        xb.sum(axis=1) == 0,
+        0.0,
+        stats.beta.ppf(
+            0.025, np.maximum(xb.sum(axis=1), 1), total - xb.sum(axis=1) + 1
+        ),
+    )
+    return {
+        "blocks": n,
+        "requests_per_run": m,
+        "rho": rho,
+        "baseline": baseline,
+        "floored_t_false_safe": float(
+            np.mean(_floored_upper(xb, xc, m) <= FRACTION_BUDGET)
+        ),
+        "pooled_requests_false_safe": float(
+            np.mean(upper_c - lower_b <= FRACTION_BUDGET)
+        ),
+        "run_claim_passes": float(np.mean(_run_claim(xb, xc, m))),
+        "runs_within_budget": float(np.mean((xc - xb) / m <= FRACTION_BUDGET)),
+    }
+
+
+FRACTION_INDEPENDENT = ((6, 300, 0.0), (8, 300, 0.0), (10, 300, 0.0), (8, 1000, 0.0))
+FRACTION_CLUSTERED = ((8, 300), (8, 1000), (10, 300))
+
+
+def check_fractions_against_module(rng: np.random.Generator, samples: int) -> int:
+    """The module's run-level gate and floored interval against the rules here."""
+    from stormlog.infer.comparison_stats import GateRule, compare_values
+
+    disagreements = 0
+    for n in (5, 6, 8, 10):
+        for _ in range(samples):
+            xb = failure_counts(rng, (1, n), 300, 0.002, 0.05)
+            xc = failure_counts(rng, (1, n), 300, 0.008, 0.05)
+            blocks = [f"b{i}" for i in range(n)]
+            result = compare_values(
+                "failure_fraction",
+                list(xb[0] / 300),
+                list(xc[0] / 300),
+                direction="lower_is_better",
+                scale="difference",
+                unit="fraction",
+                blocks=(blocks, blocks),
+                trials=([300] * n, [300] * n),
+                gate=GateRule("non-inferiority", FRACTION_BUDGET, "fraction"),
+            )
+            expected = (
+                "not_evaluable"
+                if 0.025 < 0.5**n
+                else ("pass" if _run_claim(xb, xc, 300)[0] else "fail")
+            )
+            assert result.gate is not None and result.worst is not None
+            upper = float(_floored_upper(xb, xc, 300)[0])
+            disagreements += int(
+                result.gate.status != expected
+                or not math.isclose(result.worst.upper or 0.0, upper, rel_tol=1e-9)
+            )
+    return disagreements
+
+
 def run(reps: int, seed: int = SEED, module_samples: int = 200) -> dict[str, Any]:
     rng = np.random.default_rng(seed)
     results: dict[str, Any] = {"seed": seed, "reps": reps}
@@ -457,6 +580,18 @@ def run(reps: int, seed: int = SEED, module_samples: int = 200) -> dict[str, Any
         for n in (3, 6, 8, 10, 20, 30)
     ]
     results["module_disagreements"] = check_against_module(rng, module_samples)
+    # Drawn after every other cell, so the cells above stay as published.
+    results["fraction_independent"] = [
+        fraction_cell(rng, n, m, rho, reps) for n, m, rho in FRACTION_INDEPENDENT
+    ] + [fraction_cell(rng, 8, 300, 0.0, reps, baseline=0.005)]
+    results["fraction_clustered_limit"] = [
+        fraction_cell(rng, n, m, rho, reps)
+        for rho in (0.02, 0.05)
+        for n, m in FRACTION_CLUSTERED
+    ]
+    results["fraction_module_disagreements"] = check_fractions_against_module(
+        rng, module_samples // 4
+    )
     results["verdict"] = verdict(results)
     return results
 
@@ -493,7 +628,12 @@ def verdict(results: dict[str, Any]) -> dict[str, bool]:
         "skew_screen": all(
             abs(row["rate"] - 0.05) <= 0.005 for row in results["skew_screen"]
         ),
-        "module_agrees": results["module_disagreements"] == 0,
+        "module_agrees": results["module_disagreements"] == 0
+        and results["fraction_module_disagreements"] == 0,
+        "fraction_floor_independent": all(
+            row["floored_t_false_safe"] <= CRITERION_FALSE_SAFE
+            for row in results["fraction_independent"]
+        ),
     }
 
 
