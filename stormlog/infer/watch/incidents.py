@@ -524,11 +524,16 @@ class IncidentManager:
                 held, detected, end_mono, requested_end=incident.post_end_mono
             ),
             deep_window=None,
-            # Deep capture arrives in a later step; health never captures.
+            # Deep capture arrives in a later step; health never captures,
+            # but a metric or signal trigger that joined a health incident
+            # makes it one that could.
             capture=capture_fields(
                 (
                     "health_only"
-                    if incident.trigger["kind"] == KIND_HEALTH
+                    if all(
+                        t["kind"] == KIND_HEALTH
+                        for t in (incident.trigger, *incident.joined)
+                    )
                     else "disabled"
                 ),
                 owner=self.identity.owner,

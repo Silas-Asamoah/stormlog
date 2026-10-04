@@ -507,6 +507,28 @@ def test_health_incidents_never_use_up_the_counting_budget(tmp_path: Path) -> No
     assert (harness.manager.recorded, harness.manager.recorded_counting) == (3, 1)
 
 
+def test_a_counting_trigger_joining_a_health_incident_makes_it_count(
+    tmp_path: Path,
+) -> None:
+    """A queue trigger firing within an exporter restart's post-window
+    joins that incident. Only the opening trigger made it count, so no
+    test could tell the joiner's vote from none, and it stayed health_only,
+    an incident deep capture would never take."""
+    harness = Harness(tmp_path)
+    harness.scrapes(0, 900)
+    harness.now = 100 * S
+    harness.manager.on_event("exporter_restart", "restarted", harness.now)
+    joined = harness.fire(120, trigger_id="queue", counts=True)
+    harness.tick(181)
+    (record,) = harness.of_type(INCIDENT)
+    assert record["incident_id"] == joined
+    assert record["trigger"]["kind"] == "health"
+    assert [t["trigger_id"] for t in record["joined_triggers"]] == ["queue"]
+    assert record["counts_toward_exit"] is True
+    assert record["capture"]["status"] == "disabled"
+    assert harness.manager.recorded_counting == 1
+
+
 def test_the_lanes_together_hold_the_totals_the_config_states(
     tmp_path: Path,
 ) -> None:
