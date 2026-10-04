@@ -173,6 +173,12 @@ def test_a_missing_file_is_an_input_error(tmp_path: Path) -> None:
         ),
         ({"export": []}, "export"),
         ({"server": []}, "server"),
+        # Finite but absurd: each crashed with exit 1 or broke retention.
+        ({"tick_seconds": 1e300}, "tick_seconds must be at most 3600"),
+        ({"scrape_timeout_seconds": 1e300}, "scrape_timeout_seconds must be at most"),
+        ({"history": {"seconds": 1e300}}, "history.seconds must be at most 604800"),
+        ({"incident": {"post_seconds": 1e290}}, "post_seconds must be at most"),
+        ({"store": {"max_age_hours": 1e300}}, "store.max_age_hours must be at most"),
     ],
 )
 def test_settings_the_watcher_cannot_use_are_usage_errors(
@@ -217,6 +223,7 @@ def test_settings_the_watcher_cannot_use_are_usage_errors(
         ("not an object", "must be an object"),
         (_trigger(window_seconds="30"), "window_seconds must be a number"),
         (_trigger(hold_seconds=float("inf")), "hold_seconds must be finite"),
+        (_trigger(hold_seconds=1e300), "hold_seconds must be > 0 and at most"),
         (_trigger(clear_seconds=0), "clear_seconds must be > 0"),
         (
             _trigger(gauge={"family": "f", "at_least": float("nan")}),

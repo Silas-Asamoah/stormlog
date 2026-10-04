@@ -84,7 +84,9 @@ once, without a sustain.
 Every key is optional except `server.base_url`, which the command line can
 give instead. An unknown key, a wrong type, a number that is not finite
 (JSON readers accept `NaN` and `Infinity`), a share outside (0, 1], a tick
-under 0.05 s, a server URL that is not http or https with a host, or
+under 0.05 s, a tick or scrape timeout over an hour, a history, incident
+window or trigger time over seven days, a `max_age_hours` over ten years,
+a server URL that is not http or https with a host, or
 contradictory settings (a hold shorter than its window, a window longer
 than the history, or `pre_seconds` plus `post_seconds` longer than the
 history, which the seal reads both windows from) are refused with exit 2,
