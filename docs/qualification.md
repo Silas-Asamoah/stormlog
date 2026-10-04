@@ -721,7 +721,8 @@ One run goes:
 
 The run is published atomically (see below), whatever ends it. An episode
 whose actuation raised (a stop that never took, a target gone) is published
-as `not_actuated` with the error. A run that fails part way (the victim
+as `not_actuated` with the error, its dose and, for pulses, every pulse that
+completed before it. A run that fails part way (the victim
 exiting before it measures, say) or is interrupted publishes every episode it
 attempted, the rest as skipped (`run_ended`, or `recovery_timeout` after a
 recovery timeout), with the reason as the run record's protocol failure. An
