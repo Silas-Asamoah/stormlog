@@ -11,21 +11,35 @@ never a zero.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import scrape_window as _window
 from .report_stats import percentile
+from .scrape_window import (
+    REASON_NON_FINITE,
+    REASON_SCRAPE_FAILED,
+    REASON_SCRAPE_MISSING,
+    REASON_SERIES_MISSING,
+    STATE_RESOLVED,
+    STATE_UNRESOLVED,
+    SeriesKey,
+    counter_pair_delta,
+    engine_index,
+    exporter_identity,
+    histogram_pair_delta,
+    sample_stats,
+    series_by_extra,
+    window_identity_reasons,
+)
 from .vllm_metrics import (
     CATALOG,
-    ENGINE_LABELS,
     CompactScrape,
     Discovery,
     HistogramValue,
     created_family_for,
-    encode_number,
     family_group,
     resolve_name,
 )
@@ -46,19 +60,15 @@ NOTE = (
 )
 RESIDENCY_NOTE = "wall-clock residency in a scheduler phase, not GPU time"
 
-STATE_RESOLVED = "resolved"
-STATE_UNRESOLVED = "unresolved"
-REASON_SCRAPE_MISSING = "scrape_missing"
-REASON_SCRAPE_FAILED = "scrape_failed"
-REASON_ENGINE_RESTART = "engine_restart"
-REASON_ENGINES_CHANGED = "engine_set_changed"
-REASON_IDENTITY_UNKNOWN = "exporter_identity_unknown"
-REASON_COUNTER_RESET = "counter_reset"
-REASON_COUNTER_RECREATED = "counter_recreated"
-REASON_SERIES_MISSING = "series_missing"
-REASON_BOUNDARIES_CHANGED = "bucket_boundaries_changed"
+# The window reasons are shared with scrape windows; the report's readers
+# have always imported them from here.
+REASON_BOUNDARIES_CHANGED = _window.REASON_BOUNDARIES_CHANGED
+REASON_COUNTER_RECREATED = _window.REASON_COUNTER_RECREATED
+REASON_COUNTER_RESET = _window.REASON_COUNTER_RESET
+REASON_ENGINE_RESTART = _window.REASON_ENGINE_RESTART
+REASON_ENGINES_CHANGED = _window.REASON_ENGINES_CHANGED
+REASON_IDENTITY_UNKNOWN = _window.REASON_IDENTITY_UNKNOWN
 REASON_NOT_ENABLED = "not_enabled"
-REASON_NON_FINITE = "non_finite_sample"
 
 SPAN_LATENCY_ATTRIBUTES: tuple[tuple[str, str], ...] = (
     ("time_in_queue", "gen_ai.latency.time_in_queue"),
@@ -68,8 +78,6 @@ SPAN_LATENCY_ATTRIBUTES: tuple[tuple[str, str], ...] = (
     ("time_in_model_inference", "gen_ai.latency.time_in_model_inference"),
     ("e2e", "gen_ai.latency.e2e"),
 )
-
-SeriesKey = tuple[str, tuple[tuple[str, str], ...]]
 
 
 # ----------------------------------------------------------------- entry points
@@ -291,8 +299,8 @@ def _fill_window(
         block["state"] = STATE_UNRESOLVED
     # Only the start scrape's exporter feeds the gauge summaries; a scrape
     # another exporter answered is counted and left out, never mixed in.
-    identity = _identity(start)
-    own = [s for s in inside if _identity(s) == identity]
+    identity = exporter_identity(start)
+    own = [s for s in inside if exporter_identity(s) == identity]
     seconds = (end.observed_at_ns - start.observed_at_ns) / 1e9
     block["window"] = {
         "start_observed_at_ns": start.observed_at_ns,
@@ -324,65 +332,16 @@ def _inside(
     ]
 
 
-Identity = tuple[int, tuple[str, ...]]
-
-
-def _identity(scrape: VllmScrapeRecord) -> Identity | None:
-    """Which exporter answered: its process start and its engine set."""
-    found = scrape.discovery
-    if found is None or found.process_start_ns is None:
-        return None
-    return found.process_start_ns, tuple(sorted(found.engines))
-
-
 def _epoch_reasons(
     start: VllmScrapeRecord, end: VllmScrapeRecord, inside: list[VllmScrapeRecord]
 ) -> list[str]:
     """Why the window is not one exporter's, checked on every contributing
     scrape and not only the two boundaries, so an exporter that answered
-    only an interval scrape (a load balancer, an A/B/A sequence) is caught.
-    An exporter with no process start cannot be told apart from a restarted
-    one, so it is unknown rather than assumed."""
-    identity = _identity(start)
-    if identity is None:
-        return [REASON_IDENTITY_UNKNOWN]
-    found: set[str] = set()
-    for other in [end, *inside]:
-        found |= _identity_differences(identity, _identity(other))
-    order = (REASON_ENGINE_RESTART, REASON_ENGINES_CHANGED, REASON_IDENTITY_UNKNOWN)
-    return [reason for reason in order if reason in found]
-
-
-def _identity_differences(identity: Identity, other: Identity | None) -> set[str]:
-    """How another scrape's exporter differs from the start scrape's."""
-    if other is None:
-        return {REASON_IDENTITY_UNKNOWN}
-    reasons = set()
-    if other[0] != identity[0]:
-        reasons.add(REASON_ENGINE_RESTART)
-    if other[1] != identity[1]:
-        reasons.add(REASON_ENGINES_CHANGED)
-    return reasons
+    only an interval scrape (a load balancer, an A/B/A sequence) is caught."""
+    return window_identity_reasons([start, end, *inside])
 
 
 # ----------------------------------------------------------------- per engine
-def _index(
-    scrape: CompactScrape, engine: str
-) -> dict[SeriesKey, float | HistogramValue]:
-    """Series of one engine keyed by (family, extra labels beyond the engine's)."""
-    indexed: dict[SeriesKey, float | HistogramValue] = {}
-    for name, by_set in scrape.values.items():
-        for set_id, value in by_set.items():
-            labels = scrape.labels(set_id)
-            if labels.get("engine") != engine:
-                continue
-            extra = tuple(
-                sorted((k, v) for k, v in labels.items() if k not in ENGINE_LABELS)
-            )
-            indexed[(name, extra)] = value
-    return indexed
-
-
 def _engine_block(
     engine: str,
     start: CompactScrape,
@@ -391,7 +350,7 @@ def _engine_block(
     seconds: float,
     epoch_reason: str | None,
 ) -> dict[str, Any]:
-    before, after = _index(start, engine), _index(end, engine)
+    before, after = engine_index(start, engine), engine_index(end, engine)
     kinds = {**start.families, **end.families}
     blocks: dict[str, dict[str, Any]] = {"counter": {}, "histogram": {}, "gauge": {}}
     for name in sorted({key[0] for key in before} | {key[0] for key in after}):
@@ -421,14 +380,6 @@ def _engine_block(
     }
 
 
-def _by_extra(
-    name: str, indexed: dict[SeriesKey, float | HistogramValue]
-) -> dict[tuple[tuple[str, str], ...], float | HistogramValue]:
-    return {
-        extra: value for (family, extra), value in indexed.items() if family == name
-    }
-
-
 def _label_key(extra: tuple[tuple[str, str], ...]) -> str:
     return ",".join(f"{k}={v}" for k, v in extra) or "_"
 
@@ -448,11 +399,13 @@ def _counter_field(
         "deprecated_alias_of": alias,
         "by_label": {},
     }
-    first, last = _by_extra(name, before), _by_extra(name, after)
+    first, last = series_by_extra(name, before), series_by_extra(name, after)
     recreated = _recreated(name, "counter", before, after)
     for extra in sorted(set(first) | set(last)):
         a, b = first.get(extra), last.get(extra)
-        result["by_label"][_label_key(extra)] = _delta(a, b, epoch_reason, recreated)
+        result["by_label"][_label_key(extra)] = counter_pair_delta(
+            a, b, epoch_reason, recreated
+        )
     values = result["by_label"].values()
     states = {item["state"] for item in values}
     result["state"] = STATE_RESOLVED if states == {STATE_RESOLVED} else STATE_UNRESOLVED
@@ -474,28 +427,7 @@ def _recreated(
     created_name = created_family_for(name, kind)
     if created_name is None:
         return False
-    return _by_extra(created_name, before) != _by_extra(created_name, after)
-
-
-def _delta(
-    a: float | HistogramValue | None,
-    b: float | HistogramValue | None,
-    epoch_reason: str | None,
-    recreated: bool,
-) -> dict[str, Any]:
-    if not isinstance(a, float) or not isinstance(b, float):
-        return {"state": REASON_SERIES_MISSING, "delta": None}
-    if not (math.isfinite(a) and math.isfinite(b)):
-        # Kept as the strict-JSON strings the record uses, never subtracted.
-        start, end = encode_number(a), encode_number(b)
-        return {"state": REASON_NON_FINITE, "delta": None, "start": start, "end": end}
-    if epoch_reason is not None:
-        return {"state": epoch_reason, "delta": None, "start": a, "end": b}
-    if recreated:
-        return {"state": REASON_COUNTER_RECREATED, "delta": None, "start": a, "end": b}
-    if b < a:
-        return {"state": REASON_COUNTER_RESET, "delta": None, "start": a, "end": b}
-    return {"state": STATE_RESOLVED, "delta": b - a, "start": a, "end": b}
+    return series_by_extra(created_name, before) != series_by_extra(created_name, after)
 
 
 def _histogram_field(
@@ -506,7 +438,7 @@ def _histogram_field(
     epoch_reason: str | None,
 ) -> dict[str, Any]:
     entry = CATALOG.get(resolve_name(name)[0])
-    first, last = _by_extra(name, before), _by_extra(name, after)
+    first, last = series_by_extra(name, before), series_by_extra(name, after)
     result: dict[str, Any] = {
         "native": name,
         "unit": entry.unit if entry else None,
@@ -519,7 +451,7 @@ def _histogram_field(
     by_label: dict[str, dict[str, Any]] = {}
     for extra in sorted(set(first) | set(last)):
         a, b = first.get(extra), last.get(extra)
-        by_label[_label_key(extra)] = _histogram_delta(
+        by_label[_label_key(extra)] = histogram_pair_delta(
             a if isinstance(a, HistogramValue) else None,
             b if isinstance(b, HistogramValue) else None,
             epoch_reason,
@@ -570,90 +502,6 @@ def _summed_buckets(items: list[dict[str, Any]]) -> list[list[Any]] | None:
     ]
 
 
-def _histogram_delta(
-    a: HistogramValue | None,
-    b: HistogramValue | None,
-    epoch_reason: str | None,
-    recreated: bool,
-) -> dict[str, Any]:
-    if a is None or b is None:
-        return {"state": REASON_SERIES_MISSING}
-    parts = _complete(a, b)
-    if parts is None:
-        # A _sum or _count the exposition lacked is not a zero to subtract.
-        return {"state": REASON_SERIES_MISSING, "missing": _missing_components(a, b)}
-    if not _finite_histograms(a, b, parts):
-        return {"state": REASON_NON_FINITE}
-    reason = _histogram_reason(a, b, epoch_reason, recreated)
-    if reason is not None:
-        return {"state": reason}
-    a_count, a_sum, b_count, b_sum = parts
-    count = b_count - a_count
-    total = b_sum - a_sum
-    return {
-        "state": STATE_RESOLVED,
-        "count": count,
-        "sum": total,
-        "mean": total / count if count else None,
-        "buckets": [
-            [le, after - before]
-            for (le, before), (_le, after) in zip(a.buckets, b.buckets)
-        ],
-    }
-
-
-def _histogram_reason(
-    a: HistogramValue, b: HistogramValue, epoch_reason: str | None, recreated: bool
-) -> str | None:
-    """Why a histogram window cannot be differenced, in the order checked for
-    counters: the epoch, the family's ``*_created`` stamp, then its shape and
-    monotonicity. Every cumulative part must be non-decreasing: the count,
-    the sum and each bucket."""
-    if epoch_reason is not None:
-        return epoch_reason
-    if recreated:
-        return REASON_COUNTER_RECREATED
-    if [le for le, _ in a.buckets] != [le for le, _ in b.buckets]:
-        return REASON_BOUNDARIES_CHANGED
-    backwards = _less(b.count, a.count) or _less(b.sum, a.sum)
-    if backwards or any(
-        after < before for (_, before), (_, after) in zip(a.buckets, b.buckets)
-    ):
-        return REASON_COUNTER_RESET
-    return None
-
-
-def _less(after: float | None, before: float | None) -> bool:
-    return after is not None and before is not None and after < before
-
-
-def _complete(
-    a: HistogramValue, b: HistogramValue
-) -> tuple[float, float, float, float] | None:
-    """Both histograms' count and sum, or None when any is missing."""
-    if a.count is None or a.sum is None or b.count is None or b.sum is None:
-        return None
-    return a.count, a.sum, b.count, b.sum
-
-
-def _finite_histograms(
-    a: HistogramValue, b: HistogramValue, parts: tuple[float, ...]
-) -> bool:
-    """Every count, sum and bucket of both is a finite number."""
-    counts = [count for _, count in (*a.buckets, *b.buckets)]
-    return all(math.isfinite(value) for value in (*parts, *counts))
-
-
-def _missing_components(a: HistogramValue, b: HistogramValue) -> list[str]:
-    parts = (
-        ("start_sum", a.sum),
-        ("start_count", a.count),
-        ("end_sum", b.sum),
-        ("end_count", b.count),
-    )
-    return [name for name, value in parts if value is None]
-
-
 def _gauge_field(
     name: str, alias: str | None, engine: str, inside: list[VllmScrapeRecord]
 ) -> dict[str, Any]:
@@ -668,32 +516,21 @@ def _gauge_field(
     for item in inside:
         if item.scrape is None:
             continue
-        for extra, value in _by_extra(name, _index(item.scrape, engine)).items():
+        for extra, value in series_by_extra(
+            name, engine_index(item.scrape, engine)
+        ).items():
             if isinstance(value, float):
                 series.setdefault(_label_key(extra), []).append(value)
                 last_labels[_label_key(extra)] = dict(extra)
     if not series:
         result["state"] = REASON_SERIES_MISSING
         return result
-    stats = {key: _stats(values) for key, values in series.items()}
+    stats = {key: sample_stats(values) for key, values in series.items()}
     tainted = any(item["non_finite"] for item in stats.values())
     result["state"] = REASON_NON_FINITE if tainted else STATE_RESOLVED
     result["stats"] = stats
     result["labels"] = last_labels
     return result
-
-
-def _stats(values: list[float]) -> dict[str, Any]:
-    """Over the finite samples; a NaN or an infinity is counted, not averaged."""
-    finite = [value for value in values if math.isfinite(value)]
-    return {
-        "min": min(finite) if finite else None,
-        "mean": sum(finite) / len(finite) if finite else None,
-        "max": max(finite) if finite else None,
-        "last": finite[-1] if finite else None,
-        "samples": len(values),
-        "non_finite": len(values) - len(finite),
-    }
 
 
 def _derived(

@@ -36,6 +36,7 @@ inference
 inference_correlation
 vllm_telemetry
 vllm_execution
+inference_diagnosis
 tui
 cookbook/index
 cookbook/always_on
