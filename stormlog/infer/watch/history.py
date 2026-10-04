@@ -51,6 +51,10 @@ class Stamped:
             raise ValueError("done_mono_ns precedes mono_ns")
 
 
+# An item as the ring holds it: its stamps and its compressed JSON.
+Held = tuple[Stamped, bytes]
+
+
 class BoundedRing:
     """Serialized items held for ``max_seconds`` and in at most ``max_bytes``.
 
@@ -105,12 +109,20 @@ class BoundedRing:
         self, start_mono_ns: int | None = None, end_mono_ns: int | None = None
     ) -> Iterator[tuple[Stamped, dict[str, Any]]]:
         """Held items whose ``mono_ns`` lies in ``[start, end]``, oldest first."""
-        for stamp, blob in list(self._items):
-            if start_mono_ns is not None and stamp.mono_ns < start_mono_ns:
-                continue
-            if end_mono_ns is not None and stamp.mono_ns > end_mono_ns:
-                continue
-            yield stamp, json.loads(zlib.decompress(blob))
+        for stamp, blob in self.compressed(start_mono_ns, end_mono_ns):
+            yield stamp, json.loads(expand(blob))
+
+    def compressed(
+        self, start_mono_ns: int | None = None, end_mono_ns: int | None = None
+    ) -> list[Held]:
+        """The same items as held: references to their compressed JSON, not
+        copies; :func:`expand` turns one back into its text."""
+        return [
+            (stamp, blob)
+            for stamp, blob in self._items
+            if (start_mono_ns is None or stamp.mono_ns >= start_mono_ns)
+            and (end_mono_ns is None or stamp.mono_ns <= end_mono_ns)
+        ]
 
     def _evict(self, cause: str) -> None:
         _stamp, blob = self._items.popleft()
@@ -120,6 +132,11 @@ class BoundedRing:
 
 def _charge(blob: bytes) -> int:
     return len(blob) + ITEM_OVERHEAD_BYTES
+
+
+def expand(blob: bytes) -> bytes:
+    """A held item's compact, key-sorted JSON, as the ring serialized it."""
+    return zlib.decompress(blob)
 
 
 class ScrapeHistory:
@@ -164,7 +181,9 @@ __all__ = [
     "EVICT_BYTES",
     "EVICT_OVERSIZED",
     "ITEM_OVERHEAD_BYTES",
+    "Held",
     "BoundedRing",
     "ScrapeHistory",
     "Stamped",
+    "expand",
 ]
