@@ -144,6 +144,35 @@ Descriptive, with their counts: for paired runs, the share of blocks in
 which the candidate is higher (ties count ½); for independent runs, Vargha
 and Delaney's A12 over every pair of runs.
 
+## The contract
+
+`tests/fixtures/infer/comparison_contract_v1.json` is the binding contract
+for callers that gate on these results, such as release qualification. Each
+case gives the inputs and the effect, interval and gate outcome they must
+give. The cases cover:
+- effect units and signs in both directions;
+- a 40% latency regression against a 5% non-inferiority budget;
+- the gate at its budget boundary;
+- attainment budgets in fraction units;
+- the zero rules and their fallback in two units;
+- missing-outcome bounds;
+- pre-registered block counts;
+- degenerate metrics;
+- the independent design's df.
+
+The expected numbers come from the formulas themselves, in
+`examples/analysis/comparison_contract.py`, not from this module, and a
+test checks the fixture is what that script writes.
+
+No float in the fixture is exact: numpy and scipy differ in a float's last
+bits between platforms. The fixture states its tolerance (`tolerance`,
+relative 1e-9 and absolute 1e-12) and the rule that applies it
+(`tolerance_rule`): a float, given or expected, matches when
+|actual − expected| ≤ max(relative × |expected|, absolute), and anything
+else, such as a gate's status or a missing value, matches exactly. Its own
+tests, and the check that it is what the script writes, apply that rule as
+written; an implementation checked against it should too.
+
 ## Other tools
 
 | Function | Gives |

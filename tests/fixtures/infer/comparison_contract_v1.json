@@ -1,0 +1,1091 @@
+{
+ "format": "stormlog.infer.comparison_contract",
+ "version": 1,
+ "payload": "stormlog.infer.comparison v1",
+ "confidence": 0.95,
+ "tolerance": {
+  "relative": 1e-09,
+  "absolute": 1e-12
+ },
+ "tolerance_rule": "a float, given or expected, matches when |actual - expected| <= max(relative * |expected|, absolute); anything else matches exactly",
+ "cases": [
+  {
+   "id": "latency_regression_fails_non_inferiority",
+   "note": "lower_is_better: the effect is +40%, so upper > b fails",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0,
+     98.0,
+     101.0,
+     99.0,
+     100.0
+    ],
+    "candidate": [
+     140.0,
+     143.0,
+     137.0,
+     141.0,
+     138.5,
+     140.5
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.05,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": 0.39998862104283717,
+    "lower": 0.39668488822463266,
+    "upper": 0.4033001685446729,
+    "gate": "fail",
+    "reason": "exceeds_budget"
+   }
+  },
+  {
+   "id": "unchanged_throughput_passes",
+   "note": "higher_is_better: an unchanged metric passes non-inferiority",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0,
+     98.0,
+     101.0,
+     99.0,
+     100.0
+    ],
+    "candidate": [
+     100.5,
+     101.5,
+     98.5,
+     100.5,
+     99.5,
+     100.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.05,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": 0.0008733146013070412,
+    "lower": -0.004266771360167998,
+    "upper": 0.0060399342596914865,
+    "gate": "pass",
+    "reason": null
+   }
+  },
+  {
+   "id": "latency_boundary_just_above",
+   "note": "lower_is_better: non-inferiority compares the upper bound with b",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0,
+     98.0
+    ],
+    "candidate": [
+     104.0,
+     106.5,
+     101.5
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.05042956314408593,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": 0.0399383178241547,
+    "lower": 0.029551855596566548,
+    "upper": 0.05042956214408593,
+    "gate": "pass"
+   }
+  },
+  {
+   "id": "latency_boundary_just_below",
+   "note": "lower_is_better: non-inferiority compares the upper bound with b",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0,
+     98.0
+    ],
+    "candidate": [
+     104.0,
+     106.5,
+     101.5
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.05042956114408593,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": 0.0399383178241547,
+    "lower": 0.029551855596566548,
+    "upper": 0.05042956214408593,
+    "gate": "fail"
+   }
+  },
+  {
+   "id": "throughput_boundary_just_above",
+   "note": "higher_is_better: non-inferiority compares the lower bound with -b",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0,
+     98.0
+    ],
+    "candidate": [
+     96.0,
+     97.5,
+     94.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.04704998967841484,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": -0.04164631239124877,
+    "lower": -0.04704998867841484,
+    "upper": -0.03621199470939297,
+    "gate": "pass"
+   }
+  },
+  {
+   "id": "throughput_boundary_just_below",
+   "note": "higher_is_better: non-inferiority compares the lower bound with -b",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0,
+     98.0
+    ],
+    "candidate": [
+     96.0,
+     97.5,
+     94.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.04704998767841484,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": -0.04164631239124877,
+    "lower": -0.04704998867841484,
+    "upper": -0.03621199470939297,
+    "gate": "fail"
+   }
+  },
+  {
+   "id": "boundary_decision_unstable",
+   "note": "a decision some single block would reverse is not evaluable",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0,
+     98.0,
+     101.0,
+     99.0,
+     100.0
+    ],
+    "candidate": [
+     104.0,
+     106.5,
+     101.5,
+     105.5,
+     103.0,
+     104.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.0441985591660095,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": 0.04079420672487687,
+    "lower": 0.03740095433061048,
+    "upper": 0.044198558166009504,
+    "gate": "not_evaluable",
+    "reason": "decision_unstable"
+   }
+  },
+  {
+   "id": "attainment_budget_in_fraction_units",
+   "note": "a 0.6-point drop passes a 1-point (0.01) budget",
+   "input": {
+    "baseline": [
+     0.99,
+     0.988,
+     0.991,
+     0.989,
+     0.992,
+     0.99
+    ],
+    "candidate": [
+     0.984,
+     0.983,
+     0.986,
+     0.982,
+     0.987,
+     0.985
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.01,
+     "unit": "fraction"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": -0.005500000000000005,
+    "lower": -0.006378020850321185,
+    "upper": -0.004621979149678825,
+    "gate": "pass"
+   }
+  },
+  {
+   "id": "zero_baseline_fallback_requests_per_second",
+   "note": "a zero in the baseline leaves the log ratio undefined; the pre-registered fallback gates the difference, in any unit",
+   "input": {
+    "baseline": [
+     0.0,
+     2.0,
+     2.1,
+     1.9,
+     2.0,
+     2.05
+    ],
+    "candidate": [
+     0.1,
+     2.0,
+     2.05,
+     1.95,
+     2.0,
+     2.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": "requests_per_second",
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.05,
+     "unit": "relative",
+     "fallback_budget": 0.2,
+     "fallback_unit": "requests_per_second"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": null,
+    "difference": {
+     "effect": 0.008333333333333326,
+     "lower": -0.0530085512519154,
+     "upper": 0.06967521791858206
+    },
+    "gate": "pass",
+    "reason": "fallback_budget",
+    "case": "fallback"
+   }
+  },
+  {
+   "id": "zero_baseline_fallback_requests_per_minute",
+   "note": "a zero in the baseline leaves the log ratio undefined; the pre-registered fallback gates the difference, in any unit",
+   "input": {
+    "baseline": [
+     0.0,
+     120.0,
+     126.0,
+     114.0,
+     120.0,
+     122.99999999999999
+    ],
+    "candidate": [
+     6.0,
+     120.0,
+     122.99999999999999,
+     117.0,
+     120.0,
+     120.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": "requests_per_minute",
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.05,
+     "unit": "relative",
+     "fallback_budget": 12.0,
+     "fallback_unit": "requests_per_minute"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": null,
+    "difference": {
+     "effect": 0.5,
+     "lower": -3.1805130751149213,
+     "upper": 4.180513075114922
+    },
+    "gate": "pass",
+    "reason": "fallback_budget",
+    "case": "fallback"
+   }
+  },
+  {
+   "id": "candidate_zero_always_fails",
+   "note": "a candidate that served nothing is the worst regression",
+   "input": {
+    "baseline": [
+     2.0,
+     2.1,
+     1.9,
+     2.0,
+     2.05,
+     1.95
+    ],
+    "candidate": [
+     2.0,
+     0.0,
+     1.9,
+     2.0,
+     2.05,
+     1.95
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.5,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": null,
+    "gate": "fail",
+    "reason": "candidate_zero"
+   }
+  },
+  {
+   "id": "both_zero_is_not_evaluable",
+   "note": "zeros in both arms leave the log ratio undefined, with no fallback",
+   "input": {
+    "baseline": [
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "candidate": [
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.05,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": null,
+    "gate": "not_evaluable",
+    "reason": "undefined_in_arm"
+   }
+  },
+  {
+   "id": "remaining_blocks_below_preregistered",
+   "note": "six blocks were planned; one candidate run is missing",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0,
+     98.0,
+     101.0,
+     99.0,
+     100.0
+    ],
+    "candidate": [
+     104.0,
+     106.5,
+     101.5,
+     105.5,
+     103.0,
+     null
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.5,
+     "unit": "relative",
+     "min_complete_blocks": 6
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": 0.04095312083553492,
+    "lower": 0.03649856358128042,
+    "upper": 0.045426822429230546,
+    "n_pairs": 5,
+    "gate": "not_evaluable",
+    "reason": "blocks_below_preregistered"
+   }
+  },
+  {
+   "id": "two_pairs_cannot_gate",
+   "note": "at two pairs df = 1 and the interval is always undetermined",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0
+    ],
+    "candidate": [
+     104.0,
+     106.5
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2"
+     ],
+     [
+      "b1",
+      "b2"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.5,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": 0.04205678969103048,
+    "lower": 0.016222601180643365,
+    "upper": 0.0685477292864799,
+    "gate": "not_evaluable",
+    "reason": "insufficient_blocks"
+   }
+  },
+  {
+   "id": "censored_quantile_is_not_evaluable",
+   "note": "the caller knows the quantile is censored; the values are still compared",
+   "input": {
+    "baseline": [
+     100.0,
+     102.0,
+     98.0,
+     101.0,
+     99.0,
+     100.0
+    ],
+    "candidate": [
+     104.0,
+     106.5,
+     101.5,
+     105.5,
+     103.0,
+     104.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.5,
+     "unit": "relative"
+    },
+    "unavailable": "censored"
+   },
+   "expect": {
+    "effect": 0.04079420672487687,
+    "lower": 0.03740095433061048,
+    "upper": 0.044198558166009504,
+    "gate": "not_evaluable",
+    "reason": "censored"
+   }
+  },
+  {
+   "id": "missing_outcomes_non-inferiority",
+   "note": "unknown SLO outcomes: non-inferiority uses the worst case, regression claims the best",
+   "input": {
+    "baseline": [
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ]
+    ],
+    "candidate": [
+     [
+      0.975,
+      0.995
+     ],
+     [
+      0.976,
+      0.994
+     ],
+     [
+      0.974,
+      0.996
+     ],
+     [
+      0.975,
+      0.995
+     ],
+     [
+      0.976,
+      0.994
+     ],
+     [
+      0.974,
+      0.996
+     ]
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.005,
+     "unit": "fraction"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": -0.017000000000000015,
+    "lower": -0.01793864377152738,
+    "upper": -0.01606135622847265,
+    "best": {
+     "effect": 0.0050000000000000044,
+     "lower": 0.00406135622847264,
+     "upper": 0.005938643771527369
+    },
+    "gate": "fail",
+    "case": "worst_case"
+   }
+  },
+  {
+   "id": "missing_outcomes_significant",
+   "note": "unknown SLO outcomes: non-inferiority uses the worst case, regression claims the best",
+   "input": {
+    "baseline": [
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ],
+     [
+      0.99,
+      0.992
+     ]
+    ],
+    "candidate": [
+     [
+      0.975,
+      0.995
+     ],
+     [
+      0.976,
+      0.994
+     ],
+     [
+      0.974,
+      0.996
+     ],
+     [
+      0.975,
+      0.995
+     ],
+     [
+      0.976,
+      0.994
+     ],
+     [
+      0.974,
+      0.996
+     ]
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "higher_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "significant",
+     "budget": 0.005,
+     "unit": "fraction"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": -0.017000000000000015,
+    "lower": -0.01793864377152738,
+    "upper": -0.01606135622847265,
+    "best": {
+     "effect": 0.0050000000000000044,
+     "lower": 0.00406135622847264,
+     "upper": 0.005938643771527369
+    },
+    "gate": "pass",
+    "case": "best_case"
+   }
+  },
+  {
+   "id": "all_zero_failure_rate_is_degenerate",
+   "note": "no failures anywhere: no [0, 0] interval, a run-level bound instead",
+   "input": {
+    "baseline": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "candidate": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "blocks": [
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ],
+     [
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+      "b5",
+      "b6"
+     ]
+    ],
+    "direction": "lower_is_better",
+    "scale": "difference",
+    "unit": "fraction",
+    "value_unit": null,
+    "gate": {
+     "rule": "non-inferiority",
+     "budget": 0.01,
+     "unit": "fraction"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": null,
+    "run_departs_upper": 0.4592581264399005,
+    "gate": "pass",
+    "reason": "degenerate_zero"
+   }
+  },
+  {
+   "id": "independent_runs_use_min_df",
+   "note": "8 against 3 runs: Welch on logs with df = min(nA, nB) - 1 = 2",
+   "input": {
+    "baseline": [
+     100.0,
+     103.0,
+     97.0,
+     101.0,
+     99.0,
+     102.0,
+     98.0,
+     100.5
+    ],
+    "candidate": [
+     104.0,
+     107.0,
+     101.5
+    ],
+    "blocks": null,
+    "direction": "lower_is_better",
+    "scale": "log_ratio",
+    "unit": "relative",
+    "value_unit": null,
+    "gate": {
+     "rule": "significant",
+     "budget": 0.01,
+     "unit": "relative"
+    },
+    "unavailable": null
+   },
+   "expect": {
+    "effect": 0.04095747983714565,
+    "lower": -0.03172324731320436,
+    "upper": 0.11909376304049979,
+    "df": 2
+   }
+  }
+ ]
+}
