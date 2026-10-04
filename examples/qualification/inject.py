@@ -302,11 +302,12 @@ class InjectionRun:
             actions, actuated, injected = self._actuate(index, episode)
         except Exception as error:  # a failed actuation: not actuated, on record
             actions, actuated = Actions(), False
-            injected = {"method": episode.row.method, "error": repr(error)}
+            injected = {**self._done_so_far(episode), "error": repr(error)}
         except BaseException:
             # Interrupted mid-action: what was done goes on record before the
             # run is published, then the interruption goes on.
-            self._interrupted = (index, self._done_so_far(episode))
+            done = {**self._done_so_far(episode), "interrupted": True}
+            self._interrupted = (index, done)
             raise
         ended, ended_mono = self.clock(), time.monotonic_ns()
         result = "ok" if actuated else str(injected.get("error", "failed"))
@@ -335,12 +336,11 @@ class InjectionRun:
         )  # fmt: skip
 
     def _done_so_far(self, episode: EpisodePlan) -> dict[str, Any]:
-        """An interrupted episode's record: its dose, and the pulses that
-        completed before the interruption (each one continued)."""
+        """What an episode cut short did: its dose, and the pulses that
+        completed before a failure or an interruption (each continued)."""
         done: dict[str, Any] = {
             "method": episode.row.method,
             "dose": dict(episode.dose),
-            "interrupted": True,
         }
         if self._pulser is not None:
             done["pulses"] = [pulse.to_record() for pulse in self._pulser.pulses]

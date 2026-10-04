@@ -540,3 +540,36 @@ def test_an_episode_interrupted_mid_pulse_records_its_pulses(tmp_path: Path) -> 
     assert stall.injected["interrupted"] is True
     assert len(stall.injected["pulses"]) >= 1
     assert null.injected == {"method": "none", "skipped": "run_ended"}
+
+
+def test_pulses_delivered_before_a_failing_one_are_on_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fable's A2 delta N6: pulse 3 of 5 fails to confirm its stop; the two
+    # real stops before it are in the hook log, and now in the truth too,
+    # beside the error.
+    from examples.qualification import pulser as pulser_module
+
+    real_pulse = pulser_module.Pulser.pulse
+    calls = [0]
+
+    def third_fails(self: Any, seconds: float, **kwargs: Any) -> Any:
+        calls[0] += 1
+        if calls[0] == 3:
+            raise pulser_module.PulseRefused("did not stop within 1 s")
+        return real_pulse(self, seconds, **kwargs)
+
+    monkeypatch.setattr(pulser_module.Pulser, "pulse", third_fails)
+    dose = {"pulse_ms": 100, "period_ms": 400}
+    plan = _short_plan(tmp_path / "plan.json", {"type": "F4a", "dose": dose})
+    engine = ["--step-seconds", "0.002", "--hook-dir", str(tmp_path / "hook")]
+    with FakeEngineProcess(engine) as server:
+        assert (
+            _inject(server, tmp_path, plan, "--target", f"engine_core={server.pid}")
+            == 0
+        )
+    run = tmp_path / "runs" / "q221-00000000000000bb"
+    (stall,) = load_injections(run / "truth" / "injections.jsonl")
+    assert stall.status == "not_actuated"
+    assert "did not stop" in stall.injected["error"]
+    assert len(stall.injected["pulses"]) == 2
