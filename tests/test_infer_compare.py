@@ -701,13 +701,16 @@ def test_a_difference_within_an_arm_needs_its_own_allowance_and_is_named() -> No
     comparison = compare_runs(baseline, candidate, allowed)
     gate = comparison.cases[CASE]["metrics"]["client.e2e.p95"].gate
     assert gate is not None and gate.status == "pass"
-    first = baseline[0].name
-    assert comparison.diagnostics["within_arm_allowed"] == [
-        [first, run.name, [field]] for run in baseline[1:]
+    # The lead's ruling: the payload names the field and each run's value,
+    # and the text a line naming it.
+    values = {run.name: 855088 if i == 0 else 890960 for i, run in enumerate(baseline)}
+    assert comparison.diagnostics["allowed_within_arm"] == [
+        {"arm": "baseline", "field": field, "values": values}
     ]
     assert comparison.spec.to_record()["allow_within_arm"] == [field]
     text = "\n".join(comparison_lines(comparison))
-    assert f"Within an arm: {first} and {baseline[1].name} differ in {field}" in text
+    assert f"Within an arm (allowed): baseline runs differ in {field}: " in text
+    assert f"{baseline[0].name}=855088" in text
 
 
 def _observer(requested: bool, healthy: bool | None = True) -> dict[str, Any]:

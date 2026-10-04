@@ -334,7 +334,7 @@ def compare_runs(
     usable = {arm: _usable(runs) for arm, runs in standing.items()}
     if not usable[BASELINE] or not usable[CANDIDATE]:
         raise InferInputError("an arm has no usable run: every run was excluded")
-    compatibility, unverified_pairs, within_arm_allowed = _compatibility(usable, spec)
+    compatibility, unverified_pairs, allowed_within_arm = _compatibility(usable, spec)
     observer_issues = _observer_contract(usable, spec)
     if design == PAIRED:
         excluded += _unpaired_blocks(standing, spec, excluded)
@@ -357,7 +357,7 @@ def compare_runs(
         diagnostics={
             **_diagnostics(arms, compatibility),
             "unverified_pairs": unverified_pairs,
-            "within_arm_allowed": within_arm_allowed,
+            "allowed_within_arm": allowed_within_arm,
         },
     )
     return _with_family(comparison)
@@ -589,7 +589,7 @@ def _set_aside(excluded: list[dict[str, Any]], run: RunSummary, case_id: str) ->
 
 def _compatibility(
     usable: Mapping[str, list[RunSummary]], spec: ComparisonSpec
-) -> tuple[Compatibility, list[list[Any]], list[list[Any]]]:
+) -> tuple[Compatibility, list[list[Any]], list[dict[str, Any]]]:
     """Every run within its arm (config mode), and every run across arms.
 
     Comparability is not transitive once a value is unknown, so each run is
@@ -597,8 +597,8 @@ def _compatibility(
     between the arms, and ``--allow-within-arm`` what may differ within
     one, and so across them as well. The reported result is the first runs'
     across the arms, made unverified, with every unverified field, when any
-    pair was; the unverified pairs, and the pairs within an arm that differ
-    in an allowed field, are returned with their fields.
+    pair was; the unverified pairs are returned with their fields, and each
+    allowed field an arm's runs differ in with every run's value.
     """
     within = _within_arms(usable, spec)
     across = _across_arms(usable, spec)
@@ -608,13 +608,33 @@ def _compatibility(
         for a, b, result in results
         if result.status == UNVERIFIED
     ]
-    mixed = [
-        [a, b, sorted(item.name for item in result.allowed)]
-        for a, b, result in within
-        if result.allowed
-    ]
     worst = _worst(across[0][2], [result for _a, _b, result in results])
-    return worst, pairs, mixed
+    return worst, pairs, _mixed(usable, within)
+
+
+def _mixed(
+    usable: Mapping[str, list[RunSummary]],
+    within: list[tuple[str, str, Compatibility]],
+) -> list[dict[str, Any]]:
+    """Each allowed field an arm's runs differ in, with every run's value."""
+    arm_of = {run.name: arm for arm, runs in usable.items() for run in runs}
+    names: dict[str, set[str]] = {}
+    for first, _second, result in within:
+        names.setdefault(arm_of[first], set()).update(i.name for i in result.allowed)
+    return [
+        {
+            "arm": arm,
+            "field": name,
+            "values": {run.name: _value(run, name) for run in usable[arm]},
+        }
+        for arm in usable
+        for name in sorted(names.get(arm, ()))
+    ]
+
+
+def _value(run: RunSummary, name: str) -> Any:
+    found = run.fields.get(name)
+    return None if found is None else found.value
 
 
 def _within_arms(
