@@ -9,6 +9,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -459,46 +460,31 @@ def test_a_twin_without_its_scraped_ratio_is_published_incomplete(
     assert ratio["incomplete"] is True
 
 
-@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP])
-def test_a_run_without_pulses_signalled_mid_run_is_published(
-    tmp_path: Path, signum: int
-) -> None:
-    # A job's SIGTERM or an ssh disconnect's SIGHUP during [N, N], before
-    # any pulser exists: the run is still published, interrupted, with the
-    # episode it attempted. The handlers used to come only with a pulser.
+def _signal_mid_first_episode(
+    tmp_path: Path, episodes: list[dict[str, Any]], signum: int, *targets: str
+) -> Path:
+    """Run ``episodes`` (6 s each) in their own session, signal the
+    harness's process group inside the first one, and return the run."""
     hook = tmp_path / "hook"
     plan = json.loads(_plan(tmp_path / "plan.json").read_text())
     plan["timeline"]["episode"] = 6
-    plan["episodes"] = [{"type": "N"}, {"type": "N"}]
+    plan["episodes"] = episodes
     (tmp_path / "plan.json").write_text(json.dumps(plan))
     label = "q221-00000000000000cc"
-    with FakeEngineProcess(
-        ["--step-seconds", "0.002", "--hook-dir", str(hook)]
-    ) as server:
+    engine = ["--step-seconds", "0.002", "--hook-dir", str(hook)]
+    with FakeEngineProcess(engine) as server:
+        # fmt: off
+        argv = [
+            "inject", "--plan", str(tmp_path / "plan.json"),
+            "--out", str(tmp_path / "runs"), "--label", label,
+            "--base-url", server.base_url, "--model", "fake/qwen-0.5b",
+            "--reference-channel", str(hook),
+            *(arg.format(pid=server.pid) for arg in targets),
+            "--", "--tokenizer", "none", "--system-sampler", "none",
+        ]
+        # fmt: on
         harness = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "examples.qualification",
-                "inject",
-                "--plan",
-                str(tmp_path / "plan.json"),
-                "--out",
-                str(tmp_path / "runs"),
-                "--label",
-                label,
-                "--base-url",
-                server.base_url,
-                "--model",
-                "fake/qwen-0.5b",
-                "--reference-channel",
-                str(hook),
-                "--",
-                "--tokenizer",
-                "none",
-                "--system-sampler",
-                "none",
-            ],  # fmt: skip
+            [sys.executable, "-m", "examples.qualification", *argv],
             env=_environment(),
             start_new_session=True,
             stdout=subprocess.DEVNULL,
@@ -506,12 +492,43 @@ def test_a_run_without_pulses_signalled_mid_run_is_published(
         )
         markers = tmp_path / "runs" / f".{label}.partial" / "probes" / "markers"
         assert wait_until(lambda: any(markers.glob("*measured_started*")), timeout=60)
-        # Past priming and the baseline (5 s): inside the first N.
-        wait_until(lambda: False, timeout=7)
+        # Past priming and the baseline (5 s): inside the first episode.
+        time.sleep(7)
         os.killpg(harness.pid, signum)
         assert harness.wait(timeout=120) == 128 + signum
-    run = tmp_path / "runs" / label
+        assert psutil.Process(server.pid).status() != psutil.STATUS_STOPPED
+    return tmp_path / "runs" / label
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP])
+def test_a_run_without_pulses_signalled_mid_run_is_published(
+    tmp_path: Path, signum: int
+) -> None:
+    # A job's SIGTERM or an ssh disconnect's SIGHUP during [N, N], before
+    # any pulser exists: the run is still published, interrupted, with the
+    # episode it attempted. The handlers used to come only with a pulser.
+    run = _signal_mid_first_episode(tmp_path, [{"type": "N"}, {"type": "N"}], signum)
     assert verify(run) == []
     assert load_run(run / "truth" / "run.json").protocol_failure == "interrupted"
     attempted = load_injections(run / "truth" / "injections.jsonl")
     assert [injection.episode_type for injection in attempted] == ["N", "N"]
+
+
+def test_an_episode_interrupted_mid_pulse_records_its_pulses(tmp_path: Path) -> None:
+    # SIGTERM during F4a's pulses: the engine was stopped several times, so
+    # the truth says so, with each completed pulse, and that it was cut
+    # short. The next episode is skipped because the run ended.
+    episodes: list[dict[str, Any]] = [
+        {"type": "F4a", "dose": {"pulse_ms": 100, "period_ms": 400}},
+        {"type": "N"},
+    ]
+    run = _signal_mid_first_episode(
+        tmp_path, episodes, signal.SIGTERM, "--target", "engine_core={pid}"
+    )
+    assert verify(run) == []
+    stall, null = load_injections(run / "truth" / "injections.jsonl")
+    assert stall.status == "not_actuated"
+    assert stall.validity.actuation == "interrupted"
+    assert stall.injected["interrupted"] is True
+    assert len(stall.injected["pulses"]) >= 1
+    assert null.injected == {"method": "none", "skipped": "run_ended"}
