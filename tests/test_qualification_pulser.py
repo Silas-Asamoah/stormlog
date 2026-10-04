@@ -19,6 +19,7 @@ import pytest
 from examples.qualification.fake_engine.process import FakeEngineProcess, _environment
 from examples.qualification.pulser import (
     MAX_PULSE_SECONDS,
+    WATCHDOG_SLACK_SECONDS,
     Pulser,
     PulseRefused,
     Target,
@@ -583,3 +584,16 @@ def test_a_pulser_never_holds_past_the_design_cap(
         assert pulser.max_pulse_seconds == MAX_PULSE_SECONDS
         with pytest.raises(PulseRefused, match="at most"):
             pulser.pulse(MAX_PULSE_SECONDS + 0.5)
+
+
+def test_the_first_watchdog_also_gets_the_clamped_cap(
+    loop: subprocess.Popen[bytes],
+) -> None:
+    # Fable's and rev-220-a's second A2 deltas: the clamp reached the
+    # pulser and a replacement watchdog, but the first watchdog was started
+    # with the cap as asked, so its backstop was 6 s, not 3 s.
+    with Pulser(Target.of(loop.pid), max_pulse_seconds=5.0) as pulser:
+        assert pulser.watchdog_pid is not None
+        command = psutil.Process(pulser.watchdog_pid).cmdline()
+    limit = float(command[command.index("--limit") + 1])
+    assert limit == MAX_PULSE_SECONDS + WATCHDOG_SLACK_SECONDS
