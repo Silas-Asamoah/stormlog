@@ -75,8 +75,10 @@ partly encoded is still found. These are not covered:
   backslashes.
 
 Finding every spelling costs more than a plain search: about 30 ms per
-megabyte for each value, whatever the value holds. Exporters redact bounded
-strings, and `scrub_text` bounds its input first.
+megabyte of ordinary text for each value. Text built to repeat a long
+prefix of a value costs more, about 1 s per megabyte for a 17-character
+value, and stays linear in the text. Exporters redact bounded strings, and
+`scrub_text` bounds its input first.
 
 A Basic authorization header encodes `user:password` as one string, so
 `url_secrets(url)` returns that pair alongside the password itself, decoded
