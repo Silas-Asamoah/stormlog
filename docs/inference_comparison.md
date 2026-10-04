@@ -161,7 +161,12 @@ The same artifact given twice in an arm is invalid input.
 
 The kept runs must have measured one server. Every run is checked against
 its arm's first run, and every run against the other arm's first, because
-comparability is not transitive once a value is unknown. A difference that
+comparability is not transitive once a value is unknown. A field `--allow`
+names may differ within an arm as well as across arms. On an A30, the first
+launch of each model after the box resumed had a 4% smaller KV cache
+(`effective.kv_cache_size_tokens`, 855,088 against 890,960 tokens) than
+every launch after it; a warm-up launch before the first block avoids
+that, and `--allow` accepts it. A difference that
 blocks is invalid input (exit 5). If any pair is `unverified`, the
 comparison is, with every field that could not be shown equal, and
 `diagnostics.unverified_pairs` names each pair; every gate is then

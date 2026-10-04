@@ -572,14 +572,15 @@ def _compatibility(
     """Every run within its arm (config mode), and every run across arms.
 
     Comparability is not transitive once a value is unknown, so each run is
-    checked, not only each arm's first. The reported result is the first
-    runs' across the arms, made unverified, with every unverified field,
-    when any pair was; the unverified pairs are returned with their fields.
+    checked, not only each arm's first. What ``--allow`` allows may differ
+    within an arm too. The reported result is the first runs' across the
+    arms, made unverified, with every unverified field, when any pair was;
+    the unverified pairs are returned with their fields.
     """
     within: list[tuple[str, str, Compatibility]] = []
     for arm, runs in usable.items():
         for run in runs[1:]:
-            result = compatible(runs[0].fields, run.fields)
+            result = compatible(runs[0].fields, run.fields, allowed=spec.allow)
             if result.status == INCOMPATIBLE:
                 raise InferInputError(_incompatible(f"{arm} runs", result))
             within.append((runs[0].name, run.name, result))
