@@ -175,27 +175,32 @@ earlier attempt stays on disk and in the index, and the new one records
 `order_broken: true`, since it runs later than planned.
 
 A run the runner itself was killed in (a preempted box, an operator's
-abort) leaves its attempt in `runs/<label>.partial`, with no state. A resume
-finishes that attempt in place, keeps its number, and indexes it with
-`interrupted: true`. It is an `outcome_failure` (`runner_interrupted`),
-kept and never retried, since what stopped the runner may have been the
-treatment, unless its cause is given:
+abort) leaves its attempt in `runs/<label>.partial`, with no state. What
+stopped the runner may have been the treatment, so a resume refuses (a
+usage error) until each such attempt is explained one of two ways:
 
 ```python
 run_plan(plan, out, resume=True, retry_incomplete=True,
          external_causes={"t221-b03-p1-watch-a1": ExternalCause(
              "spot_preemption", "box found paused without a release at 03:12")})
+run_plan(plan, out, resume=True,
+         interrupted_as_outcome={"t221-b03-p1-watch-a1"})
 ```
 
-The reason must be `spot_preemption`, `operator_abort` or `infra_fault`,
-with non-empty evidence, and the label must name an attempt that was
-interrupted: a finished attempt keeps the state it recorded, so an outcome
-failure can never become a set-aside. The attempt is then a
-`protocol_failure` with that reason, its `run.json`, index line and
-artifacts (`infer.run_state`) carry the cause and evidence, and
-`retry_incomplete` runs it again. `infer compare` sets aside the attempt
-(`external:spot_preemption`), lists the evidence, and keeps the retry in
-its place.
+- An **external cause**: `spot_preemption`, `operator_abort` or
+  `infra_fault`, with non-empty evidence. The attempt is a
+  `protocol_failure` with that reason; its `run.json`, index line and
+  artifacts (`infer.run_state`) carry the cause and evidence, and
+  `retry_incomplete` runs it again. `infer compare` sets the attempt aside
+  (`external:spot_preemption`), lists the evidence, and keeps the retry in
+  its place.
+- An **outcome**: an `outcome_failure` (`runner_interrupted`), compared,
+  counted against its arm, and never retried.
+
+Either way the resume finishes the attempt in place, keeps its number, and
+indexes it with `interrupted: true`. A label must name an attempt that was
+interrupted, and only one way: a finished attempt keeps the state it
+recorded, so an outcome failure can never become a set-aside.
 
 ## Running from the command line
 
@@ -204,15 +209,16 @@ python -m examples.cli.infer_repeated_baseline --plan plan.json --output exp213
 python -m examples.cli.infer_repeated_baseline --plan plan.json --output exp213 --resume
 python -m examples.cli.infer_repeated_baseline --plan plan.json --output exp213 \
   --resume --retry-incomplete \
-  --external-cause 't213-b01-p0-off-a1=spot_preemption:box paused at 03:12'
+  --external-cause 't213-b01-p0-off-a1=spot_preemption:box paused at 03:12' \
+  --interrupted-as-outcome t213-b02-p1-watch-a1
 ```
 
 It prints one line per run, with its state and reasons. It exits `0` when
 every planned run finished (completed, or an outcome failure, which is
 data), `3` when some run ended in a protocol failure (retry it with
 `--resume --retry-incomplete`), `5` for a plan or output directory it
-cannot use, and `2` for a secret the plan names that is not set or an
-`--external-cause` it refuses. Then
+cannot use, and `2` for a secret the plan names that is not set, an
+interrupted run neither flag explains, or a flag it refuses. Then
 compare the arms:
 
 ```bash
