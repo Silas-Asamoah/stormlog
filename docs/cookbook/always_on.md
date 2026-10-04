@@ -155,6 +155,21 @@ Likely cause: retention is too loose for the deployment budget.
 Fix: tighten retention and rollover settings before lowering sample fidelity.
 Verify: `final_retained_*`, `pruned_*`, and `rollover_count` stabilize.
 
+### Symptom: the sink's disk fills up or starts failing
+
+Likely cause: a full or failing volume under the sink directory. By default a
+failed flush raises from the call that triggered it, and the records stay in
+memory until a flush succeeds.
+Fix: when the process must keep running on a bad disk, give the sink a memory
+bound, `TelemetrySinkConfig(..., max_buffer_bytes=8 * 1024 * 1024)`. Then a
+record that would go over the bound is dropped and counted, a failed flush is
+counted and retried after a backoff that doubles from
+`failure_backoff_seconds` up to `failure_backoff_max_seconds`, and nothing
+raises. In either mode a write that fails partway is cut back, so the segment
+never keeps a partial line.
+Verify: `sink.failure_diagnostics()` reports `buffered_bytes`,
+`dropped_records`, `flush_failures` and `last_flush_error`.
+
 ### Symptom: tracking stays alive but live telemetry looks partial
 
 Likely cause: the collector entered degraded mode.
