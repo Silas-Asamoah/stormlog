@@ -157,6 +157,7 @@ class Watcher:
             post=self._post,
             loss=self._loss,
             tick_seconds=config.tick_seconds,
+            on_pruned=self._pruned,
         )
         self._ok_scrapes = 0
         self._failed_scrapes = 0
@@ -318,8 +319,11 @@ class Watcher:
 
         self._store_worker.submit(prune)
 
-    def _pruned(self, pruned: list[PrunedBundle], held: int) -> None:
-        self.stats.set("retention_incidents", held)
+    def _pruned(self, pruned: list[PrunedBundle], held: int | None = None) -> None:
+        """Record bundles retention removed, or the store removed to make
+        room for a seal (``held`` is then not counted)."""
+        if held is not None:
+            self.stats.set("retention_incidents", held)
         for bundle in pruned:
             self.stats.add("pruned_total")
             self.stats.add("pruned_bytes_total", bundle.bytes)
