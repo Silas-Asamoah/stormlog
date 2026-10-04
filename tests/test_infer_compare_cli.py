@@ -336,9 +336,12 @@ def test_a_run_given_twice_is_invalid_input(arms: dict[str, list[str]]) -> None:
         ("nothing.here=non-inferiority:0.05", "names no metric"),
         ("client.e2e.p95=sometimes:0.05", "gate rule must be one of"),
         ("client.e2e.p95=significant:lots", "is not a number"),
-        # Budgets that can never fail: a fraction above 1, and a fall of
-        # 100% or more in a rate, which cannot fall below zero.
+        # Budgets that can never fail: a fraction of 1 or more (rev-213-a's
+        # D4: exactly 1 was accepted), and a fall of 100% or more in a
+        # rate, which cannot fall below zero.
         ("attainment=non-inferiority:1.5", "can never fail"),
+        ("attainment=non-inferiority:1", "can never fail"),
+        ("failure_fraction=non-inferiority:1", "can never fail"),
         ("goodput_rps=non-inferiority:1", "can never fail"),
         ("throughput_rps=significant:5", "can never fail"),
     ],

@@ -136,12 +136,12 @@ _FRACTION_METRICS = ("attainment", "failure_fraction")
 def vacuous_budget(pattern: str, budget: float) -> str | None:
     """Why a budget on the metrics a pattern matches could never fail, if so.
 
-    A fraction above 1 is beyond every fraction, and a rate cannot fall by
-    100% or more, so a relative budget of 1 on one cannot be exceeded.
+    No fraction moves by more than 1, and a rate cannot fall by 100% or
+    more, so a budget of 1 on either cannot be exceeded.
     """
     matched = _matching(pattern)
-    if budget > 1 and any(name in _FRACTION_METRICS for name in matched):
-        return f"a fraction budget of {budget:g} is above 1: it can never fail"
+    if budget >= 1 and any(name in _FRACTION_METRICS for name in matched):
+        return f"a fraction budget of {budget:g} is 1 or more: it can never fail"
     rates = sorted(name for name in matched if name in _RATE_METRICS)
     if budget >= 1 and rates:
         return (

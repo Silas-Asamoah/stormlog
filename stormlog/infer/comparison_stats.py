@@ -138,9 +138,9 @@ class GateRule:
             raise InferUsageError(f"gate rule must be one of {', '.join(GATE_RULES)}")
         if not math.isfinite(self.budget) or self.budget < 0:
             raise InferUsageError("a gate budget must be a finite number >= 0")
-        if self.unit == FRACTION_UNIT and self.budget > 1:
+        if self.unit == FRACTION_UNIT and self.budget >= 1:
             raise InferUsageError(
-                f"a fraction budget of {self.budget:g} is above 1: it can never fail"
+                f"a fraction budget of {self.budget:g} is 1 or more: it can never fail"
             )
 
     def to_record(self) -> dict[str, Any]:
