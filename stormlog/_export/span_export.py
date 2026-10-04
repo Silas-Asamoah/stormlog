@@ -270,7 +270,11 @@ class SpanExporter(Generic[T]):
     def _loop(self) -> None:
         batch = _Batch()
         while True:
-            items = self.queue.take(timeout=self._take_timeout(batch))
+            # Taken into the ledger as they leave the queue, so a freeze
+            # counts every one, whether still queued or in the worker's hands.
+            items = self.queue.take(
+                timeout=self._take_timeout(batch), claim=self.ledger.take
+            )
             for item in items:
                 if not self._add(batch, item):
                     return
@@ -311,7 +315,7 @@ class SpanExporter(Generic[T]):
         return time.monotonic() >= batch.opened_at + self.schedule_delay
 
     def _unit(self, item: T) -> tuple[Any, int] | None:
-        if not self.ledger.take(1):
+        if self.ledger.frozen:
             return None
         try:
             unit, unit_size = self.encoding.unit(

@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
@@ -90,11 +91,19 @@ class BoundedQueue(Generic[T]):
             self._cond.notify()
             return True
 
-    def take(self, limit: int = TAKE_LIMIT, timeout: float | None = None) -> list[T]:
+    def take(
+        self,
+        limit: int = TAKE_LIMIT,
+        timeout: float | None = None,
+        claim: Callable[[int], object] | None = None,
+    ) -> list[T]:
         """Up to ``limit`` items, waiting at most ``timeout`` seconds for one.
 
         Returns an empty list on timeout, or at once when the queue is closed
-        and empty. ``limit`` is capped at ``TAKE_LIMIT``.
+        and empty. ``limit`` is capped at ``TAKE_LIMIT``. ``claim`` is called
+        with the number taken, under the queue's lock: a counter it updates
+        sees the items leave the queue and arrive with it in one step, never
+        in neither place, as ``drain`` would otherwise allow.
         """
         limit = max(1, min(limit, TAKE_LIMIT))
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -104,7 +113,10 @@ class BoundedQueue(Generic[T]):
                 if remaining is not None and remaining <= 0:
                     return []
                 self._cond.wait(remaining)
-            return self._pop_locked(limit)
+            taken = self._pop_locked(limit)
+            if taken and claim is not None:
+                claim(len(taken))
+            return taken
 
     def drain(self) -> list[T]:
         """Remove and return everything still queued, in order."""

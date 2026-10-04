@@ -2,6 +2,7 @@
 
 import errno
 import json
+import random
 import socket
 import time
 from pathlib import Path
@@ -17,7 +18,14 @@ from stormlog._export.span_export import FileSink, HttpSink, SpanExporter
 from stormlog._export.spans import KIND_INTERNAL, Scope, Span
 from stormlog.infer.vllm_spans import read_span_file
 from stormlog.infer.vllm_telemetry import SPAN_SOURCE_OTLP_JSON
-from tests.fake_otlp_collector import RESET, SILENT, FakeCollector, Reply, running
+from tests.fake_otlp_collector import (
+    ANSWER,
+    RESET,
+    SILENT,
+    FakeCollector,
+    Reply,
+    running,
+)
 
 pytest.importorskip("opentelemetry.proto.collector.trace.v1.trace_service_pb2")
 
@@ -177,6 +185,45 @@ def test_lost_answers_settle_within_the_collectors_bounds(
     unknown = sum(accounting["unknown"].values())
     assert accounting["exported"] <= unique <= accounting["exported"] + unknown
     assert raw - unique <= accounting["max_extra_copies"]
+
+
+def test_spans_taken_but_not_yet_batched_are_counted_at_the_freeze() -> None:
+    # The reviewer's case: one take returns all 10 spans, the worker sticks
+    # in the first batch's send, and the close freezes: the 8 the worker
+    # still held were counted nowhere.
+    with running([Reply(action=SILENT)] * 50) as collector:
+        exporter = _exporter(
+            collector.url, attempt_seconds=30, max_batch_spans=2, schedule_delay=0.0
+        )
+        _offer(exporter, 10)
+        exporter.start()
+        time.sleep(0.3)
+        exporter.close(0.2)
+    accounting = exporter.accounting()
+    assert accounting["offered"] == 10 and _balanced(accounting)
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_every_offered_span_is_accounted_for_whatever_happens(seed: int) -> None:
+    rng = random.Random(seed)
+    actions = [ANSWER, ANSWER, SILENT, RESET]
+    replies = [
+        Reply(status=rng.choice([200, 200, 500, 503]), action=rng.choice(actions))
+        for _ in range(60)
+    ]
+    with running(replies) as collector:
+        exporter = _exporter(
+            collector.url,
+            attempt_seconds=rng.uniform(0.05, 0.5),
+            max_batch_spans=rng.randint(1, 6),
+            schedule_delay=rng.uniform(0.0, 0.05),
+        )
+        _offer(exporter, rng.randint(1, 20))
+        exporter.start()
+        _offer(exporter, rng.randint(0, 20), start=100)
+        time.sleep(rng.uniform(0.0, 0.3))
+        exporter.close(rng.uniform(0.0, 0.3))
+    assert _balanced(exporter.accounting())
 
 
 def test_the_breaker_opens_probes_and_closes() -> None:
