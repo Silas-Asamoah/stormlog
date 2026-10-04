@@ -195,3 +195,20 @@ def test_a_failed_build_across_an_invalidation_leaves_the_next_build_fresh() -> 
     assert isinstance(results[0], RuntimeError)
     after = cache.acquire()
     assert after.body == b"after" and cache.is_fresh(after)
+
+
+def test_a_held_back_render_is_counted_once_however_many_readers_ask() -> None:
+    clock = _Clock()
+    cache = _cache(clock=clock)
+    held = [cache.acquire()]
+    for tick in (1.0, 2.0):
+        clock.now = tick
+        held.append(cache.acquire())
+    clock.now = 3.0  # due, but three generations are alive
+    readers = [cache.acquire() for _ in range(5)]
+    assert cache.stats.deferred == 1
+    for generation in held + readers:
+        cache.release(generation)
+    clock.now = 4.0
+    cache.acquire()
+    assert cache.stats.deferred == 1 and cache.stats.builds == 4

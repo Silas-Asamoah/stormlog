@@ -37,7 +37,8 @@ class Generation:
 class RenderStats:
     builds: int = 0
     reused: int = 0
-    # Renders that were due but held back by the publication limit.
+    # Renders that were due but held back by the publication limit, each
+    # counted once however many readers found it held back.
     deferred: int = 0
     alive_high_water: int = 0
     failures: int = 0
@@ -48,6 +49,8 @@ class _State:
     newest: Generation | None = None
     held: set[Generation] = field(default_factory=set)
     building: bool = False
+    # A render is due and held back by the publication limit.
+    deferring: bool = False
     # Counts invalidations: each one means the values changed for good (for
     # example, the registry froze), so every render started before it is
     # out of date, including one still being built.
@@ -137,8 +140,11 @@ class RenderCache:
         if not due or state.building:
             return False
         if self._published_alive() >= MAX_GENERATIONS:
-            self.stats.deferred += 1
+            if not state.deferring:
+                state.deferring = True
+                self.stats.deferred += 1
             return False
+        state.deferring = False
         return True
 
     def _reuse(self) -> Generation:
