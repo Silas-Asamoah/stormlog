@@ -40,7 +40,7 @@ A plan is `stormlog.infer.experiment_plan` version 1, in JSON:
 | `order` | `random` (seeded shuffles), `williams`, or `explicit` with each block's arms listed |
 | `server` | The server command, its environment, CPU set, base URL, and start and stop timeouts |
 | `arms` | Each arm's server arguments and environment, its workload steps, and its treatments |
-| `block_prelude` | Steps run once before each block's first run, with an arm's server (`server_arm`) or none |
+| `block_prelude` | Steps run once before each block's first run, with an arm's server (`server_arm`, launched as that arm's runs launch it, verified model included) or none |
 | `describe_server` | Whether to describe the server `before` and `after` each run, with its log (`server_log`); all on by default |
 | `secret_env` | Environment variables passed to the commands but never written down |
 | `affinity_disjoint` | The server's CPUs and the commands' must not overlap |
