@@ -37,7 +37,6 @@ from typing import Any
 from ... import __version__
 from ..correlation_events import ArtifactIdentityEvent, CorrelationContext
 from ..host_clock import host_boot_id, wall_clock_domain
-from ..vllm_telemetry import SCRAPE_OK
 from .config import IncidentLimits
 from .disk import BudgetExceeded
 from .evaluate import KIND_HEALTH, KIND_TEST, TickResult
@@ -121,12 +120,10 @@ _SIDE_KINDS = frozenset({KIND_HEALTH, KIND_TEST})
 
 @dataclass(frozen=True)
 class _HeldScrapes:
-    """The scrapes a seal writes, as the history holds them: compressed.
-
-    Each is expanded once here, for its status and size, and once more as
-    the bundle is written, so the seal holds only references to the
-    history's own copies.
-    """
+    """The scrapes a seal writes, as the history holds them: compressed,
+    with the status and expanded size the history keeps beside each, so the
+    seal reads none of them on the loop. Each is expanded once, as the
+    bundle is written on the store's worker."""
 
     items: list[Held]
     ok: tuple[bool, ...]
@@ -134,13 +131,8 @@ class _HeldScrapes:
 
     @classmethod
     def of(cls, items: list[Held]) -> _HeldScrapes:
-        ok = []
-        size = 0
-        for _stamp, blob in items:
-            text = expand(blob)
-            size += len(text) + 1
-            ok.append(json.loads(text).get("status") == SCRAPE_OK)
-        return cls(items, tuple(ok), size)
+        ok = tuple(item.ok for item in items)
+        return cls(items, ok, sum(item.size + 1 for item in items))
 
 
 @dataclass(frozen=True)
@@ -537,12 +529,12 @@ class IncidentManager:
         """
         inside = [
             index
-            for index, (stamp, _blob) in enumerate(scrapes.items)
-            if start_mono <= stamp.mono_ns <= end_mono
+            for index, item in enumerate(scrapes.items)
+            if start_mono <= item.stamp.mono_ns <= end_mono
         ]
         ok = sum(scrapes.ok[index] for index in inside)
         requested = ((requested_end or end_mono) - start_mono) / _NS
-        first = scrapes.items[inside[0]][0].mono_ns if inside else end_mono
+        first = scrapes.items[inside[0]].stamp.mono_ns if inside else end_mono
         held = (end_mono - first) / _NS
         failed = len(inside) - ok
         expected = int(requested / self._tick_seconds)
@@ -641,8 +633,8 @@ class _Lines:
 
     def __iter__(self) -> Iterator[bytes]:
         yield from self.head
-        for _stamp, blob in self.scrapes.items:
-            yield expand(blob) + b"\n"
+        for item in self.scrapes.items:
+            yield expand(item.blob) + b"\n"
         yield self.tail
 
 
