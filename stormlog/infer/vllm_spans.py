@@ -438,6 +438,9 @@ class ReceiverStats:
 
 
 MAX_BODY_BYTES = 32 * 1024 * 1024
+# DEFLATE's largest expansion: a gzip body inflates to at most this many
+# times its own length.
+GZIP_MAX_RATIO = 1032
 
 
 @dataclass(frozen=True)
@@ -449,7 +452,8 @@ class ReceiverLimits:
     arrive within ``request_deadline_seconds`` of when the receiver starts
     waiting for it; a kept-alive connection idle that long is closed. The
     bodies being read and decoded at once may hold at most
-    ``max_inflight_bytes``, a gzip body counted at its inflation cap. A body
+    ``max_inflight_bytes``, a gzip body counted with the most it can inflate
+    to. A body
     with more than ``max_spans_per_body`` spans is refused, and one that does
     not fit the queue whole is refused with 503, so the exporter can resend
     it; spans are never queued in part.
@@ -466,8 +470,11 @@ class ReceiverLimits:
         for name, value in asdict(self).items():
             if value <= 0:
                 raise ValueError(f"receiver {name} must be > 0")
-        if self.max_inflight_bytes < MAX_BODY_BYTES:
-            raise ValueError("receiver max_inflight_bytes must hold one full body")
+        if self.max_inflight_bytes < 2 * MAX_BODY_BYTES:
+            raise ValueError(
+                "receiver max_inflight_bytes must hold one full gzip body and "
+                "its inflation"
+            )
 
 
 _BUSY_RESPONSE = (
@@ -763,7 +770,7 @@ class OtlpSpanReceiver:
         encoding = (handler.headers.get("Content-Encoding") or "").strip().lower()
         reserve = min(length, MAX_BODY_BYTES)
         if encoding == "gzip":
-            reserve += MAX_BODY_BYTES
+            reserve += min(MAX_BODY_BYTES, GZIP_MAX_RATIO * reserve)
         with self._lock:
             fits = self._inflight_bytes + reserve <= self.limits.max_inflight_bytes
             if fits:

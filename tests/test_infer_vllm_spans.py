@@ -33,6 +33,7 @@ from stormlog.infer.config import ProfileConfig
 from stormlog.infer.correlation_events import RequestEvent, StageEvent
 from stormlog.infer.profile import InferenceProfiler
 from stormlog.infer.vllm_spans import (
+    MAX_BODY_BYTES,
     OTLP_EXTRA_HINT,
     OtlpProtobufUnavailable,
     OtlpSpanReceiver,
@@ -646,8 +647,10 @@ class TestReceiverAdmission:
     def test_limits_are_validated(self) -> None:
         with pytest.raises(ValueError, match="max_connections"):
             ReceiverLimits(max_connections=0)
-        with pytest.raises(ValueError, match="hold one full body"):
-            ReceiverLimits(max_inflight_bytes=1024)
+        # One full gzip body: its own bytes and its inflation.
+        with pytest.raises(ValueError, match="hold one full gzip body"):
+            ReceiverLimits(max_inflight_bytes=2 * MAX_BODY_BYTES - 1)
+        ReceiverLimits(max_inflight_bytes=2 * MAX_BODY_BYTES)
 
     def test_connections_over_the_cap_get_503_without_a_handler(self) -> None:
         with _receiver(limits=ReceiverLimits(max_connections=2)) as receiver:
@@ -745,32 +748,60 @@ class TestReceiverAdmission:
         assert metadata["header_timeouts"] == 0
 
     def test_bodies_over_the_in_flight_budget_get_503(self) -> None:
-        import gzip
-
-        # A gzip body is charged its inflation cap (32 MiB) on top of its own
-        # length, so with a 32 MiB budget it can never be admitted.
-        limits = ReceiverLimits(max_inflight_bytes=32 * 1024 * 1024)
+        """Bodies still arriving hold their reservations; an export that does
+        not fit beside them is answered 503 until one finishes."""
+        head = (
+            b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {MAX_BODY_BYTES}\r\n\r\n{{".encode()
+        )
+        limits = ReceiverLimits(max_inflight_bytes=2 * MAX_BODY_BYTES)
         with _receiver(limits=limits) as receiver:
-            request = urllib.request.Request(
-                f"http://{receiver.listen}/v1/traces",
-                data=gzip.compress(JSON_EXPORT),
-                headers={
-                    "Content-Type": "application/json",
-                    "Content-Encoding": "gzip",
-                },
-                method="POST",
-            )
-            with pytest.raises(urllib.error.HTTPError) as refused:
-                urllib.request.urlopen(request, timeout=5)
-            plain = _post(
-                f"http://{receiver.listen}/v1/traces", JSON_EXPORT, "application/json"
-            )
+            url = f"http://{receiver.listen}/v1/traces"
+            held = [_connect(receiver.listen) for _ in range(2)]
+            for sock in held:
+                sock.sendall(head)
+            time.sleep(0.2)  # both admitted, their bodies unfinished
+            refused = _post(url, JSON_EXPORT, "application/json")
+            held.pop().close()  # its handler reads EOF and lets go
+            time.sleep(0.2)
+            fits = _post(url, JSON_EXPORT, "application/json")
+            held.pop().close()
             metadata = receiver.capability_metadata()
-        assert refused.value.code == 503
-        assert refused.value.headers["Retry-After"] == "1"
-        assert plain == 200
+        assert refused == 503
+        assert fits == 200
         assert metadata["busy"] == 1
         assert metadata["spans"] == 1
+
+    def test_gzip_exports_are_charged_their_possible_inflation(self) -> None:
+        """At most 1,032 times their length (DEFLATE's limit), so two small
+        gzip exports fit side by side."""
+        import gzip
+
+        with _receiver() as receiver:
+            with _connect(receiver.listen) as held:
+                compressed = gzip.compress(JSON_EXPORT)
+                held.sendall(
+                    b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n"
+                    b"Content-Type: application/json\r\nContent-Encoding: gzip\r\n"
+                    + f"Content-Length: {len(compressed)}\r\n\r\n".encode()
+                    + compressed[:10]
+                )
+                time.sleep(0.2)  # admitted, its body not yet whole
+                request = urllib.request.Request(
+                    f"http://{receiver.listen}/v1/traces",
+                    data=compressed,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Content-Encoding": "gzip",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    status = response.status
+            metadata = receiver.capability_metadata()
+        assert status == 200
+        assert metadata["busy"] == 0
 
     def test_too_many_spans_in_one_body_is_refused(self) -> None:
         with _receiver(limits=ReceiverLimits(max_spans_per_body=3)) as receiver:

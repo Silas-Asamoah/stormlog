@@ -106,7 +106,7 @@ applied before the data is held whole, and each refusal is counted:
 | `/metrics` scrape | series in one response | 20,000 | the scrape fails with `oversized`, before the compact record is built |
 | span receiver | open connections | 8 | the next connection gets a bare 503 with `Retry-After: 1` and is closed, without a handler thread (`refused_connections`) |
 | span receiver | time to receive a whole request: request line, headers and body, from when the receiver starts waiting for it | 10 s | the connection is closed: with 408 when the body is late (`body_timeouts`), without an answer when the request line or headers are (`header_timeouts`); a kept-alive connection idle this long is closed, uncounted |
-| span receiver | bytes being read or decoded at once | 64 MiB, a gzip body counted at its 32 MiB inflation cap | 503 with `Retry-After: 1` (`busy`) |
+| span receiver | bytes being read or decoded at once | 64 MiB; a gzip body is counted with the most it can inflate to, 1,032 times its length and at most 32 MiB | 503 with `Retry-After: 1` (`busy`) |
 | span receiver | spans in one body | 10,000 | 413 (`too_many_spans`) |
 | span receiver | spans waiting in the queue | 100,000 spans and 64 MiB | 503 with `Retry-After: 1`, and none of the body's spans is kept (`dropped_queue_full`, which counts spans the exporter may resend) |
 
