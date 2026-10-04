@@ -798,7 +798,9 @@ def cmd_profile(args: argparse.Namespace) -> int:
             "the cache, and each case records its cache state as unverified"
         )
     with _usage_errors():
-        profiler = InferenceProfiler(_profile_config(args), on_warning=_print_warning)
+        profiler = InferenceProfiler(
+            _profile_config(args), on_warning=_print_warning, on_notice=_print_notice
+        )
         profiler.prepare()
     _warn_about_unjudgeable_criteria(profiler.config)
     report = profiler.run()
@@ -1036,6 +1038,10 @@ def _collection_exit_code(result: CollectionResult) -> int:
 
 def _print_warning(message: str) -> None:
     print(f"Warning: {message}", file=sys.stderr)
+
+
+def _print_notice(message: str) -> None:
+    print(message, file=sys.stderr)
 
 
 def _stop_on_signals(stop_event: threading.Event) -> dict[int, Any]:

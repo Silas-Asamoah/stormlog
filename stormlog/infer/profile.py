@@ -76,9 +76,12 @@ class InferenceProfiler:
         *,
         run_id: str | None = None,
         on_warning: Callable[[str], None] | None = None,
+        on_notice: Callable[[str], None] | None = None,
     ) -> None:
         self.config = config
         self.on_warning = on_warning
+        # What the run is doing when it would otherwise seem stuck.
+        self.on_notice = on_notice
         self.session = create_session_summary(source="stormlog.infer.profile")
         self.run_id = run_id or config.run_id or new_session_id()
         self.token_counter = build_token_counter(
@@ -229,6 +232,11 @@ class InferenceProfiler:
             export.close(EXPORT_INTERRUPT_CLOSE_SECONDS)
             linger = self.config.export.prometheus_linger_seconds
             if linger > 0 and not interrupted and export.server is not None:
+                if self.on_notice is not None:
+                    self.on_notice(
+                        f"Serving the final metrics at http://{export.server.address}"
+                        f"/metrics for {linger:g} s; Ctrl+C ends the wait"
+                    )
                 try:
                     time.sleep(linger)
                 except KeyboardInterrupt:
