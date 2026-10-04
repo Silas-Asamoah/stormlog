@@ -1124,6 +1124,27 @@ def test_a_full_disk_removes_the_oldest_bundle_not_protected(tmp_path: Path) -> 
     store.close()
 
 
+def test_a_full_disk_skips_a_bundle_being_read(tmp_path: Path) -> None:
+    """Deferred, it was removed later as well, for room already made."""
+    store = IncidentStore(tmp_path)
+    ids = []
+    for second in (1, 2, 3):
+        incident_id = store.new_incident_id(second * 1_000_000_000)
+        writer = store.new_bundle(incident_id, 4096)
+        assert writer is not None
+        with writer.file("incident.jsonl") as out:
+            out.write(b"{}\n")
+        writer.publish(status="completed", complete=True, sealed_at_ns=second)
+        ids.append(incident_id)
+    with open_incident_bundle(tmp_path / "incidents" / ids[0]):
+        assert store.make_room_on_disk()
+        assert store.deferred == 0
+    assert [p.incident_id for p in store.take_pruned()] == [ids[1]]
+    assert store.reclaim_deferred() == 0
+    assert [m.incident_id for _p, m in store.bundles()] == [ids[0], ids[2]]
+    store.close()
+
+
 def test_an_abandoned_new_bundle_leaves_nothing_behind(tmp_path: Path) -> None:
     """The bundle's directory stayed after its first generation was
     abandoned, so writing that incident again found its id taken."""
