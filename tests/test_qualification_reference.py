@@ -278,8 +278,11 @@ def test_the_engine_hit_ratio_comes_from_counter_deltas() -> None:
         scrape(5, 10, 5),  # a counter fell (a restart): skipped
         scrape(6, None, None),  # no counters on this page
         scrape(7, 110, 55),
+        scrape(8, 210, 40),  # hits fell while queries rose: not a ratio
+        scrape(9, 220, 60),  # more hits than queries: not a ratio either
+        scrape(10, 320, 110),  # 50 of 100
     ]
-    assert hit_ratios(scrapes) == [(2, 0.75), (4, 0.4)]
+    assert hit_ratios(scrapes) == [(2, 0.75), (4, 0.4), (10, 0.5)]
 
 
 def test_in_flight_intervals_merge_overlapping_requests() -> None:
