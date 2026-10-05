@@ -15,6 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "benchmarks/native_probes"
 MATRIX = ROOT / BASE / "matrices/stormlog_validated.json"
+SOURCE_MATRIX = ROOT / BASE / "matrices/source_backed.json"
+V1_COMMIT = "dcb58a4"
 DECISION = f"{BASE}/decision_2026-10-05.md"
 SCOPE = (
     "Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, "
@@ -178,7 +180,7 @@ CONTEXT = {
     "pytorch-kineto": {
         "status": "MEASURED_V2",
         "detail": (
-            "vLLM stack-free Kineto added 1.7, 7.5, 29.3 and 74.5 GiB RSS at "
+            "vLLM stack-free Kineto added 1.7, 7.3, 29.3 and 74.5 GiB RSS at "
             "50, 200, 800 and 2200 request windows; stop/export took 33, 138, "
             "551 s and timed out at 600 s, blocking serving."
         ),
@@ -186,15 +188,69 @@ CONTEXT = {
     },
 }
 
+NOT_RUN = "Not measured in protocol v1 or v2."
+OTHER_CONTEXT = {
+    "vllm-proton": (
+        "Not measured in protocol v2. v1 bounded smokes are in git history at "
+        f"commit {V1_COMMIT} and qualify no field."
+    ),
+    "ebpf-semantic": NOT_RUN,
+    "cupti-ebpf-hybrid": NOT_RUN,
+    "neutrino": NOT_RUN,
+    "rocprofiler": f"{NOT_RUN} Requires AMD hardware (issue #235).",
+    "no-native-collector": (
+        "Protocol v2 ran profiler-off only as the baseline for the other modes. "
+        "That does not show existing telemetry and imported traces answer the "
+        "attribution question, so no field is qualified."
+    ),
+}
+
+ASSUMPTIONS = {
+    "direct-cupti": [
+        "Request and phase attribution, pinned host memory, stream overlap, "
+        "and non-root or other container deployments remain unqualified."
+    ],
+    "pytorch-kineto": [
+        "Kineto trace completeness against Nsight and its cost in CUDA-graph "
+        "mode remain unqualified."
+    ],
+}
+
+
+def _unmeasured(source_status: str) -> dict:
+    return {
+        "status": "UNKNOWN",
+        "detail": (
+            "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in "
+            f"protocol v2. Source-backed status: {source_status}."
+        ),
+        "evidence": [DECISION],
+    }
+
 
 def main() -> None:
     matrix = json.loads(MATRIX.read_text())
+    source = {
+        candidate["id"]: candidate["claims"]
+        for candidate in json.loads(SOURCE_MATRIX.read_text())["candidates"]
+    }
     updates = {"direct-cupti": DIRECT_CUPTI, "pytorch-kineto": PYTORCH_KINETO}
     for candidate in matrix["candidates"]:
-        for field, claim in updates.get(candidate["id"], {}).items():
-            candidate["claims"][field] = claim
+        measured = updates.get(candidate["id"], {})
+        for field in candidate["claims"]:
+            candidate["claims"][field] = measured.get(
+                field, _unmeasured(source[candidate["id"]][field]["status"])
+            )
         if candidate["id"] in CONTEXT:
             candidate["validation_context"] = CONTEXT[candidate["id"]]
+        else:
+            candidate["validation_context"] = {
+                "status": "NOT_RUN_IN_V2",
+                "detail": OTHER_CONTEXT[candidate["id"]],
+                "evidence": [DECISION],
+            }
+        if candidate["id"] in ASSUMPTIONS:
+            candidate["unverified_assumptions"] = ASSUMPTIONS[candidate["id"]]
     matrix["reviewed_on"] = "2026-10-05"
     matrix["qualification_rule"] = (
         "UNKNOWN means no qualifying Stormlog result for that field; it does "

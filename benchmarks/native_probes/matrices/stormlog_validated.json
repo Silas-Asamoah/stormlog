@@ -4,72 +4,72 @@
     {
       "claims": {
         "amd": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
@@ -87,7 +87,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -121,7 +121,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -142,9 +142,9 @@
           "status": "STORMLOG_VALIDATED"
         },
         "macos": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
@@ -162,7 +162,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -183,72 +183,72 @@
           "status": "STORMLOG_VALIDATED"
         },
         "packaging_complexity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         }
@@ -264,10 +264,10 @@
       "id": "pytorch-kineto",
       "name": "PyTorch/Kineto",
       "unverified_assumptions": [
-        "Full-window public-engine stop/export/teardown and paired overhead remain unqualified."
+        "Kineto trace completeness against Nsight and its cost in CUDA-graph mode remain unqualified."
       ],
       "validation_context": {
-        "detail": "vLLM stack-free Kineto added 1.7, 7.5, 29.3 and 74.5 GiB RSS at 50, 200, 800 and 2200 request windows; stop/export took 33, 138, 551 s and timed out at 600 s, blocking serving.",
+        "detail": "vLLM stack-free Kineto added 1.7, 7.3, 29.3 and 74.5 GiB RSS at 50, 200, 800 and 2200 request windows; stop/export took 33, 138, 551 s and timed out at 600 s, blocking serving.",
         "evidence": [
           "benchmarks/native_probes/decision_2026-10-05.md",
           "benchmarks/native_probes/results_v2/window_scaling.md"
@@ -278,170 +278,170 @@
     {
       "claims": {
         "amd": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: FAILED_SMOKE. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         }
@@ -460,19 +460,19 @@
         "Full-window Proton attribution, completeness, and overhead remain unqualified."
       ],
       "validation_context": {
-        "detail": "A Proton smoke retained a teardown error. No full-workload Proton preflight or capability field qualified.",
+        "detail": "Not measured in protocol v2. v1 bounded smokes are in git history at commit dcb58a4 and qualify no field.",
         "evidence": [
-          "benchmarks/native_probes/decision_defer_2026-10-04.md"
+          "benchmarks/native_probes/decision_2026-10-05.md"
         ],
-        "status": "FAILED_SMOKE"
+        "status": "NOT_RUN_IN_V2"
       }
     },
     {
       "claims": {
         "amd": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
@@ -484,9 +484,9 @@
           "status": "UNSUPPORTED"
         },
         "containers": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
@@ -504,7 +504,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -538,7 +538,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -572,7 +572,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -606,7 +606,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -640,7 +640,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -661,9 +661,9 @@
           "status": "STORMLOG_VALIDATED"
         },
         "instruction_level_detail": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
@@ -681,7 +681,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -702,9 +702,9 @@
           "status": "STORMLOG_VALIDATED"
         },
         "late_attach": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
@@ -722,7 +722,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -743,9 +743,9 @@
           "status": "STORMLOG_VALIDATED"
         },
         "macos": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
@@ -763,7 +763,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -784,16 +784,16 @@
           "status": "STORMLOG_VALIDATED"
         },
         "packaging_complexity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
@@ -812,9 +812,9 @@
           "status": "VERSION_DEPENDENT"
         },
         "semantic_inference_phases": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
@@ -832,7 +832,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -866,7 +866,7 @@
             {
               "path": "benchmarks/native_probes/protocol_v2.json",
               "role": "command",
-              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
             },
             {
               "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
@@ -894,16 +894,16 @@
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         }
@@ -925,7 +925,7 @@
       "id": "direct-cupti",
       "name": "Direct CUPTI Activity",
       "unverified_assumptions": [
-        "Request/phase attribution, paired memory effect, pinned host memory, collector-buffer memory, and coexistence remain unqualified."
+        "Request and phase attribution, pinned host memory, stream overlap, and non-root or other container deployments remain unqualified."
       ],
       "validation_context": {
         "detail": "Protocol v2 measured direct CUPTI against vLLM's Kineto profiler across 50-2200 request windows (3 repetitions each), plus Nsight fidelity, induced loss, coexistence and ablations. Fidelity matched Nsight; p95 perturbation was +25-27% in eager mode and memory grew with the window because the helper's consumer could not keep up. Decision: defer. Post-hoc, in CUDA-graph mode at W=200, p95 perturbation was +0.8%.",
@@ -939,170 +939,170 @@
     {
       "claims": {
         "amd": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         }
@@ -1133,180 +1133,180 @@
         "Stormlog host probe fidelity, privileges, packaging, and overhead remain unmeasured."
       ],
       "validation_context": {
-        "detail": "No Stormlog host USDT/uprobe/eBPF candidate trial was run.",
+        "detail": "Not measured in protocol v1 or v2.",
         "evidence": [
-          "benchmarks/native_probes/decision_defer_2026-10-04.md"
+          "benchmarks/native_probes/decision_2026-10-05.md"
         ],
-        "status": "NOT_RUN"
+        "status": "NOT_RUN_IN_V2"
       }
     },
     {
       "claims": {
         "amd": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         }
@@ -1331,180 +1331,180 @@
         "Stormlog correlation, two-domain loss visibility, privileges, packaging, and overhead remain unmeasured."
       ],
       "validation_context": {
-        "detail": "No Stormlog CUPTI/eBPF hybrid candidate trial was run.",
+        "detail": "Not measured in protocol v1 or v2.",
         "evidence": [
-          "benchmarks/native_probes/decision_defer_2026-10-04.md"
+          "benchmarks/native_probes/decision_2026-10-05.md"
         ],
-        "status": "NOT_RUN"
+        "status": "NOT_RUN_IN_V2"
       }
     },
     {
       "claims": {
         "amd": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was PAPER_RESULT_NOT_REPRODUCED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         }
@@ -1529,180 +1529,180 @@
         "No named Stormlog incident establishes a need for instruction-level evidence; workload behavior remains unmeasured."
       ],
       "validation_context": {
-        "detail": "No Stormlog Neutrino candidate trial was run.",
+        "detail": "Not measured in protocol v1 or v2.",
         "evidence": [
-          "benchmarks/native_probes/decision_defer_2026-10-04.md"
+          "benchmarks/native_probes/decision_2026-10-05.md"
         ],
-        "status": "NOT_RUN"
+        "status": "NOT_RUN_IN_V2"
       }
     },
     {
       "claims": {
         "amd": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: NOT_RUN_AMD_HARDWARE_UNAVAILABLE. Source-backed status was UNSUPPORTED. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         }
@@ -1727,180 +1727,180 @@
         "No AMD hardware trial or Stormlog ROCProfiler qualification has been completed."
       ],
       "validation_context": {
-        "detail": "No compatible AMD trial was run. ROCProfiler remains a separate unqualified lane under #235.",
+        "detail": "Not measured in protocol v1 or v2. Requires AMD hardware (issue #235).",
         "evidence": [
-          "benchmarks/native_probes/decision_defer_2026-10-04.md"
+          "benchmarks/native_probes/decision_2026-10-05.md"
         ],
-        "status": "NOT_RUN_AMD_HARDWARE_UNAVAILABLE"
+        "status": "NOT_RUN_IN_V2"
       }
     },
     {
       "claims": {
         "amd": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "containers": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "device_execution_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "engine_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "graph_replay": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "host_api_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "instruction_level_detail": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "macos": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "packaging_complexity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "privileges": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "runtime_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "semantic_inference_phases": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "startup_injection": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "streams": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "support_burden": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
         "windows": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHT. Source-backed status was UNKNOWN. See candidate validation_context.",
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         }
@@ -1925,12 +1925,11 @@
         "No paired comparison establishes that existing telemetry and imported traces answer all attribution needs."
       ],
       "validation_context": {
-        "detail": "A full profiler-off L4 preflight passed. It does not qualify imported-trace attribution or establish a comparative winner.",
+        "detail": "Protocol v2 ran profiler-off only as the baseline for the other modes. That does not show existing telemetry and imported traces answer the attribution question, so no field is qualified.",
         "evidence": [
-          "benchmarks/native_probes/decision_defer_2026-10-04.md",
-          "benchmarks/native_probes/evidence/preflight-off-full-shutdown-l4-525221-23.json"
+          "benchmarks/native_probes/decision_2026-10-05.md"
         ],
-        "status": "PARTIAL_PREFLIGHT"
+        "status": "NOT_RUN_IN_V2"
       }
     }
   ],

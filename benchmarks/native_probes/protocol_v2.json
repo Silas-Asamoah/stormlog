@@ -6,7 +6,7 @@
   "status": "approved_before_observations",
   "approved_on": "2026-10-04",
   "approval": "Maintainer approved replacing v1 with window scaling, landing on the PR #239 branch, and a USD 8 GPU cap.",
-  "supersedes": "benchmarks/native_probes/final_run_proposal.json",
+  "supersedes": "v1 protocol benchmarks/native_probes/final_run_proposal.json (SHA-256 2761ffde2dfff13c14d3d2f24ef4036c2a4e33c073b879e39a69b14e82933815), removed from the tree and kept in git history at commit dcb58a4",
   "why_v1_was_superseded": [
     "Direct CUPTI enabled at process start (model load and warmup included) while Kineto, Proton and nsys started after warmup, so the capture windows never matched.",
     "Resource sampling ended with the measured window, before stop_profile, so profiler export and final flush memory were never observed.",
@@ -26,6 +26,46 @@
     "defer": "Fidelity passes but there is no cost advantage at windows Stormlog needs.",
     "reject": "Eager or graph fidelity fails, or cupti-min perturbation is clearly worse than Kineto's at equal windows.",
     "scope": "An adopt decision means an opt-in, experimental Linux NVIDIA collector only. AMD, macOS and Windows stay unqualified (issue #235)."
+  },
+  "field_disposition": {
+    "source": "Carried over unchanged from the v1 configuration (experiment.json at commit dcb58a4), set before any v2 data.",
+    "decision_critical": [
+      "buffer_loss_visibility",
+      "containers",
+      "cpu_gpu_correlation",
+      "device_execution_timing",
+      "engine_coupling",
+      "graph_replay",
+      "host_api_timing",
+      "kernel_identity",
+      "linux",
+      "nvidia",
+      "packaging_complexity",
+      "privileges",
+      "profiler_coexistence",
+      "runtime_coupling",
+      "signal",
+      "streams",
+      "support_burden"
+    ],
+    "acceptable_limitations": [
+      "amd",
+      "instruction_level_detail",
+      "late_attach",
+      "macos",
+      "semantic_inference_phases",
+      "startup_injection",
+      "windows"
+    ],
+    "limitation_conditions": {
+      "amd": "separate AMD qualification, never inferred from NVIDIA",
+      "macos": "first trial is Linux NVIDIA only",
+      "windows": "first trial is Linux NVIDIA only",
+      "semantic_inference_phases": "external engine annotations required where native trace has no phase label",
+      "instruction_level_detail": "not required for request-to-device timeline",
+      "late_attach": "startup injection is acceptable if explicitly declared",
+      "startup_injection": "required deployment mode must be recorded"
+    }
   },
   "workload": {
     "engine": "vLLM 0.30.0",

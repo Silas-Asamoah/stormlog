@@ -138,7 +138,12 @@ def test_protocol_v2_matches_runner() -> None:
     assert protocol["window_scaling"]["windows"] == sorted(
         protocol["window_scaling"]["windows"]
     )
-    assert protocol["supersedes"] == "benchmarks/native_probes/final_run_proposal.json"
+    assert "final_run_proposal.json" in protocol["supersedes"]
+    disposition = protocol["field_disposition"]
+    fields = set(disposition["decision_critical"]) | set(
+        disposition["acceptable_limitations"]
+    )
+    assert len(fields) == 24
 
 
 def test_kineto_trial_samples_through_a_slow_stop(
