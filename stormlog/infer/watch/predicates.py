@@ -362,6 +362,7 @@ class FrozenExporter:
     stayed above zero, and no progress counter moved. This is how a stalled
     engine looks from ``/metrics``: the frontend keeps answering with the last
     values its engine reported.
+    Window checks use the watcher's monotonic stamps, as metric predicates do.
     """
 
     ticks: int = 5
@@ -393,7 +394,10 @@ class FrozenExporter:
 
     def _tail(self, history: Sequence[Entry]) -> list[VllmScrapeRecord] | None:
         """The last ``ticks + 1`` scrapes, when all of them succeeded."""
-        tail = [record for _stamp, record in history[-(self.ticks + 1) :]]
+        tail = [
+            on_monotonic_clock(stamp, record)
+            for stamp, record in history[-(self.ticks + 1) :]
+        ]
         complete = len(tail) == self.ticks + 1
         return tail if complete and all(r.status == SCRAPE_OK for r in tail) else None
 

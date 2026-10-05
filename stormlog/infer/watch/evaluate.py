@@ -178,8 +178,13 @@ class TriggerEngine:
             stale_after = (self.tick_seconds + self.scrape_timeout_seconds) * _NS
             if not tail or at_ns - tail[-1][0].done_mono_ns > stale_after:
                 # Nothing finished lately: the last verdict is not today's.
+                # This verdict reads the current freshness interval, not the
+                # old tail: a past pause must eventually leave its mask.
                 reasons = (REASON_NO_RECENT_SCRAPE,)
-                return Evaluation(predicate.when_stale, reasons=reasons), since
+                return (
+                    Evaluation(predicate.when_stale, reasons=reasons),
+                    at_ns - int(stale_after),
+                )
             return predicate.evaluate_history(history), since
         selection = select_window(
             history,

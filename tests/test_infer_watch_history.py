@@ -86,6 +86,37 @@ def test_scrape_history_keeps_a_parsed_tail_and_round_trips_the_rest() -> None:
         ScrapeHistory(max_seconds=1, max_bytes=1, parsed_count=1)
 
 
+@pytest.mark.parametrize(
+    ("max_seconds", "max_bytes", "cause"),
+    [(600, 1400, EVICT_BYTES), (2, 1 << 20, EVICT_AGE)],
+)
+def test_ring_evictions_remove_the_same_scrapes_from_the_parsed_tail(
+    max_seconds: float, max_bytes: int, cause: str
+) -> None:
+    history = ScrapeHistory(
+        max_seconds=max_seconds, max_bytes=max_bytes, parsed_count=5
+    )
+    text = exposition(gauges={"vllm:num_requests_waiting": 4})
+    for second in range(10):
+        assert history.add(_stamp(second), scrape(text, second))
+        retained = list(history.records())
+        assert history.parsed() == retained[-5:]
+    assert history.ring.evictions[cause] > 0
+
+
+def test_explicit_ring_expiry_removes_the_expired_parsed_scrapes() -> None:
+    history = ScrapeHistory(max_seconds=2, max_bytes=1 << 20, parsed_count=5)
+    text = exposition(gauges={"vllm:num_requests_waiting": 4})
+    for second in range(3):
+        history.add(_stamp(second), scrape(text, second))
+    history.ring.expire(3 * S)
+    assert history.parsed() == list(history.records())
+    assert [stamp.mono_ns for stamp, _record in history.parsed()] == [S, 2 * S]
+    history.ring.expire(5 * S)
+    assert history.parsed() == []
+    assert list(history.records()) == []
+
+
 def _real_scrape() -> VllmScrapeRecord:
     text = (FIXTURES / "q05_c08_scrape_record_eb5ad3f.json").read_text()
     return VllmScrapeRecord.from_record(json.loads(text))
