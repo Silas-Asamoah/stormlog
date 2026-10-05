@@ -74,18 +74,72 @@
           "status": "UNKNOWN"
         },
         "late_attach": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "vLLM /start_profile and /stop_profile started and stopped capture on a running server in every Kineto trial. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "linux": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "vLLM torch profiler trials ran on Linux x86_64. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "macos": {
           "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
@@ -95,11 +149,38 @@
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "Validated on an L4 only. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "packaging_complexity": {
           "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
@@ -186,13 +267,12 @@
         "Full-window public-engine stop/export/teardown and paired overhead remain unqualified."
       ],
       "validation_context": {
-        "detail": "A bounded stack-free public-engine run retained useful CPU/GPU signals but missed its exact resource-row check; the full run failed stop/export/teardown. No capability field qualified.",
+        "detail": "vLLM stack-free Kineto added 1.7, 7.5, 29.3 and 74.5 GiB RSS at 50, 200, 800 and 2200 request windows; stop/export took 33, 138, 551 s and timed out at 600 s, blocking serving.",
         "evidence": [
-          "benchmarks/native_probes/decision_defer_2026-10-04.md",
-          "benchmarks/native_probes/evidence/preflight-public-engine-stack-free-l4-525216-22.json",
-          "benchmarks/native_probes/evidence/preflight-public-engine-stack-free-full-l4-525237-25.json"
+          "benchmarks/native_probes/decision_2026-10-05.md",
+          "benchmarks/native_probes/results_v2/window_scaling.md"
         ],
-        "status": "PARTIAL_PREFLIGHTS"
+        "status": "MEASURED_V2"
       }
     },
     {
@@ -397,11 +477,11 @@
           "status": "UNKNOWN"
         },
         "buffer_loss_visibility": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "Measured gaps: output-limit drops were reported (1,277,656 records), but the helper has no buffer cap, so a slow consumer grew the backlog (72 MiB, 224 s flush) instead of dropping visibly, and under Nsight the helper captured 0-1 records while reporting a clean finalize. Timestamp loss is now counted by the helper. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "status": "UNSUPPORTED"
         },
         "containers": {
           "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
@@ -411,39 +491,174 @@
           "status": "UNKNOWN"
         },
         "cpu_gpu_correlation": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "100% of kernels correlated to a runtime or driver launch in vLLM eager and graph runs and W1-W3, matching Nsight Systems. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/fidelity.json",
+              "role": "analysis",
+              "sha256": "9788273c1ced3c97491caa0787edc8a2443902a19c7bf6f2b0be17d4755ac1ed"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "device_execution_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "0 kernels without device timestamps across vLLM eager, vLLM CUDA graph and W1-W4 runs with CUPTI 13.0. With CUPTI 12.6 under the same CUDA 13 runtime, about 39% of kernels had none while 0 drops were reported. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/fidelity.json",
+              "role": "analysis",
+              "sha256": "9788273c1ced3c97491caa0787edc8a2443902a19c7bf6f2b0be17d4755ac1ed"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "engine_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
+          "detail": "No vLLM code or configuration change was needed; capture is process-level. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "graph_replay": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "W3 graph replay matched Nsight exactly (3000 graph-node kernels); in vLLM CUDA-graph mode 93.5% of kernels carried graph IDs in both CUPTI and Nsight. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/fidelity.json",
+              "role": "analysis",
+              "sha256": "9788273c1ced3c97491caa0787edc8a2443902a19c7bf6f2b0be17d4755ac1ed"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "host_api_timing": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "Runtime and driver API records carry CPU start and end timestamps; kernels launched by cuBLASLt and Triton correlate only through driver records, so the driver activity kind is required. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/fidelity.json",
+              "role": "analysis",
+              "sha256": "9788273c1ced3c97491caa0787edc8a2443902a19c7bf6f2b0be17d4755ac1ed"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "instruction_level_detail": {
           "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
@@ -453,11 +668,38 @@
           "status": "UNKNOWN"
         },
         "kernel_identity": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "Exact per-name kernel counts matched Nsight on W1 (3000), W2 (32000 each) and W3 (3000); vLLM kernel name sets matched in eager and graph mode. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/fidelity.json",
+              "role": "analysis",
+              "sha256": "9788273c1ced3c97491caa0787edc8a2443902a19c7bf6f2b0be17d4755ac1ed"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "late_attach": {
           "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
@@ -467,11 +709,38 @@
           "status": "UNKNOWN"
         },
         "linux": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "All v2 trials ran on Linux x86_64. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "macos": {
           "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
@@ -481,11 +750,38 @@
           "status": "UNKNOWN"
         },
         "nvidia": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "Validated on an L4 (compute capability 8.9) only; other architectures are untested. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "packaging_complexity": {
           "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was INFERENCE. See candidate validation_context.",
@@ -502,18 +798,18 @@
           "status": "UNKNOWN"
         },
         "profiler_coexistence": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "With Nsight Systems on the same process, Nsight captured all 3000 W1 kernels and the helper captured 0-1 records per process with no error reported. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "status": "UNSUPPORTED"
         },
         "runtime_coupling": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "Measured: the helper must link the CUPTI matching the target process's CUDA runtime. CUPTI 12.6 under the torch cu130 runtime silently lost about 39% of kernel timestamps; CUPTI 13.0 lost none. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "status": "VERSION_DEPENDENT"
         },
         "semantic_inference_phases": {
           "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was UNSUPPORTED. See candidate validation_context.",
@@ -523,23 +819,77 @@
           "status": "UNKNOWN"
         },
         "signal": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "Runtime, driver and concurrent-kernel activity records were captured in every v2 trial, with deferred start and stop controls. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "startup_injection": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was VERSION_DEPENDENT. See candidate validation_context.",
+          "detail": "CUDA_INJECTION64_PATH injection reached the vLLM V1 EngineCore process in every CUPTI trial without engine changes. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
-          "status": "UNKNOWN"
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "6b822128955ab1e5ed211358005316e6017ec2c61f843d0b24388c565798cda3"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
         },
         "streams": {
-          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Candidate status: PARTIAL_PREFLIGHTS. Source-backed status was CONFIRMED_BY_PRIMARY_SOURCE. See candidate validation_context.",
+          "detail": "Stream IDs matched Nsight, but the W2 overlap workload produced no meaningful concurrent execution on the L4 in either tool, so overlap fidelity is untested. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
           "evidence": [
-            "benchmarks/native_probes/decision_defer_2026-10-04.md"
+            "benchmarks/native_probes/decision_2026-10-05.md"
           ],
           "status": "UNKNOWN"
         },
@@ -578,12 +928,12 @@
         "Request/phase attribution, paired memory effect, pinned host memory, collector-buffer memory, and coexistence remain unqualified."
       ],
       "validation_context": {
-        "detail": "One full direct-CUPTI capacity preflight passed with STOP acknowledgment and zero reported drops; it did not qualify request/phase attribution, total memory, or a paired comparison.",
+        "detail": "Protocol v2 measured direct CUPTI against vLLM's Kineto profiler across 50-2200 request windows (3 repetitions each), plus Nsight fidelity, induced loss, coexistence and ablations. Fidelity matched Nsight; p95 perturbation was +25-27% in eager mode and memory grew with the window because the helper's consumer could not keep up. Decision: defer. Post-hoc, in CUDA-graph mode at W=200, p95 perturbation was +0.8%.",
         "evidence": [
-          "benchmarks/native_probes/decision_defer_2026-10-04.md",
-          "benchmarks/native_probes/evidence/preflight-vllm-capacity-4g-stop300-l4-524654-08.json"
+          "benchmarks/native_probes/decision_2026-10-05.md",
+          "benchmarks/native_probes/protocol_v2.json"
         ],
-        "status": "PARTIAL_PREFLIGHTS"
+        "status": "MEASURED_V2_DEFER"
       }
     },
     {
@@ -1585,7 +1935,7 @@
     }
   ],
   "matrix_kind": "stormlog_validated",
-  "qualification_rule": "UNKNOWN means no qualifying Stormlog result for that capability field; it does not mean unsupported or that no preflight was attempted. Candidate-level preflights do not automatically promote field-level claims.",
-  "reviewed_on": "2026-10-04",
+  "qualification_rule": "UNKNOWN means no qualifying Stormlog result for that field; it does not mean unsupported. STORMLOG_VALIDATED cells link five tracked v2 evidence files by SHA-256 and hold only within the stated scope. UNSUPPORTED and VERSION_DEPENDENT cells from v2 state the measurement that produced them.",
+  "reviewed_on": "2026-10-05",
   "schema_version": 1
 }

@@ -1,5 +1,7 @@
 # Issue #118: interim native integration decision
 
+> Superseded by `decision_2026-10-05.md` (protocol v2). Kept as the record of the v1 gate result.
+
 **Decision:** The native integration gate has not passed. Defer integrating a new native collector into Stormlog for now. Continue to treat existing semantic telemetry plus imported public or vendor traces as the interim path. This pauses a production integration while required comparative evidence is missing; it does not reject any of the eight candidates or establish that the interim path has better memory use or attribution than direct CUPTI.
 
 ## Concrete experimental basis
