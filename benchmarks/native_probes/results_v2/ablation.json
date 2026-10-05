@@ -1,0 +1,214 @@
+{
+ "trials": 6,
+ "table": [
+  {
+   "mode": "cupti-discard",
+   "window": 200,
+   "trials": 3,
+   "ok": 3,
+   "errors": [],
+   "off_window_p95_ms": 633.04853095,
+   "added_rss_mib": {
+    "n": 3,
+    "min": 8.0,
+    "median": 8.0,
+    "max": 10.0
+   },
+   "stopping_rss_peak_mib": {
+    "n": 1,
+    "min": 3376.65234375,
+    "median": 3376.65234375,
+    "max": 3376.65234375
+   },
+   "stop_seconds": {
+    "n": 3,
+    "min": 0.009036205,
+    "median": 0.012077077,
+    "max": 0.014916627
+   },
+   "window_p95_ms": {
+    "n": 3,
+    "min": 785.3352375999999,
+    "median": 795.64489165,
+    "max": 813.6516473999999
+   },
+   "window_ttft_p95_ms": {
+    "n": 3,
+    "min": 37.96001805,
+    "median": 39.173489999999994,
+    "max": 39.4915365
+   },
+   "after_window_p95_ms": {
+    "n": 3,
+    "min": 728.4803670499999,
+    "median": 736.1249105,
+    "max": 739.3983109999999
+   },
+   "artifact_mib": {
+    "n": 3,
+    "min": 0.0011548995971679688,
+    "median": 0.0011548995971679688,
+    "max": 0.0011548995971679688
+   },
+   "records": {
+    "n": 3,
+    "min": 0,
+    "median": 0,
+    "max": 0
+   },
+   "dropped": {
+    "n": 3,
+    "min": 0,
+    "median": 0,
+    "max": 0
+   },
+   "kernels_without_timestamps": {
+    "n": 3,
+    "min": 0,
+    "median": 0,
+    "max": 0
+   },
+   "buffer_peak_mib": {
+    "n": 3,
+    "min": 24.0,
+    "median": 24.0,
+    "max": 24.0
+   },
+   "callback_cpu_s": {
+    "n": 3,
+    "min": 0.065918894,
+    "median": 0.073978323,
+    "max": 0.082178893
+   },
+   "target_cpu_s": {
+    "n": 3,
+    "min": 243.58999999999997,
+    "median": 244.17999999999995,
+    "max": 247.66000000000003
+   },
+   "over_slo_or_failed": {
+    "n": 3,
+    "min": 0,
+    "median": 0,
+    "max": 0
+   },
+   "max_e2e_ms": {
+    "n": 3,
+    "min": 802.311227,
+    "median": 804.22914,
+    "max": 830.672721
+   },
+   "window_p95_perturbation": {
+    "n": 3,
+    "min": 0.2405608720416223,
+    "median": 0.2568465966677084,
+    "max": 0.2852911074273774
+   }
+  },
+  {
+   "mode": "cupti-kernel",
+   "window": 200,
+   "trials": 3,
+   "ok": 3,
+   "errors": [],
+   "off_window_p95_ms": 633.04853095,
+   "added_rss_mib": {
+    "n": 3,
+    "min": 2.0,
+    "median": 2.0,
+    "max": 6.0
+   },
+   "stopping_rss_peak_mib": {
+    "n": 1,
+    "min": 3400.7734375,
+    "median": 3400.7734375,
+    "max": 3400.7734375
+   },
+   "stop_seconds": {
+    "n": 3,
+    "min": 0.075265952,
+    "median": 0.111731054,
+    "max": 0.132368323
+   },
+   "window_p95_ms": {
+    "n": 3,
+    "min": 683.57674595,
+    "median": 684.0246705,
+    "max": 698.5565799999999
+   },
+   "window_ttft_p95_ms": {
+    "n": 3,
+    "min": 33.8721205,
+    "median": 33.984832000000004,
+    "max": 34.0834365
+   },
+   "after_window_p95_ms": {
+    "n": 3,
+    "min": 663.6549054999999,
+    "median": 665.93840005,
+    "max": 672.750039
+   },
+   "artifact_mib": {
+    "n": 3,
+    "min": 24.1373291015625,
+    "median": 24.450095176696777,
+    "max": 24.465309143066406
+   },
+   "records": {
+    "n": 3,
+    "min": 673273,
+    "median": 682074,
+    "max": 682190
+   },
+   "dropped": {
+    "n": 3,
+    "min": 0,
+    "median": 0,
+    "max": 0
+   },
+   "kernels_without_timestamps": {
+    "n": 3,
+    "min": 0,
+    "median": 0,
+    "max": 0
+   },
+   "buffer_peak_mib": {
+    "n": 3,
+    "min": 16.0,
+    "median": 16.0,
+    "max": 16.0
+   },
+   "callback_cpu_s": {
+    "n": 3,
+    "min": 2.735228853,
+    "median": 2.77346208,
+    "max": 2.881271442
+   },
+   "target_cpu_s": {
+    "n": 3,
+    "min": 245.46000000000004,
+    "median": 246.17000000000002,
+    "max": 247.63
+   },
+   "over_slo_or_failed": {
+    "n": 3,
+    "min": 0,
+    "median": 0,
+    "max": 0
+   },
+   "max_e2e_ms": {
+    "n": 3,
+    "min": 689.550514,
+    "median": 702.236755,
+    "max": 753.089182
+   },
+   "window_p95_perturbation": {
+    "n": 3,
+    "min": 0.07981728497841015,
+    "median": 0.08052485245246736,
+    "max": 0.10348029550229534
+   }
+  }
+ ],
+ "off_baseline_runs": "scaling"
+}

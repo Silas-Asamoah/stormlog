@@ -1,0 +1,10 @@
+name, driver_version, memory.total [MiB], compute_cap
+NVIDIA L4, 580.126.20, 23034 MiB, 8.9
+NVIDIA Nsight Systems version 2026.3.2.476-263238834031v0
+Linux 198ff3c7a108 6.8.0-71-generic #71-Ubuntu SMP PREEMPT_DYNAMIC Tue Jul 22 16:52:38 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+torch 2.13.0+cu130 13.0
+vllm 0.30.0
+	libcupti.so.13 => /home/v2/venv/lib/python3.10/site-packages/nvidia/cu13/lib/libcupti.so.13 (0x000077b7d0a00000)
+f6be3f0bd643f29f68ab3f284b697655ac8d76b40f80865ebd9bc77bc9a9e02b  /home/v2/libstormlog_cupti_cu13.so
+601d4ed74553ce6d4978badf6900b1e64f32ac08d5af7e6910c1ae1ee5aebf36  /home/v2/build/libstormlog_cupti_injection.so
+0e9756033abc59c8bc0476449139ccc5c942af31956d9c37d7794f9a57f7ca05  /home/v2/libstormlog_cupti_cu13_ablation.so
