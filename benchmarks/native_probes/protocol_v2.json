@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_probe_protocol",
+  "protocol": "native-probe-v2",
+  "issue": 118,
+  "status": "approved_before_observations",
+  "approved_on": "2026-10-04",
+  "approval": "Maintainer approved replacing v1 with window scaling, landing on the PR #239 branch, and a USD 8 GPU cap.",
+  "supersedes": "benchmarks/native_probes/final_run_proposal.json",
+  "why_v1_was_superseded": [
+    "Direct CUPTI enabled at process start (model load and warmup included) while Kineto, Proton and nsys started after warmup, so the capture windows never matched.",
+    "Resource sampling ended with the measured window, before stop_profile, so profiler export and final flush memory were never observed.",
+    "The client process was recorded as the collector helper; the CUPTI collector runs inside the target processes.",
+    "One fixed 220 s window cannot show how collection cost scales; Kineto failing to export that window was scored as a missing denominator instead of an observation.",
+    "Only eager vLLM was tested, although graph replay is a decision-critical field."
+  ],
+  "question": "Does a streaming direct-CUPTI Activity collector give bounded collection cost on long windows, with trace fidelity equal to Nsight, where vLLM's Kineto profiler (itself a CUPTI client) does not?",
+  "hypotheses": {
+    "H1_cost_scaling": "Kineto target-tree peak RSS growth and stop/export time grow with window length; direct CUPTI peak RSS growth stays bounded and its stop time stays roughly flat.",
+    "H2_perturbation": "At equal windows, cupti-min window p95 latency perturbation over off is no higher than Kineto's.",
+    "H3_fidelity": "cupti-min kernel populations match Nsight Systems in eager and CUDA-graph execution, with at least 99% of kernels correlated to a runtime launch.",
+    "H4_loss_visibility": "Under induced pressure (small buffers, slow consumer) the collector reports drops instead of losing records silently."
+  },
+  "decision_rule": {
+    "adopt": "H1 shows bounded CUPTI memory where Kineto grows or fails, H3 passes including CUDA graphs, H4 passes, and cupti-min median window p95 perturbation is at most 5% at the largest window.",
+    "defer": "Fidelity passes but there is no cost advantage at windows Stormlog needs.",
+    "reject": "Eager or graph fidelity fails, or cupti-min perturbation is clearly worse than Kineto's at equal windows.",
+    "scope": "An adopt decision means an opt-in, experimental Linux NVIDIA collector only. AMD, macOS and Windows stay unqualified (issue #235)."
+  },
+  "workload": {
+    "engine": "vLLM 0.30.0",
+    "model": "Qwen/Qwen2.5-0.5B-Instruct@c89bee90d9f811437d9735454613c35b4a3c4dc8",
+    "request": "scripts/native_probes/workloads/vllm_open_loop.py::request_body",
+    "warmup_requests": 200,
+    "measured_requests": 2200,
+    "interval_seconds": 0.1,
+    "max_in_flight": 32,
+    "server": "single L4, eager unless the trial says cuda_graphs, prefix caching off, fresh server per trial"
+  },
+  "window_scaling": {
+    "runner": "scripts/native_probes/workloads/vllm_window.py",
+    "modes": [
+      "off",
+      "kineto",
+      "cupti-min",
+      "cupti-full"
+    ],
+    "windows": [
+      50,
+      200,
+      800,
+      2200
+    ],
+    "window_definition": "capture starts with measured load and stops W * 0.1 s later; requests keep arriving after the stop",
+    "repetitions": 3,
+    "off_repetitions": 3,
+    "order": "seeded shuffle (seed 118) of all trials, one server per trial",
+    "stop_timeout_seconds": 600,
+    "timeout_rule": "A stop that does not return within the timeout is recorded as an outcome for that mode and window, never dropped.",
+    "kineto_config": "stack-free, record_shapes, memory and flops off; vLLM default gzip export retained and recorded",
+    "metrics": [
+      "target-tree RSS: baseline median, peak per phase (window, stopping, settle), added peak over baseline",
+      "GPU memory per phase from nvidia-smi",
+      "CUPTI activity buffer peak outstanding bytes and completion-callback CPU seconds",
+      "stop seconds (request to acknowledgement)",
+      "artifact bytes and delivered and dropped records",
+      "window and after-window e2e p50/p95/p99 and TTFT over successful requests",
+      "target CPU seconds from capture start to end"
+    ],
+    "reporting": "min, median and max across repetitions; no bootstrap claim from three repetitions"
+  },
+  "fidelity": {
+    "microbenchmarks": "scripts/native_probes/workloads/cuda_microbench.py W1 eager, W2 overlap and serialized, W3 graph, 100 warmup and 1000 measured iterations; cupti-min and nsys in separate runs",
+    "vllm_graph_mode": "cuda_graphs trials at W=200 for cupti-min and nsys",
+    "comparison": "kernel counts by name, kernel-to-runtime correlation coverage, stream overlap and graph node kernel counts",
+    "loss": "W4 stress with a 64 KiB buffer and consumer delay; reported drops must be nonzero and visible in status",
+    "coexistence": "one nsys plus cupti-min run to confirm the single-subscriber failure is reported"
+  },
+  "budget": {
+    "provider": "JarvisLabs",
+    "gpu": "L4",
+    "instances": 1,
+    "cap_usd": 8,
+    "rule": "pause after each phase; stop and report if projected spend exceeds the cap"
+  },
+  "artifacts": {
+    "raw_root": "artifacts/native-probes/v2",
+    "tracked_results": "benchmarks/native_probes/results_v2",
+    "retain_failures": true
+  },
+  "amendments_before_window_scaling": [
+    {
+      "date": "2026-10-05",
+      "change": "cupti-min activity set is runtime,driver,kernel (was runtime,kernel)",
+      "evidence": "Smoke: with runtime,kernel only 70.8% of vLLM kernels correlated; cuBLASLt/cutlass and Triton kernels launch through the driver API. With driver records correlation was 99.999%."
+    },
+    {
+      "date": "2026-10-05",
+      "change": "The helper links the CUPTI that matches the target's CUDA runtime (CUPTI 13.0.85 from the venv for torch cu130); the toolkit CUPTI 12.6 build is kept only as a negative control",
+      "evidence": "With CUPTI 12.6 under the CUDA 13 runtime, about 39% of kernel records had zero device timestamps while CUPTI reported 0 dropped records, in every device-buffer, pool-limit and flush-period setting tried. With CUPTI 13.0 the count was 0."
+    },
+    {
+      "date": "2026-10-05",
+      "change": "Helper finalization disables activities before the final flush and counts records delivered after close as local drops; status reports kernels_without_timestamps",
+      "evidence": "CUPTI 13 trial delivered 804 records after the trace was closed (EBADF)."
+    },
+    {
+      "date": "2026-10-05",
+      "change": "Target-tree RSS cap of 80 GiB; exceeding it kills the server and is recorded as the trial outcome",
+      "evidence": "Kineto added 1.8 GiB for a 5 s window in the smoke; a 220 s window could exhaust host memory if growth is linear."
+    },
+    {
+      "date": "2026-10-05",
+      "change": "Report Kineto's stop stall separately from in-capture overhead",
+      "evidence": "Kineto stop_profile blocked serving for 33.5 s in the smoke, so window p95 reached 34 s."
+    }
+  ],
+  "prediction_recorded_before_window_scaling": "Maintainer predicted: Kineto added RSS grows about 10x from W=200 to W=2200; CUPTI stays flat.",
+  "posthoc_additions": [
+    {
+      "plan": "benchmarks/native_probes/plans_v2/ablation.json",
+      "purpose": "Separate CUPTI API-tracing cost from the helper's consumer cost: cupti-kernel (kernel activity only) and cupti-discard (runtime,driver,kernel with records counted and discarded), W=200, 3 repetitions; off baseline from the window-scaling plan.",
+      "decision_role": "explanatory only"
+    },
+    {
+      "plan": "benchmarks/native_probes/plans_v2/graph_perturbation.json",
+      "purpose": "Perturbation in vLLM CUDA-graph mode: off, cupti-min and cupti-kernel at W=200, 3 repetitions.",
+      "decision_role": "explanatory only; does not change the pre-declared decision"
+    },
+    {
+      "step": "scripts/native_probes/remote/micro_fidelity.py",
+      "note": "The first run crashed on a duplicate environment key in the output-limit loss case (runs/micro); the fixed rerun is runs/micro2 and is the one reported."
+    },
+    {
+      "manual_trials": [
+        {
+          "trial_id": "cu13-default",
+          "command": "python -m scripts.native_probes.workloads.vllm_window --window 50 --warmup 20 --measured 100 --mode cupti-min --helper /home/v2/libstormlog_cupti_cu13.so --output /home/v2/runs/devbuf/cu13-default",
+          "purpose": "First run with the helper linked to CUPTI 13.0.",
+          "outcome": "0 kernels without timestamps; the capture failed with 804 records delivered after the trace was closed (EBADF), which led to the finalization fix."
+        },
+        {
+          "trial_id": "fixed-cupti-min",
+          "command": "python -m scripts.native_probes.workloads.vllm_window --window 50 --warmup 20 --measured 100 --mode cupti-min --helper /home/v2/libstormlog_cupti.so --output /home/v2/runs/devbuf/fixed-cupti-min",
+          "purpose": "Recheck after the finalization fix (helper symlink pointing at the CUPTI 13.0 build).",
+          "outcome": "Clean finalize, 0 drops, 0 kernels without timestamps."
+        },
+        {
+          "trial_id": "fixed-cupti-full",
+          "command": "python -m scripts.native_probes.workloads.vllm_window --window 50 --warmup 20 --measured 100 --mode cupti-full --helper /home/v2/libstormlog_cupti.so --output /home/v2/runs/devbuf/fixed-cupti-full",
+          "purpose": "Same recheck for cupti-full.",
+          "outcome": "Clean finalize, 0 drops, 0 kernels without timestamps."
+        }
+      ],
+      "decision_role": "diagnostic; results are under plan devbuf in results_v2/trials.jsonl"
+    }
+  ]
+}

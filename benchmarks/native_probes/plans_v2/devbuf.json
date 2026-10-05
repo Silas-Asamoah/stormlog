@@ -1,0 +1,76 @@
+{
+ "plan_id": "devbuf",
+ "seed": 118,
+ "trials": [
+  {
+   "trial_id": "devbuf-default",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "50",
+    "--warmup",
+    "20",
+    "--measured",
+    "100"
+   ],
+   "keep_traces": true,
+   "timeout": 1200
+  },
+  {
+   "trial_id": "devbuf-flush100",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "50",
+    "--warmup",
+    "20",
+    "--measured",
+    "100",
+    "--flush-period-ms",
+    "100"
+   ],
+   "keep_traces": true,
+   "timeout": 1200
+  },
+  {
+   "trial_id": "devbuf-devbuf32m",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "50",
+    "--warmup",
+    "20",
+    "--measured",
+    "100",
+    "--device-buffer-bytes",
+    "33554432"
+   ],
+   "keep_traces": true,
+   "timeout": 1200
+  },
+  {
+   "trial_id": "devbuf-all",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "50",
+    "--warmup",
+    "20",
+    "--measured",
+    "100",
+    "--device-buffer-bytes",
+    "33554432",
+    "--device-buffer-pool-limit",
+    "16",
+    "--flush-period-ms",
+    "100"
+   ],
+   "keep_traces": true,
+   "timeout": 1200
+  }
+ ]
+}
