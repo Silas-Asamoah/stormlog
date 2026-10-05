@@ -73,6 +73,14 @@ _PREDICATE_KEYS = (
     "scrape_failure_share",
     "frozen_exporter",
 )
+_PREDICATE_OPTION_KEYS = {
+    "gauge": {"family", "at_least", "share", "min_samples"},
+    "counter_rate": {"family", "at_least_per_s"},
+    "histogram_share": {"family", "above", "share", "min_samples"},
+    "scrape_failures": {"consecutive"},
+    "scrape_failure_share": {"share", "scrapes"},
+    "frozen_exporter": {"ticks"},
+}
 _TRIGGER_KEYS = {
     "id",
     "kind",
@@ -532,11 +540,14 @@ def _family(options: Mapping[str, Any]) -> str:
 
 
 def _predicate(key: str, value: Any, engine: str | None) -> Any:
-    options = value if isinstance(value, Mapping) else {}
     if key == "signal":
-        if value not in SIGNALS:
+        if not isinstance(value, str) or value not in SIGNALS:
             raise ValueError(f"signal must be one of {', '.join(SIGNALS)}")
         return SignalExceeds(str(value), SignalConfig(engine=engine))
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{key} must be an object")
+    options = value
+    _only(options, _PREDICATE_OPTION_KEYS[key], key)
     if key in ("gauge", "counter_rate", "histogram_share"):
         return _metric_predicate(key, options, engine)
     if key == "scrape_failures":

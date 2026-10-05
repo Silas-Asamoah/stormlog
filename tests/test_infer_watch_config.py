@@ -17,7 +17,10 @@ from stormlog.infer.watch.config import (
     resolve_watch_config,
 )
 from stormlog.infer.watch.predicates import (
+    CounterRateAtLeast,
     FrozenExporter,
+    GaugeAtLeast,
+    HistogramShareAbove,
     ScrapeFailures,
     ScrapeFailureShare,
     SignalExceeds,
@@ -329,6 +332,124 @@ def test_bad_triggers_are_usage_errors(trigger: Any, message: str) -> None:
         resolve_watch_config(_payload(triggers=[trigger]))
 
 
+@pytest.mark.parametrize(
+    ("key", "kind"),
+    [
+        ("gauge", "metric"),
+        ("counter_rate", "metric"),
+        ("histogram_share", "metric"),
+        ("scrape_failures", "health"),
+        ("scrape_failure_share", "health"),
+        ("frozen_exporter", "health"),
+    ],
+)
+@pytest.mark.parametrize("value", [None, [], 0, False, "not an object"])
+def test_nested_predicates_require_an_object(key: str, kind: str, value: Any) -> None:
+    trigger = {"id": "malformed", "kind": kind, key: value}
+    with pytest.raises(InferUsageError, match=f"{key} must be an object"):
+        resolve_watch_config(_payload(triggers=[trigger]))
+
+
+@pytest.mark.parametrize("value", [None, [], {}, False, 1])
+def test_signal_predicates_require_a_signal_name(value: Any) -> None:
+    trigger = {"id": "malformed", "kind": "signal", "signal": value}
+    with pytest.raises(InferUsageError, match="signal must be one of"):
+        resolve_watch_config(_payload(triggers=[trigger]))
+
+
+@pytest.mark.parametrize(
+    ("key", "kind", "options", "typo"),
+    [
+        ("gauge", "metric", {"family": "f", "at_least": 1}, "min_smaples"),
+        ("counter_rate", "metric", {"family": "f", "at_least_per_s": 1}, "share"),
+        (
+            "histogram_share",
+            "metric",
+            {"family": "f", "above": 1, "share": 0.05},
+            "min_smaples",
+        ),
+        ("scrape_failures", "health", {}, "consecutvie"),
+        ("scrape_failure_share", "health", {}, "scrpaes"),
+        ("frozen_exporter", "health", {}, "tiks"),
+    ],
+)
+def test_nested_predicates_reject_unknown_options(
+    key: str, kind: str, options: dict[str, Any], typo: str
+) -> None:
+    trigger = {"id": "malformed", "kind": kind, key: {**options, typo: 10}}
+    with pytest.raises(InferUsageError, match=rf"{key}: unknown key\(s\) {typo}"):
+        resolve_watch_config(_payload(triggers=[trigger]))
+
+
+@pytest.mark.parametrize(
+    ("key", "options", "missing"),
+    [
+        ("gauge", {}, "family"),
+        ("gauge", {"family": "f"}, "at_least"),
+        ("counter_rate", {"at_least_per_s": 1}, "family"),
+        ("counter_rate", {"family": "f"}, "at_least_per_s"),
+        ("histogram_share", {"above": 1, "share": 0.05}, "family"),
+        ("histogram_share", {"family": "f", "share": 0.05}, "above"),
+        ("histogram_share", {"family": "f", "above": 1}, "share"),
+    ],
+)
+def test_metric_predicates_still_require_their_options(
+    key: str, options: dict[str, Any], missing: str
+) -> None:
+    trigger = {"id": "metric", "kind": "metric", key: options}
+    with pytest.raises(InferUsageError, match=f"missing '{missing}'"):
+        resolve_watch_config(_payload(triggers=[trigger]))
+
+
+@pytest.mark.parametrize(
+    ("key", "kind", "options", "predicate"),
+    [
+        (
+            "gauge",
+            "metric",
+            {"family": "f", "at_least": 1},
+            GaugeAtLeast(family="f", threshold=1),
+        ),
+        (
+            "counter_rate",
+            "metric",
+            {"family": "f", "at_least_per_s": 1},
+            CounterRateAtLeast(family="f", rate_per_s=1),
+        ),
+        (
+            "histogram_share",
+            "metric",
+            {"family": "f", "above": 1, "share": 0.05},
+            HistogramShareAbove(family="f", value=1, share=0.05),
+        ),
+        ("scrape_failures", "health", {}, ScrapeFailures()),
+        ("scrape_failure_share", "health", {}, ScrapeFailureShare()),
+        ("frozen_exporter", "health", {}, FrozenExporter()),
+        (
+            "scrape_failures",
+            "health",
+            {"consecutive": 5},
+            ScrapeFailures(consecutive=5),
+        ),
+        (
+            "scrape_failure_share",
+            "health",
+            {"share": 0.2, "scrapes": 10},
+            ScrapeFailureShare(share=0.2, scrapes=10),
+        ),
+        ("frozen_exporter", "health", {"ticks": 7}, FrozenExporter(ticks=7)),
+    ],
+)
+def test_valid_predicate_objects_preserve_defaults_and_explicit_options(
+    key: str, kind: str, options: dict[str, Any], predicate: Any
+) -> None:
+    trigger = {"id": "valid", "kind": kind, key: options}
+    config = resolve_watch_config(
+        _payload(triggers=[trigger], default_health_triggers=False)
+    )
+    assert config.triggers[0].predicate == predicate
+
+
 def test_a_trigger_s_policy_defaults_to_its_kind_s() -> None:
     config = resolve_watch_config(
         _payload(
@@ -513,7 +634,7 @@ def test_the_digest_is_of_the_resolved_triggers() -> None:
     first = resolve_watch_config(_payload(triggers=[bare]))
     second = resolve_watch_config(_payload(triggers=[spelled]))
     assert first.digest() == second.digest()
-    (queue, *_health) = first.resolved()["triggers"]
+    queue, *_health = first.resolved()["triggers"]
     assert queue["sustain"]["gap"] == 30.0
     assert queue["counts_toward_exit"] is True
     assert queue["predicate"]["type"] == "GaugeAtLeast"
