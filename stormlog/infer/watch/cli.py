@@ -11,11 +11,13 @@ import sys
 import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..errors import InferUsageError
 from .config import MAX_SPAN_SECONDS, load_watch_config
-from .watcher import Watcher, WatchOptions, WatchOutcome
+
+if TYPE_CHECKING:
+    from .watcher import Watcher, WatchOutcome
 
 HELP = "Watch a vLLM server and record its incidents"
 
@@ -64,6 +66,8 @@ def cmd_watch(args: argparse.Namespace, *, restore_signals: bool = True) -> int:
     """Run a watch; ``restore_signals`` puts back the SIGINT and SIGTERM
     handlers it found when it returns, for a caller that goes on running.
     The console script, which exits at once, leaves them ignored."""
+    from .watcher import Watcher, WatchOptions
+
     config = load_watch_config(
         args.config,
         overrides={
