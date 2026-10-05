@@ -163,16 +163,24 @@ class ScrapeHistory:
 
         A refused scrape stays out of the parsed tail as well.
         """
-        if not self.ring.append(
+        held = self.ring.append(
             stamp, record.to_record(), ok=record.status == SCRAPE_OK
-        ):
-            return False
-        self._parsed.append((stamp, record))
-        return True
+        )
+        if held:
+            self._parsed.append((stamp, record))
+        self._trim_parsed()
+        return held
 
     def parsed(self) -> list[tuple[Stamped, VllmScrapeRecord]]:
-        """The parsed tail, oldest first."""
+        """The parsed tail still held by the ring, oldest first."""
+        self._trim_parsed()  # the ring may have been explicitly expired
         return list(self._parsed)
+
+    def _trim_parsed(self) -> None:
+        # Both hold a suffix of accepted scrapes, and the ring only evicts
+        # from the oldest end, so its length also bounds the parsed suffix.
+        while len(self._parsed) > len(self.ring):
+            self._parsed.popleft()
 
     def records(
         self, start_mono_ns: int | None = None, end_mono_ns: int | None = None

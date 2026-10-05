@@ -16,10 +16,11 @@ from stormlog.infer.watch.evaluate import (
     KIND_HEALTH,
     KIND_METRIC,
     KIND_SIGNAL,
+    HistoryPredicate,
     TriggerEngine,
     TriggerSpec,
 )
-from stormlog.infer.watch.history import Stamped
+from stormlog.infer.watch.history import ScrapeHistory, Stamped
 from stormlog.infer.watch.predicates import (
     REASON_END_FAILED,
     REASON_END_STALE,
@@ -408,6 +409,40 @@ def test_a_frozen_exporter_is_busy_without_progress() -> None:
     assert frozen.evaluate_history(_entries(idle)).classification == CLEAR
 
 
+@pytest.mark.parametrize("wall_step_s", [-30.0, 30.0])
+@pytest.mark.parametrize("completed", [False, True], ids=["duration", "completed"])
+def test_frozen_exporter_fires_on_schedule_across_wall_clock_steps(
+    wall_step_s: float, completed: bool
+) -> None:
+    history = []
+    for second in range(15):
+        wall = second + (wall_step_s if second >= 8 else 0.0)
+        record = scrape(_waiting(4, running=8, tokens=100), wall)
+        if completed:
+            record = _CompletedScrape(
+                **{f.name: getattr(record, f.name) for f in fields(record)},
+                completed_at_ns=record.observed_at_ns + 4_000_000,
+            )
+        mono = second * S
+        history.append((Stamped(mono, mono + 4_000_000, round(wall * S)), record))
+    spec = TriggerSpec(
+        "frozen",
+        KIND_HEALTH,
+        Sustain.with_defaults(window=5, hold=5, clear=None, tick=1),
+        FrozenExporter(ticks=5),
+    )
+    engine = TriggerEngine([spec], tick_seconds=1)
+    events = []
+    for second in range(5, 15):
+        at = second * S + 5_000_000
+        done = [entry for entry in history if entry[0].done_mono_ns <= at]
+        (result,) = engine.tick(at, done)
+        assert result.evaluation.classification == VIOLATING
+        if result.transition is not None:
+            events.append((second, result.transition.event))
+    assert events == [(5, "pending"), (10, EVENT_FIRED)]
+
+
 def test_an_exporter_restart_is_a_change_of_process_start() -> None:
     first = scrape(exposition(gauges={WAITING: 0}, start=1000.0), 0)
     same = scrape(exposition(gauges={WAITING: 0}, start=1000.0), 1)
@@ -423,6 +458,22 @@ def test_intervals_overlap_when_closed_ranges_meet() -> None:
 
 
 # --------------------------------------------------------------------- engine
+
+
+def test_a_trigger_cannot_fire_on_scrapes_evicted_from_its_incident_history() -> None:
+    history = ScrapeHistory(max_seconds=600, max_bytes=1400, parsed_count=5)
+    spec = TriggerSpec(
+        "queue",
+        KIND_METRIC,
+        Sustain.with_defaults(window=2, hold=2, clear=None, tick=1),
+        GaugeAtLeast(WAITING, threshold=8),
+    )
+    engine = TriggerEngine([spec], tick_seconds=1)
+    for stamp, record in _entries([_waiting(9)] * 10):
+        assert history.add(stamp, record)
+        (result,) = engine.tick(stamp.done_mono_ns + 1, history.parsed())
+        assert result.evaluation.classification == DATA_GAP
+        assert result.transition is None
 
 
 def _queue_trigger(**overrides: object) -> TriggerSpec:
@@ -671,3 +722,76 @@ def test_a_health_trigger_never_judges_a_stale_tail() -> None:
     assert stale["share"].classification == VIOLATING
     assert stale["frozen"].classification == DATA_GAP
     assert all(e.reasons == ("no_recent_scrape",) for e in stale.values())
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [ScrapeFailures(3), ScrapeFailureShare(0.5, 3), FrozenExporter(ticks=3)],
+)
+def test_stale_health_verdicts_stop_reading_a_tail_masked_by_an_old_pause(
+    predicate: HistoryPredicate,
+) -> None:
+    spec = TriggerSpec(
+        "health",
+        KIND_HEALTH,
+        Sustain.with_defaults(window=2, hold=2, clear=None, tick=1),
+        predicate,
+    )
+    engine = TriggerEngine([spec], tick_seconds=1, scrape_timeout_seconds=2)
+    history = _entries([_waiting(3, running=2, tokens=7)] * 6)
+    pause = [(4 * S, 5 * S)]
+    (fresh,) = engine.tick(6 * S, history, perturbations=pause)
+    assert fresh.evaluation.classification == MASKED
+    (stale,) = engine.tick(9 * S, history, perturbations=pause)
+    assert stale.evaluation.classification == predicate.when_stale
+    assert stale.evaluation.reasons == ("no_recent_scrape",)
+    (later,) = engine.tick(11 * S, history, perturbations=pause)
+    if predicate.when_stale == VIOLATING:
+        assert later.transition is not None and later.transition.event == EVENT_FIRED
+    else:
+        assert later.evaluation.classification == DATA_GAP
+        assert later.transition is None
+
+
+@pytest.mark.parametrize("completion_horizon_s", [0, 3])
+def test_stale_scrape_health_masks_the_full_freshness_and_completion_intervals(
+    completion_horizon_s: int,
+) -> None:
+    spec = TriggerSpec(
+        "health",
+        KIND_HEALTH,
+        Sustain.with_defaults(window=2, hold=2, clear=None, tick=1),
+        ScrapeFailures(3),
+        completion_recorded=bool(completion_horizon_s),
+    )
+    engine = TriggerEngine([spec], tick_seconds=1, scrape_timeout_seconds=2)
+    history = _entries([_waiting(3)] * 6)
+    # At 10 s, this pause lies inside the freshness interval [7, 10],
+    # before the configured window [8, 10]. A stale verdict must mask it.
+    pause = [(round(7.5 * S), round(7.6 * S))]
+    (masked,) = engine.tick(10 * S, history, perturbations=pause)
+    assert masked.evaluation.classification == MASKED
+    if completion_horizon_s:
+        (widened,) = engine.tick(
+            (10 + completion_horizon_s) * S,
+            history,
+            perturbations=pause,
+            completion_horizon_ns=completion_horizon_s * S,
+        )
+        assert widened.evaluation.classification == MASKED
+    at = (11 + completion_horizon_s) * S
+    (pending,) = engine.tick(
+        at,
+        history,
+        perturbations=pause,
+        completion_horizon_ns=completion_horizon_s * S,
+    )
+    assert pending.evaluation.classification == VIOLATING
+    assert pending.transition is not None and pending.transition.event == "pending"
+    (fired,) = engine.tick(
+        at + 2 * S,
+        history,
+        perturbations=pause,
+        completion_horizon_ns=completion_horizon_s * S,
+    )
+    assert fired.transition is not None and fired.transition.event == EVENT_FIRED
