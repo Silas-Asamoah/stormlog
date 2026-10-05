@@ -83,6 +83,58 @@ def test_the_digest_follows_the_resolved_settings() -> None:
     assert first.digest() != resolve_watch_config(_payload(tick_seconds=2.0)).digest()
 
 
+def test_recorded_server_urls_are_redacted_without_changing_request_config() -> None:
+    base_url = (
+        "https://base-user:base-password@host:8000/v1?key=base-token#base-fragment"
+    )
+    metrics_url = (
+        "https://metrics-user:metrics-password@host:9000/metrics"
+        "?key=metrics-token#metrics-fragment"
+    )
+    config = resolve_watch_config(
+        _payload(server={"base_url": base_url, "metrics_url": metrics_url})
+    )
+    assert config.base_url == base_url
+    assert config.metrics_url == metrics_url
+    assert config.resolved()["server"] == {
+        "base_url": "https://host:8000/v1?<redacted>",
+        "metrics_url": "https://host:9000/metrics?<redacted>",
+        "engine": None,
+    }
+    recorded = json.dumps(config.resolved())
+    for secret in (
+        "base-user",
+        "base-password",
+        "base-token",
+        "base-fragment",
+        "metrics-user",
+        "metrics-password",
+        "metrics-token",
+        "metrics-fragment",
+    ):
+        assert secret not in recorded
+    changed_credentials = resolve_watch_config(
+        _payload(
+            server={
+                "base_url": "https://other:credentials@host:8000/v1?key=other-token",
+                "metrics_url": "https://host:9000/metrics?key=another-token",
+            }
+        )
+    )
+    assert config.digest() == changed_credentials.digest()
+
+
+@pytest.mark.parametrize("metrics_url", [None, "auto"])
+def test_recorded_metrics_url_preserves_the_discovery_setting(
+    metrics_url: str | None,
+) -> None:
+    config = resolve_watch_config(
+        _payload(server={"base_url": BASE, "metrics_url": metrics_url})
+    )
+    assert config.metrics_url == metrics_url
+    assert config.resolved()["server"]["metrics_url"] == metrics_url
+
+
 def test_guarantees_state_each_triggers_bounds() -> None:
     config = resolve_watch_config(
         _payload(triggers=[_trigger(window_seconds=30, hold_seconds=60)])

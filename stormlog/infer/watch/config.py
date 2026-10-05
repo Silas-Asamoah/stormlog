@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+from ...scrub import redact_url
 from ..diagnosis_signals import SignalConfig
 from ..diagnosis_vocabulary import (
     KV_PREEMPTION_PRESSURE,
@@ -162,15 +163,20 @@ class WatchConfig:
     def resolved(self) -> dict[str, Any]:
         """The settings as recorded in the session record, every trigger as
         resolved (its sustain, policy and predicate), so two configs that
-        watch the same way have the same digest. The ``export`` section is
-        #220's and may hold credentials: it is left out."""
+        watch the same way have the same digest. Server URLs are redacted;
+        the digest describes these recorded settings. The ``export`` section
+        is #220's and may hold credentials: it is left out."""
         return {
             "format": CONFIG_FORMAT,
             "version": CONFIG_VERSION,
             "defaults": DEFAULTS_VERSION,
             "server": {
-                "base_url": self.base_url,
-                "metrics_url": self.metrics_url,
+                "base_url": redact_url(self.base_url),
+                "metrics_url": (
+                    "auto"
+                    if self.metrics_url == "auto"
+                    else redact_url(self.metrics_url)
+                ),
                 "engine": self.engine,
             },
             "tick_seconds": self.tick_seconds,

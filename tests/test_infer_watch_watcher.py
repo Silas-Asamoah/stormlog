@@ -248,6 +248,42 @@ def test_a_quiet_server_exits_zero(tmp_path: Path) -> None:
     assert of_type(read_ledger(tmp_path), INCIDENT) == []
 
 
+def test_session_urls_are_redacted_in_the_ledger_and_export(tmp_path: Path) -> None:
+    observer = _Observer()
+    with serve_metrics(FakeMetrics()) as base_url:
+        configured_base_url = (
+            base_url.replace("://", "://base-user:base-password@")
+            + "/v1?key=base-token"
+        )
+        metrics_url = base_url + "/metrics?key=metrics-token"
+        config = resolve_watch_config(
+            watch_config(
+                base_url,
+                server={"base_url": configured_base_url, "metrics_url": metrics_url},
+            )
+        )
+        watcher = Watcher(
+            config,
+            tmp_path,
+            options=WatchOptions(duration_seconds=0.3),
+            observer=observer,
+        )
+        assert watcher.config.base_url == configured_base_url
+        assert watcher.config.metrics_url == watcher.scraper.url == metrics_url
+        outcome = asyncio.run(watcher.run(asyncio.Event()))
+    assert outcome.exit_code == 0
+    sessions = of_type(read_ledger(tmp_path), WATCH_SESSION)
+    exported = [r for r in observer.records if r["event_type"] == WATCH_SESSION]
+    assert [s["phase"] for s in sessions] == ["started", "ended"]
+    assert sessions == exported
+    for session in sessions:
+        assert session["config"] == config.resolved()
+        assert session["config_digest"] == config.digest()
+    recorded = json.dumps(sessions)
+    for secret in ("base-user", "base-password", "base-token", "metrics-token"):
+        assert secret not in recorded
+
+
 def test_no_successful_scrape_exits_one(tmp_path: Path) -> None:
     with serve_metrics(FakeMetrics()) as base_url:
         pass  # the port is closed again
@@ -648,9 +684,7 @@ def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
     health = of_type(records, WATCH_HEALTH)
     statuses = [record["scrape"]["status"] for record in health]
     assert "error" in statuses and "skipped" in statuses
-    (given_up, *_rest) = [
-        r["scrape"] for r in health if r["scrape"]["status"] == "error"
-    ]
+    given_up, *_rest = [r["scrape"] for r in health if r["scrape"]["status"] == "error"]
     assert given_up["error"] == (
         "abandoned: no whole response within the 0.5 s scrape timeout"
     )
