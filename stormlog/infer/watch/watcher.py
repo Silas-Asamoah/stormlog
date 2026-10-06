@@ -57,7 +57,7 @@ from ...report import (
 from ..errors import InferUsageError
 from ..scrape_window import REASON_ENGINE_REQUIRED
 from ..trace_capture import server_root
-from ..vllm_scraper import VllmMetricsScraper
+from ..vllm_scraper import VllmMetricsScraper, metrics_api_key
 from ..vllm_telemetry import MARKER_INTERVAL, SCRAPE_OK, VllmScrapeRecord
 from .config import DEFAULTS_VERSION, WatchConfig
 from .evaluate import HistoryPredicate, TickResult, TriggerEngine
@@ -544,6 +544,8 @@ class Watcher:
     async def _shutdown(self) -> WatchOutcome:
         loop = asyncio.get_running_loop()
         ends = loop.time() + self.options.shutdown_deadline_seconds
+        # All admitted incidents seal at once; keep room beyond the backlog.
+        self._store_worker.reserve(len(self.incidents.open))
         self.incidents.close(self.clock.mono_ns())
         drained = await self._wait_closed(
             self._store_worker.close, (ends - loop.time()) * STORE_SHARE, STORE_SHARE
@@ -738,7 +740,9 @@ class Watcher:
             session_id=self.identity.session_id,
             run_id=self.identity.run_id,
             clock_domain=self.identity.clock_domain,
-            api_key=self.options.api_key,
+            api_key=metrics_api_key(
+                self.config.base_url, url, self.options.api_key, self.warnings.append
+            ),
         )
 
 

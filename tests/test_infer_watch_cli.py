@@ -103,6 +103,30 @@ def test_an_unusable_config_exits_two(tmp_path: Path) -> None:
     assert _watch(tmp_path, "--config", str(path)) == 2
 
 
+@pytest.mark.parametrize("server", ["bad", "", [1], [], 1, 0, True, False, None])
+@pytest.mark.parametrize("override", ["--base-url", "--metrics-url"])
+def test_overrides_of_a_malformed_server_exit_two_before_writing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    server: Any,
+    override: str,
+) -> None:
+    from stormlog.infer.watch import watcher as watcher_module
+
+    def no_watch(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the watch started")
+
+    monkeypatch.setattr(watcher_module, "Watcher", no_watch)
+    path = tmp_path / "watch.json"
+    path.write_text(
+        json.dumps(watch_config("http://x", server=server)), encoding="utf-8"
+    )
+    assert _watch(tmp_path, "--config", str(path), override, "http://127.0.0.1:9") == 2
+    assert "server must be an object" in capsys.readouterr().err
+    assert not (tmp_path / "watch").exists()
+
+
 def test_a_second_watcher_on_a_root_exits_two(tmp_path: Path) -> None:
     from stormlog.infer.watch.config import resolve_watch_config
     from stormlog.infer.watch.watcher import Watcher

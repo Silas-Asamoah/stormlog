@@ -177,6 +177,31 @@ def test_no_file_needs_a_base_url() -> None:
     assert config.base_url == BASE
 
 
+def test_overrides_create_an_omitted_server_section(tmp_path: Path) -> None:
+    path = tmp_path / "watch.json"
+    path.write_text(
+        json.dumps({"format": CONFIG_FORMAT, "version": 1}), encoding="utf-8"
+    )
+    metrics_url = f"{BASE}/metrics"
+    config = load_watch_config(
+        path,
+        overrides={"server.base_url": BASE, "server.metrics_url": metrics_url},
+    )
+    assert config.base_url == BASE
+    assert config.metrics_url == metrics_url
+
+
+@pytest.mark.parametrize("server", ["bad", "", [1], [], 1, 0, True, False, None])
+@pytest.mark.parametrize("override", ["server.base_url", "server.metrics_url"])
+def test_overrides_reject_a_malformed_server_section(
+    tmp_path: Path, server: Any, override: str
+) -> None:
+    path = tmp_path / "watch.json"
+    path.write_text(json.dumps(_payload(server=server)), encoding="utf-8")
+    with pytest.raises(InferUsageError, match="^server must be an object$"):
+        load_watch_config(path, overrides={override: BASE})
+
+
 @pytest.mark.parametrize(
     "content",
     ["{not json", "[1, 2]", json.dumps({"format": CONFIG_FORMAT, "version": 2})],

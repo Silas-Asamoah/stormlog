@@ -82,6 +82,77 @@ def test_worker_rejects_past_its_count_and_byte_bounds() -> None:
     assert worker.close(5.0)
 
 
+def test_shutdown_reservation_adds_only_its_finite_capacity() -> None:
+    gate = threading.Event()
+    worker = SerialWorker("test-reserve", max_queued=2)
+    worker.submit(gate.wait)
+    _wait_for(lambda: worker.stats().queued == 0)
+    done: list[int] = []
+    try:
+        accepted = [worker.submit(functools.partial(done.append, i)) for i in range(2)]
+        worker.reserve(3)
+        accepted.extend(
+            worker.submit(functools.partial(done.append, i)) for i in range(2, 5)
+        )
+        assert all(accepted)
+        assert not worker.submit(lambda: None)
+    finally:
+        gate.set()
+    assert worker.close(5.0)
+    assert done == list(range(5))
+    stats = worker.stats()
+    assert (stats.completed, stats.rejected) == (6, 1)
+
+
+def test_shutdown_reservation_preserves_the_byte_bound() -> None:
+    gate = threading.Event()
+    worker = SerialWorker("test-reserve-bytes", max_queued=1, max_queued_bytes=10)
+    worker.submit(gate.wait)
+    _wait_for(lambda: worker.stats().queued == 0)
+    try:
+        assert worker.submit(lambda: None, nbytes=9)
+        worker.reserve(2)
+        assert not worker.submit(lambda: None, nbytes=2)
+        assert worker.submit(lambda: None, nbytes=1)
+        assert worker.stats().queued_bytes == 10
+    finally:
+        gate.set()
+    assert worker.close(5.0)
+
+
+@pytest.mark.parametrize("state", ["stalled", "closing"])
+def test_shutdown_reservation_preserves_stalled_and_closing_rejection(
+    state: str,
+) -> None:
+    gate = threading.Event()
+    worker = SerialWorker("test-reserve-rejection", stall_seconds=0.05)
+    worker.submit(gate.wait)
+    _wait_for(lambda: worker.stats().queued == 0)
+    try:
+        worker.reserve(2)
+        if state == "stalled":
+            _wait_for(lambda: worker.stats().stalled)
+        else:
+            worker.close(0.01)
+        assert not worker.submit(lambda: None)
+        assert worker.stats().rejected == 1
+    finally:
+        gate.set()
+    assert worker.close(5.0)
+
+
+def test_shutdown_reservation_is_nonnegative_and_allowed_only_once() -> None:
+    worker = SerialWorker("test-reserve-once")
+    try:
+        with pytest.raises(ValueError, match=">= 0"):
+            worker.reserve(-1)
+        worker.reserve(2)
+        with pytest.raises(ValueError, match="only be reserved once"):
+            worker.reserve(2)
+    finally:
+        worker.close(5.0)
+
+
 def test_a_stalled_operation_rejects_work_and_never_adds_threads() -> None:
     gate = threading.Event()
     worker = SerialWorker("test-stall", stall_seconds=0.05)

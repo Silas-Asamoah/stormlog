@@ -8,12 +8,19 @@ import json
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
+from email.message import Message
+from functools import partial
+from http.server import BaseHTTPRequestHandler
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.request import Request
+from urllib.response import addinfourl
 
 import pytest
 
 from stormlog import telemetry_sink
+from stormlog.infer import vllm_scraper
 from stormlog.infer.errors import InferUsageError
 from stormlog.infer.watch.config import resolve_watch_config
 from stormlog.infer.watch.history import Stamped
@@ -248,6 +255,88 @@ def test_a_quiet_server_exits_zero(tmp_path: Path) -> None:
     assert of_type(read_ledger(tmp_path), INCIDENT) == []
 
 
+@pytest.mark.parametrize(
+    ("metrics_setting", "expected_authorization", "expected_warnings"),
+    [
+        (None, "Bearer server-secret", 0),
+        ("auto", "Bearer server-secret", 0),
+        ("same", "Bearer server-secret", 0),
+        ("other", None, 1),
+    ],
+)
+def test_bearer_token_stays_on_the_servers_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    metrics_setting: str | None,
+    expected_authorization: str | None,
+    expected_warnings: int,
+) -> None:
+    authorizations: list[str | None] = []
+    send_response = BaseHTTPRequestHandler.send_response
+
+    def record_authorization(
+        handler: BaseHTTPRequestHandler, code: int, message: str | None = None
+    ) -> None:
+        authorizations.append(handler.headers.get("Authorization"))
+        send_response(handler, code, message)
+
+    monkeypatch.setattr(BaseHTTPRequestHandler, "send_response", record_authorization)
+    with serve_metrics(FakeMetrics()) as origin:
+        # The watcher only contacts the metrics URL; another port is another origin.
+        base_url = (
+            "http://127.0.0.1:1/v1" if metrics_setting == "other" else origin + "/v1"
+        )
+        metrics_url = (
+            metrics_setting
+            if metrics_setting in (None, "auto")
+            else origin + "/metrics?key=metrics-secret"
+        )
+        outcome = _watch(
+            tmp_path,
+            watch_config(
+                base_url, server={"base_url": base_url, "metrics_url": metrics_url}
+            ),
+            options=WatchOptions(duration_seconds=0.3, api_key="server-secret"),
+        )
+
+    assert outcome.exit_code == 0
+    assert set(authorizations) == {expected_authorization}
+    started = of_type(read_ledger(tmp_path), WATCH_SESSION)[0]
+    warnings = [warning for warning in started["warnings"] if "not sent" in warning]
+    assert len(warnings) == expected_warnings
+    assert "server-secret" not in json.dumps(started)
+    assert "metrics-secret" not in json.dumps(started)
+
+
+def test_same_origin_default_port_preserves_bearer_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authorizations: list[str | None] = []
+
+    def open_metrics(request: Request, **_kwargs: Any) -> addinfourl:
+        authorizations.append(request.get_header("Authorization"))
+        return addinfourl(
+            BytesIO(exposition().encode()), Message(), request.full_url, 200
+        )
+
+    monkeypatch.setattr(vllm_scraper._OPENER, "open", open_metrics)
+    outcome = _watch(
+        tmp_path,
+        watch_config(
+            "https://metrics.example/v1",
+            server={
+                "base_url": "https://metrics.example/v1",
+                "metrics_url": "https://metrics.example:443/metrics",
+            },
+        ),
+        options=WatchOptions(duration_seconds=0.3, api_key="server-secret"),
+    )
+    assert outcome.exit_code == 0
+    assert authorizations and set(authorizations) == {"Bearer server-secret"}
+    started = of_type(read_ledger(tmp_path), WATCH_SESSION)[0]
+    assert not any("not sent" in warning for warning in started["warnings"])
+
+
 def test_session_urls_are_redacted_in_the_ledger_and_export(tmp_path: Path) -> None:
     observer = _Observer()
     with serve_metrics(FakeMetrics()) as base_url:
@@ -366,6 +455,79 @@ def test_the_stop_event_seals_open_incidents_as_interrupted(tmp_path: Path) -> N
     (incident,) = of_type(read_ledger(tmp_path), INCIDENT)
     with open_incident_bundle(tmp_path / incident["bundle"]) as view:
         assert view.manifest.status == "interrupted"
+
+
+def test_shutdown_keeps_a_full_backlog_and_every_open_incident(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    incident_count = 10  # configurable admission can exceed the eight store queue slots
+    gate, entered = threading.Event(), threading.Event()
+    accepted: list[bool] = []
+    backlog: list[int] = []
+    observer = _Observer()
+    stop = asyncio.Event()
+    observer.stop = stop.set
+    with serve_metrics(FakeMetrics()) as base_url:
+        watcher = Watcher(
+            resolve_watch_config(
+                watch_config(
+                    base_url,
+                    incident={
+                        "pre_seconds": 5,
+                        "post_seconds": 20,
+                        "max_open_incidents": incident_count,
+                        "max_incidents_per_hour": incident_count,
+                    },
+                )
+            ),
+            tmp_path,
+            options=WatchOptions(duration_seconds=30.0),
+            observer=observer,
+        )
+
+        def hold_writer() -> None:
+            entered.set()
+            gate.wait()
+
+        def stop_with_open_incidents(record: Mapping[str, Any]) -> bool:
+            if record["event_type"] != WATCH_HEALTH:
+                return False
+            accepted.append(watcher._store_worker.submit(hold_writer))
+            accepted.append(entered.wait(5.0))
+            accepted.extend(
+                watcher._store_worker.submit(partial(backlog.append, index))
+                for index in range(8)
+            )
+            for _ in range(incident_count):
+                watcher.incidents.on_test(
+                    watcher.clock.mono_ns(), requested_wall_ns=None
+                )
+            return True
+
+        close_incidents = watcher.incidents.close
+
+        def seal_then_release(at_mono: int) -> None:
+            try:
+                close_incidents(at_mono)
+            finally:
+                gate.set()
+
+        observer.stop_when = stop_with_open_incidents
+        monkeypatch.setattr(watcher.incidents, "close", seal_then_release)
+        try:
+            outcome = asyncio.run(watcher.run(stop))
+        finally:
+            gate.set()
+
+    assert all(accepted)
+    assert backlog == list(range(8))
+    assert outcome.exit_code == 0
+    assert len(outcome.incidents) == incident_count
+    assert all(incident["persisted"] for incident in outcome.incidents)
+    assert watcher._store_worker.stats().rejected == 0
+    for incident in outcome.incidents:
+        with open_incident_bundle(tmp_path / incident["bundle"]) as view:
+            assert view.manifest.status == "interrupted"
 
 
 def test_a_test_trigger_file_records_an_incident_that_does_not_count(

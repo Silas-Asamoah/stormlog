@@ -33,6 +33,11 @@ instead of piling them up.
 | `--api-key-env NAME` | An environment variable holding the server's bearer token. |
 | `--test-trigger every=SECONDS` or `file` | For qualification only; see below. |
 
+The bearer token is sent only when the metrics URL has the server's scheme,
+host and effective port. A metrics URL on another origin is scraped without
+credentials, with a warning at startup. An omitted port and its default
+(`80` for HTTP or `443` for HTTPS) count as the same port.
+
 Under the root:
 
 ```text
@@ -286,6 +291,12 @@ the code the report holds. A watch run from Python code through
 `stormlog.infer.cli.main(["watch", ...])` gives the handlers back when it
 returns. Run off the main thread, it installs no handlers and touches none,
 so only `--duration` ends it.
+
+The store writer normally queues at most eight operations. At shutdown it
+reserves one additional slot per incident still open, at most
+`incident.max_open_incidents_total`; its count bound becomes eight plus
+that actual open count. It still runs one operation at a time, and its
+byte, stall and shutdown deadline bounds continue to apply.
 
 ### Test triggers
 

@@ -352,8 +352,12 @@ def _read(path: Path) -> dict[str, Any]:
 def _set_path(payload: dict[str, Any], dotted: str, value: Any) -> None:
     *parents, leaf = dotted.split(".")
     node = payload
-    for part in parents:
-        node = node.setdefault(part, {})
+    for index, part in enumerate(parents):
+        parent = node.setdefault(part, {})
+        if not isinstance(parent, dict):
+            section = ".".join(parents[: index + 1])
+            raise InferUsageError(f"{section} must be an object")
+        node = parent
     node[leaf] = value
 
 

@@ -3,7 +3,9 @@
 A :class:`SerialWorker` owns one thread and one mutable target, such as the
 ledger's sink: its operations run one at a time, in order. Submissions go
 into a queue bounded by count and by the bytes each submission declares, and
-a full queue rejects new work instead of growing. An operation that runs past
+a full queue rejects new work instead of growing. A caller can reserve a
+finite extra count once for its shutdown batch, then close the worker;
+the byte and stall bounds still apply. An operation that runs past
 ``stall_seconds`` (an fsync on a failing disk, say) keeps the thread busy,
 and while it does every submission is rejected and counted: the worker never
 starts a second thread, so a blocked call cannot multiply into many.
@@ -53,6 +55,7 @@ class SerialWorker:
         self.stall_seconds = stall_seconds
         self._queue: deque[tuple[Operation, int]] = deque()
         self._queued_bytes = 0
+        self._reserved_slots: int | None = None
         self._condition = threading.Condition()
         self._closing = False
         self._started_at: float | None = None
@@ -67,7 +70,7 @@ class SerialWorker:
         """Queue one operation; False, and counted, when it cannot be taken."""
         with self._condition:
             full = (
-                len(self._queue) >= self.max_queued
+                len(self._queue) >= self.max_queued + (self._reserved_slots or 0)
                 or self._queued_bytes + nbytes > self.max_queued_bytes
             )
             if self._closing or full or self._stalled_locked():
@@ -77,6 +80,19 @@ class SerialWorker:
             self._queued_bytes += nbytes
             self._condition.notify()
             return True
+
+    def reserve(self, slots: int) -> None:
+        """Reserve extra count capacity once for a finite shutdown batch.
+
+        Submit the batch, then close the worker. Existing queued work keeps
+        its slots; byte, stalled and closing rejection still apply.
+        """
+        if slots < 0:
+            raise ValueError("reserved slots must be >= 0")
+        with self._condition:
+            if self._reserved_slots is not None:
+                raise ValueError("shutdown capacity can only be reserved once")
+            self._reserved_slots = slots
 
     def stats(self) -> WorkerStats:
         with self._condition:
