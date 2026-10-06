@@ -54,17 +54,22 @@ from .trace_import import import_traces_into_artifact, parse_device_uuids
 from .vllm_execution_import import import_execution_into_artifact
 from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
 from .vllm_spans import DEFAULT_SPANS_LISTEN, parse_listen_address
+from .watch.cli import add_watch_parser, cmd_watch
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Run the inference CLI and return a code from ``stormlog.exit_codes``."""
+def main(argv: Sequence[str] | None = None, *, restore_signals: bool = True) -> int:
+    """Run the inference CLI and return a code from ``stormlog.exit_codes``.
+
+    ``restore_signals`` is for the console script, which exits at once:
+    False leaves SIGINT and SIGTERM as ``watch`` left them, ignored.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.infer_command is None:
         parser.print_help()
         return int(ExitCode.OK)
     try:
-        return _run_command(parser, args)
+        return _run_command(parser, args, restore_signals)
     except BrokenPipeError:
         return int(ExitCode.ERROR)
     except KeyboardInterrupt:
@@ -75,7 +80,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(_exit_code_for(exc))
 
 
-def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+def _run_command(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, restore_signals: bool
+) -> int:
     if args.infer_command == "profile":
         return cmd_profile(args)
     if args.infer_command == "analyze":
@@ -86,6 +93,8 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         return cmd_import_trace(args)
     if args.infer_command == "import-execution":
         return cmd_import_execution(args)
+    if args.infer_command == "watch":
+        return cmd_watch(args, restore_signals=restore_signals)
     parser.error(f"Unsupported infer command: {args.infer_command}")
 
 
@@ -425,6 +434,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
+    add_watch_parser(subparsers)
     return parser
 
 

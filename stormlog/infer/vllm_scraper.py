@@ -300,6 +300,9 @@ class VllmMetricsScraper:
         self.failed_scrapes = 0
         self.first_discovery: Discovery | None = None
         self.last_error: str | None = None
+        # Fetches still running on their threads, abandoned ones included.
+        self._fetching = 0
+        self._fetching_lock = threading.Lock()
 
     def scrape(
         self,
@@ -333,8 +336,26 @@ class VllmMetricsScraper:
         written for it.
         """
         observed_at_ns = time.time_ns()
-        result, compact = await _off_loop(self._fetch(timeout_seconds))
+        fetch = self._fetch(timeout_seconds)
+
+        def tracked() -> tuple[FetchResult, CompactScrape | None]:
+            try:
+                return fetch()
+            finally:
+                with self._fetching_lock:
+                    self._fetching -= 1
+
+        with self._fetching_lock:
+            self._fetching += 1
+        result, compact = await _off_loop(tracked)
         return self._record(observed_at_ns, marker, case_id, phase, result, compact)
+
+    def fetching(self) -> bool:
+        """A fetch is still running on its thread, one whose caller gave up
+        waiting for it included: a socket timeout bounds each read, not the
+        whole response, so a trickling one can run on for long."""
+        with self._fetching_lock:
+            return self._fetching > 0
 
     def abandoned(
         self,
@@ -344,18 +365,19 @@ class VllmMetricsScraper:
         phase: str | None,
         observed_at_ns: int,
         deadline_seconds: float,
+        reason: str | None = None,
     ) -> VllmScrapeRecord:
         """The record of a scrape given up at an overall deadline.
 
         The fetch itself may still be reading on its thread; its result is
         dropped, so this failed record is the only trace of the scrape.
         """
+        error = reason or (
+            f"the {deadline_seconds:g} s deadline of the interrupted run passed "
+            "while the response was still arriving"
+        )
         result = FetchResult(
-            None,
-            None,
-            f"abandoned: the {deadline_seconds:g} s deadline of the interrupted "
-            "run passed while the response was still arriving",
-            deadline_seconds * 1000.0,
+            None, None, f"abandoned: {error}", deadline_seconds * 1000.0
         )
         return self._failed(observed_at_ns, marker, case_id, phase, result)
 

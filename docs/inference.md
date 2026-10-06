@@ -745,6 +745,14 @@ vLLM exports over gRPC by default. These are
 engine-aggregate numbers over every client's traffic; they attribute no GPU
 time to a request. See [vLLM native telemetry](vllm_telemetry.md) for the
 flags, the metric map and the capability matrix.
+
+## Watching a server for incidents
+
+`stormlog infer watch` runs beside a vLLM server instead of sending it load.
+It scrapes `/metrics` once per tick into a bounded history, and when a
+trigger's condition has been bad for long enough it seals the scrapes around
+it into an incident bundle. See [Inference incident capture](incident_capture.md).
+
 ## Profiler traces
 
 `stormlog infer profile --trace vllm-torch` opens a vLLM torch-profiler window

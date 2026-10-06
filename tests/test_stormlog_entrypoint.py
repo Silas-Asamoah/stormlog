@@ -47,7 +47,10 @@ class StormlogEntrypointTests(unittest.TestCase):
             exit_code = entrypoint.main(["infer", "analyze", "artifact.jsonl"])
 
         self.assertEqual(exit_code, 7)
-        infer_main.assert_called_once_with(["analyze", "artifact.jsonl"])
+        # Called with argv, not as the console script: signals come back.
+        infer_main.assert_called_once_with(
+            ["analyze", "artifact.jsonl"], restore_signals=True
+        )
 
     def test_query_command_dispatches_to_query_cli(self) -> None:
         importlib.import_module("stormlog.query_cli")

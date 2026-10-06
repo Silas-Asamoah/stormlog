@@ -31,7 +31,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "infer":
         from .infer.cli import main as infer_main
 
-        return infer_main(resolved_argv[1:])
+        # Run as the console script (no argv given), the process exits
+        # right after, so signals a watch ignored stay ignored.
+        return infer_main(resolved_argv[1:], restore_signals=argv is not None)
     if command == "query":
         from .query_cli import main as query_main
 
