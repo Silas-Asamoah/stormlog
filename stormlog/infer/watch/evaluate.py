@@ -1,0 +1,220 @@
+"""Evaluate every configured trigger once per tick.
+
+Each trigger pairs a predicate with a :class:`~.triggers.Sustain`. A window
+predicate is asked about the window :func:`~.predicates.select_window` cuts,
+and its evaluation records in its ``failed_scrapes`` detail how many of the
+window's scrapes failed, since the window is judged on the rest; a health
+predicate is asked about the history's tail. An evaluation whose window
+overlaps one of the watcher's own perturbation intervals is classified as
+masked, whatever its value, so a capture's pause can neither advance nor
+reset a trigger. A trigger on a family vLLM records at a request's
+completion (e2e, TPOT, the ``request_*`` histograms) widens its window by
+the completion horizon first, since requests the pause delayed finish up to
+one request lifetime later.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
+from typing import Protocol, runtime_checkable
+
+from ..vllm_telemetry import SCRAPE_OK
+from .predicates import (
+    REASON_NO_RECENT_SCRAPE,
+    Entry,
+    Evaluation,
+    WindowPredicate,
+    overlaps,
+    select_window,
+)
+from .triggers import DATA_GAP, MASKED, Sustain, Transition, TriggerState
+
+KIND_METRIC = "metric"
+KIND_SIGNAL = "signal"
+KIND_HEALTH = "health"
+KIND_SLO = "slo"
+KIND_TEST = "test"
+KINDS = (KIND_METRIC, KIND_SIGNAL, KIND_HEALTH, KIND_SLO, KIND_TEST)
+ACTION_RECORD = "record"
+ACTION_DEEP_CAPTURE = "deep_capture"
+WHEN_ALWAYS = "always"
+WHEN_UNEXPLAINED = "unexplained"
+_NS = 1_000_000_000
+# An SLO trigger traces only a violation no signal already explains.
+_DEFAULT_WHEN = {KIND_SLO: WHEN_UNEXPLAINED}
+
+
+@runtime_checkable
+class HistoryPredicate(Protocol):
+    """A question about the history's last ``tail_scrapes`` scrapes rather
+    than one window."""
+
+    @property
+    def tail_scrapes(self) -> int: ...
+
+    @property
+    def when_stale(self) -> str:
+        """How a tail with no recent scrape is classified."""
+        ...
+
+    def evaluate_history(self, history: Sequence[Entry]) -> Evaluation: ...
+
+
+@dataclass(frozen=True)
+class TriggerSpec:
+    """One configured trigger, held to the capture and exit policy.
+
+    Health triggers record only and never count toward exit 3 (decision
+    13); signal triggers record without a trace; SLO triggers capture only
+    when the cause is unexplained unless told otherwise. ``None`` takes the
+    kind's default.
+    """
+
+    trigger_id: str
+    kind: str
+    sustain: Sustain
+    predicate: WindowPredicate | HistoryPredicate
+    action: str = ACTION_RECORD
+    deep_capture_when: str | None = None
+    counts_toward_exit: bool | None = None
+    completion_recorded: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.trigger_id:
+            raise ValueError("trigger_id must be non-empty")
+        if self.kind not in KINDS or self.kind == KIND_TEST:
+            raise ValueError(f"trigger kind {self.kind!r} is not evaluated here")
+        if self.action not in (ACTION_RECORD, ACTION_DEEP_CAPTURE):
+            raise ValueError(f"unknown action {self.action!r}")
+        self._default("deep_capture_when", _DEFAULT_WHEN.get(self.kind, WHEN_ALWAYS))
+        self._default("counts_toward_exit", self.kind != KIND_HEALTH)
+        if self.deep_capture_when not in (WHEN_ALWAYS, WHEN_UNEXPLAINED):
+            raise ValueError(f"unknown deep_capture_when {self.deep_capture_when!r}")
+        self._check_policy()
+
+    def _check_policy(self) -> None:
+        if self.kind == KIND_HEALTH and self.action != ACTION_RECORD:
+            raise ValueError("health triggers only record incidents")
+        if self.kind == KIND_HEALTH and self.counts_toward_exit:
+            raise ValueError("health triggers never count toward the exit code")
+        if self.kind == KIND_SIGNAL and self.action != ACTION_RECORD:
+            raise ValueError("signal triggers record without a trace")
+
+    def _default(self, name: str, value: object) -> None:
+        if getattr(self, name) is None:
+            object.__setattr__(self, name, value)
+
+
+@dataclass(frozen=True)
+class TickResult:
+    """What one trigger's evaluation found at one tick."""
+
+    spec: TriggerSpec
+    at_ns: int
+    evaluation: Evaluation
+    transition: Transition | None
+    state: str
+
+
+@dataclass
+class TriggerEngine:
+    """The configured triggers and their states."""
+
+    specs: Sequence[TriggerSpec]
+    tick_seconds: float
+    # A window's end scrape, and a health predicate's tail, are stale once no
+    # scrape has finished for a tick plus this long; a scrape can take up to
+    # its timeout.
+    scrape_timeout_seconds: float = 0.0
+    states: dict[str, TriggerState] = field(init=False)
+
+    def __post_init__(self) -> None:
+        ids = [spec.trigger_id for spec in self.specs]
+        if len(ids) != len(set(ids)):
+            raise ValueError("trigger ids must be unique")
+        if self.tick_seconds <= 0:
+            raise ValueError("tick_seconds must be > 0")
+        self.states = {
+            spec.trigger_id: TriggerState(spec.sustain) for spec in self.specs
+        }
+
+    def tick(
+        self,
+        at_ns: int,
+        history: Sequence[Entry],
+        *,
+        perturbations: Sequence[tuple[int, int]] = (),
+        completion_horizon_ns: int = 0,
+    ) -> list[TickResult]:
+        """Evaluate every trigger at ``at_ns`` (monotonic) and advance it."""
+        results = []
+        for spec in self.specs:
+            evaluation, since_ns = self._evaluate(spec, at_ns, history)
+            # Masked over all the evaluation read: from its earliest scrape,
+            # which can lie before t - W, or from t - W, whichever is first.
+            reach = min(since_ns, at_ns - int(spec.sustain.window * _NS))
+            if spec.completion_recorded:
+                reach -= completion_horizon_ns
+            if overlaps(reach, at_ns, perturbations):
+                evaluation = replace(
+                    evaluation,
+                    classification=MASKED,
+                    reasons=(*evaluation.reasons, "perturbation"),
+                )
+            state = self.states[spec.trigger_id]
+            transition = state.observe(at_ns, evaluation.classification)
+            results.append(TickResult(spec, at_ns, evaluation, transition, state.state))
+        return results
+
+    def _evaluate(
+        self, spec: TriggerSpec, at_ns: int, history: Sequence[Entry]
+    ) -> tuple[Evaluation, int]:
+        """The evaluation, and the earliest monotonic instant it read."""
+        predicate = spec.predicate
+        if isinstance(predicate, HistoryPredicate):
+            tail = history[-predicate.tail_scrapes :]
+            since = tail[0][0].mono_ns if tail else at_ns
+            stale_after = (self.tick_seconds + self.scrape_timeout_seconds) * _NS
+            if not tail or at_ns - tail[-1][0].done_mono_ns > stale_after:
+                # Nothing finished lately: the last verdict is not today's.
+                # This verdict reads the current freshness interval, not the
+                # old tail: a past pause must eventually leave its mask.
+                reasons = (REASON_NO_RECENT_SCRAPE,)
+                return (
+                    Evaluation(predicate.when_stale, reasons=reasons),
+                    at_ns - int(stale_after),
+                )
+            return predicate.evaluate_history(history), since
+        selection = select_window(
+            history,
+            at_ns=at_ns,
+            window_ns=int(spec.sustain.window * _NS),
+            tick_ns=int(self.tick_seconds * _NS),
+            scrape_timeout_ns=int(self.scrape_timeout_seconds * _NS),
+        )
+        if selection.reason is not None:
+            return Evaluation(DATA_GAP, reasons=(selection.reason,)), at_ns
+        assert selection.sample_start_ns is not None  # set with every window
+        evaluation = predicate.evaluate(selection.scrapes)
+        failed = sum(scrape.status != SCRAPE_OK for scrape in selection.scrapes)
+        detail = {**evaluation.detail, "failed_scrapes": failed}
+        return replace(evaluation, detail=detail), selection.sample_start_ns
+
+
+__all__ = [
+    "ACTION_DEEP_CAPTURE",
+    "ACTION_RECORD",
+    "KINDS",
+    "KIND_HEALTH",
+    "KIND_METRIC",
+    "KIND_SIGNAL",
+    "KIND_SLO",
+    "KIND_TEST",
+    "WHEN_ALWAYS",
+    "WHEN_UNEXPLAINED",
+    "HistoryPredicate",
+    "TickResult",
+    "TriggerEngine",
+    "TriggerSpec",
+]
