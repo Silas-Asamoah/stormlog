@@ -1,0 +1,487 @@
+{
+ "coexistence_nsys_plus_cupti": {
+  "helper_status": [
+   {
+    "activity_buffer_bytes": 8388608,
+    "activity_buffer_peak_outstanding_bytes": 0,
+    "bytes_dropped": 0,
+    "consumer_delay_ms": 0,
+    "cupti_dropped_records": 0,
+    "cupti_version": 130001,
+    "delivered_records": 0,
+    "ended_timestamp_ns": 1791177047173260221,
+    "finalized": true,
+    "initialization_error": null,
+    "kernels_without_timestamps": 0,
+    "local_dropped_records": 0,
+    "maximum_output_bytes": 17179869184,
+    "output_limit_reached": false,
+    "started_timestamp_ns": 1791177042884376833
+   },
+   {
+    "activity_buffer_bytes": 8388608,
+    "activity_buffer_peak_outstanding_bytes": 0,
+    "bytes_dropped": 0,
+    "consumer_delay_ms": 0,
+    "cupti_dropped_records": 0,
+    "cupti_version": 130001,
+    "delivered_records": 0,
+    "ended_timestamp_ns": 1791177047173866635,
+    "finalized": true,
+    "initialization_error": null,
+    "kernels_without_timestamps": 0,
+    "local_dropped_records": 0,
+    "maximum_output_bytes": 17179869184,
+    "output_limit_reached": false,
+    "started_timestamp_ns": 1791177043066978118
+   },
+   {
+    "activity_buffer_bytes": 8388608,
+    "activity_buffer_peak_outstanding_bytes": 8388608,
+    "bytes_dropped": 0,
+    "consumer_delay_ms": 0,
+    "cupti_dropped_records": 0,
+    "cupti_version": 130001,
+    "delivered_records": 1,
+    "ended_timestamp_ns": 1791177042971808163,
+    "finalized": true,
+    "initialization_error": null,
+    "kernels_without_timestamps": 0,
+    "local_dropped_records": 0,
+    "maximum_output_bytes": 17179869184,
+    "output_limit_reached": false,
+    "started_timestamp_ns": 1791177042954074105
+   },
+   {
+    "activity_buffer_bytes": 8388608,
+    "activity_buffer_peak_outstanding_bytes": 8388608,
+    "bytes_dropped": 0,
+    "consumer_delay_ms": 0,
+    "cupti_dropped_records": 0,
+    "cupti_version": 130001,
+    "delivered_records": 1,
+    "ended_timestamp_ns": 1791177043121680362,
+    "finalized": true,
+    "initialization_error": null,
+    "kernels_without_timestamps": 0,
+    "local_dropped_records": 0,
+    "maximum_output_bytes": 17179869184,
+    "output_limit_reached": false,
+    "started_timestamp_ns": 1791177043103913844
+   }
+  ],
+  "interpretation": "Nsight captured all 3000 kernels; the helper captured 0-1 records per process and still reported finalized with no error. Coexistence is unsupported and its failure is silent at the helper level.",
+  "nsys_measured_launches": 3000
+ },
+ "cupti_version_diagnosis": {
+  "cupti_12_6_all": {
+   "activities": [
+    "driver",
+    "runtime",
+    "kernel"
+   ],
+   "cupti_version": 24,
+   "delivered_records": 5257595,
+   "device_buffer_bytes": 33554432,
+   "device_buffer_pool_limit": 16,
+   "flush_period_ms": 100,
+   "kernels_without_timestamps": 132340,
+   "reported_drops": 0
+  },
+  "cupti_12_6_default": {
+   "activities": [
+    "driver",
+    "runtime",
+    "kernel"
+   ],
+   "cupti_version": 24,
+   "delivered_records": 5327715,
+   "device_buffer_bytes": 0,
+   "device_buffer_pool_limit": 0,
+   "flush_period_ms": 0,
+   "kernels_without_timestamps": 138434,
+   "reported_drops": 0
+  },
+  "cupti_12_6_devbuf32m": {
+   "activities": [
+    "driver",
+    "runtime",
+    "kernel"
+   ],
+   "cupti_version": 24,
+   "delivered_records": 5197282,
+   "device_buffer_bytes": 33554432,
+   "device_buffer_pool_limit": 0,
+   "flush_period_ms": 0,
+   "kernels_without_timestamps": 123138,
+   "reported_drops": 0
+  },
+  "cupti_12_6_flush100": {
+   "activities": [
+    "driver",
+    "runtime",
+    "kernel"
+   ],
+   "cupti_version": 24,
+   "delivered_records": 5194881,
+   "device_buffer_bytes": 0,
+   "device_buffer_pool_limit": 0,
+   "flush_period_ms": 100,
+   "kernels_without_timestamps": 130467,
+   "reported_drops": 0
+  },
+  "cupti_13_0_fixed_full": {
+   "activities": [
+    "driver",
+    "runtime",
+    "kernel",
+    "memcpy",
+    "memset",
+    "synchronization"
+   ],
+   "cupti_version": 130001,
+   "delivered_records": 2520878,
+   "device_buffer_bytes": 0,
+   "device_buffer_pool_limit": 0,
+   "flush_period_ms": 0,
+   "kernels_without_timestamps": 0,
+   "reported_drops": 0
+  },
+  "cupti_13_0_fixed_min": {
+   "activities": [
+    "driver",
+    "runtime",
+    "kernel"
+   ],
+   "cupti_version": 130001,
+   "delivered_records": 2600446,
+   "device_buffer_bytes": 0,
+   "device_buffer_pool_limit": 0,
+   "flush_period_ms": 0,
+   "kernels_without_timestamps": 0,
+   "reported_drops": 0
+  },
+  "note": "vLLM W=50 smoke-size trials, cupti-min with runtime,driver,kernel unless noted; target torch 2.13.0+cu130."
+ },
+ "loss": {
+  "nominal": {
+   "exit_code": 0,
+   "status": [
+    {
+     "activity_buffer_bytes": 8388608,
+     "activity_buffer_peak_outstanding_bytes": 58720256,
+     "bytes_dropped": 0,
+     "consumer_delay_ms": 0,
+     "cupti_dropped_records": 0,
+     "cupti_version": 130001,
+     "delivered_records": 1320201,
+     "ended_timestamp_ns": 1791176797423738884,
+     "finalized": true,
+     "initialization_error": null,
+     "kernels_without_timestamps": 0,
+     "local_dropped_records": 0,
+     "maximum_output_bytes": 17179869184,
+     "output_limit_reached": false,
+     "started_timestamp_ns": 1791176794061588808
+    }
+   ]
+  },
+  "note": "W4 stress. small-buffer-slow-consumer used a 64 KiB buffer and 200 ms delay per completed buffer; output-limit used a 1 MiB output bound.",
+  "output-limit": {
+   "exit_code": 0,
+   "status": [
+    {
+     "activity_buffer_bytes": 8388608,
+     "activity_buffer_peak_outstanding_bytes": 50331648,
+     "bytes_dropped": 604330633,
+     "consumer_delay_ms": 0,
+     "cupti_dropped_records": 0,
+     "cupti_version": 130001,
+     "delivered_records": 42545,
+     "ended_timestamp_ns": 1791177042322215586,
+     "finalized": true,
+     "initialization_error": null,
+     "kernels_without_timestamps": 0,
+     "local_dropped_records": 1277656,
+     "maximum_output_bytes": 1048576,
+     "output_limit_reached": true,
+     "started_timestamp_ns": 1791177040244179396
+    }
+   ]
+  },
+  "small-buffer-slow-consumer": {
+   "exit_code": 0,
+   "status": [
+    {
+     "activity_buffer_bytes": 65536,
+     "activity_buffer_peak_outstanding_bytes": 71958528,
+     "bytes_dropped": 0,
+     "consumer_delay_ms": 200,
+     "cupti_dropped_records": 0,
+     "cupti_version": 130001,
+     "delivered_records": 1320201,
+     "ended_timestamp_ns": 1791177030622072643,
+     "finalized": true,
+     "initialization_error": null,
+     "kernels_without_timestamps": 0,
+     "local_dropped_records": 0,
+     "maximum_output_bytes": 17179869184,
+     "output_limit_reached": false,
+     "started_timestamp_ns": 1791176806791575246
+    }
+   ]
+  }
+ },
+ "microbenchmarks": {
+  "note": "Kernels attributed to the measured NVTX range through their host launch in both tools; exact per-name counts.",
+  "w1-eager": {
+   "comparison": {
+    "cupti_correlation_coverage": 1.0,
+    "graph_node_kernels": [
+     0,
+     null
+    ],
+    "kernel_count_match": true,
+    "names_only_in_cupti": [],
+    "names_only_in_nsys": [],
+    "nsys_correlation_coverage": 1.0,
+    "pass": true,
+    "per_name_count_match": true
+   },
+   "cupti": {
+    "correlation_coverage": 1.0,
+    "graph_node_kernels": 0,
+    "kernel_counts_by_name": {
+     "Kernel2": 1000,
+     "splitKreduce_kernel": 1000,
+     "vectorized_elementwise_kernel": 1000
+    },
+    "kernels": 3000,
+    "kernels_missing_device_timestamps": 0,
+    "stream_overlap_ns": 0,
+    "streams": 1
+   },
+   "exit_codes": {
+    "cupti": 0,
+    "nsys": 0
+   },
+   "nsys": {
+    "kernel_counts_by_name": {
+     "Kernel2": 1000,
+     "splitKreduce_kernel": 1000,
+     "vectorized_elementwise_kernel": 1000
+    },
+    "measured_graph_replays": 0,
+    "measured_host_launch_calls": 3000,
+    "measured_launches": 3000,
+    "missing_kernel_correlations": 0,
+    "problems": [],
+    "status": "valid_export"
+   }
+  },
+  "w2-overlap": {
+   "comparison": {
+    "cupti_correlation_coverage": 1.0,
+    "graph_node_kernels": [
+     0,
+     null
+    ],
+    "kernel_count_match": true,
+    "names_only_in_cupti": [],
+    "names_only_in_nsys": [],
+    "nsys_correlation_coverage": 1.0,
+    "pass": true,
+    "per_name_count_match": true
+   },
+   "cupti": {
+    "correlation_coverage": 1.0,
+    "graph_node_kernels": 0,
+    "kernel_counts_by_name": {
+     "vectorized_elementwise_kernel": 32000
+    },
+    "kernels": 32000,
+    "kernels_missing_device_timestamps": 0,
+    "stream_overlap_ns": 16704,
+    "streams": 2
+   },
+   "exit_codes": {
+    "cupti": 0,
+    "nsys": 0
+   },
+   "nsys": {
+    "kernel_counts_by_name": {
+     "vectorized_elementwise_kernel": 32000
+    },
+    "measured_graph_replays": 0,
+    "measured_host_launch_calls": 32000,
+    "measured_launches": 32000,
+    "missing_kernel_correlations": 0,
+    "problems": [],
+    "status": "valid_export"
+   }
+  },
+  "w2-serialized": {
+   "comparison": {
+    "cupti_correlation_coverage": 1.0,
+    "graph_node_kernels": [
+     0,
+     null
+    ],
+    "kernel_count_match": true,
+    "names_only_in_cupti": [],
+    "names_only_in_nsys": [],
+    "nsys_correlation_coverage": 1.0,
+    "pass": true,
+    "per_name_count_match": true
+   },
+   "cupti": {
+    "correlation_coverage": 1.0,
+    "graph_node_kernels": 0,
+    "kernel_counts_by_name": {
+     "vectorized_elementwise_kernel": 32000
+    },
+    "kernels": 32000,
+    "kernels_missing_device_timestamps": 0,
+    "stream_overlap_ns": 4608,
+    "streams": 2
+   },
+   "exit_codes": {
+    "cupti": 0,
+    "nsys": 0
+   },
+   "nsys": {
+    "kernel_counts_by_name": {
+     "vectorized_elementwise_kernel": 32000
+    },
+    "measured_graph_replays": 0,
+    "measured_host_launch_calls": 32000,
+    "measured_launches": 32000,
+    "missing_kernel_correlations": 0,
+    "problems": [],
+    "status": "valid_export"
+   }
+  },
+  "w2_overlap_interpretation": "Both tools recorded the two worker streams; neither observed meaningful concurrent execution on the L4 (whole-run overlap: nsys 0.4 us vs CUPTI 21 us; serialized control 12.8 us vs 4.6 us). Overlap fidelity is untested, not failed.",
+  "w3-graph": {
+   "comparison": {
+    "cupti_correlation_coverage": 1.0,
+    "graph_node_kernels": [
+     3000,
+     null
+    ],
+    "kernel_count_match": true,
+    "names_only_in_cupti": [],
+    "names_only_in_nsys": [],
+    "nsys_correlation_coverage": 1.0,
+    "pass": true,
+    "per_name_count_match": true
+   },
+   "cupti": {
+    "correlation_coverage": 1.0,
+    "graph_node_kernels": 3000,
+    "kernel_counts_by_name": {
+     "Kernel2": 1000,
+     "splitKreduce_kernel": 1000,
+     "vectorized_elementwise_kernel": 1000
+    },
+    "kernels": 3000,
+    "kernels_missing_device_timestamps": 0,
+    "stream_overlap_ns": 0,
+    "streams": 1
+   },
+   "exit_codes": {
+    "cupti": 0,
+    "nsys": 0
+   },
+   "nsys": {
+    "kernel_counts_by_name": {
+     "Kernel2": 1000,
+     "splitKreduce_kernel": 1000,
+     "vectorized_elementwise_kernel": 1000
+    },
+    "measured_graph_replays": 1000,
+    "measured_host_launch_calls": 1000,
+    "measured_launches": 3000,
+    "missing_kernel_correlations": 0,
+    "problems": [],
+    "status": "valid_export"
+   }
+  }
+ },
+ "vllm_w200": {
+  "eager": {
+   "comparison": {
+    "cupti_correlation_coverage": 1.0,
+    "graph_node_kernels": [
+     0,
+     0
+    ],
+    "names_only_in_cupti": [],
+    "names_only_in_nsys": [],
+    "nsys_correlation_coverage": 1.0,
+    "pass": true
+   },
+   "cupti": {
+    "correlated_kernels": 592048,
+    "correlation_coverage": 1.0,
+    "graph_node_kernels": 0,
+    "kernels": 592048,
+    "kernels_missing_device_timestamps": 0,
+    "records_by_kind": {
+     "driver": 3000869,
+     "kernel": 592048,
+     "runtime": 6247061
+    },
+    "stream_overlap_ns": 0,
+    "streams": 1
+   },
+   "nsys": {
+    "correlated_kernels": 556829,
+    "correlation_coverage": 1.0,
+    "graph_node_kernels": 0,
+    "kernels": 556829,
+    "kernels_missing_device_timestamps": 0,
+    "stream_overlap_ns": 0,
+    "streams": 1
+   }
+  },
+  "graph": {
+   "comparison": {
+    "cupti_correlation_coverage": 1.0,
+    "graph_node_kernels": [
+     1348942,
+     1330744
+    ],
+    "graph_nodes_attributed": true,
+    "names_only_in_cupti": [],
+    "names_only_in_nsys": [],
+    "nsys_correlation_coverage": 1.0,
+    "pass": true
+   },
+   "cupti": {
+    "correlated_kernels": 1442129,
+    "correlation_coverage": 1.0,
+    "graph_node_kernels": 1348942,
+    "kernels": 1442129,
+    "kernels_missing_device_timestamps": 0,
+    "records_by_kind": {
+     "driver": 865598,
+     "kernel": 1442129,
+     "runtime": 1527989
+    },
+    "stream_overlap_ns": 0,
+    "streams": 1
+   },
+   "nsys": {
+    "correlated_kernels": 1422718,
+    "correlation_coverage": 1.0,
+    "graph_node_kernels": 1330744,
+    "kernels": 1422718,
+    "kernels_missing_device_timestamps": 0,
+    "stream_overlap_ns": 0,
+    "streams": 1
+   }
+  },
+  "note": "Separate processes, so kernel counts differ with batching; the check is equal name sets, launch correlation and graph-node attribution."
+ }
+}

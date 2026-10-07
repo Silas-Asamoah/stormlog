@@ -1,0 +1,81 @@
+{
+ "plan_id": "smoke",
+ "seed": 118,
+ "trials": [
+  {
+   "trial_id": "smoke-off-w50",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "50",
+    "--warmup",
+    "20",
+    "--measured",
+    "100"
+   ],
+   "keep_traces": true,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "smoke-kineto-w50",
+   "args": [
+    "--mode",
+    "kineto",
+    "--window",
+    "50",
+    "--warmup",
+    "20",
+    "--measured",
+    "100"
+   ],
+   "keep_traces": true,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "smoke-cupti-min-w50",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "50",
+    "--warmup",
+    "20",
+    "--measured",
+    "100"
+   ],
+   "keep_traces": true,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "smoke-cupti-full-w50",
+   "args": [
+    "--mode",
+    "cupti-full",
+    "--window",
+    "50",
+    "--warmup",
+    "20",
+    "--measured",
+    "100"
+   ],
+   "keep_traces": true,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "smoke-nsys-w50",
+   "args": [
+    "--mode",
+    "nsys",
+    "--window",
+    "50",
+    "--warmup",
+    "20",
+    "--measured",
+    "100"
+   ],
+   "keep_traces": true,
+   "timeout": 2400
+  }
+ ]
+}

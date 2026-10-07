@@ -1,0 +1,41 @@
+{
+  "note": "Reconstructed from the build hashes printed on the GPU host during the session, in run order. Every build reports helper_version 0.3.0, so this file is the only link between trials and binaries.",
+  "builds": [
+    {
+      "sha256": "3793f9205b94261462c97c3ee35dc2c32341f754d1485514c9863719e162bcce",
+      "cupti": "12.6 (system toolkit)",
+      "source_state": "deferred start and buffer accounting",
+      "used_by": ["smoke"]
+    },
+    {
+      "sha256": "8d2ed02f846d66a9794a5ffd6f56d46b4cbef460571da9ba24b29d845d9ed7f7",
+      "cupti": "12.6 (system toolkit)",
+      "source_state": "adds device-buffer, pool-limit and flush-period switches and the timestamp-loss counter",
+      "used_by": ["devbuf: default, flush100, devbuf32m, all"]
+    },
+    {
+      "sha256": null,
+      "cupti": "13.0.85 (venv nvidia-cuda-cupti)",
+      "source_state": "same source as 8d2ed02f, built manually; hash not recorded",
+      "used_by": ["devbuf: cu13-default"]
+    },
+    {
+      "sha256": "f6be3f0bd643f29f68ab3f284b697655ac8d76b40f80865ebd9bc77bc9a9e02b",
+      "cupti": "13.0.85 (venv nvidia-cuda-cupti)",
+      "source_state": "adds finalization order fix and version-selected kernel record",
+      "used_by": ["devbuf: fixed-cupti-min, fixed-cupti-full", "scaling", "graph", "first micro run (crashed)"]
+    },
+    {
+      "sha256": "0e9756033abc59c8bc0476449139ccc5c942af31956d9c37d7794f9a57f7ca05",
+      "cupti": "13.0.85 (venv nvidia-cuda-cupti)",
+      "source_state": "adds the discard switch (off unless STORMLOG_CUPTI_DISCARD_RECORDS=1); committed source",
+      "used_by": ["ablation", "micro2", "graph_perturbation"]
+    },
+    {
+      "sha256": "601d4ed74553ce6d4978badf6900b1e64f32ac08d5af7e6910c1ae1ee5aebf36",
+      "cupti": "12.6 (system toolkit)",
+      "source_state": "control build from the setup rerun; not used by any reported trial",
+      "used_by": []
+    }
+  ]
+}
