@@ -495,17 +495,23 @@ def test_the_dose_check_passes_short_prefill_steps_and_a_paused_baseline() -> No
         assert recovery_blocked("F4a", paused) == ()
 
 
-@pytest.mark.parametrize(("mean_s", "refused"), [(0.0202, False), (0.0198, True)])
+@pytest.mark.parametrize(
+    ("count", "mean_s", "too_long", "refused"),
+    [(1000, 0.0202, 2, False), (320, 0.03125, 1, True), (1000, 0.0198, 2, True)],
+    ids=["0.99", "exactly-1", "1.01"],
+)
 def test_the_dose_check_refuses_from_one_too_long_gap_per_hold(
-    mean_s: float, refused: bool
+    count: int, mean_s: float, too_long: int, refused: bool
 ) -> None:
     # The lead's boundary: 2 gaps too long for a hold among 1,000 busy gaps
     # are 0.99 per 10 s hold at a 20.2 ms mean, which passes, and 1.01 at
-    # 19.8 ms, which is refused, not evaluable, with its reason.
+    # 19.8 ms, which is refused, not evaluable, with its reason. One among
+    # 320 at 31.25 ms is exactly 1.0 per hold (10 s of busy time, in exact
+    # binary fractions), and is refused: the limit is inclusive.
     from stormlog.infer.qualify.recovery import DOSE_CHECK_TOO_LONG_PER_HOLD
 
     steps = GapStats(
-        count=1000, mean=mean_s, p95=0.03, p99=0.03, p999=0.05, too_long_count=2
+        count=count, mean=mean_s, p95=0.03, p99=0.03, p999=0.05, too_long_count=too_long
     )
     baseline = Baseline(
         wait_p95=1.0,
@@ -520,13 +526,15 @@ def test_the_dose_check_refuses_from_one_too_long_gap_per_hold(
         Signals(in_flight=ALWAYS), baseline, Actions(), start_ns=0, until_ns=S
     )
     per_hold = steps.too_long_per(Thresholds().cadence_hold_ns / S)
+    if count == 320:
+        assert per_hold == DOSE_CHECK_TOO_LONG_PER_HOLD == 1.0
     assert (per_hold >= DOSE_CHECK_TOO_LONG_PER_HOLD) is refused
     reasons = recovery_blocked("F4a", context)
     if refused:
         assert reasons == (
-            "dose_check_failed: 2 of 1000 busy step gaps in the baseline are too "
-            "long for a hold, past twice the p99 and the smallest dose (60 ms): "
-            "1.0 per 10 s hold",
+            f"dose_check_failed: {too_long} of {count} busy step gaps in the "
+            "baseline are too long for a hold, past twice the p99 and the "
+            "smallest dose (60 ms): 1.0 per 10 s hold",
         )
     else:
         assert reasons == ()
