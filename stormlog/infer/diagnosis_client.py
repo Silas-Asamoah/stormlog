@@ -21,9 +21,9 @@ from .diagnosis_model import (
     RULED_OUT,
     UNTESTABLE,
     Alternative,
-    Criteria,
     Finding,
     Observation,
+    met,
 )
 from .diagnosis_selection import Subject
 from .diagnosis_stats import INSUFFICIENT_SAMPLES, Difference, median_difference
@@ -91,18 +91,18 @@ def _admission_finding(
         title="The client held requests back at its in-flight limit",
         message=f"{len(held)} requests were held for a slot and {len(dropped)} dropped.",
         gates={"arrivals_recorded": True},
-        condition=_met(
+        condition=met(
             direct_evidence=bool(held or dropped),
             sufficient_samples=excess is not None,
         ),
-        contribution=_met(
+        contribution=met(
             excess_ci_excludes_zero=excess is not None and excess.low > 0,
             explains_intended_latency_excess=_explains(excess, intended, context),
         ),
         contribution_lower=None if excess is None else excess.low / 1e6,
         observations=_admission_observations(held, dropped, excess),
         location={"component": COMPONENT_CLIENT},
-        window=_window(context, subject),
+        window=context.window(subject),
         first_detectable_ns=subject.first_detectable_ns,
         incident=subject.incident,
         metrics={
@@ -217,10 +217,10 @@ def assess_api_server(context: Context, subject: Subject) -> Assessment:
         message=f"Median send_to_ingress rose by {excess.estimate / 1e6:.1f} ms against the reference.",
         gates={"engine_progress": progressed, "bounded_placement": True},
         alternatives=alternatives,
-        condition=_met(
+        condition=met(
             direct_evidence=True, sufficient_samples=True, robust_to_clock=True
         ),
-        contribution=_met(
+        contribution=met(
             excess_ci_excludes_zero=excess.excludes_zero,
             explains_ttft_excess=_explains(excess, ttft, context),
             competitors_excluded=all(a.status == RULED_OUT for a in alternatives),
@@ -238,7 +238,7 @@ def assess_api_server(context: Context, subject: Subject) -> Assessment:
             )
         ],
         location={"component": COMPONENT_API_SERVER, "engine_producer": producer},
-        window=_window(context, subject),
+        window=context.window(subject),
         detail={"form": "frontend", "attribution": "host"},
         first_detectable_ns=subject.first_detectable_ns,
         incident=subject.incident,
@@ -375,10 +375,8 @@ def _capture_finding(
         title="A profiler stop blocked the server while requests were in flight",
         message=f"The stop took {duration_ms:.1f} ms and {len(requests)} requests waited across it.",
         gates={"stop_request_stamp": True},
-        condition=_met(direct_evidence=True, sufficient_samples=len(requests) >= 3),
-        contribution=_met(
-            excess_ci_excludes_zero=excess is not None and excess.low > 0
-        ),
+        condition=met(direct_evidence=True, sufficient_samples=len(requests) >= 3),
+        contribution=met(excess_ci_excludes_zero=excess is not None and excess.low > 0),
         contribution_lower=None if excess is None else excess.low / 1e6,
         observations=[
             Observation(
@@ -450,13 +448,6 @@ def _explains(
     )
 
 
-def _met(**criteria: bool) -> Criteria:
-    return Criteria(
-        met=tuple(name for name, held in criteria.items() if held),
-        unmet=tuple(name for name, held in criteria.items() if not held),
-    )
-
-
 def _raw(context: Context, request_id: str) -> dict[str, Any]:
     return context.view.client[request_id].terminal_raw
 
@@ -466,19 +457,6 @@ def _client_lines(context: Context, request_ids: Any) -> list[Line]:
     for request_id in dict.fromkeys(request_ids):
         lines.extend(context.view.client[request_id].lines())
     return lines
-
-
-def _window(context: Context, subject: Subject) -> dict[str, Any] | None:
-    if subject.start_ns is None or subject.end_ns is None:
-        return None
-    return {
-        "start_ns": subject.start_ns,
-        "end_ns": subject.end_ns,
-        "clock_domain": context.view.clock_domain,
-        "uncertainty_ns": 0,
-        "resolution_ns": 1_000_000_000,
-        "placement": "client_clock",
-    }
 
 
 __all__ = ["assess_api_server", "assess_capture_pause", "assess_client_admission"]

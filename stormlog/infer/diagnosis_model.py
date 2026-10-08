@@ -257,6 +257,14 @@ class Finding:
         )
 
 
+def met(**criteria: bool) -> Criteria:
+    """A claim's rubric from named criteria, each met or not."""
+    return Criteria(
+        met=tuple(name for name, held in criteria.items() if held),
+        unmet=tuple(name for name, held in criteria.items() if not held),
+    )
+
+
 def support_block(lines: Sequence[Line]) -> dict[str, Any]:
     """Every line a finding used, by identity: (line, record_id, sha256)
     triples, or above the limit ranges and a digest of their hashes."""
@@ -316,6 +324,7 @@ __all__ = [
     "Criteria",
     "Finding",
     "Observation",
+    "met",
     "rank_findings",
     "support_block",
 ]

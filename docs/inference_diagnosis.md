@@ -241,6 +241,29 @@ TTFT excess. Without engine records the class is
 `partial/no_capacity_witness`; with requests on several engines,
 `unsupported/several_engines`.
 
+## KV preemption pressure
+
+Running requests were preempted because KV blocks ran out, waited to
+resume, and recomputed what they had. The class reads the import's
+`engine.preempted` stages over the subject's requests' engine lifetimes.
+vLLM also preempts every running request when the prefix cache is reset, and
+the import attributes those preemptions to the reset; so the class's gate,
+`allocation_cause_established`, holds only when its indispensable
+competitor, a reset, is ruled out: the hook records resets (`cache_reset` in
+`observes`), none happened over the subject, and the hook's loss coverage
+spans it (every `dropped` count, `<kind>_oversized` included, and `errors`
+unchanged, the writer not capped). Without that the class is
+`partial/preemption_cause_unknown` and the finding is an observation that
+preemption and recomputation happened.
+
+Each affected request's cost is observed: the wait from the preempting
+`schedule()` call to the call that resumed it
+(`preemption_to_resume_entry`), and the positions it computed again below
+the highest context it had reached. The contribution claim asks for an
+end-to-end excess whose interval excludes zero, and resume waits adding up
+to at least half of it over the subject's requests. Without engine records
+the class is `unsupported/no_hook_preemption_data`.
+
 ## Client admission, the API server and capture pauses
 
 **`client_admission`** (cause `instrumentation`): Stormlog's open-loop

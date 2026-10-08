@@ -95,6 +95,11 @@ class Engine:
     bracketed: bool = True
     # False: a hook from before enqueued records.
     enqueued_records: bool = True
+    # KV slots, in tokens: a step whose growth would not fit preempts.
+    kv_tokens: int | None = None
+    # From this monotonic time, heartbeats report one oversized cache reset
+    # the writer dropped.
+    dropped_from: int | None = None
     # (mono_ns, delta_ns): the host's wall clock steps by delta at mono_ns.
     wall_jump: tuple[int, int] | None = None
     # (mono_ns, duration_ns): the engine loop stops for duration after the
@@ -131,7 +136,8 @@ class Engine:
         end = max(at for at, _, _ in timed) + SECOND
         records = [record for _, _, record in timed]
         records.append({"kind": "goodbye", **stamp(end), "last_seq": len(records) + 1})
-        return [self._restamp(record) for record in _with_heartbeats(records)]
+        beats = _with_heartbeats(records, self.dropped_from)
+        return [self._restamp(record) for record in beats]
 
     def _restamp(self, record: dict[str, Any]) -> dict[str, Any]:
         """Apply the wall clock's jump, or drop the second reads."""
@@ -152,7 +158,8 @@ class Engine:
         self, requests: list[SimRequest]
     ) -> list[tuple[int, int, dict[str, Any]]]:
         waiting = deque(sorted(requests, key=lambda r: r.enqueued_ns))
-        running: dict[str, tuple[SimRequest, int]] = {}  # internal -> (request, tokens)
+        running: dict[str, tuple[SimRequest, int]] = {}  # internal -> tokens
+        resumed: dict[str, int] = {}  # preempted, waiting: tokens kept
         out: list[tuple[int, int, dict[str, Any]]] = []
         now = waiting[0].enqueued_ns if waiting else 0
         iteration = 0
@@ -160,67 +167,147 @@ class Engine:
             if not running and waiting[0].enqueued_ns > now:
                 now = waiting[0].enqueued_ns
                 continue
-            admitted: list[SimRequest] = []
-            while (
-                waiting
-                and waiting[0].enqueued_ns <= now
-                and len(running) + len(admitted) < self.max_num_seqs
-            ):
-                admitted.append(waiting.popleft())
-            for request in admitted:
-                request.first_step = iteration
-            members = [_member(r, first=True) for r in admitted]
+            preempted = self._make_room(running, waiting, resumed)
+            # vLLM schedules waiting requests only in a step that preempted none.
+            admitted = [] if preempted else self._admit(now, running, waiting, resumed)
+            members = [_admission(r, resumed.pop(r.internal, None)) for r in admitted]
             members += [_member(r, first=False, done=n) for r, n in running.values()]
-            total = sum(m["scheduled"] for m in members)
-            out.append((now, 1, _scheduled(iteration, now, members, total)))
-            finished_at = now + self.step_ns
             for request in admitted:
-                running[request.internal] = (request, 0)
-            done, freed = [], []
-            for internal, (request, tokens) in list(running.items()):
-                tokens += 1
-                if tokens == 1:
-                    request.first_done_ns = finished_at
-                finish = "length" if tokens >= request.output else None
-                done.append(_done(internal, tokens, request, finish))
-                running[internal] = (request, tokens)
-                if finish is not None:
-                    request.last_done_ns = finished_at
-                    freed.append(request)
-            for request in freed:
-                del running[request.internal]
-                out.append(
+                if request.first_step is None:
+                    request.first_step = iteration
+                tokens = next(
                     (
-                        finished_at - 1,
-                        2,
-                        {
-                            "kind": "terminal",
-                            "internal": request.internal,
-                            "status": "FINISHED_LENGTH_CAPPED",
-                            "finish_reason": "length",
-                            "output_tokens": request.output,
-                            **stamp(finished_at - 1),
-                        },
-                    )
+                        m["output_before"]
+                        for m in members
+                        if m["internal"] == request.internal
+                    ),
+                    0,
                 )
-            out.append(
-                (
-                    finished_at,
-                    3,
-                    {
-                        "kind": "completed",
-                        "iteration": str(iteration),
-                        **stamp(finished_at),
-                        "members": done,
-                    },
-                )
-            )
+                running[request.internal] = (request, tokens)
+            total = sum(m["scheduled"] for m in members)
+            out.append((now, 1, _scheduled(iteration, now, members, total, preempted)))
+            finished_at = now + self.step_ns
+            out.extend(self._complete(iteration, finished_at, running))
             iteration += 1
             now = finished_at + self.gap_ns
             if self.stall is not None and finished_at >= self.stall[0]:
                 now += self.stall[1]
                 self.stall = None
         return out
+
+    def _make_room(
+        self,
+        running: dict[str, tuple[SimRequest, int]],
+        waiting: deque[SimRequest],
+        resumed: dict[str, int],
+    ) -> list[str]:
+        """Preempt the latest admitted requests until the step's growth fits
+        the KV budget; they go back to the front of the queue."""
+        preempted: list[str] = []
+        while (
+            self.kv_tokens is not None
+            and running
+            and _usage(running) + len(running) > self.kv_tokens
+        ):
+            internal = next(reversed(running))
+            request, tokens = running.pop(internal)
+            resumed[internal] = tokens
+            waiting.appendleft(request)
+            preempted.append(internal)
+        return preempted
+
+    def _admit(
+        self,
+        now: int,
+        running: dict[str, tuple[SimRequest, int]],
+        waiting: deque[SimRequest],
+        resumed: dict[str, int],
+    ) -> list[SimRequest]:
+        admitted: list[SimRequest] = []
+        usage = _usage(running) + len(running)
+        while (
+            waiting
+            and waiting[0].enqueued_ns <= now
+            and len(running) + len(admitted) < self.max_num_seqs
+        ):
+            need = waiting[0].prompt + resumed.get(waiting[0].internal, 0) + 1
+            if self.kv_tokens is not None and usage + need > self.kv_tokens:
+                break
+            usage += need
+            admitted.append(waiting.popleft())
+        return admitted
+
+    def _complete(
+        self,
+        iteration: int,
+        finished_at: int,
+        running: dict[str, tuple[SimRequest, int]],
+    ) -> list[tuple[int, int, dict[str, Any]]]:
+        """Every running request gains a token; finished ones are freed."""
+        out: list[tuple[int, int, dict[str, Any]]] = []
+        done = []
+        for internal, (request, tokens) in list(running.items()):
+            tokens += 1
+            if tokens == 1:
+                request.first_done_ns = finished_at
+            finish = "length" if tokens >= request.output else None
+            done.append(_done(internal, tokens, request, finish))
+            running[internal] = (request, tokens)
+            if finish is not None:
+                request.last_done_ns = finished_at
+                del running[internal]
+                out.append((finished_at - 1, 2, _terminal(request, finished_at - 1)))
+        out.append(
+            (
+                finished_at,
+                3,
+                {
+                    "kind": "completed",
+                    "iteration": str(iteration),
+                    **stamp(finished_at),
+                    "members": done,
+                },
+            )
+        )
+        return out
+
+
+def _usage(running: dict[str, tuple[SimRequest, int]]) -> int:
+    """KV slots the running requests hold: prompt and output so far."""
+    return sum(request.prompt + tokens for request, tokens in running.values())
+
+
+def _terminal(request: SimRequest, at: int) -> dict[str, Any]:
+    return {
+        "kind": "terminal",
+        "internal": request.internal,
+        "status": "FINISHED_LENGTH_CAPPED",
+        "finish_reason": "length",
+        "output_tokens": request.output,
+        **stamp(at),
+    }
+
+
+def _admission(request: SimRequest, kept: int | None) -> dict[str, Any]:
+    """A first schedule, or the resume of a preempted request, which
+    recomputes its prompt and the output it kept."""
+    if kept is None:
+        return _member(request, first=True)
+    return {
+        "internal": request.internal,
+        "sighting": "repeat",
+        "phase": "context",
+        "scheduled": request.prompt + kept,
+        "computed_before": 0,
+        "prompt_tokens": request.prompt,
+        "prefill_scheduled": request.prompt,
+        "past_prompt_scheduled": kept,
+        "drafts_scheduled": 0,
+        "cached_at_admission": None,
+        "recompute": True,
+        "output_before": kept,
+        "resumable": False,
+    }
 
 
 def _enqueued(request: SimRequest) -> tuple[int, int, dict[str, Any]]:
@@ -273,7 +360,11 @@ def _done(
 
 
 def _scheduled(
-    iteration: int, now: int, members: list[dict[str, Any]], total: int
+    iteration: int,
+    now: int,
+    members: list[dict[str, Any]],
+    total: int,
+    preempted: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "kind": "scheduled",
@@ -282,14 +373,17 @@ def _scheduled(
         **stamp(now + 50_000, "end_"),
         "total_tokens": total,
         "zero_token": total == 0,
-        "preempted": [],
+        "preempted": list(preempted or []),
         "pause_state": "UNPAUSED",
         "members": members,
     }
 
 
-def _with_heartbeats(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Insert a heartbeat every second of engine time, counters clean."""
+def _with_heartbeats(
+    records: list[dict[str, Any]], dropped_from: int | None = None
+) -> list[dict[str, Any]]:
+    """Insert a heartbeat every second of engine time; its counters are
+    clean, or from ``dropped_from`` count one dropped oversized reset."""
     out: list[dict[str, Any]] = []
     next_beat: int | None = None
     for record in records:
@@ -303,7 +397,11 @@ def _with_heartbeats(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         "kind": "heartbeat",
                         **stamp(next_beat),
                         "last_seq": len(out),
-                        "dropped": {},
+                        "dropped": (
+                            {"cache_reset_oversized": 1}
+                            if dropped_from is not None and next_beat >= dropped_from
+                            else {}
+                        ),
                         "errors": 0,
                         "bytes": 1024,
                         "capped": False,
