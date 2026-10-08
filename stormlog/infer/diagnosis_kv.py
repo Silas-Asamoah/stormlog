@@ -23,6 +23,7 @@ from .correlation_events import StageEvent
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
 from .diagnosis_inputs import Line
 from .diagnosis_join import Execution
+from .diagnosis_metrics import aggregate_assessment
 from .diagnosis_model import (
     RULED_OUT,
     Alternative,
@@ -54,7 +55,16 @@ def assess_kv(context: Context, subject: Subject) -> Assessment:
     """The KV class on one subject."""
     producer = context.producer_of(subject.requests)
     if producer is None:
-        return Assessment(KV_PREEMPTION_PRESSURE, subject.key, UNSUPPORTED, [NO_HOOK])
+        aggregate = aggregate_assessment(
+            context,
+            subject,
+            KV_PREEMPTION_PRESSURE,
+            "vLLM counted {value:.0f} preemptions over the window.",
+            NO_HOOK,
+        )
+        return aggregate or Assessment(
+            KV_PREEMPTION_PRESSURE, subject.key, UNSUPPORTED, [NO_HOOK]
+        )
     span = _span(context, subject)
     stages = _stages(context, producer, span)
     preemptions = [(line, s) for line, s in stages if s.name == PREEMPTED]

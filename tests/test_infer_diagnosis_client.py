@@ -102,8 +102,8 @@ def test_a_closed_loop_has_no_intended_arrivals(tmp_path: Path) -> None:
 def _slow_front() -> list[SimRequest]:
     """Background load keeps the engine stepping; then two thirds of the
     requests take 300 ms to reach it."""
-    background = poisson_free(900, 10 * SECOND, 100 * MS, prefix="g")
-    slow = poisson_free(100, AT, 50 * MS, prefix="s", ingress_ns=300 * MS)
+    background = poisson_free(300, 10 * SECOND, 100 * MS, prefix="g")
+    slow = poisson_free(100, 30 * SECOND, 50 * MS, prefix="s", ingress_ns=300 * MS)
     return background + slow
 
 

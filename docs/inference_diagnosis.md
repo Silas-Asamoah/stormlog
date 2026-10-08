@@ -281,6 +281,18 @@ TTFT excess. Without engine records the class is
 `partial/no_capacity_witness`; with requests on several engines,
 `unsupported/several_engines`.
 
+**vLLM's metrics.** Scrapes describe the whole engine between two instants,
+never a request. A scraped exporter is bound to the engine whose hook log
+was imported only when the operator asserts it with `--metrics-from-engine`;
+then `vllm:num_requests_waiting_by_reason{reason="capacity"}` above zero over
+the subject's window can stand in for the hook's capacity witness. Without
+engine records, the queue and KV classes give at most a window-level
+observation from the scrapes in the subject's window (the median waiting
+count, or the preemption counter's increase, over its threshold):
+`partial` with reasons `aggregate_only` and the missing hook evidence, never
+a fault claim, and with `location.exporter_binding` `asserted` or
+`exporter_scoped`.
+
 ## KV preemption pressure
 
 Running requests were preempted because KV blocks ran out, waited to

@@ -13,6 +13,7 @@ from .diagnosis_segments import Decomposition, decompose
 from .diagnosis_selection import Selection, Subject
 from .diagnosis_stats import Difference, median_difference
 from .diagnosis_steps import Steps, steps_of
+from .vllm_telemetry import VllmScrapeRecord
 
 UNSUPPORTED = "unsupported"
 PARTIAL = "partial"
@@ -52,6 +53,7 @@ class Context:
         default_factory=dict
     )
     _steps: dict[str, Steps] = field(default_factory=dict)
+    _scrapes: list[VllmScrapeRecord] | None = None
 
     def clock(self, producer: str) -> EngineClock:
         if producer not in self._clocks:
@@ -172,6 +174,26 @@ class Context:
 
     def subjects(self) -> list[Subject]:
         return self.selection.subjects
+
+    def scrapes(
+        self, start_ns: int | None = None, end_ns: int | None = None
+    ) -> list[VllmScrapeRecord]:
+        """The run's vLLM metric scrapes in time order, those observed in
+        [start, end] when given; a record that does not parse is skipped."""
+        if self._scrapes is None:
+            parsed = []
+            for line in self.view.scrapes:
+                try:
+                    parsed.append(VllmScrapeRecord.from_record(dict(line.raw or {})))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            self._scrapes = sorted(parsed, key=lambda r: r.observed_at_ns)
+        return [
+            s
+            for s in self._scrapes
+            if (start_ns is None or s.observed_at_ns >= start_ns)
+            and (end_ns is None or s.observed_at_ns <= end_ns)
+        ]
 
     def window(self, subject: Subject) -> dict[str, Any] | None:
         """A finding's window: its subject's, on the artifact's clock."""

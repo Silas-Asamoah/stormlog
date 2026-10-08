@@ -19,6 +19,7 @@ from typing import Any
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
 from .diagnosis_inputs import Line
 from .diagnosis_loop import LoopGapConfig, stalls_over_limit
+from .diagnosis_metrics import aggregate_assessment, subject_signal
 from .diagnosis_model import (
     NOT_RULED_OUT,
     RULED_OUT,
@@ -64,7 +65,15 @@ def assess_queue(context: Context, subject: Subject) -> Assessment:
     waits = _waits(context, subject)
     producer = context.producer_of(list(waits.subject)) if waits else None
     if waits is None or not waits.subject:
-        return Assessment(
+        # Without the hook, vLLM's metrics can only describe the window.
+        aggregate = aggregate_assessment(
+            context,
+            subject,
+            QUEUE_SATURATION,
+            "A median of {value:.1f} requests waited in vLLM's queue over the window.",
+            NO_SERVER_QUEUE_SIGNAL,
+        )
+        return aggregate or Assessment(
             QUEUE_SATURATION, subject.key, UNSUPPORTED, [NO_SERVER_QUEUE_SIGNAL]
         )
     if producer is None:
@@ -111,6 +120,8 @@ def _finding(
     span = _wait_span(context, list(waits.subject))
     spanning = steps.between(*span) if span else []
     witness = _witness(context, producer, spanning)
+    if not witness[0]:
+        witness = _exporter_witness(context, subject, witness)
     ttft = context.total_excess(subject, "ttft")
     alternatives = [
         _engine_stall(context, producer, waits),
@@ -178,6 +189,22 @@ def _witness(
     share = full / len(busy)
     needed = resolve_threshold(QUEUE_WITNESS_SHARE, context.thresholds)[0]
     return share >= needed, round(share, 4)
+
+
+def _exporter_witness(
+    context: Context, subject: Subject, hook: tuple[bool, float | None]
+) -> tuple[bool, float | None]:
+    """Requests waiting for scheduling capacity, as vLLM's own metric
+    counts them (its help text: "waiting for scheduling capacity", not only
+    KV): a witness only from an exporter asserted to be this engine."""
+    if not context.metrics_from_engine:
+        return hook
+    signal = subject_signal(context, subject, QUEUE_SATURATION)
+    reasons = signal.detail.get("waiting_by_reason") if signal is not None else None
+    capacity = reasons.get("capacity") if isinstance(reasons, dict) else None
+    if isinstance(capacity, (int, float)) and capacity > 0:
+        return True, hook[1]
+    return hook
 
 
 def _capacity(context: Context, producer: str) -> tuple[int | None, int | None]:
