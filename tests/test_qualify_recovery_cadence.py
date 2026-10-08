@@ -494,6 +494,20 @@ def test_the_dose_check_passes_short_prefill_steps_and_a_paused_baseline() -> No
         assert recovery_blocked("F4a", paused) == ()
 
 
+def test_the_dose_check_counts_per_hold_of_time_not_per_gap() -> None:
+    # A mutant that rated the long gaps per gap at a 20 ms step survived
+    # the 20 ms fixtures. Nine 250 ms stalls in a 45 s baseline are two per
+    # 10 s hold whatever the step: a 5 ms engine (about 9,000 gaps) is
+    # refused; two such stalls (0.44 per hold) are not.
+    def stalls(count: int) -> list[tuple[int, int]]:
+        return [(t * S, t * S + 250 * MS) for t in range(4, 4 + 4 * count, 4)]
+
+    nine = prefill_context(0, 0.0, stalls(9))
+    reasons = recovery_blocked("F4a", nine)
+    assert len(reasons) == 1 and "2.0 per 10 s hold" in reasons[0]
+    assert recovery_blocked("F4a", prefill_context(0, 0.0, stalls(2))) == ()
+
+
 def test_stalls_as_long_as_a_dose_still_hold_recovery_off() -> None:
     # The allowance is for gaps like the baseline's, and never for one as
     # long as the smallest F4a/F4b dose: a 100 ms stall every 2 s for 40 s
