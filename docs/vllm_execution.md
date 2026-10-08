@@ -553,7 +553,8 @@ write waits for it in the same way; another client's that no written step
 ran is counted as `unreferenced`, and one in an epoch without its key as
 `withheld`, in the epoch's `stages` counts. A reset or pause with no step
 written before it goes in the epoch's `unanchored` list with its `seq`, its
-times and its fields. Each stage's ID is fixed by the epoch and the raw
+times and its fields. Every import that reads such a record again lists it
+again, so a reader joining imports keys these facts by epoch and `seq`. Each stage's ID is fixed by the epoch and the raw
 `seq`, so no import writes one twice.
 
 **Device binding for traces.** A worker hello names the worker's host, pid,
