@@ -669,16 +669,16 @@ the hook's steps alone.
   units nearest in decode context that share its key and bands (at least
   5), its ratio its cadence over their median. Nearest in context, not in
   time: the reference's last steps abut the subject, and may be the
-  incident's own beginning. The statistic is the median ratio,
-  its interval from the subject's and the reference's spans resampled
+  incident's own beginning. The statistic is the median ratio, its
+  interval from the subject's and the reference's spans resampled
   together, drawn only with the support the comparison needs and a point
-  estimate above its floor. Decode-only units compare the engine's pace at
-  the same batch: the driver's capacity. Treated units are matched also on
-  their dose bin and prefill member count exactly, and their dose, cached
-  prefix (or within 64 tokens) and longest prefill within 15%: the same
-  prefill, split the same way, into the same batch. One 1,000-token prompt
-  costs more attention than four of 250, so the comparison never reads a
-  change in how the prefill is split as the engine mixing worse.
+  estimate above its floor. Decode-only units are matched as controls are.
+  Treated units are matched also on their dose bin and prefill member
+  count exactly, and their dose, cached prefix (or within 64 tokens) and
+  longest prefill within 15%: the same prefill, split the same way, into
+  the same batch. One 1,000-token prompt costs more attention than four of
+  250, so the comparison never reads a change in how the prefill is split
+  as the engine mixing worse.
 
 Matching on the running requests rather than on the decode members is
 what keeps the async pipeline's bubble out of the controls. On a real run

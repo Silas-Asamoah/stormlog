@@ -459,9 +459,8 @@ def ratio(
     subject: list[Unit], reference: list[Unit], *, treated: bool = False
 ) -> Ratio:
     design = Design()
-    comparison = Comparison(
-        design.treated if treated else design.controls, treated, 1.10, 0.5
-    )
+    match = design.treated if treated else design.controls
+    comparison = Comparison(((treated, match),), 1.10, 0.5)
     arms = Arms(Columns.of(subject), Columns.of(reference))
     return compare([arms], comparison, design, replicates=99)
 
@@ -496,6 +495,22 @@ def test_the_reference_is_matched_by_work_not_by_nearness_to_the_subject() -> No
     found = ratio(arm(rng, 30, 10, cadence_ms=3.9, spread=10), reference)
 
     assert found.ratio is not None and found.ratio.above(1.10)
+
+
+def test_treated_and_decode_only_steps_are_each_compared_with_their_like() -> None:
+    """Half the steps prefill: decode-only steps 1.3 times slower than the
+    reference's, treated ones (1 ms more each) 1.225 times. Both kinds find
+    their matches, never each other."""
+    rng = np.random.default_rng(13)
+    design = Design()
+    both = Comparison(((False, design.controls), (True, design.treated)), 1.10, 0.8)
+    mine = arm(rng, 40, 10, prompts=(100,), every=2, cadence_ms=3.9)
+    theirs = arm(rng, 0, 30, prompts=(100,), every=2)
+
+    found = compare([Arms(Columns.of(mine), Columns.of(theirs))], both, design)
+
+    assert found.support == 1.0 and found.ratio is not None
+    assert 1.2 < found.ratio.estimate < 1.31 and found.ratio.above(1.10)
 
 
 def test_more_decodes_per_step_is_no_match_for_fewer() -> None:

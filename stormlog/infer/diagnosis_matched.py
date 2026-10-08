@@ -39,11 +39,11 @@ each subject unit with the 32 reference units nearest in decode context
 that share its key and bands, its ratio the cadence over their median, the
 statistic the median ratio, its interval from both spans resampled
 together. Nearest in context, not time: the reference's last steps abut
-the subject, and may be the incident's own beginning. Decode
-units compare the engine's pace at the same batch (the driver's capacity);
-treated units, matched also on their dose bin and prefill member count,
-dose, cached prefix and longest prefill, compare its cost of mixing the
-same prefill into the same batch.
+the subject, and may be the incident's own beginning. Decode-only units
+are matched as controls are; treated units also on their dose bin and
+prefill member count, dose, cached prefix and longest prefill, so they
+compare the engine's cost of mixing the same prefill into the same batch.
+The driver's capacity compares both, each with its like.
 """
 
 from __future__ import annotations
@@ -786,11 +786,11 @@ def _rounded(value: float | None) -> float | None:
 
 @dataclass(frozen=True)
 class Comparison:
-    """What is compared: treated units or decode-only ones, matched how,
-    and what an interval must clear."""
+    """Which units are compared, each with its like: (treated, match) pairs,
+    decode-only units by one match and treated units by another; and what
+    an interval must clear."""
 
-    match: Match
-    treated: bool
+    matches: tuple[tuple[bool, Match], ...]
     floor: float
     min_support: float
 
@@ -805,19 +805,14 @@ def compare(
 ) -> Ratio:
     """The subject's units against its reference's; the interval only where
     support is met and the point estimate is above the floor."""
-    keyed = [
-        (arm, key_ids([arm.subject, arm.reference], comparison.match.exact))
-        for arm in arms
-    ]
-    point = [_ratios(arm, keys, comparison, design, None) for arm, keys in keyed]
+    keyed = [_Keyed.of(arm, comparison) for arm in arms]
+    point = [k.ratios(design, None) for k in keyed]
     ratios = np.concatenate([r for r, _ in point]) if point else np.zeros(0)
     result = Ratio(sum(n for _, n in point), len(ratios), None)
     result.screened = _ratio_screen(result, ratios, comparison)
     if result.screened is None:
         rng = np.random.default_rng(seed)
-        draws = [
-            _replicate_ratio(keyed, comparison, design, rng) for _ in range(replicates)
-        ]
+        draws = [_replicate_ratio(keyed, design, rng) for _ in range(replicates)]
         result.ratio = interval(float(np.median(ratios)), draws)
     return result
 
@@ -836,46 +831,67 @@ def _ratio_screen(
 
 
 def _replicate_ratio(
-    keyed: Sequence[tuple[Arms, list[np.ndarray]]],
-    comparison: Comparison,
-    design: Design,
-    rng: np.random.Generator,
+    keyed: Sequence[_Keyed], design: Design, rng: np.random.Generator
 ) -> float:
-    found = [_ratios(arm, keys, comparison, design, rng)[0] for arm, keys in keyed]
+    found = [k.ratios(design, rng)[0] for k in keyed]
     ratios = np.concatenate(found) if found else np.zeros(0)
     return float(np.median(ratios)) if len(ratios) else float("nan")
 
 
-def _ratios(
-    arm: Arms,
-    keys: list[np.ndarray],
-    comparison: Comparison,
-    design: Design,
-    rng: np.random.Generator | None,
-) -> tuple[np.ndarray, int]:
-    """The matched subject units' cadence ratios, and how many subject
-    units there were; resampled when ``rng`` is given."""
-    sides = []
-    for columns, key in zip((arm.subject, arm.reference), keys):
-        if rng is None:
-            picked = np.arange(len(columns))
-        else:
-            picked, _ = circular_resample(columns.time, design.block_ns, rng)
-        rows = picked[columns.treated[picked] == comparison.treated]
-        # Ordered by decode context, not time: the reference's last steps
-        # abut the subject, and may be the incident's own beginning.
-        order = np.round(columns.banded["context"][rows] * 1000).astype(np.int64)
-        sides.append(Side.of(columns, key, comparison.match, rows, order))
-    medians, _ = nearest_medians(
-        sides[0],
-        sides[1],
-        comparison.match.bands,
-        Window(None, causal=False),
-        nearest=design.nearest,
-        minimum=design.min_controls,
-    )
-    found = np.isfinite(medians)
-    return sides[0].value[found] / medians[found], len(medians)
+@dataclass(frozen=True)
+class _Keyed:
+    """One epoch's arms, with each match's key ids for both."""
+
+    arm: Arms
+    comparison: Comparison
+    keys: tuple[list[np.ndarray], ...]
+
+    @classmethod
+    def of(cls, arm: Arms, comparison: Comparison) -> _Keyed:
+        sides = [arm.subject, arm.reference]
+        keys = tuple(key_ids(sides, match.exact) for _, match in comparison.matches)
+        return cls(arm, comparison, keys)
+
+    def ratios(
+        self, design: Design, rng: np.random.Generator | None
+    ) -> tuple[np.ndarray, int]:
+        """The matched subject units' cadence ratios, and how many subject
+        units there were; resampled when ``rng`` is given."""
+        sides = (self.arm.subject, self.arm.reference)
+        picks = [_pick(columns, design, rng) for columns in sides]
+        found, targets = [], 0
+        for (treated, match), keys in zip(self.comparison.matches, self.keys):
+            pair = [
+                _side(columns, key, match, rows[columns.treated[rows] == treated])
+                for columns, key, rows in zip(sides, keys, picks)
+            ]
+            medians, _ = nearest_medians(
+                pair[0],
+                pair[1],
+                match.bands,
+                Window(None, causal=False),
+                nearest=design.nearest,
+                minimum=design.min_controls,
+            )
+            matched = np.isfinite(medians)
+            found.append(pair[0].value[matched] / medians[matched])
+            targets += len(medians)
+        return np.concatenate(found) if found else np.zeros(0), targets
+
+
+def _pick(
+    columns: Columns, design: Design, rng: np.random.Generator | None
+) -> np.ndarray:
+    if rng is None:
+        return np.arange(len(columns))
+    return circular_resample(columns.time, design.block_ns, rng)[0]
+
+
+def _side(columns: Columns, keys: np.ndarray, match: Match, rows: np.ndarray) -> Side:
+    """Rows ordered by decode context, not time: the reference's last steps
+    abut the subject, and may be the incident's own beginning."""
+    order = np.round(columns.banded["context"][rows] * 1000).astype(np.int64)
+    return Side.of(columns, keys, match, rows, order)
 
 
 __all__ = [
