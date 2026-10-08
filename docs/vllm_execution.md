@@ -114,8 +114,14 @@ Every line is one JSON object with these common fields:
 | `epoch` | the epoch directory name, `<role>-<pid>-<start ns>` |
 | `seq` | 0, 1, 2, … within the epoch, with no gaps; a dropped record takes no number |
 
-Times are pairs: `*_wall_ns` from `time.time_ns()` and `*_mono_ns` from
-`time.monotonic_ns()`, read in the same process.
+Times are bracketed reads in the writing process: `*_wall_ns` from
+`time.time_ns()`, then `*_mono_ns` from `time.monotonic_ns()`, then
+`*_wall_after_ns` from `time.time_ns()` again. The wall time at the
+monotonic read lies between `*_wall_ns` and `*_wall_after_ns`, so the pair
+is known to within their difference. The hello's `clock` is one such read,
+also giving that difference as `gap_ns`. Logs from before
+`*_wall_after_ns` have it only in the hello, and their other pairs have no
+stated bound.
 
 | Kind | Written by | When |
 | --- | --- | --- |
@@ -152,7 +158,8 @@ Times are pairs: `*_wall_ns` from `time.time_ns()` and `*_mono_ns` from
                          "ignore_frontend": true, "max_iterations": 40,
                          "delay_iterations": 0, "warmup_iterations": 0,
                          "active_iterations": 5, "wait_iterations": 0}},
- "clock": {"wall_ns": 1790000000000123456, "mono_ns": 123456789000, "gap_ns": 1200}}
+ "clock": {"wall_ns": 1790000000000123456, "mono_ns": 123456789000,
+           "wall_after_ns": 1790000000000124656, "gap_ns": 1200}}
 ```
 
 `start_ns` is when the hook's writer started. The process fields name the
@@ -191,7 +198,8 @@ trace file name. The `config.runner` field is filled by workers.
 
 ```json
 {"kind": "alias", "internal": "chatcmpl-stormlog-r1-q0-0f3a9c1d",
- "external": "chatcmpl-stormlog-r1-q0", "wall_ns": …, "mono_ns": …}
+ "external": "chatcmpl-stormlog-r1-q0",
+ "wall_ns": …, "mono_ns": …, "wall_after_ns": …}
 ```
 
 Written from vLLM's input thread, so it may come before or after the request's
@@ -201,7 +209,8 @@ first `scheduled` record.
 
 ```json
 {"kind": "scheduled", "iteration": "41",
- "start_wall_ns": …, "start_mono_ns": …, "end_wall_ns": …, "end_mono_ns": …,
+ "start_wall_ns": …, "start_mono_ns": …, "start_wall_after_ns": …,
+ "end_wall_ns": …, "end_mono_ns": …, "end_wall_after_ns": …,
  "total_tokens": 2048, "zero_token": false, "preempted": ["…"],
  "members": [
    {"internal": "…", "sighting": "first", "phase": "context", "scheduled": 2000,
@@ -227,7 +236,8 @@ only.
 **`completed`**
 
 ```json
-{"kind": "completed", "iteration": "41", "wall_ns": …, "mono_ns": …,
+{"kind": "completed", "iteration": "41",
+ "wall_ns": …, "mono_ns": …, "wall_after_ns": …,
  "members": [
    {"internal": "…", "outcome": "kept", "stale": false,
     "sampled": 1, "accepted_drafts": 0, "retained": 1,
@@ -254,13 +264,15 @@ exception passes through, and the step's fate was not seen.
 
 ```json
 {"kind": "terminal", "internal": "…", "status": "FINISHED_STOPPED",
- "finish_reason": "stop", "output_tokens": 128, "wall_ns": …, "mono_ns": …}
+ "finish_reason": "stop", "output_tokens": 128,
+ "wall_ns": …, "mono_ns": …, "wall_after_ns": …}
 ```
 
 **`heartbeat`** and `status.json`
 
 ```json
-{"kind": "heartbeat", "wall_ns": …, "mono_ns": …, "last_seq": 1234,
+{"kind": "heartbeat", "wall_ns": …, "mono_ns": …, "wall_after_ns": …,
+ "last_seq": 1234,
  "dropped": {"alias": 3, "alias_oversized": 1},
  "errors": 0, "bytes": 1048576, "capped": false, "queued": 0}
 ```
@@ -278,7 +290,7 @@ calls before the first serving step, which never have one), and
 `status.json` holds the latest heartbeat's fields and is still updated after
 the disk cap stops record writing, so loss stays visible.
 
-**`goodbye`** has `wall_ns`, `mono_ns` and `last_seq`. A process that is killed,
+**`goodbye`** has `wall_ns`, `mono_ns`, `wall_after_ns` and `last_seq`. A process that is killed,
 including by vLLM's default shutdown, writes no `goodbye`.
 
 ## Iteration ranges

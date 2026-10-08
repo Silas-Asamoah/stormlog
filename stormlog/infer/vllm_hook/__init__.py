@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import socket
 import threading
-import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,7 @@ from . import gate
 from .engine import EngineRecorder
 from .process import process_fields
 from .worker import RunnerRecorder, worker_identity
-from .writer import EpochWriter, WriterLimits, remove_old_epochs
+from .writer import EpochWriter, WriterLimits, remove_old_epochs, stamp
 
 ENV_DIR = "STORMLOG_VLLM_HOOK_DIR"
 ENV_NVTX = "STORMLOG_VLLM_HOOK_NVTX"
@@ -119,7 +118,7 @@ def _patch_engine(settings: _Settings) -> None:
 
     def scheduler_schedule(self: Any, *args: Any, **kwargs: Any) -> Any:
         recorder = getattr(self, RECORDER_ATTRIBUTE, None)
-        start = (time.time_ns(), time.monotonic_ns())
+        start = stamp()
         output = schedule(self, *args, **kwargs)
         if recorder is not None:
             _guard(recorder, lambda: recorder.on_schedule(self, output, start))
@@ -235,9 +234,7 @@ def _hello(
     producer: str | None,
     observes: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    wall = time.time_ns()
-    mono = time.monotonic_ns()
-    wall_after = time.time_ns()
+    clock = stamp()
     return {
         "role": writer.role,
         "host": writer.host,
@@ -251,7 +248,7 @@ def _hello(
         "producer": producer,
         "observes": sorted(observes),
         "config": result.config,
-        "clock": {"wall_ns": wall, "mono_ns": mono, "gap_ns": wall_after - wall},
+        "clock": {**clock, "gap_ns": clock["wall_after_ns"] - clock["wall_ns"]},
     }
 
 

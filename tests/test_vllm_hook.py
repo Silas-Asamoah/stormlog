@@ -490,6 +490,42 @@ def test_admission_writes_an_alias(vllm: dict[str, Any]) -> None:
     )
 
 
+def test_every_stamp_is_bracketed_by_two_wall_reads(vllm: dict[str, Any]) -> None:
+    scheduler = vllm["Scheduler"](vllm_config())
+    vllm["EngineCore"](scheduler).preprocess_add_request(
+        types.SimpleNamespace(request_id="a-1", external_req_id="chatcmpl-a")
+    )
+    scheduler.requests = {"a-1": FakeRequest("a-1", 2, max_tokens=1)}
+    output = SchedulerOutput([_new("a-1", 2)], CachedRequestData(), {"a-1": 2}, 2)
+    scheduler.next_output = output
+    scheduler.schedule()
+    scheduler.update_from_output(output, ModelRunnerOutput({"a-1": 0}, [[5]]))
+
+    records = _records(vllm["root"], "engine")
+    status = json.loads(next(vllm["root"].glob("*/engine-*/status.json")).read_text())
+    stamps = [("hello", _of(records, "hello")[0]["clock"]), ("status", status)]
+    for record in records:
+        for prefix in ("", "start_", "end_"):
+            if f"{prefix}wall_ns" in record:
+                names = ("wall_ns", "mono_ns", "wall_after_ns")
+                stamps.append(
+                    (record["kind"], {name: record[prefix + name] for name in names})
+                )
+    assert {kind for kind, _ in stamps} == {
+        "hello",
+        "status",
+        "alias",
+        "scheduled",
+        "completed",
+        "terminal",
+        "goodbye",
+    }
+    for _kind, read in stamps:
+        assert read["wall_ns"] <= read["wall_after_ns"]
+    clock = stamps[0][1]
+    assert clock["gap_ns"] == clock["wall_after_ns"] - clock["wall_ns"]
+
+
 @pytest.mark.parametrize(
     ("config", "reason"),
     [
@@ -1194,7 +1230,7 @@ def _engine_step(writer: EpochWriter, members: int) -> Callable[[], None]:
     recorder = EngineRecorder(writer, "vllm:h:b:1:1")
 
     def step() -> None:
-        recorder.on_schedule(scheduler, output, (time.time_ns(), time.monotonic_ns()))
+        recorder.on_schedule(scheduler, output, writer_module.stamp())
         before = recorder.before_update(scheduler, output, sampled)
         recorder.after_update(scheduler, output, before, result=result)
 
