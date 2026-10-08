@@ -52,9 +52,19 @@
     "join": { "type": "object" },
     "selection": {
       "type": "object",
-      "required": ["automatic", "windows", "subjects"],
+      "required": ["automatic", "error_rate", "windows", "subjects"],
       "properties": {
         "automatic": { "type": "boolean" },
+        "error_rate": {
+          "type": "object",
+          "required": ["test", "alpha_per_window", "assumes", "calibrated_false_incident_rate"],
+          "properties": {
+            "test": { "type": "string" },
+            "alpha_per_window": { "type": "number" },
+            "assumes": { "type": "string" },
+            "calibrated_false_incident_rate": { "type": ["number", "null"] }
+          }
+        },
         "windows": { "type": "array" },
         "subjects": { "type": "array", "items": { "$ref": "#/$defs/subject" } }
       }
