@@ -776,6 +776,26 @@ def _dose_check(name: str, stats: GapStats, thresholds: Thresholds) -> Never | N
     )
 
 
+def dose_check_rates(
+    baseline: Baseline, thresholds: Thresholds
+) -> dict[str, float | None]:
+    """Each cadence series' baseline gaps too long for a hold, per cadence
+    hold at the baseline's rate: what G0's dose check compares with
+    ``DOSE_CHECK_TOO_LONG_PER_HOLD``, or None for a series too thin to
+    judge. A run publishes them, so a recovery that came late on an engine
+    just under the limit can be told from one late for another reason."""
+    hold_s = thresholds.cadence_hold_ns / SECOND
+    series = (("busy step gaps", baseline.steps), ("chunk gaps", baseline.chunks))
+    return {
+        name: (
+            stats.too_long_per(hold_s)
+            if stats.count >= thresholds.min_cadence_samples
+            else None
+        )
+        for name, stats in series
+    }
+
+
 def _queue_onset(context: Context) -> tuple[int | None, str]:
     p95 = context.baseline.wait_p95
     onset = first_window(
@@ -1252,6 +1272,7 @@ __all__ = [
     "Thresholds",
     "Timing",
     "added_mechanisms",
+    "dose_check_rates",
     "allowed_exceedances",
     "base_type",
     "between",

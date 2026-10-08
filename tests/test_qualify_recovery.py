@@ -629,6 +629,26 @@ def test_the_front_end_chunk_gaps_are_dose_checked_too() -> None:
     assert recovery_blocked("F4a", ctx) == ()
 
 
+def test_each_series_dose_check_rate_is_there_to_publish() -> None:
+    # close-221-delta, H4: engines at 0.44-1.11 too-long gaps per hold pass
+    # or fail the check with nothing on record, and those that pass may
+    # recover seconds late. Each series' rate is given for the run to
+    # publish; a thin series has none.
+    from stormlog.infer.qualify.recovery import dose_check_rates
+
+    steps = [tick * 20 * MS for tick in range(200 * 50)]
+    chunks = [
+        (index * 5 * MS, 0.2 if index % 900 == 450 else 0.005)
+        for index in range(1, 200 * 200)
+    ]
+    ctx = context(Signals(in_flight=ALWAYS, step_starts=steps, chunk_gaps=chunks))
+    rates = dose_check_rates(ctx.baseline, ctx.thresholds)
+    assert rates["busy step gaps"] == 0.0
+    assert rates["chunk gaps"] == pytest.approx(10 * 10 / 46.95, rel=1e-3)
+    thin = context(Signals(in_flight=ALWAYS, step_starts=steps))
+    assert dose_check_rates(thin.baseline, thin.thresholds)["chunk gaps"] is None
+
+
 def test_a_thin_baseline_says_why_recovery_can_never_hold() -> None:
     # fable-design's A2 delta 2, N0: a run whose baseline was too thin
     # timed out with nothing in its truth but recovery_timeout. The rule
