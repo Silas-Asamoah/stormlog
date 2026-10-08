@@ -89,6 +89,16 @@ class Engine:
     max_num_batched_tokens: int = 2048
     # Extra raw records to interleave by time, e.g. pauses and resets.
     extra: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
+    # False: a hook from before wall_after_ns, whose stamps are unbracketed.
+    bracketed: bool = True
+    # (mono_ns, delta_ns): the host's wall clock steps by delta at mono_ns.
+    wall_jump: tuple[int, int] | None = None
+
+    def wall(self, mono_ns: int) -> int:
+        """The shared wall clock at an engine monotonic time."""
+        jump = self.wall_jump
+        step = jump[1] if jump is not None and mono_ns >= jump[0] else 0
+        return mono_ns + WALL_OFFSET + step
 
     def run(self, requests: list[SimRequest]) -> list[dict[str, Any]]:
         """Serve ``requests``; return the epoch's raw records after the hello."""
@@ -125,7 +135,22 @@ class Engine:
         end = max(at for at, _, _ in timed) + SECOND
         records = [record for _, _, record in timed]
         records.append({"kind": "goodbye", **stamp(end), "last_seq": len(records) + 1})
-        return _with_heartbeats(records)
+        return [self._restamp(record) for record in _with_heartbeats(records)]
+
+    def _restamp(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Apply the wall clock's jump, or drop the second reads."""
+        out = dict(record)
+        for prefix in ("", "start_", "end_"):
+            mono = out.get(f"{prefix}mono_ns")
+            if not isinstance(mono, int):
+                continue
+            if f"{prefix}wall_ns" in out:
+                out[f"{prefix}wall_ns"] = self.wall(mono)
+            if not self.bracketed:
+                out.pop(f"{prefix}wall_after_ns", None)
+            elif f"{prefix}wall_after_ns" in out:
+                out[f"{prefix}wall_after_ns"] = self.wall(mono) + 800
+        return out
 
     def _steps(
         self, requests: list[SimRequest]
@@ -299,9 +324,12 @@ def hello_record(engine: Engine) -> dict[str, Any]:
     return first
 
 
-def client_records(request: SimRequest) -> list[dict[str, Any]]:
+def client_records(
+    request: SimRequest, engine: Engine | None = None
+) -> list[dict[str, Any]]:
     """What ``infer profile`` writes for one request, in append order."""
-    sent = request.sent_ns + WALL_OFFSET
+    wall = (engine or Engine()).wall
+    sent = wall(request.sent_ns)
     common = {
         "schema_version": 1,
         "session_id": SESSION,
@@ -310,9 +338,9 @@ def client_records(request: SimRequest) -> list[dict[str, Any]]:
         "case_id": request.case_id,
         "phase": request.phase,
     }
-    intended = (
+    intended = wall(
         request.intended_ns if request.intended_ns is not None else request.sent_ns
-    ) + WALL_OFFSET
+    )
     records = [
         {
             **common,
@@ -324,8 +352,8 @@ def client_records(request: SimRequest) -> list[dict[str, Any]]:
     ]
     if request.first_done_ns is None or request.last_done_ns is None:
         return records
-    first = request.first_done_ns + request.delivery_ns + WALL_OFFSET
-    ended = request.last_done_ns + request.delivery_ns + WALL_OFFSET
+    first = wall(request.first_done_ns + request.delivery_ns)
+    ended = wall(request.last_done_ns + request.delivery_ns)
     records.append(
         {
             **common,
@@ -359,14 +387,14 @@ def client_records(request: SimRequest) -> list[dict[str, Any]]:
     return records
 
 
-def identity_record() -> dict[str, Any]:
+def identity_record(host: str = HOST) -> dict[str, Any]:
     return ArtifactIdentityEvent(
         context=CorrelationContext(
             run_id=RUN,
             session_id=SESSION,
             producer_id="stormlog.infer.profile",
             source="stormlog.infer.profile",
-            clock_domain=f"{HOST}/{BOOT}/unix_epoch_ns",
+            clock_domain=f"{host}/{BOOT}/unix_epoch_ns",
             clock_kind="wall",
             collection_mode="active",
             provenance="observed",
@@ -383,15 +411,16 @@ def build_run(
     engine: Engine | None = None,
     *,
     windows: list[dict[str, Any]] | None = None,
+    client_host: str = HOST,
 ) -> Path:
     """Serve ``requests``, write the client artifact, import the hook log."""
     engine = engine or Engine()
     raw = engine.run(requests)
     write_epoch(tmp_path / "hook", "engine", PID, START, [hello_record(engine), *raw])
-    lines = [identity_record()]
+    lines = [identity_record(client_host)]
     events: list[tuple[int, dict[str, Any]]] = []
     for request in requests:
-        events.extend((r["timestamp_ns"], r) for r in client_records(request))
+        events.extend((r["timestamp_ns"], r) for r in client_records(request, engine))
     for window in windows or []:
         events.append((window["timestamp_ns"], window))
     events.sort(key=lambda item: item[0])
