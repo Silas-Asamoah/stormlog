@@ -178,6 +178,10 @@ def test_preemptions_of_unknown_cause_are_not_upstream(tmp_path: Path) -> None:
     queue = by_kind["queue_saturation"]
     assert _kv_status(queue) == "not_ruled_out"
     assert not queue["eligibility"]["contested"]
+    # Waits spent mostly behind preempted requests are not a full engine's,
+    # whatever caused the preemptions: the queue cannot claim them.
+    failed = queue["eligibility"]["failed"]
+    assert "competitor:kv_preemption_pressure:not_ruled_out" in failed
 
 
 @pytest.mark.parametrize(
