@@ -24,6 +24,7 @@ from typing import Any, cast
 import pytest
 
 import stormlog.infer.vllm_hook as hook
+from stormlog.infer.vllm_hook import engine as engine_module
 from stormlog.infer.vllm_hook import gate, process
 from stormlog.infer.vllm_hook import writer as writer_module
 from stormlog.infer.vllm_hook.engine import ITERATION_ATTRIBUTE, EngineRecorder
@@ -1562,6 +1563,76 @@ def test_a_heartbeat_counts_a_record_still_being_serialized(
     writer.close()
 
     assert [r["kind"] for r in _epoch_records(writer.directory)].count("pause") == 1
+
+
+def test_a_record_is_pending_from_before_its_last_stamp(
+    vllm: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A span vouches for the instants before its closing heartbeat's stamp,
+    and a record is matched by its last stamp, so the record must count as
+    pending from before that stamp is taken, not only once emit takes the
+    lock: a heartbeat stamped in between (a GIL handoff, or vLLM's own
+    add_request after an enqueue's stamp) would be written ahead of it with
+    nothing pending."""
+    scheduler = vllm["Scheduler"](vllm_config())
+    core = vllm["EngineCore"](scheduler)
+    writer = getattr(scheduler, hook.RECORDER_ATTRIBUTE).writer
+    _wait(lambda: writer._status()["pending"] == 0)  # the hello is written
+    # From here the writer thread writes nothing, so pending only grows.
+    written = threading.Event()
+    write = writer_module._Segment.write
+
+    def held(segment: Any, line: bytes) -> bool:
+        written.wait(10)
+        return write(segment, line)
+
+    monkeypatch.setattr(writer_module._Segment, "write", held)
+    pending_at: dict[int, int] = {}
+
+    def stamped() -> dict[str, int]:
+        value = writer_module.stamp()
+        pending_at[value["mono_ns"]] = writer._status()["pending"]
+        return value
+
+    monkeypatch.setattr(engine_module, "stamp", stamped)
+    monkeypatch.setattr(hook, "stamp", stamped)
+    output = SchedulerOutput([_new("a-1", 2)], CachedRequestData(), {"a-1": 2}, 2)
+    scheduler.next_output = output
+    request = FakeRequest("a-1", 2)
+    steps: list[Callable[[], object]] = [
+        lambda: core.preprocess_add_request(
+            types.SimpleNamespace(request_id="a-1", external_req_id="chatcmpl-a")
+        ),
+        lambda: scheduler.add_request(request),
+        scheduler.schedule,
+        lambda: scheduler.update_from_output(
+            output, ModelRunnerOutput({"a-1": 0}, [[5]])
+        ),
+        lambda: scheduler.set_pause_state(PauseState.PAUSED_ALL),
+        scheduler.reset_prefix_cache,
+        lambda: scheduler._free_request(request),
+    ]
+    before = []
+    for step in steps:
+        before.append(writer._status()["pending"])
+        step()
+    written.set()
+
+    records = _records(vllm["root"], "engine")
+    unstamped = ("hello", "heartbeat", "goodbye")
+    stamped_records = [r for r in records if r["kind"] not in unstamped]
+    assert [r["kind"] for r in stamped_records] == [
+        "alias",
+        "enqueued",
+        "scheduled",
+        "completed",
+        "pause",
+        "cache_reset",
+        "terminal",
+    ]
+    for record, pending in zip(stamped_records, before):
+        last = record.get("end_mono_ns", record.get("mono_ns"))
+        assert pending_at[last] == pending + 1, record["kind"]
 
 
 def test_a_short_write_leaves_only_whole_lines(

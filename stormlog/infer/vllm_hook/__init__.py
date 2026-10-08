@@ -216,10 +216,12 @@ def _wrap_add_request(add_request: Any) -> Any:
         # A streaming-input request's later inputs reuse its live ID; only
         # its first add enters it into the scheduler.
         new = _guard(recorder, lambda: str(request.request_id) not in self.requests)
-        at = stamp()
-        result = add_request(self, request, *args, **kwargs)
-        if new:
-            _guard(recorder, lambda: recorder.on_enqueue(request, at))
+        # Reserved before the stamp: vLLM's own call runs between the two.
+        with recorder.writer.reserve() as reservation:
+            at = stamp()
+            result = add_request(self, request, *args, **kwargs)
+            if new:
+                _guard(recorder, lambda: recorder.on_enqueue(request, at, reservation))
         return result
 
     return scheduler_add_request
