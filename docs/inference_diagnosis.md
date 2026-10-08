@@ -409,7 +409,12 @@ client held requests at its in-flight limit (`held_for_slot`) or dropped
 them, so they went out late. The class counts held and dropped requests and
 compares the subject's dispatch lag (send minus intended arrival) with the
 reference's; the contribution claim asks that the lag excess be at least
-half the excess of first content measured from the intended arrival. A
+half the excess of first content measured from the intended arrival. Its
+gate `held_or_dropped` asks for a held or dropped request: lag alone says
+the client sent late, not why (a starved client thread looks the same, and
+no in-flight limit would help it), so such a finding is titled "The client
+sent requests later than their arrivals", stays an observation, and its
+experiment reruns the client on an idle host. A
 closed loop has no intended arrivals: `unsupported/no_intended_arrivals`.
 
 **`host_stall` at `api_server`** (`detail.form: frontend`): requests took
