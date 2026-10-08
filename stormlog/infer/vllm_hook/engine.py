@@ -85,6 +85,7 @@ class EngineRecorder:
                 "total_tokens": int(output.total_num_scheduled_tokens),
                 "zero_token": int(output.total_num_scheduled_tokens) == 0,
                 "preempted": sorted(getattr(output, "preempted_req_ids", None) or ()),
+                "pause_state": _state_name(getattr(scheduler, "pause_state", None)),
                 "members": [fields for _, fields in members],
             },
         )
@@ -267,6 +268,15 @@ class EngineRecorder:
             "computed_after": computed_after,
         }
 
+    # ------------------------------------------------------------ pauses
+
+    def on_pause(self, before: Any, after: Any) -> None:
+        """A call to ``set_pause_state``, stamped once it has returned."""
+        self.writer.emit(
+            "pause",
+            {"from": _state_name(before), "to": _state_name(after), **stamp()},
+        )
+
     # ------------------------------------------------------------ exit
 
     def on_free(self, request: Any) -> None:
@@ -334,6 +344,14 @@ def _outcome(before: dict[str, Any]) -> str:
     if before["stale"] and before["drop_stale"]:
         return "dropped_stale"
     return "kept"
+
+
+def _state_name(state: Any) -> str | None:
+    """vLLM's PauseState by name: UNPAUSED, PAUSED_NEW or PAUSED_ALL."""
+    if state is None:
+        return None
+    name = getattr(state, "name", None)
+    return name if isinstance(name, str) else str(state)
 
 
 def _optional_str(value: Any) -> str | None:
