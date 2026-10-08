@@ -244,15 +244,19 @@ class InjectionRun:
         victim: subprocess.Popen[bytes] | None = None
         held = _HeldSignals()
         try:
+            # Passed on until each way out of the episodes sets ``holding``
+            # first, by a plain store that runs no handler: a signal before
+            # it raises into the handlers below, one after it is noted, and
+            # none can leave the run unpublished on its way to the finish.
+            held.__enter__()
             victim = self._start_victim()
             self._episodes(victim, progress)
-            # Held from inside the try: a signal before this raises into the
-            # handler below, and one after it is noted, so none can leave
-            # the run unpublished between the episodes and the finish.
-            held.__enter__()
+            held.holding = True
         except Exception as error:  # the run's own failure; publish it
+            held.holding = True
             progress.failure = f"run_failed: {error!r}"
         except BaseException:
+            held.holding = True
             progress.failure = "interrupted"
             self._finish(victim, poller, progress, held)
             raise
@@ -762,11 +766,16 @@ class InjectionRun:
 
 
 class _HeldSignals:
-    """SIGTERM, SIGHUP and SIGINT noted instead of acted on, while the run
-    is published. Handlers can be set only from the main thread; elsewhere
-    nothing is held. Entering again while held changes nothing. A third
-    signal is not held: a publish that hangs (a full disk) can still be
-    ended, by the handlers held before, as if nothing had been held."""
+    """SIGTERM, SIGHUP and SIGINT, handled for the whole run: passed on to
+    the handlers they replaced until ``holding`` is set, then noted instead
+    of acted on while the run is published. ``holding`` is a plain
+    attribute, so setting it runs no handler: entered at the run's start,
+    nothing is left to install when the run ends, which is what left a
+    signal room to land unheld (Astra's H6). Handlers can be set only from
+    the main thread; elsewhere nothing is held. Entering again changes
+    nothing. A third held signal is not held: a publish that hangs (a full
+    disk) can still be ended, by the handlers held before, as if nothing
+    had been held."""
 
     SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
     # The signal that is acted on at once rather than noted.
@@ -774,17 +783,21 @@ class _HeldSignals:
 
     def __init__(self) -> None:
         self.received: list[int] = []
+        self.holding = False
         self._previous: dict[int, Any] = {}
 
     @property
-    def holding(self) -> bool:
+    def installed(self) -> bool:
         return bool(self._previous)
 
     def __enter__(self) -> _HeldSignals:
-        if self.holding or threading.current_thread() is not threading.main_thread():
+        if self.installed or threading.current_thread() is not threading.main_thread():
             return self
         for signum in self.SIGNALS:
-            self._previous[signum] = signal.signal(signum, self._note)
+            # Kept before the install: a signal handled as the install
+            # returns finds the handler to pass it on to (close-221-final).
+            self._previous[signum] = signal.getsignal(signum)
+            signal.signal(signum, self._note)
         return self
 
     def __exit__(self, *_exc: object) -> None:
@@ -793,9 +806,21 @@ class _HeldSignals:
             # A handler installed from C reads as None: the default stands in.
             signal.signal(signum, signal.SIG_DFL if handler is None else handler)
 
-    def _note(self, signum: int, _frame: Any) -> None:
+    def _note(self, signum: int, frame: Any) -> None:
+        if not self.holding:
+            self._pass_on(signum, frame)
+            return
         self.received.append(signum)
         if len(self.received) >= self.GIVE_UP_AT:
+            self.__exit__()
+            signal.raise_signal(signum)
+
+    def _pass_on(self, signum: int, frame: Any) -> None:
+        """Act on a signal as the handler it replaced would have."""
+        previous = self._previous.get(signum)
+        if callable(previous):
+            previous(signum, frame)
+        elif previous != signal.SIG_IGN:  # the default, or one set from C
             self.__exit__()
             signal.raise_signal(signum)
 

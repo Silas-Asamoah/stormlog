@@ -862,14 +862,63 @@ def test_a_third_signal_is_not_held() -> None:
     previous = signal.signal(signal.SIGHUP, lambda signum, _frame: seen.append(signum))
     try:
         with _HeldSignals() as held:
+            held.holding = True
             signal.raise_signal(signal.SIGHUP)
             signal.raise_signal(signal.SIGHUP)
             assert (held.received, seen) == ([signal.SIGHUP] * 2, [])
             signal.raise_signal(signal.SIGHUP)
             assert seen == [signal.SIGHUP]
-            assert not held.holding
+            assert not held.installed
     finally:
         signal.signal(signal.SIGHUP, previous)
+
+
+def test_a_signal_before_holding_is_passed_on() -> None:
+    # Installed for the whole run, the handlers act as the ones they
+    # replaced until the run's end sets holding: mid-run, a signal still
+    # ends the run (and the run is published on the way out).
+    from examples.qualification.inject import _HeldSignals
+
+    seen: list[int] = []
+    previous = signal.signal(signal.SIGHUP, lambda signum, _frame: seen.append(signum))
+    try:
+        with _HeldSignals() as held:
+            signal.raise_signal(signal.SIGHUP)
+            assert (held.received, seen) == ([], [signal.SIGHUP])
+            with pytest.raises(KeyboardInterrupt):
+                signal.raise_signal(signal.SIGINT)
+            assert held.installed
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
+def test_a_signal_handled_as_the_holder_installs_is_passed_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # close-221-final, 2: a signal handled just as signal.signal installed
+    # the note-taker, before what it replaced was kept, found nothing to
+    # pass on to, and was held for the whole run. The replaced handler is
+    # kept first, so a Ctrl+C there ends the run as Python's own would.
+    from examples.qualification import inject as module
+
+    real = signal.signal
+    saved = {signum: signal.getsignal(signum) for signum in module._HeldSignals.SIGNALS}
+    holder = module._HeldSignals()
+
+    def handled_as_it_returns(signum: int, handler: Any) -> Any:
+        before = real(signum, handler)
+        if signum == signal.SIGINT and handler == holder._note:
+            handler(signum, None)  # handled before __enter__ goes on
+        return before
+
+    monkeypatch.setattr(module.signal, "signal", handled_as_it_returns)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            holder.__enter__()
+        assert holder.received == []
+    finally:
+        for signum, handler in saved.items():
+            real(signum, handler)
 
 
 def test_a_handler_installed_from_c_is_restored_as_the_default(
@@ -879,18 +928,24 @@ def test_a_handler_installed_from_c_is_restored_as_the_default(
     # __exit__ skipped it, leaving the note-taker installed for good.
     from examples.qualification import inject as module
 
-    real = signal.signal
-    saved = {signum: signal.getsignal(signum) for signum in module._HeldSignals.SIGNALS}
+    real, real_get = signal.signal, signal.getsignal
+    saved: dict[int, Any] = {
+        signum: signal.getsignal(signum) for signum in module._HeldSignals.SIGNALS
+    }
 
     def from_c(signum: int, handler: Any) -> Any:
         before = real(signum, handler)
         return None if signum == signal.SIGHUP and handler != signal.SIG_DFL else before
 
+    def read_from_c(signum: int) -> Any:
+        return None if signum == signal.SIGHUP else saved[signum]
+
     monkeypatch.setattr(module.signal, "signal", from_c)
+    monkeypatch.setattr(module.signal, "getsignal", read_from_c)
     try:
         with module._HeldSignals():
             pass
-        assert signal.getsignal(signal.SIGHUP) == signal.SIG_DFL
+        assert real_get(signal.SIGHUP) == signal.SIG_DFL
     finally:
         for signum, handler in saved.items():
             real(signum, handler)
@@ -925,6 +980,62 @@ def test_the_run_holds_signals_before_it_finishes(
     monkeypatch.setattr(run, "_finish", finish)
     run.execute()
     assert holding == [True]
+
+
+@pytest.mark.parametrize("first", ["run_failure", "keyboard_interrupt"])
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
+def test_a_signal_on_the_way_to_the_finish_still_publishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str, signum: int
+) -> None:
+    # Astra's closure of delta 3, H6: after the run's own failure, or a
+    # first Ctrl+C, signals were held only once _finish entered them, so a
+    # signal landing in between (a double Ctrl+C) raised out of execute()
+    # with nothing published. It lands here at _finish's entry, the last
+    # moment of that window: the run is still published, then ends as the
+    # first cause, or the held signal, says.
+    from examples.qualification import pulser
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "N"}]})
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-v"), Server("", "m", tmp_path, {})
+    )
+    published: list[bool] = []
+
+    def finish(victim: Any, poller: Any, progress: Any, held: Any) -> Any:
+        signal.raise_signal(signum)
+        with held:
+            published.append(True)
+        return tmp_path, held.received[0] if held.received else None
+
+    def episodes(victim: Any, progress: Any) -> None:
+        if first == "run_failure":
+            raise RuntimeError("engine died")
+        raise KeyboardInterrupt
+
+    saved = {
+        s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    }
+    monkeypatch.setattr(run, "_channel", lambda: None)
+    monkeypatch.setattr(run, "_poll_loop", lambda: None)
+    monkeypatch.setattr(run, "_start_victim", lambda: None)
+    monkeypatch.setattr(run, "_episodes", episodes)
+    monkeypatch.setattr(run, "_finish", finish)
+    expected = {
+        "keyboard_interrupt": KeyboardInterrupt,
+        "run_failure": KeyboardInterrupt if signum == signal.SIGINT else SystemExit,
+    }[first]
+    try:
+        with pytest.raises(expected):
+            run.execute()
+    finally:
+        for saved_signum, handler in saved.items():
+            signal.signal(saved_signum, handler)
+        pulser._HANDLED.clear()
+    assert published == [True]
 
 
 def test_an_episode_interrupted_mid_pulse_records_its_pulses(tmp_path: Path) -> None:
