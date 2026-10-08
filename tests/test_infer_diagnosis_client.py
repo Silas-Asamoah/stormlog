@@ -157,6 +157,21 @@ def test_requests_slow_to_reach_a_stepping_engine_are_a_frontend_stall(
     )
 
 
+def test_a_pause_is_ruled_out_only_where_nothing_was_lost_over_the_stalls(
+    tmp_path: Path,
+) -> None:
+    # The hook reports a dropped record from 30.5 s, inside the slow stretch.
+    engine = Engine(max_num_seqs=64, dropped_from=30 * SECOND + 500 * MS)
+    context = _context(tmp_path, _slow_front(), engine)
+
+    (finding,) = assess_api_server(context, context.subjects()[0]).findings
+
+    paused = {alt.kind: alt for alt in finding.alternatives}["scheduler_paused"]
+    assert paused.status == "untestable"
+    assert paused.reason.startswith("records may have been lost over")
+    assert not finding.eligible
+
+
 def test_a_frontend_stall_needs_bracketed_engine_stamps(tmp_path: Path) -> None:
     context = _context(
         tmp_path, _slow_front(), Engine(max_num_seqs=64, bracketed=False)

@@ -424,8 +424,9 @@ engine progress (a step completed inside at least half of the stalled
 requests' send-to-admission intervals) and a bounded placement of
 `send_to_ingress`. Two competitors are indispensable: a scheduler paused for
 new requests, which looks the same from the client and is ruled out only by
-pause records with nothing lost, and a capture pause, ruled out when no
-profiler window overlaps the stalls. Without engine records it is
+pause records with nothing lost over every stalled request's interval (each
+placed on the engine's clock, ending at its admission), and a capture
+pause, ruled out when no profiler window overlaps the stalls. Without engine records it is
 `unsupported/no_engine_progress_evidence`; without a placed
 `send_to_ingress`, `unsupported/clock_alignment_required`. Host stalls in
 the engine loop and the workers are not assessed yet, so `host_stall` is
