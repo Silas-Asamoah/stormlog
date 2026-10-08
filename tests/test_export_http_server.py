@@ -82,19 +82,29 @@ def test_other_paths_are_not_found(server: MetricsServer) -> None:
 def test_connections_past_the_limit_are_refused_before_a_thread_starts() -> None:
     # A long deadline, so the idle pair still holds both slots however late
     # the third connection comes on a loaded machine.
+    existing = set(threading.enumerate())
     metrics = MetricsServer(
         "127.0.0.1:0", RenderCache(lambda: BODY), max_connections=2, deadline=30
     )
+
+    def handlers() -> list[threading.Thread]:
+        # This server's connection threads only: one counts as active before
+        # its thread has started, and other tests' threads come and go.
+        return [
+            thread
+            for thread in threading.enumerate()
+            if thread not in existing and "process_request_thread" in thread.name
+        ]
+
     metrics.start()
     idle = [_idle(metrics), _idle(metrics)]  # send nothing, hold both slots
     try:
-        assert _wait_for(lambda: metrics.stats.active == 2)
-        threads_before = threading.active_count()
+        assert _wait_for(lambda: metrics.stats.active == 2 and len(handlers()) == 2)
         refused = _idle(metrics)
         assert refused.recv(1024).startswith(b"HTTP/1.1 503")
         refused.close()
         assert metrics.stats.rejected_busy == 1
-        assert threading.active_count() == threads_before
+        assert len(handlers()) == 2
     finally:
         for sock in idle:
             sock.close()
