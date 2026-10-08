@@ -428,6 +428,15 @@ class _EpochReducer:
         binding = self.binder.bind(internal, None)
         return Execution(self._latest_known_key(internal, binding), internal, binding)
 
+    def request_source(self, execution: Execution) -> int | None:
+        """The last raw record a request record needs: its alias, its entry
+        into the scheduler and its first final step. None when this read
+        holds none of its steps (an earlier import wrote it)."""
+        if not execution.memberships:
+            return None
+        first = min(m.iteration.final_seq or 0 for m in execution.memberships)
+        return _max_seq([execution.alias_seq, execution.enqueued_seq, first])
+
     def withholds(self, execution: Execution) -> bool:
         """Another client's, in an epoch whose identities cannot be keyed."""
         return self.withhold and execution.binding.ownership != OWN
@@ -710,13 +719,7 @@ class _EpochReducer:
             # again (behind a mark another request held back) reuses the attempt.
             "epoch": self.epoch.epoch,
             # Written with its first final step: the raw records it needed.
-            "source_seq_max": _max_seq(
-                [
-                    execution.alias_seq,
-                    execution.enqueued_seq,
-                    min(m.iteration.final_seq or 0 for m in execution.memberships),
-                ]
-            ),
+            "source_seq_max": self.request_source(execution),
             "admission_seq": execution.alias_seq,
             "admission_seen": execution.alias is not None,
             "admitted_wall_ns": _integer(alias.get("wall_ns")),
