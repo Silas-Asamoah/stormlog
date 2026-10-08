@@ -76,7 +76,9 @@ SERVICES = (
 def _binary(service: Service) -> str | None:
     named = os.environ.get(service.variable)
     if named:
-        return named if Path(named).exists() else None
+        # Absolute: the service starts in its state directory, where a path
+        # relative to the caller's would name nothing.
+        return os.path.abspath(named) if Path(named).exists() else None
     return shutil.which(service.binary)
 
 
