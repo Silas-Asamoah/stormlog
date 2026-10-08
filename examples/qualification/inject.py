@@ -31,7 +31,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from stormlog.infer.host_clock import host_boot_id, wall_clock_domain
 from stormlog.infer.qualify.ground_truth import (
@@ -51,6 +51,7 @@ from stormlog.infer.qualify.ground_truth import (
     write_run,
 )
 from stormlog.infer.qualify.recovery import (
+    DOSE_CHECK_TOO_LONG_PER_HOLD,
     SECOND,
     START,
     TIMEOUT,
@@ -62,6 +63,7 @@ from stormlog.infer.qualify.recovery import (
     Thresholds,
     Timing,
     added_mechanisms,
+    dose_check_rates,
     effect_timing,
     engine_stalled,
     next_episode,
@@ -155,12 +157,21 @@ class _Progress:
     final_start: int | None = None
     priming: tuple[bool, float | None] = (False, None)
     failure: str | None = None
+    # What was measured of the baseline for the rules, for run.json.
+    baseline_checks: dict[str, Any] = field(default_factory=dict)
 
     def windows(self, now: int) -> _Windows:
         start = self.measured_start or self.started_ns
         priming_end = self.priming_end or start
         baseline_end = self.baseline_end or priming_end
-        return _Windows(start, priming_end, baseline_end, self.final_start or now, now)
+        return _Windows(
+            start,
+            priming_end,
+            baseline_end,
+            self.final_start or now,
+            now,
+            self.baseline_checks,
+        )
 
     def protocol_failure(self) -> str | None:
         if self.failure is not None:
@@ -177,6 +188,7 @@ class _Windows:
     baseline_end: int
     final_start: int
     measured_end: int
+    baseline_checks: Mapping[str, Any] = field(default_factory=dict)
 
     def run_record(
         self, run_id: str, clock_domain: str | None, failure: str | None
@@ -189,6 +201,7 @@ class _Windows:
             baseline=Interval(self.priming_end, self.baseline_end),
             final_recovery=Interval(self.final_start, self.measured_end),
             protocol_failure=failure,
+            baseline_checks=self.baseline_checks,
         )
 
 
@@ -317,6 +330,7 @@ class InjectionRun:
         baseline_end = progress.baseline_end = priming_end + int(t.baseline * SECOND)
         self._sleep_until(baseline_end)
         baseline = self._measure_baseline(priming_end, baseline_end)
+        progress.baseline_checks = _baseline_checks(baseline, self.thresholds)
         self._measure_record_lag(priming_end, baseline_end)
         # The baseline itself is the first episode's clean time.
         self._run_episodes(baseline, priming_end, progress.attempts)
@@ -370,6 +384,11 @@ class InjectionRun:
         actions = replace(actions, action_end_ns=ended, slot_ns=(started, ended))
         onset = _action_onset(actions, started)
         decision, timing = self._recover(episode, baseline, actions, onset, ended)
+        # How long after the action its effect ended: a cadence episode on an
+        # engine just under the dose limit may recover late, and says by
+        # how much beside run.json's per-hold rates.
+        lateness = None if timing.end_ns is None else timing.end_ns - ended
+        injected = {**injected, "recovery_lateness_ns": lateness}
         if episode.row.method == PULSE:
             self._mark_landings(injected)
         context = Context(
@@ -896,6 +915,18 @@ class _HeldSignals:
         else:  # the default, or one set from C
             self.__exit__()
             signal.raise_signal(signum)
+
+
+def _baseline_checks(baseline: Baseline, thresholds: Thresholds) -> dict[str, Any]:
+    """What run.json says of the baseline: each cadence series' gaps too
+    long for a hold, per hold, against the dose check's limit (a series
+    too thin to judge has none)."""
+    return {
+        "dose_check": {
+            "limit_per_hold": DOSE_CHECK_TOO_LONG_PER_HOLD,
+            "per_hold": dose_check_rates(baseline, thresholds),
+        }
+    }
 
 
 def _act_on(signum: int) -> None:

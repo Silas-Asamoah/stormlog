@@ -162,6 +162,16 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     assert record.priming is not None and record.final_recovery is not None
     assert record.measured.start_ns == record.priming.start_ns
     assert record.final_recovery.end_ns == record.measured.end_ns
+    # close-221-delta, H4: run.json says how near the dose check each
+    # cadence series came, and each episode how long after its action its
+    # effect ended, so a late recovery just under the limit can be read.
+    dose = record.baseline_checks["dose_check"]
+    assert dose["limit_per_hold"] == 1.0
+    assert 0 <= dose["per_hold"]["busy step gaps"] < 1
+    times = stall.times
+    assert times.effect_end_ns is not None and times.action_end_ns is not None
+    lateness = times.effect_end_ns - times.action_end_ns
+    assert stall.injected["recovery_lateness_ns"] == lateness
     for injection in injections.values():
         assert injection.run_id == record.run_id
         assert injection.clock_domain == record.clock_domain
@@ -694,6 +704,9 @@ def test_an_engine_whose_prefill_steps_outlast_a_dose_is_not_evaluable(
     assert stall.validity.actuation == "ok"
     (reason,) = stall.injected["recovery_blocked"]
     assert reason.startswith("dose_check_failed: ") and "busy step gaps" in reason
+    assert stall.injected["recovery_lateness_ns"] is None
+    per_hold = load_run(run / "truth" / "run.json").baseline_checks["dose_check"]
+    assert per_hold["per_hold"]["busy step gaps"] >= 1
     assert stall.status == "recovery_incomplete"
     assert null.injected["skipped"] == "dose_check_failed"
     nothing: dict[str, Any] = {"payload": {"findings_detail": {}, "coverage": {}}}

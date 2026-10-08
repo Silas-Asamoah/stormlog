@@ -89,8 +89,10 @@ every problem:
 its `run_id`, and one run record holds what the harness measured on the
 victim's clock: the measured window, and the priming, baseline and
 final-recovery windows, any run-level protocol failure (a failed priming
-check), and the run's actions. The scorer derives the run's negative
-exposure from it and the run's episodes (`negative_exposure`). Every
+check), the run's actions, and `baseline_checks`, what the harness measured
+of the baseline for its rules, which the scorer doesn't read. The scorer
+derives the run's negative exposure from it and the run's episodes
+(`negative_exposure`). Every
 sub-window must lie inside the measured one, and `score_run` refuses an
 episode on another clock than its run's: the two are compared. `score_run`
 also checks a run and its episodes built in memory as if they had been read
@@ -792,8 +794,14 @@ One run goes:
    - its status.
 
    Beside them, `truth/run.json` (`stormlog.qualify.run/1`) holds the run's
-   measured, priming, baseline and final-recovery windows, and a failed
-   priming check as the run's protocol failure. The measured window ends
+   measured, priming, baseline and final-recovery windows, a failed
+   priming check as the run's protocol failure, and under
+   `baseline_checks.dose_check` each cadence series' baseline gaps too long
+   for a hold, per hold, beside the limit (`limit_per_hold`). Each
+   episode's record gives `injected.recovery_lateness_ns`, how long after
+   its action its effect ended (null if it never did): an engine that
+   passed the dose check just under the limit may recover seconds late,
+   and the two say so. The measured window ends
    where the victim's measured phase window did (`window_ended_at_ns`), not
    after its drain: drain time has completions but no arrivals to score. The victim runs under the
    run's label as its `--run-id`, so its artifact names the run its truth
