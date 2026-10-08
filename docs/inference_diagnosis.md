@@ -420,12 +420,16 @@ never a request. A scraped exporter is bound to the engine whose hook log
 was imported only when the operator asserts it with `--metrics-from-engine`;
 then `vllm:num_requests_waiting_by_reason{reason="capacity"}` above zero over
 the subject's window can stand in for the hook's capacity witness, but only
-where the hook measured none (no step ran while a placed wait lasted, or the
-hello gave no capacity): engine-global metrics never overrule the steps the
-requests waited through. It is a weaker witness than the hook's: any
-waiting request counts, and vLLM's capacity reason also counts waits bound
-by KV space. `detail.capacity_witness_source` says which held (`hook` or
-`exporter`). Without
+where the hook measured none (the hello gave no capacity): engine-global
+metrics never overrule the steps the requests waited through. A request
+whose wait spanned no step at all waited only for the next one to begin,
+which the hook measured too. The window must also be one the queue signal
+can decide on, and the gauge one series of one exporter: across a restart,
+out of order or too short (`engine_restart`, `scrapes_out_of_order`,
+`too_few_scrapes`, ...) it witnesses nothing. It is a weaker witness than
+the hook's: any waiting request counts, and vLLM's capacity reason also
+counts waits bound by KV space. `detail.capacity_witness_source` says which
+held (`hook` or `exporter`). Without
 engine records, the queue and KV classes give at most a window-level
 observation from the scrapes in the subject's window (the median waiting
 count, or the preemption counter's increase, over its threshold):
@@ -559,9 +563,11 @@ and their confidence is the condition's:
 `payload.memory` is a ledger of what each source says about the server's
 memory, never a sum: its sources sample different instants, so categories
 are never added or subtracted. Each entry gives its category, scope, source,
-unit, status (`observed`, `not_collected`, `unsupported`, or
-`exporter_scoped` for metrics not bound to the engine), and, when observed,
-its provenance, cadence, clock and peak (`sampled_max` over the run).
+unit, status (`observed`, `not_collected`, `unsupported`,
+`exporter_scoped` for metrics not bound to the engine, or `insufficient`
+when the samples are not one exporter's series, with the reason), and, when
+observed, its provenance, cadence, clock and peak (`sampled_max` over the
+run).
 
 | Category | Source | Status |
 | --- | --- | --- |
@@ -570,7 +576,7 @@ its provenance, cadence, clock and peak (`sampled_max` over the run).
 | `allocator_allocated`, `allocator_reserved` | the collector's allocator counters | observed when given; nothing in vLLM's server reports them yet |
 | `runtime` (CUDA context, NCCL, workspaces) | none | unsupported |
 | `cuda_graph_pools` | none | unsupported |
-| `kv_blocks_allocated` | `vllm:kv_cache_usage_perc` times the hello's `num_gpu_blocks` | observed with `--metrics-from-engine`, else `exporter_scoped` |
+| `kv_blocks_allocated` | `vllm:kv_cache_usage_perc` times the hello's `num_gpu_blocks` | observed with `--metrics-from-engine`, else `exporter_scoped`; `insufficient` when the gauge's samples are not one series of one exporter (`engine_restart` across a restart) |
 
 The KV figure counts blocks held by running requests: in tokens these are
 capacity slots, not live tokens, and cached blocks that are free count as

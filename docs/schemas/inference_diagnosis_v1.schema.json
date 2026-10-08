@@ -104,7 +104,7 @@
             "required": ["category", "status", "peak"],
             "properties": {
               "category": { "type": "string" },
-              "status": { "enum": ["observed", "not_collected", "unsupported", "exporter_scoped"] },
+              "status": { "enum": ["observed", "not_collected", "unsupported", "exporter_scoped", "insufficient"] },
               "peak": {
                 "oneOf": [
                   { "type": "null" },
