@@ -1,9 +1,13 @@
 """Small, seeded statistics for diagnosis: medians and their differences.
 
 A difference of medians between a subject and its reference comes with a
-percentile bootstrap interval: both arms are resampled independently,
-B = 2000 times, from a fixed seed, so a rerun on the same artifact gives the
-same interval. Below the per-arm floor nothing is estimated.
+percentile bootstrap interval: each arm, in arrival order, is resampled
+apart from the other by a moving-block bootstrap, B = 2000 times, from a
+fixed seed, so a rerun on the same artifact gives the same interval. Waits
+within a burst are a ramp, not independent draws; resampling runs of
+consecutive requests keeps that dependence, where resampling single
+requests would give an interval narrower than its 95%. Below the per-arm
+floor nothing is estimated.
 """
 
 from __future__ import annotations
@@ -41,16 +45,18 @@ def median_difference(
     *,
     replicates: int = BOOTSTRAP_REPLICATES,
     seed: int = SEED,
+    blocks: bool = True,
 ) -> Difference | None:
-    """The difference of medians with a percentile bootstrap 95% interval;
-    None when either arm is under the floor."""
+    """The difference of medians with a percentile bootstrap 95% interval,
+    each arm in arrival order; None when either arm is under the floor.
+    ``blocks=False`` resamples single values, for comparison."""
     if len(subject) < MIN_PER_ARM or len(reference) < MIN_PER_ARM:
         return None
     rng = np.random.default_rng(seed)
     draws = np.concatenate(
         [
-            _medians(rng, np.asarray(subject, dtype=float), size)
-            - _medians(rng, np.asarray(reference, dtype=float), size)
+            _medians(rng, np.asarray(subject, dtype=float), size, blocks)
+            - _medians(rng, np.asarray(reference, dtype=float), size, blocks)
             for size in _blocks(replicates)
         ]
     )
@@ -64,10 +70,24 @@ def median_difference(
     )
 
 
-def _medians(rng: np.random.Generator, values: np.ndarray, size: int) -> np.ndarray:
-    """Medians of ``size`` resamples of ``values``, with replacement."""
-    picks = rng.integers(0, len(values), size=(size, len(values)))
+def _medians(
+    rng: np.random.Generator, values: np.ndarray, size: int, blocks: bool = True
+) -> np.ndarray:
+    """Medians of ``size`` resamples of ``values``, with replacement: runs
+    of ``block_length`` consecutive values, from starts drawn uniformly,
+    joined and cut to the arm's length."""
+    count = len(values)
+    length = block_length(count) if blocks else 1
+    runs = -(-count // length)
+    starts = rng.integers(0, count - length + 1, size=(size, runs))
+    picks = (starts[..., None] + np.arange(length)).reshape(size, -1)[:, :count]
     return np.asarray(np.median(values[picks], axis=1), dtype=float)
+
+
+def block_length(count: int) -> int:
+    """The moving block's length: the cube root of the arm's size, the
+    usual rate for a variance of a smooth statistic."""
+    return max(1, int(round(count ** (1 / 3))))
 
 
 def _blocks(replicates: int, block: int = 250) -> list[int]:
@@ -84,6 +104,7 @@ __all__ = [
     "MIN_PER_ARM",
     "SEED",
     "Difference",
+    "block_length",
     "median",
     "median_difference",
 ]
