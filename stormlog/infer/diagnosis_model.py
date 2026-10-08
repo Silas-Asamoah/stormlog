@@ -9,7 +9,9 @@ and an experiment that would confirm it. Three rules keep a finding honest:
   fails the gate. An ineligible finding is ``claim: observation``, cause
   ``undetermined``, at ``info``, and lists what failed. A competitor shown
   to explain a material but minor share is ``contributing``: the finding
-  stays eligible, but it is contested and makes no fault claim.
+  stays eligible, but it is contested and makes no fault claim, as it is
+  with a cause ``upstream`` of it. Every finding is primary in this
+  version: the edge table that makes one secondary to another comes later.
 - **Confidence** is ordinal and per claim: whether the mechanism occurred
   (condition), and whether it explains the incident (contribution). Its
   level is the lower of the two.
@@ -200,12 +202,14 @@ class Finding:
 
     @property
     def contested(self) -> list[str]:
-        """Indispensable competitors that explain a minor share themselves:
-        the mechanism stands, but not as the fault."""
+        """Competitors that leave the mechanism standing but not as the
+        fault: an indispensable one that explains a minor share itself, or
+        a cause upstream of it, of which it may be the consequence."""
         return [
             f"competitor:{alternative.kind}:{alternative.status}"
             for alternative in self.alternatives
-            if alternative.indispensable and alternative.status == CONTRIBUTING
+            if alternative.status == UPSTREAM
+            or (alternative.indispensable and alternative.status == CONTRIBUTING)
         ]
 
     @property

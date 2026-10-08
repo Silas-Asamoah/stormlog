@@ -81,7 +81,9 @@ def test_preemptions_that_explain_the_excess_are_a_kv_fault(tmp_path: Path) -> N
     assert (finding.severity, finding.claim) == ("warning", "fault")
 
 
-def test_a_queue_behind_a_kv_fault_is_its_secondary(tmp_path: Path) -> None:
+def test_a_kv_fault_and_the_queue_behind_it_are_both_primary(tmp_path: Path) -> None:
+    """Roles stay primary until the edge table: the queue, with KV upstream
+    of it, makes no fault claim, and the KV fault ranks first."""
     calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a", output=100)
     heavy = poisson_free(100, AT, 200 * MS, prefix="b", output=100)
     artifact = build_run(tmp_path, calm + heavy, Engine(max_num_seqs=64, kv_tokens=300))
@@ -90,10 +92,10 @@ def test_a_queue_behind_a_kv_fault_is_its_secondary(tmp_path: Path) -> None:
 
     details = report["payload"]["findings_detail"]
     by_kind = {detail["kind"]: (fid, detail) for fid, detail in details.items()}
-    kv_id, kv = by_kind["kv_preemption_pressure"]
+    _, kv = by_kind["kv_preemption_pressure"]
     _, queue = by_kind["queue_saturation"]
     assert (kv["role"], kv["claim"], kv["rank"]) == ("primary", "fault", 1)
-    assert (queue["role"], queue["secondary_to"]) == ("secondary", [kv_id])
+    assert (queue["role"], queue["secondary_to"]) == ("primary", [])
     assert queue["claim"] != "fault"
 
 
