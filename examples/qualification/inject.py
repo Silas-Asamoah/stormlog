@@ -513,7 +513,18 @@ class InjectionRun:
     ) -> tuple[str, Timing]:
         """Wait until the next episode may start; the effect's timing. A
         recovery found earlier doesn't start the next episode while the
-        engine looks hung now (G4): a request sent since may be stuck."""
+        engine looks hung now (G4): a request sent since may be stuck. A
+        recovery that can never hold (a baseline too thin, or steps that
+        fail G0's dose check) is a timeout at once, not after the full
+        recovery timeout: nothing it could wait for would change that."""
+        context = Context(
+            self._signals(), baseline, actions, onset, self.clock(), self.thresholds
+        )
+        if recovery_blocked(episode.type, context):
+            now = self.clock()
+            return TIMEOUT, self._timing(
+                episode, baseline, actions, onset, action_end, now
+            )
         while True:
             now = self.clock()
             timing = self._timing(episode, baseline, actions, onset, action_end, now)
