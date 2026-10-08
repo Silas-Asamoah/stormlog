@@ -126,9 +126,9 @@ def loop_steps(view: RunView, producer: str) -> list[LoopStep]:
     the offline diagnosis finds the stalls an online trigger would. A step's
     members are the attempts its written memberships name; withheld
     members are missing."""
-    members, finished = _attempt_sets(view, producer)
+    sets, prompts = _attempt_sets(view, producer), _prompts(view, producer)
     found = (
-        _loop_step(iteration, members, finished)
+        _loop_step(iteration, sets, prompts)
         for ref, (_, iteration) in view.iterations.items()
         if ref.producer_id == producer
     )
@@ -138,28 +138,45 @@ def loop_steps(view: RunView, producer: str) -> list[LoopStep]:
     )
 
 
-def _attempt_sets(
-    view: RunView, producer: str
-) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
-    """Per step, the attempts it ran and those that finished in it."""
-    members: dict[str, set[str]] = {}
-    finished: dict[str, set[str]] = {}
+AttemptSets = dict[str, dict[str, set[str]]]
+
+
+def _attempt_sets(view: RunView, producer: str) -> AttemptSets:
+    """Per step, the attempts it ran ("members"), those that finished in it
+    ("finished") and its streaming-input members ("streaming")."""
+    sets: AttemptSets = {"members": {}, "finished": {}, "streaming": {}}
     for execution in view.executions.values():
         if execution.producer != producer or execution.attempt is None:
             continue
         for _, membership in execution.memberships:
-            step = membership.iteration_ref.id
-            members.setdefault(step, set()).add(execution.attempt.id)
-            finish = membership.metadata.get("finish")
+            step, attempt = membership.iteration_ref.id, execution.attempt.id
+            sets["members"].setdefault(step, set()).add(attempt)
+            data = membership.metadata
+            finish = data.get("finish")
             if isinstance(finish, dict) and finish.get("in_step"):
-                finished.setdefault(step, set()).add(execution.attempt.id)
-    return members, finished
+                sets["finished"].setdefault(step, set()).add(attempt)
+            if data.get("resumable") is True:
+                sets["streaming"].setdefault(step, set()).add(attempt)
+    return sets
+
+
+def _prompts(view: RunView, producer: str) -> dict[str, dict[str, int]]:
+    """Per step, each member's prompt length then: a streaming-input
+    request's grows when its client's next turn arrives."""
+    prompts: dict[str, dict[str, int]] = {}
+    for execution in view.executions.values():
+        if execution.producer != producer or execution.attempt is None:
+            continue
+        for _, membership in execution.memberships:
+            tokens = _optional(membership.metadata.get("prompt_tokens"))
+            if tokens is not None:
+                step = prompts.setdefault(membership.iteration_ref.id, {})
+                step[execution.attempt.id] = tokens
+    return prompts
 
 
 def _loop_step(
-    iteration: IterationEvent,
-    members: dict[str, set[str]],
-    finished: dict[str, set[str]],
+    iteration: IterationEvent, sets: AttemptSets, prompts: dict[str, dict[str, int]]
 ) -> LoopStep | None:
     data = iteration.metadata
     start_wall = _optional(data.get("start_wall_ns"))
@@ -176,9 +193,11 @@ def _loop_step(
         end_mono_ns=end_mono or 0,
         completed_wall_ns=_optional(data.get("completed_wall_ns")),
         completed_mono_ns=iteration.end_ns,
-        members=frozenset(members.get(step, ())),
+        members=frozenset(sets["members"].get(step, ())),
         total_tokens=_count(data.get("total_tokens")),
-        finished=frozenset(finished.get(step, ())),
+        finished=frozenset(sets["finished"].get(step, ())),
+        prompts=tuple(sorted(prompts.get(step, {}).items())),
+        streaming=frozenset(sets["streaming"].get(step, ())),
     )
 
 

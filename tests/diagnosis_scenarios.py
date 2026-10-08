@@ -55,6 +55,7 @@ class SimRequest:
     enqueue_ns: int = 100_000  # alias to entering the scheduler
     delivery_ns: int = 500_000  # a step's completion to the client
     structured_output: bool = False
+    resumable: bool = False  # a streaming-input request
     held_for_slot: bool = False
     closed_loop: bool = False  # no intended arrival time
     shared_prefix_tokens: int | None = None
@@ -323,7 +324,7 @@ def _enqueued(request: SimRequest) -> tuple[int, int, dict[str, Any]]:
             "kind": "enqueued",
             "internal": request.internal,
             "structured_output": request.structured_output,
-            "resumable": False,
+            "resumable": request.resumable,
             **stamp(request.enqueued_ns),
         },
     )
@@ -345,7 +346,7 @@ def _member(request: SimRequest, *, first: bool, done: int = 0) -> dict[str, Any
         "cached_at_admission": request.cached if first else None,
         "recompute": False,
         "output_before": 0 if first else done,
-        "resumable": False,
+        "resumable": request.resumable,
     }
 
 
