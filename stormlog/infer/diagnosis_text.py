@@ -56,7 +56,9 @@ def _finding_text(detail: dict[str, Any], finding: dict[str, Any]) -> list[str]:
 def _heading(detail: dict[str, Any], finding: dict[str, Any]) -> list[str]:
     confidence = detail.get("confidence") or {}
     condition = (confidence.get("condition") or {}).get("level")
-    contribution = (confidence.get("contribution") or {}).get("level")
+    contribution = (confidence.get("contribution") or {}).get("level") or (
+        "not assessed"
+    )
     component = (detail.get("location") or {}).get("component")
     lines = [
         f"[{detail.get('rank')}] {finding['severity'].upper()} {finding['kind']} "
