@@ -108,6 +108,8 @@ class Engine:
     # (mono_ns, duration_ns): the engine loop stops for duration after the
     # first step that completes at or after mono_ns.
     stall: tuple[int, int] | None = None
+    # More such stops, each as ``stall`` is.
+    stalls: list[tuple[int, int]] = field(default_factory=list)
     # How long an idle engine takes from a request's entry to its schedule()
     # call; vLLM 0.30.0's loop took 20 us and more on an A30.
     wake_ns: int = 0
@@ -196,10 +198,17 @@ class Engine:
             out.extend(self._complete(iteration, finished_at, running))
             iteration += 1
             now = finished_at + self.gap_ns
-            if self.stall is not None and finished_at >= self.stall[0]:
-                now += self.stall[1]
-                self.stall = None
+            now += self._stalled(finished_at)
         return out
+
+    def _stalled(self, finished_at: int) -> int:
+        """How long the loop stops after a step completing at finished_at:
+        each stall stops it once, after the first step at or past its time."""
+        pending = sorted([*self.stalls, *([self.stall] if self.stall else [])])
+        due = [stall for stall in pending if finished_at >= stall[0]]
+        self.stall = None
+        self.stalls = [stall for stall in pending if stall not in due]
+        return sum(length for _, length in due)
 
     def _make_room(
         self,

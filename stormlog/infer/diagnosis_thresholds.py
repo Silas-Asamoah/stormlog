@@ -85,9 +85,9 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # The queue explains the incident when its wait excess is at least
         # this share of the TTFT excess.
         QUEUE_CONTRIBUTION: 0.5,
-        # Engine stalls during or just before the waits explain them instead
-        # when they last this share of the wait excess: a stall holds a
-        # request back by no more than its own length.
+        # Engine stalls explain the waits instead when they hold the median
+        # waiting request back for this share of the wait excess: a stall
+        # holds a request back by no more than its own length.
         QUEUE_STALL_SHARE: 0.5,
         # Time before the queue (engine ingress, the API server) explains the
         # excess instead when its own excess is this share of the wait's.
