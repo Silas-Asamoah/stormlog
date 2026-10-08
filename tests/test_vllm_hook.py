@@ -573,6 +573,31 @@ def test_a_request_entering_the_scheduler_is_stamped_once(vllm: dict[str, Any]) 
     assert all(e["wall_ns"] <= e["wall_after_ns"] for e in enqueued)
 
 
+def test_a_reservation_left_without_its_record_is_released(
+    vllm: dict[str, Any]
+) -> None:
+    """A streaming-input request's next input and an add_request that raises
+    write no enqueued record. Their reservations must still be released, or
+    the writer reports them pending, and holds every later span, forever."""
+
+    class Unnamed:
+        @property
+        def request_id(self) -> str:
+            raise RuntimeError("no request ID")
+
+    scheduler = vllm["Scheduler"](vllm_config())
+    writer = getattr(scheduler, hook.RECORDER_ATTRIBUTE).writer
+    scheduler.add_request(FakeRequest("s-1", 4, resumable=True))
+    scheduler.add_request(FakeRequest("s-1", 6, resumable=True))  # its next input
+    with pytest.raises(RuntimeError, match="no request ID"):
+        scheduler.add_request(Unnamed())
+
+    assert writer._status()["reserved"] == 0
+    _wait(lambda: writer._status()["pending"] == 0)
+    enqueued = _of(_records(vllm["root"], "engine"), "enqueued")
+    assert [e["internal"] for e in enqueued] == ["s-1"]
+
+
 def test_a_cache_reset_records_who_was_running_and_how_it_ended(
     vllm: dict[str, Any]
 ) -> None:
