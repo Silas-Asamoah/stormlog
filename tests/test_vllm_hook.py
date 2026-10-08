@@ -704,8 +704,15 @@ class CUDAGraphMode(enum.Enum):
 PROFILER = {
     "profiler": "torch",
     "torch_profiler_dir": "/traces",
+    # The .gz name and streaming write a truncated trace is read through.
+    "torch_profiler_use_gzip": True,
     "torch_profiler_with_stack": False,
+    # Each of these changes what a window costs and how long its stop pauses.
+    "torch_profiler_record_shapes": False,
+    "torch_profiler_with_memory": False,
+    "torch_profiler_with_flops": False,
     "torch_profiler_dump_cuda_time_total": False,
+    "capture_torch_profiler": False,
     "ignore_frontend": True,
     "max_iterations": 40,
     "delay_iterations": 0,
