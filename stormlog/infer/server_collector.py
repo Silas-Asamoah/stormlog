@@ -372,9 +372,25 @@ def _server_process(pid: int) -> psutil.Process:
         process = psutil.Process(pid)
     except psutil.NoSuchProcess as exc:
         raise ValueError(f"no process with pid {pid}") from exc
-    if not process.is_running():
+    try:
+        ended = _ended(process)
+    except psutil.NoSuchProcess:  # includes ZombieProcess
+        ended = True
+    except psutil.AccessDenied:
+        ended = False  # cannot tell here; the first poll will
+    if ended:
         raise ValueError("server process is not running")
     return process
+
+
+def _ended(process: psutil.Process) -> bool:
+    """Whether the process has exited, or its PID now names another one.
+
+    ``is_running`` compares the creation time with the original, so it also
+    catches a PID the OS reused. A zombie has exited too: on Linux it still
+    counts as running, with an RSS of 0, until its parent reaps it.
+    """
+    return not process.is_running() or process.status() == psutil.STATUS_ZOMBIE
 
 
 def _validate_collection_options(
@@ -644,15 +660,10 @@ def _process_sample(
 
 
 def read_process_rss(process: psutil.Process) -> tuple[str, int | None, str | None]:
-    """Return ``(state, rss, detail)``; only a gone or replaced process is invalid.
-
-    ``is_running`` compares the process creation time with the original, so it
-    also detects a PID that the OS reused for another process. A zombie has
-    ended too: on Linux it still counts as running, with an RSS of 0, until
-    its parent reaps it.
-    """
+    """Return ``(state, rss, detail)``; only an ended or replaced process is
+    invalid (see ``_ended``)."""
     try:
-        if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
+        if _ended(process):
             return "invalid", None, _PROCESS_ENDED_DETAIL
         return "valid", int(process.memory_info().rss), None
     except psutil.NoSuchProcess:  # includes ZombieProcess
