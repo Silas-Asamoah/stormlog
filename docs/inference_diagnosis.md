@@ -340,7 +340,8 @@ minor second cause.
   finding at `warning`. Every other finding is `primary`; the other edges
   come with the engine-loop class.
 - **Rank.** Findings are ordered by: primary before secondary, eligible
-  before observation, confidence, the contribution's lower bound, kind,
+  before observation, confidence, the contribution's lower bound (in ms of
+  latency for every kind, so kinds compare), kind,
   location, window start, and finally ID, so the order is total.
 - **Identity.** A finding's ID is `diagnosis.<kind>.<12 hex>`, a hash of the
   run, the subject, the kind, the location and the window start: the same
