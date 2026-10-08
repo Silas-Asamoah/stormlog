@@ -563,6 +563,26 @@ def test_records_that_arrive_late_are_no_stall_once_their_lag_is_allowed() -> No
     assert engine_stalled(seen_at(hung), hung, lag_ns=lag)
 
 
+def test_the_whole_record_lag_is_allowed_and_no_more() -> None:
+    # close-221-delta, N7: the lag's magnitude and where the latest step is
+    # taken were unpinned. Records 40 ms late on a 5 ms engine (a 10 ms
+    # limit): judged the whole lag ago, no stall; judged half of it ago, a
+    # 20 ms one. And an engine that stalled a second, then stepped again
+    # with its records already in: the latest step is the last one seen,
+    # not the last one before now - lag, so it has resumed.
+    from stormlog.infer.qualify.recovery import engine_stalled
+
+    lag = 40 * MS
+    steps = [tick * 5 * MS for tick in range(150 * 200 + 1)]  # to 150 s
+    now = 150 * S + lag
+    late = context(Signals(in_flight=ALWAYS, step_starts=steps))
+    assert not engine_stalled(late, now, lag_ns=lag)
+    assert engine_stalled(late, now, lag_ns=lag // 2)
+    resumed = steps + [151 * S + tick * 5 * MS for tick in range(2, 10)]
+    ctx = context(Signals(in_flight=ALWAYS, step_starts=resumed))
+    assert not engine_stalled(ctx, 151 * S + 45 * MS, lag_ns=lag)
+
+
 def test_an_open_gap_just_past_twice_the_p99_is_a_stall() -> None:
     # Astra's closure of delta 3, H7: the limit is twice the baseline's p99
     # (40 ms for 20 ms steps), not ten times it. The last step starts at
