@@ -93,6 +93,44 @@ first sample or after the last, within one sample gap of it. Two jumps that
 cancel between two samples cannot be seen, so a segment is monitored to
 within its largest sample gap, not verified.
 
+## What gets explained
+
+A diagnosis explains subjects. A caller can declare them: a window (start
+and end on the artifact's clock), a list of requests, or a case; a declared
+subject is an incident by declaration, and each class still applies its own
+tests. Without one, the diagnosis selects incidents itself, per case, from
+the measured phase:
+
+- **Assignment.** A request belongs to the window of its intended arrival,
+  or of its send when it had no intended time, so a window holds what
+  arrived in it however long it took.
+- **Windows.** Base windows of 1 s are joined forward until each holds 20
+  requests, or spans 30 s; a quiet stretch that reaches 30 s is a window of
+  its own.
+- **Reference.** A window is compared with every earlier window of its case
+  that was not flagged itself, and only once those hold at least 114
+  requests, the fewest that bound a p90 under the shared sufficiency rule;
+  until then it is `insufficient_reference`.
+- **Test.** For TTFT and for end-to-end latency separately, the threshold is
+  the reference's p90 (nearest rank), and a one-sided Fisher's exact test on
+  (window above, window below) against (reference above, reference below)
+  flags the window at α = 0.01, if at least 3 of its requests are above. A
+  failed request is above any threshold.
+- **Incident.** At least two consecutive flagged windows of a case, joined
+  into one subject. One bad window alone is not an incident.
+
+Every judgement is causal: a window is judged at its evaluation time, the
+end of the window after it, from what the artifact held by then. A request
+still running then is censored at its elapsed time, and counts as above only
+once that passes the threshold. A request is known from its send only when
+the client wrote `infer.dispatch` records, and its TTFT before its end only
+with `infer.first_content` records; without dispatch records, an incident
+has no `first_detectable_ns`, and says `legacy_no_dispatch_records`.
+
+With a declared SLO the test would compare violations instead; that waits
+for the SLO policies of the comparison work (#213), and the threshold
+version records which test ran.
+
 ## Thresholds
 
 Online triggers and the diagnoser read thresholds from one versioned table,
@@ -116,6 +154,12 @@ The values are provisional until they are read from real runs.
 | `host_stall.min_busy_steps` | 20 | busy steps at least as large as the stall's that window needs |
 | `host_stall.matched_bin_min_steps` | 20 | steps of the stall's own work bucket (scheduled tokens within a factor of two) needed to compare it with steps of its size |
 | `host_stall.heartbeat_grace_ns` | 3 s | how recently the hook's writer must have been heard from to judge a stall still going on |
+| `selection.window_seconds` | 1 | base window of incident selection |
+| `selection.span_cap_seconds` | 30 | longest a joined window may span |
+| `selection.min_requests` | 20 | requests a window is joined until it holds |
+| `selection.reference_min_requests` | 114 | reference requests before a window is tested |
+| `selection.alpha` | 0.01 | level of the one-sided Fisher's exact test |
+| `selection.min_above` | 3 | fewest requests above the reference p90 in a flagged window |
 
 ## Online signals
 
