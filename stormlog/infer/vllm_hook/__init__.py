@@ -177,6 +177,9 @@ def _patch_engine(settings: _Settings) -> None:
     setattr(EngineCore, "preprocess_add_request", engine_admit)
     _patch_optional(Scheduler, "set_pause_state", "pause", _wrap_set_pause_state)
     _patch_optional(Scheduler, "add_request", "enqueued", _wrap_add_request)
+    _patch_optional(
+        Scheduler, "reset_prefix_cache", "cache_reset", _wrap_reset_prefix_cache
+    )
 
 
 def _patch_optional(cls: Any, name: str, kind: str, wrap: Callable[[Any], Any]) -> None:
@@ -220,6 +223,25 @@ def _wrap_add_request(add_request: Any) -> Any:
         return result
 
     return scheduler_add_request
+
+
+def _wrap_reset_prefix_cache(reset: Any) -> Any:
+    def scheduler_reset_prefix_cache(self: Any, *args: Any, **kwargs: Any) -> Any:
+        recorder = getattr(self, RECORDER_ATTRIBUTE, None)
+        if recorder is None:
+            return reset(self, *args, **kwargs)
+        # Read before the call: with reset_running_requests vLLM preempts
+        # every running request first, and then checks the reset succeeded.
+        call = _guard(recorder, lambda: recorder.reset_call(self, args, kwargs))
+        try:
+            result = reset(self, *args, **kwargs)
+        except BaseException:
+            _guard(recorder, lambda: recorder.on_cache_reset(call, None))
+            raise
+        _guard(recorder, lambda: recorder.on_cache_reset(call, bool(result)))
+        return result
+
+    return scheduler_reset_prefix_cache
 
 
 def _enable_engine(scheduler: Any, vllm_config: Any, settings: _Settings) -> None:
