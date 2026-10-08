@@ -251,7 +251,12 @@ the measured phase:
 Every judgement is causal: a window is judged at its evaluation time, the
 end of the window after it, from what the artifact held by then. A request
 still running then is censored at its elapsed time, and counts as above only
-once that passes the threshold. A request is known from its send only when
+once that passes the threshold. In a growing artifact, a window whose
+evaluation time is after the client's last record, with requests still
+running, is `not_yet_evaluable`: judging it would read them as if that time
+had passed. `first_detectable_ns` is when selection could first have chosen
+the subject; a class's own evidence, such as the hook's records up to its
+last heartbeat, can come later. A request is known from its send only when
 the client wrote `infer.dispatch` records, and its TTFT before its end only
 with `infer.first_content` records; without dispatch records, an incident
 has no `first_detectable_ns`, and says `legacy_no_dispatch_records`; a
