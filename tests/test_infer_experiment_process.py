@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import shutil
@@ -16,8 +17,12 @@ import pytest
 
 from stormlog.infer.experiment_process import (
     MARK_VARIABLE,
+    Cleanup,
     Launched,
+    current_boot,
+    end_journaled,
     identify,
+    journaled,
     launch,
     parse_cpu_list,
     remembered_tree,
@@ -649,3 +654,30 @@ def test_on_linux_a_journaled_leader_still_running_has_its_group_stopped(
     cleanup = stop_journaled(_journal_entry(4000, 500), timeout_s=0.2, proc=proc)
     assert (fake.signalled, fake.killed) == ([(4000, signal.SIGTERM)], [])
     assert cleanup.verified
+
+
+def test_a_launch_ends_in_its_journal_only_by_a_whole_line(tmp_path: Path) -> None:
+    # A resume judges again only a launch whose cleanup did not verify. A
+    # crash may tear the journal's last line: a torn end leaves its launch
+    # to the resume, never ends it.
+    journal = tmp_path / "launches.ndjson"
+    launched = launch("step", [sys.executable, "-c", "pass"], journal=journal)
+    launched.process.wait(timeout=5)
+    launched.poll()
+    (entry,) = journaled(journal)
+    assert entry["mark"] == launched.mark
+    assert entry["identity"]["boot_id"] == current_boot()
+    whole = journal.read_text()
+    end = json.dumps({"ended": launched.mark})
+    for torn in (end[:-1], end, end[:20] + "\n"):
+        journal.write_text(whole + torn)
+        assert journaled(journal) == [entry], torn
+    # An unverified cleanup ends nothing; a verified one ends the launch.
+    journal.write_text(whole)
+    end_journaled(launched, Cleanup(False, "proc"))
+    assert journaled(journal) == [entry]
+    end_journaled(launched, Cleanup(True, "proc"))
+    assert journaled(journal) == []
+    # An end names its launch by the whole mark.
+    journal.write_text(whole + json.dumps({"ended": launched.mark[:16]}) + "\n")
+    assert journaled(journal) == [entry]

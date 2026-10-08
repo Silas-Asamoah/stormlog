@@ -192,8 +192,11 @@ and start time.
 A runner that is killed (SIGKILL, an ssh drop, the OOM killer) runs no
 cleanup, and what it launched lives on in sessions of its own. So every
 launch, of a run or a prelude, is journaled in `launches.ndjson` as it
-starts: the host's boot ID, PID, process group, start time and mark. A
-resume signals or kills only what it can tie to a journaled launch:
+starts: the host's boot ID, PID, process group, start time and mark. Once
+a launch's cleanup verifies, the runner journals its end (`{"ended":
+<mark>}`), and a resume leaves it be; only a whole line ends a launch, so
+one a crash tore leaves it to the resume. A resume signals or kills only
+what it can tie to a launch that has not ended:
 
 - a launch journaled in another boot left nothing running, and is skipped;
 - while a launch's leader is still that process (same boot, PID and start

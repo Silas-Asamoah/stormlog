@@ -85,6 +85,7 @@ from .experiment_plan import (
 from .experiment_process import (
     Launched,
     clean_up_after,
+    end_journaled,
     journaled,
     launch,
     listens,
@@ -343,8 +344,9 @@ def _stop_left_launches(output: Path) -> None:
     """Stop what a runner that was killed left running, or refuse to resume.
 
     Every launch of an unfinished attempt or a prelude is in its journal by
-    PID, start time and mark. One whose leader is still that process has its
-    group stopped; then its group, session and mark are verified gone.
+    boot, PID, start time and mark, and ends there once its cleanup
+    verified. Each one that has not ended is stopped as far as the journal
+    ties it to the launch (``stop_journaled``), and must be verified gone.
     """
     journals = [
         *sorted((output / "runs").glob(f"*.partial/{LAUNCHES}")),
@@ -1198,6 +1200,7 @@ class _Run:
             lasted_s=self.server.lasted_s(),
         )
         self.record.cleanup = cleanup.to_record()
+        end_journaled(self.server, cleanup)
         if not cleanup.verified:
             self.record.protocol("collector_cleanup_unverified", before_treatment=False)
         self.record.processes.append(self.server.to_record())
@@ -1404,6 +1407,7 @@ class _Run:
                 since=launched.identity,
                 lasted_s=launched.lasted_s(),
             )
+            end_journaled(launched, cleanup)
             if not cleanup.verified:
                 self.record.protocol(
                     f"treatment_cleanup_unverified:{name}", before_treatment=False
@@ -1607,6 +1611,7 @@ def _stop_prelude_server(
     (directory / "cleanup.json").write_text(
         json.dumps(cleanup.to_record(), indent=2) + "\n"
     )
+    end_journaled(server, cleanup)
     return cleanup.verified
 
 
