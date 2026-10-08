@@ -448,6 +448,95 @@ def test_run_facts_come_from_the_artifact(tmp_path: Path) -> None:
     assert facts.existing_iterations == frozenset()
 
 
+def _in_progress_artifact(path: Path, *later: dict[str, Any]) -> Path:
+    """The artifact of a run still under way: its measured phase has begun
+    and its request was sent; neither has ended."""
+    _artifact(path, requests=False)
+    lines = [
+        {
+            "schema_version": 1,
+            "event_type": "infer.phase_start",
+            "session_id": SESSION,
+            "case_id": "c1_in8_out4",
+            "phase": "measured",
+            "arrival_mode": "closed",
+            "started_at_ns": T0 + WALL_OFFSET - SECOND,
+            "timestamp_ns": T0 + WALL_OFFSET - SECOND,
+        },
+        {
+            "schema_version": 1,
+            "event_type": "infer.dispatch",
+            "session_id": SESSION,
+            "request_id": REQUEST0,
+            "x_request_id": X0,
+            "case_id": "c1_in8_out4",
+            "phase": "measured",
+            "intended_at_ns": None,
+            "started_at_ns": T0 + WALL_OFFSET - 20,
+            "timestamp_ns": T0 + WALL_OFFSET - 20,
+        },
+        *later,
+    ]
+    with path.open("a", encoding="utf-8") as handle:
+        handle.writelines(json.dumps(line) + "\n" for line in lines)
+    return path
+
+
+def _placement(artifact: Path) -> tuple[int, int]:
+    engine = next(
+        r
+        for r in load_inference_artifact(artifact)
+        if isinstance(r, CapabilityEvent) and r.component == "engine_adapter"
+    )
+    epoch = engine.metadata["summary"]["execution"]["epochs"][EPOCH]
+    return epoch["foreign_only_placed"], epoch["foreign_only_counted"]
+
+
+def test_an_import_of_a_run_under_way_binds_requests_still_in_flight(
+    tmp_path: Path,
+) -> None:
+    artifact = _in_progress_artifact(tmp_path / "infer.jsonl")
+    engine_log(tmp_path / "hook", _records())
+
+    import_execution_into_artifact(artifact, tmp_path / "hook", importer=HERE)
+
+    requests = [
+        r for r in load_inference_artifact(artifact) if isinstance(r, RequestEvent)
+    ]
+    own = next(r for r in requests if r.metadata["ownership"] == "run")
+    assert own.request_ref == EntityRef("stormlog", REQUEST0)
+    assert own.metadata["case_id"] == "c1_in8_out4"
+    # The begun phase has no end yet, so every later step lies inside it.
+    assert _placement(artifact) == (2, 0)
+
+
+def test_a_begun_phase_ends_with_its_window_or_the_session(tmp_path: Path) -> None:
+    window = {
+        "schema_version": 1,
+        "event_type": "infer.phase_window",
+        "session_id": SESSION,
+        "case_id": "c1_in8_out4",
+        "phase": "measured",
+        "started_at_ns": T0 + WALL_OFFSET - SECOND,
+        "window_ended_at_ns": T0 + WALL_OFFSET + 2 * SECOND,
+        "drained_at_ns": T0 + WALL_OFFSET + 3 * SECOND,
+    }
+    interrupted = {
+        "schema_version": 1,
+        "event_type": "infer.session",
+        "session_id": SESSION,
+        "timestamp_ns": T0 + WALL_OFFSET + 3 * SECOND,
+        "status": "interrupted",
+    }
+    for name, later in (("measured", window), ("interrupted", interrupted)):
+        artifact = _in_progress_artifact(tmp_path / f"{name}.jsonl", later)
+        engine_log(tmp_path / name, _records())
+
+        import_execution_into_artifact(artifact, tmp_path / name, importer=HERE)
+
+        assert _placement(artifact) == (1, 1), name
+
+
 def test_cli_imports_and_reports_the_epochs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
