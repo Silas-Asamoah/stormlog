@@ -29,6 +29,12 @@ BLOCKS6 = [f"b{i}" for i in range(1, 7)]
 BLOCKS8 = [f"b{i}" for i in range(1, 9)]
 BLOCKS10 = [f"b{i}" for i in range(1, 11)]
 NUDGE = 1e-9  # keeps a boundary budget clear of floating-point ties
+# numpy and scipy differ in a float's last bits between platforms, so no
+# float here, an input or an expected value, is exact.
+TOLERANCE_RULE = (
+    "a float, given or expected, matches when |actual - expected| <= "
+    "max(relative * |expected|, absolute); anything else matches exactly"
+)
 
 
 def _t(n_df: float) -> float:
@@ -801,6 +807,7 @@ def main() -> None:
         "payload": "stormlog.infer.comparison v1",
         "confidence": 0.95,
         "tolerance": {"relative": 1e-9, "absolute": 1e-12},
+        "tolerance_rule": TOLERANCE_RULE,
         "cases": cases,
     }
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)

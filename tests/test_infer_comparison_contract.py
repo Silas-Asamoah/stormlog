@@ -7,6 +7,7 @@ The fixture's expected numbers come from the textbook formulas
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -100,7 +101,65 @@ def test_every_contract_case_holds(case: dict[str, Any]) -> None:
             assert _close(result.gate.claim[key], value), key
 
 
+def _differences(actual: Any, expected: Any, where: str = "cases") -> list[str]:
+    """Where two contract documents differ by the fixture's tolerance_rule:
+    a float within the tolerance of the other, anything else exactly."""
+    if isinstance(actual, float) or isinstance(expected, float):
+        numbers = all(
+            isinstance(v, (int, float)) and not isinstance(v, bool)
+            for v in (actual, expected)
+        )
+        if numbers and _close(actual, expected):
+            return []
+    elif isinstance(actual, dict) and isinstance(expected, dict):
+        if actual.keys() == expected.keys():
+            return [
+                difference
+                for key in expected
+                for difference in _differences(
+                    actual[key], expected[key], f"{where}.{key}"
+                )
+            ]
+    elif isinstance(actual, list) and isinstance(expected, list):
+        if len(actual) == len(expected):
+            return [
+                difference
+                for index, pair in enumerate(zip(actual, expected))
+                for difference in _differences(*pair, f"{where}[{index}]")
+            ]
+    elif type(actual) is type(expected) and actual == expected:
+        return []
+    return [f"{where}: {actual!r} != {expected!r}"]
+
+
 def test_the_fixture_is_what_its_generator_writes() -> None:
     from examples.analysis.comparison_contract import build
 
-    assert json.loads(json.dumps(build())) == CONTRACT["cases"]
+    actual = json.loads(json.dumps(build()))
+    assert _differences(actual, CONTRACT["cases"]) == []
+
+
+def test_the_fixtures_floats_hold_to_its_tolerance_and_no_further() -> None:
+    # fable-213's lens a: on Linux (numpy 2.2.6, scipy 1.14.1) the generator
+    # wrote these two floats with other last bits, and the exact check failed.
+    rule = CONTRACT["tolerance_rule"]
+    assert "max(relative * |expected|, absolute)" in rule
+    linux = copy.deepcopy(CONTRACT["cases"])
+    by_id = {case["id"]: case for case in linux}
+    by_id["latency_regression_fails_non_inferiority"]["expect"][
+        "lower"
+    ] = 0.3966848882246326
+    by_id["latency_boundary_just_above"]["input"]["gate"][
+        "budget"
+    ] = 0.050429563144216594
+    assert _differences(linux, CONTRACT["cases"]) == []
+    beyond = by_id["latency_regression_fails_non_inferiority"]["expect"]
+    beyond["lower"] *= 1 + 1e-6
+    (difference,) = _differences(linux, CONTRACT["cases"])
+    assert difference.startswith("cases[0].expect.lower: ")
+    # Anything but a float is exact: a status, a reason, a missing value.
+    beyond["lower"] = CONTRACT["cases"][0]["expect"]["lower"]
+    for key, value in (("gate", "pass"), ("reason", "within"), ("lower", None)):
+        changed = copy.deepcopy(linux)
+        changed[0]["expect"][key] = value
+        assert _differences(changed, CONTRACT["cases"]), key

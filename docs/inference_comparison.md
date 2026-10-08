@@ -432,6 +432,15 @@ blockers (too few or fewer than pre-registered pairs) and the leave-one-out
 screen, and the run-level claim to each run, rather than assigning them by
 hand.
 
+No float in the fixture is exact: numpy and scipy differ in a float's last
+bits between platforms. The fixture states its tolerance (`tolerance`,
+relative 1e-9 and absolute 1e-12) and the rule that applies it
+(`tolerance_rule`): a float, given or expected, matches when
+|actual − expected| ≤ max(relative × |expected|, absolute), and anything
+else, such as a gate's status or a missing value, matches exactly. Its own
+tests, and the check that it is what the script writes, apply that rule as
+written; an implementation checked against it should too.
+
 ## Other tools
 
 | Function | Gives |

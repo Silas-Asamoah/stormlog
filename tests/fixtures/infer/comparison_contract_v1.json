@@ -7,6 +7,7 @@
   "relative": 1e-09,
   "absolute": 1e-12
  },
+ "tolerance_rule": "a float, given or expected, matches when |actual - expected| <= max(relative * |expected|, absolute); anything else matches exactly",
  "cases": [
   {
    "id": "latency_regression_fails_non_inferiority",
