@@ -280,3 +280,76 @@ def test_a_finish_read_after_its_step_raises_the_membership_s_source(
     assert membership.metadata["source_seq_max"] == 4
     (alignment,) = _of(result, ClockAlignmentEvent)
     assert alignment.metadata["source_seq_max"] == 0  # the hello alone
+
+
+# ---------------------------------------------------------------- coverage
+
+
+def _coverage(root: Path, records: list[dict[str, Any]], **kwargs: Any) -> Any:
+    write_epoch(root, "engine", PID, START, records, **kwargs.pop("epoch", {}))
+    (epoch,) = read_execution_log(root, importer=HERE, **kwargs).engines()
+    return epoch.coverage()
+
+
+def _spans(coverage: dict[str, Any]) -> list[tuple[int, int]]:
+    return [(span["start_seq"], span["end_seq"]) for span in coverage["spans"]]
+
+
+def test_coverage_is_where_heartbeats_show_nothing_lost(tmp_path: Path) -> None:
+    observes = ["cache_reset", "enqueued", "pause"]
+    coverage = _coverage(
+        tmp_path,
+        [
+            hello("engine", PID, START, observes=observes),  # 0
+            heartbeat(T0, 0),  # 1
+            heartbeat(T0 + SECOND, 1),  # 2
+            heartbeat(T0 + 2 * SECOND, 2),  # 3
+            # A reset too large to queue: only its _oversized count rises.
+            heartbeat(T0 + 3 * SECOND, 3, dropped={"cache_reset_oversized": 1}),  # 4
+            heartbeat(T0 + 4 * SECOND, 4, dropped={"cache_reset_oversized": 1}),  # 5
+            heartbeat(
+                T0 + 5 * SECOND, 5, dropped={"cache_reset_oversized": 1}, errors=1
+            ),
+            heartbeat(
+                T0 + 6 * SECOND, 6, dropped={"cache_reset_oversized": 1}, errors=1
+            ),
+            heartbeat(T0 + 7 * SECOND, 7, capped=True),  # 8
+            heartbeat(T0 + 8 * SECOND, 8, capped=True),  # 9
+        ],
+    )
+
+    assert coverage["observes"] == observes
+    assert coverage["heartbeats"] == 9
+    assert _spans(coverage) == [(1, 3), (4, 5), (6, 7)]
+    first = coverage["spans"][0]
+    assert (first["start_mono_ns"], first["end_mono_ns"]) == (T0, T0 + 2 * SECOND)
+    assert first["start_wall_ns"] == T0 + WALL_OFFSET
+
+
+def test_coverage_needs_every_record_between_two_heartbeats(tmp_path: Path) -> None:
+    records = [
+        hello("engine", PID, START),  # 0: a hook that does not say what it observes
+        heartbeat(T0, 0),  # 1
+        alias(OWN0, f"chatcmpl-{X0}", T0 + 1),  # 2
+        heartbeat(T0 + SECOND, 2),  # 3
+        alias(OTHER, "chatcmpl-other", T0 + SECOND + 1),  # 4: not yet readable
+        heartbeat(T0 + 2 * SECOND, 4),  # 5
+    ]
+    write_epoch(tmp_path, "engine", PID, START, records)
+    part = next(tmp_path.glob("*/engine-*/000000.jsonl"))
+    lines = part.read_text().splitlines(keepends=True)
+    part.write_text("".join(lines[:4] + lines[5:]))  # seq 4 is missing
+
+    (epoch,) = read_execution_log(tmp_path, importer=HERE).engines()
+    coverage = epoch.coverage()
+    assert coverage["observes"] is None
+    assert _spans(coverage) == [(1, 3)]
+
+
+def test_coverage_spans_what_earlier_imports_consumed(tmp_path: Path) -> None:
+    records = [hello("engine", PID, START)]
+    records += [heartbeat(T0 + n * SECOND, n) for n in range(4)]
+
+    coverage = _coverage(tmp_path, records, high_water={EPOCH: 3})
+
+    assert _spans(coverage) == [(1, 4)]

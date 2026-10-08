@@ -400,6 +400,16 @@ server that has since stopped, `--server-stopped` says so, and every epoch
 without `goodbye` is then gone and its pending steps final. `infer profile`
 imports while its server may still be up and needs no such flag.
 
+**Loss coverage.** Each epoch's summary has a `coverage` block saying where
+its log is known to be whole: `spans` from one heartbeat to a later one
+(their `seq`, `mono_ns` and `wall_ns`) with every record between them read,
+every `dropped` count (of any kind, `<kind>_oversized` included) and
+`errors` unchanged, and the writer not capped; `observes` is the hello's
+list, or null for a hook that does not give one. Every import computes it
+from all the heartbeats it read, including ones an earlier import consumed,
+under `basis` `heartbeat_counters/1`. A kind the hello observes is known
+not to have happened in an interval only when a span covers it.
+
 **Records.** One `infer.iteration` per step on the engine's monotonic clock
 (`<host>/<boot id>/monotonic_ns`, `clock_kind` `monotonic`), whose
 `elapsed_ns` is the scheduler residence from `schedule()` to the processed
