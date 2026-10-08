@@ -36,7 +36,12 @@ def add_diagnose_parser(subparsers: Any) -> None:
     parser.add_argument(
         "--request", action="append", default=[], help="A request ID; repeatable"
     )
-    parser.add_argument("--case", action="append", default=[], help="A case ID")
+    parser.add_argument(
+        "--case",
+        action="append",
+        default=[],
+        help="Explain only this case's incidents; repeatable",
+    )
     parser.add_argument(
         "--window-seconds",
         type=float,

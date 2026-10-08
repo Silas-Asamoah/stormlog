@@ -84,12 +84,17 @@ A cause is one of `fault`, `workload_change`, `instrumentation` and
 ```bash
 stormlog infer diagnose infer.jsonl                       # automatic incidents
 stormlog infer diagnose infer.jsonl --window START,END    # a declared window, ns
-stormlog infer diagnose infer.jsonl --request ID --case ID
+stormlog infer diagnose infer.jsonl --request ID --request ID
+stormlog infer diagnose infer.jsonl --case ID             # one case's incidents
 stormlog infer diagnose infer.jsonl --output diagnosis.json --format json
 stormlog infer diagnose --inspect diagnosis.json FINDING_ID [--all]
 ```
 
-`--window`, `--request` and `--case` declare subjects and may be repeated;
+`--window` and `--request` declare subjects and may be repeated; declared
+requests are compared, like a declared window's, with the unflagged requests
+of their cases that arrived before the first of them, and a difference of
+medians needs 20 in each arm, so one request alone cannot be explained.
+`--case` (repeatable) keeps automatic selection to those cases' incidents;
 `--window-seconds` sets the base window of automatic selection;
 `--thresholds FILE` overrides entries of the threshold table from a JSON
 object; `--metrics-from-engine` asserts that the scraped metrics exporter is
@@ -183,9 +188,10 @@ within its largest sample gap, not verified.
 ## What gets explained
 
 A diagnosis explains subjects. A caller can declare them: a window (start
-and end on the artifact's clock), a list of requests, or a case; a declared
-subject is an incident by declaration, and each class still applies its own
-tests. Without one, the diagnosis selects incidents itself, per case, from
+and end on the artifact's clock) or a list of requests; a declared subject
+is an incident by declaration, and each class still applies its own tests.
+A caller can also keep automatic selection to some cases. Without a
+declared subject, the diagnosis selects incidents itself, per case, from
 the measured phase:
 
 - **Assignment.** A request belongs to the window of its intended arrival,
