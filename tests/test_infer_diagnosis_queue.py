@@ -12,6 +12,7 @@ from stormlog.infer.diagnosis import DiagnoseOptions, diagnose_artifact
 from stormlog.infer.diagnosis_context import Assessment, Context
 from stormlog.infer.diagnosis_inputs import Line, read_input
 from stormlog.infer.diagnosis_join import join
+from stormlog.infer.diagnosis_kv import held_admissions
 from stormlog.infer.diagnosis_model import Finding
 from stormlog.infer.diagnosis_queue import (
     _at_capacity,
@@ -167,6 +168,43 @@ def test_preemptions_holding_the_queue_make_it_secondary_to_the_kv_fault(
     assert "competitors_excluded" in queue["confidence"]["contribution"]["met"]
     (evidence,) = queue["detail"]["role_evidence"]
     assert evidence["edge"] == "kv_preemption_pressure->queue_saturation"
+
+
+def test_another_client_s_preempted_requests_hold_no_subject_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A co-tenant's preempted requests wait at the head of the queue too,
+    but they are its KV pressure, not the subject's: only the subject's own
+    preemptions hold its waits."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a", output=8)
+    burst = [
+        SimRequest(
+            f"{'f' if odd else 'b'}{i}",
+            BURST_AT + i * 10 * MS,
+            output=64 if odd else 8,
+            run="run-9" if odd else "run-1",
+        )
+        for i in range(240)
+        for odd in [i % 2 == 1]
+    ]
+    view = join(
+        read_input(
+            build_run(tmp_path, calm + burst, Engine(max_num_seqs=8, kv_tokens=200))
+        )
+    )
+    context = Context(view, select(view))
+    (subject,) = context.subjects()
+    (producer,) = {e.producer for e in context.subject_executions(subject)}
+    everyone = [e for e in view.executions.values() if e.producer == producer]
+    own = held_admissions(context, subject, producer)
+    monkeypatch.setattr(context, "subject_executions", lambda *_, **__: everyone)
+    shared = held_admissions(context, subject, producer)
+
+    def held(intervals: list[tuple[int, int]]) -> int:
+        return sum(end - start for start, end in intervals)
+
+    assert any(e.event.request_ref.id not in view.client for e in everyone)
+    assert 0 < held(own) < held(shared)
 
 
 def test_preemptions_of_unknown_cause_are_not_upstream(tmp_path: Path) -> None:
