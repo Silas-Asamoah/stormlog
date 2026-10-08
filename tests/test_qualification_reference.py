@@ -260,6 +260,41 @@ def test_the_channel_measures_how_late_step_records_arrive(tmp_path: Path) -> No
     assert channel.step_lags == [] and len(channel.view.step_starts) == 2
 
 
+def test_the_record_lag_is_the_p99_of_engine_steps_only(tmp_path: Path) -> None:
+    # close-221-delta, N4: the p99 (a p50 survived) and the engine-epoch
+    # filter (dropping it survived) were unpinned. A hundred engine steps
+    # first seen 0-990 ms after they began: the p99 is about 980 ms, where
+    # a p50 would read about 500. A worker's step, 5 s late, is no engine
+    # step and adds nothing.
+    now = time.time_ns()
+    engine = _epoch_dir(tmp_path)
+    lines = [
+        {"epoch": "engine-1", "seq": index, "kind": "scheduled",
+         "start_wall_ns": now - index * 10_000_000}
+        for index in range(100)
+    ]  # fmt: skip
+    (engine / "000001.jsonl.part").write_bytes(
+        "".join(json.dumps(line) + "\n" for line in lines).encode()
+    )
+    worker = tmp_path / "hook" / "host-a" / "worker-1"
+    worker.mkdir()
+    late = {"epoch": "worker-1", "seq": 1, "kind": "scheduled",
+            "start_wall_ns": now - 5_000_000_000}  # fmt: skip
+    (worker / "000001.jsonl.part").write_bytes((json.dumps(late) + "\n").encode())
+    channel = ReferenceChannel(
+        hook_root=tmp_path / "hook",
+        metrics_url="http://127.0.0.1:9/metrics",
+        victim_prefix=VICTIM,
+        shared_prefix_tokens=4,
+        reference_dir=tmp_path / "reference",
+        probes_dir=tmp_path / "probes",
+    )
+    channel.poll(scrape=False)
+    assert len(channel.step_lags) == 100
+    lag = channel.record_lag_ns(now - 6_000_000_000, now + 1)
+    assert lag is not None and 970_000_000 <= lag < 1_500_000_000
+
+
 def test_a_bad_record_changes_nothing() -> None:
     # rev-220-a's second A2 delta, D4: a record counted as bad was half
     # applied. A victim alias without its internal ID left an admission
