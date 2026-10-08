@@ -227,7 +227,8 @@ def _cases(records: list[dict[str, Any]]) -> dict[str, str]:
     """The client's request IDs to their cases."""
     cases = {}
     for record in records:
-        if record.get("event_type") == "infer.request" and record.get("x_request_id"):
+        kind = record.get("event_type")
+        if kind in ("infer.request", "infer.dispatch") and record.get("x_request_id"):
             cases[str(record.get("request_id"))] = str(record.get("case_id"))
     return cases
 
