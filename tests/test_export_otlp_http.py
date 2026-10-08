@@ -4,11 +4,16 @@ import contextlib
 import gzip
 import json
 import os
+import re
+import shutil
 import socket
+import ssl
 import struct
+import subprocess
 import threading
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -426,6 +431,115 @@ def test_a_silent_tls_handshake_ends_at_the_deadline() -> None:
         elapsed = time.monotonic() - started
     assert (out.kind, out.category) == (NOT_SENT, TLS)
     assert elapsed < 1.5
+
+
+@pytest.fixture(scope="module")
+def tls_files(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    """A throwaway certificate and key for 127.0.0.1, made with ``openssl``."""
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("needs the openssl command to make a certificate")
+    directory = tmp_path_factory.mktemp("tls")
+    cert, key = directory / "cert.pem", directory / "key.pem"
+    subprocess.run(
+        [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:prime256v1",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=127.0.0.1",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+    return cert, key
+
+
+def _read_request(sock: socket.socket) -> None:
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(65536)
+        if not chunk:
+            return
+        data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    match = re.search(rb"(?i)content-length:\s*(\d+)", head)
+    length = int(match.group(1)) if match else 0
+    while len(body) < length:
+        chunk = sock.recv(65536)
+        if not chunk:
+            return
+        body += chunk
+
+
+@contextlib.contextmanager
+def _tls_dribbler(cert: Path, key: Path) -> Iterator[int]:
+    """Completes the handshake and reads the request, then sends the status
+    line one byte every 0.2 s over TLS: no per-read timeout can end that."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+    server.settimeout(5.0)
+    stop = threading.Event()
+
+    def serve() -> None:
+        with contextlib.suppress(OSError):
+            conn, _ = server.accept()
+            with context.wrap_socket(conn, server_side=True) as tls:
+                _read_request(tls)
+                for byte in b"HTTP/1.1 200 OK\r\n":
+                    if stop.wait(0.2):
+                        return
+                    tls.sendall(bytes([byte]))
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield int(server.getsockname()[1])
+    finally:
+        stop.set()
+        thread.join(2)
+        server.close()
+
+
+def test_a_tls_collector_dribbling_its_answer_is_cut_at_the_deadline(
+    tls_files: tuple[Path, Path],
+) -> None:
+    # The watchdog shuts the registered SSLSocket down in the middle of a read.
+    cert, key = tls_files
+    with _tls_dribbler(cert, key) as port:
+        transport = _transport(
+            f"https://127.0.0.1:{port}",
+            attempt_seconds=0.6,
+            ssl_context=ssl.create_default_context(cafile=str(cert)),
+        )
+        started = time.monotonic()
+        out = transport.send(_body(), spans=3)
+        elapsed = time.monotonic() - started
+    assert (out.kind, out.category, out.retryable) == (
+        AMBIGUOUS,
+        TIMEOUT_AFTER_SEND,
+        True,
+    )
+    assert out.sent_bytes > 0
+    assert 0.5 <= elapsed < 1.5
+    assert transport.watchdog.stats.fired == 1
 
 
 @pytest.mark.parametrize(
