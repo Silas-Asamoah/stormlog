@@ -417,6 +417,45 @@ def _cli(tmp_path: Path, *flags: str) -> int:
     )
 
 
+def test_the_endpoint_stops_when_the_collection_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The collection fails once the export serves: its output cannot be
+    # opened. No linger follows a failure, and the endpoint must not outlive
+    # the command in a caller's process.
+    port = _free_port()
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, so nothing can be created under it")
+    stops: list[bool] = []
+    real_stop = CollectorExport.stop_serving
+
+    def noting_stop(self: CollectorExport) -> None:
+        stops.append(self.server is not None)
+        real_stop(self)
+
+    monkeypatch.setattr(CollectorExport, "stop_serving", noting_stop)
+    code = infer_main(
+        [
+            "collect-server",
+            "--run-id",
+            "run-c",
+            "--pid",
+            str(os.getpid()),
+            "--no-gpu",
+            "--duration",
+            "5",
+            "--output",
+            str(blocker / "server.jsonl"),
+            "--prometheus-listen",
+            f"127.0.0.1:{port}",
+        ]
+    )
+    assert code != ExitCode.OK
+    assert stops == [True]
+    with pytest.raises(OSError):
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+
+
 def test_the_cli_exports_and_keeps_its_exit_code(tmp_path: Path) -> None:
     metrics = tmp_path / "metrics"
     metrics.mkdir()
