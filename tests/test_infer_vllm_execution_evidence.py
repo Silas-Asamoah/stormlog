@@ -616,6 +616,44 @@ def test_a_reset_waits_for_the_step_that_lists_its_preemptions(tmp_path: Path) -
     assert after.high_water == {EPOCH: 10}
 
 
+def test_a_reset_waits_until_the_step_that_lists_it_is_final(tmp_path: Path) -> None:
+    """Under async scheduling the log's tail nearly always holds a pending
+    step. Read with the step after a reset while that step's output is not
+    in, the import still holds the mark at the reset, so the next import
+    reads the step with it and does not call the reset's preemptions the
+    step's own."""
+    resumed = [
+        member(name, scheduled=8, sighting="repeat", phase="context")
+        for name in (OWN0, OWN1)
+    ]
+    first = [
+        *_admitted(OWN0, OWN1),  # 0..4
+        cache_reset([OWN0, OWN1], T0 + SECOND + 5),  # 5
+        scheduled(1, T0 + 2 * SECOND, resumed, preempted=[OWN0, OWN1]),  # 6
+        heartbeat(T0 + 2 * SECOND + 5, 6),  # 7
+    ]
+    rest = [
+        completed(1, T0 + 3 * SECOND, [done(OWN0), done(OWN1)]),  # 8
+        heartbeat(T0 + 4 * SECOND, 8),  # 9
+    ]
+    before = _reduce(tmp_path, first, _two_requests())
+    assert before.high_water == {EPOCH: 4}  # read again from the reset
+    write_epoch(tmp_path, "engine", PID, START, [*first, *rest])
+    after = reduce_execution_log(
+        read_execution_log(tmp_path, importer=HERE, high_water=before.high_water),
+        _after(before),
+    )
+
+    names = [
+        stage.name
+        for result in (before, after)
+        for stage in [s for v in _stages(result).values() for s in v]
+        if stage.name in ("engine.preempted", "engine.preempted_by_reset")
+    ]
+    # Each request was preempted once, by the reset.
+    assert sorted(names) == ["engine.preempted_by_reset"] * 2
+
+
 def test_a_reset_s_preemption_waits_for_its_request_record(tmp_path: Path) -> None:
     first = [
         hello("engine", PID, START, observes=OBSERVES),  # 0
