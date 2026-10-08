@@ -99,7 +99,7 @@ the flaky benchmark memory gates
   hello gains the engine's capacity and profiler settings, five process
   fields and `observes`; every stamp brackets its monotonic read between
   two wall reads; and three record kinds are new: `pause`, `enqueued` and
-  `cache_reset`, with a `pending` count on each heartbeat.
+  `cache_reset`, with `pending` and `reserved` counts on each heartbeat.
   `infer import-execution` binds requests in flight from their dispatches,
   aligns the engine clock at the hello bracket's midpoint, names on every
   record the last raw record it came from (`source_seq_max`), says per
