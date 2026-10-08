@@ -891,6 +891,8 @@ def test_a_resume_stops_the_server_a_killed_runner_left(tmp_path: Path) -> None:
     finally:
         os.kill(runner.pid, signal.SIGKILL)
         runner.wait()
+    # The killed runner's lock went with it; only its PID is left.
+    assert (exp / ".lock").read_text() == f"{runner.pid}\n"
     left = {entry["name"]: entry for entry in journaled(journal)}
     try:
         assert still_there(left["server"]["identity"])
@@ -913,6 +915,73 @@ def test_a_resume_stops_the_server_a_killed_runner_left(tmp_path: Path) -> None:
         ("off", 2, "completed"),
         ("watch", 1, "completed"),
     ]
+    assert (exp / ".lock").read_text() == f"{os.getpid()}\n"
+
+
+def _tree(root: Path) -> dict[str, tuple[int, int]]:
+    """Every path under root, with its size and modification time."""
+    return {
+        str(path.relative_to(root)): (path.stat().st_size, path.stat().st_mtime_ns)
+        for path in sorted(root.rglob("*"))
+    }
+
+
+def test_a_second_runner_on_the_same_experiment_refuses_and_touches_nothing(
+    tmp_path: Path,
+) -> None:
+    # A resume started while the first runner still ran its block's prelude
+    # took that prelude's live launches for a killed runner's: it killed
+    # them, so the first runner's run became prelude_failed, and both then
+    # ran the same runs into one index. The first runner runs here, in a
+    # thread (so this process holds the lock); the second is the example
+    # CLI, as an operator would start it.
+    import os
+    import subprocess
+    import threading
+
+    from stormlog.infer.experiment_process import journaled, still_there
+
+    document = _plan(_port(), blocks=1)
+    step = {"name": "c1", "command": ["{python}", "-c", "pass"]}
+    document["arms"] = {"off": {"workload": [step]}}
+    document["order"] = {"kind": "explicit", "blocks": [["off"]]}
+    hold = ["{python}", "-c", "import time; time.sleep(6)"]
+    document["block_prelude"] = [{"name": "warm", "server_arm": "off", "command": hold}]
+    plan_file = tmp_path / "plan.json"
+    plan_file.write_text(json.dumps(document))
+    exp = tmp_path / "exp"
+    ran: list[Any] = []
+    first = threading.Thread(target=lambda: ran.append(_run(tmp_path, document)))
+    first.start()
+    try:
+        journal = exp / "preludes" / "b00-warm" / "launches.ndjson"
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and '"warm"' not in (
+            journal.read_text() if journal.exists() else ""
+        ):
+            time.sleep(0.05)
+        launches = journaled(journal)
+        assert [entry["name"] for entry in launches] == ["server", "warm"]
+        before = _tree(exp)
+        second = subprocess.run(
+            [
+                *(sys.executable, "-m", "examples.cli.infer_repeated_baseline"),
+                *("--plan", str(plan_file), "--output", str(exp), "--resume"),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert second.returncode == 2, second.stderr
+        lock = exp / ".lock"
+        assert f"{lock} is held by runner PID {os.getpid()}" in second.stderr
+        assert _tree(exp) == before
+        assert all(still_there(entry["identity"]) for entry in launches)
+    finally:
+        first.join(timeout=120)
+    ((record,),) = ran
+    assert (record["label"], record["state"]) == ("t213-b00-p0-off-a1", "completed")
 
 
 def test_a_port_already_taken_stops_the_experiment_before_a_launch(
