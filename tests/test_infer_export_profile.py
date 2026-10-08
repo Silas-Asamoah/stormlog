@@ -4,9 +4,11 @@ import asyncio
 import json
 import signal
 import socket
+import sys
 import threading
 import time
 import urllib.request
+import weakref
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ from stormlog._export.textfile import PRODUCER_LABEL, TextfileWriter
 from stormlog.exit_codes import ExitCode
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
+from stormlog.infer.events import JsonlEventWriter
 from stormlog.infer.export import ExportPipeline
 from stormlog.infer.export_config import ExportConfig
 from stormlog.infer.export_metrics import ProfileMetrics
@@ -342,6 +345,76 @@ def test_a_ctrl_c_ends_a_lingering_run_within_the_close_deadline(
     assert closes and closes[0] < 3.5 and sum(closes[1:]) < 0.5
     summary = _capability(_records(output))["metadata"]["summary"]["records"]
     assert summary["dropped"]["shutdown"] > 0  # it was behind when it stopped
+
+
+def test_a_ctrl_c_lost_in_a_finalizer_still_ends_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Python runs the Ctrl+C handler at the next bytecode, which can be in a
+    # weakref callback; the KeyboardInterrupt raised there is printed and
+    # dropped. The press must still end the run as interrupted, with the
+    # interrupted close's deadline and no linger.
+    lost: list[Any] = []
+    monkeypatch.setattr(sys, "unraisablehook", lambda u: lost.append(u.exc_type))
+    real_append = JsonlEventWriter.append
+    requests = 0
+
+    def append_then_press_in_a_callback(
+        self: JsonlEventWriter, record: dict[str, Any], extras: Any = None
+    ) -> None:
+        nonlocal requests
+        real_append(self, record, extras)
+        if record.get("event_type") != "infer.request":
+            return
+        requests += 1
+        if requests == 3 and threading.current_thread() is threading.main_thread():
+
+            class Dropped:
+                pass
+
+            dropped = Dropped()
+            ref = weakref.ref(dropped, lambda _: signal.raise_signal(signal.SIGINT))
+            del dropped  # the callback runs here, and its interrupt is lost
+            assert ref() is None
+
+    monkeypatch.setattr(JsonlEventWriter, "append", append_then_press_in_a_callback)
+    _slow_worker(monkeypatch, delay=0.2)
+    closes: list[float] = []
+    real_close = ExportPipeline.close
+
+    def timed_close(self: ExportPipeline, deadline: float) -> None:
+        started = time.perf_counter()
+        try:
+            real_close(self, deadline)
+        finally:
+            closes.append(time.perf_counter() - started)
+
+    monkeypatch.setattr(ExportPipeline, "close", timed_close)
+    output = tmp_path / "infer.jsonl"
+    with _fake_server() as endpoint:
+        config = _config(
+            endpoint,
+            output,
+            ExportConfig(
+                prometheus_listen=f"127.0.0.1:{_free_port()}",
+                prometheus_linger_seconds=10,
+            ),
+            concurrency=(8,),
+            request_count=5000,
+            warmup_requests=0,
+            stream=False,
+        )
+        started = time.perf_counter()
+        with pytest.raises(KeyboardInterrupt):
+            InferenceProfiler(config).run()
+        assert time.perf_counter() - started < 8  # no 10 s linger
+    assert lost == [KeyboardInterrupt]  # the press really was dropped
+    assert closes and closes[0] < 3.5
+    records = _records(output)
+    assert records[-1]["event_type"] == "infer.session"
+    assert records[-1]["status"] == "interrupted"
+    sent = [r for r in records if r["event_type"] == "infer.request"]
+    assert len(sent) < 5000
 
 
 def test_a_ctrl_c_inside_the_close_still_finishes_it(

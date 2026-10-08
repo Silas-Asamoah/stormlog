@@ -117,6 +117,7 @@ class InferenceProfiler:
         # Pool threads remove finished calls while the event loop reads the set.
         self._unfinished_lock = threading.Lock()
         self._opened_artifact = False
+        self._ctrl_c = _CtrlC()
         self.vllm_scraper = self._build_vllm_scraper()
         self.span_receiver: OtlpSpanReceiver | None = None
         self._span_receiver_error: str | None = None
@@ -216,11 +217,17 @@ class InferenceProfiler:
         """Run profiling and return an aggregate report."""
         try:
             self.prepare()
-            with _ctrl_c_raises():
-                return asyncio.run(self._run_async())
+            with _ctrl_c_raises(self._ctrl_c):
+                try:
+                    return asyncio.run(self._run_async())
+                except asyncio.CancelledError:
+                    self._ctrl_c.check()  # the watch's cancel: a Ctrl+C
+                    raise
         finally:
             self.request_executor.shutdown(wait=True, cancel_futures=True)
-            self._end_export(interrupted=sys.exc_info()[0] is not None)
+            self._end_export(
+                interrupted=sys.exc_info()[0] is not None or self._ctrl_c.pressed
+            )
 
     def _end_export(self, *, interrupted: bool) -> None:
         """Close (a no-op after the capture closed it), linger, stop serving.
@@ -252,6 +259,7 @@ class InferenceProfiler:
         try:
             await self._capture(output_path)
             await self._import_server_evidence(output_path)
+            self._ctrl_c.check()
         except BaseException as exc:
             # A crash or Ctrl+C still ends the artifact with a session record,
             # once this run has opened it; an older file at the path is left be.
@@ -421,12 +429,16 @@ class InferenceProfiler:
             span_task = asyncio.create_task(
                 self._drain_spans_loop(writer=writer, stop_event=stop_spans)
             )
+            ctrl_c_task = self._ctrl_c.start_watch()
             completed = False
             try:
                 for case in self.config.cases():
                     await self._run_case(case=case, writer=writer)
                 completed = True
             finally:
+                # Before any await: the shutdown below is not to be cut short
+                # by the watch, which stands in only for a lost Ctrl+C.
+                ctrl_c_task.cancel()
                 # The helpers are waited for, never awaited: under a real
                 # Ctrl+C asyncio.run has cancelled them too, and a bare
                 # await would raise here and skip the rest of this block.
@@ -452,6 +464,8 @@ class InferenceProfiler:
                         # so the artifact says what the engine exposed
                         # before it says why the run stopped.
                         self._write_capabilities(writer)
+            # A Ctrl+C whose KeyboardInterrupt was lost ends the run here.
+            self._ctrl_c.check()
 
     def _start_export(self) -> None:
         export = self.export
@@ -464,7 +478,9 @@ class InferenceProfiler:
     def _close_export(self, completed: bool) -> None:
         if self.export is not None:
             deadline = (
-                EXPORT_CLOSE_SECONDS if completed else EXPORT_INTERRUPT_CLOSE_SECONDS
+                EXPORT_CLOSE_SECONDS
+                if completed and not self._ctrl_c.pressed
+                else EXPORT_INTERRUPT_CLOSE_SECONDS
             )
             self.export.close(deadline)
 
@@ -1430,12 +1446,49 @@ async def _wait_for(task: asyncio.Task[Any], timeout: float | None = None) -> bo
     return task in done
 
 
-def _raise_keyboard_interrupt(_signum: int, _frame: FrameType | None) -> None:
-    raise KeyboardInterrupt
+class _CtrlC:
+    """Whether a Ctrl+C reached the run, even if its KeyboardInterrupt did not.
+
+    Python runs a signal handler at the next bytecode, which can be in a
+    weakref callback or a ``__del__`` run by the garbage collector. An
+    exception raised there is printed and dropped, so the run would go on
+    as if the key was never pressed. The handler records the press before
+    it raises, and the run stops on the record where it can.
+    """
+
+    # How often the capture looks for a press whose interrupt was lost.
+    WATCH_SECONDS = 0.1
+
+    def __init__(self) -> None:
+        self.pressed = False
+
+    def handler(self, _signum: int, _frame: FrameType | None) -> None:
+        self.pressed = True
+        raise KeyboardInterrupt
+
+    def check(self) -> None:
+        """Raise the KeyboardInterrupt of a press that was lost."""
+        if self.pressed:
+            raise KeyboardInterrupt
+
+    def start_watch(self) -> asyncio.Task[None]:
+        """Watch, from now on, on behalf of the task that calls this."""
+        task = asyncio.current_task()
+        assert task is not None
+        return asyncio.create_task(self.watch(task))
+
+    async def watch(self, task: asyncio.Task[Any]) -> None:
+        """Cancel ``task`` once a press is seen, as asyncio's own handler would.
+
+        ``run`` turns the cancellation back into the KeyboardInterrupt.
+        """
+        while not self.pressed:
+            await asyncio.sleep(self.WATCH_SECONDS)
+        task.cancel()
 
 
 @contextmanager
-def _ctrl_c_raises() -> Iterator[None]:
+def _ctrl_c_raises(ctrl_c: _CtrlC) -> Iterator[None]:
     """Keep Ctrl+C a KeyboardInterrupt where it lands, on every Python.
 
     From 3.11, asyncio.run swaps the default SIGINT handler for one that
@@ -1444,8 +1497,8 @@ def _ctrl_c_raises() -> Iterator[None]:
     synchronous, so a Ctrl+C there would wait out the close's deadline and
     leave the run recorded as completed. asyncio.run keeps any other
     handler, so this one, which raises as the default does, keeps 3.10's
-    behaviour. Off the main thread, or under another handler, it does
-    nothing.
+    behaviour, and records the press in ``ctrl_c`` first. Off the main
+    thread, or under another handler, it does nothing.
     """
     if (
         threading.current_thread() is not threading.main_thread()
@@ -1453,7 +1506,7 @@ def _ctrl_c_raises() -> Iterator[None]:
     ):
         yield
         return
-    signal.signal(signal.SIGINT, _raise_keyboard_interrupt)
+    signal.signal(signal.SIGINT, ctrl_c.handler)
     try:
         yield
     finally:
