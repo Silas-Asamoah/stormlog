@@ -1635,6 +1635,43 @@ def test_a_record_is_pending_from_before_its_last_stamp(
         assert pending_at[last] == pending + 1, record["kind"]
 
 
+def test_emit_never_lets_go_of_a_record_it_has_not_queued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A record stops counting as pending in the same hold of the lock that
+    queues or drops it: whenever the emitting thread lets the lock go, the
+    record is still reserved, queued or dropped, so a heartbeat stamped at
+    any moment counts it one way or another."""
+    emitting = threading.Event()
+    unaccounted: list[str] = []
+
+    class Checked(threading.Condition):
+        def __exit__(self, *args: Any) -> None:
+            if emitting.is_set() and threading.current_thread() is caller:
+                if not (
+                    writer._reserved
+                    or any(kind == "probe" for kind, _ in writer._queue)
+                    or writer._counters.dropped["probe"]
+                ):
+                    unaccounted.append("lock released with the record uncounted")
+            super().__exit__(*args)
+
+    caller = threading.current_thread()
+    with monkeypatch.context() as patched:
+        patched.setattr(writer_module.threading, "Condition", Checked)
+        writer = EpochWriter(tmp_path, "engine")
+    emitting.set()
+    writer.emit("probe", {"index": 0})
+    emitting.clear()
+    writer.close()
+
+    assert unaccounted == []
+    assert [r["kind"] for r in _epoch_records(writer.directory)] == [
+        "probe",
+        "goodbye",
+    ]
+
+
 def test_a_short_write_leaves_only_whole_lines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
