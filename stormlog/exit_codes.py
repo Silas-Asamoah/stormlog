@@ -30,7 +30,9 @@ class ExitCode(IntEnum):
     """Invalid command line, or the installation cannot serve the request."""
 
     FINDINGS = 3
-    """The command completed but detected memory risk, OOM, or leak findings."""
+    """The command completed but detected findings at failure severity: memory
+    risk, OOM or leaks, or a warning-severity diagnosis of an inference
+    incident."""
 
     GATE_FAILED = 4
     """The command completed but a configured budget or tolerance was exceeded."""
