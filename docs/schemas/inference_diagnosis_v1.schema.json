@@ -285,7 +285,7 @@
             "required": ["kind", "status", "reason", "indispensable"],
             "properties": {
               "kind": { "type": "string" },
-              "status": { "enum": ["ruled_out", "untestable", "not_ruled_out", "upstream"] },
+              "status": { "enum": ["ruled_out", "contributing", "untestable", "not_ruled_out", "upstream"] },
               "reason": { "type": "string" },
               "indispensable": { "type": "boolean" }
             }
@@ -294,11 +294,12 @@
         "eligibility": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["eligible", "gates", "failed"],
+          "required": ["eligible", "gates", "failed", "contested"],
           "properties": {
             "eligible": { "type": "boolean" },
             "gates": { "type": "object", "additionalProperties": { "type": "boolean" } },
-            "failed": { "type": "array", "items": { "type": "string" } }
+            "failed": { "type": "array", "items": { "type": "string" } },
+            "contested": { "type": "array", "items": { "type": "string" } }
           }
         },
         "confidence": {

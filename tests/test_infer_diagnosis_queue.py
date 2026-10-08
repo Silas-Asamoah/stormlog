@@ -86,6 +86,31 @@ def test_a_queue_that_explains_little_of_the_ttft_rise_is_no_warning(
     )
 
 
+@pytest.mark.parametrize(
+    "enqueue_ms, status, claim",
+    [
+        (60, "ruled_out", "fault"),  # 8% of the wait excess
+        (120, "contributing", "condition"),  # 16%: real, minor, contested
+        (200, "not_ruled_out", "observation"),  # 26%
+    ],
+)
+def test_time_before_the_queue_is_ruled_out_only_below_a_floor(
+    tmp_path: Path, enqueue_ms: int, status: str, claim: str
+) -> None:
+    """The burst's requests also spend longer between reaching the engine
+    and entering its queue; the wait excess stays 757 ms."""
+    assessment = _assess(
+        tmp_path, _requests(enqueue_ns=enqueue_ms * MS), Engine(max_num_seqs=4)
+    )
+
+    (finding,) = assessment.findings
+    assert _alternatives(finding)["engine_ingress"] == status
+    assert finding.claim == claim
+    if status == "contributing":
+        assert finding.eligible and finding.severity == "info"
+        assert finding.contested == ["competitor:engine_ingress:contributing"]
+
+
 def test_the_witness_counts_steps_while_someone_waited(tmp_path: Path) -> None:
     """A subject's window can begin in calm traffic before the burst, as the
     first real run's did: its early requests wait some microseconds for an

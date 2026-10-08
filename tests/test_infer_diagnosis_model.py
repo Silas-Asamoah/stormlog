@@ -9,6 +9,7 @@ import pytest
 from stormlog.infer import diagnosis_model as model
 from stormlog.infer.diagnosis_inputs import Line
 from stormlog.infer.diagnosis_model import (
+    CONTRIBUTING,
     NOT_RULED_OUT,
     PARTIAL,
     RULED_OUT,
@@ -130,6 +131,20 @@ def test_a_warning_needs_the_mechanism_shown_and_explaining_the_incident(
     finding = _finding(**changes)
 
     assert finding.eligible
+    assert (finding.severity, finding.cause, finding.claim) == (
+        "info",
+        "undetermined",
+        "condition",
+    )
+
+
+def test_a_contributing_competitor_leaves_the_claim_a_condition() -> None:
+    finding = _finding(
+        alternatives=[Alternative("engine_stall", CONTRIBUTING, "r", True)]
+    )
+
+    assert finding.eligible and finding.failed_gates == []
+    assert finding.contested == ["competitor:engine_stall:contributing"]
     assert (finding.severity, finding.cause, finding.claim) == (
         "info",
         "undetermined",
