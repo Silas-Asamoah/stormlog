@@ -92,6 +92,20 @@ the flaky benchmark memory gates
   600 s history a `tick_seconds` over 10 s exits 2 until `history.seconds`
   is raised. Deep capture and SLO triggers come later.
   ([#219](https://github.com/Silas-Asamoah/stormlog/issues/219))
+- Evidence for #218's incident explanations. `stormlog infer profile`
+  writes `infer.phase_start`, `infer.dispatch` and `infer.first_content` as
+  they happen, so a growing artifact shows what is under way, and each
+  `infer.vllm_scrape` gains `completed_at_ns`. The vLLM execution hook's
+  hello gains the engine's capacity and profiler settings, five process
+  fields and `observes`; every stamp brackets its monotonic read between
+  two wall reads; and three record kinds are new: `pause`, `enqueued` and
+  `cache_reset`, with a `pending` count on each heartbeat.
+  `infer import-execution` binds requests in flight from their dispatches,
+  aligns the engine clock at the hello bracket's midpoint, names on every
+  record the last raw record it came from (`source_seq_max`), says per
+  epoch where the log is whole (`coverage`) and when its writer was heard
+  from (`liveness`), and writes preemptions, cache resets and pause changes
+  as `infer.stage` records. (#218)
 - `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
   hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,
   `infer.membership`, `infer.request` and `infer.clock_alignment` records:
