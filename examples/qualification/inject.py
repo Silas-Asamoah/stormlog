@@ -29,9 +29,10 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from stormlog.infer.host_clock import host_boot_id, wall_clock_domain
 from stormlog.infer.qualify.ground_truth import (
@@ -273,15 +274,18 @@ class InjectionRun:
         episode whose actuation raised is not actuated, and a run that fails
         or is interrupted records why in its run record (``self.failure``).
         An interruption is re-raised once the run is published: SIGTERM and
-        SIGHUP become one from the start, not only once a pulser exists."""
+        SIGHUP become one from the start, not only once a pulser exists.
+
+        Raises:
+            FileExistsError: when the label is taken, by a published run or a
+                partial one: nothing of either is touched.
+        """
+        if self.directory.final.exists() or self.directory.partial.exists():
+            # Refused before anything starts; a run given the label
+            # meanwhile is told apart by its nonce (close-221-final).
+            raise FileExistsError(self.directory.label)
         handle_termination()
-        directory = self.directory.create()
-        (directory.truth / "plan.json").write_text(
-            json.dumps(self.plan.to_record(), indent=2, sort_keys=True)
-        )
-        self.channel = self._channel()
         poller = threading.Thread(target=self._poll_loop, name="reference", daemon=True)
-        poller.start()
         progress = _Progress(self.clock())
         victim: subprocess.Popen[bytes] | None = None
         held = _HeldSignals()
@@ -299,26 +303,46 @@ class InjectionRun:
                 # raises past it into the outer one; a passed-on signal sets
                 # ``holding`` itself (_pass_on), so a further one, handled as
                 # the outer except is entered, is noted. Either way the run
-                # is published.
+                # is published. Its directory is made inside the try too, so
+                # a signal while the run sets up is published, not left in
+                # .partial.
                 held.__enter__()
+                self._set_up(poller)
                 victim = self._start_victim()
                 self._episodes(victim, progress)
                 held.holding = True
             except BaseException as error:
                 held.holding = True
-                if not isinstance(error, Exception):
-                    raise  # an interruption: published below
+                if not isinstance(error, Exception) or not self.directory.owned():
+                    # An interruption, published below; or a run that never
+                    # claimed its label, with nothing of its own to publish.
+                    raise
                 progress.failure = f"run_failed: {error!r}"  # the run's own failure
         except BaseException:
             held.holding = True
-            # Interrupted: publish what was done, then go on ending.
+            # Interrupted: publish what was done, then go on ending. Only a
+            # directory this run claimed is published: before the claim, or
+            # with the label another run's, there is nothing of this run's.
             progress.failure = "interrupted"
-            self._finish(victim, poller, progress, held)
+            if self.directory.owned():
+                self._finish(victim, poller, progress, held)
+            else:
+                held.__exit__()
             raise
         published, signum = self._finish(victim, poller, progress, held)
         if signum is not None:
             _act_on(signum)
         return published
+
+    def _set_up(self, poller: threading.Thread) -> None:
+        """The run's directory, its plan, the reference channel and its
+        poller."""
+        directory = self.directory.create()
+        (directory.truth / "plan.json").write_text(
+            json.dumps(self.plan.to_record(), indent=2, sort_keys=True)
+        )
+        self.channel = self._channel()
+        _start_unsignalled(poller)
 
     def _finish(
         self,
@@ -338,7 +362,8 @@ class InjectionRun:
                 # The victim's drain was cut short: its artifact isn't whole.
                 progress.failure = "interrupted"
             self._close_channel()
-            self._stop_poller(poller)
+            if poller.ident is not None:  # started
+                self._stop_poller(poller)
             if self.channel is not None:
                 # The hook log the replay cuts by first-seen time, in the truth.
                 self.channel.tailer.copy_to(self.directory.reference / "hook")
@@ -485,7 +510,7 @@ class InjectionRun:
             output=self.directory.truth / f"neighbor-{index}.jsonl",
             seed=self.plan.seed + index,
         )
-        neighbor.start()
+        neighbor.start(_start_unsignalled)
         neighbor.join()
         actuation = neighbor.actuation()
         with self._lock:
@@ -813,7 +838,10 @@ class InjectionRun:
         the poller's cadence)."""
         with self._lock:
             assert self.channel is not None
-            self.channel.poll(scrape=False)
+            # Whole: a signal waits until what the poll read is applied, so
+            # none can land inside a record's apply and have it applied twice.
+            with _signals_blocked():
+                self.channel.poll(scrape=False)
             return self.channel.signals()
 
     def _start_victim(self) -> subprocess.Popen[bytes]:
@@ -904,10 +932,10 @@ class _HeldSignals:
     attribute, so setting it runs no handler: entered at the run's start,
     nothing is left to install when the run ends, which is what left a
     signal room to land unheld (Astra's H6). Handlers can be set only from
-    the main thread; elsewhere nothing is held. Entering again changes
-    nothing. A third held signal is not held: a publish that hangs (a full
-    disk) can still be ended, by the handlers held before, as if nothing
-    had been held."""
+    the main thread; elsewhere nothing is held. Entering again installs
+    what isn't yet, and keeps the handlers first replaced. A third held
+    signal is not held: a publish that hangs (a full disk) can still be
+    ended, by the handlers held before, as if nothing had been held."""
 
     SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
     # The signal that is acted on at once rather than noted.
@@ -923,12 +951,16 @@ class _HeldSignals:
         return bool(self._previous)
 
     def __enter__(self) -> _HeldSignals:
-        if self.installed or threading.current_thread() is not threading.main_thread():
+        """Install the note-taker for each signal: a signal landing between
+        two installs leaves the rest to the next entry (close-221-delta, N1),
+        which the finish makes."""
+        if threading.current_thread() is not threading.main_thread():
             return self
         for signum in self.SIGNALS:
-            # Kept before the install: a signal handled as the install
-            # returns finds the handler to pass it on to (close-221-final).
-            self._previous[signum] = signal.getsignal(signum)
+            # The handler replaced is kept before the install, so a signal
+            # handled as the install returns finds it to pass on to
+            # (close-221-final); the first one kept stays.
+            self._previous.setdefault(signum, signal.getsignal(signum))
             signal.signal(signum, self._note)
         return self
 
@@ -963,6 +995,32 @@ class _HeldSignals:
         else:  # the default, or one set from C
             self.__exit__()
             signal.raise_signal(signum)
+
+
+def _start_unsignalled(thread: threading.Thread) -> None:
+    """Start ``thread`` with the run's signals blocked in this one, so none
+    is handled inside ``Thread.start``: a Ctrl+C there came out as
+    RuntimeError('release unlocked lock'), a run failure, or left the
+    thread started but unjoinable and the run in .partial
+    (close-221-final). A signal sent meanwhile is handled once they are
+    unblocked; the thread keeps them blocked, so they reach this one. The
+    mask is read before it is changed, so a signal handled as the block
+    returns can't leave the three blocked for good (gate-221-bisect)."""
+    with _signals_blocked():
+        thread.start()
+
+
+@contextmanager
+def _signals_blocked() -> Iterator[None]:
+    """The run's three signals blocked in this thread for the block's
+    length; one sent meanwhile is handled as it ends. The mask is read
+    before it changes and restored in a finally."""
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    try:
+        signal.pthread_sigmask(signal.SIG_BLOCK, _HeldSignals.SIGNALS)
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
 def _baseline_checks(baseline: Baseline, thresholds: Thresholds) -> dict[str, Any]:

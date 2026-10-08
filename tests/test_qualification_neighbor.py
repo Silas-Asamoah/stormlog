@@ -24,6 +24,43 @@ def _neighbor(engine: FakeEngine, tmp_path: Path, shape: NeighborShape) -> Neigh
     )
 
 
+def test_a_neighbor_starts_its_thread_as_it_is_told(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # gate-221-bisect, G2, and gate-221-final, H5: the harness starts each
+    # neighbor's thread with its signals blocked, by the launcher it hands
+    # Neighbor.start, so the real start must use it.
+    import threading
+
+    from examples.qualification import neighbor as module
+
+    class Profiler:
+        def __init__(self, _config: Any) -> None:
+            pass
+
+        def run(self) -> None:
+            pass
+
+    monkeypatch.setattr(module, "InferenceProfiler", Profiler)
+    launched: list[threading.Thread] = []
+
+    def launch(thread: threading.Thread) -> None:
+        launched.append(thread)
+        thread.start()
+
+    neighbor = Neighbor(
+        name="1",
+        shape=NeighborShape(8, 4, rate_per_second=1.0),
+        endpoint="http://127.0.0.1:9/v1/chat/completions",
+        model="m",
+        duration_seconds=1.0,
+        output=tmp_path / "neighbor-1.jsonl",
+    )
+    neighbor.start(launch)
+    assert neighbor.join(timeout=10)
+    assert [thread.name for thread in launched] == [neighbor.run_id]
+
+
 def test_an_open_loop_neighbor_reaches_its_planned_rate(tmp_path: Path) -> None:
     with FakeEngine(FAST) as engine:
         neighbor = _neighbor(
