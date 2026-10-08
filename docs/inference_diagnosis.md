@@ -298,7 +298,7 @@ interval); with no excess it reports `not_observed`.
 
 | Gate | Holds when |
 | --- | --- |
-| `capacity_witness` | at least half of the busy steps scheduled while a subject's request waited (from its entry into the queue to the call that ran it, not counting that call) ran at the hello's `max_num_seqs`, or scheduled `max_num_batched_tokens` |
+| `capacity_witness` | at least half of the subject's requests waited mostly through steps at capacity: of the busy steps scheduled while one waited (from its entry into the queue to the call that ran it, not counting that call), at least half ran the hello's `max_num_seqs` or scheduled `max_num_batched_tokens`. A request that waited through no step waited only for the next one to begin, and was not held by capacity. A step counts the slots the step before freed and it did not refill: under async scheduling vLLM plans a step before the last one's outputs are seen, so a slot freed by a request that reached `max_tokens` is refilled one step late (a request that ended by end of sequence was already planned into the next step, where it is discarded, so it is counted once) |
 | `usable_timing` | the wait is `scheduler_wait`; on a log without `enqueued` records it is `engine_ingress_to_schedule`, labelled, and the gate fails |
 
 | Competitor | Indispensable | Ruled out when |
@@ -311,8 +311,15 @@ interval); with no excess it reports `not_observed`.
 | `client_admission` | no | no request was held at the client |
 | `host_stall@api_server` | no | the `send_to_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` |
 
-The contribution claim also asks that the wait excess be at least half the
-TTFT excess. Without engine records the class is
+The excess is a median over the subject's requests, so the witness asks
+about the requests, not the steps: bursts that overflow `max_num_seqs` by a
+few leave every step run while someone waited full, yet the median request
+waited only for the next step boundary, as it does when nothing overflows.
+The metrics report the requests' share
+(`requests_waiting_at_capacity_share`), the steps' share counting late
+refills (`steps_at_capacity_share`), and the steps' share by their members
+alone (`steps_at_max_num_seqs_share`). The contribution claim also asks that
+the wait excess be at least half the TTFT excess. Without engine records the class is
 `unsupported/no_server_queue_signal`; without a witness it is
 `partial/no_capacity_witness`; with requests on several engines,
 `unsupported/several_engines`.
@@ -477,7 +484,7 @@ The values are provisional until they are read from real runs.
 | `host_stall.min_busy_steps` | 20 | busy steps at least as large as the stall's that window needs |
 | `host_stall.matched_bin_min_steps` | 20 | steps of the stall's own work bucket (scheduled tokens within a factor of two) needed to compare it with steps of its size |
 | `host_stall.heartbeat_grace_ns` | 3 s | how recently the hook's writer must have been heard from to judge a stall still going on |
-| `queue_saturation.witness_step_share` | 0.5 | share of the steps scheduled while requests waited at capacity for a witness |
+| `queue_saturation.witness_request_share` | 0.5 | share of the subject's requests that must have waited mostly through steps at capacity for a witness |
 | `queue_saturation.ttft_excess_share` | 0.5 | share of the TTFT excess the wait excess must reach to explain it |
 | `queue_saturation.stall_excess_share` | 0.5 | share of the wait excess the engine stalls during or just before the waits must last to explain it instead |
 | `queue_saturation.front_excess_share` | 0.25 | share of the wait excess an excess before the queue (engine ingress, the API server) must reach to explain it instead |

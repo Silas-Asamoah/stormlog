@@ -13,6 +13,7 @@ from stormlog.infer.diagnosis_join import join
 from stormlog.infer.diagnosis_model import Finding
 from stormlog.infer.diagnosis_queue import assess_queue
 from stormlog.infer.diagnosis_selection import SelectionOptions, select
+from stormlog.infer.diagnosis_steps import refills
 from tests.diagnosis_scenarios import (
     MS,
     Engine,
@@ -64,6 +65,9 @@ def test_a_full_engine_s_waits_are_a_queue_fault(burst: Assessment) -> None:
     assert wait.metric == "scheduler_wait_excess_ms" and wait.ci is not None
     assert wait.ci[0] > 100  # hundreds of ms of queueing, against ~0
     assert finding.metrics["steps_at_capacity_share"] == pytest.approx(1.0, abs=0.01)
+    assert finding.metrics["requests_waiting_at_capacity_share"] == pytest.approx(
+        1.0, abs=0.02
+    )
     assert finding.support and len(finding.display) <= 8
 
 
@@ -132,6 +136,45 @@ def test_the_witness_counts_steps_while_someone_waited(tmp_path: Path) -> None:
 
     assert finding.gates["capacity_witness"]
     assert finding.metrics["steps_at_capacity_share"] == pytest.approx(1.0, abs=0.02)
+
+
+def test_a_few_overflow_requests_do_not_witness_the_median_wait(
+    tmp_path: Path,
+) -> None:
+    """Bursts of 10 every 300 ms into 8 slots: the 2 overflow requests of
+    each burst wait through full steps, but the median request waits only
+    for the next step to begin, as it does in bursts of 6."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
+    bursts = [
+        SimRequest(f"b{b * 10 + j}", BURST_AT + b * 300 * MS + j * MS)
+        for b in range(100)
+        for j in range(10)
+    ]
+    assessment = _assess(
+        tmp_path, calm + bursts, Engine(max_num_seqs=8, wake_ns=20_000)
+    )
+
+    (finding,) = assessment.findings
+    assert finding.metrics["steps_at_capacity_share"] == 1.0
+    assert finding.metrics["requests_waiting_at_capacity_share"] == pytest.approx(
+        0.2, abs=0.02
+    )
+    assert "capacity_witness" in finding.failed_gates
+    assert finding.claim == "observation"
+
+
+def test_a_slot_freed_one_step_late_counts_as_full() -> None:
+    """Run 1's pattern (vLLM 0.30.0, async scheduling, max_num_seqs 8): in
+    step t, request a reached max_tokens and b emitted an end of sequence.
+    vLLM foresaw a's end and left it out of t+1, which ran 7; it had
+    already planned b into t+1, where b was discarded but still a member,
+    so b is not counted twice."""
+    members = [frozenset("abcdefgh"), frozenset("bcdefgh")]
+    finished = [frozenset("ab"), frozenset()]
+
+    assert refills(members, finished) == [0, 1]
+    # Without b planned in, both slots were freed.
+    assert refills([members[0], frozenset("cdefgh")], finished) == [0, 2]
 
 
 def test_admissions_rule_out_a_pause_only_while_requests_waited(
