@@ -264,6 +264,29 @@ end-to-end excess whose interval excludes zero, and resume waits adding up
 to at least half of it over the subject's requests. Without engine records
 the class is `unsupported/no_hook_preemption_data`.
 
+## Prefix-cache loss
+
+Requests that should have found their shared prefix cached found less of
+it. The class reads the client's declared prefix groups (`prefix_group`,
+`shared_prefix_tokens`) and each request's `cached_at_admission` from the
+import. A request is *warm* when another request of its group had finished
+prefilling the shared span (its `computed_after` reached it) before this
+request entered the scheduler; requests of a group used for the first time
+together are not warm. What a warm request should find is its group's own
+experience: the median `cached_at_admission` of the reference's warm
+requests of that group, never a length derived from a tokenizer. The
+finding is the subject's warm requests falling short of it: a difference of
+medians of the shortfall, with an interval.
+
+Two competitors are indispensable: a prefix-cache reset between the group
+warming and the requests entering (ruled out only where the hook records
+resets and lost nothing), and `prefix_sharing_drop`, ruled out when the
+share of requests declaring a shared prefix and the median shared length
+both stayed within 10% of the reference's. Fewer than 3 warm requests is
+`too_few_warm_requests`; requests that declare no sharing are
+`unsupported/no_declared_sharing`, and without engine records
+`unsupported/no_per_request_cache_evidence`.
+
 ## Client admission, the API server and capture pauses
 
 **`client_admission`** (cause `instrumentation`): Stormlog's open-loop

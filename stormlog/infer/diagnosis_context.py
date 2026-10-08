@@ -8,6 +8,7 @@ from typing import Any
 
 from .diagnosis_clocks import EngineClock
 from .diagnosis_join import EngineEpoch, RunView
+from .diagnosis_model import NOT_RULED_OUT, RULED_OUT, UNTESTABLE, Alternative
 from .diagnosis_segments import Decomposition, decompose
 from .diagnosis_selection import Selection, Subject
 from .diagnosis_stats import Difference, median_difference
@@ -16,6 +17,7 @@ from .diagnosis_steps import Steps, steps_of
 UNSUPPORTED = "unsupported"
 PARTIAL = "partial"
 ASSESSED = "assessed"
+RESET_STAGES = ("engine.cache_reset", "engine.preempted_by_reset")
 
 
 @dataclass
@@ -113,6 +115,60 @@ class Context:
         return next(
             (e for e in self.view.engines.values() if e.producer == producer), None
         )
+
+    def observes(self, producer: str, kind: str) -> bool:
+        """Whether the engine's hook records ``kind`` at all."""
+        epoch = self.epoch_of(producer)
+        observes = epoch.observes if epoch is not None else None
+        return observes is not None and kind in observes
+
+    def lossless(self, producer: str, span: tuple[int, int]) -> bool:
+        """Whether the hook's loss coverage spans [start, end] on the
+        engine's monotonic clock: nothing it records can be missing there."""
+        epoch = self.epoch_of(producer)
+        spans = (epoch.coverage or {}).get("spans") or [] if epoch is not None else []
+        return any(
+            s.get("start_mono_ns", 0) <= span[0] and span[1] <= s.get("end_mono_ns", -1)
+            for s in spans
+        )
+
+    def reset_absent(self, producer: str, span: tuple[int, int] | None) -> Alternative:
+        """Whether a prefix-cache reset is ruled out over ``span``, as the
+        indispensable competitor ``prefix_cache_reset``: only where the hook
+        records resets, none happened, and nothing was lost."""
+        kind = "prefix_cache_reset"
+        if self._resets(producer, span):
+            return Alternative(
+                kind, NOT_RULED_OUT, "the prefix cache was reset over the subject", True
+            )
+        if not self.observes(producer, "cache_reset"):
+            return Alternative(
+                kind, UNTESTABLE, "the hook does not record cache resets", True
+            )
+        if span is None or not self.lossless(producer, span):
+            return Alternative(
+                kind, UNTESTABLE, "records may have been lost over the subject", True
+            )
+        return Alternative(
+            kind,
+            RULED_OUT,
+            "no reset, and the hook records them with nothing lost",
+            True,
+        )
+
+    def _resets(self, producer: str, span: tuple[int, int] | None) -> bool:
+        for _, stage in self.view.stages:
+            if (
+                stage.name not in RESET_STAGES
+                or stage.stage_ref.producer_id != producer
+            ):
+                continue
+            start = stage.start_ns or 0
+            if span is None or (
+                start <= span[1] and span[0] <= (stage.end_ns or start)
+            ):
+                return True
+        return False
 
     def subjects(self) -> list[Subject]:
         return self.selection.subjects
