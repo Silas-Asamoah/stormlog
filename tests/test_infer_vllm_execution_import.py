@@ -198,7 +198,32 @@ def _newer_hook(record: dict[str, Any]) -> dict[str, Any]:
     return newer
 
 
-def test_the_import_ignores_what_later_hooks_add(tmp_path: Path) -> None:
+# What the import reads from a later hook's records, on a request's metadata.
+_LATER_REQUEST_FIELDS = (
+    "enqueued_mono_ns",
+    "enqueued_wall_ns",
+    "enqueued_wall_after_ns",
+    "structured_output",
+)
+
+
+def _without_later_evidence(record: dict[str, Any]) -> dict[str, Any]:
+    if record["event_type"] != "infer.request" or "metadata" not in record:
+        return record  # not the import's: the client's own v1 request record
+    metadata = {
+        key: value
+        for key, value in record["metadata"].items()
+        if key not in _LATER_REQUEST_FIELDS
+    }
+    return {**record, "metadata": metadata}
+
+
+def test_a_later_hook_s_log_changes_only_what_the_import_reads_from_it(
+    tmp_path: Path,
+) -> None:
+    """The log format stays version 1 because every addition is optional:
+    the same run logged by a later hook imports to the same records, apart
+    from the facts the import takes from the later records."""
     stamp = {"wall_ns": T0 + WALL_OFFSET, "mono_ns": T0, "wall_after_ns": T0 + 1}
     later = [
         hello(
@@ -246,7 +271,7 @@ def test_the_import_ignores_what_later_hooks_add(tmp_path: Path) -> None:
         import_execution_into_artifact(artifact, tmp_path / name, importer=HERE)
         imported.append(
             [
-                record.to_record()
+                _without_later_evidence(record.to_record())
                 for record in load_inference_artifact(artifact)
                 if not isinstance(record, CapabilityEvent)
             ]

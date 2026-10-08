@@ -145,6 +145,7 @@ class Execution:
     resumable: bool | None = None
     terminal: dict[str, Any] | None = None
     terminal_seq: int | None = None
+    enqueued: dict[str, Any] | None = None  # entering the scheduler's queue
     reused: bool = False
     seen_final: bool = False
     memberships: list[Member] = field(default_factory=list)
@@ -286,6 +287,20 @@ class _EpochReducer:
 
     # ----------------------------------------------------------- gathering
     def _gather(self) -> None:
+        aliases, first_use = self._index_records()
+        for record in self.epoch.records:
+            if record.kind == "completed":
+                self._attach_completed(record)
+        self._build_executions(aliases, first_use)
+        # Both belong to the execution admitted last before them.
+        attach = {"terminal": self._attach_terminal, "enqueued": self._attach_enqueued}
+        for record in self.epoch.records:
+            if record.kind in attach:
+                attach[record.kind](record)
+
+    def _index_records(self) -> tuple[dict[str, list[RawRecord]], dict[str, int]]:
+        """Steps by iteration, and per internal ID its admissions and the
+        first time a step or exit used it."""
         aliases: dict[str, list[RawRecord]] = {}
         first_use: dict[str, int] = {}
         for record in self.epoch.records:
@@ -298,13 +313,7 @@ class _EpochReducer:
                     _note_use(first_use, member, record.data.get("start_mono_ns"))
             elif record.kind == "terminal":
                 _note_use(first_use, record.data, record.data.get("mono_ns"))
-        for record in self.epoch.records:
-            if record.kind == "completed":
-                self._attach_completed(record)
-        self._build_executions(aliases, first_use)
-        for record in self.epoch.records:
-            if record.kind == "terminal":
-                self._attach_terminal(record)
+        return aliases, first_use
 
     def _attach_completed(self, record: RawRecord) -> None:
         item = self.iterations.get(str(record.data.get("iteration")))
@@ -403,6 +412,13 @@ class _EpochReducer:
         if execution.terminal is None:
             execution.terminal = record.data
             execution.terminal_seq = record.seq
+
+    def _attach_enqueued(self, record: RawRecord) -> None:
+        execution = self._execution_for(
+            str(record.data.get("internal")), _integer(record.data.get("mono_ns"))
+        )
+        if execution.enqueued is None:
+            execution.enqueued = record.data
 
     # ------------------------------------------------------------ selection
     def _split_iterations(self) -> tuple[list[Iteration], list[Iteration]]:
@@ -637,6 +653,7 @@ class _EpochReducer:
 
     def _request(self, execution: Execution, attempt: EntityRef) -> RequestEvent:
         binding, alias = execution.binding, execution.alias or {}
+        enqueued = execution.enqueued or {}
         own = binding.ownership == OWN
         metadata: dict[str, Any] = {
             "ownership": binding.ownership,
@@ -650,6 +667,12 @@ class _EpochReducer:
             "admission_seq": execution.alias_seq,
             "admission_seen": execution.alias is not None,
             "admitted_wall_ns": _integer(alias.get("wall_ns")),
+            # Entering the scheduler's waiting queue, on the engine thread;
+            # null when the hook does not record it or the record was lost.
+            "enqueued_mono_ns": _integer(enqueued.get("mono_ns")),
+            "enqueued_wall_ns": _integer(enqueued.get("wall_ns")),
+            "enqueued_wall_after_ns": _integer(enqueued.get("wall_after_ns")),
+            "structured_output": _flag(enqueued.get("structured_output")),
             "cached_at_admission": execution.cached_at_admission,
             "resumable": execution.resumable,
         }
@@ -982,6 +1005,10 @@ def _digits(value: Any) -> int | None:
 
 def _integer(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _flag(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
 
 
 def _text(value: Any) -> str | None:

@@ -15,6 +15,7 @@ from stormlog.infer.correlation_events import (
     ClockAlignmentEvent,
     CorrelationContext,
     CorrelationEvent,
+    RequestEvent,
 )
 from stormlog.infer.vllm_execution import (
     ALIGNMENT_BASIS,
@@ -28,8 +29,17 @@ from tests.vllm_execution_helpers import (
     BOOT,
     HOST,
     SECOND,
+    WALL_OFFSET,
+    alias,
+    completed,
+    done,
+    enqueued,
+    heartbeat,
     hello,
     importer,
+    member,
+    scheduled,
+    terminal,
     write_epoch,
 )
 
@@ -148,3 +158,56 @@ def test_a_legacy_alignment_is_read_as_its_bracket_never_rewritten() -> None:
         alignments=[legacy],
     )
     assert (placed.value_ns, placed.uncertainty_ns) == (196, 5)
+
+
+# ---------------------------------------------------------------- enqueue
+
+
+def _run(*records: dict[str, Any]) -> list[dict[str, Any]]:
+    return [hello("engine", PID, START), *records]
+
+
+def test_a_request_carries_when_it_entered_the_scheduler(tmp_path: Path) -> None:
+    result = _reduce(
+        tmp_path,
+        _run(
+            alias(OWN0, f"chatcmpl-{X0}", T0 - 30),
+            enqueued(OWN0, T0 - 20, structured_output=True),
+            alias(OTHER, "chatcmpl-other", T0 - 15),  # its enqueue was not recorded
+            scheduled(0, T0, [member(OWN0, scheduled=8), member(OTHER, scheduled=8)]),
+            completed(0, T0 + SECOND, [done(OWN0), done(OTHER)]),
+            heartbeat(T0 + 2 * SECOND, 6),
+        ),
+    )
+
+    requests = {r.metadata["ownership"]: r for r in _of(result, RequestEvent)}
+    own = requests["run"].metadata
+    assert (own["enqueued_mono_ns"], own["structured_output"]) == (T0 - 20, True)
+    assert own["enqueued_wall_ns"] == T0 - 20 + WALL_OFFSET
+    assert own["enqueued_wall_after_ns"] == T0 - 20 + WALL_OFFSET + 800
+    other = requests["foreign"].metadata
+    assert (other["enqueued_mono_ns"], other["structured_output"]) == (None, None)
+
+
+def test_each_admission_of_a_reused_id_keeps_its_own_enqueue(tmp_path: Path) -> None:
+    result = _reduce(
+        tmp_path,
+        _run(
+            alias(OWN0, f"chatcmpl-{X0}", T0 - 30),
+            enqueued(OWN0, T0 - 20),
+            scheduled(0, T0, [member(OWN0, scheduled=8)]),
+            completed(0, T0 + SECOND, [done(OWN0)]),
+            terminal(OWN0, T0 + SECOND + 5),
+            alias(OWN0, f"chatcmpl-{X0}", T0 + 2 * SECOND),
+            enqueued(OWN0, T0 + 2 * SECOND + 10, structured_output=True),
+            scheduled(1, T0 + 3 * SECOND, [member(OWN0, scheduled=8)]),
+            completed(1, T0 + 4 * SECOND, [done(OWN0)]),
+            heartbeat(T0 + 4 * SECOND + 1, 10),
+        ),
+    )
+
+    enqueues = sorted(
+        (r.metadata["enqueued_mono_ns"], r.metadata["structured_output"])
+        for r in _of(result, RequestEvent)
+    )
+    assert enqueues == [(T0 - 20, False), (T0 + 2 * SECOND + 10, True)]

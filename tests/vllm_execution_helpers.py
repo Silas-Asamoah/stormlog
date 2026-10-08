@@ -233,6 +233,56 @@ def terminal(
     }
 
 
+def stamp(mono_ns: int, prefix: str = "") -> dict[str, int]:
+    """A bracketed stamp, as hooks with ``wall_after_ns`` write them."""
+    wall = mono_ns + WALL_OFFSET
+    return {
+        f"{prefix}wall_ns": wall,
+        f"{prefix}mono_ns": mono_ns,
+        f"{prefix}wall_after_ns": wall + 800,
+    }
+
+
+def enqueued(
+    internal: str,
+    mono_ns: int,
+    *,
+    structured_output: bool | None = False,
+    resumable: bool | None = False,
+) -> dict[str, Any]:
+    return {
+        "kind": "enqueued",
+        "internal": internal,
+        "structured_output": structured_output,
+        "resumable": resumable,
+        **stamp(mono_ns),
+    }
+
+
+def pause(before: str, after: str, mono_ns: int) -> dict[str, Any]:
+    return {"kind": "pause", "from": before, "to": after, **stamp(mono_ns)}
+
+
+def cache_reset(
+    running: list[str],
+    start_mono_ns: int,
+    *,
+    reset_running_requests: bool = True,
+    succeeded: bool | None = True,
+    duration_ns: int = 50_000,
+) -> dict[str, Any]:
+    return {
+        "kind": "cache_reset",
+        "reset_running_requests": reset_running_requests,
+        "reset_connector": False,
+        "running": list(running),
+        "succeeded": succeeded,
+        "raised": succeeded is None,
+        **stamp(start_mono_ns, "start_"),
+        **stamp(start_mono_ns + duration_ns, "end_"),
+    }
+
+
 def heartbeat(mono_ns: int, last_seq: int, **counters: Any) -> dict[str, Any]:
     record: dict[str, Any] = {
         "kind": "heartbeat",

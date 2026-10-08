@@ -408,7 +408,9 @@ whose role follows vLLM's `phase` (`context` is `prefill`, `generation` is
 `decode` or, with drafts scheduled, `spec_decode`; no phase is `unknown`), with
 the step's token counts, outcome and, for the step a request was freed in,
 its finish; one `infer.request` per backend execution, holding admission
-facts only; and one `infer.clock_alignment` per epoch from the hello's
+facts only, among them `enqueued_mono_ns`, `enqueued_wall_ns`,
+`enqueued_wall_after_ns` and `structured_output` from its `enqueued` record
+(null without one); and one `infer.clock_alignment` per epoch from the hello's
 bracketed read: the wall clock at the monotonic read lies between the wall
 reads before and after it, so the offset is that bracket's midpoint and the
 uncertainty half its width. Its metadata gives `alignment_basis`
