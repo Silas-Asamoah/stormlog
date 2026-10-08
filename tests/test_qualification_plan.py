@@ -158,6 +158,23 @@ def test_a_short_baseline_is_listed_with_the_other_problems() -> None:
     ]
 
 
+def test_a_plan_that_cant_be_built_for_the_sample_check_is_a_plan_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # fable-221-delta, N7: K2 builds a provisional plan for the sample
+    # check, outside parse_plan's try, so a constructor that raised (no path
+    # today: the sections are checked first) would escape as a TypeError.
+    from examples.qualification import plan as module
+
+    def refuses(**_fields: object) -> None:
+        raise TypeError("victim refused")
+
+    monkeypatch.setattr(module, "Victim", refuses)
+    with pytest.raises(PlanError) as raised:
+        parse_plan(_plan(QUEUE, timeline=SHORT))
+    assert raised.value.problems == ["malformed plan: victim refused"]
+
+
 def test_a_plan_may_lower_the_queue_minimums_as_counts() -> None:
     fewer = {"hold": 3, "min_gauge_samples": 2, "min_wait_samples": 5}
     plan = parse_plan(_plan(QUEUE, timeline=SHORT, thresholds=fewer))
