@@ -184,7 +184,15 @@ def test_a_real_group_is_listed_and_empty_after_it_is_killed(
     session: subprocess.Popen[bytes],
 ) -> None:
     leader = session.pid
-    assert _wait_for(lambda: len(process_tree(leader)) == 3)
+
+    def escaped_once() -> bool:
+        # The tree can hold all three before the Python child has called
+        # setsid: wait for the escape itself (gate-213-b23's T1, which
+        # failed 18 of 30 under -n 4).
+        tree = process_tree(leader)
+        return len(tree) == 3 and sum(info.sid != leader for info in tree) == 1
+
+    assert _wait_for(escaped_once)
     tree = process_tree(leader)
     escaped = [info for info in tree if info.sid != leader]
     assert len(escaped) == 1
