@@ -131,6 +131,46 @@ With a declared SLO the test would compare violations instead; that waits
 for the SLO policies of the comparison work (#213), and the threshold
 version records which test ran.
 
+## How a finding is graded
+
+A finding names a kind at a location for one subject, with its
+observations, the competing mechanisms and what became of each (`ruled_out`,
+`untestable`, `not_ruled_out`, or `upstream` for a cause that comes before
+it), and an experiment that would confirm it.
+
+- **Eligibility.** A kind may claim a fault only when its gates hold and
+  every competitor indispensable to it is `ruled_out`; one that is
+  `untestable` fails the gate as surely as one that is not ruled out. An
+  ineligible finding is `claim: observation`, `cause: undetermined`, at
+  `info`, and `eligibility.failed` lists why. Other competitors only lower
+  confidence.
+- **Confidence** is ordinal and per claim. *Condition*, that the mechanism
+  occurred, asks for direct evidence, enough samples, robustness to clock
+  uncertainty and observed loss coverage. *Contribution*, that it explains
+  the incident, asks for an excess whose interval excludes zero, competitors
+  excluded and, where the kind needs one, a witness. A claim is `high` with
+  everything met, `medium` with one miss or unknown coverage, and `low`
+  otherwise or with known loss. `confidence.level` is the lower of the two,
+  and a `partial` assessment is at most `medium`.
+- **Severity and cause.** `warning` needs an eligible claim, a contribution
+  of at least `medium`, and an incident subject; its cause is then `fault`,
+  and with `role: primary` that is the fault claim (`claim: fault`). An
+  eligible finding at `info` is `claim: condition`, its cause undetermined
+  until a driver says otherwise. Workload kinds are always
+  `workload_change` at `info`; instrumentation kinds are `instrumentation`.
+- **Rank.** Findings are ordered by: primary before secondary, eligible
+  before observation, confidence, the contribution's lower bound, kind,
+  location, window start, and finally ID, so the order is total.
+- **Identity.** A finding's ID is `diagnosis.<kind>.<12 hex>`, a hash of the
+  run, the subject, the kind, the location and the window start: the same
+  artifact gives the same IDs.
+- **Support.** Every line a finding used is listed as `(line, record_id,
+  sha256)` triples, up to 10,000; above that as line ranges, the count and a
+  digest of the lines' hashes (`support_identity: ranges_only`).
+
+Differences of medians come with a percentile bootstrap 95% interval
+(B = 2000, fixed seed), and need at least 20 values in each arm.
+
 ## Thresholds
 
 Online triggers and the diagnoser read thresholds from one versioned table,
