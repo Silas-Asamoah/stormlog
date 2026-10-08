@@ -76,16 +76,17 @@ def test_client_classes_say_there_are_no_client_requests(
 
 
 def _incident_window(name: str, start: int, end: int) -> dict[str, Any]:
-    """An incident watcher's window record, as #219's bundle writes it."""
+    """An incident watcher's window record, exactly as #219's bundle writes
+    it (``stormlog.infer.watch.incidents``): no ``timestamp_ns``."""
     return {
         "schema_version": 1,
         "event_type": "infer.incident_window",
         "session_id": SESSION,
+        "run_id": "run-1",
         "incident_id": "incident-1",
         "window": name,
         "start_ns": start,
         "end_ns": end,
-        "timestamp_ns": start,
     }
 
 
