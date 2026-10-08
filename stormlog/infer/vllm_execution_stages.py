@@ -152,6 +152,8 @@ class StageBuilder:
             else:
                 self.counts["unreferenced"] += 1
             return
+        # Written only with its request record: an import must reach both.
+        needed = [source_seq, reducer.request_source(execution)]
         self._emit(
             name,
             f"{key}/{attempt.id}",
@@ -160,7 +162,9 @@ class StageBuilder:
             iteration=iteration,
             span=span,
             metadata={
-                "source_seq_max": source_seq,
+                "source_seq_max": max(
+                    (s for s in needed if s is not None), default=None
+                ),
                 "attempt": attempt.id,
                 "ownership": execution.binding.ownership,
                 **details,
