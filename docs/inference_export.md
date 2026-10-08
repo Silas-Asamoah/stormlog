@@ -328,9 +328,9 @@ identifier, an ID Stormlog made, a value from a closed set, or a number:
   `stormlog.first_token` event), prompt and output token counts with their
   sources, the prompt ID, prefix group and shared prefix, and the chunk
   count.
-- **Status:** `timeout`, `rejected`, `error` and `unreachable` are ERROR,
-  with `error.type` set to the status, the HTTP status code, or the
-  exception's class name. `cancelled`, where Stormlog stopped waiting at its
+- **Status:** `timeout`, `rejected`, `error`, `unreachable` and
+  `delivery_unknown` are ERROR, with `error.type` set to the status, the HTTP
+  status code, or the exception's class name. `cancelled`, where Stormlog stopped waiting at its
   own drain deadline, leaves the status unset; `stormlog.request.status`
   says what happened. A trace window whose profiler call failed is ERROR.
   Only an ERROR span has a status message, as OpenTelemetry asks.

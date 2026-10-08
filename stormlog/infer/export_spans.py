@@ -99,7 +99,7 @@ API_ERROR_CODES = (
 )
 OTHER = "other"
 # Statuses that end a request span in error; cancelled is Stormlog's choice.
-ERROR_STATUSES = ("timeout", "rejected", "error", "unreachable")
+ERROR_STATUSES = ("timeout", "rejected", "error", "unreachable", "delivery_unknown")
 # The most of an error body read for its type and code, on the pool thread.
 _DIAGNOSTIC_BYTES = 64 * 1024
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{0,63}\Z")
