@@ -68,7 +68,7 @@
     "summary_keys": ["offered", "applied", "dropped", "tokens_rejected", "exact", "queue_high_water"],
     "dropped_reasons": ["queue_full", "closed", "shutdown", "error"],
     "identity": "offered = applied + dropped.queue_full + dropped.closed + dropped.shutdown + dropped.error",
-    "exact": "dropped.queue_full + dropped.shutdown + dropped.error == 0 and internal_errors.observe == 0"
+    "exact": "dropped.queue_full + dropped.shutdown + dropped.error == 0 and internal_errors.observe == 0 and tokens_rejected == 0"
   },
   "spans": {
     "accounting_keys": [

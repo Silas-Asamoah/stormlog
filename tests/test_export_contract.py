@@ -126,6 +126,71 @@ def test_the_defaults_match_the_code() -> None:
     }
 
 
+def _pipeline(tmp_path: Path) -> export_module.ExportPipeline:
+    return export_module.ExportPipeline(
+        ExportConfig(prometheus_textfile_dir=tmp_path),
+        ProfileLabels(
+            model="m",
+            server="http://h",
+            cases=(("c", "closed"),),
+            run_id="r",
+            session_id="s",
+            version="0",
+        ),
+    )
+
+
+def _rule_holds(rule: str, figures: dict[str, Any]) -> bool:
+    """Evaluate a fixture rule: clauses ``a + b == 0`` joined by ``and``."""
+
+    def value(name: str) -> int:
+        node: Any = figures
+        for part in name.split("."):
+            node = node[part]
+        return int(node)
+
+    holds = True
+    for clause in rule.split(" and "):
+        terms, _, zero = clause.partition(" == ")
+        assert zero == "0", clause
+        holds = holds and sum(value(t) for t in terms.split(" + ")) == 0
+    return holds
+
+
+@pytest.mark.parametrize(
+    "figure",
+    [
+        None,
+        "dropped.queue_full",
+        "dropped.closed",
+        "dropped.shutdown",
+        "dropped.error",
+        "internal_errors.observe",
+        "tokens_rejected",
+    ],
+)
+def test_the_exact_rule_is_the_one_the_pipeline_applies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, figure: str | None
+) -> None:
+    # Each figure the summary reports is made non-zero in turn; the fixture's
+    # rule, read as written, must agree with the pipeline's own `exact`.
+    pipeline = _pipeline(tmp_path)
+    pipeline.close(0.1)
+    drops = dict.fromkeys(CONTRACT["metrics"]["dropped_reasons"], 0)
+    if figure is not None and figure.startswith("dropped."):
+        drops[figure.split(".", 1)[1]] = 1
+    monkeypatch.setattr(pipeline, "_drop_counts", lambda _queue: dict(drops))
+    if figure == "internal_errors.observe":
+        pipeline._counts.internal_errors["observe"] = 1
+    if figure == "tokens_rejected":
+        pipeline.metrics.tokens_rejected = 1
+    summary = pipeline.summary()
+    figures = {**summary["records"], "internal_errors": summary["internal_errors"]}
+    expected = _rule_holds(CONTRACT["metrics"]["exact"], figures)
+    assert summary["records"]["exact"] is expected
+    assert expected is (figure in (None, "dropped.closed"))
+
+
 def test_the_summaries_carry_the_declared_keys(tmp_path: Path) -> None:
     config = ExportConfig(otlp_endpoint="http://127.0.0.1:9")
     otlp = OtlpExport(
@@ -140,17 +205,7 @@ def test_the_summaries_carry_the_declared_keys(tmp_path: Path) -> None:
     accounting = otlp.accounting()
     assert sorted(accounting) == sorted(CONTRACT["spans"]["accounting_keys"])
     assert accounting["queued"] == accounting["in_flight"] == 0
-    pipeline = export_module.ExportPipeline(
-        ExportConfig(prometheus_textfile_dir=tmp_path),
-        ProfileLabels(
-            model="m",
-            server="http://h",
-            cases=(("c", "closed"),),
-            run_id="r",
-            session_id="s",
-            version="0",
-        ),
-    )
+    pipeline = _pipeline(tmp_path)
     pipeline.close(0.1)
     records = pipeline.summary()["records"]
     assert sorted(records) == sorted(CONTRACT["metrics"]["summary_keys"])
