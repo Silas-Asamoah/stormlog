@@ -41,9 +41,15 @@ _STAMP = ("wall_ns", "mono_ns", "wall_after_ns")
 class StageBuilder:
     """The stages one import of one epoch writes, and what it could not."""
 
-    def __init__(self, reducer: _EpochReducer, kept: list[Iteration]) -> None:
+    def __init__(
+        self,
+        reducer: _EpochReducer,
+        kept: list[Iteration],
+        pending: list[Iteration] | None = None,
+    ) -> None:
         self.reducer = reducer
         self.kept = kept
+        self.pending = pending or []
         producer = reducer.producer
         self.written_iterations = {
             ref.id
@@ -69,9 +75,17 @@ class StageBuilder:
 
     def build(self) -> list[StageEvent]:
         by_reset = self.reducer.reset_preemptions
-        if by_reset.unlisted_from is not None and self.live:
-            # The step that lists these preemptions is not read yet.
-            self.holds.append(by_reset.unlisted_from)
+        if self.live:
+            # A reset is read again until the step that lists its preemptions
+            # is final: unread, or read but pending, that step would be read
+            # next time without the reset, and its preemptions taken for the
+            # step's own.
+            if by_reset.unlisted_from is not None:
+                self.holds.append(by_reset.unlisted_from)
+            for item in self.pending:
+                first = by_reset.first_reset.get(item.scheduled.seq)
+                if first is not None:
+                    self.holds.append(first)
         for item in self.kept:
             self._step_preemptions(item, by_reset.of(item))
         for record in self.reducer.epoch.records:
@@ -296,19 +310,24 @@ class ResetPreemptions:
 
     def __init__(self, records: list[RawRecord]) -> None:
         self.by_step: dict[int, set[str]] = {}
-        # The first reset whose preemptions no step read so far lists.
-        self.unlisted_from: int | None = None
+        # Per listing step (by its scheduled seq), the first reset it lists.
+        self.first_reset: dict[int, int] = {}
         since: set[str] = set()
+        first: int | None = None
         for record in records:
             if record.kind == "cache_reset" and record.data.get(
                 "reset_running_requests"
             ):
                 since |= set(_texts(record.data.get("running")))
-                if self.unlisted_from is None:
-                    self.unlisted_from = record.seq
+                if first is None:
+                    first = record.seq
             elif record.kind == "scheduled" and since:
                 self.by_step[record.seq] = since
-                since, self.unlisted_from = set(), None
+                if first is not None:
+                    self.first_reset[record.seq] = first
+                since, first = set(), None
+        # The first reset whose preemptions no step read so far lists.
+        self.unlisted_from: int | None = first
 
     def of(self, item: Iteration) -> set[str]:
         return self.by_step.get(item.scheduled.seq, set())
