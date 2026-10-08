@@ -13,14 +13,18 @@ from stormlog.infer.diagnosis_context import Context
 from stormlog.infer.diagnosis_inputs import read_input
 from stormlog.infer.diagnosis_join import join
 from stormlog.infer.diagnosis_matched import (
+    Arms,
     Band,
     Columns,
+    Comparison,
     Design,
     Epoch,
+    Ratio,
     Side,
     Span,
     Window,
     circular_resample,
+    compare,
     interference,
     matched_effects,
     nearest_medians,
@@ -410,3 +414,114 @@ def test_a_subject_s_interference_fits_its_budget() -> None:
     elapsed = time.perf_counter() - started
     assert found.pooled is not None and found.pooled.replicates == 499
     assert elapsed < 30.0, f"{elapsed:.1f} s"
+
+
+# ---------------------------------------------- subject against reference
+def arm(
+    rng: np.random.Generator,
+    start_s: float,
+    seconds: float,
+    *,
+    cadence_ms: float = 3.0,
+    running: int = 8,
+    prompts: tuple[int, ...] = (),
+    every: int = 10,
+) -> list[Unit]:
+    """Steps at ``cadence_ms`` with a little noise; every ``every``-th one
+    also prefills ``prompts``, one member each, 1 ms more."""
+    units: list[Unit] = []
+    at = start_s * 1000
+    while at < (start_s + seconds) * 1000:
+        treated = bool(prompts) and len(units) % every == 0
+        cadence = cadence_ms * (1 + rng.normal(0, 0.02)) + (1.0 if treated else 0.0)
+        at += cadence
+        prefills = tuple(Prefill(f"p{k}", n, 0, 0) for k, n in enumerate(prompts))
+        units.append(
+            Unit(
+                iteration=f"i{len(units)}",
+                completed_ns=int(at * MS),
+                cadence_ns=int(cadence * MS),
+                running=running,
+                drafts=0,
+                refill=False,
+                after_refill=False,
+                context=100.0,
+                decoders=tuple(f"d{k}" for k in range(running - len(prompts))),
+                prefills=prefills if treated else (),
+            )
+        )
+    return units
+
+
+def ratio(
+    subject: list[Unit], reference: list[Unit], *, treated: bool = False
+) -> Ratio:
+    design = Design()
+    comparison = Comparison(
+        design.treated if treated else design.controls, treated, 1.10, 0.5
+    )
+    arms = Arms(Columns.of(subject), Columns.of(reference))
+    return compare([arms], comparison, design, replicates=99)
+
+
+def test_the_same_engine_at_the_same_batch_shows_no_capacity_change() -> None:
+    rng = np.random.default_rng(7)
+
+    found = ratio(arm(rng, 40, 10), arm(rng, 0, 30))
+
+    assert found.ratio is not None
+    assert found.ratio.estimate == pytest.approx(1.0, abs=0.02)
+    assert (found.support, found.screened) == (1.0, "not_above_floor")
+
+
+def test_a_slower_engine_at_the_same_batch_shows_it() -> None:
+    rng = np.random.default_rng(8)
+
+    found = ratio(arm(rng, 40, 10, cadence_ms=3.9), arm(rng, 0, 30))
+
+    assert found.ratio is not None and found.screened is None
+    assert found.ratio.estimate == pytest.approx(1.3, abs=0.02)
+    assert found.ratio.above(1.10)
+
+
+def test_more_decodes_per_step_is_no_match_for_fewer() -> None:
+    """W1's shape: the subject ran twice the batch; nothing in the
+    reference ran it, so nothing is claimed about the engine's pace."""
+    rng = np.random.default_rng(9)
+
+    found = ratio(arm(rng, 40, 10, running=16, cadence_ms=6.0), arm(rng, 0, 30))
+
+    assert (found.support, found.screened) == (0.0, "insufficient_common_support")
+
+
+@pytest.mark.parametrize(
+    ("subject", "reference"),
+    [((1000,), (300,)), ((1000,), (250, 250, 250, 250))],
+    ids=["longer_prompts_in_one_bin", "one_prompt_for_four"],
+)
+def test_a_differently_made_prefill_is_no_match(
+    subject: tuple[int, ...], reference: tuple[int, ...]
+) -> None:
+    """Case B: prompts of 1,000 tokens against 300, both in one dose bin.
+    Case D: one prompt of 1,000 against four of 250, the same dose. Either
+    is a change in the work, not the engine mixing worse."""
+    rng = np.random.default_rng(10)
+    mine = arm(rng, 40, 10, prompts=subject, cadence_ms=3.0)
+    theirs = arm(rng, 0, 30, prompts=reference, cadence_ms=3.0)
+
+    found = ratio(mine, theirs, treated=True)
+
+    assert (found.support, found.screened) == (0.0, "insufficient_common_support")
+
+
+def test_mixing_a_little_worse_is_under_the_floor() -> None:
+    """Treated steps 5% slower than the reference's at the same prefill:
+    slower every time, but by a ratio under the 1.10 floor."""
+    rng = np.random.default_rng(11)
+    mine = arm(rng, 40, 10, prompts=(500,), cadence_ms=3.0 * 1.05)
+    theirs = arm(rng, 0, 30, prompts=(500,), cadence_ms=3.0)
+
+    found = ratio(mine, theirs, treated=True)
+
+    assert found.support == 1.0 and found.screened == "not_above_floor"
+    assert found.ratio is not None and 1.0 < found.ratio.estimate < 1.10

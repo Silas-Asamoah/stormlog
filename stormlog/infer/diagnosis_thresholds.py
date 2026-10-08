@@ -37,6 +37,8 @@ MIXED_CONTEXT_TOLERANCE = "mixed_prefill_interference.context_tolerance"
 MIXED_MIN_CONTROLS = "mixed_prefill_interference.min_controls"
 MIXED_NEAREST_CONTROLS = "mixed_prefill_interference.nearest_controls"
 MIXED_BLOCK_NS = "mixed_prefill_interference.bootstrap_block_ns"
+MIXED_DOSE_TOLERANCE = "mixed_prefill_interference.dose_tolerance"
+MIXED_CACHED_SLACK = "mixed_prefill_interference.cached_prefix_slack_tokens"
 WORKLOAD_RATE_RATIO = "load_increase.arrival_rate_ratio"
 WORKLOAD_LENGTH_RATIO = "workload.length_ratio"
 WORKLOAD_SHARE_DROP = "prefix_sharing_drop.share_drop"
@@ -117,6 +119,11 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         MIXED_NEAREST_CONTROLS: 32.0,
         # The bootstrap resamples blocks of this length.
         MIXED_BLOCK_NS: 1_000_000_000.0,
+        # A subject's treated step against a reference's: dose, cached
+        # prefix and longest prefill within this fraction, the cached
+        # prefix also within this many tokens when that is wider.
+        MIXED_DOSE_TOLERANCE: 0.15,
+        MIXED_CACHED_SLACK: 64.0,
         # Workload changes: arrivals faster by this ratio (interval's lower
         # bound), prompts or outputs longer by this ratio, or this much less
         # of the requests declaring a shared prefix.
@@ -164,7 +171,9 @@ __all__ = [
     "LOOP_STALL_FACTOR",
     "LOOP_STALL_FLOOR_NS",
     "MIXED_BLOCK_NS",
+    "MIXED_CACHED_SLACK",
     "MIXED_CONTEXT_TOLERANCE",
+    "MIXED_DOSE_TOLERANCE",
     "MIXED_MATCH_WINDOW_NS",
     "MIXED_MIN_CONTROLS",
     "MIXED_NEAREST_CONTROLS",

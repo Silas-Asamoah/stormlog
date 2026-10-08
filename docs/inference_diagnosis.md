@@ -662,6 +662,19 @@ the hook's steps alone.
   at 0.5 s and 2 s blocks (B = 199), as sensitivity. On 200 null epochs
   with the async bubble on, the pooled interval's lower end passed zero
   once (0.5%; 2.5% nominal).
+- **Subject against reference.** A subject's units are also compared with
+  its reference's, unit for unit: each subject unit with the 32 reference
+  units nearest in time that share its key and bands (at least 5), its
+  ratio its cadence over their median. The statistic is the median ratio,
+  its interval from the subject's and the reference's spans resampled
+  together, drawn only with the support the comparison needs and a point
+  estimate above its floor. Decode-only units compare the engine's pace at
+  the same batch: the driver's capacity. Treated units are matched also on
+  their dose bin and prefill member count exactly, and their dose, cached
+  prefix (or within 64 tokens) and longest prefill within 15%: the same
+  prefill, split the same way, into the same batch. One 1,000-token prompt
+  costs more attention than four of 250, so the comparison never reads a
+  change in how the prefill is split as the engine mixing worse.
 
 Matching on the running requests rather than on the decode members is
 what keeps the async pipeline's bubble out of the controls. On a real run
@@ -753,6 +766,8 @@ The values are provisional until they are read from real runs.
 | `mixed_prefill_interference.min_controls` | 5 | controls a treated step needs to be matched |
 | `mixed_prefill_interference.nearest_controls` | 32 | the controls nearest in time that are used |
 | `mixed_prefill_interference.bootstrap_block_ns` | 1 s | the block the matched design's bootstrap resamples |
+| `mixed_prefill_interference.dose_tolerance` | 0.15 | a subject's treated step against a reference's: dose, cached prefix and longest prefill within this fraction |
+| `mixed_prefill_interference.cached_prefix_slack_tokens` | 64 | or, for the cached prefix, within this many tokens when that is wider |
 | `load_increase.arrival_rate_ratio` | 1.25 | lower bound of the arrival rate ratio for a load increase |
 | `workload.length_ratio` | 1.1 | how much longer median prompts or outputs must be |
 | `prefix_sharing_drop.share_drop` | 0.1 | how far the share declaring a shared prefix must fall |

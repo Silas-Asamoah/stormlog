@@ -33,6 +33,15 @@ controls shared by many treated units and the serial dependence of
 neighbouring steps both widen the interval. B = 499 seeded replicates,
 with the Monte Carlo error of the interval's 2.5% quantile reported; the
 bootstrap runs only where an interval could decide the gate.
+
+A subject's units are also compared with its reference's, unit for unit:
+each subject unit with the 32 reference units nearest in time that share
+its key and bands, its ratio the cadence over their median, the statistic
+the median ratio, its interval from both spans resampled together. Decode
+units compare the engine's pace at the same batch (the driver's capacity);
+treated units, matched also on their dose bin and prefill member count,
+dose, cached prefix and longest prefill, compare its cost of mixing the
+same prefill into the same batch.
 """
 
 from __future__ import annotations
@@ -47,7 +56,9 @@ from scipy import sparse
 from .diagnosis_stats import SEED
 from .diagnosis_thresholds import (
     MIXED_BLOCK_NS,
+    MIXED_CACHED_SLACK,
     MIXED_CONTEXT_TOLERANCE,
+    MIXED_DOSE_TOLERANCE,
     MIXED_MATCH_WINDOW_NS,
     MIXED_MIN_CONTROLS,
     MIXED_NEAREST_CONTROLS,
@@ -69,6 +80,7 @@ SENSITIVITY_BLOCKS_NS = (500_000_000, 2_000_000_000)
 SENSITIVITY_REPLICATES = 199
 INSUFFICIENT_SUPPORT = "insufficient_common_support"
 NO_POSITIVE_EFFECT = "no_positive_effect"
+NOT_ABOVE_FLOOR = "not_above_floor"
 
 
 def dose_bin(tokens: int) -> int:
@@ -154,6 +166,10 @@ class Design:
     min_controls: int = 5
     nearest: int = 32
     block_ns: int = 1_000_000_000
+    # A treated unit's dose, cached prefix and longest prefill against its
+    # reference's: within this fraction, the prefix also within the slack.
+    dose_tolerance: float = 0.15
+    cached_slack: float = 64.0
 
     @classmethod
     def from_thresholds(cls, overrides: Mapping[str, float] | None) -> Design:
@@ -166,11 +182,29 @@ class Design:
             min_controls=int(value(MIXED_MIN_CONTROLS)),
             nearest=int(value(MIXED_NEAREST_CONTROLS)),
             block_ns=int(value(MIXED_BLOCK_NS)),
+            dose_tolerance=value(MIXED_DOSE_TOLERANCE),
+            cached_slack=value(MIXED_CACHED_SLACK),
         )
 
     @property
     def controls(self) -> Match:
         return Match(CONTROL_KEY, (Band("context", self.tolerance),))
+
+    @property
+    def treated(self) -> Match:
+        """A treated unit's match in another span: the same prefill, split
+        the same way, into the same batch. One long prompt costs more
+        attention than several short ones of its total."""
+        tolerance = self.dose_tolerance
+        return Match(
+            (*CONTROL_KEY, "bin", "members"),
+            (
+                Band("context", self.tolerance),
+                Band("dose", tolerance),
+                Band("cached", tolerance, self.cached_slack),
+                Band("longest", tolerance),
+            ),
+        )
 
 
 def key_ids(sides: Sequence[Columns], names: Sequence[str]) -> list[np.ndarray]:
@@ -711,12 +745,143 @@ def victim_matrix(
     return sparse.csr_matrix((data, (rows, cols)), shape=(len(columns), requests))
 
 
+# ------------------------------------------------ subject against reference
+@dataclass(frozen=True)
+class Arms:
+    """A subject's units and its reference's, on one epoch."""
+
+    subject: Columns
+    reference: Columns
+
+
+@dataclass
+class Ratio:
+    """Subject units against matched reference units: the median ratio of
+    their cadences, with its interval where it could pass the floor."""
+
+    targets: int
+    matched: int
+    ratio: Interval | None
+    screened: str | None = None
+
+    @property
+    def support(self) -> float | None:
+        return self.matched / self.targets if self.targets else None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ratio": None if self.ratio is None else self.ratio.as_dict(digits=4),
+            "common_support": _rounded(self.support),
+            "matched": self.matched,
+            "units": self.targets,
+            "screened": self.screened,
+        }
+
+
+def _rounded(value: float | None) -> float | None:
+    return None if value is None else round(value, 4)
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """What is compared: treated units or decode-only ones, matched how,
+    and what an interval must clear."""
+
+    match: Match
+    treated: bool
+    floor: float
+    min_support: float
+
+
+def compare(
+    arms: Sequence[Arms],
+    comparison: Comparison,
+    design: Design,
+    *,
+    replicates: int = REPLICATES,
+    seed: int = SEED,
+) -> Ratio:
+    """The subject's units against its reference's; the interval only where
+    support is met and the point estimate is above the floor."""
+    keyed = [
+        (arm, key_ids([arm.subject, arm.reference], comparison.match.exact))
+        for arm in arms
+    ]
+    point = [_ratios(arm, keys, comparison, design, None) for arm, keys in keyed]
+    ratios = np.concatenate([r for r, _ in point]) if point else np.zeros(0)
+    result = Ratio(sum(n for _, n in point), len(ratios), None)
+    result.screened = _ratio_screen(result, ratios, comparison)
+    if result.screened is None:
+        rng = np.random.default_rng(seed)
+        draws = [
+            _replicate_ratio(keyed, comparison, design, rng) for _ in range(replicates)
+        ]
+        result.ratio = interval(float(np.median(ratios)), draws)
+    return result
+
+
+def _ratio_screen(
+    result: Ratio, ratios: np.ndarray, comparison: Comparison
+) -> str | None:
+    if not len(ratios):
+        return INSUFFICIENT_SUPPORT
+    result.ratio = Interval(float(np.median(ratios)))
+    if (result.support or 0.0) < comparison.min_support:
+        return INSUFFICIENT_SUPPORT
+    if result.ratio.estimate <= comparison.floor:
+        return NOT_ABOVE_FLOOR
+    return None
+
+
+def _replicate_ratio(
+    keyed: Sequence[tuple[Arms, list[np.ndarray]]],
+    comparison: Comparison,
+    design: Design,
+    rng: np.random.Generator,
+) -> float:
+    found = [_ratios(arm, keys, comparison, design, rng)[0] for arm, keys in keyed]
+    ratios = np.concatenate(found) if found else np.zeros(0)
+    return float(np.median(ratios)) if len(ratios) else float("nan")
+
+
+def _ratios(
+    arm: Arms,
+    keys: list[np.ndarray],
+    comparison: Comparison,
+    design: Design,
+    rng: np.random.Generator | None,
+) -> tuple[np.ndarray, int]:
+    """The matched subject units' cadence ratios, and how many subject
+    units there were; resampled when ``rng`` is given."""
+    sides = []
+    for columns, key in zip((arm.subject, arm.reference), keys):
+        if rng is None:
+            picked, times = np.arange(len(columns)), columns.time
+        else:
+            picked, times = circular_resample(columns.time, design.block_ns, rng)
+        mine = np.flatnonzero(columns.treated[picked] == comparison.treated)
+        sides.append(Side.of(columns, key, comparison.match, picked[mine], times[mine]))
+    medians, _ = nearest_medians(
+        sides[0],
+        sides[1],
+        comparison.match.bands,
+        Window(None, causal=False),
+        nearest=design.nearest,
+        minimum=design.min_controls,
+    )
+    found = np.isfinite(medians)
+    return sides[0].value[found] / medians[found], len(medians)
+
+
 __all__ = [
     "BANDED",
     "INSUFFICIENT_SUPPORT",
+    "NOT_ABOVE_FLOOR",
     "NO_POSITIVE_EFFECT",
     "REPLICATES",
     "CONTROL_KEY",
+    "Arms",
+    "Comparison",
     "DOSE_BINS",
     "EXACT",
     "Band",
@@ -727,11 +892,13 @@ __all__ = [
     "Interference",
     "Interval",
     "Match",
+    "Ratio",
     "Side",
     "Span",
     "Window",
     "bin_name",
     "circular_resample",
+    "compare",
     "dose_bin",
     "interference",
     "interval",
