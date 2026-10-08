@@ -445,6 +445,17 @@ artifact with no `infer.session` or `infer.request` records. Otherwise it exits 
 every request in the artifact failed: analysis reports findings without
 failing.
 
+## Diagnose an artifact
+
+```bash
+stormlog infer diagnose artifacts/infer_qwen.jsonl --output diagnosis.json
+stormlog infer diagnose --inspect diagnosis.json diagnosis.queue_saturation.3f9a1c07d2be
+```
+
+`infer diagnose` explains the artifact's slow windows from the evidence it
+holds, and exits `3` when a finding is a `warning`. See
+[Inference diagnosis](inference_diagnosis.md).
+
 ## Token accounting
 
 Server usage metadata is preferred whenever the endpoint returns it. If usage is

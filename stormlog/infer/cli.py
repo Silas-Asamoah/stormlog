@@ -31,6 +31,7 @@ from .arrivals import (
 )
 from .cache_state import CACHE_STATES, COLD, RESET_RETRY_SECONDS, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
+from .diagnosis_cli import add_diagnose_parser, cmd_diagnose
 from .errors import InferInputError, InferUsageError
 from .profile import InferenceProfiler
 from .prompts import MIN_CONTROLLED_TOKENS, PROMPT_MODES, REPEAT, SHARED_PREFIX
@@ -86,6 +87,8 @@ def _run_command(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
         return cmd_import_trace(args)
     if args.infer_command == "import-execution":
         return cmd_import_execution(args)
+    if args.infer_command == "diagnose":
+        return cmd_diagnose(args)
     parser.error(f"Unsupported infer command: {args.infer_command}")
 
 
@@ -425,6 +428,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
+    add_diagnose_parser(subparsers)
     return parser
 
 

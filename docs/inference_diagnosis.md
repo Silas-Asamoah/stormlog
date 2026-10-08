@@ -74,6 +74,46 @@ change to the diagnosis payload's schema.
 A cause is one of `fault`, `workload_change`, `instrumentation` and
 `undetermined`.
 
+## The command
+
+```bash
+stormlog infer diagnose infer.jsonl                       # automatic incidents
+stormlog infer diagnose infer.jsonl --window START,END    # a declared window, ns
+stormlog infer diagnose infer.jsonl --request ID --case ID
+stormlog infer diagnose infer.jsonl --output diagnosis.json --format json
+stormlog infer diagnose --inspect diagnosis.json FINDING_ID [--all]
+```
+
+`--window`, `--request` and `--case` declare subjects and may be repeated;
+`--window-seconds` sets the base window of automatic selection;
+`--thresholds FILE` overrides entries of the threshold table from a JSON
+object; `--metrics-from-engine` asserts that the scraped metrics exporter is
+the engine whose hook log was imported. `--output` writes the validated
+report; `--format` prints the text view (the default) or the report as JSON.
+
+The text view gives the verdict and outcome, the coverage of every kind, and
+each finding with its claim, cause, confidence per claim, observations,
+competitors, experiment and up to 8 `path:line record_id` pointers.
+
+`--inspect REPORT FINDING_ID` never diagnoses again. It reads the saved
+report and prints the records the finding rests on, by physical line: its
+display pointers, or with `--all` its whole support. It finds the artifact
+where the report recorded it, else relative to the report, else beside it,
+so a report moved with its artifact still resolves. When the artifact's
+SHA-256 differs from the report's, each record is found by its ID and its
+line's hash checked, with a warning; a record that changed is an error, and
+a finding whose support was kept only as line ranges stops with
+`support_unresolvable_after_modification`. A missing artifact or report
+exits `5`.
+
+| Code | When |
+| --- | --- |
+| 0 | the diagnosis completed with no `warning` finding, including `inconclusive` |
+| 3 | at least one `warning` finding |
+| 2 | a usage error: no artifact, a malformed `--window`, an unknown threshold key |
+| 5 | an unreadable artifact, report or threshold file |
+| 1 | anything unexpected |
+
 ## Citing records
 
 A diagnosis cites the artifact records behind each finding. It reads the
