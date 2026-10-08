@@ -13,7 +13,12 @@ from stormlog.infer.diagnosis_context import Assessment, Context
 from stormlog.infer.diagnosis_inputs import Line, read_input
 from stormlog.infer.diagnosis_join import join
 from stormlog.infer.diagnosis_model import Finding
-from stormlog.infer.diagnosis_queue import _at_capacity, _holds_back, assess_queue
+from stormlog.infer.diagnosis_queue import (
+    _at_capacity,
+    _held_by_stalls,
+    _holds_back,
+    assess_queue,
+)
 from stormlog.infer.diagnosis_selection import SelectionOptions, select
 from stormlog.infer.diagnosis_steps import Step, refills
 from tests.diagnosis_scenarios import (
@@ -426,9 +431,9 @@ def test_a_stall_that_built_the_backlog_is_not_ruled_out(tmp_path: Path) -> None
     """Load the engine carries (no witness without a stall), and a 600 ms
     stall half a second in: the requests that arrived during it enter the
     queue after it, so it covers none of their waiting time, yet the
-    backlog it left is the whole excess."""
+    backlog it left holds the median request back."""
     calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
-    load = poisson_free(600, BURST_AT, 8 * MS, prefix="b")
+    load = poisson_free(200, BURST_AT, 8 * MS, prefix="b")
     engine = Engine(max_num_seqs=8, stall=(BURST_AT + 500 * MS, 600 * MS))
     _entering_after(calm + load, engine)
 
@@ -436,6 +441,29 @@ def test_a_stall_that_built_the_backlog_is_not_ruled_out(tmp_path: Path) -> None
 
     assert _alternatives(finding)["engine_stall"] == "not_ruled_out"
     assert finding.claim == "observation"
+
+
+def test_stalls_spread_over_a_saturation_are_weighed_per_request(
+    tmp_path: Path,
+) -> None:
+    """Six 120 ms stalls 700 ms apart while the burst drains: each holds
+    back the admissions after it, so the median request is held by one or
+    two of them, a minor share of the excess, not by all 720 ms."""
+    stalls = [(BURST_AT + 500 * MS + k * 700 * MS, 120 * MS) for k in range(6)]
+    engine = Engine(max_num_seqs=4, stalls=stalls)
+
+    (finding,) = _assess(tmp_path, _requests(), engine).findings
+
+    (stall,) = [a for a in finding.alternatives if a.kind == "engine_stall"]
+    assert stall.status == "contributing"
+
+
+def test_a_stall_holds_a_wait_back_by_no_more_than_the_wait() -> None:
+    # A 100-long stall early in a busy queue, and a wait of 30 after it.
+    assert _held_by_stalls([(0, 100)], (150, 180), since=0) == 30
+    # The part inside, and the whole of one that ended just before.
+    assert _held_by_stalls([(140, 160)], (150, 400), since=150) == 10
+    assert _held_by_stalls([(100, 140)], (150, 400), since=150) == 40
 
 
 def test_a_stall_holds_back_waits_it_overlaps_or_ended_just_before() -> None:
