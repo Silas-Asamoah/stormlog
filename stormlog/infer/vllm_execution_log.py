@@ -18,7 +18,7 @@ import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .host_clock import host_boot_id
 
@@ -198,18 +198,29 @@ class EpochRead:
 
     def coverage(self) -> dict[str, Any]:
         """Where the log is known to be whole: spans between two heartbeats
-        with every sequence between them read, every ``dropped`` count and
-        ``errors`` unchanged, and the writer not capped. Only there does a
-        kind the hello ``observes`` prove absent by having no record."""
+        whose drop counts and errors are unchanged, the writer not capped,
+        with every record read that was accepted by the later one's stamp.
+        A heartbeat says how many accepted records it was written ahead of
+        (``pending``); they take the next sequences, so the span reaches
+        past them, and the first heartbeat after them must show nothing lost
+        while they were written. Only there does a kind the hello
+        ``observes`` prove absent by having no record, matched by the
+        record's last stamp, taken just before it is emitted."""
         observes = (self.hello or {}).get("observes")
         spans: list[dict[str, int]] = []
-        for before, after in zip(self.heartbeats, self.heartbeats[1:]):
-            if not self._whole_between(before, after):
+        beats = self.heartbeats
+        joined: int | None = None
+        for index, (before, after) in enumerate(zip(beats, beats[1:])):
+            close = after.seq + _pending(after.data)
+            if not self._whole_between(before, after, close, beats[index + 2 :]):
                 continue
-            if spans and spans[-1]["end_seq"] == before.seq:
-                spans[-1].update(_span_end(after))
+            if spans and joined == before.seq:
+                spans[-1].update(_span_end(after), end_seq=close)
             else:
-                spans.append({**_span_start(before), **_span_end(after)})
+                spans.append(
+                    {**_span_start(before), **_span_end(after), "end_seq": close}
+                )
+            joined = after.seq
         return {
             "basis": COVERAGE_BASIS,
             "observes": sorted(observes) if isinstance(observes, list) else None,
@@ -217,13 +228,23 @@ class EpochRead:
             "spans": spans,
         }
 
-    def _whole_between(self, before: RawRecord, after: RawRecord) -> bool:
-        read = self.contiguous_seq is not None and after.seq <= self.contiguous_seq
-        return (
-            read
-            and _losses(before.data) is not None
-            and _losses(before.data) == _losses(after.data)
-        )
+    def _whole_between(
+        self,
+        before: RawRecord,
+        after: RawRecord,
+        close: int,
+        later: Sequence[RawRecord],
+    ) -> bool:
+        if self.contiguous_seq is None or close > self.contiguous_seq:
+            return False
+        lost = _losses(before.data)
+        if lost is None or lost != _losses(after.data):
+            return False
+        if close == after.seq:
+            return True
+        # A record lost while the pending ones were written counts later.
+        witness = next((beat for beat in later if beat.seq > close), None)
+        return witness is not None and _losses(witness.data) == lost
 
 
 @dataclass
@@ -507,6 +528,17 @@ def _losses(heartbeat: dict[str, Any]) -> tuple[Any, ...] | None:
         return None
     counts = {str(kind): count for kind, count in dropped.items() if count}
     return tuple(sorted(counts.items())), errors
+
+
+def _pending(heartbeat: dict[str, Any]) -> int:
+    """Records accepted before a heartbeat's stamp and written after it. A
+    hook from before the count gives only its queue, which leaves out the
+    batch being written: no more than a lower bound."""
+    for key in ("pending", "queued"):
+        value = _integer(heartbeat.get(key))
+        if value is not None:
+            return value
+    return 0
 
 
 def _span_start(record: RawRecord) -> dict[str, int]:

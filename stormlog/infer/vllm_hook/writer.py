@@ -90,6 +90,9 @@ class EpochWriter:
         self._counters = _Counters()
         self._queue: deque[_Queued] = deque()
         self._queued_bytes = 0
+        # Records taken from the queue and not yet written: with the queue,
+        # what a heartbeat says is still to come.
+        self._in_flight = 0
         self._condition = threading.Condition()
         self._closing = False
         # Set once goodbye is written; no heartbeat record may follow it.
@@ -164,6 +167,7 @@ class EpochWriter:
                 self._write(kind, body)
                 with self._condition:
                     self._queued_bytes -= len(body)
+                    self._in_flight -= 1
                 if self._segment.size >= self.limits.segment_bytes:
                     self._seal()
                 # Checked per record, so a slow disk delays these by one write.
@@ -191,6 +195,7 @@ class EpochWriter:
             batch: list[_Queued] = []
             while self._queue and len(batch) < self.limits.batch_records:
                 batch.append(self._queue.popleft())
+            self._in_flight = len(batch)
             closing = self._closing and not self._queue
             return batch, closing
 
@@ -268,6 +273,9 @@ class EpochWriter:
                 "bytes": counters.bytes,
                 "capped": counters.capped,
                 "queued": len(self._queue),
+                # Accepted before this stamp and not yet written: they take
+                # the next sequences, after this record.
+                "pending": len(self._queue) + self._in_flight,
             }
         try:
             status.update(self._status_fields())

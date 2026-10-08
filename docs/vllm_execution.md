@@ -341,13 +341,16 @@ call and the end stamp after it. Listed in `observes` as `cache_reset`.
 {"kind": "heartbeat", "wall_ns": …, "mono_ns": …, "wall_after_ns": …,
  "last_seq": 1234,
  "dropped": {"alias": 3, "alias_oversized": 1},
- "errors": 0, "bytes": 1048576, "capped": false, "queued": 0}
+ "errors": 0, "bytes": 1048576, "capped": false, "queued": 0, "pending": 0}
 ```
 
 `dropped` counts dropped records by kind, and `<kind>_oversized` counts single
 records over 4 MiB. A record dropped unserialized because the queue was full or
 record writing had stopped counts under its kind, whatever its size. `queued`
-is the number of records waiting to be written.
+is the number of records waiting to be written. `pending` is the number
+accepted before the heartbeat's stamp and not yet written, the batch being
+written included: under a backlog the heartbeat is written ahead of them, and
+they take the next sequences after it.
 
 A worker's heartbeat adds `range_misses` (serving calls that ran without an
 iteration range), `startup_unranged` (warm-up, dummy and CUDA-graph capture
@@ -411,13 +414,22 @@ imports while its server may still be up and needs no such flag.
 
 **Loss coverage.** Each epoch's summary has a `coverage` block saying where
 its log is known to be whole: `spans` from one heartbeat to a later one
-(their `seq`, `mono_ns` and `wall_ns`) with every record between them read,
-every `dropped` count (of any kind, `<kind>_oversized` included) and
-`errors` unchanged, and the writer not capped; `observes` is the hello's
-list, or null for a hook that does not give one. Every import computes it
-from all the heartbeats it read, including ones an earlier import consumed,
-under `basis` `heartbeat_counters/1`. A kind the hello observes is known
-not to have happened in an interval only when a span covers it.
+(their `seq`, `mono_ns` and `wall_ns`) with every `dropped` count (of any
+kind, `<kind>_oversized` included) and `errors` unchanged and the writer not
+capped, and with every record read that was accepted by the later
+heartbeat's stamp: through its `seq` plus its `pending` (the span's
+`end_seq`), the first heartbeat after those also showing nothing lost, since
+a record lost while being written counts only later. `observes` is the
+hello's list, or null for a hook that does not give one. Every import
+computes it from all the heartbeats it read, including ones an earlier
+import consumed, under `basis` `heartbeat_counters/1`; a hook from before
+`pending` gives only `queued`, a lower bound.
+
+A kind the hello observes is known not to have happened in an interval only
+when a span covers it, and a record is matched by its last stamp: the hook
+stamps a record before it emits it, and a call's record (a `cache_reset`'s
+`end_*` stamp) is emitted only when the call returns. A call still running
+when a span ends is not vouched against.
 
 **Liveness.** Beside it, a `liveness` block says when the hook's writer was
 heard from, under `basis` `heartbeat_gaps/1`: the number of heartbeats, the
