@@ -145,11 +145,13 @@ TITLED = textwrap.dedent(
     """
     import subprocess, sys, time
     # argv[1:]: titles of children to start, as "title" or "title/child-title".
+    # A child's own sys.executable is '' on Linux once its argv[0] is a
+    # title, so the grandchild's interpreter is this process's, written in.
     for spec in sys.argv[1:]:
         title, _, child = spec.partition("/")
         script = (
-            "import subprocess, sys, time\\n"
-            + (f"subprocess.Popen([{child!r}, '-c', 'import time; time.sleep(30)'], executable=sys.executable)\\n" if child else "")
+            "import subprocess, time\\n"
+            + (f"subprocess.Popen([{child!r}, '-c', 'import time; time.sleep(30)'], executable={sys.executable!r})\\n" if child else "")
             + "time.sleep(30)"
         )
         subprocess.Popen([title, "-c", script], executable=sys.executable)
