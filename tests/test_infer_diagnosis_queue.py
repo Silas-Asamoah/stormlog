@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from stormlog.infer.diagnosis_context import Assessment, Context
-from stormlog.infer.diagnosis_inputs import read_input
+from stormlog.infer.diagnosis_inputs import Line, read_input
 from stormlog.infer.diagnosis_join import join
 from stormlog.infer.diagnosis_model import Finding
-from stormlog.infer.diagnosis_queue import assess_queue
+from stormlog.infer.diagnosis_queue import _at_capacity, _holds_back, assess_queue
 from stormlog.infer.diagnosis_selection import SelectionOptions, select
-from stormlog.infer.diagnosis_steps import refills
+from stormlog.infer.diagnosis_steps import Step, refills
 from tests.diagnosis_scenarios import (
     MS,
     Engine,
@@ -175,6 +176,11 @@ def test_a_slot_freed_one_step_late_counts_as_full() -> None:
     assert refills(members, finished) == [0, 1]
     # Without b planned in, both slots were freed.
     assert refills([members[0], frozenset("cdefgh")], finished) == [0, 2]
+    # t+1 runs 7 of 8, owed 1: at capacity; 7 owed nothing is not.
+    line = Line(0, "", None, None, None)
+    step = Step("1", 0, 1, None, 7, 7, admitted=0, preempted=0, line=line, refill=1)
+    assert _at_capacity(step, 8, 2048)
+    assert not _at_capacity(replace(step, refill=0), 8, 2048)
 
 
 def test_admissions_rule_out_a_pause_only_while_requests_waited(
@@ -319,7 +325,7 @@ def test_a_stall_during_the_waits_is_judged_by_its_length(
 
 def _entering_after(requests: list[SimRequest], engine: Engine) -> None:
     """vLLM adds requests on the engine thread: one that reaches the engine
-    during a stall enters its queue only when the loop resumes."""
+    during a stall enters its queue only after the loop resumes."""
     probe = Engine(max_num_seqs=engine.max_num_seqs, stall=engine.stall)
     starts = sorted(
         record["start_mono_ns"]
@@ -329,7 +335,7 @@ def _entering_after(requests: list[SimRequest], engine: Engine) -> None:
     gap = max(zip(starts, starts[1:]), key=lambda pair: pair[1] - pair[0])
     for request in requests:
         if gap[0] < request.admitted_ns < gap[1]:
-            request.enqueue_ns = gap[1] - 1 - request.admitted_ns
+            request.enqueue_ns = gap[1] + MS - request.admitted_ns
 
 
 def test_a_stall_that_built_the_backlog_is_not_ruled_out(tmp_path: Path) -> None:
@@ -346,6 +352,14 @@ def test_a_stall_that_built_the_backlog_is_not_ruled_out(tmp_path: Path) -> None
 
     assert _alternatives(finding)["engine_stall"] == "not_ruled_out"
     assert finding.claim == "observation"
+
+
+def test_a_stall_holds_back_waits_it_overlaps_or_ended_just_before() -> None:
+    stall = (100, 200)
+    assert _holds_back(stall, (150, 300))  # overlaps
+    assert _holds_back(stall, (250, 400))  # began 50 after a 100-long stall
+    assert not _holds_back(stall, (350, 400))  # 150 after: unrelated
+    assert not _holds_back(stall, (0, 100))  # ended as the stall began
 
 
 def test_without_engine_records_the_queue_is_unsupported(tmp_path: Path) -> None:
