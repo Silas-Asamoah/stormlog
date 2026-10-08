@@ -91,6 +91,24 @@ def test_a_queue_that_explains_little_of_the_ttft_rise_is_no_warning(
     )
 
 
+def test_kv_preemption_upstream_leaves_the_queue_no_fault(tmp_path: Path) -> None:
+    """The burst into a KV budget of 55 tokens: the waits are real, but the
+    steps run while requests waited preempted some of them, so the queue may
+    be KV's consequence and claims no fault."""
+    assessment = _assess(
+        tmp_path, _requests(output=8), Engine(max_num_seqs=4, kv_tokens=55)
+    )
+
+    (finding,) = assessment.findings
+    assert _alternatives(finding)["kv_preemption_pressure"] == "upstream"
+    assert finding.contested == ["competitor:kv_preemption_pressure:upstream"]
+    assert (finding.severity, finding.claim, finding.role) == (
+        "info",
+        "condition",
+        "primary",
+    )
+
+
 @pytest.mark.parametrize(
     "enqueue_ms, status, claim",
     [
