@@ -292,6 +292,38 @@ class EngineRecorder:
             {"from": _state_name(before), "to": _state_name(after), **stamp()},
         )
 
+    # ------------------------------------------------------------ cache resets
+
+    def reset_call(
+        self, scheduler: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
+        """A ``reset_prefix_cache`` call's settings and running requests, and
+        its start, read before vLLM runs it."""
+        named = dict(zip(("reset_running_requests", "reset_connector"), args))
+        named.update(kwargs)
+        return {
+            "reset_running_requests": bool(named.get("reset_running_requests")),
+            "reset_connector": bool(named.get("reset_connector")),
+            "running": [str(request.request_id) for request in scheduler.running],
+            **{f"start_{name}": value for name, value in stamp().items()},
+        }
+
+    def on_cache_reset(
+        self, call: dict[str, Any] | None, succeeded: bool | None
+    ) -> None:
+        """The call's outcome: its return value, or null when it raised."""
+        if call is None:
+            return
+        self.writer.emit(
+            "cache_reset",
+            {
+                **call,
+                "succeeded": succeeded,
+                "raised": succeeded is None,
+                **{f"end_{name}": value for name, value in stamp().items()},
+            },
+        )
+
     # ------------------------------------------------------------ exit
 
     def on_free(self, request: Any) -> None:

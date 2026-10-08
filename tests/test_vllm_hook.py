@@ -152,6 +152,8 @@ def _fake_vllm() -> dict[str, types.ModuleType]:
             self.next_output: SchedulerOutput | None = None
             self.update_error: Exception | None = None
             self._pause_state = PauseState.UNPAUSED
+            self.running: list[FakeRequest] = []
+            self.reset_error: Exception | None = None
 
         @property
         def pause_state(self) -> PauseState:
@@ -163,6 +165,16 @@ def _fake_vllm() -> dict[str, types.ModuleType]:
         def add_request(self, request: Any) -> None:
             # A live ID's later add is a streaming-input request's next input.
             self.requests.setdefault(request.request_id, request)
+
+        def reset_prefix_cache(
+            self, reset_running_requests: bool = False, reset_connector: bool = False
+        ) -> bool:
+            """vLLM 0.30.0's order: preempt every running request, then reset."""
+            if reset_running_requests:
+                self.running.clear()
+            if self.reset_error is not None:
+                raise self.reset_error
+            return not self.running
 
         def schedule(self, throttle_prefills: bool = False) -> SchedulerOutput:
             assert self.next_output is not None
@@ -525,7 +537,10 @@ def test_pause_transitions_and_the_state_each_step_saw(vllm: dict[str, Any]) -> 
     assert refused.pause_state is PauseState.PAUSED_ALL
     records = _records(vllm["root"], "engine")
     hellos = _of(records, "hello")
-    assert [hello["observes"] for hello in hellos] == [["enqueued", "pause"], []]
+    assert [hello["observes"] for hello in hellos] == [
+        ["cache_reset", "enqueued", "pause"],
+        [],
+    ]
     pauses = _of(records, "pause")
     assert [(p["from"], p["to"]) for p in pauses] == [
         ("UNPAUSED", "PAUSED_NEW"),
@@ -552,6 +567,41 @@ def test_a_request_entering_the_scheduler_is_stamped_once(vllm: dict[str, Any]) 
         (e["internal"], e["structured_output"], e["resumable"]) for e in enqueued
     ] == [("s-1", False, True), ("g-1", True, False), ("u-1", None, None)]
     assert all(e["wall_ns"] <= e["wall_after_ns"] for e in enqueued)
+
+
+def test_a_cache_reset_records_who_was_running_and_how_it_ended(
+    vllm: dict[str, Any]
+) -> None:
+    scheduler = vllm["Scheduler"](vllm_config())
+    scheduler.running = [FakeRequest("a-1", 2), FakeRequest("b-1", 2)]
+
+    assert scheduler.reset_prefix_cache() is False  # requests hold the cache
+    assert scheduler.reset_prefix_cache(True, reset_connector=True) is True
+    scheduler.running = [FakeRequest("c-1", 2)]
+    scheduler.reset_error = RuntimeError("remote KV transfer pending")
+    with pytest.raises(RuntimeError, match="remote KV transfer"):
+        scheduler.reset_prefix_cache(reset_running_requests=True)
+
+    resets = _of(_records(vllm["root"], "engine"), "cache_reset")
+    assert [
+        (
+            r["reset_running_requests"],
+            r["reset_connector"],
+            r["running"],
+            r["succeeded"],
+            r["raised"],
+        )
+        for r in resets
+    ] == [
+        (False, False, ["a-1", "b-1"], False, False),
+        (True, True, ["a-1", "b-1"], True, False),
+        # vLLM preempts before it fails, so its running requests still count.
+        (True, False, ["c-1"], None, True),
+    ]
+    for reset in resets:
+        assert reset["start_wall_ns"] <= reset["start_wall_after_ns"]
+        assert reset["start_mono_ns"] <= reset["end_mono_ns"]
+        assert reset["end_wall_ns"] <= reset["end_wall_after_ns"]
 
 
 def test_a_method_vllm_lacks_is_neither_patched_nor_claimed() -> None:
@@ -741,7 +791,10 @@ def test_hello_records_the_layout_the_profiler_and_the_process(
             "parent_process_start_ticks": parent * 10,
             "parent_process_start_ns": parent * 1_000,
         }
-    assert (engine["enabled"], engine["observes"]) == (True, ["enqueued", "pause"])
+    assert (engine["enabled"], engine["observes"]) == (
+        True,
+        ["cache_reset", "enqueued", "pause"],
+    )
     assert _of(_records(vllm["root"], "worker"), "hello")[0]["observes"] == []
     worker_config = _of(_records(vllm["root"], "worker"), "hello")[0]["config"]
     # A worker has no scheduler: its layout is the configured one.
