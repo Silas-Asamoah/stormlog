@@ -43,6 +43,8 @@ METRICS = (TTFT, E2E)
 MEASURED = "measured"
 
 DECLARED_BY_CALLER = "caller"
+DECLARED = "declared"  # a declared subject has no detection time
+DETECTION_BASIS = "selection_sustained/1"
 INSUFFICIENT_REFERENCE = "insufficient_reference"
 TOO_FEW_REQUESTS = "too_few_requests"
 LEGACY_NO_DISPATCH = "legacy_no_dispatch_records"
@@ -95,6 +97,26 @@ class Window:
     def flagged(self) -> bool:
         return any(test.flagged for test in self.tests.values())
 
+    def evidence(self) -> dict[str, Any]:
+        """The window as detection evidence: when it was judged, on what it
+        was flagged, and each test's counts."""
+        return {
+            "start_ns": self.start_ns,
+            "end_ns": self.end_ns,
+            "evaluated_at_ns": self.evaluated_at_ns,
+            "flagged_on": [m for m, test in self.tests.items() if test.flagged],
+            "tests": {
+                metric: {
+                    "above": test.window_above,
+                    "n": test.window_above + test.window_below,
+                    "reference_above": test.reference_above,
+                    "reference_n": test.reference_above + test.reference_below,
+                    "p": test.p_value,
+                }
+                for metric, test in self.tests.items()
+            },
+        }
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "case_id": self.case_id,
@@ -144,6 +166,18 @@ class Subject:
     def incident(self) -> bool:
         """Declared subjects are incidents by declaration."""
         return self.declared_by is not None or bool(self.windows)
+
+    def detection_evidence(self) -> dict[str, Any] | None:
+        """What made the subject selectable at ``first_detectable_ns``: the
+        two windows the sustain rule needed, each judged at its evaluation
+        time from the client records stamped by then."""
+        if self.first_detectable_ns is None or len(self.windows) < 2:
+            return None
+        return {
+            "basis": DETECTION_BASIS,
+            "windows": [window.evidence() for window in self.windows[:2]],
+            "client_records_through_ns": self.first_detectable_ns,
+        }
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -523,6 +557,7 @@ def _declared(
                 requests=known,
                 reference=_earlier(by_case, flagged, known),
                 declared_by=DECLARED_BY_CALLER,
+                detection_unavailable=DECLARED,
             )
         )
     return subjects
@@ -595,6 +630,7 @@ def _declared_window(
         requests=inside,
         reference=reference,
         declared_by=DECLARED_BY_CALLER,
+        detection_unavailable=DECLARED,
     )
 
 
@@ -603,7 +639,9 @@ def _at(request: ClientRequest) -> int:
 
 
 __all__ = [
+    "DECLARED",
     "DECLARED_BY_CALLER",
+    "DETECTION_BASIS",
     "E2E",
     "INSUFFICIENT_REFERENCE",
     "LEGACY_NO_DISPATCH",
