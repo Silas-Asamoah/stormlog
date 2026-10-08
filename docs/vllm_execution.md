@@ -425,6 +425,16 @@ output tokens and nothing read from its counters; the coverage block counts
 such steps. A request's `input_tokens` is its prompt at the first sighting;
 a `resumable` request's later prompts are on its memberships.
 
+Every record the import writes names its epoch and its `source_seq_max` in
+its metadata: the `seq` of the last raw record it was derived from, so an
+import whose read had reached that record could have written it. For a step
+that is the record that made it final (its `completed` record, the first
+completion of a later step when its own output never came, or the last
+record of an ended epoch); a membership adds the `terminal` record of a
+finish it carries; a request takes its first final step, its alias and its
+`enqueued` record; a clock alignment takes the hello, or the goodbye that
+bounds it.
+
 **Binding.** A request is the run's when its alias `external` is
 `chatcmpl-<x_request_id>` or `cmpl-<x_request_id>-<i>` for an
 `x_request_id` the artifact recorded, in an `infer.dispatch` record (at the
