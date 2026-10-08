@@ -488,6 +488,57 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
     assert found == decision
 
 
+def test_a_recovery_that_can_never_hold_ends_the_episode_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # close-221-delta, H4: an engine refused by G0's dose check waited out
+    # the full recovery timeout (150 s) before its episode ended. Its
+    # recovery can never hold, so the decision is a timeout at once, with
+    # no poll waited.
+    from examples.qualification import inject as module
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+    from stormlog.infer.qualify.recovery import (
+        TIMEOUT,
+        Actions,
+        Baseline,
+        GapStats,
+        Signals,
+        Timing,
+    )
+
+    second = 1_000_000_000
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "F4a"}]})
+    now = [100 * second]
+
+    def clock() -> int:
+        now[0] += second // 4
+        return now[0]
+
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-x"), Server("", "m", tmp_path, {}),
+        clock=clock,
+    )  # fmt: skip
+    # 30 too-long gaps among 1,000 busy ones of 20 ms: 1.5 per 1 s hold.
+    steps = GapStats(count=1000, mean=0.02, p95=0.03, p99=0.03, too_long_count=30)
+    baseline = Baseline(
+        wait_p95=1.0, waiting_low=0.0, waiting_high=1.0, kv_max=0.5,
+        steps=steps, chunks=GapStats(), cached_median=1.0,
+    )  # fmt: skip
+    slept: list[float] = []
+    monkeypatch.setattr(run, "_signals", lambda: Signals(in_flight=[(0, 10**18)]))
+    monkeypatch.setattr(
+        run, "_timing", lambda *_args: Timing(90 * second, "test", None, None)
+    )
+    monkeypatch.setattr(module.time, "sleep", slept.append)
+    decision, _timing = run._recover(
+        plan.episodes[0], baseline, Actions(), 90 * second, 95 * second
+    )
+    assert (decision, slept) == (TIMEOUT, [])
+
+
 def test_targets_are_bound_at_startup(tmp_path: Path) -> None:
     from examples.qualification.__main__ import _targets
 

@@ -136,7 +136,7 @@ measured window with length.
 | `not_actuated` | the action didn't happen |
 | `invalid_alignment` | the episode isn't aligned (below) |
 | `not_realized` | the mechanism didn't occur |
-| `recovery_incomplete` | recovery timed out |
+| `recovery_incomplete` | recovery timed out, or could never hold: the record's `injected.recovery_blocked` then says why (`baseline_too_thin`, `dose_check_failed`), the episode ends at once rather than after the timeout, and the scorer counts it as not evaluable |
 
 Otherwise the status is `valid`.
 
