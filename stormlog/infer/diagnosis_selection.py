@@ -213,12 +213,27 @@ class Selection:
     subjects: list[Subject]
     windows: list[Window]
     tested: bool  # whether automatic selection ran
+    alpha: float = 0.01
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "automatic": self.tested,
+            "error_rate": self.error_rate(),
             "windows": [window.as_dict() for window in self.windows],
             "subjects": [subject.as_dict() for subject in self.subjects],
+        }
+
+    def error_rate(self) -> dict[str, Any]:
+        """What is known of selection's false incidents. The test's level
+        is per window and holds only for independent requests; requests in
+        a continuous-batching server share batch state, and serial
+        correlation inflates the rate sharply. The calibrated rate comes
+        from #221's healthy runs; until then it is unknown."""
+        return {
+            "test": "fisher_exact_one_sided",
+            "alpha_per_window": self.alpha,
+            "assumes": "independent_requests",
+            "calibrated_false_incident_rate": None,
         }
 
 
@@ -228,11 +243,12 @@ def select(view: RunView, options: SelectionOptions | None = None) -> Selection:
     options = options or SelectionOptions()
     windows = _all_windows(view, options)
     declared = _declared(view, options, windows)
+    alpha = resolve_threshold(SELECTION_ALPHA, options.thresholds)[0]
     if declared:
-        return Selection(declared, windows, tested=False)
+        return Selection(declared, windows, tested=False, alpha=alpha)
     if options.case_ids:
         windows = [w for w in windows if w.case_id in options.case_ids]
-    return Selection(_incidents(view, windows), windows, tested=True)
+    return Selection(_incidents(view, windows), windows, tested=True, alpha=alpha)
 
 
 # ------------------------------------------------------------------ windows

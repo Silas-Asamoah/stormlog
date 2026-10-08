@@ -74,6 +74,13 @@ def test_a_sustained_burst_is_one_incident_detected_on_its_second_window(
     assert incident.first_detectable_ns == incident.windows[1].evaluated_at_ns
     test = incident.windows[0].tests[TTFT]
     assert test.p_value < 0.01 and test.window_above >= 3
+    # Alpha is per window under independence, not the false-incident rate.
+    assert selection.as_dict()["error_rate"] == {
+        "test": "fisher_exact_one_sided",
+        "alpha_per_window": 0.01,
+        "assumes": "independent_requests",
+        "calibrated_false_incident_rate": None,
+    }
 
 
 def test_an_incident_is_placed_where_it_was_first_seen(tmp_path: Path) -> None:

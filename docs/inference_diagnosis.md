@@ -217,6 +217,17 @@ the measured phase:
   (window above, window below) against (reference above, reference below)
   flags the window at α = 0.01, if at least 3 of its requests are above. A
   failed request is above any threshold.
+- **Error rate.** α is per window and holds only if requests are
+  independent. In a continuous-batching server consecutive requests share
+  batch state: in a simulation with the selection's own test, 0.2% of
+  healthy 30-window runs got a false incident with independent requests,
+  11% with a lag-1 correlation of 0.5, and 80% with 0.9. So α is not the
+  rate of false incidents, and `selection.error_rate` says so: the test,
+  `alpha_per_window`, `assumes: independent_requests`, and
+  `calibrated_false_incident_rate`, null until #221's healthy runs measure
+  it. The classes' gates, not the test, are what keep a false incident from
+  becoming a warning: a bursty run below capacity selects an incident and
+  stays `inconclusive`.
 - **Incident.** At least two consecutive flagged windows of a case, joined
   into one subject. One bad window alone is not an incident.
 - **Onset.** A window joined forward from calm traffic can begin seconds
