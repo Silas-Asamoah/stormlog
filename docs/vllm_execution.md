@@ -423,8 +423,9 @@ its log is known to be whole: `spans` from one heartbeat to a later one
 (their `seq`, `mono_ns` and `wall_ns`) with every `dropped` count (of any
 kind, `<kind>_oversized` included) and `errors` unchanged and the writer not
 capped, and with every record read that was accepted by the later
-heartbeat's stamp: through its `seq` plus its `pending` (the span's
-`end_seq`), the first heartbeat after those also showing nothing lost, since
+heartbeat's stamp: through its `seq` plus its `pending`, plus any heartbeat
+the writer wrote before those records came (the span's `end_seq`), the
+first heartbeat after those also showing nothing lost, since
 a record lost while being written counts only later. `observes` is the
 hello's list, or null for a hook that does not give one. Every import
 computes it from all the heartbeats it read, including ones an earlier
