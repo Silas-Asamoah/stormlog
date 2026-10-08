@@ -211,6 +211,10 @@ recovery. A hold found earlier, in an idle stretch, can still be complete
 when a request sent since is stuck, so `engine_stalled(context, now)` reads
 the present: whether the busy part of the gap still open at `now` is longer
 than twice the baseline's p99. The harness says START only while it isn't.
+A step's record reaches the channel a little after the step starts, so
+`engine_stalled(context, now, lag_ns)` judges the gap as it stood `lag_ns`
+earlier: on a 5 ms engine, records 15 ms late read as a hang at most polls
+without it.
 
 **A baseline too thin to compare with never recovers.** A criterion whose
 baseline has fewer samples than it needs in a hold (20 busy gaps, 20 waits,
