@@ -3,7 +3,8 @@
 Requests belong to the window of their intended arrival (their send, when an
 arrival had no intended time), so a window holds what arrived in it however
 long it took. Base windows are coalesced forward until each holds enough
-requests, up to a span cap. A window is compared with the earlier windows of
+requests, up to a span cap; a window that holds enough ends early at the
+next arrival in its base window, so a dense burst spans several. A window is compared with the earlier windows of
 its case that were not flagged themselves, pooled to the reference floor; it
 is flagged when a one-sided Fisher's exact test finds more of its requests
 above the reference's p90 than the reference has, at the threshold table's
@@ -233,31 +234,53 @@ def _coalesce(
 ) -> list[Window]:
     """Consecutive base windows joined until they hold ``minimum`` requests,
     or span the cap; an empty stretch that reaches the cap is a window too,
-    so a silence breaks a run of flagged windows."""
+    so a silence breaks a run of flagged windows. A window that holds
+    ``minimum`` requests ends early at the next arrival in its base window,
+    which starts the next one: a burst that arrives inside one base window
+    still spans several, so the sustain rule sees how long it lasted. Each
+    boundary is known when it passes, so a prefix of the run draws the same
+    windows up to its end."""
     if not requests:
         return []
     origin = assignment_ns(requests[0]) or 0
-    by_base: dict[int, list[str]] = {}
+    by_base: dict[int, list[ClientRequest]] = {}
     for request in requests:
         index = ((assignment_ns(request) or 0) - origin) // base
-        by_base.setdefault(index, []).append(request.request_id)
+        by_base.setdefault(index, []).append(request)
     windows: list[Window] = []
-    first, members = 0, []
-    last = max(by_base)
-    for index in range(last + 1):
-        members += by_base.get(index, [])
-        if len(members) >= minimum or (index + 1 - first) * base >= cap:
-            windows.append(_window(case_id, origin, base, first, index, members))
-            first, members = index + 1, []
+    start, members = origin, list[str]()
+    for index in range(max(by_base) + 1):
+        start, members = _fill(
+            windows, case_id, start, members, by_base.get(index, []), minimum
+        )
+        end = origin + (index + 1) * base
+        if len(members) >= minimum or end - start >= cap:
+            windows.append(Window(case_id, start, end, members))
+            start, members = end, list[str]()
     if members:
-        windows.append(_window(case_id, origin, base, first, last, members))
+        windows.append(
+            Window(case_id, start, origin + (max(by_base) + 1) * base, members)
+        )
     return windows
 
 
-def _window(
-    case_id: str, origin: int, base: int, first: int, last: int, members: list[str]
-) -> Window:
-    return Window(case_id, origin + first * base, origin + (last + 1) * base, members)
+def _fill(
+    windows: list[Window],
+    case_id: str,
+    start: int,
+    members: list[str],
+    arrivals: list[ClientRequest],
+    minimum: int,
+) -> tuple[int, list[str]]:
+    """Add one base window's arrivals to the open window, which ends at the
+    next arrival once it holds ``minimum``; the open window after them."""
+    for request in arrivals:
+        at = assignment_ns(request) or 0
+        if len(members) >= minimum and at > start:
+            windows.append(Window(case_id, start, at, members))
+            start, members = at, list[str]()
+        members.append(request.request_id)
+    return start, members
 
 
 # --------------------------------------------------------------- the tests
