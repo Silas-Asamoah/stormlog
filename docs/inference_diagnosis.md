@@ -53,6 +53,7 @@ The payload, `stormlog.inference_diagnosis` v1
 | `coverage` | per kind: `assessed`, `partial` or `unsupported`, with reasons, per subject |
 | `findings_detail` | per finding ID: its claim, cause, role, what drove it (`driver`, `driver_evidence`), eligibility, confidence, location, window, detection time and evidence, observations, alternatives, experiment, up to 8 display pointers and its full support |
 | `thresholds` | the table version, the overridden keys and every value used |
+| `edges` | the fixed table of edges roles are settled by, and its version (`diagnosis_edges_v1`) |
 
 The envelope's findings carry the verdict, flat metrics and up to 8
 evidence pointers: `path` (relative to the report's directory when the
