@@ -15,6 +15,7 @@
     "selection",
     "coverage",
     "findings_detail",
+    "memory",
     "thresholds"
   ],
   "properties": {
@@ -77,7 +78,39 @@
       "propertyNames": { "pattern": "^diagnosis\\.[a-z_]+\\.[0-9a-f]{12}$" },
       "additionalProperties": { "$ref": "#/$defs/finding" }
     },
-    "memory": { "type": "object" },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries", "nesting", "rule"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["category", "status", "peak"],
+            "properties": {
+              "category": { "type": "string" },
+              "status": { "enum": ["observed", "not_collected", "unsupported", "exporter_scoped"] },
+              "peak": {
+                "oneOf": [
+                  { "type": "null" },
+                  {
+                    "type": "object",
+                    "required": ["scope", "value"],
+                    "properties": {
+                      "scope": { "enum": ["sampled_max", "lifetime_peak"] },
+                      "value": { "type": "integer", "minimum": 0 }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "nesting": { "type": "object" },
+        "rule": { "type": "string" }
+      }
+    },
     "thresholds": {
       "type": "object",
       "additionalProperties": false,
