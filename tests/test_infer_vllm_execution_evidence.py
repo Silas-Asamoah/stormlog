@@ -654,6 +654,27 @@ def test_a_reset_waits_until_the_step_that_lists_it_is_final(tmp_path: Path) -> 
     assert sorted(names) == ["engine.preempted_by_reset"] * 2
 
 
+def test_a_reset_with_nothing_running_holds_no_mark(tmp_path: Path) -> None:
+    """vLLM's default pause aborts every request, then resets the prefix
+    cache with reset_running_requests and nothing running: no step will list
+    its preemptions, so nothing waits for one."""
+    records = [
+        *_admitted(OWN0, OWN1),  # 0..4
+        pause("UNPAUSED", "PAUSED_NEW", T0 + SECOND + 1),  # 5
+        cache_reset([], T0 + SECOND + 5),  # 6
+        pause("PAUSED_NEW", "UNPAUSED", T0 + SECOND + 9),  # 7
+        scheduled(1, T0 + 2 * SECOND, [member(OWN0, scheduled=1, sighting="repeat")]),
+        completed(1, T0 + 2 * SECOND + 10, [done(OWN0)]),  # 9
+        scheduled(2, T0 + 3 * SECOND, [member(OWN0, scheduled=1, sighting="repeat")]),
+        completed(2, T0 + 3 * SECOND + 10, [done(OWN0)]),  # 11
+        heartbeat(T0 + 4 * SECOND, 11),  # 12
+    ]
+
+    result = _reduce(tmp_path, records, _two_requests())
+
+    assert result.high_water == {EPOCH: 12}
+
+
 def test_a_reset_s_preemption_waits_for_its_request_record(tmp_path: Path) -> None:
     first = [
         hello("engine", PID, START, observes=OBSERVES),  # 0

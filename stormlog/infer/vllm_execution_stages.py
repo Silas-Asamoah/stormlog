@@ -318,11 +318,15 @@ class ResetPreemptions:
             if record.kind == "cache_reset" and record.data.get(
                 "reset_running_requests"
             ):
-                since |= set(_texts(record.data.get("running")))
-                if first is None:
+                running = set(_texts(record.data.get("running")))
+                if running and first is None:
+                    # A reset with nothing running (vLLM's default pause
+                    # resets after aborting all) has nothing to list.
                     first = record.seq
-            elif record.kind == "scheduled" and since:
-                self.by_step[record.seq] = since
+                since |= running
+            elif record.kind == "scheduled":
+                if since:
+                    self.by_step[record.seq] = since
                 if first is not None:
                     self.first_reset[record.seq] = first
                 since, first = set(), None
