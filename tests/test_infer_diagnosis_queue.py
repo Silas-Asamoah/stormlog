@@ -67,6 +67,29 @@ def test_a_full_engine_s_waits_are_a_queue_fault(burst: Assessment) -> None:
     assert finding.support and len(finding.display) <= 8
 
 
+def test_the_witness_counts_steps_while_someone_waited(tmp_path: Path) -> None:
+    """A subject's window can begin in calm traffic before the burst, as the
+    first real run's did: its early requests wait some microseconds for an
+    idle engine to wake. Steps between those waits ran nobody waiting, and
+    count neither for capacity nor against it."""
+    requests = _requests()
+    view = join(
+        read_input(
+            build_run(tmp_path, requests, Engine(max_num_seqs=4, wake_ns=20_000))
+        )
+    )
+    start = BURST_AT + WALL_OFFSET - 30 * SECOND
+    context = Context(
+        view, select(view, SelectionOptions(windows=((start, start + 40 * SECOND),)))
+    )
+    (subject,) = context.subjects()
+
+    (finding,) = assess_queue(context, subject).findings
+
+    assert finding.gates["capacity_witness"]
+    assert finding.metrics["steps_at_capacity_share"] == pytest.approx(1.0, abs=0.02)
+
+
 def test_an_older_log_cannot_tell_ingress_from_the_queue(tmp_path: Path) -> None:
     engine = Engine(max_num_seqs=4, enqueued_records=False, observes=None)
     assessment = _assess(tmp_path, _requests(), engine)
