@@ -100,6 +100,8 @@ class Engine:
     # From this monotonic time, heartbeats report one oversized cache reset
     # the writer dropped.
     dropped_from: int | None = None
+    # Extra settings the hello's config reports.
+    config: dict[str, Any] = field(default_factory=dict)
     # (mono_ns, delta_ns): the host's wall clock steps by delta at mono_ns.
     wall_jump: tuple[int, int] | None = None
     # (mono_ns, duration_ns): the engine loop stops for duration after the
@@ -431,6 +433,7 @@ def hello_record(engine: Engine) -> dict[str, Any]:
             "max_num_seqs": engine.max_num_seqs,
             "max_num_batched_tokens": engine.max_num_batched_tokens,
             "request_id_randomization": True,
+            **engine.config,
         },
         "clock": {**stamp(0), "gap_ns": 800},
     }
