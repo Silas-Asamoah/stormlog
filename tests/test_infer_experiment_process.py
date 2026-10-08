@@ -748,6 +748,14 @@ def test_a_launch_ends_in_its_journal_only_by_a_whole_line(tmp_path: Path) -> No
     assert journaled(journal) == [entry]
     end_journaled(launched, Cleanup(True, "proc"))
     assert journaled(journal) == []
+    # gate-213-b23's G2: a later entry started on the torn line, joined it,
+    # and so went unread.
+    journal.write_text(whole + end[:-1])
+    later = launch("step", [sys.executable, "-c", "pass"], journal=journal)
+    later.process.wait(timeout=5)
+    assert [item["mark"] for item in journaled(journal)] == [entry["mark"], later.mark]
+    end_journaled(later, Cleanup(True, "proc"))
+    assert journaled(journal) == [entry]
     # An end names its launch by the whole mark.
     journal.write_text(whole + json.dumps({"ended": launched.mark[:16]}) + "\n")
     assert journaled(journal) == [entry]
