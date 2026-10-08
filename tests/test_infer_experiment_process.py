@@ -681,3 +681,77 @@ def test_a_launch_ends_in_its_journal_only_by_a_whole_line(tmp_path: Path) -> No
     # An end names its launch by the whole mark.
     journal.write_text(whole + json.dumps({"ended": launched.mark[:16]}) + "\n")
     assert journaled(journal) == [entry]
+
+
+# An orphan with an emptied environment that waits for the launch's leader
+# to exit, then 2.5 s, starts another one (its PID into argv[2]) and exits.
+# The grandchild starts through env -i: Linux's dash exports PWD to its
+# children, which would make the grandchild's environment readable.
+LATE_GRANDCHILD = (
+    "import subprocess, sys; "
+    "script = 'while kill -0 {leader} 2>/dev/null; do /bin/sleep 0.1; done; "
+    "/bin/sleep 2.5; /usr/bin/env -i /bin/sleep 60 & echo $! > {out}; exit 0'; "
+    "subprocess.Popen(['/bin/sh', '-c', script.format(leader=sys.argv[1], "
+    "out=sys.argv[2])], env={}, start_new_session=True)"
+)
+
+
+def test_an_orphan_started_late_by_a_blind_one_is_not_cleared_by_its_start(
+    tmp_path: Path,
+) -> None:
+    # close-213-pr24-cloud's F3: a blind orphan, seen at the first poll,
+    # started an emptied grandchild once the leader had been gone 2 s and
+    # left; the grandchild's late start cleared it, and the check verified
+    # while it ran on.
+    out = tmp_path / "grandchild.pid"
+    launched = launch(
+        "server",
+        [sys.executable, "-c", "import sys, time; time.sleep(0.3)", str(out)],
+    )
+    spawner = subprocess.Popen(
+        [sys.executable, "-c", LATE_GRANDCHILD, str(launched.pid), str(out)],
+        env={**os.environ, MARK_VARIABLE: launched.mark},
+    )
+    spawner.wait(timeout=5)
+    launched.process.wait(timeout=5)
+    launched.poll()
+    try:
+        cleanup = verify_cleanup(
+            launched.pid,
+            wait_s=4.5,
+            mark=launched.mark,
+            since=launched.identity,
+            lasted_s=launched.lasted_s(),
+        )
+        assert not cleanup.verified
+        assert int(out.read_text()) in [item["pid"] for item in cleanup.blind]
+    finally:
+        if out.exists():
+            os.kill(int(out.read_text()), signal.SIGKILL)
+
+
+def test_a_clean_poll_after_one_that_found_something_verifies_only_if_the_next_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The same escape within one poll: the blind orphan started its
+    # grandchild and left while the poll read the process table, so the poll
+    # listed neither. The next poll, which starts after it left, lists the
+    # grandchild.
+    from stormlog.infer import experiment_process as ep
+
+    orphan = {"pid": 10, "start_ticks": 1, "boot_id": "b"}
+    grandchild = {"pid": 11, "start_ticks": 2, "boot_id": "b"}
+
+    def looks(*blinds: tuple[dict[str, Any], ...]) -> None:
+        polls = iter([ep._Poll(set(), blind, 0) for blind in blinds])
+        last = ep._Poll(set(), blinds[-1], 0)
+        monkeypatch.setattr(ep, "_look", lambda *args: next(polls, last))
+
+    looks((orphan,), (), (grandchild,))
+    cleanup = verify_cleanup(4000, wait_s=0.3)
+    assert (cleanup.verified, cleanup.blind) == (False, (grandchild,))
+    looks((orphan,), (), ())
+    assert verify_cleanup(4000, wait_s=0.3).verified
+    # Nothing seen: the first clean poll verifies.
+    looks(())
+    assert verify_cleanup(4000, wait_s=0).verified
