@@ -352,6 +352,46 @@ def test_coverage_needs_every_record_between_two_heartbeats(tmp_path: Path) -> N
     assert _spans(coverage) == [(1, 3)]
 
 
+def test_liveness_lists_the_stretches_no_heartbeat_was_heard(tmp_path: Path) -> None:
+    # Seconds: a 2.3 s slip, as under load on a real run, then six silent
+    # seconds from 5.3 s to 11.3 s.
+    beats = [0.0, 1.0, 2.0, 4.3, 5.3, 11.3, 12.3]
+    records = [hello("engine", PID, START)]
+    records += [heartbeat(T0 + round(at * SECOND), n) for n, at in enumerate(beats)]
+    write_epoch(tmp_path, "engine", PID, START, records)
+
+    (epoch,) = read_execution_log(
+        tmp_path, importer=HERE, high_water={EPOCH: 5}
+    ).engines()
+    liveness = epoch.summary()["liveness"]
+
+    # Every heartbeat counts, those an earlier import consumed included.
+    assert liveness["heartbeats"] == 7
+    assert (liveness["first"]["start_mono_ns"], liveness["last"]["end_mono_ns"]) == (
+        T0,
+        T0 + round(12.3 * SECOND),
+    )
+    # The slip is not a gap; the six silent seconds are.
+    (gap,) = liveness["gaps"]
+    assert (gap["start_mono_ns"], gap["end_mono_ns"]) == (
+        T0 + round(5.3 * SECOND),
+        T0 + round(11.3 * SECOND),
+    )
+    assert gap["start_wall_ns"] == T0 + round(5.3 * SECOND) + WALL_OFFSET
+    assert liveness["gap_ns"] == 5 * SECOND
+    assert liveness["max_interval_ns"] == 6 * SECOND
+
+
+def test_an_epoch_without_heartbeats_has_no_liveness_bounds(tmp_path: Path) -> None:
+    write_epoch(tmp_path, "engine", PID, START, [hello("engine", PID, START)])
+
+    (epoch,) = read_execution_log(tmp_path, importer=HERE).engines()
+
+    liveness = epoch.liveness()
+    assert liveness["first"] is None and liveness["max_interval_ns"] is None
+    assert liveness["gaps"] == []
+
+
 def test_coverage_spans_what_earlier_imports_consumed(tmp_path: Path) -> None:
     records = [hello("engine", PID, START)]
     records += [heartbeat(T0 + n * SECOND, n) for n in range(4)]

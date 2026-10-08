@@ -38,6 +38,11 @@ STATE_ALIVE = "alive"
 # alive or gone, and its pending steps are left for a later import.
 STATE_UNKNOWN = "unknown"
 COVERAGE_BASIS = "heartbeat_counters/1"
+LIVENESS_BASIS = "heartbeat_gaps/1"
+# The hook's writer beats once a second, but under load its thread slips: on
+# the real vLLM 0.30.0 runs from #217 the longest interval was 2.3 s, with
+# nothing lost. A stretch over five beats is a gap it was not heard from in.
+HEARTBEAT_GAP_NS = 5_000_000_000
 
 
 @dataclass(frozen=True)
@@ -159,6 +164,36 @@ class EpochRead:
             "pending_samples": status.get("pending_samples"),
             "errors": list(self.errors),
             "coverage": self.coverage(),
+            "liveness": self.liveness(),
+        }
+
+    def liveness(self) -> dict[str, Any]:
+        """When the hook's writer was heard from: its first and last
+        heartbeat, the longest interval between two, and every stretch
+        between consecutive heartbeats longer than ``HEARTBEAT_GAP_NS``, on
+        the server's monotonic and wall clocks.
+        An interval between the first and the last that no gap overlaps had
+        a writer beating throughout; it says nothing of what was lost."""
+        beats = [
+            beat
+            for beat in self.heartbeats
+            if _integer(beat.data.get("mono_ns")) is not None
+        ]
+        pairs = list(zip(beats, beats[1:]))
+        intervals = [b.data["mono_ns"] - a.data["mono_ns"] for a, b in pairs]
+        gaps = [
+            {**_span_start(before), **_span_end(after)}
+            for (before, after), interval in zip(pairs, intervals)
+            if interval > HEARTBEAT_GAP_NS
+        ]
+        return {
+            "basis": LIVENESS_BASIS,
+            "gap_ns": HEARTBEAT_GAP_NS,
+            "heartbeats": len(beats),
+            "max_interval_ns": max(intervals) if intervals else None,
+            "first": _span_start(beats[0]) if beats else None,
+            "last": _span_end(beats[-1]) if beats else None,
+            "gaps": gaps,
         }
 
     def coverage(self) -> dict[str, Any]:
@@ -523,6 +558,8 @@ def _state(
 
 __all__ = [
     "COVERAGE_BASIS",
+    "HEARTBEAT_GAP_NS",
+    "LIVENESS_BASIS",
     "FORMAT",
     "RECORD_KINDS",
     "SILENCE_NS",
