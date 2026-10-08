@@ -53,7 +53,8 @@ class _Cost:
 
 def assess_kv(context: Context, subject: Subject) -> Assessment:
     """The KV class on one subject."""
-    producer = context.producer_of(subject.requests)
+    producers = {e.producer for e in context.subject_executions(subject)}
+    producer = next(iter(producers)) if len(producers) == 1 else None
     if producer is None:
         aggregate = aggregate_assessment(
             context,
@@ -84,14 +85,13 @@ def _span(context: Context, subject: Subject) -> tuple[int, int] | None:
     """The subject's requests' engine lifetimes: first admission to last
     step, on the engine's monotonic clock."""
     starts, ends = [], []
-    for request_id in subject.requests:
-        for execution in context.view.executions_of(request_id):
-            if execution.event.start_ns is not None:
-                starts.append(execution.event.start_ns)
-            for _, membership in execution.memberships[-1:]:
-                step = context.view.iterations.get(membership.iteration_ref)
-                if step is not None and step[1].end_ns is not None:
-                    ends.append(step[1].end_ns)
+    for execution in context.subject_executions(subject):
+        if execution.event.start_ns is not None:
+            starts.append(execution.event.start_ns)
+        for _, membership in execution.memberships[-1:]:
+            step = context.view.iterations.get(membership.iteration_ref)
+            if step is not None and step[1].end_ns is not None:
+                ends.append(step[1].end_ns)
     return (min(starts), max(ends)) if starts and ends else None
 
 
@@ -118,17 +118,14 @@ def _costs(
         if isinstance(attempt, str) and stage.start_ns is not None:
             by_attempt.setdefault(attempt, []).append(stage.start_ns)
     costs = []
-    for request_id in subject.requests:
-        for execution in context.view.executions_of(request_id):
-            attempt = execution.attempt.id if execution.attempt else None
-            if attempt in by_attempt:
-                costs.append(_cost(context, request_id, execution, by_attempt[attempt]))
+    for execution in context.subject_executions(subject):
+        attempt = execution.attempt.id if execution.attempt else None
+        if attempt in by_attempt:
+            costs.append(_cost(context, execution, by_attempt[attempt]))
     return costs
 
 
-def _cost(
-    context: Context, request_id: str, execution: Execution, preempted_at: list[int]
-) -> _Cost:
+def _cost(context: Context, execution: Execution, preempted_at: list[int]) -> _Cost:
     starts = [
         step[1].start_ns
         for _, membership in execution.memberships
@@ -140,6 +137,7 @@ def _cost(
         resume = next((start for start in starts if start > at), None)
         if resume is not None:
             waits.append(resume - at)
+    request_id = execution.event.request_ref.id
     return _Cost(request_id, len(preempted_at), tuple(waits), _recomputed(execution))
 
 
@@ -200,11 +198,21 @@ def _finding(
             "prediction": "no allocation preemption, and end-to-end latency falls by the resume waits",
         },
     )
-    finding.support = [line for line, _ in preemptions] + [
-        line for cost in costs for line in context.view.client[cost.request_id].lines()
-    ]
+    finding.support = [line for line, _ in preemptions] + _client_lines(
+        context, [cost.request_id for cost in costs]
+    )
     finding.display = finding.support[:8]
     return finding
+
+
+def _client_lines(context: Context, request_ids: list[str]) -> list[Line]:
+    """The affected requests' own records, when the client wrote them."""
+    return [
+        line
+        for request_id in request_ids
+        if request_id in context.view.client
+        for line in context.view.client[request_id].lines()
+    ]
 
 
 def _metrics(

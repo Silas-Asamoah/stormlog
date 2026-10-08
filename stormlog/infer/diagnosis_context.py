@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .diagnosis_clocks import EngineClock
-from .diagnosis_join import EngineEpoch, RunView
+from .diagnosis_join import EngineEpoch, Execution, RunView
 from .diagnosis_model import NOT_RULED_OUT, RULED_OUT, UNTESTABLE, Alternative
 from .diagnosis_segments import Decomposition, decompose
 from .diagnosis_selection import Selection, Subject
@@ -97,6 +97,55 @@ class Context:
             totals = (self.decomposition(r)[index].total_ns for r in request_ids)
             arms.append([float(t) for t in totals if t is not None])
         return median_difference(arms[0], arms[1])
+
+    def subject_executions(
+        self, subject: Subject, *, reference: bool = False
+    ) -> list[Execution]:
+        """The engine executions a subject (or its reference) stands for:
+        the run's executions of its client requests, or, for a server-only
+        subject, the executions themselves."""
+        if subject.basis == "engine":
+            refs = subject.reference_executions if reference else subject.executions
+            return [self.view.executions[ref] for ref in refs]
+        request_ids = subject.reference if reference else subject.requests
+        return [e for r in request_ids for e in self.view.executions_of(r)]
+
+    def engine_segments(self, execution: Execution) -> dict[str, int]:
+        """The segments the engine's own clock measures exactly for one
+        execution: ``engine_ingress`` and ``scheduler_wait`` (or, on a log
+        without ``enqueued`` records, ``engine_ingress_to_schedule``),
+        ``prefill``, and ``engine_ttft`` from admission to the first step
+        that kept an output token."""
+        admitted = execution.event.start_ns
+        enqueued = execution.metadata.get("enqueued_mono_ns")
+        first, retained = self._first_steps(execution)
+        segments: dict[str, int] = {}
+        if admitted is not None and first is not None:
+            if isinstance(enqueued, int):
+                segments["engine_ingress"] = enqueued - admitted
+                segments["scheduler_wait"] = first - enqueued
+            else:
+                segments["engine_ingress_to_schedule"] = first - admitted
+        if first is not None and retained is not None:
+            segments["prefill"] = retained - first
+        if admitted is not None and retained is not None:
+            segments["engine_ttft"] = retained - admitted
+        return segments
+
+    def _first_steps(self, execution: Execution) -> tuple[int | None, int | None]:
+        """The execution's first schedule() entry, and the completion of its
+        first step that kept an output token."""
+        first = retained = None
+        for _, membership in execution.memberships:
+            step = self.view.iterations.get(membership.iteration_ref)
+            if step is None:
+                continue
+            if first is None:
+                first = step[1].start_ns
+            kept = membership.metadata.get("outcome") == "kept"
+            if retained is None and kept and (membership.output_tokens or 0) > 0:
+                retained = step[1].end_ns
+        return first, retained
 
     def producer_of(self, request_ids: list[str]) -> str | None:
         """The one engine that served these requests; None for none or

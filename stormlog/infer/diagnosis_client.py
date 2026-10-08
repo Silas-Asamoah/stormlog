@@ -187,6 +187,8 @@ def _admission_observations(
 # -------------------------------------------------------------- API server
 def assess_api_server(context: Context, subject: Subject) -> Assessment:
     """Requests reached the engine late while the engine kept stepping."""
+    if not subject.requests:
+        return _verdict(HOST_STALL, subject, UNSUPPORTED, NO_CLIENT_REQUESTS)
     producer = context.producer_of(subject.requests)
     if producer is None:
         return Assessment(
@@ -334,6 +336,8 @@ def assess_capture_pause(context: Context, subject: Subject) -> Assessment:
     windows = context.view.trace_windows
     if not windows:
         return _verdict(CAPTURE_PAUSE, subject, ASSESSED, NO_TRACE_WINDOWS)
+    if not subject.requests:
+        return _verdict(CAPTURE_PAUSE, subject, UNSUPPORTED, NO_CLIENT_REQUESTS)
     stops = [stop for stop in (_stop(line) for line in windows) if stop is not None]
     if not stops:
         return _verdict(CAPTURE_PAUSE, subject, UNSUPPORTED, NO_STOP_REQUEST_STAMP)

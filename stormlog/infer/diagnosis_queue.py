@@ -18,6 +18,7 @@ from typing import Any
 
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
 from .diagnosis_inputs import Line
+from .diagnosis_join import Execution
 from .diagnosis_loop import LoopGapConfig, stalls_over_limit
 from .diagnosis_metrics import aggregate_assessment, subject_signal
 from .diagnosis_model import (
@@ -53,17 +54,24 @@ WAIT = "scheduler_wait"
 
 @dataclass(frozen=True)
 class _Waits:
-    """Each request's wait to be scheduled, as one segment family."""
+    """Each execution's wait to be scheduled, as one segment family."""
 
     segment: str  # scheduler_wait, or the legacy merged segment
     subject: dict[str, float]
     reference: dict[str, float]
+    executions: dict[str, Execution]  # the subject's, by key
+
+    @property
+    def producer(self) -> str | None:
+        """The one engine that ran the subject; None for several."""
+        producers = {execution.producer for execution in self.executions.values()}
+        return next(iter(producers)) if len(producers) == 1 else None
 
 
 def assess_queue(context: Context, subject: Subject) -> Assessment:
     """The queue class on one subject."""
     waits = _waits(context, subject)
-    producer = context.producer_of(list(waits.subject)) if waits else None
+    producer = waits.producer if waits else None
     if waits is None or not waits.subject:
         # Without the hook, vLLM's metrics can only describe the window.
         aggregate = aggregate_assessment(
@@ -91,42 +99,50 @@ def assess_queue(context: Context, subject: Subject) -> Assessment:
 
 
 def _waits(context: Context, subject: Subject) -> _Waits | None:
-    """The waits of the subject's and the reference's requests; on a log
-    without enqueued records, the merged ingress segment, labelled."""
+    """The waits of the subject's and the reference's executions, on the
+    engine's clock; on a log without enqueued records, the merged ingress
+    segment, labelled."""
     found: dict[str, dict[str, dict[str, float]]] = {}
-    for arm, request_ids in (
-        ("subject", subject.requests),
-        ("reference", subject.reference),
-    ):
-        for request_id in request_ids:
-            ttft, _ = context.decomposition(request_id)
+    executions: dict[str, Execution] = {}
+    for arm, reference in (("subject", False), ("reference", True)):
+        for execution in context.subject_executions(subject, reference=reference):
+            segments = context.engine_segments(execution)
+            key = _key(execution)
             for name in (WAIT, MERGED_INGRESS):
-                part = ttft.part(name)
-                if part is not None and part.interval is not None:
-                    found.setdefault(name, {}).setdefault(arm, {})[request_id] = (
-                        part.interval[0]
+                if name in segments:
+                    found.setdefault(name, {}).setdefault(arm, {})[key] = float(
+                        segments[name]
                     )
+            if not reference:
+                executions[key] = execution
     if not found:
         return None
     segment = WAIT if WAIT in found else MERGED_INGRESS
     arms = found[segment]
-    return _Waits(segment, arms.get("subject", {}), arms.get("reference", {}))
+    return _Waits(
+        segment, arms.get("subject", {}), arms.get("reference", {}), executions
+    )
+
+
+def _key(execution: Execution) -> str:
+    return (execution.attempt or execution.event.request_ref).id
 
 
 def _finding(
     context: Context, subject: Subject, waits: _Waits, excess: Difference, producer: str
 ) -> Assessment:
     steps = context.steps(producer)
-    span = _wait_span(context, list(waits.subject))
+    waiting = list(waits.executions.values())
+    span = _wait_span(context, waiting)
     spanning = steps.between(*span) if span else []
     witness = _witness(context, producer, spanning)
     if not witness[0]:
         witness = _exporter_witness(context, subject, witness)
-    ttft = context.total_excess(subject, "ttft")
+    ttft = _ttft_excess(context, subject)
     alternatives = [
-        _engine_stall(context, producer, waits),
+        _engine_stall(context, producer, waiting),
         _scheduler_paused(context, producer, steps, span),
-        _blocked_waiting(context, list(waits.subject)),
+        _blocked_waiting(waiting),
         _engine_ingress(context, subject, waits, excess),
         _preemption(spanning),
         _client_admission(context, subject),
@@ -164,10 +180,13 @@ def _finding(
     finding.condition, finding.contribution = _criteria(
         context, producer, span, waits, excess, ttft, witness, alternatives
     )
-    finding.segments = {"decomposition": "ttft", "wait_segment": waits.segment}
+    finding.segments = {
+        "decomposition": "ttft" if subject.basis == "client" else "engine_ttft",
+        "wait_segment": waits.segment,
+    }
     finding.support, finding.display = _support(context, subject, spanning)
     reasons = [] if witness[0] else [NO_CAPACITY_WITNESS]
-    if not context.view.client:
+    if subject.basis == "engine":
         reasons.append(NO_CLIENT_LATENCY)
     status = PARTIAL if reasons else ASSESSED
     finding.status = status
@@ -225,38 +244,41 @@ def _at_capacity(step: Step, seqs: int | None, tokens: int | None) -> bool:
 
 
 # ------------------------------------------------------------- competitors
-def _engine_stall(context: Context, producer: str, waits: _Waits) -> Alternative:
+def _engine_stall(
+    context: Context, producer: str, waiting: list[Execution]
+) -> Alternative:
     """Engine-loop stalls, by the online trigger's own rules, covering most
     of the subject's waiting time: then the engine, not its capacity, kept
     the requests waiting."""
-    intervals = _wait_intervals(context, list(waits.subject))
+    intervals = _wait_intervals(context, waiting)
     if not intervals:
         return Alternative("engine_stall", UNTESTABLE, "no wait was placed", True)
     config = LoopGapConfig(thresholds=dict(context.thresholds or {}))
     stalls = stalls_over_limit(loop_steps(context.view, producer), (), config)
     stalled = [(s.start_mono_ns, s.start_mono_ns + s.duration_ns) for s, _ in stalls]
-    waiting = sum(end - start for start, end in intervals)
+    total = sum(end - start for start, end in intervals)
     covered = sum(_covered_by(interval, stalled) for interval in intervals)
-    share = covered / waiting if waiting else 0.0
+    share = covered / total if total else 0.0
     needed = resolve_threshold(QUEUE_STALL_COVERAGE, context.thresholds)[0]
     status = NOT_RULED_OUT if share >= needed else RULED_OUT
     reason = f"{len(stalls)} engine stalls cover {share:.0%} of the waiting time"
     return Alternative("engine_stall", status, reason, True)
 
 
-def _wait_intervals(context: Context, request_ids: list[str]) -> list[tuple[int, int]]:
-    """Each request's wait on the engine clock: queue entry (or admission)
+def _wait_intervals(
+    context: Context, executions: list[Execution]
+) -> list[tuple[int, int]]:
+    """Each execution's wait on the engine clock: queue entry (or admission)
     to its first schedule() call."""
     intervals = []
-    for request_id in request_ids:
-        for execution in context.view.executions_of(request_id):
-            enqueued = execution.metadata.get("enqueued_mono_ns")
-            start = enqueued if isinstance(enqueued, int) else execution.event.start_ns
-            first = execution.memberships[0][1] if execution.memberships else None
-            step = context.view.iterations.get(first.iteration_ref) if first else None
-            end = step[1].start_ns if step is not None else None
-            if start is not None and end is not None and end > start:
-                intervals.append((start, end))
+    for execution in executions:
+        enqueued = execution.metadata.get("enqueued_mono_ns")
+        start = enqueued if isinstance(enqueued, int) else execution.event.start_ns
+        first = execution.memberships[0][1] if execution.memberships else None
+        step = context.view.iterations.get(first.iteration_ref) if first else None
+        end = step[1].start_ns if step is not None else None
+        if start is not None and end is not None and end > start:
+            intervals.append((start, end))
     return intervals
 
 
@@ -315,37 +337,21 @@ def _admissions_continue(context: Context, steps: Steps, span: tuple[int, int]) 
     return max(b - a for a, b in zip(edges, edges[1:])) < floor
 
 
-def _blocked_waiting(context: Context, request_ids: list[str]) -> Alternative:
+def _blocked_waiting(executions: list[Execution]) -> Alternative:
     """Requests held by their own constraints: grammar or streaming input."""
-    flags = []
-    for request_id in request_ids:
-        for execution in context.view.executions_of(request_id):
-            flags.append(
-                (
-                    execution.metadata.get("structured_output"),
-                    execution.metadata.get("resumable"),
-                )
-            )
+    kind = "blocked_waiting"
+    flags = [
+        (e.metadata.get("structured_output"), e.metadata.get("resumable"))
+        for e in executions
+    ]
     if flags and all(s is False and r is False for s, r in flags):
-        return Alternative(
-            "blocked_waiting",
-            RULED_OUT,
-            "no request used structured output or streaming input",
-            True,
-        )
+        reason = "no request used structured output or streaming input"
+        return Alternative(kind, RULED_OUT, reason, True)
     if any(s is True or r is True for s, r in flags):
-        return Alternative(
-            "blocked_waiting",
-            NOT_RULED_OUT,
-            "some waiting requests were constrained",
-            True,
-        )
-    return Alternative(
-        "blocked_waiting",
-        UNTESTABLE,
-        "the hook did not record the requests' constraints",
-        True,
-    )
+        reason = "some waiting requests were constrained"
+        return Alternative(kind, NOT_RULED_OUT, reason, True)
+    reason = "the hook did not record the requests' constraints"
+    return Alternative(kind, UNTESTABLE, reason, True)
 
 
 def _engine_ingress(
@@ -359,7 +365,7 @@ def _engine_ingress(
             "ingress and the queue wait are one segment on this log",
             True,
         )
-    ingress = context.segment_excess(subject, "engine_ingress")
+    ingress = _engine_excess(context, subject, "engine_ingress")
     if ingress is None:
         return Alternative(
             "engine_ingress", UNTESTABLE, "too few ingress samples", True
@@ -395,6 +401,8 @@ def _preemption(spanning: list[Step]) -> Alternative:
 
 
 def _client_admission(context: Context, subject: Subject) -> Alternative:
+    if subject.basis == "engine":
+        return Alternative("client_admission", UNTESTABLE, "no client requests")
     held = sum(
         1
         for r in subject.requests
@@ -412,6 +420,8 @@ def _client_admission(context: Context, subject: Subject) -> Alternative:
 
 
 def _api_server(context: Context, subject: Subject, excess: Difference) -> Alternative:
+    if subject.basis == "engine":
+        return Alternative("host_stall@api_server", UNTESTABLE, "no client requests")
     front = context.segment_excess(subject, "send_to_ingress")
     if front is None:
         return Alternative(
@@ -431,9 +441,30 @@ def _api_server(context: Context, subject: Subject, excess: Difference) -> Alter
 
 
 # ---------------------------------------------------------------- helpers
-def _wait_span(context: Context, request_ids: list[str]) -> tuple[int, int] | None:
+def _engine_excess(context: Context, subject: Subject, name: str) -> Difference | None:
+    """An engine segment's excess over the subject's executions."""
+    arms = [
+        [
+            float(value)
+            for e in context.subject_executions(subject, reference=reference)
+            if (value := context.engine_segments(e).get(name)) is not None
+        ]
+        for reference in (False, True)
+    ]
+    return median_difference(arms[0], arms[1])
+
+
+def _ttft_excess(context: Context, subject: Subject) -> Difference | None:
+    """The client's TTFT excess, or without client requests the engine's
+    own, from admission to the first step that kept a token."""
+    if subject.basis == "engine":
+        return _engine_excess(context, subject, "engine_ttft")
+    return context.total_excess(subject, "ttft")
+
+
+def _wait_span(context: Context, executions: list[Execution]) -> tuple[int, int] | None:
     """From the earliest entry into the queue to the latest first schedule."""
-    intervals = _wait_intervals(context, request_ids)
+    intervals = _wait_intervals(context, executions)
     if not intervals:
         return None
     return min(s for s, _ in intervals), max(e for _, e in intervals)
@@ -573,21 +604,28 @@ def _support(
 ) -> tuple[list[Line], list[Line]]:
     lines: list[Line] = []
     for request_id in subject.requests:
-        request = context.view.client[request_id]
-        lines.extend(request.lines())
-        for execution in context.view.executions_of(request_id):
-            lines.append(execution.line)
-            lines.extend(line for line, _ in execution.memberships)
+        lines.extend(context.view.client[request_id].lines())
+    executions = context.subject_executions(subject)
+    for execution in executions:
+        lines.append(execution.line)
+        lines.extend(line for line, _ in execution.memberships)
     lines.extend(step.line for step in spanning)
-    longest = sorted(subject.requests, key=lambda r: -_wait_of(context, r))[:4]
-    display = [line for r in longest for line in context.view.client[r].lines()[-1:]]
+    longest = sorted(executions, key=lambda e: -_wait_of(context, e))[:4]
+    display = [_display_line(context, e) for e in longest]
     display += [step.line for step in spanning[:4]]
     return lines, display[:8]
 
 
-def _wait_of(context: Context, request_id: str) -> float:
-    part = context.decomposition(request_id)[0].part(WAIT)
-    return part.interval[0] if part is not None and part.interval is not None else 0.0
+def _display_line(context: Context, execution: Execution) -> Line:
+    """A waiting request's own record: the client's, or the engine's."""
+    request = context.view.client.get(execution.event.request_ref.id)
+    lines = request.lines() if request is not None else []
+    return lines[-1] if lines else execution.line
+
+
+def _wait_of(context: Context, execution: Execution) -> float:
+    segments = context.engine_segments(execution)
+    return float(segments.get(WAIT, segments.get(MERGED_INGRESS, 0)))
 
 
 __all__ = ["assess_queue"]
