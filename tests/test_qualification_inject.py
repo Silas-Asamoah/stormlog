@@ -162,6 +162,18 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     assert record.priming is not None and record.final_recovery is not None
     assert record.measured.start_ns == record.priming.start_ns
     assert record.final_recovery.end_ns == record.measured.end_ns
+    # close-221-delta, H4: run.json says how near the dose check each
+    # cadence series came, and each episode how long after its action its
+    # effect ended, so a late recovery just under the limit can be read.
+    dose = record.baseline_checks["dose_check"]
+    assert dose["limit_per_hold"] == 1.0
+    assert 0 <= dose["per_hold"]["busy step gaps"] < 1
+    p99 = dose["p99_s"]["busy step gaps"]
+    assert p99 is not None and dose["never_longer_s"]["busy step gaps"] >= 2 * p99
+    times = stall.times
+    assert times.effect_end_ns is not None and times.action_end_ns is not None
+    lateness = times.effect_end_ns - times.action_end_ns
+    assert stall.injected["recovery_lateness_ns"] == max(0, lateness)
     for injection in injections.values():
         assert injection.run_id == record.run_id
         assert injection.clock_domain == record.clock_domain
@@ -673,6 +685,42 @@ def test_a_baseline_too_thin_to_recover_is_named_not_a_bare_timeout(
     assert skipped.injected["skipped"] == "baseline_too_thin"
 
 
+def test_the_dose_check_on_record_shows_a_slow_step_its_rate_cant() -> None:
+    # close-221-final: a slow step as common as one in a hundred is the p99
+    # itself, so the gaps too long for a hold are none and the rate reads 0.
+    # run.json gives each series' p99 and the longest gap a hold may hold, so
+    # the run shows it; and they come from the plan's thresholds.
+    from examples.qualification.inject import _baseline_checks
+    from stormlog.infer.qualify.recovery import Baseline, GapStats, Thresholds
+
+    slow = GapStats.of([0.005] * 97 + [0.25] * 3, 2.0, 0.06)
+    baseline = Baseline(0.1, 0.0, 1.0, 0.5, steps=slow, chunks=GapStats(),
+                        cached_median=1.0)  # fmt: skip
+    dose = _baseline_checks(baseline, Thresholds())["dose_check"]
+    assert dose["per_hold"] == {"busy step gaps": 0.0, "chunk gaps": None}
+    assert dose["p99_s"] == {"busy step gaps": 0.25, "chunk gaps": None}
+    assert dose["never_longer_s"] == {"busy step gaps": 0.5, "chunk gaps": None}
+    # The plan's thresholds, not the defaults: too few gaps for its minimum.
+    strict = replace(Thresholds(), min_cadence_samples=101)
+    dose = _baseline_checks(baseline, strict)["dose_check"]
+    assert dose["per_hold"]["busy step gaps"] is None
+    assert dose["p99_s"]["busy step gaps"] is None
+
+
+def test_an_effect_over_before_its_action_was_undone_is_not_late() -> None:
+    # close-221-final: lateness ran from the action's end as the harness
+    # records it, once a pulser is torn down or a neighbor drained, which
+    # the effect needn't outlast: F4a read -37 ms and F2 -569 ms. Such an
+    # effect wasn't late, so 0; one that never ended has none.
+    from examples.qualification.inject import _lateness
+    from stormlog.infer.qualify.recovery import Timing
+
+    second = 1_000_000_000
+    assert _lateness(Timing(1, "x", end_ns=10 * second - 37_000_000), 10 * second) == 0
+    assert _lateness(Timing(1, "x", end_ns=13 * second), 10 * second) == 3 * second
+    assert _lateness(Timing(1, "x"), 10 * second) is None
+
+
 def test_an_engine_whose_prefill_steps_outlast_a_dose_is_not_evaluable(
     tmp_path: Path,
 ) -> None:
@@ -708,6 +756,9 @@ def test_an_engine_whose_prefill_steps_outlast_a_dose_is_not_evaluable(
     assert stall.validity.actuation == "ok"
     (reason,) = stall.injected["recovery_blocked"]
     assert reason.startswith("dose_check_failed: ") and "busy step gaps" in reason
+    assert stall.injected["recovery_lateness_ns"] is None
+    per_hold = load_run(run / "truth" / "run.json").baseline_checks["dose_check"]
+    assert per_hold["per_hold"]["busy step gaps"] >= 1
     assert stall.status == "recovery_incomplete"
     assert null.injected["skipped"] == "dose_check_failed"
     nothing: dict[str, Any] = {"payload": {"findings_detail": {}, "coverage": {}}}

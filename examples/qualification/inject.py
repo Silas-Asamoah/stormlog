@@ -31,7 +31,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from stormlog.infer.host_clock import host_boot_id, wall_clock_domain
 from stormlog.infer.qualify.ground_truth import (
@@ -51,6 +51,7 @@ from stormlog.infer.qualify.ground_truth import (
     write_run,
 )
 from stormlog.infer.qualify.recovery import (
+    DOSE_CHECK_TOO_LONG_PER_HOLD,
     SECOND,
     START,
     TIMEOUT,
@@ -58,12 +59,15 @@ from stormlog.infer.qualify.recovery import (
     Actions,
     Baseline,
     Context,
+    GapStats,
     Signals,
     Thresholds,
     Timing,
     added_mechanisms,
+    dose_check_rates,
     effect_timing,
     engine_stalled,
+    never_longer,
     next_episode,
     observation_of,
     priming_check,
@@ -155,12 +159,21 @@ class _Progress:
     final_start: int | None = None
     priming: tuple[bool, float | None] = (False, None)
     failure: str | None = None
+    # What was measured of the baseline for the rules, for run.json.
+    baseline_checks: dict[str, Any] = field(default_factory=dict)
 
     def windows(self, now: int) -> _Windows:
         start = self.measured_start or self.started_ns
         priming_end = self.priming_end or start
         baseline_end = self.baseline_end or priming_end
-        return _Windows(start, priming_end, baseline_end, self.final_start or now, now)
+        return _Windows(
+            start,
+            priming_end,
+            baseline_end,
+            self.final_start or now,
+            now,
+            self.baseline_checks,
+        )
 
     def protocol_failure(self) -> str | None:
         if self.failure is not None:
@@ -177,6 +190,7 @@ class _Windows:
     baseline_end: int
     final_start: int
     measured_end: int
+    baseline_checks: Mapping[str, Any] = field(default_factory=dict)
 
     def run_record(
         self, run_id: str, clock_domain: str | None, failure: str | None
@@ -189,6 +203,7 @@ class _Windows:
             baseline=Interval(self.priming_end, self.baseline_end),
             final_recovery=Interval(self.final_start, self.measured_end),
             protocol_failure=failure,
+            baseline_checks=self.baseline_checks,
         )
 
 
@@ -317,6 +332,7 @@ class InjectionRun:
         baseline_end = progress.baseline_end = priming_end + int(t.baseline * SECOND)
         self._sleep_until(baseline_end)
         baseline = self._measure_baseline(priming_end, baseline_end)
+        progress.baseline_checks = _baseline_checks(baseline, self.thresholds)
         self._measure_record_lag(priming_end, baseline_end)
         # The baseline itself is the first episode's clean time.
         self._run_episodes(baseline, priming_end, progress.attempts)
@@ -370,6 +386,7 @@ class InjectionRun:
         actions = replace(actions, action_end_ns=ended, slot_ns=(started, ended))
         onset = _action_onset(actions, started)
         decision, timing = self._recover(episode, baseline, actions, onset, ended)
+        injected = {**injected, "recovery_lateness_ns": _lateness(timing, ended)}
         if episode.row.method == PULSE:
             self._mark_landings(injected)
         context = Context(
@@ -899,6 +916,48 @@ class _HeldSignals:
         else:  # the default, or one set from C
             self.__exit__()
             signal.raise_signal(signum)
+
+
+def _baseline_checks(baseline: Baseline, thresholds: Thresholds) -> dict[str, Any]:
+    """What run.json says of the baseline: each cadence series' gaps too
+    long for a hold, per hold, against the dose check's limit, with the
+    series' p99 and the longest gap a hold may hold, in seconds (a series
+    too thin to judge has none). A slow step as common as one in a hundred
+    is the p99 itself, so its rate reads 0, and only those two show it
+    (close-221-final)."""
+    rates = dose_check_rates(baseline, thresholds)
+    series = {"busy step gaps": baseline.steps, "chunk gaps": baseline.chunks}
+    p99: dict[str, float | None] = {}
+    longest: dict[str, float | None] = {}
+    for name, stats in series.items():
+        judged = rates[name] is not None
+        p99[name] = stats.p99 if judged else None
+        longest[name] = _never_longer(stats, thresholds) if judged else None
+    return {
+        "dose_check": {
+            "limit_per_hold": DOSE_CHECK_TOO_LONG_PER_HOLD,
+            "per_hold": rates,
+            "p99_s": p99,
+            "never_longer_s": longest,
+        }
+    }
+
+
+def _never_longer(stats: GapStats, thresholds: Thresholds) -> float:
+    return never_longer(
+        stats.p99,
+        stats.p999,
+        thresholds.long_gap_factor,
+        thresholds.long_gap_tolerance_cap_s,
+    )
+
+
+def _lateness(timing: Timing, action_end_ns: int) -> int | None:
+    """How long after its action an episode's effect ended, or None if it
+    never did. The action ends once the harness has undone it (a pulser's
+    last continue and teardown, a neighbor's drain), which the effect may
+    not outlast: an effect over by then was not late, 0 (close-221-final)."""
+    return None if timing.end_ns is None else max(0, timing.end_ns - action_end_ns)
 
 
 def _act_on(signum: int) -> None:
