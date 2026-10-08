@@ -614,8 +614,10 @@ the hook's steps alone.
 
 - **Units.** A unit is one complete step of one engine epoch whose every
   member is known (none withheld, unresolved, or of unknown role) and whose
-  decode set continues from the step completed before it, so its completion
-  cadence, from that step's completion to its own, is defined. Under async
+  decode set continues from the step right before it (by the engine's count
+  of `schedule()` calls: the import leaves out steps that held only other
+  clients' requests), so its completion cadence, from that step's
+  completion to its own, is defined. Under async
   scheduling that is the pace at which the engine completed steps, not one
   step's execution time.
 - **Treatment.** A treated unit scheduled prefill. Its dose is its prefill

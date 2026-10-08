@@ -525,3 +525,22 @@ def test_mixing_a_little_worse_is_under_the_floor() -> None:
 
     assert found.support == 1.0 and found.screened == "not_above_floor"
     assert found.ratio is not None and 1.0 < found.ratio.estimate < 1.10
+
+
+def test_a_step_after_a_gap_in_the_import_is_no_unit(tmp_path: Path) -> None:
+    """Another client's request decodes alone between the run's two: those
+    steps are not imported, and the step after them, though it continues
+    that request's decoding, has no completion cadence of its own."""
+    requests = [
+        SimRequest("f", 0, output=60, run="other"),
+        SimRequest("r1", 30 * MS, output=4),
+        SimRequest("r2", 300 * MS, output=4),
+    ]
+    view = join(read_input(build_run(tmp_path, requests, Engine())))
+    context = Context(view, select(view))
+    (producer,) = {e.producer for e in view.executions.values()}
+
+    units = epoch_units(context, producer).units
+
+    assert [u.iteration for u in units] == ["4", "5", "6", "31", "32", "33"]
+    assert {u.cadence_ns for u in units} == {int(10.1 * MS)}

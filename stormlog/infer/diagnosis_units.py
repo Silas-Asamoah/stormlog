@@ -3,10 +3,10 @@ whose completion cadence is defined, with what it ran.
 
 A unit is one complete step of one engine epoch whose every member is known
 (none withheld, unresolved, or of unknown role) and whose decode set
-continues from the step completed before it, so its ``completion_cadence``,
-from that step's completion to its own, is defined. Under async scheduling
-that is the pace at which the engine completed steps, not one step's
-execution time.
+continues from the step right before it, by the engine's count of
+``schedule()`` calls, so its ``completion_cadence``, from that step's
+completion to its own, is defined. Under async scheduling that is the pace
+at which the engine completed steps, not one step's execution time.
 
 A unit carries what matching compares: its running requests (decode and
 prefill members), its drafts, whether it and the step before it in schedule
@@ -112,19 +112,30 @@ def epoch_units(context: Context, producer: str) -> EpochUnits:
     refill = {step.iteration: step.refill > 0 for step in steps}
     after = {b.iteration: a.refill > 0 for a, b in zip(steps, steps[1:])}
     found = EpochUnits(producer)
-    last: tuple[int, frozenset[str]] | None = None  # completion, decoders
+    last: tuple[int, frozenset[str], str] | None = None
     for completed, iteration, line, metadata in _completed(context.view, producer):
         members = rows.get(iteration, [])
         decoders = frozenset(r.attempt for r in members if r.role in DECODE_ROLES)
         if not _known(metadata, members):
             found.unknown_ns.append(completed)
-        elif last is not None and decoders & last[1]:
+        elif last is not None and _continues(last[2], iteration, last[1], decoders):
             flags = (refill.get(iteration, False), after.get(iteration, False))
             found.units.append(
                 _unit(iteration, completed, completed - last[0], members, flags, line)
             )
-        last = (completed, decoders)
+        last = (completed, decoders, iteration)
     return found
+
+
+def _continues(
+    before: str, iteration: str, decoded: frozenset[str], decoders: frozenset[str]
+) -> bool:
+    """The step right before this one, by the engine's count of schedule()
+    calls (the import leaves out steps that held only other clients'
+    requests), and a request decoding in both."""
+    if before.isdigit() and iteration.isdigit() and int(iteration) != int(before) + 1:
+        return False
+    return bool(decoded & decoders)
 
 
 @dataclass(frozen=True)
