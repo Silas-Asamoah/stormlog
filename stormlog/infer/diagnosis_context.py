@@ -208,18 +208,27 @@ class Context:
         )
 
     def _resets(self, producer: str, span: tuple[int, int] | None) -> bool:
-        for _, stage in self.view.stages:
-            if (
-                stage.name not in RESET_STAGES
-                or stage.stage_ref.producer_id != producer
-            ):
-                continue
-            start = stage.start_ns or 0
-            if span is None or (
-                start <= span[1] and span[0] <= (stage.end_ns or start)
-            ):
-                return True
-        return False
+        """Whether a reset overlaps ``span``: a stage, or a dated fact the
+        import kept for a reset before any step was written."""
+        intervals = [
+            (stage.start_ns or 0, stage.end_ns or stage.start_ns or 0)
+            for _, stage in self.view.stages
+            if stage.name in RESET_STAGES and stage.stage_ref.producer_id == producer
+        ] + self._unanchored_resets(producer)
+        return any(
+            span is None or (start <= span[1] and span[0] <= end)
+            for start, end in intervals
+        )
+
+    def _unanchored_resets(self, producer: str) -> list[tuple[int, int]]:
+        intervals = []
+        for epoch in self.view.engines.values():
+            facts = epoch.unanchored if epoch.producer == producer else []
+            for fact in facts:
+                start, end = fact.get("start_mono_ns"), fact.get("end_mono_ns")
+                if fact.get("name") in RESET_STAGES and isinstance(start, int):
+                    intervals.append((start, end if isinstance(end, int) else start))
+        return intervals
 
     def subjects(self) -> list[Subject]:
         return self.selection.subjects

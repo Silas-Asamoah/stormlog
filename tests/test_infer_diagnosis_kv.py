@@ -158,3 +158,32 @@ def test_no_preemption_is_not_observed(tmp_path: Path) -> None:
         ["not_observed"],
         [],
     )
+
+
+def test_a_reset_before_any_written_step_still_counts(tmp_path: Path) -> None:
+    """A reset between the first request's admission and the first step has
+    no step to refer to, so the import keeps it as a dated fact, not a
+    stage; it still overlaps the request's lifetime."""
+    first = SimRequest("a0", 10 * SECOND)
+    at = first.admitted_ns + 50_000  # before it enters the queue
+    reset = {
+        "kind": "cache_reset",
+        "reset_running_requests": False,
+        "reset_connector": False,
+        "running": [],
+        "succeeded": True,
+        "raised": False,
+        **stamp(at, "start_"),
+        **stamp(at + 50_000, "end_"),
+    }
+    calm = poisson_free(140, 10 * SECOND + SECOND, 500 * MS, prefix="a")
+    view = join(
+        read_input(build_run(tmp_path, [first, *calm], Engine(extra=[(at, reset)])))
+    )
+    context = Context(view, select(view))
+    (producer,) = {e.producer for e in view.executions.values()}
+
+    (epoch,) = view.engines.values()
+    assert [fact["name"] for fact in epoch.unanchored] == ["engine.cache_reset"]
+    alternative = context.reset_absent(producer, (at - MS, at + MS))
+    assert alternative.status == "not_ruled_out"
