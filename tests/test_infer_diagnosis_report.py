@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import io
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -137,6 +138,8 @@ def test_an_incident_without_an_eligible_explanation_is_inconclusive(
     "windows, options, message",
     [
         (None, {"thresholds": {"no.such.key": 1.0}}, "unknown threshold keys"),
+        (None, {"thresholds": {"selection.window_seconds": math.nan}}, "finite"),
+        (None, {"thresholds": {"selection.window_seconds": math.inf}}, "finite"),
         ([(5, 5)], {}, "is empty"),
     ],
 )
