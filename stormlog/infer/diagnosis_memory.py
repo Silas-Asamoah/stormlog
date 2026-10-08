@@ -21,6 +21,7 @@ from .telemetry import TelemetrySample
 
 OBSERVED = "observed"
 NOT_COLLECTED = "not_collected"
+INSUFFICIENT = "insufficient"
 UNSUPPORTED = "unsupported"
 EXPORTER_SCOPED = "exporter_scoped"
 KV_USAGE = "vllm:kv_cache_usage_perc"
@@ -119,6 +120,15 @@ def _kv(context: Context) -> dict[str, Any]:
     scrapes = context.scrapes()
     gauge = gauge_window(scrapes, KV_USAGE) if scrapes else None
     blocks = _engine_blocks(context)
+    if gauge is not None and gauge.reasons:
+        # Samples from two exporters (across a restart, say) are no one peak.
+        return {
+            **entry,
+            "status": INSUFFICIENT,
+            "peak": None,
+            "reason": gauge.reasons[0],
+            "reasons": list(gauge.reasons),
+        }
     if gauge is None or gauge.max is None:
         return {**entry, "status": NOT_COLLECTED, "peak": None}
     if blocks is None:

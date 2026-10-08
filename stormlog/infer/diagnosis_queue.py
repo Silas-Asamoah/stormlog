@@ -52,12 +52,14 @@ from .diagnosis_thresholds import (
     resolve_threshold,
 )
 from .diagnosis_vocabulary import COMPONENT_SCHEDULER, QUEUE_SATURATION
+from .scrape_window import gauge_median, gauge_window
 
 NO_SERVER_QUEUE_SIGNAL = "no_server_queue_signal"
 NO_CAPACITY_WITNESS = "no_capacity_witness"
 NO_CLIENT_LATENCY = "no_client_latency"
 SEVERAL_ENGINES = "several_engines"
 WAIT = "scheduler_wait"
+WAITING_BY_REASON = "vllm:num_requests_waiting_by_reason"
 
 
 @dataclass(frozen=True)
@@ -249,8 +251,10 @@ def _witness(
     full steps do not, while most waited only for the next step to begin."""
     seqs, tokens = _capacity(context, producer)
     busy = [step for step in steps.within(waits) if step.members]
-    if not busy or (seqs is None and tokens is None):
+    if not waits or (seqs is None and tokens is None):
         return _Witness(False, None, None, None, None, len(busy))
+    # A request that waited through no step waited only for the next one to
+    # begin: measured, and not held by capacity.
     mostly = [_mostly_full(steps.within([wait]), seqs, tokens) for wait in waits]
     share = sum(mostly) / len(mostly)
     needed = resolve_threshold(QUEUE_WITNESS_SHARE, context.thresholds)[0]
@@ -265,7 +269,9 @@ def _witness(
     )
 
 
-def _share(steps: list[Step], holds: Callable[[Step], bool]) -> float:
+def _share(steps: list[Step], holds: Callable[[Step], bool]) -> float | None:
+    if not steps:
+        return None
     return round(sum(holds(step) for step in steps) / len(steps), 4)
 
 
@@ -285,11 +291,22 @@ def _exporter_witness(context: Context, subject: Subject, hook: _Witness) -> _Wi
     if not context.metrics_from_engine:
         return hook
     signal = subject_signal(context, subject, QUEUE_SATURATION)
-    reasons = signal.detail.get("waiting_by_reason") if signal is not None else None
-    capacity = reasons.get("capacity") if isinstance(reasons, dict) else None
-    if isinstance(capacity, (int, float)) and capacity > 0:
+    if signal is None or not signal.sufficient:
+        # A window the signal cannot decide on (across a restart, out of
+        # order, too few scrapes) witnesses nothing either.
+        return hook
+    capacity = _capacity_waiting(context, subject)
+    if capacity is not None and capacity > 0:
         return replace(hook, held=True, source="exporter")
     return hook
+
+
+def _capacity_waiting(context: Context, subject: Subject) -> float | None:
+    """The median of vLLM's capacity-waiting gauge over the subject's
+    window; None when the window is not one series of one exporter."""
+    scrapes = context.scrapes(subject.start_ns, subject.end_ns)
+    window = gauge_window(scrapes, WAITING_BY_REASON, labels={"reason": "capacity"})
+    return None if window.reasons else gauge_median(window)
 
 
 def _capacity(context: Context, producer: str) -> tuple[int | None, int | None]:
