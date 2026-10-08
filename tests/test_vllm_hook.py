@@ -1481,6 +1481,45 @@ def test_a_backlog_does_not_hold_up_the_status_or_sealing(
     assert max(path.stat().st_size for path in segments) <= 1024 + longest + 1
 
 
+def test_a_heartbeat_counts_the_records_it_is_written_ahead_of(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a slow disk a heartbeat is written while records accepted before
+    its stamp still wait; it says how many, so a reader knows the span it
+    closes reaches past them."""
+    write = writer_module._Segment.write
+
+    def slow(segment: Any, line: bytes) -> bool:
+        if b'"kind":"heartbeat"' not in line:
+            time.sleep(0.02)
+        return write(segment, line)
+
+    monkeypatch.setattr(writer_module._Segment, "write", slow)
+    writer = EpochWriter(
+        tmp_path, "engine", limits=WriterLimits(heartbeat_seconds=0.05)
+    )
+    for index in range(10):
+        writer.emit("filler", {"index": index})
+    accepted = writer_module.stamp()
+    writer.emit("pause", {"from": "UNPAUSED", "to": "PAUSED_ALL", **accepted})
+    for index in range(10):
+        writer.emit("filler", {"index": 10 + index})
+    writer.close()
+
+    records = _epoch_records(writer.directory)
+    pause = next(r for r in records if r["kind"] == "pause")
+    ahead = [
+        r
+        for r in records
+        if r["kind"] == "heartbeat"
+        and r["mono_ns"] > accepted["mono_ns"]
+        and r["seq"] < pause["seq"]
+    ]
+    assert ahead  # written after the pause was accepted, before it was
+    for beat in ahead:
+        assert beat["seq"] + beat["pending"] >= pause["seq"]
+
+
 def test_a_short_write_leaves_only_whole_lines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
