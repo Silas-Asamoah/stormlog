@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from stormlog.infer.diagnosis import DiagnoseOptions, diagnose_artifact
 from stormlog.infer.diagnosis_context import Assessment, Context
 from stormlog.infer.diagnosis_inputs import read_input
 from stormlog.infer.diagnosis_join import join
@@ -78,6 +79,22 @@ def test_preemptions_that_explain_the_excess_are_a_kv_fault(tmp_path: Path) -> N
 
     assert "explains_e2e_excess" in finding.contribution.met
     assert (finding.severity, finding.claim) == ("warning", "fault")
+
+
+def test_a_queue_behind_a_kv_fault_is_its_secondary(tmp_path: Path) -> None:
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a", output=100)
+    heavy = poisson_free(100, AT, 200 * MS, prefix="b", output=100)
+    artifact = build_run(tmp_path, calm + heavy, Engine(max_num_seqs=64, kv_tokens=300))
+
+    report = diagnose_artifact(artifact, options=DiagnoseOptions(generated_at_ns=1))
+
+    details = report["payload"]["findings_detail"]
+    by_kind = {detail["kind"]: (fid, detail) for fid, detail in details.items()}
+    kv_id, kv = by_kind["kv_preemption_pressure"]
+    _, queue = by_kind["queue_saturation"]
+    assert (kv["role"], kv["claim"], kv["rank"]) == ("primary", "fault", 1)
+    assert (queue["role"], queue["secondary_to"]) == ("secondary", [kv_id])
+    assert queue["claim"] != "fault"
 
 
 def test_without_reset_records_the_cause_is_unknown(tmp_path: Path) -> None:

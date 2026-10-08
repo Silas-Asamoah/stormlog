@@ -276,6 +276,14 @@ minor second cause.
   cause undetermined until a driver says otherwise. Workload kinds are
   always `workload_change` at `info`; instrumentation kinds are
   `instrumentation`.
+- **Roles.** A finding is `secondary` to a fault upstream of it on the
+  same subject, by a fixed edge, and names it in `secondary_to`; a
+  secondary claims a condition, never the fault. This version has one
+  edge, `kv_preemption_pressure` → `queue_saturation`: preemption leaves
+  requests waiting to resume and keeps new ones out, so a queue that names
+  KV preemption `upstream` among its competitors is secondary to a KV
+  finding at `warning`. Every other finding is `primary`; the other edges
+  come with the engine-loop class.
 - **Rank.** Findings are ordered by: primary before secondary, eligible
   before observation, confidence, the contribution's lower bound, kind,
   location, window start, and finally ID, so the order is total.
@@ -307,7 +315,7 @@ interval); with no excess it reports `not_observed`.
 | `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else admissions continued throughout the waits (no gap of 500 ms). Both are judged over the stretches in which a subject's request waited, not the calm between them |
 | `blocked_waiting` | yes | every waiting request's `enqueued` record says it used neither structured output nor streaming input |
 | `engine_ingress` | yes | the `engine_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` (untestable on a log without `enqueued` records) |
-| `kv_preemption_pressure` | no | the steps scheduled while requests waited preempted nobody; otherwise it is `upstream` |
+| `kv_preemption_pressure` | no | the steps scheduled while requests waited preempted nobody; otherwise it is `upstream`, which is not excluded, and with a KV finding at `warning` on the subject the queue is its secondary |
 | `client_admission` | no | no request was held at the client |
 | `host_stall@api_server` | no | the `send_to_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` |
 

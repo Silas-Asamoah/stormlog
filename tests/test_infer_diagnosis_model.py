@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from stormlog.infer import diagnosis_model as model
+from stormlog.infer.diagnosis import link_edges
 from stormlog.infer.diagnosis_inputs import Line
 from stormlog.infer.diagnosis_model import (
     CONTRIBUTING,
@@ -15,6 +16,7 @@ from stormlog.infer.diagnosis_model import (
     RULED_OUT,
     SECONDARY,
     UNTESTABLE,
+    UPSTREAM,
     Alternative,
     Criteria,
     Finding,
@@ -150,6 +152,32 @@ def test_a_contributing_competitor_leaves_the_claim_a_condition() -> None:
         "undetermined",
         "condition",
     )
+
+
+@pytest.mark.parametrize("kv_severity_held", [True, False])
+def test_a_queue_is_secondary_only_to_a_kv_fault_it_names_upstream(
+    kv_severity_held: bool,
+) -> None:
+    kv = _finding(
+        kind="kv_preemption_pressure",
+        component="kv_cache",
+        explains="explains_e2e_excess" if kv_severity_held else None,
+        contribution=Criteria(met=("excess_ci_excludes_zero", "explains_e2e_excess")),
+    )
+    queue = _finding(
+        alternatives=[
+            Alternative("engine_stall", RULED_OUT, "r", True),
+            Alternative("kv_preemption_pressure", UPSTREAM, "r"),
+        ]
+    )
+
+    link_edges([kv, queue], "run-1")
+
+    if kv_severity_held:
+        assert (queue.role, queue.secondary_to) == (SECONDARY, [kv.identity("run-1")])
+        assert queue.claim == "condition"
+    else:
+        assert (queue.role, queue.secondary_to) == ("primary", [])
 
 
 def test_workload_and_instrumentation_kinds_keep_their_causes() -> None:
