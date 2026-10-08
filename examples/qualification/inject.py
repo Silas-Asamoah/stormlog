@@ -537,6 +537,7 @@ class InjectionRun:
         with self._lock:
             assert self.channel is not None
             measured = self.channel.record_lag_ns(start_ns, end_ns)
+            self.channel.stop_noting_lags()
         floor = self._record_lag_ns
         if measured is None:
             source = "poll_period: no step record in the baseline to measure"

@@ -250,6 +250,14 @@ def test_the_channel_measures_how_late_step_records_arrive(tmp_path: Path) -> No
     lag = channel.record_lag_ns(began, began + 1)
     assert lag is not None and lag >= 300_000_000
     assert channel.record_lag_ns(began + 1, began + 2) is None
+    # fable-221-delta, N5: once the run has measured its baseline's lag, the
+    # channel stops noting them, rather than keep every step of the run.
+    channel.stop_noting_lags()
+    later = {**record, "seq": 2, "start_wall_ns": time.time_ns()}
+    with part.open("ab") as handle:
+        handle.write((json.dumps(later) + "\n").encode())
+    channel.poll(scrape=False)
+    assert channel.step_lags == [] and len(channel.view.step_starts) == 2
 
 
 def test_a_bad_record_changes_nothing() -> None:
