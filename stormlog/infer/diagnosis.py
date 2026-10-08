@@ -20,6 +20,11 @@ from typing import Any
 
 from ..exit_codes import ExitCode
 from ..report import build_report, validate_report
+from .diagnosis_client import (
+    assess_api_server,
+    assess_capture_pause,
+    assess_client_admission,
+)
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
 from .diagnosis_inputs import read_input
 from .diagnosis_join import RunView, join
@@ -28,7 +33,13 @@ from .diagnosis_queue import assess_queue
 from .diagnosis_report import envelope_finding, finding_detail, inputs_block
 from .diagnosis_selection import SelectionOptions, Subject, select
 from .diagnosis_thresholds import DEFAULT_THRESHOLDS, THRESHOLDS_VERSION
-from .diagnosis_vocabulary import KINDS, QUEUE_SATURATION
+from .diagnosis_vocabulary import (
+    CAPTURE_PAUSE,
+    CLIENT_ADMISSION,
+    HOST_STALL,
+    KINDS,
+    QUEUE_SATURATION,
+)
 
 REPORT_KIND = "inference_diagnosis"
 PAYLOAD_FORMAT = "stormlog.inference_diagnosis"
@@ -38,9 +49,16 @@ NOT_IMPLEMENTED = "not_assessed_by_this_version"
 
 Assess = Callable[[Context, Subject], Assessment]
 
-# The classes this version assesses, in report order.
-CLASSES: dict[str, Assess] = {
-    QUEUE_SATURATION: assess_queue,
+# The classes this version assesses, per kind.
+CLASSES: dict[str, tuple[Assess, ...]] = {
+    QUEUE_SATURATION: (assess_queue,),
+    CLIENT_ADMISSION: (assess_client_admission,),
+    HOST_STALL: (assess_api_server,),
+    CAPTURE_PAUSE: (assess_capture_pause,),
+}
+# Parts of a kind this version does not assess yet.
+NOT_YET: dict[str, str] = {
+    HOST_STALL: "engine_core_and_worker_not_assessed_by_this_version",
 }
 
 
@@ -103,9 +121,10 @@ def diagnose_artifact(
         metrics_from_engine=options.metrics_from_engine,
     )
     assessments = [
-        CLASSES[kind](context, subject)
+        assess(context, subject)
         for subject in selection.subjects
-        for kind in CLASSES
+        for assessors in CLASSES.values()
+        for assess in assessors
     ]
     return _report(context, assessments, options, windows or ())
 
@@ -235,13 +254,23 @@ def _coverage(context: Context, assessments: list[Assessment]) -> dict[str, Any]
                 "by_subject": {},
             }
             continue
-        mine = [a for a in assessments if a.kind == kind]
-        coverage[kind] = {
-            "status": _overall({a.status for a in mine}),
-            "reasons": sorted({r for a in mine for r in a.reasons}),
-            "by_subject": {a.subject_key: a.as_dict() for a in mine},
-        }
+        coverage[kind] = _kind_coverage(
+            kind, [a for a in assessments if a.kind == kind]
+        )
     return coverage
+
+
+def _kind_coverage(kind: str, mine: list[Assessment]) -> dict[str, Any]:
+    statuses = {a.status for a in mine}
+    reasons = {r for a in mine for r in a.reasons}
+    if kind in NOT_YET:  # a part of the kind this version does not assess
+        statuses.add(PARTIAL)
+        reasons.add(NOT_YET[kind])
+    return {
+        "status": _overall(statuses),
+        "reasons": sorted(reasons),
+        "by_subject": {a.subject_key: a.as_dict() for a in mine},
+    }
 
 
 def _overall(statuses: set[str]) -> str:

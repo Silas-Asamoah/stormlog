@@ -10,6 +10,7 @@ from .diagnosis_clocks import EngineClock
 from .diagnosis_join import EngineEpoch, RunView
 from .diagnosis_segments import Decomposition, decompose
 from .diagnosis_selection import Selection, Subject
+from .diagnosis_stats import Difference, median_difference
 from .diagnosis_steps import Steps, steps_of
 
 UNSUPPORTED = "unsupported"
@@ -63,6 +64,35 @@ class Context:
             clocks = {producer: self.clock(producer) for producer in producers}
             self._decompositions[request_id] = decompose(self.view, request, clocks)
         return self._decompositions[request_id]
+
+    def segment_values(self, request_ids: list[str], name: str) -> list[float]:
+        """A segment's duration for each request that has it placed: the
+        middle of its interval (exact on the engine clock, within its
+        bracket across clocks)."""
+        values = []
+        for request_id in request_ids:
+            ttft, e2e = self.decomposition(request_id)
+            part = ttft.part(name) or e2e.part(name)
+            if part is not None and part.interval is not None:
+                values.append(sum(part.interval) / 2)
+        return values
+
+    def segment_excess(self, subject: Subject, name: str) -> Difference | None:
+        """The subject's median segment minus the reference's."""
+        return median_difference(
+            self.segment_values(subject.requests, name),
+            self.segment_values(subject.reference, name),
+        )
+
+    def total_excess(self, subject: Subject, kind: str) -> Difference | None:
+        """The subject's median TTFT (``kind`` ttft) or end-to-end latency
+        minus the reference's."""
+        index = 0 if kind == "ttft" else 1
+        arms = []
+        for request_ids in (subject.requests, subject.reference):
+            totals = (self.decomposition(r)[index].total_ns for r in request_ids)
+            arms.append([float(t) for t in totals if t is not None])
+        return median_difference(arms[0], arms[1])
 
     def producer_of(self, request_ids: list[str]) -> str | None:
         """The one engine that served these requests; None for none or

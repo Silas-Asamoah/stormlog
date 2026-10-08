@@ -29,7 +29,7 @@ from .diagnosis_model import (
     Finding,
     Observation,
 )
-from .diagnosis_segments import MERGED_INGRESS, Decomposition
+from .diagnosis_segments import MERGED_INGRESS
 from .diagnosis_selection import Subject
 from .diagnosis_stats import INSUFFICIENT_SAMPLES, Difference, median_difference
 from .diagnosis_steps import Step, Steps, loop_steps
@@ -110,7 +110,7 @@ def _finding(
     span = _wait_span(context, list(waits.subject))
     spanning = steps.between(*span) if span else []
     witness = _witness(context, producer, spanning)
-    ttft = _ttft_excess(context, subject)
+    ttft = context.total_excess(subject, "ttft")
     alternatives = [
         _engine_stall(context, producer, waits),
         _scheduler_paused(context, producer, steps, span),
@@ -331,7 +331,7 @@ def _engine_ingress(
             "ingress and the queue wait are one segment on this log",
             True,
         )
-    ingress = _segment_excess(context, subject, "engine_ingress")
+    ingress = context.segment_excess(subject, "engine_ingress")
     if ingress is None:
         return Alternative(
             "engine_ingress", UNTESTABLE, "too few ingress samples", True
@@ -384,7 +384,7 @@ def _client_admission(context: Context, subject: Subject) -> Alternative:
 
 
 def _api_server(context: Context, subject: Subject, excess: Difference) -> Alternative:
-    front = _segment_excess(context, subject, "send_to_ingress")
+    front = context.segment_excess(subject, "send_to_ingress")
     if front is None:
         return Alternative(
             "host_stall@api_server", UNTESTABLE, "send_to_ingress not placed"
@@ -403,35 +403,6 @@ def _api_server(context: Context, subject: Subject, excess: Difference) -> Alter
 
 
 # ---------------------------------------------------------------- helpers
-def _segment_excess(context: Context, subject: Subject, name: str) -> Difference | None:
-    arms = []
-    for request_ids in (subject.requests, subject.reference):
-        values = []
-        for request_id in request_ids:
-            part = context.decomposition(request_id)[0].part(name)
-            if part is not None and part.interval is not None:
-                values.append(sum(part.interval) / 2)
-        arms.append(values)
-    return median_difference(arms[0], arms[1])
-
-
-def _ttft_excess(context: Context, subject: Subject) -> Difference | None:
-    arms = []
-    for request_ids in (subject.requests, subject.reference):
-        arms.append(
-            [
-                d.total_ns
-                for d in (_ttft(context, r) for r in request_ids)
-                if d.total_ns is not None
-            ]
-        )
-    return median_difference(arms[0], arms[1])
-
-
-def _ttft(context: Context, request_id: str) -> Decomposition:
-    return context.decomposition(request_id)[0]
-
-
 def _wait_span(context: Context, request_ids: list[str]) -> tuple[int, int] | None:
     """From the earliest entry into the queue to the latest first schedule."""
     intervals = _wait_intervals(context, request_ids)
