@@ -368,9 +368,16 @@ ranked by #218's total `rank`, and top-1 and top-3 are taken over it.
   plus its `window.uncertainty_ns`, at most `ScoreConfig.max_uncertainty_ns`
   (5 s; #218 emits none on one host). Both bounds are fixed, frozen with
   `score_v1`, never taken from a claim. A run's problems count, separately,
-  the findings that claim more resolution and those that claim more
-  uncertainty. `grace` is frozen per finding kind (`ScoreConfig.grace_ns`). A finding qualifies
-  when it starts inside `S` and at least half of its window lies inside. A finding with no window, or a run-wide one, never does, nor
+  the findings that claim more resolution, those that claim more
+  uncertainty, and those whose resolution is longer than their own window
+  (#218's first flagged window lies inside its finding's). `grace` is
+  frozen per finding kind (`ScoreConfig.grace_ns`). A finding qualifies
+  when it starts inside `S`,
+  its window reaches the onset (its end plus its bounded uncertainty is at
+  or after `effect_onset`), and at least half of its window lies inside.
+  Resolution lets a coarse window start early, never end early: a window
+  wholly before the onset is about something earlier, whatever resolution
+  it declares. A finding with no window, or a run-wide one, never does, nor
   does one whose window ends before it starts or names a clock domain
   other than the victim's. A finding with a severity or role outside #218's
   vocabulary is refused (`ValueError`, naming it).

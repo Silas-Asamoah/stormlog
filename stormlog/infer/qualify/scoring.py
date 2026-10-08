@@ -159,9 +159,14 @@ class Window:
     def pre_grace_ns(self, config: ScoreConfig) -> int:
         """How far the window may start before an effect's onset: its
         resolution and uncertainty, each within its fixed bound."""
-        return min(self.resolution_ns, config.max_resolution_ns) + min(
-            self.uncertainty_ns, config.max_uncertainty_ns
-        )
+        return min(
+            self.resolution_ns, config.max_resolution_ns
+        ) + self.bounded_uncertainty_ns(config)
+
+    def bounded_uncertainty_ns(self, config: ScoreConfig) -> int:
+        """How far the window may lie from where it says, at most the
+        fixed bound."""
+        return min(self.uncertainty_ns, config.max_uncertainty_ns)
 
 
 @dataclass(frozen=True)
@@ -260,13 +265,18 @@ def coverage_of(diagnosis: Mapping[str, Any]) -> Mapping[str, Any]:
 def in_scoring_window(
     finding: FindingView, injection: Injection, config: ScoreConfig
 ) -> bool:
-    """The temporal rule: start within ``S_e``, and at least half inside,
-    on the victim's clock."""
+    """The temporal rule: start within ``S_e``, reach the effect's onset
+    (give or take the window's bounded uncertainty), and lie at least half
+    inside, on the victim's clock. A window that ends before the onset is
+    about something earlier, however coarse it says it is: its resolution
+    lets it start early, not end early."""
     window = finding.window
     onset, end = injection.times.effect_onset_ns, injection.times.effect_end_ns
     if window is None or onset is None or end is None:
         return False
     if window.end_ns < window.start_ns or not window.on_clock(injection.clock_domain):
+        return False
+    if window.end_ns + window.bounded_uncertainty_ns(config) < onset:
         return False
     first = onset - window.pre_grace_ns(config)
     last = end + config.grace(finding.kind)
@@ -640,14 +650,20 @@ def score_run(
 def _finding_problems(
     run: RunRecord, findings: Sequence[FindingView], config: ScoreConfig
 ) -> tuple[str, ...]:
-    """How many of the run's findings are off its clock, and how many claim
-    more resolution, or more uncertainty, than the pre-grace allows."""
+    """How many of the run's findings are off its clock, how many claim
+    more resolution, or more uncertainty, than the pre-grace allows, and
+    how many claim a resolution longer than their own window (#218's is its
+    first flagged window's span, which the finding's window holds)."""
     windows = [f.window for f in findings if f.window is not None]
     counts = (
         (sum(not w.on_clock(run.clock_domain) for w in windows), "on another clock"),
         (
             sum(w.resolution_ns > config.max_resolution_ns for w in windows),
             "with more resolution than max_resolution_ns",
+        ),
+        (
+            sum(w.resolution_ns > w.end_ns - w.start_ns for w in windows),
+            "with more resolution than their window's length",
         ),
         (
             sum(w.uncertainty_ns > config.max_uncertainty_ns for w in windows),

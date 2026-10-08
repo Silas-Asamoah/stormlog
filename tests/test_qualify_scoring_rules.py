@@ -480,7 +480,7 @@ def test_resolution_and_uncertainty_are_reported_apart() -> None:
     # resolution than #218 can emit is reported on its own.
     from tests.test_qualify_scoring import null_run
 
-    wide = finding("s", "host_stall", 1, component="engine_core", window=(250, 280))
+    wide = finding("s", "host_stall", 1, component="engine_core", window=(250, 300))
     wide["window"]["resolution_ns"] = 45 * S
     vague = finding("v", "host_stall", 2, component="engine_core", window=(250, 280))
     vague["window"]["uncertainty_ns"] = 6 * S
@@ -489,6 +489,47 @@ def test_resolution_and_uncertainty_are_reported_apart() -> None:
         "run r: 1 findings with more resolution than max_resolution_ns",
         "run r: 1 findings with more uncertainty than max_uncertainty_ns",
     )
+
+
+@pytest.mark.parametrize(
+    ("window", "resolution", "uncertainty"),
+    [
+        ((65, 66), 30, 5),  # 1 s, ending 34 s before the onset
+        ((66, 86), 30, 5),  # 20 s, all before it
+        ((71, 72), 30, 0),  # 1 s, 28 s before it
+    ],
+)
+def test_a_window_that_ends_before_the_onset_is_never_correct(
+    window: tuple[float, float], resolution: float, uncertainty: float
+) -> None:
+    # Astra's closure of delta 3, H2: a claim declaring the 30 s resolution
+    # cap and 5 s of uncertainty got 35 s of pre-grace, and "half inside" was
+    # measured from that early start, so a window wholly before the onset
+    # was correct. A window must reach the onset, give or take its bounded
+    # uncertainty; a declared resolution longer than the window is reported.
+    claim = finding("q", KV, 1, window=window, resolution=resolution)
+    claim["window"]["uncertainty_ns"] = int(uncertainty * S)
+    score = run_of([episode()], diagnosis(claim), run_id="r")
+    assert not score.episodes[0].correct(TOP1, 2)
+    assert score.problems == (
+        "run r: 1 findings with more resolution than their window's length",
+    )
+    # The same coarse claim reaching the onset is correct, and an honest
+    # resolution is no problem.
+    reaching = finding("q", KV, 1, window=(71, 101), resolution=30)
+    score = run_of([episode()], diagnosis(reaching), run_id="r")
+    assert score.episodes[0].correct(TOP1, 2) and score.problems == ()
+
+
+def test_a_window_may_reach_the_onset_within_its_uncertainty() -> None:
+    # Uncertainty, unlike resolution, says where the window lies: one that
+    # ends 3 s before the onset with 5 s of it may still cover the effect;
+    # with 2 s it may not, though its start is within the pre-grace.
+    near = finding("q", KV, 1, window=(92, 97), resolution=7)
+    near["window"]["uncertainty_ns"] = 5 * S
+    assert score_episode(episode(), diagnosis(near), CONFIG).correct(TOP1, 2)
+    near["window"]["uncertainty_ns"] = 2 * S
+    assert not score_episode(episode(), diagnosis(near), CONFIG).correct(TOP1, 2)
 
 
 # ------------------------------------------------------------------ pinned by mutation
