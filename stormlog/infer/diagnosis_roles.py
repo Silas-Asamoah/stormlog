@@ -9,7 +9,9 @@ is merely not ruled out. When it is, the edge forms:
 
 - the downstream finding becomes ``secondary``, lists the upstream's ID in
   ``secondary_to``, and keeps the evidence in ``detail.role_evidence``
-  instead of the competitor (an upstream cause is never a competitor);
+  instead of the competitor (an upstream cause is never a competitor); its
+  severity is capped at the upstream's, so an edge never raises the exit
+  code above what the cause says;
 - the upstream finding claims what its consequence explains: KV pressure
   that held the queue explains the TTFT excess the queue does
   (``explains_ttft_excess_through_queue``), when the requests' time held
@@ -88,6 +90,7 @@ def _link(
     upstream_id = upstream.identity(run_id)
     finding.role = SECONDARY
     finding.secondary_to.append(upstream_id)
+    finding.upstreams.append(upstream)
     finding.detail.setdefault("role_evidence", []).append(
         {
             "edge": f"{upstream.kind}->{finding.kind}",

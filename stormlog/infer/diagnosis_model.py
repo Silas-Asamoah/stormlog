@@ -181,6 +181,9 @@ class Finding:
     partial_reasons: list[str] = field(default_factory=list)
     role: str = PRIMARY
     secondary_to: list[str] = field(default_factory=list)
+    # The findings named in ``secondary_to``: a secondary is never more
+    # severe than a finding it is the consequence of.
+    upstreams: list[Finding] = field(default_factory=list, repr=False, compare=False)
     incident: bool = False  # whether the subject's impact is supported
     # The contribution criterion that says the mechanism explains the
     # incident; a kind without one never warns.
@@ -230,6 +233,14 @@ class Finding:
 
     @property
     def severity(self) -> str:
+        """Its own severity, capped at each upstream finding's: a queue that
+        is KV pressure's consequence warns only if the KV finding does."""
+        own = self._own_severity()
+        if own == "warning" and any(u.severity != "warning" for u in self.upstreams):
+            return "info"
+        return own
+
+    def _own_severity(self) -> str:
         if self.kind in WORKLOAD_KINDS or not self.eligible:
             return "info"
         explained = self.explains is not None and self.explains in self.contribution.met
