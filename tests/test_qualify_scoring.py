@@ -782,6 +782,38 @@ def test_a_declared_stratum_without_valid_episodes_fails_the_gate() -> None:
     assert not f2_stratum.passes and not summary.accuracy_passes
 
 
+def test_an_engine_that_fails_the_dose_check_is_not_evaluable() -> None:
+    # The lead's note on Astra's H4: F4a episodes on an engine whose own
+    # steps fail G0's dose check never recover (recovery_incomplete, the
+    # reason in recovery_blocked). They are neither misses nor passes: the
+    # stratum says it couldn't judge them, and why; a blocked negative run
+    # is excluded by that reason too.
+    f4a = replace(
+        CONFIG, supported_types=frozenset({"F4a"}), negative_types=frozenset({"H0"})
+    )
+    dose = "dose_check_failed: 16 of 2021 busy step gaps in the baseline are ..."
+    blocked = replace(
+        episode("F4a", expects=(Expectation("host_stall", "engine_core"),)),
+        status="recovery_incomplete",
+        injected={"method": "signal_pulses", "recovery_blocked": [dose]},
+    )
+    runs = [run_of([blocked], diagnosis(), f4a, run_id=f"b{i}") for i in range(15)]
+    summary = summarize(runs, f4a)
+    (stratum,) = summary.strata
+    assert runs[0].episodes[0].not_evaluable == "dose_check_failed"
+    assert runs[0].episodes[0].to_record()["not_evaluable"] == "dose_check_failed"
+    assert (stratum.episodes, stratum.lower_bound, stratum.passes) == (0, None, False)
+    assert stratum.excluded == {"recovery_incomplete": 15}
+    assert stratum.to_record()["not_evaluable"] == {"dose_check_failed": 15}
+    # A plain timeout is no such reason.
+    timed_out = replace(blocked, injected={"method": "signal_pulses"})
+    assert run_of([timed_out], diagnosis(), f4a).episodes[0].not_evaluable is None
+    h0 = replace(
+        negative("H0"), status="recovery_incomplete", injected=blocked.injected
+    )
+    assert run_of([h0], diagnosis(), f4a).excluded_negative == "dose_check_failed"
+
+
 def test_a_gated_summary_needs_the_support_matrix() -> None:
     with pytest.raises(ValueError, match="supported_types"):
         summarize(_scores(15, 15), ScoreConfig(default_grace_ns=20 * S))

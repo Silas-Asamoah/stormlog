@@ -54,6 +54,7 @@ from .bounds import (
     poisson_rate_upper,
 )
 from .ground_truth import (
+    RECOVERY_INCOMPLETE,
     VALID,
     Expectation,
     GroundTruthError,
@@ -388,6 +389,8 @@ class EpisodeScore:
     miss: str | None
     secondaries: int
     secondary_errors: int
+    # Why the episode can't be judged, if its recovery could never hold.
+    not_evaluable: str | None = None
 
     def correct(self, metric: str, level: int) -> bool:
         rank = self.match_rank.get(level)
@@ -421,6 +424,7 @@ class EpisodeScore:
             "miss": self.miss,
             "secondaries": self.secondaries,
             "secondary_errors": self.secondary_errors,
+            "not_evaluable": self.not_evaluable,
         }
 
 
@@ -455,7 +459,21 @@ def score_episode(
         miss=_miss(ranked, expectation, match_rank[2], coverage_of(diagnosis)),
         secondaries=len(secondaries),
         secondary_errors=len(secondaries) - len(neutral),
+        not_evaluable=not_evaluable_reason(injection),
     )
+
+
+def not_evaluable_reason(injection: Injection) -> str | None:
+    """Why an episode can't be judged, when its recovery could never hold:
+    the kind of the first reason its record lists under ``recovery_blocked``
+    (``dose_check_failed`` for an engine that fails G0's dose check,
+    ``baseline_too_thin``). Such an episode is neither correct nor a miss:
+    it is left out, like any episode that isn't valid, and counted by that
+    reason, so a stratum it empties says why rather than failing silently."""
+    if injection.status != RECOVERY_INCOMPLETE:
+        return None
+    blocked = injection.injected.get("recovery_blocked") or ()
+    return str(blocked[0]).split(":", 1)[0] if blocked else None
 
 
 def _candidates(
@@ -773,7 +791,7 @@ def _negative_unit(
     if not negatives:
         return None, (), None
     if negatives[0].status != VALID:
-        return None, (), negatives[0].status
+        return None, (), not_evaluable_reason(negatives[0]) or negatives[0].status
     return negatives[0], (), None
 
 
@@ -927,7 +945,10 @@ def _injected_kinds(injections: Sequence[Injection]) -> frozenset[str]:
 @dataclass(frozen=True)
 class Stratum:
     """One declared fault episode type's accuracy and its gate, with its
-    attempted episodes that didn't count, by status."""
+    attempted episodes that didn't count, by status, and those of them that
+    couldn't be judged, by why (``not_evaluable_reason``). A stratum with no
+    valid episode has no bound and doesn't pass; ``not_evaluable`` then says
+    whether that was for want of an engine the rules could judge."""
 
     episode_type: str
     episodes: int
@@ -935,6 +956,7 @@ class Stratum:
     lower_bound: float | None
     passes: bool
     excluded: Mapping[str, int] = field(default_factory=dict)
+    not_evaluable: Mapping[str, int] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -944,6 +966,7 @@ class Stratum:
             "lower_bound": self.lower_bound,
             "passes": self.passes,
             "excluded": dict(self.excluded),
+            "not_evaluable": dict(self.not_evaluable),
         }
 
 
@@ -1115,6 +1138,7 @@ def _stratum(
         lower_bound=lower,
         passes=lower is not None and lower >= config.accuracy_floor,
         excluded=_excluded(attempted),
+        not_evaluable=_not_evaluable(attempted),
     )
 
 
@@ -1126,6 +1150,11 @@ def _attempts(scores: Sequence[EpisodeScore], episode_type: str) -> list[Episode
 
 def _excluded(attempted: Sequence[EpisodeScore]) -> dict[str, int]:
     counts = Counter(s.status for s in attempted if not s.valid)
+    return dict(sorted(counts.items()))
+
+
+def _not_evaluable(attempted: Sequence[EpisodeScore]) -> dict[str, int]:
+    counts = Counter(s.not_evaluable for s in attempted if s.not_evaluable)
     return dict(sorted(counts.items()))
 
 
@@ -1196,6 +1225,7 @@ __all__ = [
     "location_matches",
     "matches",
     "negative_exposure",
+    "not_evaluable_reason",
     "score_episode",
     "score_run",
     "summarize",
