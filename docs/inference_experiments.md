@@ -182,9 +182,12 @@ A cleanup that left processes stops the experiment, not just its block:
 no server, treatment or prelude starts beside them. Every planned run after
 it is indexed with state `not_run`, the reason `cleanup_unverified`, and
 `stopped_after: <label>`. A server port something else already holds stops
-it the same way (`server_port_in_use`). Each survivor is recorded by its
-PID and start time, and a resume refuses (a usage error, exit 2) while any
-is still running; once the host is clean, it runs them.
+it the same way (`server_port_in_use`). Each survivor is recorded by the
+host's boot ID, its PID and its start time, and a resume refuses (a usage
+error, exit 2) while any is still running; once the host is clean, it runs
+them. A survivor recorded in another boot is gone: on Linux start times
+count from the boot, so after a reboot another process may hold its PID
+and start time.
 
 A runner that is killed (SIGKILL, an ssh drop, the OOM killer) runs no
 cleanup, and what it launched lives on in sessions of its own. So every
@@ -379,7 +382,8 @@ process's), nor tell a process whose environment holds no variable (emptied,
 or overwritten in place by a process title, as `setproctitle` does) from an
 unmarked one. Each cleanup records `mark_search`: how many environments it
 could not read (`complete` only when it read them all), and `blind`, each
-process it could not judge that may be the launch's, by PID and start time.
+process it could not judge that may be the launch's, by boot, PID and start
+time.
 Any `blind` process keeps the cleanup from verifying, holds a resume like a
 survivor, and is never killed, since it may be another's. A process is not
 the launch's when another user runs it (so anything run under `sudo` is

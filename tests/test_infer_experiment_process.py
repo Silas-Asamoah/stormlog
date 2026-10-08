@@ -152,7 +152,8 @@ def test_a_survivor_is_known_by_its_start_time_as_well_as_its_pid() -> None:
         assert survivor["pid"] == process.pid
         assert still_there(survivor)
         # The same PID, started at another time, is another process.
-        other = {k: (v + 1 if k != "pid" else v) for k, v in survivor.items()}
+        start = "start_ticks" if "start_ticks" in survivor else "create_time"
+        other = {**survivor, start: survivor[start] + 1}
         assert not still_there(other)
     finally:
         process.kill()
@@ -160,6 +161,33 @@ def test_a_survivor_is_known_by_its_start_time_as_well_as_its_pid() -> None:
     assert not still_there(survivor)
     # A survivor recorded without its start time cannot be told apart.
     assert not still_there({"pid": os.getpid()})
+
+
+def test_a_survivor_recorded_in_another_boot_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Linux start ticks count from the boot, so after a reboot a process may
+    # hold a recorded survivor's PID and start ticks; a resume then refused
+    # and told the operator to stop it. A survivor is named by its boot too.
+    import subprocess
+
+    from stormlog.infer import experiment_process
+
+    process = subprocess.Popen(["/bin/sleep", "60"])
+    try:
+        survivor = identify(process.pid)
+        assert survivor["boot_id"] == experiment_process.current_boot()
+        assert still_there(survivor)
+        assert not still_there({**survivor, "boot_id": "another-boot"})
+        # Rebooted: what runs now has the PID and start the record names.
+        monkeypatch.setattr(experiment_process, "current_boot", lambda: "next-boot")
+        assert identify(process.pid)["boot_id"] == "next-boot"
+        assert not still_there(survivor)
+        # A record of no known boot is judged by its start alone.
+        assert still_there({**survivor, "boot_id": None})
+    finally:
+        process.kill()
+        process.wait()
 
 
 STUBBORN = (
