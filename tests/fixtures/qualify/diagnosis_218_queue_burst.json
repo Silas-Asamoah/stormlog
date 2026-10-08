@@ -196,5 +196,5 @@
       }
     }
   },
-  "source": "stormlog #218 PR 1b (feat/issue-218-pr1b, 90e164d1): diagnose_artifact on tests/diagnosis_scenarios.py's burst (140 calm requests, then 300 at 5 ms from 90 s, max_num_seqs 4), from opus-218's burst-report.json. Kept: the fields of findings_detail the scorer reads (location without its iteration span), and coverage's status, reasons, per-subject status and per-component status."
+  "source": "stormlog #218 PR 1b (feat/issue-218-pr1b), at its commit 'feat(infer): say per component which parts of a kind were assessed': diagnose_artifact on tests/diagnosis_scenarios.py's burst (140 calm requests, then 300 at 5 ms from 90 s, max_num_seqs 4), from opus-218's burst-report.json. Kept: the fields of findings_detail the scorer reads (location without its iteration span), and coverage's status, reasons, per-subject status and per-component status."
 }
