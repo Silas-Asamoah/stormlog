@@ -294,7 +294,7 @@ class _EpochReducer:
             events.extend(self._iteration_events(item))
         events.extend(self._request_events())
         # Last: a stage refers only to records already written.
-        stages = StageBuilder(self, kept)
+        stages = StageBuilder(self, kept, pending)
         events.extend(stages.build())
         return events, self._summary(kept, pending, stages)
 

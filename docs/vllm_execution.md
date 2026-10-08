@@ -523,8 +523,10 @@ bracketing wall reads:
 
 vLLM lists a reset's preemptions in the next step's `preempted` along with
 the step's own, so of a step's preemptions those a reset since the previous
-step made are the reset's; until that next step is read, the import holds
-its mark below the reset and reads it again. A reset's preemptions stand
+step made are the reset's. Until that next step is final (read, and its
+output too), the import holds its mark below the reset and reads it again,
+so a later import never reads the step without the reset and takes the
+reset's preemptions for the step's own. A reset's preemptions stand
 even when the reset failed, since vLLM preempts before it checks.
 `engine.preempted` says in `reset_observed` whether the hook records resets
 at all: without them, a reset's preemptions look like the step's own. A
