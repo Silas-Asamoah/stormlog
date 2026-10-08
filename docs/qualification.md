@@ -598,8 +598,9 @@ F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
 Each pulse records where it landed in the step loop (A.4, #218 R12), from the
 reference hook's records: `in_schedule` (inside a step's `schedule()` call),
 `in_step` (after it, before the step completed: execution or a GPU wait) or
-`between_steps`. Each pulse's stop, confirmation and continue times are
-kept, with `held_ns`, the measured time from `SIGSTOP` to `SIGCONT`
+`between_steps`; so do the pulses of an episode that failed or was
+interrupted, the one cut short included. Each pulse's stop, confirmation
+and continue times are kept, with `held_ns`, the measured time from `SIGSTOP` to `SIGCONT`
 (`continued_by_other` when the target was already running, continued by the
 watchdog's limit or an operator, so it was stopped for less), so effect
 timing can start from the first confirmed stop.
