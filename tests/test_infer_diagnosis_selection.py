@@ -69,7 +69,8 @@ def test_a_sustained_burst_is_one_incident_detected_on_its_second_window(
     (incident,) = selection.subjects
     assert incident.kind == "window" and incident.declared_by is None
     assert len(incident.requests) == 600 and len(incident.reference) == 240
-    assert [w.flagged for w in incident.windows] == [True, True, True]
+    # 3 s at 200 requests/s: windows of 20, each ending at the next arrival.
+    assert len(incident.windows) == 30 and all(w.flagged for w in incident.windows)
     assert incident.first_detectable_ns == incident.windows[1].evaluated_at_ns
     test = incident.windows[0].tests[TTFT]
     assert test.p_value < 0.01 and test.window_above >= 3
@@ -93,18 +94,34 @@ def test_an_incident_is_placed_where_it_was_first_seen(tmp_path: Path) -> None:
     assert onset <= incident.onset_ns < onset + 100 * MS
     window = Context(view, selection).window(incident)
     assert window is not None and window["start_ns"] == incident.onset_ns
-    assert window["resolution_ns"] == 11 * SECOND
+    first = incident.windows[0]
+    assert window["resolution_ns"] == first.end_ns - first.start_ns
     # #221's match: start >= effect onset - (resolution + uncertainty).
     assert window["start_ns"] >= onset - window["resolution_ns"]
 
 
 def test_one_bad_window_alone_is_not_an_incident(tmp_path: Path) -> None:
-    view = _burst_run(tmp_path, burst=180)  # 0.9 s: one window
+    # 30 requests: a window of 20, then 10, too few to be tested.
+    view = _burst_run(tmp_path, burst=30)
 
     selection = select(view)
 
     assert sum(w.flagged for w in selection.windows) == 1
     assert selection.subjects == []
+
+
+def test_a_burst_inside_one_base_window_is_still_an_incident(tmp_path: Path) -> None:
+    """300 requests 1 ms apart, as a batch job submits them: they arrive in
+    one base window, but every 20 make a window ending at the next arrival,
+    so the sustain rule sees the burst."""
+    calm = poisson_free(240, 10 * SECOND, 500 * MS, prefix="a")
+    burst = poisson_free(300, 130 * SECOND, MS, prefix="b")
+    view = join(read_input(build_run(tmp_path, calm + burst, Engine(max_num_seqs=4))))
+
+    (incident,) = select(view).subjects
+
+    assert len(incident.requests) == 300 and len(incident.windows) == 15
+    assert incident.first_detectable_ns == incident.windows[1].evaluated_at_ns
 
 
 def test_without_dispatch_records_no_detection_time_is_given(tmp_path: Path) -> None:

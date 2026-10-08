@@ -193,7 +193,11 @@ the measured phase:
   arrived in it however long it took.
 - **Windows.** Base windows of 1 s are joined forward until each holds 20
   requests, or spans 30 s; a quiet stretch that reaches 30 s is a window of
-  its own.
+  its own. A window that holds 20 ends early at the next arrival in its base
+  window, which starts the next window: a burst a batch job submits within
+  one second still spans many windows, so the sustain rule sees how long it
+  lasted. Each boundary is known when it passes, so a prefix of the run
+  draws the same windows up to its end.
 - **Reference.** A window is compared with every earlier window of its case
   that was not flagged itself, and only once those hold at least 114
   requests, the fewest that bound a p90 under the shared sufficiency rule;
