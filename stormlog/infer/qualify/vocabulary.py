@@ -1,9 +1,12 @@
 """The diagnosis vocabulary and edge table the qualification labels use.
 
-These are #218's names (its design v2.2, §4.4 kinds and §4.6 edges), copied
-here until #218's ``diagnosis_vocabulary`` and edge table reach
-``release/dev``; whichever of the two lands second makes this module import
-them instead. A test compares the two when both are present.
+The kinds, where each may be located, the workload kinds and the causes are
+#218's, imported from ``stormlog.infer.diagnosis_vocabulary``; the severity
+names are ``stormlog.report``'s. What #218's later PRs add is not on
+``release/dev`` yet, so it is copied from its design (v2.2 §4.4 and §4.6)
+until they land, then imported: a finding's role and claim, the order of
+the two severities a diagnosis finding takes, and the edge table. A test
+pins the edge table to #218's PR 2 table.
 """
 
 from __future__ import annotations
@@ -12,53 +15,35 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-QUEUE_SATURATION = "queue_saturation"
-KV_PREEMPTION_PRESSURE = "kv_preemption_pressure"
-PREFIX_CACHE_LOSS = "prefix_cache_loss"
-MIXED_PREFILL_INTERFERENCE = "mixed_prefill_interference"
-HOST_STALL = "host_stall"
-RANK_DELAY = "rank_delay"
-TRANSFER_DEGRADATION = "transfer_degradation"
-CAPTURE_PAUSE = "capture_pause"
-CLIENT_ADMISSION = "client_admission"
-LOAD_INCREASE = "load_increase"
-LONGER_INPUTS = "longer_inputs"
-LONGER_OUTPUTS = "longer_outputs"
-PREFIX_SHARING_DROP = "prefix_sharing_drop"
-
-# Where each kind may be located (#218 §4.4).
-KIND_COMPONENTS: Mapping[str, frozenset[str]] = MappingProxyType(
-    {
-        QUEUE_SATURATION: frozenset({"scheduler"}),
-        KV_PREEMPTION_PRESSURE: frozenset({"kv_cache"}),
-        PREFIX_CACHE_LOSS: frozenset({"prefix_cache"}),
-        MIXED_PREFILL_INTERFERENCE: frozenset({"scheduler"}),
-        HOST_STALL: frozenset({"engine_core", "worker", "api_server"}),
-        RANK_DELAY: frozenset({"worker"}),
-        TRANSFER_DEGRADATION: frozenset({"interconnect"}),
-        CAPTURE_PAUSE: frozenset({"profiler"}),
-        CLIENT_ADMISSION: frozenset({"client"}),
-        LOAD_INCREASE: frozenset({"workload"}),
-        LONGER_INPUTS: frozenset({"workload"}),
-        LONGER_OUTPUTS: frozenset({"workload"}),
-        PREFIX_SHARING_DROP: frozenset({"workload"}),
-    }
+from stormlog.infer.diagnosis_vocabulary import (
+    CAPTURE_PAUSE,
+    CAUSE_FAULT,
+    CAUSE_INSTRUMENTATION,
+    CAUSE_UNDETERMINED,
+    CAUSE_WORKLOAD_CHANGE,
+    CAUSES,
+    CLIENT_ADMISSION,
+    HOST_STALL,
+    KIND_COMPONENTS,
+    KINDS,
+    KV_PREEMPTION_PRESSURE,
+    LOAD_INCREASE,
+    LONGER_INPUTS,
+    LONGER_OUTPUTS,
+    MIXED_PREFILL_INTERFERENCE,
+    PREFIX_CACHE_LOSS,
+    PREFIX_SHARING_DROP,
+    QUEUE_SATURATION,
+    RANK_DELAY,
+    TRANSFER_DEGRADATION,
+    WORKLOAD_KINDS,
 )
-KINDS = frozenset(KIND_COMPONENTS)
-WORKLOAD_KINDS = frozenset(
-    {LOAD_INCREASE, LONGER_INPUTS, LONGER_OUTPUTS, PREFIX_SHARING_DROP}
-)
+from stormlog.report import SEVERITY_INFO, SEVERITY_WARNING
 
-CAUSE_FAULT = "fault"
-CAUSE_WORKLOAD_CHANGE = "workload_change"
-CAUSE_INSTRUMENTATION = "instrumentation"
-CAUSE_UNDETERMINED = "undetermined"
-CAUSES = frozenset(
-    {CAUSE_FAULT, CAUSE_WORKLOAD_CHANGE, CAUSE_INSTRUMENTATION, CAUSE_UNDETERMINED}
-)
-
-# #218's severities, lowest first; a fault claim is at ``warning``.
-SEVERITIES = ("info", "warning")
+# The severities a diagnosis finding takes, lowest first; a fault claim is
+# at ``warning``. #218 never emits the report's ``critical``, so the scorer
+# refuses it as outside the vocabulary.
+SEVERITIES = (SEVERITY_INFO, SEVERITY_WARNING)
 
 PRIMARY = "primary"
 SECONDARY = "secondary"
@@ -138,6 +123,7 @@ def severity_at_least(severity: str, floor: str) -> bool:
 
 
 __all__ = [
+    "CAPTURE_PAUSE",
     "CAUSES",
     "CAUSE_FAULT",
     "CAUSE_INSTRUMENTATION",
@@ -146,14 +132,26 @@ __all__ = [
     "CLAIM_CONDITION",
     "CLAIM_FAULT",
     "CLAIM_OBSERVATION",
+    "CLIENT_ADMISSION",
     "EDGES",
     "EDGE_TABLE_VERSION",
     "Edge",
+    "HOST_STALL",
     "KINDS",
     "KIND_COMPONENTS",
+    "KV_PREEMPTION_PRESSURE",
+    "LOAD_INCREASE",
+    "LONGER_INPUTS",
+    "LONGER_OUTPUTS",
+    "MIXED_PREFILL_INTERFERENCE",
+    "PREFIX_CACHE_LOSS",
+    "PREFIX_SHARING_DROP",
     "PRIMARY",
+    "QUEUE_SATURATION",
+    "RANK_DELAY",
     "SECONDARY",
     "SEVERITIES",
+    "TRANSFER_DEGRADATION",
     "WORKLOAD_KINDS",
     "severity_at_least",
 ]
