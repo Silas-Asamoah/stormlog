@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import os
+import secrets
+import shutil
+import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -11,6 +15,8 @@ from typing import Any
 import pytest
 
 from stormlog.infer.experiment_process import (
+    MARK_VARIABLE,
+    Launched,
     identify,
     launch,
     parse_cpu_list,
@@ -18,9 +24,11 @@ from stormlog.infer.experiment_process import (
     run_step,
     still_there,
     stop,
+    stop_journaled,
     verify_cleanup,
     wait_for_file,
 )
+from tests.infer_proc_helpers import fake_process
 
 ESCAPE = "import os, time; os.setsid(); time.sleep(60)"
 
@@ -144,8 +152,6 @@ def test_the_mark_is_not_a_difference_between_runs() -> None:
 
 
 def test_a_survivor_is_known_by_its_start_time_as_well_as_its_pid() -> None:
-    import subprocess
-
     process = subprocess.Popen(["/bin/sleep", "60"])
     try:
         survivor = identify(process.pid)
@@ -169,8 +175,6 @@ def test_a_survivor_recorded_in_another_boot_is_gone(
     # Linux start ticks count from the boot, so after a reboot a process may
     # hold a recorded survivor's PID and start ticks; a resume then refused
     # and told the operator to stop it. A survivor is named by its boot too.
-    import subprocess
-
     from stormlog.infer import experiment_process
 
     process = subprocess.Popen(["/bin/sleep", "60"])
@@ -451,3 +455,197 @@ def test_a_launch_knows_how_long_its_leader_ran() -> None:
     launched.poll()
     lasted = launched.lasted_s()
     assert lasted is not None and 0.2 < lasted < 5
+
+
+SLEEPER = [sys.executable, "-c", "import time; time.sleep(60)"]
+
+
+def _sleeper(env: dict[str, str] | None = None) -> subprocess.Popen[bytes]:
+    """A process in a session and group of its own, as any shell or daemon is."""
+    return subprocess.Popen(
+        SLEEPER, env={**os.environ, **(env or {})}, start_new_session=True
+    )
+
+
+def _ended(launched: Launched) -> dict[str, Any]:
+    """A journal entry for a launch whose leader has exited."""
+    launched.process.wait(timeout=5)
+    return {
+        "name": "server",
+        "pid": launched.pid,
+        "pgid": launched.pid,
+        "mark": launched.mark,
+        "identity": launched.identity,
+    }
+
+
+def test_a_journaled_pid_another_process_holds_is_left_alone() -> None:
+    # fable-213's lens a: an unrelated session leader holding a journaled
+    # PID, started at another time, was counted as the launch's group on
+    # resume and killed (verified: True, killed: (pid,)).
+    other = _sleeper()
+    try:
+        identity = identify(other.pid)
+        start = "start_ticks" if "start_ticks" in identity else "create_time"
+        entry = {
+            "name": "server",
+            "pid": other.pid,
+            "pgid": other.pid,
+            "mark": secrets.token_hex(16),
+            "identity": {**identity, start: identity[start] - 1},
+        }
+        cleanup = stop_journaled(entry, timeout_s=0.5)
+        assert other.poll() is None
+        assert other.pid not in cleanup.killed
+        assert other.pid not in [s["pid"] for s in cleanup.survivors]
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_a_launch_journaled_in_another_boot_is_neither_signalled_nor_counted() -> None:
+    # Its PID and start time name another process in this boot, whatever
+    # runs under them now.
+    launched = launch("server", SLEEPER)
+    try:
+        entry = {
+            "name": "server",
+            "pid": launched.pid,
+            "pgid": launched.pid,
+            "mark": launched.mark,
+            "identity": {**launched.identity, "boot_id": "another-boot"},
+        }
+        cleanup = stop_journaled(entry, timeout_s=0.5)
+        assert (cleanup.verified, cleanup.killed, cleanup.survivors) == (True, (), ())
+        assert launched.poll() is None
+    finally:
+        stop(launched, timeout_s=2)
+
+
+def test_once_its_leader_is_gone_only_its_exact_mark_ties_a_process_to_a_launch() -> (
+    None
+):
+    # The lead's rule: with the leader gone its PID ties nothing, but a
+    # readable environment holding the mark variable with exactly the
+    # journal's 64-bit-or-more nonce is the launch's, in the journal's boot.
+    entry = _ended(launch("server", [sys.executable, "-c", "pass"]))
+    mark = entry["mark"]
+    carrier = _sleeper({MARK_VARIABLE: mark})
+    longer = _sleeper({MARK_VARIABLE: mark + "ff"})
+    another = _sleeper({MARK_VARIABLE: secrets.token_hex(16)})
+    short = _sleeper({MARK_VARIABLE: "ab12"})
+    try:
+        cleanup = stop_journaled(entry, timeout_s=2)
+        assert cleanup.killed == (carrier.pid,)
+        assert carrier.wait(timeout=5) == -9
+        assert longer.poll() is None and another.poll() is None
+        # A journaled mark too short to be a nonce ties nothing.
+        cleanup = stop_journaled({**entry, "mark": "ab12"}, timeout_s=0.3)
+        assert cleanup.killed == () and short.poll() is None
+    finally:
+        for process in (carrier, longer, another, short):
+            process.kill()
+            process.wait()
+
+
+def test_a_launch_of_no_known_boot_lists_what_carries_its_mark_and_kills_nothing() -> (
+    None
+):
+    entry = _ended(launch("server", [sys.executable, "-c", "pass"]))
+    carrier = _sleeper({MARK_VARIABLE: entry["mark"]})
+    try:
+        unknown = {**entry, "identity": {**entry["identity"], "boot_id": None}}
+        cleanup = stop_journaled(unknown, timeout_s=0.3)
+        assert not cleanup.verified and cleanup.killed == ()
+        assert [s["pid"] for s in cleanup.survivors] == [carrier.pid]
+        assert carrier.poll() is None
+    finally:
+        carrier.kill()
+        carrier.wait()
+
+
+class _FakeLinux:
+    """stop_journaled's Linux branch over a fake /proc: what it signals and
+    kills, each kill or group signal ending the processes it reaches."""
+
+    def __init__(self, proc: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from stormlog.infer import experiment_process as ep
+
+        self.proc = proc
+        self.signalled: list[tuple[int, int]] = []
+        self.killed: list[int] = []
+        monkeypatch.setattr(ep, "_linux", lambda: True)
+        monkeypatch.setattr(ep, "current_boot", lambda: "boot-a")
+        monkeypatch.setattr(ep, "_alive", lambda pid: (proc / str(pid)).is_dir())
+        monkeypatch.setattr(ep, "_signal_group", self._signal_group)
+        monkeypatch.setattr(ep, "_kill", self._kill)
+
+    def _signal_group(self, pgid: int, signum: int) -> None:
+        self.signalled.append((pgid, signum))
+        shutil.rmtree(self.proc / str(pgid), ignore_errors=True)
+
+    def _kill(self, pid: int) -> None:
+        self.killed.append(pid)
+        shutil.rmtree(self.proc / str(pid), ignore_errors=True)
+
+
+MARK = "a1" * 16
+
+
+def _journal_entry(pid: int, start: int, boot: str = "boot-a") -> dict[str, Any]:
+    identity = {"pid": pid, "start_ticks": start, "boot_id": boot}
+    return {
+        "name": "server",
+        "pid": pid,
+        "pgid": pid,
+        "mark": MARK,
+        "identity": identity,
+    }
+
+
+def test_on_linux_a_journaled_pid_another_process_holds_is_left_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proc = tmp_path / "proc"
+    fake_process(proc, 4000, start=900, environ={"HOME": "/root"})
+    fake = _FakeLinux(proc, monkeypatch)
+    # Another start time, in this boot: fable-213's repro.
+    cleanup = stop_journaled(_journal_entry(4000, 500), timeout_s=0.2, proc=proc)
+    assert (fake.signalled, fake.killed, cleanup.verified) == ([], [], True)
+    # The same start ticks, in another boot.
+    entry = _journal_entry(4000, 900, boot="boot-b")
+    cleanup = stop_journaled(entry, timeout_s=0.2, proc=proc)
+    assert (fake.signalled, fake.killed, cleanup.verified) == ([], [], True)
+
+
+def test_on_linux_a_gone_leaders_group_is_judged_by_its_mark_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proc = tmp_path / "proc"
+    marks = {4001: MARK, 4002: "b2" * 16, 4003: MARK + "ff", 4004: None}
+    for pid, mark in marks.items():
+        environ = None if mark is None else {MARK_VARIABLE: mark}
+        fake_process(proc, pid, pgid=4000, sid=4000, start=600, environ=environ)
+    # vLLM's titles overwrite an environment in place.
+    (proc / "4004" / "environ").write_bytes(b"VLLM::EngineCore\0\0\0")
+    fake = _FakeLinux(proc, monkeypatch)
+    cleanup = stop_journaled(_journal_entry(4000, 500), timeout_s=0.3, proc=proc)
+    assert (fake.signalled, fake.killed) == ([], [4001])
+    assert not cleanup.verified
+    assert [item["pid"] for item in cleanup.blind] == [4004]
+    assert sorted(int(p.name) for p in proc.iterdir() if p.name.isdigit()) == [
+        4002,
+        4003,
+        4004,
+    ]
+
+
+def test_on_linux_a_journaled_leader_still_running_has_its_group_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proc = tmp_path / "proc"
+    fake_process(proc, 4000, start=500, environ={MARK_VARIABLE: MARK})
+    fake = _FakeLinux(proc, monkeypatch)
+    cleanup = stop_journaled(_journal_entry(4000, 500), timeout_s=0.2, proc=proc)
+    assert (fake.signalled, fake.killed) == ([(4000, signal.SIGTERM)], [])
+    assert cleanup.verified

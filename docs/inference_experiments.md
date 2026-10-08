@@ -192,12 +192,28 @@ and start time.
 A runner that is killed (SIGKILL, an ssh drop, the OOM killer) runs no
 cleanup, and what it launched lives on in sessions of its own. So every
 launch, of a run or a prelude, is journaled in `launches.ndjson` as it
-starts: PID, process group, start time and mark. A resume stops each
-journaled launch of an unfinished attempt or prelude whose leader is still
-that process, by its group, and then verifies its group, session and mark
-are gone, as after any launch; if they are not, it refuses (exit 2). A `probe_incomplete` run is run
-again at once on a fresh server, after its group is verified gone, and both
-attempts are kept.
+starts: the host's boot ID, PID, process group, start time and mark. A
+resume signals or kills only what it can tie to a journaled launch:
+
+- a launch journaled in another boot left nothing running, and is skipped;
+- while a launch's leader is still that process (same boot, PID and start
+  time), its group is stopped, and then its group, session and mark are
+  verified gone, as after any launch;
+- once the leader is gone, its PID may be another process's, so its group
+  and session are neither signalled nor counted. A process is still the
+  launch's, and is killed, only when the journal's boot is this boot, the
+  mark is a nonce of at least 64 bits (each launch draws a random 128-bit
+  one), and the process's environment could be read and holds
+  `STORMLOG_RUN_MARK` with exactly that value, not one that merely starts
+  with it. A process whose environment cannot be read, or was emptied or
+  overwritten, is never killed; one that may be the launch's (see
+  Processes) holds the resume;
+- a launch of no known boot ties nothing: what carries its mark is listed,
+  never killed.
+
+If anything is left, the resume refuses (exit 2). A `probe_incomplete` run
+is run again at once on a fresh server, after its group is verified gone,
+and both attempts are kept.
 
 ### The bundle
 
