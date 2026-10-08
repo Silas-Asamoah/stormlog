@@ -15,19 +15,28 @@ digest of the lines above it; the digest of the whole ``SHA256SUMS`` is kept
 beside the run, in ``<root>/<label>.sha256``. Every file, the partial
 directory and the root are fsynced around the rename, so a power loss can't
 leave a published run with empty sums.
+
+A run claims its label: its partial directory appears, laid out and with
+the run's own nonce in ``.owner``, by one rename, and only a partial
+directory carrying the run's nonce is published. Two runs given one label
+can't publish into each other's directory.
 """
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import secrets
-from dataclasses import dataclass
+import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 
 LABEL_PREFIX = "q221-"
 SUMS = "SHA256SUMS"
 COUNT_LINE = "# files "
+# In the partial directory: the nonce of the run that claimed it.
+OWNER = ".owner"
 
 
 def new_label() -> str:
@@ -37,10 +46,12 @@ def new_label() -> str:
 
 @dataclass(frozen=True)
 class RunDirectory:
-    """Where one run is written, then published."""
+    """Where one run is written, then published. ``owner`` is this run's
+    nonce, which the partial directory carries while it is this run's."""
 
     root: Path
     label: str
+    owner: str = field(default_factory=lambda: secrets.token_hex(8), compare=False)
 
     @property
     def partial(self) -> Path:
@@ -67,22 +78,55 @@ class RunDirectory:
         return self.truth / "reference"
 
     def create(self) -> RunDirectory:
-        """Make the layout under the partial directory.
+        """Claim the label: lay out a directory of this run's own, with its
+        nonce in ``.owner``, and rename it to the partial directory in one
+        step. The partial directory is then this run's and whole, or not
+        this run's at all: interrupted before the rename, nothing is left
+        under the label, and a run that claimed the label first keeps it.
 
         Raises:
             FileExistsError: when the run, or a partial one, already exists.
         """
         if self.final.exists():
             raise FileExistsError(self.final)
-        self.partial.mkdir(parents=True)
-        for directory in (self.run, self.truth, self.probes, self.reference):
-            directory.mkdir(parents=True, exist_ok=True)
+        staging = self.root / f".{self.label}.{self.owner}.new"
+        staging.mkdir(parents=True)
+        try:
+            for directory in ("run", "truth/reference", "probes"):
+                (staging / directory).mkdir(parents=True)
+            (staging / OWNER).write_text(self.owner)
+            _claim(staging, self.partial)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        if self.final.exists():
+            # Published since the check above, which freed the partial
+            # directory's name: the label is still that run's.
+            shutil.rmtree(self.partial)
+            raise FileExistsError(self.final)
         return self
+
+    def owned(self) -> bool:
+        """Whether the partial directory is this run's: it carries its
+        nonce."""
+        try:
+            return (self.partial / OWNER).read_text() == self.owner
+        except OSError:
+            return False
 
     def publish(self) -> Path:
         """fsync every file; write ``SHA256SUMS`` over all of them, with its
         count line, and its digest beside the run; then rename the run into
-        place in one step and fsync the root."""
+        place in one step and fsync the root. Only this run's partial
+        directory is published, never over a published run.
+
+        Raises:
+            FileExistsError: when the partial directory isn't this run's, or
+                the run is already published.
+        """
+        if not self.owned() or self.final.exists():
+            raise FileExistsError(self.final)
+        (self.partial / OWNER).unlink()
         files = sorted(path for path in self.partial.rglob("*") if path.is_file())
         for path in files:
             _fsync(path)
@@ -99,6 +143,17 @@ class RunDirectory:
         os.replace(self.partial, self.final)
         _fsync(self.root)
         return self.final
+
+
+def _claim(staging: Path, partial: Path) -> None:
+    """Rename ``staging`` to ``partial``, which fails if another run's
+    partial directory is there: it is never empty."""
+    try:
+        os.rename(staging, partial)
+    except OSError as error:
+        if error.errno in (errno.ENOTEMPTY, errno.EEXIST):
+            raise FileExistsError(partial) from error
+        raise
 
 
 def verify(directory: Path) -> list[str]:

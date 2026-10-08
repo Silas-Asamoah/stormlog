@@ -134,6 +134,49 @@ def test_verify_catches_tampering_and_truncation(tmp_path: Path, tamper: str) ->
     assert verify(run), tamper
 
 
+def test_only_the_run_that_claimed_a_label_publishes_it(tmp_path: Path) -> None:
+    # close-221-final: a label is claimed by one rename of a directory laid
+    # out with the run's nonce; a second run given it can neither claim it
+    # nor publish what is there, and the owner file isn't published.
+    first = RunDirectory(tmp_path, "q221-0000000000000003").create()
+    second = RunDirectory(tmp_path, first.label)
+    with pytest.raises(FileExistsError):
+        second.create()
+    with pytest.raises(FileExistsError):
+        second.publish()
+    assert first.owned() and not second.owned()
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        f".{first.label}.partial"
+    ]
+    published = first.publish()
+    assert verify(published) == [] and not (published / ".owner").exists()
+    with pytest.raises(FileExistsError):
+        first.publish()
+
+
+def test_a_label_published_while_it_is_claimed_is_given_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # close-221-final: a run that published between this one's check and
+    # its claim freed the partial directory's name, but the label is its.
+    from examples.qualification import run_dir
+
+    first = RunDirectory(tmp_path, "q221-0000000000000004").create()
+    (first.run / "victim.jsonl").write_text('{"event_type": "infer.request"}\n')
+    real = run_dir._claim
+
+    def published_meanwhile(staging: Path, partial: Path) -> None:
+        first.publish()
+        real(staging, partial)
+
+    monkeypatch.setattr(run_dir, "_claim", published_meanwhile)
+    with pytest.raises(FileExistsError):
+        RunDirectory(tmp_path, first.label).create()
+    assert verify(first.final) == []
+    names = sorted(path.name for path in tmp_path.iterdir())
+    assert names == [first.label, f"{first.label}.sha256"]
+
+
 def test_a_published_run_keeps_its_sums_digest_beside_it(tmp_path: Path) -> None:
     run = _run(tmp_path)
     assert verify(run) == []

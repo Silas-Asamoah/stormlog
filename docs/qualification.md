@@ -857,6 +857,17 @@ entered raises into the second, having set the flag itself, and one
 handled as the second is entered is noted. Tests check the bytecode (from
 3.11), raise a signal at the last check before the except, and fail the
 run in a C call that leaves one or two signals pending (on every version).
+The run's directory, its plan, the reference channel and its poller are
+set up inside the same try, so a signal while the run sets up publishes it,
+interrupted, rather than leaving `.partial`; and a signal landing between
+two of the handlers' installs leaves the rest for the finish to install.
+Each handler replaced is kept before the note-taker goes in, so a signal
+handled just as it does is passed on, and the poller is started with the
+three signals blocked, since one handled inside `Thread.start` breaks it.
+A label already taken, by a published run or a `.partial` one, is refused
+before anything starts, and a run publishes only a partial directory it
+claimed (below), so a second run given the label never publishes into the
+first's.
 A third is not held: a publish that hangs (a full disk) can still be ended,
 by whatever handled the signal before.
 
@@ -873,9 +884,14 @@ nothing about its episodes:
   SHA256SUMS
 ```
 
-It is written under `<root>/.<label>.partial`. Once `SHA256SUMS` is written
-last, the directory is renamed into place, so a reader never sees half a
-run. `SHA256SUMS` lists every file and ends with a line giving their count
+It is written under `<root>/.<label>.partial`, which the run claims in one
+step: it lays out a directory of its own with its nonce in `.owner`, and
+renames that to the partial directory, which fails if another run's is
+there. Only a partial directory carrying the run's nonce is published, and
+never over a published run; interrupted before the claim, a run leaves
+nothing under its label. Once `SHA256SUMS` is written last (without
+`.owner`), the directory is renamed into place, so a reader never sees half
+a run. `SHA256SUMS` lists every file and ends with a line giving their count
 and a digest of the lines above it, and the digest of the whole file is kept
 beside the run, in `<root>/<label>.sha256`. Every file, the run's
 directories and the root are fsynced around the rename. `run_dir.verify`

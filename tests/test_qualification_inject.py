@@ -1204,6 +1204,262 @@ def test_a_third_signal_is_not_held() -> None:
         signal.signal(signal.SIGHUP, previous)
 
 
+def test_a_holder_cut_short_while_installing_installs_the_rest_next_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # close-221-delta, N1: a signal between two installs left __enter__
+    # with SIGTERM held and the rest not; the finish's entry then returned
+    # at once (something was installed), so a Ctrl+C during the publish
+    # was not held. Entering again installs what isn't yet.
+    from examples.qualification import inject as module
+
+    real = signal.signal
+    saved = {signum: signal.getsignal(signum) for signum in module._HeldSignals.SIGNALS}
+    cut = [True]
+
+    def cut_after_sigterm(signum: int, handler: Any) -> Any:
+        if signum == signal.SIGHUP and cut[0]:
+            cut[0] = False
+            raise KeyboardInterrupt  # a Ctrl+C between two installs
+        return real(signum, handler)
+
+    monkeypatch.setattr(module.signal, "signal", cut_after_sigterm)
+    held = module._HeldSignals()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            held.__enter__()
+        assert signal.getsignal(signal.SIGINT) is saved[signal.SIGINT]
+        held.__enter__()
+        assert all(signal.getsignal(s) == held._note for s in held.SIGNALS)
+        held.__exit__()
+        assert {s: signal.getsignal(s) for s in saved} == saved
+    finally:
+        for signum, handler in saved.items():
+            real(signum, handler)
+
+
+def test_a_signal_while_the_run_sets_up_still_publishes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # close-221-delta, N1's pre-existing half: a signal after the run's
+    # directory was made but before its try (the plan written, the channel
+    # and poller starting) left the run in .partial. The set-up is inside
+    # the try now: the run is published, interrupted, with every episode
+    # skipped, and the interruption goes on.
+    from examples.qualification import pulser
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "N"}]})
+    directory = RunDirectory(tmp_path / "runs", "q221-s")
+    run = InjectionRun(plan, directory, Server("", "m", tmp_path, {}))
+
+    def interrupted() -> None:
+        raise KeyboardInterrupt  # a Ctrl+C as the channel starts
+
+    saved = {
+        s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    }
+    monkeypatch.setattr(run, "_channel", interrupted)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run.execute()
+    finally:
+        for saved_signum, handler in saved.items():
+            signal.signal(saved_signum, handler)
+        pulser._HANDLED.clear()
+    assert not directory.partial.exists() and verify(directory.final) == []
+    assert load_run(directory.final / "truth" / "run.json").protocol_failure == (
+        "interrupted"
+    )
+    (skipped,) = load_injections(directory.final / "truth" / "injections.jsonl")
+    assert skipped.injected["skipped"] == "run_ended"
+
+
+def _set_up_run(tmp_path: Path, label: str) -> Any:
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "N"}]})
+    directory = RunDirectory(tmp_path / "runs", label)
+    return InjectionRun(plan, directory, Server("", "m", tmp_path, {}))
+
+
+def _execute_restoring_signals(run: Any) -> None:
+    from examples.qualification import pulser
+
+    saved = {
+        s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    }
+    try:
+        run.execute()
+    finally:
+        for saved_signum, handler in saved.items():
+            signal.signal(saved_signum, handler)
+        pulser._HANDLED.clear()
+
+
+def _files(directory: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(directory).as_posix(): path.read_bytes()
+        for path in directory.rglob("*")
+        if path.is_file()
+    }
+
+
+@pytest.mark.parametrize("taken_by", ["published", "partial"])
+def test_a_taken_label_is_refused_and_left_as_it_was(
+    tmp_path: Path, taken_by: str
+) -> None:
+    # close-221-final, the P2: with the set-up inside the run's try, a
+    # label already taken made create() fail as the run's own failure, and
+    # the finish then published anyway: over a published run, its digest
+    # was rewritten so it no longer verified; over a crashed run's
+    # .partial, that partial was published as a valid run. The label is
+    # checked before anything starts, and neither is touched.
+    from examples.qualification.run_dir import RunDirectory
+
+    run = _set_up_run(tmp_path, "q221-dup")
+    earlier = RunDirectory(run.directory.root, "q221-dup").create()
+    (earlier.run / "victim.jsonl").write_text('{"event_type": "infer.request"}\n')
+    if taken_by == "published":
+        earlier.publish()
+    taken = earlier.final if taken_by == "published" else earlier.partial
+    before = _files(taken)
+    beside = sorted(path.name for path in run.directory.root.iterdir())
+    with pytest.raises(FileExistsError):
+        _execute_restoring_signals(run)
+    assert _files(taken) == before
+    assert sorted(path.name for path in run.directory.root.iterdir()) == beside
+    if taken_by == "published":
+        assert verify(taken) == []
+
+
+def test_an_interruption_before_the_run_has_a_directory_publishes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # close-221-final's mutants: a run interrupted before its directory
+    # was made has nothing to publish, and makes nothing.
+    from examples.qualification.run_dir import RunDirectory
+
+    def interrupted(self: RunDirectory) -> RunDirectory:
+        raise KeyboardInterrupt
+
+    run = _set_up_run(tmp_path, "q221-n")
+    monkeypatch.setattr(RunDirectory, "create", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        _execute_restoring_signals(run)
+    assert not run.directory.partial.exists() and not run.directory.final.exists()
+
+
+@pytest.mark.parametrize("claimed", [False, True])
+def test_a_run_interrupted_as_it_claims_its_label_publishes_only_its_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, claimed: bool
+) -> None:
+    # close-221-final: only a partial directory carrying the run's nonce
+    # is published. Interrupted just before the rename that claims the
+    # label, a run leaves nothing under it; just after, its directory is
+    # whole, and published, interrupted.
+    from examples.qualification import run_dir
+
+    real = run_dir._claim
+
+    def interrupted(staging: Path, partial: Path) -> None:
+        if claimed:
+            real(staging, partial)
+        raise KeyboardInterrupt
+
+    run = _set_up_run(tmp_path, "q221-l")
+    monkeypatch.setattr(run_dir, "_claim", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        _execute_restoring_signals(run)
+    root, final = run.directory.root, run.directory.final
+    if not claimed:
+        assert list(root.iterdir()) == []
+        return
+    assert sorted(path.name for path in root.iterdir()) == ["q221-l", "q221-l.sha256"]
+    assert verify(final) == []
+    assert all((final / name).is_dir() for name in ("run", "truth", "probes"))
+    run_record = load_run(final / "truth" / "run.json")
+    assert run_record.protocol_failure == "interrupted"
+
+
+@pytest.mark.parametrize("winner", ["claimed", "published"])
+def test_two_runs_given_one_label_never_publish_into_each_other(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, winner: str
+) -> None:
+    # close-221-final: another run took the label between this run's check
+    # and its claim, so its create() failed inside the try, and the finish
+    # published the other's partial directory, or rewrote the published
+    # run's digest. Only a directory with this run's nonce is published:
+    # the loser publishes nothing and leaves the winner's as it was.
+    from examples.qualification import inject
+    from examples.qualification.run_dir import RunDirectory
+
+    loser = _set_up_run(tmp_path, "q221-race")
+    winning = RunDirectory(loser.directory.root, "q221-race")
+
+    def the_other_run_claims_first() -> None:  # just after the check
+        winning.create()
+        (winning.run / "victim.jsonl").write_text('{"event_type": "infer.request"}\n')
+        if winner == "published":
+            winning.publish()
+
+    monkeypatch.setattr(inject, "handle_termination", the_other_run_claims_first)
+    with pytest.raises(FileExistsError):
+        _execute_restoring_signals(loser)
+    if winner == "claimed":
+        assert winning.owned() and not loser.directory.owned()
+        assert set(_files(winning.partial)) == {".owner", "run/victim.jsonl"}
+        winning.publish()
+    assert verify(winning.final) == []
+    names = sorted(path.name for path in loser.directory.root.iterdir())
+    assert names == ["q221-race", "q221-race.sha256"]
+
+
+def test_the_poller_starts_with_the_runs_signals_blocked() -> None:
+    # close-221-final: a Ctrl+C handled inside Thread.start broke it: it
+    # came out as RuntimeError('release unlocked lock'), a run failure that
+    # lost the Ctrl+C, or left the poller started but unjoinable and the
+    # run in .partial. The poller starts with the three signals blocked;
+    # one sent meanwhile is handled once start has returned.
+    import threading
+
+    from examples.qualification.inject import _start_unsignalled
+
+    masks: list[set[int]] = []
+
+    class Poller(threading.Thread):
+        def start(self) -> None:
+            masks.append(signal.pthread_sigmask(signal.SIG_BLOCK, []))
+            # A Ctrl+C sent during start, then a check point inside it.
+            signal.pthread_kill(threading.main_thread().ident or 0, signal.SIGINT)
+            time.sleep(0.01)
+            super().start()
+
+    def interrupt(_signum: int, _frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGINT, interrupt)
+    poller = Poller(target=lambda: None)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            _start_unsignalled(poller)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+    poller.join(timeout=10)
+    assert poller.ident is not None and not poller.is_alive()
+    assert set(_HELD) <= masks[0]
+    assert not set(_HELD) & signal.pthread_sigmask(signal.SIG_BLOCK, [])
+
+
+_HELD = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+
 def test_a_signal_before_holding_is_passed_on() -> None:
     # Installed for the whole run, the handlers act as the ones they
     # replaced until the run's end sets holding: mid-run, a signal still
