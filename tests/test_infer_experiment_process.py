@@ -361,6 +361,36 @@ def test_a_process_that_cannot_be_the_launchs_is_not_counted(
     }
 
 
+def test_on_linux_an_orphan_a_subreaper_among_the_runners_ancestors_adopted_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # close-213-pr24-cloud's F4: a subreaper (systemd --user on a desktop,
+    # here 777) adopts the launch's orphans in init's place, so only ppid 1
+    # missed them. Any parent outside the runner's ancestry still shows
+    # whose a process is; macOS has no subreapers.
+    from stormlog.infer import experiment_process as ep
+
+    ticks, uid, parent = ep._clock_ticks(), os.getuid(), os.getppid()
+    start = 5_000 * ticks
+    _table(
+        monkeypatch,
+        {
+            parent: ep._Process(1, 777, uid),
+            777: ep._Process(1, 1, uid),
+            40: ep._Process(start, 777, uid),
+            41: ep._Process(start, parent, uid),
+            42: ep._Process(start, 888, uid),
+            43: ep._Process(start, 1, uid),
+        },
+    )
+    since = {"pid": 1, "start_ticks": start - 1}
+    unclear = {40, 41, 42, 43}
+    found = ep._blind(unclear, since, None, Path("/proc"), "proc")
+    assert [item["pid"] for item in found] == [40, 41, 43]
+    found = ep._blind(unclear, since, None, Path("/proc"), "psutil")
+    assert [item["pid"] for item in found] == [43]
+
+
 def test_start_times_are_compared_in_the_processes_own_clock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
