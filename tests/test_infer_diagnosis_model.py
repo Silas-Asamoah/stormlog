@@ -23,7 +23,7 @@ from stormlog.infer.diagnosis_model import (
     rank_findings,
     support_block,
 )
-from stormlog.infer.diagnosis_stats import median_difference
+from stormlog.infer.diagnosis_stats import block_length, median_difference
 
 
 def _finding(**changes: Any) -> Finding:
@@ -259,3 +259,19 @@ def test_median_differences_are_seeded_and_need_twenty_per_arm() -> None:
     assert first.estimate == 100.0 and first.low <= 100.0 <= first.high
     assert first.excludes_zero
     assert median_difference(subject[:19], reference) is None
+
+
+def test_a_queue_s_ramp_keeps_its_dependence_in_the_interval() -> None:
+    """Waits in a burst rise one after another; resampling single waits
+    treats them as independent and gives a narrower interval than runs of
+    consecutive ones (7 for 300 values) do."""
+    ramp = [float(wait) for wait in range(300)]
+    reference = [float(index % 7) for index in range(200)]
+
+    blocked = median_difference(ramp, reference)
+    single = median_difference(ramp, reference, blocks=False)
+
+    assert block_length(300) == 7 and block_length(20) == 3
+    assert blocked is not None and single is not None
+    assert blocked.estimate == single.estimate
+    assert blocked.high - blocked.low > 2 * (single.high - single.low)

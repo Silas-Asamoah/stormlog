@@ -342,7 +342,12 @@ minor second cause.
   digest of the lines' hashes (`support_identity: ranges_only`).
 
 Differences of medians come with a percentile bootstrap 95% interval
-(B = 2000, fixed seed), and need at least 20 values in each arm.
+(B = 2000, fixed seed), and need at least 20 values in each arm. Each arm is
+resampled in arrival order by a moving-block bootstrap, in runs of
+consecutive values as long as the cube root of the arm's size (7 for 300):
+waits within a burst rise one after another, and resampling single values
+would treat them as independent and give an interval narrower than its
+95%.
 
 ## Queue saturation
 
