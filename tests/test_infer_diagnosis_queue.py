@@ -197,6 +197,23 @@ def test_admissions_rule_out_a_pause_only_while_requests_waited(
     assert _alternatives(finding)["scheduler_paused"] == "ruled_out"
 
 
+def test_without_pause_records_a_long_stop_in_admissions_is_untestable(
+    tmp_path: Path,
+) -> None:
+    """Nobody was admitted for 300 ms while requests waited: a pause that
+    long could hide there, and without pause records only admissions could
+    rule it out. A gap under 500 ms used to rule it out by construction."""
+    engine = Engine(
+        max_num_seqs=4, observes=None, stall=(BURST_AT + 500 * MS, 300 * MS)
+    )
+
+    (finding,) = _assess(tmp_path, _requests(), engine).findings
+
+    paused = {alt.kind: alt for alt in finding.alternatives}["scheduler_paused"]
+    assert paused.status == "untestable"
+    assert "admissions stopped for up to 310.1 ms" in paused.reason
+
+
 def test_an_older_log_cannot_tell_ingress_from_the_queue(tmp_path: Path) -> None:
     engine = Engine(max_num_seqs=4, enqueued_records=False, observes=None)
     assessment = _assess(tmp_path, _requests(), engine)
