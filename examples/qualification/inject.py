@@ -247,29 +247,35 @@ class InjectionRun:
         victim: subprocess.Popen[bytes] | None = None
         held = _HeldSignals()
         try:
-            # Signals are passed on until ``holding`` is set, and noted after.
-            # Each way out of the episodes sets it first, by a plain attribute
-            # store. CPython runs a Python signal handler only where it checks
-            # for pending calls: at a call (a frame's RESUME), a backward jump
-            # or a C call's return. From 3.11, matching an except clause and
-            # a STORE_ATTR are none of these, so a signal handled before the
-            # store raises into this except, one after it is noted, and none
-            # leaves the run unpublished on its way to the finish. On 3.10
-            # the jump into an except block is itself a check: a first signal
-            # landing at that instant still escapes, while a second is held,
-            # since a passed-on signal sets ``holding`` itself (_pass_on).
-            held.__enter__()
-            victim = self._start_victim()
-            self._episodes(victim, progress)
+            try:
+                # Signals are passed on until ``holding`` is set, and noted
+                # after. Each way out of the episodes sets it first, by a
+                # plain attribute store. CPython runs a Python signal handler
+                # only where it checks for pending calls: a call (a frame's
+                # RESUME), a backward jump, a C call's return, and, on 3.10,
+                # the jump into an except block. From 3.11 nothing between
+                # this except's match and its store is a check, so a signal
+                # handled before the store raises into it, and one after is
+                # noted. On 3.10 one handled as the inner except is entered
+                # raises past it into the outer one; a passed-on signal sets
+                # ``holding`` itself (_pass_on), so a further one, handled as
+                # the outer except is entered, is noted. Either way the run
+                # is published.
+                held.__enter__()
+                victim = self._start_victim()
+                self._episodes(victim, progress)
+                held.holding = True
+            except BaseException as error:
+                held.holding = True
+                if not isinstance(error, Exception):
+                    raise  # an interruption: published below
+                progress.failure = f"run_failed: {error!r}"  # the run's own failure
+        except BaseException:
             held.holding = True
-        except BaseException as error:
-            held.holding = True
-            if not isinstance(error, Exception):
-                # Interrupted: publish what was done, then go on ending.
-                progress.failure = "interrupted"
-                self._finish(victim, poller, progress, held)
-                raise
-            progress.failure = f"run_failed: {error!r}"  # the run's own failure
+            # Interrupted: publish what was done, then go on ending.
+            progress.failure = "interrupted"
+            self._finish(victim, poller, progress, held)
+            raise
         published, signum = self._finish(victim, poller, progress, held)
         if signum is not None:
             _act_on(signum)

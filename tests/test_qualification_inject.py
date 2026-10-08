@@ -1196,11 +1196,12 @@ def test_a_signal_at_the_last_check_before_the_runs_except_still_publishes(
     assert seen["received"] == ([signum] if held_first else [])
 
 
-# Instructions that run no Python code and don't check for pending signals.
+# Instructions that run no Python code and don't check for pending signals
+# (POP_TOP drops the caught exception, which the handler still holds).
 _NO_HANDLER_RUNS = {
     "PUSH_EXC_INFO", "LOAD_GLOBAL", "CHECK_EXC_MATCH", "POP_JUMP_IF_FALSE",
-    "POP_JUMP_FORWARD_IF_FALSE", "STORE_FAST", "LOAD_CONST", "LOAD_FAST",
-    "STORE_ATTR", "NOP", "CACHE",
+    "POP_JUMP_FORWARD_IF_FALSE", "POP_TOP", "STORE_FAST", "LOAD_CONST",
+    "LOAD_FAST", "STORE_ATTR", "NOP", "CACHE",
 }  # fmt: skip
 
 
@@ -1208,33 +1209,115 @@ _NO_HANDLER_RUNS = {
     sys.version_info < (3, 11), reason="3.10 checks for signals entering an except"
 )
 def test_no_signal_handler_can_run_between_the_runs_except_and_holding() -> None:
-    # The other half of H6's proof: from the except clause's first
-    # instruction to its store of ``holding``, execute's bytecode holds
+    # The other half of H6's proof: from each of execute's except clauses'
+    # first instruction to its store of ``holding``, the bytecode holds
     # nothing CPython checks for pending signals at (no call, no backward
     # jump, no RESUME), and the store itself runs no Python code (no
-    # __setattr__, no descriptor). A signal is handled before the except,
+    # __setattr__, no descriptor). A signal is handled before an except,
     # and raises into it, or after the store, and is held.
     import dis
 
     from examples.qualification.inject import InjectionRun, _HeldSignals
 
     code = list(dis.get_instructions(InjectionRun.execute))
-    stores = [
-        index
-        for index, ins in enumerate(code)
-        if ins.opname == "STORE_ATTR" and ins.argval == "holding"
-    ]
-    entries = [i for i, ins in enumerate(code) if ins.opname == "PUSH_EXC_INFO"]
-    handler = [
-        (entry, store)
-        for store in stores
-        for entry in entries
-        if entry < store and "CHECK_EXC_MATCH" in {c.opname for c in code[entry:store]}
-    ]
-    entry, store = min(handler, key=lambda pair: pair[1] - pair[0])
-    assert {ins.opname for ins in code[entry : store + 1]} <= _NO_HANDLER_RUNS
+    handlers = []
+    for entry, ins in enumerate(code):
+        if ins.opname != "PUSH_EXC_INFO":
+            continue
+        store = next(
+            index
+            for index in range(entry, len(code))
+            if code[index].opname == "STORE_ATTR" and code[index].argval == "holding"
+        )
+        names = [c.opname for c in code[entry : store + 1]]
+        if "CHECK_EXC_MATCH" in names:
+            handlers.append(names)
+    assert len(handlers) == 2  # the run's except, and the one around it
+    for names in handlers:
+        assert set(names) <= _NO_HANDLER_RUNS, names
     assert _HeldSignals.__setattr__ is object.__setattr__
     assert "holding" not in vars(_HeldSignals)
+
+
+def _fail_with_signals_pending(*signums: int) -> None:
+    """Raise TypeError from one C call that has just set ``signums``
+    pending, with no Python code run and no check made in between: ctypes
+    calls PyErr_SetInterruptEx for the first, each errcheck (a C partial of
+    the next such call) sets the next, and the last errcheck, the C builtin
+    pow, raises. CPython runs their handlers at its next checks, which on
+    3.10 include the entry to an except block."""
+    import ctypes
+    import functools
+
+    pointer: Any = type(ctypes.pythonapi.PyErr_SetInterruptEx)
+
+    def setter(extra: int) -> Any:
+        function = pointer(("PyErr_SetInterruptEx", ctypes.pythonapi))
+        function.argtypes = [ctypes.c_int] + [ctypes.py_object] * extra
+        function.restype = ctypes.c_int
+        return function
+
+    errcheck: Any = pow
+    for signum in reversed(signums[1:]):
+        chained = setter(3)  # called as errcheck: (signum, result, func, args)
+        chained.errcheck = errcheck
+        errcheck = functools.partial(chained, signum)
+    first = setter(0)
+    first.errcheck = errcheck
+    first(signums[0])
+
+
+@pytest.mark.parametrize(
+    "pending", [(signal.SIGINT,), (signal.SIGINT, signal.SIGTERM)], ids=["one", "two"]
+)
+def test_a_run_that_fails_with_signals_pending_is_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending: tuple[int, ...]
+) -> None:
+    # The lead's 3.10 question on H6: the run fails in a C call with SIGINT
+    # (and SIGTERM) left pending. On 3.10, CPython runs the first handler
+    # as the run's except is entered, so the KeyboardInterrupt skipped it
+    # and left the run unpublished; it now lands in the except around it,
+    # and the second signal, handled as that one is entered, is held. From
+    # 3.11 both are handled after the except has set holding, and held.
+    from examples.qualification import pulser
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "N"}]})
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-t"), Server("", "m", tmp_path, {})
+    )
+    seen: dict[str, Any] = {}
+
+    def finish(victim: Any, poller: Any, progress: Any, held: Any) -> Any:
+        with held:
+            seen.update(failure=progress.failure, received=list(held.received))
+        return tmp_path, held.received[0] if held.received else None
+
+    saved = {
+        s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    }
+    monkeypatch.setattr(run, "_channel", lambda: None)
+    monkeypatch.setattr(run, "_poll_loop", lambda: None)
+    monkeypatch.setattr(run, "_start_victim", lambda: None)
+    monkeypatch.setattr(
+        run, "_episodes", lambda victim, progress: _fail_with_signals_pending(*pending)
+    )
+    monkeypatch.setattr(run, "_finish", finish)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run.execute()
+    finally:
+        for saved_signum, handler in saved.items():
+            signal.signal(saved_signum, handler)
+        pulser._HANDLED.clear()
+    if sys.version_info < (3, 11):
+        assert seen == {"failure": "interrupted", "received": list(pending[1:])}
+    else:
+        assert seen["failure"].startswith("run_failed: TypeError")
+        assert seen["received"] == list(pending)
 
 
 def test_an_episode_interrupted_mid_pulse_records_its_pulses(tmp_path: Path) -> None:
