@@ -416,10 +416,12 @@ def test_liveness_lists_the_stretches_no_heartbeat_was_heard(tmp_path: Path) -> 
 
     # Every heartbeat counts, those an earlier import consumed included.
     assert liveness["heartbeats"] == 7
-    assert (liveness["first"]["start_mono_ns"], liveness["last"]["end_mono_ns"]) == (
-        T0,
-        T0 + round(12.3 * SECOND),
-    )
+    assert liveness["first"] == {"seq": 1, "mono_ns": T0, "wall_ns": T0 + WALL_OFFSET}
+    assert liveness["last"] == {
+        "seq": 7,
+        "mono_ns": T0 + round(12.3 * SECOND),
+        "wall_ns": T0 + round(12.3 * SECOND) + WALL_OFFSET,
+    }
     # The slip is not a gap; the six silent seconds are.
     (gap,) = liveness["gaps"]
     assert (gap["start_mono_ns"], gap["end_mono_ns"]) == (
