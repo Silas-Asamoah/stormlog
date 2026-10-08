@@ -255,12 +255,20 @@ it), and an experiment that would confirm it.
   everything met, `medium` with one miss or unknown coverage, and `low`
   otherwise or with known loss. `confidence.level` is the lower of the two,
   and a `partial` assessment is at most `medium`.
-- **Severity and cause.** `warning` needs an eligible claim, a contribution
-  of at least `medium`, and an incident subject; its cause is then `fault`,
-  and with `role: primary` that is the fault claim (`claim: fault`). An
-  eligible finding at `info` is `claim: condition`, its cause undetermined
-  until a driver says otherwise. Workload kinds are always
-  `workload_change` at `info`; instrumentation kinds are `instrumentation`.
+- **Severity and cause.** `warning` needs an eligible claim, an incident
+  subject, a condition and a contribution each at least `medium`, and the
+  one contribution criterion that says the mechanism explains the incident
+  met: `confidence.contribution.explains` names it (the queue's
+  `explains_ttft_excess`, KV's `explains_e2e_excess`, prefix loss's
+  `ttft_rose`, client admission's `explains_intended_latency_excess`, and
+  `explains_ttft_excess` for the API server and capture pauses). One unmet
+  criterion lowers confidence to `medium`, but never that one: a queue that
+  explains a sixth of the TTFT rise is not the fault. A warning's cause is
+  then `fault`, and with `role: primary` that is the fault claim
+  (`claim: fault`). An eligible finding at `info` is `claim: condition`, its
+  cause undetermined until a driver says otherwise. Workload kinds are
+  always `workload_change` at `info`; instrumentation kinds are
+  `instrumentation`.
 - **Rank.** Findings are ordered by: primary before secondary, eligible
   before observation, confidence, the contribution's lower bound, kind,
   location, window start, and finally ID, so the order is total.

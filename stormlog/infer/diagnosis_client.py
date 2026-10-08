@@ -115,6 +115,7 @@ def _admission_finding(
             "change": "rerun with a larger --max-in-flight, same seed",
             "prediction": "no request is held for a slot, and dispatch lag falls to the reference's",
         },
+        explains="explains_intended_latency_excess",
     )
 
 
@@ -250,6 +251,7 @@ def assess_api_server(context: Context, subject: Subject) -> Assessment:
             "change": "rerun with the API server given more CPU, or with fewer API server workers sharing it",
             "prediction": f"median send_to_ingress falls by at least {excess.low / 1e6:.1f} ms",
         },
+        explains="explains_ttft_excess",
     )
     finding.support = _client_lines(context, subject.requests)
     finding.display = finding.support[:8]
@@ -429,6 +431,7 @@ def _capture_finding(
             "change": "rerun with torch_profiler_dump_cuda_time_total off and the trace stack off, or without the profiler window",
             "prediction": "the stall around the stop shrinks or disappears",
         },
+        explains="explains_ttft_excess",
     )
 
 

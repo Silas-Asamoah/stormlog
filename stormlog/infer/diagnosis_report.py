@@ -58,7 +58,10 @@ def finding_detail(
         "confidence": {
             "level": finding.confidence_level,
             "condition": finding.condition.as_dict(),
-            "contribution": finding.contribution.as_dict(),
+            "contribution": {
+                **finding.contribution.as_dict(),
+                **({"explains": finding.explains} if finding.explains else {}),
+            },
             "driver": {"level": None, "met": [], "unmet": ["not_determined"]},
         },
         "evidence": [_pointer(line, context) for line in display],
