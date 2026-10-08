@@ -30,6 +30,7 @@ from .diagnosis_inputs import read_input
 from .diagnosis_join import RunView, join
 from .diagnosis_kv import assess_kv
 from .diagnosis_model import Finding, rank_findings
+from .diagnosis_prefix import assess_prefix
 from .diagnosis_queue import assess_queue
 from .diagnosis_report import envelope_finding, finding_detail, inputs_block
 from .diagnosis_selection import SelectionOptions, Subject, select
@@ -40,6 +41,7 @@ from .diagnosis_vocabulary import (
     HOST_STALL,
     KINDS,
     KV_PREEMPTION_PRESSURE,
+    PREFIX_CACHE_LOSS,
     QUEUE_SATURATION,
 )
 
@@ -55,6 +57,7 @@ Assess = Callable[[Context, Subject], Assessment]
 CLASSES: dict[str, tuple[Assess, ...]] = {
     QUEUE_SATURATION: (assess_queue,),
     KV_PREEMPTION_PRESSURE: (assess_kv,),
+    PREFIX_CACHE_LOSS: (assess_prefix,),
     CLIENT_ADMISSION: (assess_client_admission,),
     HOST_STALL: (assess_api_server,),
     CAPTURE_PAUSE: (assess_capture_pause,),

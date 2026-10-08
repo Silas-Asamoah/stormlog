@@ -18,16 +18,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from statistics import median
-from typing import Any
 
 from .correlation_events import StageEvent
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
 from .diagnosis_inputs import Line
 from .diagnosis_join import Execution
 from .diagnosis_model import (
-    NOT_RULED_OUT,
     RULED_OUT,
-    UNTESTABLE,
     Alternative,
     Finding,
     Observation,
@@ -41,7 +38,6 @@ NOT_OBSERVED = "not_observed"
 NO_HOOK = "no_hook_preemption_data"
 CAUSE_UNKNOWN = "preemption_cause_unknown"
 PREEMPTED = "engine.preempted"
-RESET_STAGES = ("engine.cache_reset", "engine.preempted_by_reset")
 
 
 @dataclass(frozen=True)
@@ -65,7 +61,7 @@ def assess_kv(context: Context, subject: Subject) -> Assessment:
     costs = _costs(context, subject, preemptions)
     if not costs:
         return Assessment(KV_PREEMPTION_PRESSURE, subject.key, ASSESSED, [NOT_OBSERVED])
-    reset = _reset(context, producer, span, stages)
+    reset = context.reset_absent(producer, span)
     finding = _finding(context, subject, producer, costs, reset, preemptions)
     reasons = [] if reset.status == RULED_OUT else [CAUSE_UNKNOWN]
     status = PARTIAL if reasons else ASSESSED
@@ -151,42 +147,6 @@ def _recomputed(execution: Execution) -> int:
         if data.get("outcome") == "kept" and isinstance(after, int):
             high = max(high, after)
     return again
-
-
-def _reset(
-    context: Context,
-    producer: str,
-    span: tuple[int, int] | None,
-    stages: list[tuple[Line, StageEvent]],
-) -> Alternative:
-    """A cache reset is ruled out only where the hook records resets and
-    lost nothing; the reset's own preemptions are already the reset's."""
-    kind = "prefix_cache_reset"
-    if any(stage.name in RESET_STAGES for _, stage in stages):
-        return Alternative(
-            kind, NOT_RULED_OUT, "the prefix cache was reset during the subject", True
-        )
-    epoch = context.epoch_of(producer)
-    observes = epoch.observes if epoch is not None else None
-    if observes is None or "cache_reset" not in observes:
-        return Alternative(
-            kind, UNTESTABLE, "the hook does not record cache resets", True
-        )
-    if span is None or not _covered(epoch, span):
-        return Alternative(
-            kind, UNTESTABLE, "records may have been lost over the subject", True
-        )
-    return Alternative(
-        kind, RULED_OUT, "no reset, and the hook records them with nothing lost", True
-    )
-
-
-def _covered(epoch: Any, span: tuple[int, int]) -> bool:
-    spans = (epoch.coverage or {}).get("spans") or []
-    return any(
-        s.get("start_mono_ns", 0) <= span[0] and span[1] <= s.get("end_mono_ns", -1)
-        for s in spans
-    )
 
 
 def _finding(
