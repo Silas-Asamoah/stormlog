@@ -24,6 +24,7 @@ import functools
 import json
 import os
 import platform
+import re
 import secrets
 import signal
 import subprocess
@@ -48,8 +49,13 @@ from .server_process import (
 )
 
 KILL_WAIT_SECONDS = 10.0
-# Inherited by everything a launch starts; a fresh value per launch.
+# Inherited by everything a launch starts; a fresh value per launch, a
+# random nonce of MARK_BYTES bytes, in hex.
 MARK_VARIABLE = "STORMLOG_RUN_MARK"
+MARK_BYTES = 16
+# A journaled mark ties a process to its launch only as a nonce of at
+# least 64 bits.
+_NONCE = re.compile(r"[0-9a-f]{16,}")
 POLL_SECONDS = 0.1
 # A process started this long before a launch is not the launch's. Start
 # times are compared in the processes' own clock (ticks since boot, or
@@ -156,7 +162,7 @@ def launch(
     """
     cpus = parse_cpu_list(cpu_affinity) if cpu_affinity else None
     log = log_path.open("ab") if log_path is not None else None
-    mark = secrets.token_hex(16)
+    mark = secrets.token_hex(MARK_BYTES)
     process = subprocess.Popen(
         list(command),
         env={**os.environ, **(env or {}), MARK_VARIABLE: mark},
@@ -212,26 +218,78 @@ def journaled(path: Path) -> list[dict[str, Any]]:
 
 
 def stop_journaled(
-    entry: Mapping[str, Any], *, timeout_s: float = KILL_WAIT_SECONDS
+    entry: Mapping[str, Any],
+    *,
+    timeout_s: float = KILL_WAIT_SECONDS,
+    proc: Path = PROC,
 ) -> Cleanup:
     """Stop what a launch the runner no longer holds left running.
 
-    Its group is signalled only while its leader is still that process (same
-    PID and start time); then the group, its session and anything carrying
-    its mark are verified gone, as after any launch.
+    The runner signals or kills only what it can tie to a launch it made:
+
+    - A launch journaled in another boot left nothing running: nothing is
+      signalled, searched or counted.
+    - While the launch's leader is still that process (same boot, PID and
+      start time), its group and session are the launch's: the group is
+      signalled, then the group, the session and the mark are verified
+      gone, as after any launch.
+    - Otherwise the PID may now be another process's, so its group and
+      session are neither signalled nor counted. A process that carries the
+      launch's mark is still the launch's, and is killed, when all three
+      hold: the journal's boot is this boot; the mark is a nonce of at least
+      64 bits; and the process's environment could be read and holds the
+      mark variable with exactly that value, never a value it merely starts
+      with. A process whose environment cannot be read, or was emptied or
+      overwritten, is never killed; one that may be the launch's keeps the
+      cleanup from verifying, so a resume refuses while it runs.
+    - A launch of no known boot ties nothing: what carries its mark is
+      listed, never killed, and keeps the cleanup from verifying.
     """
     identity = entry.get("identity") or {}
+    method = "proc" if _linux() else "psutil"
+    boot, now = identity.get("boot_id"), current_boot()
+    if boot is not None and now is not None and boot != now:
+        return Cleanup(True, method)
+    mark = _journaled_mark(entry)
+    if boot is None or now is None:
+        return _marked_only(mark, proc, method)
     pgid = int(entry["pgid"])
+    held = still_there(identity, proc=proc)
+    if held:
+        _stop_group(pgid, identity, timeout_s, proc)
+    return verify_cleanup(
+        pgid if held else None,
+        mark=mark,
+        since=identity,
+        wait_s=timeout_s,
+        proc=proc,
+    )
+
+
+def _stop_group(
+    pgid: int, leader: Mapping[str, Any], timeout_s: float, proc: Path
+) -> None:
+    """Signal the group, escalating, while its leader is still that process."""
     for signum in (signal.SIGTERM, signal.SIGKILL):
-        if not still_there(identity):
-            break
+        if not still_there(leader, proc=proc):
+            return
         _signal_group(pgid, signum)
         deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline and still_there(identity):
+        while time.monotonic() < deadline and still_there(leader, proc=proc):
             time.sleep(POLL_SECONDS)
-    return verify_cleanup(
-        pgid, mark=entry.get("mark"), since=identity, wait_s=timeout_s
-    )
+
+
+def _journaled_mark(entry: Mapping[str, Any]) -> str | None:
+    """A journal's mark, when it can tie a process to its launch."""
+    mark = entry.get("mark")
+    return mark if isinstance(mark, str) and _NONCE.fullmatch(mark) else None
+
+
+def _marked_only(mark: str | None, proc: Path, method: str) -> Cleanup:
+    """What carries the mark, listed and never killed."""
+    search = _marked(mark, proc, method)
+    left = tuple(identify(pid, proc=proc) for pid in sorted(search.found))
+    return Cleanup(not left, method, left, unreadable=search.unreadable)
 
 
 def clean_up_after(launched: Launched, *, wait_s: float = KILL_WAIT_SECONDS) -> Cleanup:
@@ -335,7 +393,7 @@ class Cleanup:
 
 
 def verify_cleanup(
-    pgid: int,
+    pgid: int | None,
     remembered: Iterable[tuple[int, int]] = (),
     *,
     wait_s: float = KILL_WAIT_SECONDS,
@@ -346,6 +404,8 @@ def verify_cleanup(
 ) -> Cleanup:
     """Wait until nothing of a group, its session or remembered tree runs.
 
+    ``pgid`` None counts no group or session: none is known to be the
+    launch's (``stop_journaled``, once its leader is gone).
     ``mark`` is the launch's environment mark: a process that carries it
     is the launch's, wherever it went. Survivors are killed by PID once;
     whatever outlives that and ``wait_s`` is listed, and the cleanup is not
@@ -417,13 +477,15 @@ def still_there(survivor: Mapping[str, Any], *, proc: Path = PROC) -> bool:
 
 
 def _survivors(
-    pgid: int, keys: list[tuple[int, int]], proc: Path, method: str
+    pgid: int | None, keys: list[tuple[int, int]], proc: Path, method: str
 ) -> set[int]:
     if method == "proc":
-        found = {info.pid for info in group_members(pgid, pgid, proc)}
-        found |= {info.pid for info in still_running(keys, proc)}
+        found = {info.pid for info in still_running(keys, proc)}
+        if pgid is not None:
+            found |= {info.pid for info in group_members(pgid, pgid, proc)}
         return found
-    return _psutil_group(pgid) | {pid for pid, _ in keys if _alive(pid)}
+    found = {pid for pid, _ in keys if _alive(pid)}
+    return found if pgid is None else found | _psutil_group(pgid)
 
 
 @dataclass(frozen=True)
@@ -437,7 +499,8 @@ class _Search:
 
 
 def _marked(mark: str | None, proc: Path, method: str) -> _Search:
-    """Live processes whose environment carries the launch's mark."""
+    """Live processes whose environment, read, holds the mark variable with
+    exactly the launch's mark as its value."""
     if not mark:
         return _Search()
     needle = f"{MARK_VARIABLE}={mark}"
