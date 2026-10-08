@@ -1225,6 +1225,47 @@ def test_a_resume_runs_no_prelude_for_a_block_it_will_not_run(
     assert (preludes / "b00-warm" / "launches.ndjson").read_text() == before
 
 
+ORPHAN = (
+    "import subprocess, sys; "
+    "child = subprocess.Popen(['/bin/sleep', '60'], env={}, start_new_session=True); "
+    "open(sys.argv[1], 'w').write(str(child.pid))"
+)
+
+
+def test_a_resume_does_not_judge_again_a_launch_whose_cleanup_verified(
+    tmp_path: Path,
+) -> None:
+    # A resume replayed every prelude's journal, finished launches too.
+    # With no leader left to bound it, an orphan of init whose environment
+    # cannot be read, started since, was blind to the replay, and the
+    # resume refused, saying the runner had been stopped. A verified
+    # cleanup now ends its launch in the journal.
+    import os
+    import signal
+    import subprocess
+
+    from stormlog.infer.experiment_process import journaled
+
+    document = _plan(_port(), blocks=1)
+    document["arms"] = {"off": document["arms"]["off"]}
+    document["order"] = {"kind": "explicit", "blocks": [["off"]]}
+    document["block_prelude"] = [
+        {"name": "warm", "server_arm": "off", "command": ["{python}", "-c", "pass"]}
+    ]
+    (record,) = _run(tmp_path, document)
+    assert record["state"] == "completed", record
+    pid_file = tmp_path / "orphan.pid"
+    subprocess.run([sys.executable, "-c", ORPHAN, str(pid_file)], check=True)
+    orphan = int(pid_file.read_text())
+    try:
+        assert _run(tmp_path, document, resume=True) == []
+    finally:
+        os.kill(orphan, signal.SIGKILL)
+    journal = tmp_path / "exp" / "preludes" / "b00-warm" / "launches.ndjson"
+    assert journal.read_text().count('"ended"') == 2
+    assert journaled(journal) == []
+
+
 def test_the_bundle_is_scanned_for_the_plans_secrets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -86,6 +86,8 @@ class Launched:
     identity: dict[str, Any] = field(default_factory=dict)
     # The monotonic clock at its start and at its end, for how long it ran.
     started_monotonic: float = field(default_factory=time.monotonic)
+    # Where it was journaled, if it was.
+    journal: Path | None = None
     ended_monotonic: float | None = None
     _log: IO[bytes] | None = field(default=None, repr=False)
 
@@ -185,6 +187,7 @@ def launch(
     )
     launched.identity = identify(process.pid)
     if journal is not None:
+        launched.journal = journal
         _journal(journal, launched)
     if cpus:
         launched.affinity_applied = affinity_matches(process.pid, cpus)
@@ -204,17 +207,43 @@ def _journal(path: Path, launched: Launched) -> None:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
+def end_journaled(launched: Launched, cleanup: Cleanup) -> None:
+    """Journal a launch's end once its cleanup verified, so a resume does
+    not judge it again; one whose cleanup did not verify stays for it."""
+    if cleanup.verified and launched.journal is not None:
+        with launched.journal.open("a") as handle:
+            handle.write(json.dumps({"ended": launched.mark}) + "\n")
+
+
 def journaled(path: Path) -> list[dict[str, Any]]:
-    """The launches a journal names; an unreadable line is skipped."""
-    found = []
-    for line in path.read_text().splitlines() if path.is_file() else []:
-        try:
-            entry = json.loads(line)
-        except ValueError:
+    """The launches a journal names that have not ended.
+
+    An unreadable line is skipped. Only a whole line ends a launch: one a
+    crash tore, unparsable or without its newline, ends nothing, so its
+    launch is left to the resume.
+    """
+    found, ended = [], set()
+    text = path.read_text() if path.is_file() else ""
+    for line in text.splitlines(keepends=True):
+        entry = _journal_line(line)
+        if entry is None:
             continue
-        if isinstance(entry, dict) and isinstance(entry.get("pgid"), int):
+        if "ended" not in entry:
             found.append(entry)
-    return found
+        elif line.endswith("\n") and _journaled_mark(entry, "ended"):
+            ended.add(entry["ended"])
+    return [entry for entry in found if entry.get("mark") not in ended]
+
+
+def _journal_line(line: str) -> dict[str, Any] | None:
+    """A journal line's launch or end; None for anything else."""
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(entry, dict):
+        return None
+    return entry if "ended" in entry or isinstance(entry.get("pgid"), int) else None
 
 
 def stop_journaled(
@@ -279,9 +308,9 @@ def _stop_group(
             time.sleep(POLL_SECONDS)
 
 
-def _journaled_mark(entry: Mapping[str, Any]) -> str | None:
+def _journaled_mark(entry: Mapping[str, Any], key: str = "mark") -> str | None:
     """A journal's mark, when it can tie a process to its launch."""
-    mark = entry.get("mark")
+    mark = entry.get(key)
     return mark if isinstance(mark, str) and _NONCE.fullmatch(mark) else None
 
 
@@ -296,13 +325,15 @@ def clean_up_after(launched: Launched, *, wait_s: float = KILL_WAIT_SECONDS) -> 
     """After a step ends, stop whatever it left in its group and verify that
     nothing it started is left, as after a server."""
     _signal_group(launched.pid, signal.SIGTERM)
-    return verify_cleanup(
+    cleanup = verify_cleanup(
         launched.pid,
         mark=launched.mark,
         since=launched.identity,
         lasted_s=launched.lasted_s(),
         wait_s=wait_s,
     )
+    end_journaled(launched, cleanup)
+    return cleanup
 
 
 def _pin(cpus: set[int]) -> Any:
@@ -811,6 +842,7 @@ __all__ = [
     "affinity_matches",
     "clean_up_after",
     "current_boot",
+    "end_journaled",
     "identify",
     "journaled",
     "listens",
