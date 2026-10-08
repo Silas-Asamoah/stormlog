@@ -9,11 +9,10 @@ next step has been scheduled before this one's output is processed.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .writer import EpochWriter
+from .writer import EpochWriter, stamp
 
 ITERATION_ATTRIBUTE = "_stormlog_iteration"
 # vLLM keeps at most a few steps in flight; more pending means outputs were
@@ -57,13 +56,13 @@ class EngineRecorder:
             {
                 "internal": str(request.request_id),
                 "external": _optional_str(getattr(request, "external_req_id", None)),
-                **_stamp(),
+                **stamp(),
             },
         )
 
     # ------------------------------------------------------------ schedule
 
-    def on_schedule(self, scheduler: Any, output: Any, start: tuple[int, int]) -> None:
+    def on_schedule(self, scheduler: Any, output: Any, start: dict[str, int]) -> None:
         iteration = str(self.next_iteration)
         self.next_iteration += 1
         setattr(output, ITERATION_ATTRIBUTE, (self.producer, iteration))
@@ -76,15 +75,13 @@ class EngineRecorder:
         )
         while len(self.pending) > MAX_PENDING:
             self.pending.pop(next(iter(self.pending)))
-        end = _stamp()
+        end = stamp()
         self.writer.emit(
             "scheduled",
             {
                 "iteration": iteration,
-                "start_wall_ns": start[0],
-                "start_mono_ns": start[1],
-                "end_wall_ns": end["wall_ns"],
-                "end_mono_ns": end["mono_ns"],
+                **{f"start_{name}": value for name, value in start.items()},
+                **{f"end_{name}": value for name, value in end.items()},
                 "total_tokens": int(output.total_num_scheduled_tokens),
                 "zero_token": int(output.total_num_scheduled_tokens) == 0,
                 "preempted": sorted(getattr(output, "preempted_req_ids", None) or ()),
@@ -227,7 +224,7 @@ class EngineRecorder:
             )
             for name, member in (pending.members.items() if pending else ())
         ]
-        fields: dict[str, Any] = {"iteration": identity[1], **_stamp()}
+        fields: dict[str, Any] = {"iteration": identity[1], **stamp()}
         if failed:
             fields["update_failed"] = True
         fields["members"] = members
@@ -290,7 +287,7 @@ class EngineRecorder:
                 "status": getattr(status, "name", None) or _optional_str(status),
                 "finish_reason": _optional_str(reason),
                 "output_tokens": output_tokens,
-                **_stamp(),
+                **stamp(),
             },
         )
 
@@ -337,10 +334,6 @@ def _outcome(before: dict[str, Any]) -> str:
     if before["stale"] and before["drop_stale"]:
         return "dropped_stale"
     return "kept"
-
-
-def _stamp() -> dict[str, int]:
-    return {"wall_ns": time.time_ns(), "mono_ns": time.monotonic_ns()}
 
 
 def _optional_str(value: Any) -> str | None:
