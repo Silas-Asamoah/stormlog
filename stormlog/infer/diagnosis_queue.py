@@ -15,6 +15,7 @@ upstream, the client holding requests back, the API server.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass, replace
 from statistics import median
 from typing import Any, Callable
@@ -314,13 +315,15 @@ def _at_capacity(step: Step, seqs: int | None, tokens: int | None) -> bool:
 def _engine_stall(
     context: Context, producer: str, waiting: list[Execution], excess: Difference
 ) -> Alternative:
-    """Engine-loop stalls, by the online trigger's own rules, during the
-    subject's waits or just before them, against the wait excess. A stall
-    holds a request back by no more than its own length, so their summed
-    length is the most of the excess they can explain. One just before the
-    waits counts: a request reaching the engine during a stall enters the
-    queue only when the loop resumes, and the backlog it left drains after
-    it."""
+    """Engine-loop stalls, by the online trigger's own rules, against the
+    wait excess, request by request. While the queue stays busy a stall
+    postpones every later admission by its length, so a request is held by
+    the stalls since its queue was last empty, up to its own admission, and
+    by one that ended at most its own length before then (a request reaching
+    the engine during a stall enters the queue only when the loop resumes),
+    by no more than its own wait. The excess is a median over the requests,
+    so it is set against the median request's held time: stalls spread over
+    a long saturation hold each request by those before it, not by all."""
     intervals = _wait_intervals(context, waiting)
     if not intervals:
         return Alternative("engine_stall", UNTESTABLE, "no wait was placed", True)
@@ -331,15 +334,45 @@ def _engine_stall(
             loop_steps(context.view, producer), (), config
         )
     ]
-    near = [s for s in stalls if any(_holds_back(s, wait) for wait in intervals)]
-    held = sum(end - start for start, end in near)
-    status = _by_share(context, held / excess.estimate, QUEUE_STALL_SHARE)
+    busy = _busy_periods(context, producer)
+    held = [
+        _held_by_stalls(stalls, wait, _busy_since(busy, wait)) for wait in intervals
+    ]
+    typical = median(held)
+    status = _by_share(context, typical / excess.estimate, QUEUE_STALL_SHARE)
     reason = (
-        f"{len(near)} engine stalls during or just before the waits, "
-        f"{held / 1e6:.1f} ms in all, against a wait excess of "
-        f"{excess.estimate / 1e6:.1f} ms"
+        f"{len(stalls)} engine stalls; the median waiting request was held "
+        f"{typical / 1e6:.1f} ms by those since its queue was last empty, "
+        f"against a wait excess of {excess.estimate / 1e6:.1f} ms"
     )
     return Alternative("engine_stall", status, reason, True)
+
+
+def _busy_periods(context: Context, producer: str) -> list[tuple[int, int]]:
+    """When anyone at all waited in the engine's queue, the subject's
+    requests or not."""
+    executions = [e for e in context.view.executions.values() if e.producer == producer]
+    return merge_intervals(_wait_intervals(context, executions))
+
+
+def _busy_since(busy: list[tuple[int, int]], wait: tuple[int, int]) -> int:
+    """When the queue was last empty before a wait began."""
+    index = bisect_right([start for start, _ in busy], wait[0]) - 1
+    return min(busy[index][0], wait[0]) if index >= 0 else wait[0]
+
+
+def _held_by_stalls(
+    stalls: list[tuple[int, int]], wait: tuple[int, int], since: int
+) -> int:
+    """How long stalls held one wait back: their part from when its queue
+    was last empty to its admission, and the whole of one that ended at most
+    its own length before then; never more than the wait itself."""
+    held = 0
+    for start, end in stalls:
+        inside = _overlap((start, end), (since, wait[1]))
+        before = end <= since and _holds_back((start, end), (since, wait[1]))
+        held += inside or (end - start if before else 0)
+    return min(held, wait[1] - wait[0])
 
 
 def _holds_back(stall: tuple[int, int], wait: tuple[int, int]) -> bool:
