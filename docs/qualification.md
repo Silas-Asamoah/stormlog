@@ -823,10 +823,17 @@ first cuts the victim's drain short with SIGINT, so the victim still records
 its end, and a second kills it. The run is then recorded as interrupted, and
 `inject` exits as the first such signal would have, once the run is
 published. The run's handlers are installed when it starts and act as the
-ones they replaced until the run ends; the episodes' end, the run's own
-failure and its interruption each switch them to holding before anything
-else, by setting a flag, which runs no handler, so no signal can slip
-between the run's end and the finish (a double Ctrl+C included).
+ones they replaced until the run ends. A signal they pass on ends the run,
+so it switches them to holding at once, and a second one (a double Ctrl+C)
+is noted rather than raised over the first. The episodes' end and the
+run's own failure switch them too, as the first thing they do, by setting
+a flag. CPython runs a signal handler only where it checks for pending
+calls (a call, a backward jump), and from 3.11 entering an except block
+and setting an attribute are neither, so no signal can slip between the
+run's end and the finish; a test checks the bytecode, and another raises
+a signal at the last check before the except. On 3.10 entering an except
+block is a check: a first signal landing at that instant, as the run
+fails, can still end the harness unpublished.
 A third is not held: a publish that hangs (a full disk) can still be ended,
 by whatever handled the signal before.
 
