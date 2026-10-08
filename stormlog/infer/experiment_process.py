@@ -165,15 +165,8 @@ def launch(
     cpus = parse_cpu_list(cpu_affinity) if cpu_affinity else None
     log = log_path.open("ab") if log_path is not None else None
     mark = secrets.token_hex(MARK_BYTES)
-    process = subprocess.Popen(
-        list(command),
-        env={**os.environ, **(env or {}), MARK_VARIABLE: mark},
-        cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=log if log is not None else subprocess.DEVNULL,
-        stderr=subprocess.STDOUT if log is not None else subprocess.DEVNULL,
-        start_new_session=True,
-        preexec_fn=_pin(cpus) if cpus else None,
+    process = _start(
+        command, {**os.environ, **(env or {}), MARK_VARIABLE: mark}, cwd, log, cpus
     )
     launched = Launched(
         name=name,
@@ -192,6 +185,33 @@ def launch(
     if cpus:
         launched.affinity_applied = affinity_matches(process.pid, cpus)
     return launched
+
+
+def _start(
+    command: Sequence[str],
+    env: Mapping[str, str],
+    cwd: Path | None,
+    log: IO[bytes] | None,
+    cpus: set[int] | None,
+) -> subprocess.Popen[bytes]:
+    """The process, in a session of its own. One that cannot start (its
+    executable missing or not runnable) raises OSError, said in its log."""
+    try:
+        return subprocess.Popen(
+            list(command),
+            env=dict(env),
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=log if log is not None else subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if log is not None else subprocess.DEVNULL,
+            start_new_session=True,
+            preexec_fn=_pin(cpus) if cpus else None,
+        )
+    except OSError as exc:
+        if log is not None:
+            log.write(f"launch failed: {exc}\n".encode())
+            log.close()
+        raise
 
 
 def _journal(path: Path, launched: Launched) -> None:
