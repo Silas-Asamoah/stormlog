@@ -378,11 +378,15 @@ class VllmMetricsScraper:
         observed_at_ns: int,
         deadline_seconds: float,
         reason: str | None = None,
+        completed_at_ns: int | None = None,
     ) -> VllmScrapeRecord:
         """The record of a scrape given up at an overall deadline.
 
         The fetch itself may still be reading on its thread; its result is
-        dropped, so this failed record is the only trace of the scrape.
+        dropped, so this failed record is the only trace of the scrape. A
+        caller that stamped ``observed_at_ns`` on its own clock gives the
+        moment it gave up, ``completed_at_ns``, on that clock too; without
+        it, the end is read from the wall clock now.
         """
         error = reason or (
             f"the {deadline_seconds:g} s deadline of the interrupted run passed "
@@ -391,7 +395,8 @@ class VllmMetricsScraper:
         result = FetchResult(
             None, None, f"abandoned: {error}", deadline_seconds * 1000.0
         )
-        sampled = (observed_at_ns, max(observed_at_ns, time.time_ns()))
+        end = time.time_ns() if completed_at_ns is None else completed_at_ns
+        sampled = (observed_at_ns, max(observed_at_ns, end))
         return self._failed(sampled, marker, case_id, phase, result)
 
     def _timeout(self, override: float | None) -> float:

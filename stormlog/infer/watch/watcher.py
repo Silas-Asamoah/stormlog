@@ -310,6 +310,7 @@ class Watcher:
             observed_at_ns=wall_ns,
             deadline_seconds=timeout,
             reason=f"no whole response within the {timeout:g} s scrape timeout",
+            completed_at_ns=self.clock.wall_ns(),
         )
 
     def _judge(

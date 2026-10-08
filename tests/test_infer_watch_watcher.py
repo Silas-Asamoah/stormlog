@@ -24,6 +24,7 @@ from stormlog.infer import vllm_scraper
 from stormlog.infer.errors import InferUsageError
 from stormlog.infer.watch.config import resolve_watch_config
 from stormlog.infer.watch.history import Stamped
+from stormlog.infer.watch.incidents import WatchClock
 from stormlog.infer.watch.records import (
     INCIDENT,
     INCIDENT_EVENT,
@@ -852,6 +853,32 @@ def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
     )
     stats = _report(tmp_path)["payload"]["stats"]
     assert stats["ticks_missed_total"] >= 1
+
+
+def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None:
+    """The watcher stamps a scrape's start on its own clock. The one it gave
+    up on ended on the real clock, so with the watcher's clock behind it the
+    abandoned record lasted 11 days instead of its 0.3 s timeout."""
+    metrics = FakeMetrics()
+    metrics.dribble = 0.2
+    behind = 10**15  # about 11.6 days
+    clock = WatchClock(wall_ns=lambda: time.time_ns() - behind)
+    payload = watch_config("", scrape_timeout_seconds=0.3)
+    with serve_metrics(metrics) as base_url:
+        payload["server"]["base_url"] = base_url
+        watcher = Watcher(resolve_watch_config(payload), tmp_path, clock=clock)
+
+        async def scrape() -> Any:
+            return await watcher._scrape(clock.wall_ns(), asyncio.Event())
+
+        try:
+            record = asyncio.run(scrape())
+        finally:
+            watcher.close()
+    assert record is not None and record.status == "error"
+    assert record.completed_at_ns is not None
+    took = record.completed_at_ns - record.observed_at_ns
+    assert 0.25 * 1e9 <= took < 5 * 1e9
 
 
 def test_an_incident_whose_bundle_cannot_be_created_is_reported(
