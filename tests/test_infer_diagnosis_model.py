@@ -230,6 +230,65 @@ def test_a_fault_claim_outranks_a_more_confident_condition() -> None:
     assert ranked == [fault, condition]
 
 
+def test_a_warning_outranks_a_more_confident_info_finding_of_its_claim() -> None:
+    """An instrumentation warning claims a condition, never a fault, so the
+    claim alone does not put it above an info condition: severity comes
+    next, before confidence."""
+    warning = _finding(
+        kind="client_admission",
+        component="client",
+        contribution=Criteria(
+            met=("excess_ci_excludes_zero", "explains_ttft_excess"),
+            unmet=("competitors_excluded",),
+        ),
+        subject={"key": "w"},
+    )
+    info = _finding(incident=False, subject={"key": "i"})
+    assert (warning.severity, warning.claim, warning.confidence_level) == (
+        "warning",
+        "condition",
+        "medium",
+    )
+    assert (info.severity, info.claim, info.confidence_level) == (
+        "info",
+        "condition",
+        "high",
+    )
+
+    ranked = [f for _, f in rank_findings([info, warning], "r")]
+
+    assert ranked == [warning, info]
+
+
+def test_a_fault_claim_outranks_a_more_confident_instrumentation_warning() -> None:
+    """Both warn, but only the queue claims a fault: the claim decides
+    before severity and confidence do."""
+    fault = _finding(
+        contribution=Criteria(
+            met=("excess_ci_excludes_zero", "explains_ttft_excess"),
+            unmet=("competitors_excluded",),
+        ),
+        subject={"key": "f"},
+    )
+    instrumentation = _finding(
+        kind="client_admission", component="client", subject={"key": "c"}
+    )
+    assert (fault.severity, fault.claim, fault.confidence_level) == (
+        "warning",
+        "fault",
+        "medium",
+    )
+    assert (
+        instrumentation.severity,
+        instrumentation.claim,
+        instrumentation.confidence_level,
+    ) == ("warning", "condition", "high")
+
+    ranked = [f for _, f in rank_findings([instrumentation, fault], "r")]
+
+    assert ranked == [fault, instrumentation]
+
+
 def _line(number: int) -> Line:
     return Line(
         number,

@@ -294,13 +294,14 @@ class Finding:
 
     def rank_key(self, finding_id: str) -> tuple[Any, ...]:
         """Primary first, eligible first, fault claims before conditions,
-        then confidence, the contribution's lower bound, kind, location,
-        window start and id."""
+        warnings before info, then confidence, the contribution's lower
+        bound, kind, location, window start and id."""
         lower = self.contribution_lower
         return (
             0 if self.role == PRIMARY else 1,
             0 if self.eligible else 1,
             _CLAIMS.index(self.claim),
+            0 if self.severity == "warning" else 1,
             -_LEVELS.index(self.confidence_level),
             -(lower if lower is not None else float("-inf")),
             self.kind,
