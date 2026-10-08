@@ -5,9 +5,11 @@ from typing import Any
 import pytest
 
 from stormlog._export.spans import KIND_CLIENT, STATUS_ERROR, STATUS_UNSET, Span
+from stormlog.infer.events import REQUEST_STATUSES
 from stormlog.infer.export_spans import (
     CAPTURE_SPAN,
     DIGESTS,
+    ERROR_STATUSES,
     ERRORS,
     FIRST_TOKEN_EVENT,
     GENAI_ATTRIBUTES,
@@ -208,6 +210,13 @@ def test_a_request_span_that_carried_a_traceparent_is_always_exported() -> None:
         ("error", 400, "EndpointHTTPError", ("400", STATUS_ERROR)),
         ("error", None, "ConnectionResetError", ("ConnectionResetError", STATUS_ERROR)),
         ("error", None, "not an identifier!", ("_OTHER", STATUS_ERROR)),
+        ("unreachable", None, "ConnectionRefusedError", ("unreachable", STATUS_ERROR)),
+        (
+            "delivery_unknown",
+            None,
+            "NoResponseError",
+            ("delivery_unknown", STATUS_ERROR),
+        ),
         ("cancelled", None, None, (None, STATUS_UNSET)),
     ],
 )
@@ -219,6 +228,13 @@ def test_failures_carry_a_structured_error_type(
         _request(status=status, http_status=http_status, error_type=error_type),
     )
     assert (dict(span.attributes).get("error.type"), span.status) == expected
+
+
+def test_every_failed_status_ends_its_span_in_error() -> None:
+    # A status added to the record vocabulary must not export as a success:
+    # only cancelled (Stormlog's own deadline) is left unset, and a dropped
+    # request was never sent, so it has no span.
+    assert set(ERROR_STATUSES) == set(REQUEST_STATUSES) - {"ok", "cancelled", "dropped"}
 
 
 ECHO = (
