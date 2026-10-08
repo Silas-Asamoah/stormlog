@@ -25,6 +25,12 @@ LOOP_BASELINE_WINDOW_NS = "host_stall.baseline_window_ns"
 LOOP_MIN_BUSY_STEPS = "host_stall.min_busy_steps"
 LOOP_MATCHED_BIN_MIN_STEPS = "host_stall.matched_bin_min_steps"
 LOOP_HEARTBEAT_GRACE_NS = "host_stall.heartbeat_grace_ns"
+SELECTION_WINDOW_S = "selection.window_seconds"
+SELECTION_SPAN_CAP_S = "selection.span_cap_seconds"
+SELECTION_MIN_REQUESTS = "selection.min_requests"
+SELECTION_REFERENCE_MIN = "selection.reference_min_requests"
+SELECTION_ALPHA = "selection.alpha"
+SELECTION_MIN_ABOVE = "selection.min_above"
 
 DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
     {
@@ -56,6 +62,19 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # heard from this recently: three of its one-second heartbeats, since
         # under load they slip (2.3 s apart on a real vLLM 0.30.0 run).
         LOOP_HEARTBEAT_GRACE_NS: 3_000_000_000.0,
+        # Incident selection: base windows of 1 s, joined until each holds
+        # 20 requests or spans 30 s.
+        SELECTION_WINDOW_S: 1.0,
+        SELECTION_SPAN_CAP_S: 30.0,
+        SELECTION_MIN_REQUESTS: 20.0,
+        # Reference requests needed before a window is tested: the fewest
+        # that bound a p90 under the shared sufficiency rule (#213's
+        # quantile_minimum_n(0.90) with margin 5 at 95%).
+        SELECTION_REFERENCE_MIN: 114.0,
+        # One-sided Fisher's exact test level, and the fewest requests above
+        # the reference p90 a flagged window must hold.
+        SELECTION_ALPHA: 0.01,
+        SELECTION_MIN_ABOVE: 3.0,
     }
 )
 
@@ -86,6 +105,12 @@ __all__ = [
     "PREFIX_HIT_RATIO_DROP",
     "PREFIX_MIN_QUERIED",
     "QUEUE_MEDIAN_WAITING",
+    "SELECTION_ALPHA",
+    "SELECTION_MIN_ABOVE",
+    "SELECTION_MIN_REQUESTS",
+    "SELECTION_REFERENCE_MIN",
+    "SELECTION_SPAN_CAP_S",
+    "SELECTION_WINDOW_S",
     "THRESHOLDS_VERSION",
     "resolve_threshold",
 ]
