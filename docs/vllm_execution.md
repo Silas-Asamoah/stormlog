@@ -130,6 +130,7 @@ stated bound.
 | `scheduled` | engine | `Scheduler.schedule` returns |
 | `completed` | engine | `Scheduler.update_from_output` returns |
 | `terminal` | engine | `Scheduler._free_request` runs |
+| `pause` | engine | `Scheduler.set_pause_state` returns |
 | `heartbeat` | every epoch | every second |
 | `goodbye` | every epoch | the process exits cleanly |
 
@@ -143,7 +144,7 @@ stated bound.
  "parent_process_start_ns": 1789999944560000000,
  "vllm_version": "0.30.0", "enabled": true, "refused": null,
  "producer": "vllm:node-7:<boot>:2600:1790000000000000000",
- "observes": [],
+ "observes": ["pause"],
  "config": {"executor": "mp", "scheduler": "vllm.v1.core.sched.async_scheduler.AsyncScheduler",
             "runner": null, "tp": 2, "pp": 1, "dp": 1, "async_scheduling": true,
             "speculative": "ngram", "max_num_batched_tokens": 2048,
@@ -170,10 +171,13 @@ it, the value Stormlog's server collector records. `parent_pid` and the two
 `parent_process_*` fields say the same of the parent process; a multiproc
 worker's parent is the engine core. Each is null where it cannot be read.
 
-`observes` lists the optional record kinds this epoch's hook can write, so
-a reader can tell "none happened" from "not recorded"; it is empty when the
-hook is refused. With no kind listed, the absence of such records says
-nothing.
+`observes` lists the optional record kinds this epoch's hook writes, of
+those described below; only kinds the installed vLLM can produce are
+listed, and the list is empty when the hook is refused and on a worker. A
+listed kind's absence over an interval means none happened only when no
+record was lost across it: `seq` has no gap, and heartbeats on either side
+show every `dropped` count and `errors` unchanged and the writer not
+`capped`. For a kind not listed, absence says nothing.
 
 `config` records vLLM's settings as JSON values (an enum by its name), each
 null when vLLM does not have it. `max_num_seqs`, `num_gpu_blocks`,
@@ -212,6 +216,7 @@ first `scheduled` record.
  "start_wall_ns": …, "start_mono_ns": …, "start_wall_after_ns": …,
  "end_wall_ns": …, "end_mono_ns": …, "end_wall_after_ns": …,
  "total_tokens": 2048, "zero_token": false, "preempted": ["…"],
+ "pause_state": "UNPAUSED",
  "members": [
    {"internal": "…", "sighting": "first", "phase": "context", "scheduled": 2000,
     "computed_before": 0, "prompt_tokens": 4000,
@@ -220,7 +225,8 @@ first `scheduled` record.
     "recompute": false, "output_before": 0, "resumable": false}]}
 ```
 
-`iteration` counts the engine's `schedule()` calls from 0. `computed_before` is
+`iteration` counts the engine's `schedule()` calls from 0. `pause_state` is
+the scheduler's pause state when the call returned (see `pause` below). `computed_before` is
 the context before this step, read from the scheduler output. `phase` is vLLM's
 own classification: `context` for a request new in this output (including one
 resumed after preemption) or still in its context phase, else `generation`.
@@ -267,6 +273,20 @@ exception passes through, and the step's fate was not seen.
  "finish_reason": "stop", "output_tokens": 128,
  "wall_ns": …, "mono_ns": …, "wall_after_ns": …}
 ```
+
+**`pause`**
+
+```json
+{"kind": "pause", "from": "UNPAUSED", "to": "PAUSED_ALL",
+ "wall_ns": …, "mono_ns": …, "wall_after_ns": …}
+```
+
+One per call to `set_pause_state`, vLLM's single place for changing the
+scheduler's pause state, stamped after the call returns; `from` and `to` are
+the states before and after (`UNPAUSED`, `PAUSED_NEW` or `PAUSED_ALL`).
+`PAUSED_ALL` stops the engine from stepping, so no `scheduled` record shows
+it; `PAUSED_NEW` holds new requests while running ones keep stepping. A call
+that raises is not recorded. Listed in `observes` as `pause`.
 
 **`heartbeat`** and `status.json`
 

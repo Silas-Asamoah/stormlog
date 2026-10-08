@@ -175,6 +175,31 @@ def _patch_engine(settings: _Settings) -> None:
     setattr(Scheduler, "update_from_output", scheduler_update)
     setattr(Scheduler, "_free_request", scheduler_free)
     setattr(EngineCore, "preprocess_add_request", engine_admit)
+    _patch_optional(Scheduler, "set_pause_state", "pause", _wrap_set_pause_state)
+
+
+def _patch_optional(cls: Any, name: str, kind: str, wrap: Callable[[Any], Any]) -> None:
+    """Wrap ``cls.name`` when this vLLM has it, and claim ``kind`` for it."""
+    original = getattr(cls, name, None)
+    if original is None:
+        return
+    setattr(cls, name, wrap(original))
+    setattr(cls, OBSERVES_ATTRIBUTE, (*getattr(cls, OBSERVES_ATTRIBUTE, ()), kind))
+
+
+def _wrap_set_pause_state(set_pause_state: Any) -> Any:
+    def scheduler_set_pause_state(
+        self: Any, pause_state: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        recorder = getattr(self, RECORDER_ATTRIBUTE, None)
+        if recorder is None:
+            return set_pause_state(self, pause_state, *args, **kwargs)
+        before = _guard(recorder, lambda: getattr(self, "pause_state", None))
+        result = set_pause_state(self, pause_state, *args, **kwargs)
+        _guard(recorder, lambda: recorder.on_pause(before, pause_state))
+        return result
+
+    return scheduler_set_pause_state
 
 
 def _enable_engine(scheduler: Any, vllm_config: Any, settings: _Settings) -> None:

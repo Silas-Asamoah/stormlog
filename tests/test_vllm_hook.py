@@ -43,6 +43,12 @@ class FinishReason(enum.IntEnum):
         return ("stop", "length")[self.value]
 
 
+class PauseState(enum.Enum):
+    UNPAUSED = 0
+    PAUSED_NEW = 1
+    PAUSED_ALL = 2
+
+
 @dataclass
 class FakeRequest:
     request_id: str
@@ -144,6 +150,14 @@ def _fake_vllm() -> dict[str, types.ModuleType]:
             self.num_sampled_tokens_per_step = 1
             self.next_output: SchedulerOutput | None = None
             self.update_error: Exception | None = None
+            self._pause_state = PauseState.UNPAUSED
+
+        @property
+        def pause_state(self) -> PauseState:
+            return self._pause_state
+
+        def set_pause_state(self, pause_state: PauseState) -> None:
+            self._pause_state = pause_state
 
         def schedule(self, throttle_prefills: bool = False) -> SchedulerOutput:
             assert self.next_output is not None
@@ -490,6 +504,43 @@ def test_admission_writes_an_alias(vllm: dict[str, Any]) -> None:
     )
 
 
+def test_pause_transitions_and_the_state_each_step_saw(vllm: dict[str, Any]) -> None:
+    scheduler = vllm["Scheduler"](vllm_config())
+    scheduler.requests = {"a-1": FakeRequest("a-1", 2)}
+    scheduler.set_pause_state(PauseState.PAUSED_NEW)
+    output = SchedulerOutput([_new("a-1", 2)], CachedRequestData(), {"a-1": 2}, 2)
+    scheduler.next_output = output
+    scheduler.schedule()
+    scheduler.set_pause_state(PauseState.PAUSED_ALL)
+    scheduler.set_pause_state(PauseState.UNPAUSED)
+    refused = vllm["Scheduler"](vllm_config(pp=2))
+    refused.set_pause_state(PauseState.PAUSED_ALL)
+
+    assert scheduler.pause_state is PauseState.UNPAUSED  # vLLM's own call ran
+    assert refused.pause_state is PauseState.PAUSED_ALL
+    records = _records(vllm["root"], "engine")
+    hellos = _of(records, "hello")
+    assert [hello["observes"] for hello in hellos] == [["pause"], []]
+    pauses = _of(records, "pause")
+    assert [(p["from"], p["to"]) for p in pauses] == [
+        ("UNPAUSED", "PAUSED_NEW"),
+        ("PAUSED_NEW", "PAUSED_ALL"),
+        ("PAUSED_ALL", "UNPAUSED"),
+    ]
+    assert all(p["wall_ns"] <= p["wall_after_ns"] for p in pauses)
+    assert _of(records, "scheduled")[0]["pause_state"] == "PAUSED_NEW"
+
+
+def test_a_method_vllm_lacks_is_neither_patched_nor_claimed() -> None:
+    class OldScheduler:
+        pass
+
+    hook._patch_optional(OldScheduler, "set_pause_state", "pause", lambda f: f)
+
+    assert not hasattr(OldScheduler, "set_pause_state")
+    assert not hasattr(OldScheduler, hook.OBSERVES_ATTRIBUTE)
+
+
 def test_every_stamp_is_bracketed_by_two_wall_reads(vllm: dict[str, Any]) -> None:
     scheduler = vllm["Scheduler"](vllm_config())
     vllm["EngineCore"](scheduler).preprocess_add_request(
@@ -619,6 +670,7 @@ def test_hello_records_the_layout_the_profiler_and_the_process(
             super().__init__(vllm_config)
 
     SizedScheduler.__module__ = scheduler_class.__module__
+    SizedScheduler.__qualname__ = scheduler_class.__qualname__  # passes the gate
     SizedScheduler(_sized_config())
     worker = vllm["Worker"](_sized_config())
     worker.init_device()
@@ -666,7 +718,8 @@ def test_hello_records_the_layout_the_profiler_and_the_process(
             "parent_process_start_ticks": parent * 10,
             "parent_process_start_ns": parent * 1_000,
         }
-        assert hello["observes"] == []
+    assert (engine["enabled"], engine["observes"]) == (True, ["pause"])
+    assert _of(_records(vllm["root"], "worker"), "hello")[0]["observes"] == []
     worker_config = _of(_records(vllm["root"], "worker"), "hello")[0]["config"]
     # A worker has no scheduler: its layout is the configured one.
     assert (worker_config["kv_cache_groups"], worker_config["block_size"]) == (None, 32)
