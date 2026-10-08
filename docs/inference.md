@@ -217,7 +217,12 @@ Each also carries `session_id` and a `timestamp_ns` equal to its own time.
 A dispatch's `started_at_ns` is the client's send stamp, the one a
 successful request's `infer.request` carries; a failed request's record
 times the call from when a client thread picked it up, slightly earlier.
-`first_content_at_ns` is the send stamp plus the request's TTFT. Both
+`first_content_at_ns` is the send stamp plus the time to that first piece,
+which a successful request's `infer.request` gives as `ttft_ms`. A request
+that fails or times out after its first content keeps its
+`infer.first_content`, but its `infer.request`, like every failed one, has
+no TTFT, so the summary's TTFT percentiles stay over successful requests;
+the progress record is then the only sign that content arrived. Both
 progress records of a request come before its `infer.request` record. A
 dropped request was never sent and has neither; a request without streamed
 content has no `infer.first_content`. A call the drain gave up on can still
