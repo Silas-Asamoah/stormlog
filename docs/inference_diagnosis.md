@@ -333,7 +333,8 @@ minor second cause.
   subject, a condition and a contribution each at least `medium`, and the
   one contribution criterion that says the mechanism explains the incident
   met: `confidence.contribution.explains` names it (the queue's
-  `explains_ttft_excess`, KV's `explains_e2e_excess`, prefix loss's
+  `explains_ttft_excess`, KV's `explains_e2e_excess` or, through the queue
+  it held, `explains_ttft_excess_through_queue`, prefix loss's
   `ttft_rose`, client admission's `explains_intended_latency_excess`, and
   `explains_ttft_excess` for the API server and capture pauses). One unmet
   criterion lowers confidence to `medium`, but never that one: a queue that
@@ -341,20 +342,25 @@ minor second cause.
   then `fault`, and with `role: primary` that is the fault claim
   (`claim: fault`); for an instrumentation kind (`client_admission`,
   `capture_pause`) it is `instrumentation`, since Stormlog's own client or
-  profiler caused it, and the claim is a condition. Either exits 3. An eligible finding at `info` is `claim: condition`, its
-  cause undetermined until a driver says otherwise. Workload kinds are
-  always `workload_change` at `info`; instrumentation kinds are
-  `instrumentation`.
-- **Roles.** Every finding is `primary` in this version, with an empty
-  `secondary_to`: the edge table that makes a finding secondary to the
-  cause upstream of it comes with the engine-loop class. Until then a
-  competitor that is `upstream` (KV preemption, for the queue: it leaves
-  requests waiting to resume and keeps new ones out) contests the finding
-  like a contributing one: it stays eligible but claims a condition at
-  `info`, since it may be the upstream cause's consequence. A cause is
-  upstream only when the subject's finding of that kind is eligible; an
-  observation establishes nothing, and leaves the competitor
-  `not_ruled_out`.
+  profiler caused it, and the claim is a condition. Either exits 3. An
+  eligible finding at `info` is `claim: condition`, its cause undetermined
+  until a driver says otherwise. Workload kinds are always
+  `workload_change` at `info`; instrumentation kinds are `instrumentation`.
+- **Roles.** A finding is `secondary` to a cause upstream of it, and lists
+  that finding's ID in `secondary_to`, when the subject's finding of that
+  kind is eligible: an observation establishes nothing, and leaves the
+  competitor `not_ruled_out`. This version links one pair: the queue, when
+  its requests waited behind the subject's own preempted requests, is KV
+  preemption pressure's secondary. The competitor then leaves its
+  alternatives (an upstream cause is no competitor), `detail.role_evidence`
+  says why, and its claim is a condition, never the fault, though it keeps
+  its own severity. The upstream finding claims what its consequence
+  explains: KV pressure explains the TTFT excess through the queue
+  (`explains_ttft_excess_through_queue`) when the median request's time
+  held behind preempted ones is at least half of it, so a KV fault that
+  shows as queueing is still a warning. The other edges of the table come
+  with the engine-loop class; until then a competitor that stays
+  `upstream` contests the finding like a contributing one.
 - **Rank.** Findings are ordered by: primary before secondary, eligible
   before observation, confidence, the contribution's lower bound (in ms of
   latency for every kind, so kinds compare), kind,
@@ -392,7 +398,7 @@ interval); with no excess it reports `not_observed`.
 | `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else, without pause records, the longest stretch without an admission while a subject's request waited (the longest pause that could hide there, since a paused scheduler admits nobody) is under 10% of the wait excess; a longer one is `untestable`, since a full engine admits nobody either. Both are judged over the stretches in which a subject's request waited, not the calm between them |
 | `blocked_waiting` | yes | every waiting request's `enqueued` record says it used neither structured output nor streaming input |
 | `engine_ingress` | yes | the `engine_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` (untestable on a log without `enqueued` records) |
-| `kv_preemption_pressure` | no | the subject's own allocation preemptions held its waits for under 10% of the wait excess: the median request's time waiting behind the subject's preempted requests, which vLLM puts back at the head of the queue until they resume. Another client's preemptions, and a reset's, are no evidence of the subject's KV pressure. Up to half the excess it is `contributing`; above that it is `upstream` when the subject's KV finding is eligible, which contests the queue (no fault claim, a condition at `info`), and otherwise `not_ruled_out`, since an observation of KV pressure establishes nothing upstream |
+| `kv_preemption_pressure` | no | the subject's own allocation preemptions held its waits for under 10% of the wait excess: the median request's time waiting behind the subject's preempted requests, which vLLM puts back at the head of the queue until they resume. Another client's preemptions, and a reset's, are no evidence of the subject's KV pressure. Up to half the excess it is `contributing`; above that the queue is the KV finding's `secondary` when that finding is eligible (see Roles), and otherwise the competitor is `not_ruled_out`, since an observation of KV pressure establishes nothing upstream |
 | `client_admission` | no | no request was held at the client |
 | `host_stall@api_server` | no | the `send_to_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` |
 
@@ -448,8 +454,12 @@ Each affected request's cost is observed: the wait from the preempting
 (`preemption_to_resume_entry`), and the positions it computed again below
 the highest context it had reached. The contribution claim asks for an
 end-to-end excess whose interval excludes zero, and resume waits adding up
-to at least half of it over the subject's requests. Without engine records
-the class is `unsupported/no_hook_preemption_data`.
+to at least half of it over the subject's requests, or, when the queue is
+its secondary, the TTFT excess it explains through the queue (see Roles):
+a preempted request goes back to the head of the queue, and nobody behind
+it is admitted until it resumes, so KV pressure often costs queueing more
+than resume waits. Without engine records the class is
+`unsupported/no_hook_preemption_data`.
 
 ## Prefix-cache loss
 
