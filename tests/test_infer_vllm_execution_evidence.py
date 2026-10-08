@@ -10,14 +10,17 @@ from typing import Any
 from stormlog.infer.correlation_accounting import (
     align_timestamp,
     alignment_offset_bounds,
+    resolve_inference_events,
 )
 from stormlog.infer.correlation_events import (
     ClockAlignmentEvent,
     CorrelationContext,
     CorrelationEvent,
+    EntityRef,
     IterationEvent,
     MembershipEvent,
     RequestEvent,
+    StageEvent,
 )
 from stormlog.infer.vllm_execution import (
     ALIGNMENT_BASIS,
@@ -33,6 +36,7 @@ from tests.vllm_execution_helpers import (
     SECOND,
     WALL_OFFSET,
     alias,
+    cache_reset,
     completed,
     done,
     enqueued,
@@ -41,6 +45,7 @@ from tests.vllm_execution_helpers import (
     hello,
     importer,
     member,
+    pause,
     scheduled,
     terminal,
     write_epoch,
@@ -353,3 +358,250 @@ def test_coverage_spans_what_earlier_imports_consumed(tmp_path: Path) -> None:
     coverage = _coverage(tmp_path, records, high_water={EPOCH: 3})
 
     assert _spans(coverage) == [(1, 4)]
+
+
+# ---------------------------------------------------------------- stages
+
+REQUEST1 = "c1_in8_out4_measured_0_1"
+X1 = f"stormlog-{RUN}-{REQUEST1}"
+OWN1 = f"chatcmpl-{X1}-77aa00bb"
+OBSERVES = ["cache_reset", "enqueued", "pause"]
+
+
+def _two_requests(**changes: Any) -> RunFacts:
+    return _facts(
+        requests={
+            X0: RunRequest(REQUEST0, X0, "c1_in8_out4", "measured"),
+            X1: RunRequest(REQUEST1, X1, "c1_in8_out4", "measured"),
+        },
+        **changes,
+    )
+
+
+def _after(result: ReduceResult, **changes: Any) -> RunFacts:
+    """The facts a later import reads back from an artifact holding ``result``."""
+    graph = resolve_inference_events(result.events)
+    return _two_requests(
+        existing_iterations=frozenset(graph.iterations),
+        existing_attempts=frozenset(
+            r.attempt_ref for r in graph.requests.values() if r.attempt_ref is not None
+        ),
+        existing_alignments=frozenset(a.event_id for a in graph.alignments),
+        existing_stages=frozenset(s.event_id for s in graph.stages.values()),
+        **changes,
+    )
+
+
+def _admitted(*internals: str) -> list[dict[str, Any]]:
+    """A hook that observes resets and pauses, with both run requests
+    admitted and prefilled together in step 0."""
+    return [
+        hello("engine", PID, START, observes=OBSERVES),  # 0
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 30),  # 1
+        alias(OWN1, f"chatcmpl-{X1}", T0 - 20),  # 2
+        scheduled(0, T0, [member(name, scheduled=8) for name in internals]),  # 3
+        completed(0, T0 + SECOND, [done(name) for name in internals]),  # 4
+    ]
+
+
+def _stages(result: ReduceResult) -> dict[str, list[StageEvent]]:
+    found: dict[str, list[StageEvent]] = {}
+    for stage in _of(result, StageEvent):
+        found.setdefault(stage.name, []).append(stage)
+    return found
+
+
+def test_a_step_s_preemption_is_dated_by_its_schedule_call(tmp_path: Path) -> None:
+    result = _reduce(
+        tmp_path,
+        [
+            *_admitted(OWN0, OWN1),
+            scheduled(
+                1, T0 + SECOND + 10, [member(OWN0, scheduled=1)], preempted=[OWN1]
+            ),
+            completed(1, T0 + 2 * SECOND, [done(OWN0)]),  # 6
+            heartbeat(T0 + 3 * SECOND, 6),
+        ],
+        _two_requests(),
+    )
+
+    (stage,) = _stages(result)["engine.preempted"]
+    assert stage.iteration_ref is not None and stage.iteration_ref.id == "1"
+    assert stage.request_ref == EntityRef("stormlog", REQUEST1)
+    assert (stage.start_ns, stage.end_ns) == (T0 + SECOND + 10, T0 + SECOND + 200_010)
+    metadata = stage.metadata
+    assert (metadata["by"], metadata["reset_observed"]) == ("schedule", True)
+    assert (metadata["epoch"], metadata["seq"], metadata["source_seq_max"]) == (
+        EPOCH,
+        5,
+        6,
+    )
+    assert metadata["attempt"] == OWN1
+    assert resolve_inference_events(result.events).unresolved == ()
+
+
+def test_a_reset_s_preemptions_are_its_own_not_the_next_step_s(tmp_path: Path) -> None:
+    result = _reduce(
+        tmp_path,
+        [
+            *_admitted(OWN0, OWN1),
+            cache_reset([OWN0, OWN1], T0 + SECOND + 5, succeeded=None),  # 5: raised
+            # vLLM lists the reset's preemptions in the next step's output.
+            scheduled(1, T0 + 2 * SECOND, [], preempted=[OWN0, OWN1]),  # 6
+            completed(1, T0 + 2 * SECOND + 10, []),
+            heartbeat(T0 + 3 * SECOND, 8),
+        ],
+        _two_requests(),
+    )
+
+    stages = _stages(result)
+    assert "engine.preempted" not in stages
+    # Step 1 preempted no run request itself, and ran none: it is empty.
+    assert [i.iteration_ref.id for i in _of(result, IterationEvent)] == ["0"]
+    (reset,) = stages["engine.cache_reset"]
+    # Step 0 is the last one written before the reset; step 1 is empty.
+    assert reset.iteration_ref == EntityRef(reset.context.producer_id, "0")
+    assert (reset.metadata["succeeded"], reset.metadata["raised"]) == (None, True)
+    assert (reset.start_ns, reset.end_ns) == (T0 + SECOND + 5, T0 + SECOND + 50_005)
+    assert reset.metadata["start_wall_after_ns"] == T0 + SECOND + 5 + WALL_OFFSET + 800
+    by_reset = stages["engine.preempted_by_reset"]
+    assert sorted(s.request_ref.id for s in by_reset if s.request_ref) == [
+        REQUEST0,
+        REQUEST1,
+    ]
+    assert {s.metadata["reset_seq"] for s in by_reset} == {5}
+    assert resolve_inference_events(result.events).unresolved == ()
+
+
+def test_a_pause_with_no_step_before_it_is_a_dated_fact(tmp_path: Path) -> None:
+    result = _reduce(
+        tmp_path,
+        [
+            hello("engine", PID, START, observes=OBSERVES),
+            pause("UNPAUSED", "PAUSED_ALL", T0 - 50),  # 1: nothing to refer to
+            pause("PAUSED_ALL", "UNPAUSED", T0 - 40),  # 2
+            alias(OWN0, f"chatcmpl-{X0}", T0 - 30),
+            scheduled(0, T0, [member(OWN0, scheduled=8)]),
+            completed(0, T0 + SECOND, [done(OWN0)]),
+            pause("UNPAUSED", "PAUSED_NEW", T0 + SECOND + 5),  # 6
+            heartbeat(T0 + 3 * SECOND, 6),
+        ],
+    )
+
+    (stage,) = _stages(result)["engine.pause_transition"]
+    assert (stage.metadata["from"], stage.metadata["to"]) == ("UNPAUSED", "PAUSED_NEW")
+    assert stage.start_ns == stage.end_ns == T0 + SECOND + 5
+    assert stage.iteration_ref is not None and stage.iteration_ref.id == "0"
+    summary = result.summary["epochs"][EPOCH]
+    assert [
+        (f["seq"], f["from"], f["to"], f["start_mono_ns"])
+        for f in summary["unanchored"]
+    ] == [
+        (1, "UNPAUSED", "PAUSED_ALL", T0 - 50),
+        (2, "PAUSED_ALL", "UNPAUSED", T0 - 40),
+    ]
+    assert summary["stages"] == {"engine.pause_transition": 1, "unanchored": 2}
+
+
+def test_other_clients_preemptions_follow_the_pseudonym_rules(tmp_path: Path) -> None:
+    records = [
+        *_admitted(OWN0),
+        # Another client's request, in a step of its own that is not kept.
+        alias(OTHER, "chatcmpl-other", T0 + SECOND + 1),
+        scheduled(1, T0 + SECOND + 10, [member(OTHER, scheduled=8)]),
+        completed(1, T0 + SECOND + 20, [done(OTHER)]),
+        scheduled(2, T0 + 2 * SECOND, [member(OWN0, scheduled=1)], preempted=[OTHER]),
+        completed(2, T0 + 2 * SECOND + 10, [done(OWN0)]),
+        heartbeat(T0 + 3 * SECOND, 10),
+    ]
+    keyed = _reduce(tmp_path / "keyed", records)
+    write_epoch(tmp_path / "keyless", "engine", PID, START, records, key=None)
+    keyless = reduce_execution_log(
+        read_execution_log(tmp_path / "keyless", importer=HERE), _facts()
+    )
+
+    # No record of the other request was written, so nothing can refer to it.
+    assert _stages(keyed) == {}
+    assert keyed.summary["epochs"][EPOCH]["stages"] == {"unreferenced": 1}
+    assert keyless.summary["epochs"][EPOCH]["stages"] == {"withheld": 1}
+
+
+def test_a_step_that_preempted_a_run_request_is_kept(tmp_path: Path) -> None:
+    result = _reduce(
+        tmp_path,
+        [
+            *_admitted(OWN0),
+            alias(OTHER, "chatcmpl-other", T0 + SECOND + 1),
+            # Only another client's request runs, outside every run window.
+            scheduled(
+                1, T0 + SECOND + 10, [member(OTHER, scheduled=8)], preempted=[OWN0]
+            ),
+            completed(1, T0 + SECOND + 20, [done(OTHER)]),
+            heartbeat(T0 + 3 * SECOND, 8),
+        ],
+    )
+
+    (stage,) = _stages(result)["engine.preempted"]
+    assert stage.iteration_ref is not None and stage.iteration_ref.id == "1"
+    assert "1" in [i.iteration_ref.id for i in _of(result, IterationEvent)]
+
+
+def test_a_reset_waits_for_the_step_that_lists_its_preemptions(tmp_path: Path) -> None:
+    first = [
+        *_admitted(OWN0, OWN1),
+        heartbeat(T0 + SECOND + 1, 4),  # 5
+        cache_reset([OWN0, OWN1], T0 + SECOND + 5),  # 6
+        heartbeat(T0 + 2 * SECOND, 6),  # 7
+    ]
+    rest = [
+        scheduled(1, T0 + 2 * SECOND + 10, [], preempted=[OWN0, OWN1]),  # 8
+        completed(1, T0 + 2 * SECOND + 20, []),  # 9
+        heartbeat(T0 + 3 * SECOND, 9),  # 10
+    ]
+    before = _reduce(tmp_path, first, _two_requests())
+    assert before.high_water == {EPOCH: 5}  # read again from the reset
+    write_epoch(tmp_path, "engine", PID, START, [*first, *rest])
+    after = reduce_execution_log(
+        read_execution_log(tmp_path, importer=HERE, high_water=before.high_water),
+        _after(before),
+    )
+
+    assert sorted(_stages(before)) == [
+        "engine.cache_reset",
+        "engine.preempted_by_reset",
+    ]
+    assert _stages(after) == {}  # the reset's stages are not written twice
+    assert after.summary["epochs"][EPOCH]["stages"] == {"already_imported": 3}
+    assert after.high_water == {EPOCH: 10}
+
+
+def test_a_reset_s_preemption_waits_for_its_request_record(tmp_path: Path) -> None:
+    first = [
+        hello("engine", PID, START, observes=OBSERVES),  # 0
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 30),  # 1
+        scheduled(0, T0, [member(OWN0, scheduled=8)]),  # 2: its output is not in
+        cache_reset([OWN0], T0 + 5),  # 3
+        scheduled(1, T0 + 10, [], preempted=[OWN0]),  # 4
+        heartbeat(T0 + 20, 4),  # 5
+    ]
+    rest = [
+        completed(0, T0 + SECOND, [done(OWN0)]),  # 6
+        completed(1, T0 + SECOND + 10, []),  # 7
+        heartbeat(T0 + 2 * SECOND, 7),  # 8
+    ]
+    before = _reduce(tmp_path, first)
+    write_epoch(tmp_path, "engine", PID, START, [*first, *rest])
+    after = reduce_execution_log(
+        read_execution_log(tmp_path, importer=HERE, high_water=before.high_water),
+        _after(before),
+    )
+
+    assert _stages(before) == {}
+    assert before.high_water == {EPOCH: 0}
+    assert before.summary["epochs"][EPOCH]["unanchored"][0]["seq"] == 3
+    (stage,) = _stages(after)["engine.preempted_by_reset"]
+    assert stage.request_ref == EntityRef("stormlog", REQUEST0)
+    # Step 0 completed after the reset, so the reset itself has no step to
+    # refer to: it stays a dated fact, and its preemption refers to the request.
+    assert stage.iteration_ref is None
+    assert after.summary["epochs"][EPOCH]["unanchored"][0]["seq"] == 3
