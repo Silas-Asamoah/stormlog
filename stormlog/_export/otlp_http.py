@@ -43,6 +43,10 @@ TRACES_PATH = "/v1/traces"
 # The most a response may hold, after decompression.
 MAX_RESPONSE_BYTES = 64 * 1024
 DEFAULT_ATTEMPT_SECONDS = 5.0
+# Attempts in a row that reached none of the addresses before the name is
+# resolved again: a collector whose address changed, such as a recreated
+# service, is found within a few attempts.
+RESOLVE_AFTER_FAILURES = 3
 
 # What a transmission was.
 CONFIRMED = "confirmed"
@@ -180,6 +184,8 @@ class OtlpHttpTransport:
         self._lock = threading.Lock()
         self._current: socket.socket | None = None
         self._aborted = False
+        # Only the sending thread reads or changes it.
+        self._connect_failures = 0
         # Whether the latest attempt began to send its body; kept until the
         # next attempt starts, so a late reader still sees it.
         self._body_started = False
@@ -228,9 +234,7 @@ class OtlpHttpTransport:
     def _connect(
         self, deadline: float
     ) -> tuple[socket.socket | None, int | None, Transmission | None]:
-        candidates = self.resolver.candidates()
-        if not candidates and self.resolver.resolve(min(2.0, _left(deadline))):
-            candidates = self.resolver.candidates()
+        candidates = self._candidates(deadline)
         if not candidates:
             return None, None, Transmission(NOT_SENT, DNS, retryable=True)
         category = CONNECT_TIMEOUT
@@ -239,9 +243,24 @@ class OtlpHttpTransport:
                 break
             sock, token, category = self._try(candidate, deadline)
             if sock is not None and token is not None:
+                self._connect_failures = 0
                 self.resolver.mark_good(candidate)
                 return self._secure(sock, token, deadline)
+        self._connect_failures += 1
         return None, None, Transmission(NOT_SENT, category, retryable=True)
+
+    def _candidates(self, deadline: float) -> list[Candidate]:
+        """The addresses to try, resolved again when none is known, or when
+        ``RESOLVE_AFTER_FAILURES`` attempts in a row reached none of them."""
+        candidates = self.resolver.candidates()
+        stale = self._connect_failures >= RESOLVE_AFTER_FAILURES
+        if stale:
+            self._connect_failures = 0
+        if (not candidates or stale) and self.resolver.resolve(
+            min(2.0, _left(deadline))
+        ):
+            candidates = self.resolver.candidates()
+        return candidates
 
     def _try(
         self, candidate: Candidate, deadline: float
