@@ -926,6 +926,62 @@ def _tree(root: Path) -> dict[str, tuple[int, int]]:
     }
 
 
+GATE = (
+    "import pathlib, sys, time\n"
+    "while not pathlib.Path(sys.argv[1]).exists():\n"
+    "    time.sleep(0.05)"
+)
+
+
+def test_a_resume_ends_in_the_journal_what_it_stopped(tmp_path: Path) -> None:
+    # fable-213-delta's N1 (gate-213-b23's G1): a resume stopped what a
+    # killed runner's prelude left but never ended it in the journal, so
+    # every later resume judged it again; an unrelated emptied orphan then
+    # held a resume, which named it as left by the runner.
+    import os
+    import signal
+    import subprocess
+
+    from stormlog.infer.experiment_process import journaled, still_there
+
+    gate = tmp_path / "gate"
+    document = _plan(_port(), blocks=1)
+    step = {"name": "c1", "command": ["{python}", "-c", "pass"]}
+    document["arms"] = {"off": {"workload": [step]}}
+    document["order"] = {"kind": "explicit", "blocks": [["off"]]}
+    wait = ["{python}", "-c", GATE, str(gate)]
+    document["block_prelude"] = [{"name": "warm", "server_arm": "off", "command": wait}]
+    plan_file = tmp_path / "plan.json"
+    plan_file.write_text(json.dumps(document))
+    exp = tmp_path / "exp"
+    journal = exp / "preludes" / "b00-warm" / "launches.ndjson"
+    runner = subprocess.Popen(
+        [
+            *(sys.executable, "-m", "examples.cli.infer_repeated_baseline"),
+            *("--plan", str(plan_file), "--output", str(exp)),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and '"warm"' not in (
+            journal.read_text() if journal.exists() else ""
+        ):
+            time.sleep(0.05)
+    finally:
+        os.kill(runner.pid, signal.SIGKILL)
+        runner.wait()
+    left = journaled(journal)
+    assert [entry["name"] for entry in left] == ["server", "warm"]
+    gate.touch()
+    (record,) = _run(tmp_path, document, resume=True)
+    assert record["state"] == "completed", record
+    assert not any(still_there(entry["identity"]) for entry in left)
+    assert journaled(journal) == []
+
+
 def test_a_second_runner_on_the_same_experiment_refuses_and_touches_nothing(
     tmp_path: Path,
 ) -> None:
