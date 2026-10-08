@@ -48,6 +48,7 @@ recorded its state keeps that state, and no cause can be named for it.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -60,6 +61,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Collection, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -124,6 +126,8 @@ NOT_RUN = "not_run"
 NEVER_HEALTHY = "server_never_healthy"
 PENDING = "pending"
 INDEX = "index.jsonl"
+# Held by the runner, with its PID in it, for as long as it runs.
+LOCK = ".lock"
 # Written when an attempt starts: the slot it runs in.
 ATTEMPT = "attempt.json"
 # One line per process an attempt or a prelude launches, as it starts.
@@ -240,39 +244,73 @@ def run_plan(
 
     Every attempt the runner was killed in must be named, by label, in
     ``external_causes`` (why it does not count) or ``interrupted_as_outcome``
-    (it counts against its arm); a resume refuses until each is.
+    (it counts against its arm); a resume refuses until each is. Before
+    anything else, the runner takes the experiment's lock (``_held``).
     """
-    causes = dict(external_causes or {})
-    _check_interrupted(output_dir, causes, set(interrupted_as_outcome), resume)
-    if resume:
-        _stop_left_launches(output_dir)
-        _check_nothing_left(output_dir)
-    env = environment or Environment(secrets=_secrets(plan))
-    order = plan_order(plan)
-    _prepare(plan, order, output_dir, resume)
-    model = _verified_model(plan)
-    if model is not None:
-        env = replace(env, model=model)
-    epoch = _stops_so_far(output_dir)
-    written: list[dict[str, Any]] = []
-    for block, arms in enumerate(order.blocks):
-        records, stopped = _run_block(
-            plan,
-            block,
-            arms,
-            output_dir,
-            env,
-            _Resume(resume, retry_incomplete, causes, epoch),
-            on_event,
-        )
-        written += records
-        if stopped is not None:
-            # Nothing more starts beside a process that would not stop.
-            written += _not_run(plan, order, stopped, output_dir, on_event)
-            break
-    report = sanitize_bundle(output_dir, env.secrets.values())
-    (output_dir / "sanitizer.json").write_text(json.dumps(report, indent=2) + "\n")
-    return written
+    with _held(output_dir):
+        causes = dict(external_causes or {})
+        _check_interrupted(output_dir, causes, set(interrupted_as_outcome), resume)
+        if resume:
+            _stop_left_launches(output_dir)
+            _check_nothing_left(output_dir)
+        env = environment or Environment(secrets=_secrets(plan))
+        order = plan_order(plan)
+        _prepare(plan, order, output_dir, resume)
+        model = _verified_model(plan)
+        if model is not None:
+            env = replace(env, model=model)
+        epoch = _stops_so_far(output_dir)
+        written: list[dict[str, Any]] = []
+        for block, arms in enumerate(order.blocks):
+            records, stopped = _run_block(
+                plan,
+                block,
+                arms,
+                output_dir,
+                env,
+                _Resume(resume, retry_incomplete, causes, epoch),
+                on_event,
+            )
+            written += records
+            if stopped is not None:
+                # Nothing more starts beside a process that would not stop.
+                written += _not_run(plan, order, stopped, output_dir, on_event)
+                break
+        report = sanitize_bundle(output_dir, env.secrets.values())
+        (output_dir / "sanitizer.json").write_text(json.dumps(report, indent=2) + "\n")
+        return written
+
+
+@contextmanager
+def _held(output: Path) -> Iterator[None]:
+    """Hold the experiment's lock for the whole run, or refuse at once.
+
+    A second runner on the same directory, such as a resume while the first
+    still runs, would take the first's live launches for those a killed
+    runner left and stop them, and both would write the same runs. The lock
+    is ``flock``'s: advisory (it binds only runners that take it), gone with
+    the process that held it, so a killed runner's lock never holds a
+    resume, and reliable only on a local file system, not over NFS. The
+    holder writes its PID into it, and a refusal names that PID.
+    """
+    output.mkdir(parents=True, exist_ok=True)
+    path = output / LOCK
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = os.pread(fd, 32, 0).decode(errors="replace").strip()
+            raise InferUsageError(
+                f"{path} is held by runner PID {holder or 'unknown'}: another "
+                "runner is running this experiment; let it finish or stop it, "
+                "then resume"
+            ) from None
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, f"{os.getpid()}\n".encode(), 0)
+        yield
+    finally:
+        os.close(fd)
 
 
 @dataclass(frozen=True)
@@ -1733,6 +1771,7 @@ __all__ = [
     "COMPLETED",
     "EXTERNAL_REASONS",
     "INDEX",
+    "LOCK",
     "OUTCOME_FAILURE",
     "PROTOCOL_FAILURE",
     "Environment",
