@@ -488,10 +488,16 @@ both stayed within 10% of the reference's; and
 the subject's requests declared (in tokens) are at most 1.1 times those of
 as many of the latest reference requests. A cache that evicts the least
 recently used loses old prefixes to a larger working set without any
-fault. Fewer than 3 warm requests is
-`too_few_warm_requests`; requests that declare no sharing are
-`unsupported/no_declared_sharing`, and without engine records
-`unsupported/no_per_request_cache_evidence`.
+fault. A subject with no warm request at all (every request a group's
+first use) is `assessed` with `too_few_warm_requests`: nothing was cached
+for it to find. One with too few warm requests on either side for the
+difference (20 per side) is `partial/insufficient_samples`, never "not
+observed": a dozen warm requests that lost their whole prefix are a loss
+too few to measure, not the absence of one. Requests that declare no
+sharing are `unsupported/no_declared_sharing`, and without engine records
+`unsupported/no_per_request_cache_evidence`. The class reads the hook's
+per-request cached tokens, never the scraped hit ratio, so the online
+signal's floor of queried tokens does not apply to it.
 
 ## Client admission, the API server and capture pauses
 
