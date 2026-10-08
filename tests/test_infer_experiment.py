@@ -591,20 +591,23 @@ def test_a_staged_model_is_fixed_before_launch_and_recorded(tmp_path: Path) -> N
 def test_the_runner_binds_the_weights_it_verified_to_the_server_it_launched(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Off Linux the server's start ticks cannot be read; stand them in.
+    # On Linux the runner reads the server's start ticks, the boot and the
+    # description from /proc as it is. Elsewhere it cannot: stand them in.
+    # fable-213's lens a: standing them in on Linux too bound the record to
+    # a server the real description did not show.
     from stormlog.infer import experiment
+    from stormlog.infer.host_clock import host_boot_id
 
-    monkeypatch.setattr(experiment, "process_key", lambda pid: (pid, 4242))
-    monkeypatch.setattr(experiment, "host_boot_id", lambda: "boot-test")
-    real_describe = experiment.describe_server
+    linux = platform.system() == "Linux"
+    if not linux:
+        monkeypatch.setattr(experiment, "process_key", lambda pid: (pid, 4242))
+        monkeypatch.setattr(experiment, "host_boot_id", lambda: "boot-test")
 
     def describe(options: Any, **kwargs: Any) -> dict[str, Any]:
         # Off Linux describe-server cannot read /proc: a stand-in of the
         # launched server, as Linux would describe it.
         from stormlog.infer.describe_server import description_digest
 
-        if platform.system() == "Linux":
-            return real_describe(options, **kwargs)
         document = {
             "format": "stormlog.infer.server_description",
             "version": 1,
@@ -617,7 +620,8 @@ def test_the_runner_binds_the_weights_it_verified_to_the_server_it_launched(
         document["sha256"] = description_digest(document)
         return document
 
-    monkeypatch.setattr(experiment, "describe_server", describe)
+    if not linux:
+        monkeypatch.setattr(experiment, "describe_server", describe)
     source = tmp_path / "model"
     source.mkdir()
     (source / "config.json").write_text("{}")
@@ -638,8 +642,20 @@ def test_the_runner_binds_the_weights_it_verified_to_the_server_it_launched(
     lines = [json.loads(line) for line in artifact.read_text().splitlines()]
     (bound,) = [r for r in lines if r.get("event_type") == "infer.model_identity"]
     server = next(p for p in record["processes"] if p["name"] == "server")
-    assert bound["server"] == {"pid": server["pid"], "start_ticks": 4242}
-    assert bound["boot_id"] == "boot-test"
+    # The record names the server its run's before description shows.
+    before = json.loads((Path(record["run_dir"]) / "describe-before.json").read_text())
+    shown = before["server"]
+    assert bound["server"] == {
+        "pid": server["pid"],
+        "start_ticks": shown["start_ticks"],
+    }
+    assert bound["boot_id"] == before["host"]["boot_id"]
+    if linux:
+        # Read from /proc: this boot, and the stand-in as vLLM's API server.
+        assert bound["boot_id"] == host_boot_id()
+        assert [p["role"] for p in shown["processes"]] == ["api_server"]
+    else:
+        assert (shown["start_ticks"], bound["boot_id"]) == (4242, "boot-test")
     assert bound["model"]["identity_evidence"] == "staged_snapshot_verified"
     assert bound["run_id"] == record["label"]
     # The runner attached its before description, so the comparison binds
