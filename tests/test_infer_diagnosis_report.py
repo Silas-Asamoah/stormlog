@@ -58,6 +58,9 @@ def test_a_queue_incident_is_a_warning_report(burst: Path) -> None:
     payload = report["payload"]
     detail = payload["findings_detail"][finding["id"]]
     assert (finding["kind"], finding["severity"]) == ("queue_saturation", "warning")
+    # The edge table the roles were settled against, as the scorer reads it.
+    assert payload["edges"]["version"] == "diagnosis_edges_v1"
+    assert len(payload["edges"]["table"]) == 6
     assert (detail["claim"], detail["cause"], detail["rank"]) == ("fault", "fault", 1)
     assert payload["outcome"] == "findings"
     assert payload["inputs"][0]["sha256"] and payload["inputs"][0]["lines"] > 0

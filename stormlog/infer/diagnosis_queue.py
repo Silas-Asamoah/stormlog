@@ -51,7 +51,11 @@ from .diagnosis_thresholds import (
     QUEUE_WITNESS_SHARE,
     resolve_threshold,
 )
-from .diagnosis_vocabulary import COMPONENT_SCHEDULER, QUEUE_SATURATION
+from .diagnosis_vocabulary import (
+    COMPONENT_SCHEDULER,
+    KV_PREEMPTION_PRESSURE,
+    QUEUE_SATURATION,
+)
 from .scrape_window import gauge_median, gauge_window
 
 NO_SERVER_QUEUE_SIGNAL = "no_server_queue_signal"
@@ -59,6 +63,9 @@ NO_CAPACITY_WITNESS = "no_capacity_witness"
 NO_CLIENT_LATENCY = "no_client_latency"
 SEVERAL_ENGINES = "several_engines"
 WAIT = "scheduler_wait"
+KV_EDGE = f"{KV_PREEMPTION_PRESSURE}->{QUEUE_SATURATION}"
+# What KV pressure explains through a queue it held (``diagnosis_roles``).
+THROUGH_QUEUE = "explains_ttft_excess_through_queue"
 WAITING_BY_REASON = "vllm:num_requests_waiting_by_reason"
 
 
@@ -201,7 +208,7 @@ def _finding(
         explains="explains_ttft_excess",
         detail={
             "capacity_witness_source": witness.source,
-            "kv_hold": _kv_claim(context, held, ttft),
+            "edge_claims": {KV_EDGE: _kv_claim(context, held, ttft)},
         },
     )
     finding.condition, finding.contribution = _criteria(
@@ -572,7 +579,11 @@ def _kv_claim(context: Context, held: float, ttft: Difference | None) -> dict[st
     contribution share."""
     share = resolve_threshold(QUEUE_CONTRIBUTION, context.thresholds)[0]
     explains = ttft is not None and ttft.estimate > 0 and held >= share * ttft.estimate
-    return {"held_p50_ms": round(held / 1e6, 3), "explains_ttft_excess": explains}
+    return {
+        "criterion": THROUGH_QUEUE,
+        "met": explains,
+        "held_p50_ms": round(held / 1e6, 3),
+    }
 
 
 def _client_admission(context: Context, subject: Subject) -> Alternative:

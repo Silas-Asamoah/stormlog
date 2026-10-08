@@ -16,7 +16,8 @@
     "coverage",
     "findings_detail",
     "memory",
-    "thresholds"
+    "thresholds",
+    "edges"
   ],
   "properties": {
     "format": { "const": "stormlog.inference_diagnosis" },
@@ -134,9 +135,39 @@
         "overridden": { "type": "array", "items": { "type": "string" } },
         "values": { "type": "object", "additionalProperties": { "type": "number" } }
       }
+    },
+    "edges": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "table"],
+      "properties": {
+        "version": { "type": "string" },
+        "table": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "upstream", "downstream"],
+            "properties": {
+              "name": { "type": "string" },
+              "upstream": { "$ref": "#/$defs/edge_end" },
+              "downstream": { "$ref": "#/$defs/edge_end" }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
+    "edge_end": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "components"],
+      "properties": {
+        "kind": { "type": "string" },
+        "components": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "kind": {
       "enum": [
         "queue_saturation",

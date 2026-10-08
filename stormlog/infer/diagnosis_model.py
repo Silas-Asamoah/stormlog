@@ -256,12 +256,16 @@ class Finding:
     @property
     def cause(self) -> str:
         """Workload changes are always that; an ineligible finding's cause
-        is undetermined; a warning is a fault; the driver, which would say
-        whether load drove an info finding, is not yet determined."""
+        is undetermined; a secondary's is its upstream's (a host stall a
+        capture caused is instrumentation, not a fault); a warning is a
+        fault; the driver, which would say whether load drove an info
+        finding, is not yet determined."""
         if self.kind in WORKLOAD_KINDS:
             return CAUSE_WORKLOAD_CHANGE
         if not self.eligible:
             return CAUSE_UNDETERMINED
+        if self.upstreams:
+            return self.upstreams[0].cause
         if self.kind in INSTRUMENTATION_KINDS:
             return CAUSE_INSTRUMENTATION
         if self.severity == "warning":

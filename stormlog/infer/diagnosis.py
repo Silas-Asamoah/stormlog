@@ -27,6 +27,8 @@ from .diagnosis_client import (
     assess_client_admission,
 )
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
+from .diagnosis_edges import EDGES_VERSION
+from .diagnosis_edges import table as edge_table
 from .diagnosis_inputs import read_input
 from .diagnosis_join import RunView, join
 from .diagnosis_kv import assess_kv
@@ -213,6 +215,7 @@ def _report(
         "findings_detail": details,
         "memory": memory_ledger(context, telemetry),
         "thresholds": _thresholds(options),
+        "edges": {"version": EDGES_VERSION, "table": edge_table()},
     }
     report = build_report(
         report_kind=REPORT_KIND,
@@ -244,6 +247,7 @@ def _diagnoser(
     """The version, a digest of everything that decides the result, and when."""
     config = {
         "thresholds_version": THRESHOLDS_VERSION,
+        "edges_version": EDGES_VERSION,
         "thresholds": {**DEFAULT_THRESHOLDS, **options.thresholds},
         "options": options.as_dict(),
         "windows": [list(window) for window in windows],

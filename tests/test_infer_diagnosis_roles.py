@@ -41,7 +41,15 @@ def _queue(hold: Alternative) -> Finding:
         ),
         incident=True,
         explains="explains_ttft_excess",
-        detail={"kv_hold": {"held_p50_ms": 900.0, "explains_ttft_excess": True}},
+        detail={
+            "edge_claims": {
+                "kv_preemption_pressure->queue_saturation": {
+                    "criterion": "explains_ttft_excess_through_queue",
+                    "met": True,
+                    "held_p50_ms": 900.0,
+                }
+            }
+        },
     )
 
 
@@ -91,7 +99,9 @@ def test_a_secondary_warns_only_if_its_upstream_does() -> None:
     either, and the edge cannot raise the exit code above the cause's."""
     hold = Alternative("kv_preemption_pressure", UPSTREAM, HELD, True)
     queue = _queue(hold)
-    queue.detail["kv_hold"]["explains_ttft_excess"] = False
+    queue.detail["edge_claims"]["kv_preemption_pressure->queue_saturation"][
+        "met"
+    ] = False
     queue.contribution = Criteria(
         met=("excess_ci_excludes_zero", "explains_ttft_excess", "witness"),
         unmet=("competitors_excluded",),
@@ -115,3 +125,68 @@ def test_the_cap_follows_a_chain_of_upstreams() -> None:
 
     assert middle._own_severity() == last._own_severity() == "warning"
     assert (cause.severity, middle.severity, last.severity) == ("info",) * 3
+
+
+def _capture() -> Finding:
+    return Finding(
+        kind="capture_pause",
+        component="profiler",
+        subject={"key": "window:c1:0"},
+        title="t",
+        message="m",
+        gates={"stop_request_stamp": True},
+        condition=Criteria(met=("direct_evidence",)),
+        contribution=Criteria(met=("explains_ttft_excess",)),
+        incident=True,
+        explains="explains_ttft_excess",
+    )
+
+
+def _host(competitor: Alternative) -> Finding:
+    return Finding(
+        kind="host_stall",
+        component=COMPONENT,
+        subject={"key": "window:c1:0"},
+        title="t",
+        message="m",
+        gates={"host_attribution": True},
+        alternatives=[competitor],
+        condition=Criteria(met=("direct_evidence",)),
+        contribution=Criteria(met=("explains_e2e_excess",)),
+        incident=True,
+        explains="explains_e2e_excess",
+    )
+
+
+COMPONENT = "engine_core"
+
+
+def test_a_stall_a_capture_caused_takes_the_capture_s_cause() -> None:
+    """The edge joins kind and component: the capture's stop held the
+    engine loop, so the stall is instrumentation, not a fault."""
+    capture = _capture()
+    stall = _host(Alternative("capture_pause@profiler", UPSTREAM, "held", True))
+    assert capture.cause == "instrumentation" and capture.severity == "warning"
+
+    link_roles([stall, capture], "run-1")
+
+    assert stall.role == SECONDARY and stall.secondary_to == [capture.identity("run-1")]
+    assert (stall.severity, stall.cause, stall.claim) == (
+        "warning",
+        "instrumentation",
+        "condition",
+    )
+
+
+def test_a_frontend_stall_is_upstream_of_nothing() -> None:
+    """No edge joins a host stall at the API server to the queue: the
+    competitor stays upstream and contests, as without an edge."""
+    stall = _host(Alternative("engine_stall", RULED_OUT, "r", True))
+    stall.component = "api_server"
+    queue = _queue(Alternative("host_stall@api_server", UPSTREAM, "held", False))
+
+    link_roles([queue, stall], "run-1")
+
+    assert queue.role == PRIMARY
+    (named,) = [a for a in queue.alternatives if a.kind == "host_stall@api_server"]
+    assert named.status == UPSTREAM and queue.contested

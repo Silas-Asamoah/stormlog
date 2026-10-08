@@ -1,31 +1,35 @@
 """Roles: whether one finding stands behind another.
 
 A class marks a competitor ``upstream`` when its evidence says the
-mechanism may be another one's consequence. That is a claim about another
-finding, so it is settled here, after every class has assessed every
-subject. A cause is upstream only when the subject's finding of that kind
-is eligible (an observation establishes nothing); otherwise the competitor
-is merely not ruled out. When it is, the edge forms:
+mechanism may be another one's consequence, naming the cause as ``kind``
+or ``kind@component``. That is a claim about another finding, so it is
+settled here, after every class has assessed every subject, one downstream
+kind at a time in the edge table's order (``diagnosis_edges``), so an
+upstream's eligibility is final before anything reads it. A cause is
+upstream only when the subject's finding of that kind is eligible (an
+observation establishes nothing); otherwise the competitor is merely not
+ruled out, and stays indispensable if it was. When an edge of the table
+joins the two, it forms:
 
 - the downstream finding becomes ``secondary``, lists the upstream's ID in
   ``secondary_to``, and keeps the evidence in ``detail.role_evidence``
-  instead of the competitor (an upstream cause is never a competitor); its
-  severity is capped at the upstream's, so an edge never raises the exit
-  code above what the cause says;
-- the upstream finding claims what its consequence explains: KV pressure
-  that held the queue explains the TTFT excess the queue does
-  (``explains_ttft_excess_through_queue``), when the requests' time held
-  behind preempted ones is itself that share of it.
-
-This version has one edge, KV preemption pressure upstream of the queue;
-the others come with the engine-loop class.
+  instead of the competitor (an upstream cause is never a competitor). Its
+  severity is capped at the upstream's and its cause is the upstream's,
+  through any chain, so an edge never raises the exit code above what the
+  cause says, nor calls a capture's consequence a fault;
+- the upstream finding claims what its consequence explains, when the
+  downstream class recorded that it does (``detail.edge_claims``): KV
+  pressure that held the queue explains the TTFT excess the queue does
+  (``explains_ttft_excess_through_queue``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
+from typing import Any
 
+from .diagnosis_edges import edge_between, settle_order
 from .diagnosis_model import (
     NOT_RULED_OUT,
     RULED_OUT,
@@ -34,28 +38,36 @@ from .diagnosis_model import (
     Alternative,
     Finding,
 )
-from .diagnosis_vocabulary import KV_PREEMPTION_PRESSURE, QUEUE_SATURATION
 
 NOT_ESTABLISHED = "but no eligible {kind} finding establishes it"
-THROUGH_QUEUE = "explains_ttft_excess_through_queue"
 EXCLUDED = "competitors_excluded"
-EDGES = frozenset({(KV_PREEMPTION_PRESSURE, QUEUE_SATURATION)})
+
+Located = dict[tuple[str, str], Finding]
 
 
 def link_roles(findings: Sequence[Finding], run_id: str | None) -> None:
     """Settle every ``upstream`` competitor against the subject's findings."""
-    by_subject: dict[str, dict[str, Finding]] = {}
+    by_subject: dict[str, Located] = {}
     for finding in findings:
         key = str(finding.subject.get("key"))
-        by_subject.setdefault(key, {}).setdefault(finding.kind, finding)
-    for kinds in by_subject.values():
-        for finding in kinds.values():
-            _settle(finding, kinds, run_id)
+        by_subject.setdefault(key, {}).setdefault(_location(finding), finding)
+    order = settle_order()
+    for located in by_subject.values():
+        ordered = sorted(
+            located.values(),
+            key=lambda f: order.index(f.kind) if f.kind in order else len(order),
+        )
+        for finding in ordered:
+            _settle(finding, located, run_id)
 
 
-def _settle(finding: Finding, kinds: dict[str, Finding], run_id: str | None) -> None:
+def _location(finding: Finding) -> tuple[str, str]:
+    return finding.kind, finding.component
+
+
+def _settle(finding: Finding, located: Located, run_id: str | None) -> None:
     for alternative in [a for a in finding.alternatives if a.status == UPSTREAM]:
-        upstream = kinds.get(alternative.kind)
+        upstream = _upstream(alternative.kind, finding, located)
         index = finding.alternatives.index(alternative)
         if upstream is None or not upstream.eligible:
             reason = f"{alternative.reason}, " + NOT_ESTABLISHED.format(
@@ -64,10 +76,25 @@ def _settle(finding: Finding, kinds: dict[str, Finding], run_id: str | None) -> 
             finding.alternatives[index] = replace(
                 alternative, status=NOT_RULED_OUT, reason=reason
             )
-        elif (upstream.kind, finding.kind) in EDGES:
+            continue
+        edge = edge_between(_location(upstream), _location(finding))
+        if edge is not None:
             del finding.alternatives[index]
-            _link(upstream, finding, alternative, run_id)
+            _link(upstream, finding, alternative, edge.name, run_id)
             _recount_excluded(finding)
+
+
+def _upstream(named: str, finding: Finding, located: Located) -> Finding | None:
+    """The subject's finding a competitor names, as ``kind`` or
+    ``kind@component``; for a bare kind, the one an edge joins to
+    ``finding``."""
+    kind, _, component = named.partition("@")
+    if component:
+        return located.get((kind, component))
+    candidates = [f for (k, _), f in sorted(located.items()) if k == kind]
+    joined = [f for f in candidates if edge_between(_location(f), _location(finding))]
+    found = joined or candidates
+    return found[0] if found else None
 
 
 def _recount_excluded(finding: Finding) -> None:
@@ -85,35 +112,43 @@ def _recount_excluded(finding: Finding) -> None:
 
 
 def _link(
-    upstream: Finding, finding: Finding, evidence: Alternative, run_id: str | None
+    upstream: Finding,
+    finding: Finding,
+    evidence: Alternative,
+    edge: str,
+    run_id: str | None,
 ) -> None:
     upstream_id = upstream.identity(run_id)
     finding.role = SECONDARY
     finding.secondary_to.append(upstream_id)
     finding.upstreams.append(upstream)
     finding.detail.setdefault("role_evidence", []).append(
-        {
-            "edge": f"{upstream.kind}->{finding.kind}",
-            "upstream": upstream_id,
-            "evidence": evidence.reason,
-        }
+        {"edge": edge, "upstream": upstream_id, "evidence": evidence.reason}
     )
-    hold = finding.detail.get("kv_hold") or {}
-    if not hold.get("explains_ttft_excess"):
-        return
+    claim: dict[str, Any] = (finding.detail.get("edge_claims") or {}).get(edge) or {}
+    if claim.get("met") and claim.get("criterion"):
+        _claim(upstream, str(claim["criterion"]), finding, claim, run_id)
+
+
+def _claim(
+    upstream: Finding,
+    criterion: str,
+    finding: Finding,
+    claim: dict[str, Any],
+    run_id: str | None,
+) -> None:
+    """The upstream explains, through its consequence, what that explains."""
     contribution = upstream.contribution
-    upstream.contribution = replace(
-        contribution, met=(*contribution.met, THROUGH_QUEUE)
-    )
+    if criterion not in contribution.met:
+        upstream.contribution = replace(
+            contribution, met=(*contribution.met, criterion)
+        )
     if upstream.explains not in contribution.met:
-        upstream.explains = THROUGH_QUEUE
+        upstream.explains = criterion
+    extra = {k: v for k, v in claim.items() if k not in ("criterion", "met")}
     upstream.detail.setdefault("claims", []).append(
-        {
-            "kind": finding.kind,
-            "id": finding.identity(run_id),
-            "held_p50_ms": hold.get("held_p50_ms"),
-        }
+        {"kind": finding.kind, "id": finding.identity(run_id), **extra}
     )
 
 
-__all__ = ["EDGES", "THROUGH_QUEUE", "link_roles"]
+__all__ = ["link_roles"]

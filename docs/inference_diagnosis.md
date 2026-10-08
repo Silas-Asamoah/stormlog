@@ -355,13 +355,17 @@ minor second cause.
   alternatives (an upstream cause is no competitor), `detail.role_evidence`
   says why, and its claim is a condition, never the fault. Its severity is
   capped at the upstream finding's, through any chain of them, so an edge
-  never raises the exit code above what the cause says. The upstream finding
-  claims what its consequence explains: KV pressure explains the TTFT excess
-  through the queue (`explains_ttft_excess_through_queue`) when the median
-  request's time held behind preempted ones is at least half of it, so a KV
-  fault that shows as queueing is still a warning. The other edges of the
-  table come with the engine-loop class; until then a competitor that stays
-  `upstream` contests the finding like a contributing one.
+  never raises the exit code above what the cause says, and its cause is the
+  upstream's: a host stall a capture caused is `instrumentation`. Edges join
+  kinds at components, from a fixed, versioned table that the payload
+  carries as `edges` (`diagnosis_edges_v1`), so a stall at the API server is
+  upstream of nothing. The upstream finding claims what its consequence
+  explains: KV pressure explains the TTFT excess through the queue
+  (`explains_ttft_excess_through_queue`) when the median request's time held
+  behind preempted ones is at least half of it, so a KV fault that shows as
+  queueing is still a warning. The other edges of the table come with the
+  engine-loop class; until then a competitor that stays `upstream` contests
+  the finding like a contributing one.
 - **Rank.** Findings are ordered by: primary before secondary, eligible
   before observation, a fault claim before a condition (so a warning at
   medium confidence outranks an info finding at high: the top finding is
