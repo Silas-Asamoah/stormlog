@@ -63,6 +63,14 @@ def test_a_full_file_ending_in_part_of_a_line_is_left_as_it_is(
     assert path.read_bytes() == b"x" * 10
 
 
+def test_a_missing_directory_is_created(tmp_path: Path) -> None:
+    sink = LineFileSink(tmp_path / "artifacts" / "spans" / "f.jsonl", max_bytes=100)
+    sink.open()
+    assert sink.write_line(b"{}") == WRITTEN
+    sink.close()
+    assert _lines(sink.path) == [b"{}\n"]
+
+
 def test_reopening_counts_what_the_file_already_holds(tmp_path: Path) -> None:
     path = tmp_path / "f"
     path.write_bytes(b"x" * 8)

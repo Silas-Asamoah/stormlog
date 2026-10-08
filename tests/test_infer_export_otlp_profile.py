@@ -130,6 +130,21 @@ def test_spans_go_to_a_file_when_asked(tmp_path: Path) -> None:
     assert capability["metadata"]["summary"]["spans"]["exported"] == len(spans)
 
 
+def test_a_span_file_in_a_directory_not_yet_made_is_written(tmp_path: Path) -> None:
+    # As the guide's example on a fresh checkout: the span file is opened
+    # before the artifact's writer creates artifacts/, so it makes it itself.
+    output = tmp_path / "artifacts" / "infer.jsonl"
+    spans_file = tmp_path / "artifacts" / "spans.jsonl"
+    with _fake_server() as endpoint:
+        InferenceProfiler(
+            _config(endpoint, output, ExportConfig(otlp_file=spans_file))
+        ).run()
+    _source, spans = read_span_file(spans_file)
+    capability = _capability(_records(output), "export.otlp")
+    assert capability["available"]
+    assert capability["metadata"]["summary"]["spans"]["exported"] == len(spans) > 0
+
+
 def _closed_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
