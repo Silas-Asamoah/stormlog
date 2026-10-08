@@ -6,7 +6,7 @@ import threading
 import time
 import unittest
 import urllib.error
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -293,6 +293,109 @@ class InferenceProfileTests(unittest.TestCase):
                         for record in records
                     )
                 )
+
+    def test_profile_records_phase_starts_sends_and_first_content(self) -> None:
+        progress = ("infer.phase_start", "infer.dispatch", "infer.first_content")
+        with _fake_server() as endpoint:
+            with tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "infer.jsonl"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    exit_code = infer_main(
+                        [
+                            "profile",
+                            "--endpoint",
+                            str(endpoint),
+                            "--model",
+                            "fake-model",
+                            "--concurrency",
+                            "2",
+                            "--input-tokens",
+                            "8",
+                            "--output-tokens",
+                            "4",
+                            "--requests",
+                            "2",
+                            "--warmup-requests",
+                            "1",
+                            "--system-sampler",
+                            "none",
+                            "--tokenizer",
+                            "none",
+                            "--output",
+                            str(output),
+                        ]
+                    )
+                self.assertEqual(exit_code, 0)
+                lines = output.read_text(encoding="utf-8").splitlines()
+                records = [json.loads(line) for line in lines]
+                kinds = [record["event_type"] for record in records]
+
+                starts = [i for i, kind in enumerate(kinds) if kind == progress[0]]
+                windows = [
+                    i for i, kind in enumerate(kinds) if kind.endswith("_window")
+                ]
+                self.assertEqual(
+                    [records[i]["phase"] for i in starts], ["warmup", "measured"]
+                )
+                self.assertEqual(
+                    [records[i]["arrival_mode"] for i in starts], ["closed", "closed"]
+                )
+                # Each phase begins after the one before it has been measured.
+                self.assertLess(starts[0], windows[0])
+                self.assertLess(windows[0], starts[1])
+                ended = {
+                    record["request_id"]: (i, record)
+                    for i, record in enumerate(records)
+                    if record["event_type"] == "infer.request"
+                }
+                self.assertEqual(len(ended), 3)
+                for request_id, (end, request) in ended.items():
+                    [(sent, dispatch)] = self._progress(
+                        records, progress[1], request_id
+                    )
+                    [(first, content)] = self._progress(
+                        records, progress[2], request_id
+                    )
+                    self.assertLess(starts[0], sent)
+                    self.assertLess(sent, first)
+                    self.assertLess(first, end)
+                    self.assertEqual(
+                        dispatch["started_at_ns"], request["started_at_ns"]
+                    )
+                    self.assertEqual(
+                        dispatch["intended_at_ns"], request["intended_at_ns"]
+                    )
+                    self.assertEqual(dispatch["x_request_id"], request["x_request_id"])
+                    self.assertEqual(
+                        (dispatch["case_id"], dispatch["phase"]),
+                        (request["case_id"], request["phase"]),
+                    )
+                    ttft_ns = content["first_content_at_ns"] - request["started_at_ns"]
+                    self.assertLessEqual(abs(ttft_ns - request["ttft_ms"] * 1e6), 1)
+
+                # The analysis reads none of them.
+                bare = Path(directory) / "bare.jsonl"
+                bare.write_text(
+                    "".join(
+                        line + "\n"
+                        for line, kind in zip(lines, kinds)
+                        if kind not in progress
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    analyze_inference_events(output), analyze_inference_events(bare)
+                )
+
+    @staticmethod
+    def _progress(
+        records: list[dict[str, Any]], kind: str, request_id: str
+    ) -> list[tuple[int, dict[str, Any]]]:
+        return [
+            (i, record)
+            for i, record in enumerate(records)
+            if record["event_type"] == kind and record.get("request_id") == request_id
+        ]
 
     def test_stream_usage_can_be_disabled_for_compatibility(self) -> None:
         with _fake_server() as endpoint:
@@ -878,6 +981,8 @@ class _BlockingClient:
         stream_include_usage: bool,
         request_id: str | None = None,
         headers: dict[str, str] | None = None,
+        on_sent: Callable[[int], None] | None = None,
+        on_first_content: Callable[[int], None] | None = None,
     ) -> ChatCompletionResult:
         started_at_ns = time.time_ns()
         started_perf = time.perf_counter()

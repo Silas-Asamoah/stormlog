@@ -35,7 +35,14 @@ from .arrivals import CLOSED, arrival_offsets, scheduled_endpoint
 from .cache_state import cache_state_record, reset_cache
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
-from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
+from .events import (
+    InferenceDispatchEvent,
+    InferenceFirstContentEvent,
+    InferencePhaseStartEvent,
+    InferenceRequestEvent,
+    InferenceSummaryEvent,
+    JsonlEventWriter,
+)
 from .export import RECEIVER_HEALTH, ExportPipeline, ReceiverHealth
 from .export_config import sampler_warnings
 from .export_metrics import ProfileLabels
@@ -789,6 +796,17 @@ class InferenceProfiler:
         prompts.warm()
         if abandoned is None:
             abandoned = await self._wait_for_abandoned()
+        # Append-only, so a reader of the growing artifact knows a phase is
+        # open before its infer.phase_window record is written at the end.
+        writer.append(
+            InferencePhaseStartEvent(
+                session_id=self.session.session_id,
+                case_id=case.case_id,
+                phase=phase,
+                arrival_mode=case.arrival.mode,
+                started_at_ns=time.time_ns(),
+            ).to_record()
+        )
         try:
             async with self._trace_window(case.case_id, phase):
                 window = await self._run_scraped_phase(
@@ -1207,6 +1225,7 @@ class InferenceProfiler:
             if ids is not None
             else None
         )
+        on_sent, on_first_content = self._progress_records(request_id, request, arrival)
         call = self.request_executor.submit(
             self._call_and_count,
             prompt,
@@ -1218,6 +1237,8 @@ class InferenceProfiler:
                 stream_include_usage=self.config.stream_include_usage,
                 request_id=self._x_request_id(request_id),
                 headers=headers,
+                on_sent=on_sent,
+                on_first_content=on_first_content,
             ),
         )
         self._track(call)
@@ -1230,6 +1251,52 @@ class InferenceProfiler:
                 outcome = replace(outcome, error=exc)
         event = self._failure_event(request_id, request, arrival, prompt, outcome)
         return event, outcome.extras
+
+    def _progress_records(
+        self, request_id: str, request: "_PhaseRequest", arrival: Arrival
+    ) -> tuple[Callable[[int], None], Callable[[int], None]]:
+        """Callbacks that record a request's send and its first content as
+        they happen. The call runs on a pool thread, which only hands the
+        stamp to the event loop; the loop builds and appends the record, so
+        it lands before the request's ``infer.request`` record."""
+        loop = asyncio.get_running_loop()
+        writer = request.writer
+        identity = {
+            "session_id": self.session.session_id,
+            "request_id": request_id,
+            "x_request_id": self._x_request_id(request_id),
+            "case_id": request.case.case_id,
+            "phase": request.phase,
+        }
+
+        def append(record: dict[str, Any]) -> None:
+            # A call a drain gave up on can outlive the capture's writer.
+            if writer.is_open:
+                writer.append(record)
+
+        def sent(at_ns: int) -> None:
+            event = InferenceDispatchEvent(
+                **identity, intended_at_ns=arrival.intended_at_ns, started_at_ns=at_ns
+            )
+            append(event.to_record())
+
+        def first_content(at_ns: int) -> None:
+            append(
+                InferenceFirstContentEvent(
+                    **identity, first_content_at_ns=at_ns
+                ).to_record()
+            )
+
+        def on_loop(callback: Callable[[int], None]) -> Callable[[int], None]:
+            def call(at_ns: int) -> None:
+                try:
+                    loop.call_soon_threadsafe(callback, at_ns)
+                except RuntimeError:  # the loop has closed: the run is over
+                    pass
+
+            return call
+
+        return on_loop(sent), on_loop(first_content)
 
     def _call_and_count(
         self, prompt: Prompt, call: Callable[[], ChatCompletionResult]

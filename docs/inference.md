@@ -203,6 +203,30 @@ proxy, and a server that cannot be reached reads as the proxy's HTTP 502, an
 (`config.environment_proxies`: `ignored`, and the schemes the environment
 set, never their URLs). To go through a proxy, point the endpoint at it.
 
+### Progress records
+
+A request's `infer.request` record is written when it ends, and a phase's
+`infer.phase_window` once it has drained. Three more records are written as
+things happen, so a reader of an artifact that is still growing can see
+what is under way:
+
+| Record | Written | Fields |
+| --- | --- | --- |
+| `infer.phase_start` | when a phase begins, before its first send | `case_id`, `phase`, `arrival_mode`, `started_at_ns` |
+| `infer.dispatch` | when a request is sent | `request_id`, `x_request_id`, `case_id`, `phase`, `intended_at_ns`, `started_at_ns` |
+| `infer.first_content` | when a streamed request's first content piece arrives | `request_id`, `x_request_id`, `case_id`, `phase`, `first_content_at_ns` |
+
+Each also carries `session_id` and a `timestamp_ns` equal to its own time.
+A dispatch's `started_at_ns` is the client's send stamp, the one a
+successful request's `infer.request` carries; a failed request's record
+times the call from when a client thread picked it up, slightly earlier.
+`first_content_at_ns` is the send stamp plus the request's TTFT. Both
+progress records of a request come before its `infer.request` record. A
+dropped request was never sent and has neither; a request without streamed
+content has no `infer.first_content`. A call the drain gave up on can still
+report its first content after its `cancelled` record, while the profile is
+writing the artifact. `infer analyze` reads none of these records.
+
 ### Prompts and prefix sharing
 
 ```bash
