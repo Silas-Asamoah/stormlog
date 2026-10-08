@@ -2,9 +2,11 @@
 full.
 
 The class compares the subject's ``scheduler_wait`` with its reference's
-(the difference of medians, with a bootstrap interval), and asks whether the
-engine was at capacity over the steps scheduled while requests waited: running at
-``max_num_seqs``, or scheduling ``max_num_batched_tokens``. Four competitors
+(the difference of medians, with a bootstrap interval), and asks whether
+most of the subject's requests waited through an engine at capacity: most of
+the steps scheduled while each one waited running ``max_num_seqs`` (counting
+the slots freed in the step before, which async scheduling refills one step
+late) or scheduling ``max_num_batched_tokens``. Four competitors
 must be ruled out before the waits may be called a fault: a stalled engine,
 a paused scheduler, requests blocked by their own constraints, and time
 spent before the queue rather than in it. Others are reported: preemptions
@@ -13,8 +15,8 @@ upstream, the client holding requests back, the API server.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, Callable
 
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
 from .diagnosis_inputs import Line
@@ -139,9 +141,10 @@ def _finding(
     span = _wait_span(context, waiting)
     # Steps run while a subject's request waited; the span from the first
     # wait to the last can hold stretches in which nobody did.
-    spanning = steps.within(_wait_intervals(context, waiting))
-    witness = _witness(context, producer, spanning)
-    if not witness[0]:
+    intervals = _wait_intervals(context, waiting)
+    spanning = steps.within(intervals)
+    witness = _witness(context, producer, steps, intervals)
+    if not witness.held:
         witness = _exporter_witness(context, subject, witness)
     ttft = _ttft_excess(context, subject)
     alternatives = [
@@ -162,11 +165,11 @@ def _finding(
         title="Requests waited to be scheduled while the engine was full",
         message=_message(waits, excess, witness),
         gates={
-            "capacity_witness": witness[0],
+            "capacity_witness": witness.held,
             "usable_timing": waits.segment == WAIT,
         },
         alternatives=alternatives,
-        observations=_observations(waits, excess, ttft, witness, spanning),
+        observations=_observations(waits, excess, ttft, witness),
         location={
             "component": COMPONENT_SCHEDULER,
             "engine_producer": producer,
@@ -180,7 +183,7 @@ def _finding(
             "scheduler_wait_excess_ms": round(excess.estimate / 1e6, 3),
             "scheduler_wait_excess_low_ms": round(excess.low / 1e6, 3),
             "ttft_excess_ms": None if ttft is None else round(ttft.estimate / 1e6, 3),
-            "steps_at_capacity_share": witness[1],
+            **witness.metrics(),
         },
         experiment=_experiment(excess),
         explains="explains_ttft_excess",
@@ -193,7 +196,7 @@ def _finding(
         "wait_segment": waits.segment,
     }
     finding.support, finding.display = _support(context, subject, spanning)
-    reasons = [] if witness[0] else [NO_CAPACITY_WITNESS]
+    reasons = [] if witness.held else [NO_CAPACITY_WITNESS]
     if subject.basis == "engine":
         reasons.append(NO_CLIENT_LATENCY)
     status = PARTIAL if reasons else ASSESSED
@@ -203,24 +206,65 @@ def _finding(
 
 
 # ----------------------------------------------------------------- witness
+@dataclass(frozen=True)
+class _Witness:
+    """Whether the engine was full while the subject's requests waited, and
+    what said so."""
+
+    held: bool
+    source: str | None  # "hook" or "exporter": the evidence that held
+    requests_share: float | None  # requests whose wait ran mostly at capacity
+    steps_share: float | None  # steps run while requests waited, at capacity
+    max_num_seqs_share: float | None  # the same, by their members alone
+    steps: int  # busy steps run while requests waited
+
+    def metrics(self) -> dict[str, float | None]:
+        return {
+            "requests_waiting_at_capacity_share": self.requests_share,
+            "steps_at_capacity_share": self.steps_share,
+            "steps_at_max_num_seqs_share": self.max_num_seqs_share,
+        }
+
+
 def _witness(
-    context: Context, producer: str, spanning: list[Step]
-) -> tuple[bool, float | None]:
-    """Whether most steps scheduled while requests waited ran at capacity: at
-    max_num_seqs running, or at the max_num_batched_tokens budget."""
+    context: Context, producer: str, steps: Steps, waits: list[tuple[int, int]]
+) -> _Witness:
+    """Whether most of the subject's requests waited mostly through steps at
+    capacity. The excess is a median over the requests, so the witness must
+    speak for the median request: a few overflow requests waiting through
+    full steps do not, while most waited only for the next step to begin."""
     seqs, tokens = _capacity(context, producer)
-    busy = [step for step in spanning if step.members]
+    busy = [step for step in steps.within(waits) if step.members]
     if not busy or (seqs is None and tokens is None):
-        return False, None
-    full = sum(1 for step in busy if _at_capacity(step, seqs, tokens))
-    share = full / len(busy)
+        return _Witness(False, None, None, None, None, len(busy))
+    mostly = [_mostly_full(steps.within([wait]), seqs, tokens) for wait in waits]
+    share = sum(mostly) / len(mostly)
     needed = resolve_threshold(QUEUE_WITNESS_SHARE, context.thresholds)[0]
-    return share >= needed, round(share, 4)
+    held = share >= needed
+    return _Witness(
+        held,
+        "hook" if held else None,
+        round(share, 4),
+        _share(busy, lambda step: _at_capacity(step, seqs, tokens)),
+        None if seqs is None else _share(busy, lambda step: step.members >= seqs),
+        len(busy),
+    )
 
 
-def _exporter_witness(
-    context: Context, subject: Subject, hook: tuple[bool, float | None]
-) -> tuple[bool, float | None]:
+def _share(steps: list[Step], holds: Callable[[Step], bool]) -> float:
+    return round(sum(holds(step) for step in steps) / len(steps), 4)
+
+
+def _mostly_full(waited: list[Step], seqs: int | None, tokens: int | None) -> bool:
+    """Whether at least half the busy steps run while one request waited
+    were at capacity; a request that waited through none waited only for
+    the next step to begin."""
+    busy = [step for step in waited if step.members]
+    full = sum(_at_capacity(step, seqs, tokens) for step in busy)
+    return bool(busy) and 2 * full >= len(busy)
+
+
+def _exporter_witness(context: Context, subject: Subject, hook: _Witness) -> _Witness:
     """Requests waiting for scheduling capacity, as vLLM's own metric
     counts them (its help text: "waiting for scheduling capacity", not only
     KV): a witness only from an exporter asserted to be this engine."""
@@ -230,7 +274,7 @@ def _exporter_witness(
     reasons = signal.detail.get("waiting_by_reason") if signal is not None else None
     capacity = reasons.get("capacity") if isinstance(reasons, dict) else None
     if isinstance(capacity, (int, float)) and capacity > 0:
-        return True, hook[1]
+        return replace(hook, held=True, source="exporter")
     return hook
 
 
@@ -246,7 +290,9 @@ def _capacity(context: Context, producer: str) -> tuple[int | None, int | None]:
 
 
 def _at_capacity(step: Step, seqs: int | None, tokens: int | None) -> bool:
-    return (seqs is not None and step.members >= seqs) or (
+    """Running max_num_seqs, counting the slots the step before freed and
+    this one could not refill yet, or scheduling the token budget."""
+    return (seqs is not None and step.members + step.refill >= seqs) or (
         tokens is not None and step.total_tokens >= tokens
     )
 
@@ -504,7 +550,7 @@ def _criteria(
     waits: _Waits,
     excess: Difference,
     ttft: Difference | None,
-    witness: tuple[bool, float | None],
+    witness: _Witness,
     alternatives: list[Alternative],
 ) -> tuple[Criteria, Criteria]:
     epoch = context.epoch_of(producer)
@@ -526,7 +572,7 @@ def _criteria(
         competitors_excluded=all(
             a.status in (RULED_OUT, UPSTREAM) for a in alternatives
         ),
-        witness=witness[0],
+        witness=witness.held,
     )
     return (
         Criteria(condition.met, condition.unmet, coverage_unknown=not covered),
@@ -538,8 +584,7 @@ def _observations(
     waits: _Waits,
     excess: Difference,
     ttft: Difference | None,
-    witness: tuple[bool, float | None],
-    spanning: list[Step],
+    witness: _Witness,
 ) -> list[Observation]:
     label = (
         "scheduler_wait"
@@ -569,27 +614,24 @@ def _observations(
                 ttft.n_ref,
             )
         )
-    if witness[1] is not None:
-        busy = len([s for s in spanning if s.members])
+    if witness.requests_share is not None and witness.steps_share is not None:
         out.append(
             Observation(
                 "o3",
-                f"{witness[1]:.0%} of the {busy} steps scheduled while requests waited ran at capacity.",
-                "steps_at_capacity_share",
-                witness[1],
-                n=busy,
+                f"{witness.requests_share:.0%} of the subject's requests waited mostly through steps at capacity; {witness.steps_share:.0%} of the {witness.steps} steps scheduled while requests waited ran at capacity, counting the slots freed in the step before.",
+                "requests_waiting_at_capacity_share",
+                witness.requests_share,
+                n=witness.steps,
             )
         )
     return out
 
 
-def _message(
-    waits: _Waits, excess: Difference, witness: tuple[bool, float | None]
-) -> str:
+def _message(waits: _Waits, excess: Difference, witness: _Witness) -> str:
     share = (
         ""
-        if witness[1] is None
-        else f"; {witness[1]:.0%} of the steps scheduled while requests waited ran at capacity"
+        if witness.requests_share is None
+        else f"; {witness.requests_share:.0%} of the subject's requests waited mostly through steps at capacity"
     )
     return f"Median {waits.segment} rose by {excess.estimate / 1e6:.1f} ms against the reference{share}."
 

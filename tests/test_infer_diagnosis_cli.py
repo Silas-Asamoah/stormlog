@@ -200,7 +200,7 @@ def test_a_nan_threshold_is_a_usage_error_not_a_silent_pass(
 ) -> None:
     # json.loads reads NaN; never exceeded, it would hide the queue warning.
     overrides = tmp_path / "thresholds.json"
-    overrides.write_text('{"queue_saturation.witness_step_share": NaN}')
+    overrides.write_text('{"queue_saturation.witness_request_share": NaN}')
 
     code = main(["diagnose", str(burst), "--thresholds", str(overrides)])
 
