@@ -166,7 +166,8 @@
         "level": { "oneOf": [{ "$ref": "#/$defs/level" }, { "type": "null" }] },
         "met": { "type": "array", "items": { "type": "string" } },
         "unmet": { "type": "array", "items": { "type": "string" } },
-        "coverage": { "enum": ["observed", "unknown", "known_loss"] }
+        "coverage": { "enum": ["observed", "unknown", "known_loss"] },
+        "explains": { "type": "string" }
       }
     },
     "support": {

@@ -33,8 +33,11 @@ def _finding(**changes: Any) -> Finding:
         "gates": {"capacity_witness": True},
         "alternatives": [Alternative("engine_stall", RULED_OUT, "r", True)],
         "condition": Criteria(met=("direct_evidence",)),
-        "contribution": Criteria(met=("excess_ci_excludes_zero",)),
+        "contribution": Criteria(
+            met=("excess_ci_excludes_zero", "explains_ttft_excess")
+        ),
         "incident": True,
+        "explains": "explains_ttft_excess",
     }
     values.update(changes)
     return Finding(**values)
@@ -104,6 +107,34 @@ def test_severity_needs_contribution_and_an_incident() -> None:
     # Eligible but info: a condition, with the driver undetermined.
     finding = _finding(incident=False)
     assert (finding.cause, finding.claim) == ("undetermined", "condition")
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        # The excess is real, but the mechanism explains too little of it.
+        {
+            "contribution": Criteria(
+                met=("excess_ci_excludes_zero",), unmet=("explains_ttft_excess",)
+            )
+        },
+        # A kind that names no criterion for explaining the incident.
+        {"explains": None},
+        # The mechanism itself is barely shown.
+        {"condition": Criteria(unmet=("direct_evidence", "sufficient_samples"))},
+    ],
+)
+def test_a_warning_needs_the_mechanism_shown_and_explaining_the_incident(
+    changes: dict[str, Any],
+) -> None:
+    finding = _finding(**changes)
+
+    assert finding.eligible
+    assert (finding.severity, finding.cause, finding.claim) == (
+        "info",
+        "undetermined",
+        "condition",
+    )
 
 
 def test_workload_and_instrumentation_kinds_keep_their_causes() -> None:

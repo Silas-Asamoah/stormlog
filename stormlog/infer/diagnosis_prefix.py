@@ -229,6 +229,7 @@ def _finding(
         },
         support=_lines(context, list(warm)),
         display=_lines(context, list(warm))[:8],
+        explains="ttft_rose",
     )
 
 

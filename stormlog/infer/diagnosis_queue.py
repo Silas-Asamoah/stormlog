@@ -180,6 +180,7 @@ def _finding(
             "steps_at_capacity_share": witness[1],
         },
         experiment=_experiment(excess),
+        explains="explains_ttft_excess",
     )
     finding.condition, finding.contribution = _criteria(
         context, producer, span, waits, excess, ttft, witness, alternatives
