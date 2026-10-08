@@ -23,6 +23,7 @@ from stormlog.infer.qualify.recovery import (
     Thresholds,
     Timing,
     effect_timing,
+    recovery_blocked,
 )
 
 S = 1_000_000_000
@@ -409,6 +410,18 @@ def prefill_run(
 ) -> Timing:
     """F4a on an engine with prefill steps all along: baseline, ten pulses,
     and ``stalls`` that nobody recorded (in the baseline too, if there)."""
+    context = prefill_context(seed, share, stalls, decode=decode, prefill=prefill)
+    return effect_timing("F4a", context)
+
+
+def prefill_context(
+    seed: int,
+    share: float,
+    stalls: list[tuple[int, int]],
+    *,
+    decode: float = 0.005,
+    prefill: float = 0.025,
+) -> Context:
     rng, steps, at = random.Random(seed), [], 0
     gap = with_prefill(share, decode, prefill)
     while at < LAST + 200 * S:
@@ -421,14 +434,13 @@ def prefill_run(
     actions = Actions(
         first_stop_confirmed_ns=FIRST_PULSE, last_continue_ns=LAST, pulses=PULSES
     )
-    context = Context(
+    return Context(
         signals,
         Baseline.measure(signals, 0, BASELINE_END),
         actions,
         start_ns=FIRST_PULSE,
         until_ns=LAST + Thresholds().recovery_timeout_ns,
     )
-    return effect_timing("F4a", context)
 
 
 @pytest.mark.parametrize("share", [0.006, 0.008, 0.010])
@@ -443,6 +455,43 @@ def test_an_engine_with_rare_prefill_steps_recovers(share: float) -> None:
     timings = [prefill_run(seed, share, []) for seed in range(20)]
     assert all(recovered_by(timing, 10.0) for timing in timings)
     assert sum(recovered_by(timing, 1.0) for timing in timings) >= 19
+
+
+@pytest.mark.parametrize("share", [0.004, 0.008])
+def test_an_engine_whose_prefill_steps_outlast_a_dose_fails_the_dose_check(
+    share: float,
+) -> None:
+    # Astra's closure of delta 3, H4: with 250 ms prefill steps (past the
+    # 60 ms cap) a healthy engine fell back to the strict rule, and
+    # recovered at the last SIGCONT in 3 of 20 at 0.8%, timing out in 8.
+    # G0's dose check was only in the plan. Now a baseline whose gaps too
+    # long for a hold recur at one or more per hold says so, and the rule
+    # never holds; a seed whose tail the rule tolerates recovers at once.
+    blocked = 0
+    for seed in range(20):
+        context = prefill_context(seed, share, [], decode=0.020, prefill=0.250)
+        reasons = recovery_blocked("F4a", context)
+        timing = effect_timing("F4a", context)
+        if reasons:
+            blocked += 1
+            assert reasons[0].startswith("dose_check_failed: "), reasons
+            assert "busy step gaps" in reasons[0]
+            assert timing.end_ns is None, seed
+        else:
+            assert recovered_by(timing, 1.0), seed
+    assert blocked >= 15
+
+
+def test_the_dose_check_passes_short_prefill_steps_and_a_paused_baseline() -> None:
+    # The engines the cap was built for: 25 ms prefill steps at 1%, and G2's
+    # baseline with three 1 s pauses (0.67 such gaps per hold), which the
+    # cap keeps from widening the tolerance, not from recovering.
+    pauses = [(t * S, t * S + S) for t in (10, 20, 30)]
+    for seed in range(5):
+        short = prefill_context(seed, 0.010, [])
+        paused = prefill_context(seed, 0.0, pauses, decode=0.020)
+        assert recovery_blocked("F4a", short) == ()
+        assert recovery_blocked("F4a", paused) == ()
 
 
 def test_stalls_as_long_as_a_dose_still_hold_recovery_off() -> None:
