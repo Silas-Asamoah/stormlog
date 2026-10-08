@@ -834,10 +834,12 @@ run's own failure switch them too, as the first thing they do, by setting
 a flag. CPython runs a signal handler only where it checks for pending
 calls (a call, a backward jump), and from 3.11 entering an except block
 and setting an attribute are neither, so no signal can slip between the
-run's end and the finish; a test checks the bytecode, and another raises
-a signal at the last check before the except. On 3.10 entering an except
-block is a check: a first signal landing at that instant, as the run
-fails, can still end the harness unpublished.
+run's end and the finish. On 3.10 entering an except block is a check, so
+the run's except sits inside another: a signal handled as the first is
+entered raises into the second, having set the flag itself, and one
+handled as the second is entered is noted. Tests check the bytecode (from
+3.11), raise a signal at the last check before the except, and fail the
+run in a C call that leaves one or two signals pending (on every version).
 A third is not held: a publish that hangs (a full disk) can still be ended,
 by whatever handled the signal before.
 
