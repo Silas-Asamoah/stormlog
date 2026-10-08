@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from stormlog.infer.diagnosis_inputs import read_input, record_id
@@ -111,3 +112,18 @@ def test_the_join_groups_a_request_s_client_and_engine_records(
     assert engine.coverage is not None and engine.coverage["spans"]
     assert view.has_dispatch_records() and view.has_first_content_records()
     assert view.run_id == "run-1"
+
+
+def test_a_request_s_executions_are_found_again_after_more_are_joined(
+    tmp_path: Path,
+) -> None:
+    """The index by request is rebuilt when executions are added."""
+    requests = poisson_free(3, SECOND, 50 * MS)
+    view = join(read_input(build_run(tmp_path, requests, Engine())))
+    (first,) = view.executions_of("r0")
+    key = next(k for k, e in view.executions.items() if e is first)
+
+    view.executions[replace(key, id=key.id + "-again")] = first
+
+    assert view.executions_of("r0") == [first, first]
+    assert view.executions_of("r1") and view.executions_of("nobody") == []

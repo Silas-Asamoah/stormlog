@@ -177,6 +177,11 @@ class RunView:
     workload: Line | None = None
     sessions: list[Line] = field(default_factory=list)
     engines: dict[str, EngineEpoch] = field(default_factory=dict)
+    # The run's executions by client request, and how many executions there
+    # were when it was built.
+    _by_request: tuple[int, dict[str, list[Execution]]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def run_id(self) -> str | None:
@@ -194,14 +199,18 @@ class RunView:
         return self.identity[1].context.clock_domain
 
     def executions_of(self, request_id: str) -> list[Execution]:
-        """The run's executions of one client request, in admission order."""
-        found = [
-            execution
-            for execution in self.executions.values()
-            if execution.ownership == OWN
-            and execution.event.request_ref.id == request_id
-        ]
-        return sorted(found, key=lambda e: e.event.start_ns or 0)
+        """The run's executions of one client request, in admission order;
+        indexed once, and again when executions were added."""
+        if self._by_request is None or self._by_request[0] != len(self.executions):
+            index: dict[str, list[Execution]] = {}
+            for execution in self.executions.values():
+                if execution.ownership == OWN:
+                    request = execution.event.request_ref.id
+                    index.setdefault(request, []).append(execution)
+            for found in index.values():
+                found.sort(key=lambda e: e.event.start_ns or 0)
+            self._by_request = (len(self.executions), index)
+        return list(self._by_request[1].get(request_id, []))
 
     def has_dispatch_records(self) -> bool:
         return any(request.dispatch is not None for request in self.client.values())
