@@ -145,6 +145,22 @@ def test_a_declared_window_is_the_subject(burst: Path) -> None:
     assert report["payload"]["selection"]["automatic"] is False
 
 
+def test_a_declared_window_over_healthy_traffic_has_no_findings(
+    tmp_path: Path,
+) -> None:
+    calm = build_run(tmp_path, poisson_free(160, 10 * SECOND, 500 * MS), Engine())
+    start = 70 * SECOND + WALL_OFFSET
+
+    report = diagnose_artifact(
+        calm, windows=[(start, start + 10 * SECOND)], options=_options()
+    )
+
+    _validate(report)
+    assert report["payload"]["outcome"] == "no_findings"
+    assert "0 incidents unexplained" in report["verdict"]["summary"]
+    assert report["verdict"]["summary"].endswith("no excess in the declared window")
+
+
 def test_an_incident_without_an_eligible_explanation_is_inconclusive(
     tmp_path: Path,
 ) -> None:
