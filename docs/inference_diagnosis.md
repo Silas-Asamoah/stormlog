@@ -463,7 +463,10 @@ windows has nothing to assess (`no_trace_windows`).
 
 Four kinds say what the workload asked for, never what failed; they are
 always `info` with cause `workload_change`, and an incident explained only
-by them is still `inconclusive`:
+by them is still `inconclusive`. How much of the incident the demand
+explains is a driver's question, which this version does not answer, so
+their contribution is not assessed (`level: null`, unmet `not_determined`)
+and their confidence is the condition's:
 
 | Kind | Found when |
 | --- | --- |

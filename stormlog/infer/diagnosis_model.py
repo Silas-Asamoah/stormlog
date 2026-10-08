@@ -73,6 +73,7 @@ class Criteria:
     unmet: tuple[str, ...] = ()
     known_loss: bool = False
     coverage_unknown: bool = False
+    assessed: bool = True  # False: a claim this version does not judge
 
     @property
     def level(self) -> str:
@@ -84,6 +85,8 @@ class Criteria:
         return HIGH if misses == 0 else MEDIUM if misses == 1 else LOW
 
     def as_dict(self) -> dict[str, Any]:
+        if not self.assessed:
+            return {"level": None, "met": [], "unmet": list(self.unmet)}
         coverage = (
             "known_loss"
             if self.known_loss
@@ -209,7 +212,11 @@ class Finding:
 
     @property
     def confidence_level(self) -> str:
-        level = min(self.condition.level, self.contribution.level, key=_LEVELS.index)
+        """The lower of the condition's and the contribution's levels; the
+        condition's alone when the contribution is not assessed."""
+        claims = [self.condition, self.contribution]
+        assessed = [claim.level for claim in claims if claim.assessed]
+        level = min(assessed, key=_LEVELS.index)
         if self.status == PARTIAL and level == HIGH:
             return MEDIUM  # a partial assessment never reaches high
         return level
@@ -285,6 +292,11 @@ def _at_least(level: str, floor: str) -> bool:
     return _LEVELS.index(level) >= _LEVELS.index(floor)
 
 
+# A contribution no class of this version judges, as a workload change's:
+# what share of the incident the demand explains is the driver's question.
+NOT_DETERMINED = Criteria(unmet=("not_determined",), assessed=False)
+
+
 def met(**criteria: bool) -> Criteria:
     """A claim's rubric from named criteria, each met or not."""
     return Criteria(
@@ -340,6 +352,7 @@ __all__ = [
     "HIGH",
     "LOW",
     "MEDIUM",
+    "NOT_DETERMINED",
     "NOT_OBSERVED",
     "NOT_RULED_OUT",
     "PARTIAL",

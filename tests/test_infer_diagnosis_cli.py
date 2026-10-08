@@ -43,6 +43,8 @@ def test_diagnose_writes_the_report_and_prints_the_findings(
     assert "WARNING queue_saturation at scheduler" in text
     assert "competitor engine_stall (indispensable): ruled_out" in text
     assert "queue_saturation             assessed" in text
+    assert "INFO load_increase at workload" in text
+    assert "contribution not assessed)" in text
     # Evidence paths are relative to the report's directory.
     assert report["findings"][0]["evidence"][0]["path"] == "infer.jsonl"
 
