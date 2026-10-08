@@ -144,7 +144,9 @@ def _finding(
     intervals = _wait_intervals(context, waiting)
     spanning = steps.within(intervals)
     witness = _witness(context, producer, steps, intervals)
-    if not witness.held:
+    if witness.requests_share is None:
+        # Only where the hook could not measure: engine-global metrics
+        # never overrule the steps the requests waited through.
         witness = _exporter_witness(context, subject, witness)
     ttft = _ttft_excess(context, subject)
     alternatives = [
@@ -187,6 +189,7 @@ def _finding(
         },
         experiment=_experiment(excess),
         explains="explains_ttft_excess",
+        detail={"capacity_witness_source": witness.source},
     )
     finding.condition, finding.contribution = _criteria(
         context, producer, span, waits, excess, ttft, witness, alternatives

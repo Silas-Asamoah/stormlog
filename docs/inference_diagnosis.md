@@ -391,7 +391,13 @@ the wait excess be at least half the TTFT excess. Without engine records the cla
 never a request. A scraped exporter is bound to the engine whose hook log
 was imported only when the operator asserts it with `--metrics-from-engine`;
 then `vllm:num_requests_waiting_by_reason{reason="capacity"}` above zero over
-the subject's window can stand in for the hook's capacity witness. Without
+the subject's window can stand in for the hook's capacity witness, but only
+where the hook measured none (no step ran while a placed wait lasted, or the
+hello gave no capacity): engine-global metrics never overrule the steps the
+requests waited through. It is a weaker witness than the hook's: any
+waiting request counts, and vLLM's capacity reason also counts waits bound
+by KV space. `detail.capacity_witness_source` says which held (`hook` or
+`exporter`). Without
 engine records, the queue and KV classes give at most a window-level
 observation from the scrapes in the subject's window (the median waiting
 count, or the preemption counter's increase, over its threshold):

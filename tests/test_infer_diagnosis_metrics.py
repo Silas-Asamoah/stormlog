@@ -13,7 +13,7 @@ from stormlog.infer.diagnosis_join import join
 from stormlog.infer.diagnosis_kv import assess_kv
 from stormlog.infer.diagnosis_queue import assess_queue
 from stormlog.infer.diagnosis_selection import SelectionOptions, select
-from tests.diagnosis_scenarios import MS, Engine, build_run, poisson_free
+from tests.diagnosis_scenarios import MS, Engine, SimRequest, build_run, poisson_free
 from tests.vllm_execution_helpers import SECOND, WALL_OFFSET
 from tests.vllm_scrape_helpers import exposition, scrape
 
@@ -114,6 +114,38 @@ def test_capacity_waits_witness_a_queue_only_from_an_asserted_exporter(
     for asserted in (False, True):
         context = _context(path, asserted=asserted)
         (finding,) = assess_queue(context, context.subjects()[0]).findings
-        gates.append(finding.gates["capacity_witness"])
+        gates.append(
+            (
+                finding.gates["capacity_witness"],
+                finding.detail["capacity_witness_source"],
+            )
+        )
 
-    assert gates == [False, True]
+    assert gates == [(False, None), (True, "exporter")]
+
+
+def test_an_exporter_never_overrules_the_hook_s_measured_witness(
+    tmp_path: Path,
+) -> None:
+    """Bursts of 10 into 8 slots: the hook measured that most requests
+    waited only for the next step, and an asserted exporter's capacity
+    count (which also counts KV-bound waits) does not replace that."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
+    bursts = [
+        SimRequest(f"b{b * 10 + j}", AT + b * 300 * MS + j * MS)
+        for b in range(100)
+        for j in range(10)
+    ]
+    path = build_run(tmp_path, calm + bursts, Engine(max_num_seqs=8, wake_ns=20_000))
+    _with_scrapes(
+        path,
+        gauges={"vllm:num_requests_waiting": 2.0},
+        labelled={"vllm:num_requests_waiting_by_reason": {"reason=capacity": 2.0}},
+    )
+    context = _context(path, asserted=True)
+
+    (finding,) = assess_queue(context, context.subjects()[0]).findings
+
+    assert finding.metrics["requests_waiting_at_capacity_share"] is not None
+    assert not finding.gates["capacity_witness"]
+    assert finding.detail["capacity_witness_source"] is None
