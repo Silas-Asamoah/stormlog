@@ -62,6 +62,9 @@ ROLE_DECODE = "decode"
 ROLE_SPEC_DECODE = "spec_decode"
 ROLE_UNKNOWN = "unknown"
 _ROLE_BY_PHASE = {"context": ROLE_PREFILL, "generation": ROLE_DECODE}
+# How an alignment's offset and uncertainty were derived from the hello's
+# bracketed read; an alignment without it is from an earlier import.
+ALIGNMENT_BASIS = "hello_bracket_midpoint/1"
 
 # vLLM's request IDs: an optional n>1 child index, the API's prefix, the
 # external ID, and the 8 random characters vLLM adds unless told not to.
@@ -551,21 +554,34 @@ class _EpochReducer:
         )
 
     def _alignment(self) -> ClockAlignmentEvent | None:
-        clock = self.hello.get("clock") or {}
-        wall, mono = _integer(clock.get("wall_ns")), _integer(clock.get("mono_ns"))
+        """The hello's read: the wall clock at its monotonic read lies between
+        the wall reads before and after it, so the offset is the midpoint of
+        that bracket and the uncertainty half its width."""
         event_id = f"alignment:{self.epoch.epoch}"
-        if wall is None or mono is None or event_id in self.facts.existing_alignments:
+        bracket = _clock_bracket(self.hello.get("clock"))
+        if bracket is None or event_id in self.facts.existing_alignments:
             return None
-        gap = _integer(clock.get("gap_ns")) or 0
+        wall, mono, wall_after = bracket
+        gap = wall_after - wall
         goodbye = self.epoch.goodbye or {}
         return ClockAlignmentEvent(
             context=self._context(),
             event_id=event_id,
-            metadata={"epoch": self.epoch.epoch, "gap_ns": gap, "ended": bool(goodbye)},
+            metadata={
+                "epoch": self.epoch.epoch,
+                "gap_ns": gap,
+                "ended": bool(goodbye),
+                "alignment_basis": ALIGNMENT_BASIS,
+                "bracket": {
+                    "wall_ns": wall,
+                    "mono_ns": mono,
+                    "wall_after_ns": wall_after,
+                },
+            },
             from_clock_domain=self.mono_domain,
             to_clock_domain=self.wall_domain,
-            offset_ns=wall - mono,
-            uncertainty_ns=(gap + 1) // 2,
+            offset_ns=wall - mono + gap // 2,
+            uncertainty_ns=gap - gap // 2,
             valid_from_ns=mono,
             valid_to_ns=_integer(goodbye.get("mono_ns")),
         )
@@ -830,6 +846,22 @@ def _superseded(item: Iteration, latest_completed: int | None) -> bool:
     )
 
 
+def _clock_bracket(clock: Any) -> tuple[int, int, int] | None:
+    """The hello's (wall, mono, wall after) read; a hook from before
+    ``wall_after_ns`` gives the gap instead. None for a read without a
+    bracket, or one the wall clock stepped back across."""
+    if not isinstance(clock, dict):
+        return None
+    wall, mono = _integer(clock.get("wall_ns")), _integer(clock.get("mono_ns"))
+    after = _integer(clock.get("wall_after_ns"))
+    gap = _integer(clock.get("gap_ns"))
+    if after is None and wall is not None and gap is not None:
+        after = wall + gap
+    if wall is None or mono is None or after is None or after < wall:
+        return None
+    return wall, mono, after
+
+
 def _randomization(hello: dict[str, Any]) -> bool | None:
     config = hello.get("config")
     value = config.get("request_id_randomization") if isinstance(config, dict) else None
@@ -957,6 +989,7 @@ def _text(value: Any) -> str | None:
 
 
 __all__ = [
+    "ALIGNMENT_BASIS",
     "FOREIGN",
     "OWN",
     "SCHEME_PSEUDONYM",
