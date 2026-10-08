@@ -165,6 +165,7 @@ class Family:
     # a render never meets a value it cannot format within VALUE_BYTES.
     def inc(self, labels: LabelValues, amount: float = 1.0) -> None:
         """Add to a value; a counter's increment must be finite and >= 0."""
+        self._require("gauge", "counter")
         with self.registry._lock:
             number = _number(amount)
             if number is None or not (
@@ -177,6 +178,7 @@ class Family:
                 self._add(series, 0, number)
 
     def set(self, labels: LabelValues, value: float) -> None:
+        self._require("gauge", "counter")
         with self.registry._lock:
             number = _number(value)
             if number is None:
@@ -187,6 +189,7 @@ class Family:
                 self._put(series, 0, number)
 
     def observe(self, labels: LabelValues, value: float) -> None:
+        self._require("histogram")
         with self.registry._lock:
             number = _number(value)
             if number is None or not math.isfinite(number):
@@ -203,6 +206,7 @@ class Family:
         self, labels: LabelValues, counts: Sequence[int], total: float
     ) -> None:
         """Add pre-counted observations: one count per bucket, the last +Inf."""
+        self._require("histogram")
         if len(counts) != len(self.spec.buckets) + 1:
             raise ValueError("one count per bucket, plus +Inf, is needed")
         with self.registry._lock:
@@ -218,6 +222,15 @@ class Family:
                 self._add(series, index, count)
             self._add(series, -2, sum_)
             self._add(series, -1, math.fsum(numbers))
+
+    def _require(self, *kinds: str) -> None:
+        # Before any change: an update of another kind would write into the
+        # wrong slots of a series' values, part-way, then fail.
+        if self.spec.kind not in kinds:
+            raise TypeError(
+                f"{self.spec.name} is a {self.spec.kind}; "
+                f"this update is for a {' or '.join(kinds)}"
+            )
 
     def _add(self, series: _Series, index: int, amount: float) -> None:
         self._put(series, index, series.values[index] + amount)

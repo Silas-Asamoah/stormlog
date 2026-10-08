@@ -386,6 +386,28 @@ def test_the_byte_budget_takes_the_enum_value_widest_in_bytes() -> None:
         assert len(_text(registry).encode()) <= budget.size, wide
 
 
+def test_an_update_of_the_wrong_kind_is_refused_before_it_changes_anything() -> None:
+    # An observation on a gauge or counter, or an increment or a set on a
+    # histogram, would write into the wrong slots of its values.
+    registry = Registry()
+    level = registry.add(
+        FamilySpec("stormlog_level", "gauge", "h", labels=("case",)),
+        known=[{"case": "c1"}],
+    )
+    requests = _requests(registry, ["c1"])
+    latency = _latency(registry, ["c1"])
+    before = _text(registry)
+    with pytest.raises(TypeError, match="gauge"):
+        level.observe(("c1",), 3.0)
+    with pytest.raises(TypeError, match="counter"):
+        requests.observe(("c1", "ok"), 3.0)
+    with pytest.raises(TypeError, match="histogram"):
+        latency.inc(("c1",), 1.0)
+    with pytest.raises(TypeError, match="histogram"):
+        latency.set(("c1",), 1.0)
+    assert _text(registry) == before
+
+
 def test_a_value_on_a_bucket_bound_falls_in_that_bucket() -> None:
     # Buckets count values less than or equal to their bound.
     registry = Registry()
