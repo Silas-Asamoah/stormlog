@@ -222,6 +222,9 @@ class InjectionRun:
         # signal or Ctrl+C interrupted mid-action: (its index, what was done).
         self._pulser: Pulser | None = None
         self._interrupted: tuple[int, dict[str, Any]] | None = None
+        # How late a step's record may reach the channel: at least a poll
+        # period, until the baseline measures it.
+        self._record_lag_ns = int(poll_seconds * SECOND)
 
     # ------------------------------------------------------------ the run
 
@@ -301,6 +304,7 @@ class InjectionRun:
         baseline_end = progress.baseline_end = priming_end + int(t.baseline * SECOND)
         self._sleep_until(baseline_end)
         baseline = Baseline.measure(self._signals(), priming_end, baseline_end)
+        self._measure_record_lag(priming_end, baseline_end)
         # The baseline itself is the first episode's clean time.
         self._run_episodes(baseline, priming_end, progress.attempts)
         progress.final_start = self.clock()
@@ -512,7 +516,17 @@ class InjectionRun:
 
     def _engine_stalled(self, baseline: Baseline, actions: Actions, now: int) -> bool:
         context = Context(self._signals(), baseline, actions, now, now, self.thresholds)
-        return engine_stalled(context, now)
+        return engine_stalled(context, now, self._record_lag_ns)
+
+    def _measure_record_lag(self, start_ns: int, end_ns: int) -> None:
+        """Allow engine_stalled the baseline's record lag, and never less
+        than a poll period: a healthy engine's records arriving late must
+        not read as a hang (Astra's H5)."""
+        with self._lock:
+            assert self.channel is not None
+            measured = self.channel.record_lag_ns(start_ns, end_ns)
+        if measured is not None:
+            self._record_lag_ns = max(self._record_lag_ns, measured)
 
     def _timing(
         self,

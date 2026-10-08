@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
 from stormlog.infer.qualify.recovery import Point, Signals
+from stormlog.infer.quantiles import quantile
 from stormlog.infer.vllm_metrics import (
     CompactScrape,
     compact_scrape,
@@ -506,13 +507,17 @@ class ReferenceChannel:
         self._victim_spans: list[tuple[int, int]] = []
         self._victim_finished: set[str] = set()
         self.bad_records = 0
+        # Each engine step's start, and how long after it its record was
+        # first seen: (start, lag), in ns.
+        self.step_lags: list[tuple[int, int]] = []
 
     def poll(self, *, scrape: bool = True) -> None:
         """Read new hook records, and take one scrape unless told not to. A
         record that parses but lacks a field the view needs is skipped,
         counted and noted, like a damaged line: the records after it in the
         same poll are still read."""
-        for record in self.tailer.poll():
+        seen = time.time_ns()
+        for record in self.tailer.poll(seen):
             try:
                 self.view.add(record)
             except (KeyError, TypeError, ValueError) as error:
@@ -521,10 +526,25 @@ class ReferenceChannel:
                         "record_kind": record.get("kind"), "error": repr(error),
                         "seen_ns": time.time_ns()}  # fmt: skip
                 _append_lines(self.tailer.problems, [note])
+                continue
+            if record.get("kind") == "scheduled" and str(
+                record.get("epoch", "")
+            ).startswith("engine-"):
+                start = int(record["start_wall_ns"])
+                self.step_lags.append((start, max(0, seen - start)))
         if scrape:
             taken = scrape_metrics(self.metrics_url)
             self.scrapes.append(taken)
             _append_lines(self.scrape_log, [taken.to_record()])
+
+    def record_lag_ns(self, start_ns: int, end_ns: int) -> int | None:
+        """How late step records reach the channel: the p99, over the steps
+        begun in ``[start_ns, end_ns)``, of the time from a step's start to
+        the poll that first saw its record (the hook's write lag plus the
+        polls' own spacing); None with no step then."""
+        lags = [lag for start, lag in self.step_lags if start_ns <= start < end_ns]
+        found = quantile(lags, 0.99)
+        return None if found is None else int(found)
 
     def signals(self) -> Signals:
         """The series so far. ``in_flight`` comes from the victim's finished
