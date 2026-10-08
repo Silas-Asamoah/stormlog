@@ -85,13 +85,20 @@ def _admission_finding(
 ) -> Finding:
     intended = _from_intended_excess(context, subject)
     lag_ms = None if excess is None else round(excess.estimate / 1e6, 3)
+    limited = bool(held or dropped)
     return Finding(
         kind=CLIENT_ADMISSION,
         component=COMPONENT_CLIENT,
         subject=subject.as_dict(),
-        title="The client held requests back at its in-flight limit",
+        # Lag alone says the client sent late, not why: a starved client
+        # thread looks the same, and no in-flight limit would help it.
+        title=(
+            "The client held requests back at its in-flight limit"
+            if limited
+            else "The client sent requests later than their arrivals"
+        ),
         message=f"{len(held)} requests were held for a slot and {len(dropped)} dropped.",
-        gates={"arrivals_recorded": True},
+        gates={"arrivals_recorded": True, "held_or_dropped": limited},
         condition=met(
             direct_evidence=bool(held or dropped),
             sufficient_samples=excess is not None,
@@ -111,10 +118,17 @@ def _admission_finding(
             "dropped": len(dropped),
             "dispatch_lag_excess_ms": lag_ms,
         },
-        experiment={
-            "change": "rerun with a larger --max-in-flight, same seed",
-            "prediction": "no request is held for a slot, and dispatch lag falls to the reference's",
-        },
+        experiment=(
+            {
+                "change": "rerun with a larger --max-in-flight, same seed",
+                "prediction": "no request is held for a slot, and dispatch lag falls to the reference's",
+            }
+            if limited
+            else {
+                "change": "rerun with the client on an idle host, same seed",
+                "prediction": "dispatch lag falls to the reference's",
+            }
+        ),
         explains="explains_intended_latency_excess",
     )
 

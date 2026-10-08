@@ -81,6 +81,35 @@ def test_requests_held_at_the_client_are_its_admission(tmp_path: Path) -> None:
     assert finding.observations[2].ci is not None and finding.observations[2].ci[0] > 0
 
 
+def test_a_client_that_only_sent_late_held_nothing_back(tmp_path: Path) -> None:
+    """A starved client sends 150 ms after each intended arrival, holding
+    nothing: lag alone says it sent late, not that its in-flight limit held
+    requests, and a larger --max-in-flight cannot help."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
+    late = [
+        SimRequest(
+            f"b{i}", sent_ns=AT + i * 50 * MS + 150 * MS, intended_ns=AT + i * 50 * MS
+        )
+        for i in range(100)
+    ]
+    start = AT + WALL_OFFSET
+    context = _context(
+        tmp_path,
+        calm + late,
+        Engine(max_num_seqs=64),
+        declared=((start, start + 5 * SECOND),),
+    )
+
+    (finding,) = assess_client_admission(context, _only(context)).findings
+
+    assert finding.metrics["held_for_slot"] == 0 and finding.metrics["dropped"] == 0
+    assert "held_or_dropped" in finding.failed_gates
+    assert (finding.claim, finding.severity) == ("observation", "info")
+    assert finding.title == "The client sent requests later than their arrivals"
+    assert finding.experiment is not None
+    assert "--max-in-flight" not in finding.experiment["change"]
+
+
 def test_a_closed_loop_has_no_intended_arrivals(tmp_path: Path) -> None:
     requests = poisson_free(140, 10 * SECOND, 500 * MS, closed_loop=True)
     start = 60 * SECOND + WALL_OFFSET
