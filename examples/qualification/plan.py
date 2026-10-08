@@ -154,29 +154,40 @@ def parse_plan(record: Mapping[str, Any]) -> Plan:
     if not isinstance(entries, list):
         raise PlanError(["episodes must be a list"])
     episodes, problems = _episodes(entries)
-    problems += _section_problems("timeline", record.get("timeline", {}), _TIMELINE)
-    problems += _section_problems("victim", record.get("victim", {}), _VICTIM)
-    problems += _threshold_problems(record.get("thresholds") or {})
+    sections = [
+        *_section_problems("timeline", record.get("timeline", {}), _TIMELINE),
+        *_section_problems("victim", record.get("victim", {}), _VICTIM),
+        *_threshold_problems(record.get("thresholds") or {}),
+    ]
+    problems += sections
     problems += _order_problems(record.get("timeline", {}))
     if record.get("binding", "vllm-0.30") != "vllm-0.30":
         problems.append(f"no binding {record.get('binding')!r}")
+    if not sections:
+        # With the windows and rates readable, their samples are checked in
+        # the same round: every problem is listed at once.
+        problems += _sample_problems(_plan_of(record, episodes, "", 0))
     if problems:
         raise PlanError(problems)
     try:
-        plan = Plan(
-            profile=str(record["profile"]),
-            seed=int(record.get("seed", 0)),
-            victim=Victim(**record.get("victim", {})),
-            timeline=Timeline(**record.get("timeline", {})),
-            episodes=tuple(episodes),
-            thresholds=dict(record.get("thresholds") or {}),
+        return _plan_of(
+            record, episodes, str(record["profile"]), int(record.get("seed", 0))
         )
     except (KeyError, TypeError, ValueError) as error:
         raise PlanError([f"malformed plan: {error}"]) from error
-    problems = _sample_problems(plan)
-    if problems:
-        raise PlanError(problems)
-    return plan
+
+
+def _plan_of(
+    record: Mapping[str, Any], episodes: list[EpisodePlan], profile: str, seed: int
+) -> Plan:
+    return Plan(
+        profile=profile,
+        seed=seed,
+        victim=Victim(**record.get("victim", {})),
+        timeline=Timeline(**record.get("timeline", {})),
+        episodes=tuple(episodes),
+        thresholds=dict(record.get("thresholds") or {}),
+    )
 
 
 def _episodes(entries: list[Any]) -> tuple[list[EpisodePlan], list[str]]:
