@@ -1025,9 +1025,7 @@ def cmd_collect_server(args: argparse.Namespace) -> int:
     finally:
         _restore_signal_handlers(previous_handlers)
         if export is not None:
-            # A no-op after the collector closed it; a start that failed
-            # before then still frees the slot it took.
-            export.close("error")
+            _end_collector_export(export, failed=sys.exc_info()[0] is not None)
     print(
         f"Collected {result.polls} server polls to: {Path(args.output)} "
         f"(stopped: {result.stop_reason})"
@@ -1035,6 +1033,16 @@ def cmd_collect_server(args: argparse.Namespace) -> int:
     if export is not None:
         _linger(export, args)
     return _collection_exit_code(result)
+
+
+def _end_collector_export(export: CollectorExport, *, failed: bool) -> None:
+    # A no-op after the collector closed it; a start that failed before then
+    # still frees the slot it took.
+    export.close("error")
+    if failed:
+        # No linger follows a failure, so the endpoint stops with it rather
+        # than outliving the command in a caller's process.
+        export.stop_serving()
 
 
 def _collector_export(args: argparse.Namespace) -> CollectorExport | None:
