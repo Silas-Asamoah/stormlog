@@ -132,6 +132,7 @@ stated bound.
 | `completed` | engine | `Scheduler.update_from_output` returns |
 | `terminal` | engine | `Scheduler._free_request` runs |
 | `pause` | engine | `Scheduler.set_pause_state` returns |
+| `cache_reset` | engine | `Scheduler.reset_prefix_cache` returns or raises |
 | `heartbeat` | every epoch | every second |
 | `goodbye` | every epoch | the process exits cleanly |
 
@@ -145,7 +146,7 @@ stated bound.
  "parent_process_start_ns": 1789999944560000000,
  "vllm_version": "0.30.0", "enabled": true, "refused": null,
  "producer": "vllm:node-7:<boot>:2600:1790000000000000000",
- "observes": ["enqueued", "pause"],
+ "observes": ["cache_reset", "enqueued", "pause"],
  "config": {"executor": "mp", "scheduler": "vllm.v1.core.sched.async_scheduler.AsyncScheduler",
             "runner": null, "tp": 2, "pp": 1, "dp": 1, "async_scheduling": true,
             "speculative": "ngram", "max_num_batched_tokens": 2048,
@@ -306,6 +307,24 @@ the states before and after (`UNPAUSED`, `PAUSED_NEW` or `PAUSED_ALL`).
 `PAUSED_ALL` stops the engine from stepping, so no `scheduled` record shows
 it; `PAUSED_NEW` holds new requests while running ones keep stepping. A call
 that raises is not recorded. Listed in `observes` as `pause`.
+
+**`cache_reset`**
+
+```json
+{"kind": "cache_reset", "reset_running_requests": true, "reset_connector": false,
+ "running": ["…", "…"], "succeeded": true, "raised": false,
+ "start_wall_ns": …, "start_mono_ns": …, "start_wall_after_ns": …,
+ "end_wall_ns": …, "end_mono_ns": …, "end_wall_after_ns": …}
+```
+
+One per call to `reset_prefix_cache`, which empties vLLM's prefix cache.
+`running` lists the internal IDs running when the call started. With
+`reset_running_requests`, vLLM preempts every one of them before it resets
+the cache, so they are preempted even when the reset then fails; without it,
+the reset succeeds only when no running request holds cache blocks.
+`succeeded` is the call's return value, or null when it raised (`raised`
+true; vLLM's exception passes through). The start stamp is read before the
+call and the end stamp after it. Listed in `observes` as `cache_reset`.
 
 **`heartbeat`** and `status.json`
 
