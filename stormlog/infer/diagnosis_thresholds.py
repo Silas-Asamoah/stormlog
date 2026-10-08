@@ -25,6 +25,9 @@ LOOP_BASELINE_WINDOW_NS = "host_stall.baseline_window_ns"
 LOOP_MIN_BUSY_STEPS = "host_stall.min_busy_steps"
 LOOP_MATCHED_BIN_MIN_STEPS = "host_stall.matched_bin_min_steps"
 LOOP_HEARTBEAT_GRACE_NS = "host_stall.heartbeat_grace_ns"
+QUEUE_WITNESS_SHARE = "queue_saturation.witness_step_share"
+QUEUE_CONTRIBUTION = "queue_saturation.ttft_excess_share"
+QUEUE_STALL_COVERAGE = "queue_saturation.stall_wait_share"
 SELECTION_WINDOW_S = "selection.window_seconds"
 SELECTION_SPAN_CAP_S = "selection.span_cap_seconds"
 SELECTION_MIN_REQUESTS = "selection.min_requests"
@@ -62,6 +65,15 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # heard from this recently: three of its one-second heartbeats, since
         # under load they slip (2.3 s apart on a real vLLM 0.30.0 run).
         LOOP_HEARTBEAT_GRACE_NS: 3_000_000_000.0,
+        # A capacity witness: the share of steps spanning the waits that ran
+        # at max_num_seqs or at the max_num_batched_tokens budget.
+        QUEUE_WITNESS_SHARE: 0.5,
+        # The queue explains the incident when its wait excess is at least
+        # this share of the TTFT excess.
+        QUEUE_CONTRIBUTION: 0.5,
+        # Engine stalls explain the waits instead when they cover this share
+        # of the waiting time.
+        QUEUE_STALL_COVERAGE: 0.5,
         # Incident selection: base windows of 1 s, joined until each holds
         # 20 requests or spans 30 s.
         SELECTION_WINDOW_S: 1.0,
@@ -104,7 +116,10 @@ __all__ = [
     "LOOP_STALL_FLOOR_NS",
     "PREFIX_HIT_RATIO_DROP",
     "PREFIX_MIN_QUERIED",
+    "QUEUE_CONTRIBUTION",
     "QUEUE_MEDIAN_WAITING",
+    "QUEUE_STALL_COVERAGE",
+    "QUEUE_WITNESS_SHARE",
     "SELECTION_ALPHA",
     "SELECTION_MIN_ABOVE",
     "SELECTION_MIN_REQUESTS",

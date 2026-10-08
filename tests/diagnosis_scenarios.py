@@ -92,8 +92,13 @@ class Engine:
     extra: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
     # False: a hook from before wall_after_ns, whose stamps are unbracketed.
     bracketed: bool = True
+    # False: a hook from before enqueued records.
+    enqueued_records: bool = True
     # (mono_ns, delta_ns): the host's wall clock steps by delta at mono_ns.
     wall_jump: tuple[int, int] | None = None
+    # (mono_ns, duration_ns): the engine loop stops for duration after the
+    # first step that completes at or after mono_ns.
+    stall: tuple[int, int] | None = None
 
     def wall(self, mono_ns: int) -> int:
         """The shared wall clock at an engine monotonic time."""
@@ -105,6 +110,8 @@ class Engine:
         """Serve ``requests``; return the epoch's raw records after the hello."""
         timed: list[tuple[int, int, dict[str, Any]]] = []
         for request in requests:
+            if self.enqueued_records:
+                timed.append(_enqueued(request))
             timed.append(
                 (
                     request.admitted_ns,
@@ -114,19 +121,6 @@ class Engine:
                         "internal": request.internal,
                         "external": f"chatcmpl-{request.x_request_id}",
                         **stamp(request.admitted_ns),
-                    },
-                )
-            )
-            timed.append(
-                (
-                    request.enqueued_ns,
-                    0,
-                    {
-                        "kind": "enqueued",
-                        "internal": request.internal,
-                        "structured_output": request.structured_output,
-                        "resumable": False,
-                        **stamp(request.enqueued_ns),
                     },
                 )
             )
@@ -222,7 +216,24 @@ class Engine:
             )
             iteration += 1
             now = finished_at + self.gap_ns
+            if self.stall is not None and finished_at >= self.stall[0]:
+                now += self.stall[1]
+                self.stall = None
         return out
+
+
+def _enqueued(request: SimRequest) -> tuple[int, int, dict[str, Any]]:
+    return (
+        request.enqueued_ns,
+        0,
+        {
+            "kind": "enqueued",
+            "internal": request.internal,
+            "structured_output": request.structured_output,
+            "resumable": False,
+            **stamp(request.enqueued_ns),
+        },
+    )
 
 
 def _member(request: SimRequest, *, first: bool, done: int = 0) -> dict[str, Any]:
