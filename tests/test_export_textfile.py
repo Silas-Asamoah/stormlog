@@ -137,6 +137,50 @@ def test_a_writer_thread_that_cannot_start_gives_the_slot_back(
     second.close()
 
 
+@pytest.mark.parametrize("kind", ["symlink", "hardlink"])
+def test_a_lock_that_is_a_link_to_another_file_is_refused(
+    tmp_path: Path, kind: str
+) -> None:
+    # Another account that can write a shared textfile directory could plant
+    # the lock as a link to a file this one can write, which the lock's
+    # truncate and write would then overwrite.
+    victim = tmp_path / "victim"
+    victim.write_text("keep me")
+    directory = tmp_path / "shared"
+    directory.mkdir()
+    writer = _writer(directory)
+    if kind == "symlink":
+        writer.lock_path.symlink_to(victim)
+    else:
+        os.link(victim, writer.lock_path)
+    with pytest.raises(ValueError, match="not a plain file|link"):
+        writer.acquire()
+    assert victim.read_text() == "keep me"
+
+
+def test_a_lock_that_is_a_directory_is_refused(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    writer.lock_path.mkdir()
+    with pytest.raises(ValueError, match="not a plain file|cannot use"):
+        writer.acquire()
+
+
+def test_a_planted_temporary_link_is_not_written_through(tmp_path: Path) -> None:
+    # The same with the temporary file each write renames into place: its
+    # name is predictable, so it could be planted too.
+    victim = tmp_path / "victim"
+    victim.write_text("keep me")
+    directory = tmp_path / "shared"
+    directory.mkdir()
+    writer = _writer(directory)
+    temporary = directory / f".stormlog-alpha.prom.{os.getpid()}.tmp"
+    temporary.symlink_to(victim)
+    writer.start()
+    writer.close()
+    assert victim.read_text() == "keep me"
+    assert writer.stats.writes_failed > 0
+
+
 def test_writers_of_different_slots_coexist(tmp_path: Path) -> None:
     alpha, beta = _writer(tmp_path, "alpha"), _writer(tmp_path, "beta")
     alpha.start()

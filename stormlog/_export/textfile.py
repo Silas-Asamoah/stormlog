@@ -23,10 +23,12 @@ late write can only publish the newest content it was given.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
 import socket
+import stat
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -47,6 +49,10 @@ try:
 except ImportError:  # no flock: the lock is the file's existence
     _flock = None
     _LOCK_NOW = 0
+# A link in the directory is never followed: whoever else can write a shared
+# textfile directory could plant the lock or a temporary file as a link to a
+# file this process can write, and the write would land there.
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 SLOT = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 PRODUCER_LABEL = "stormlog_producer"
@@ -246,7 +252,7 @@ class TextfileWriter:
     def _write_file(self, body: bytes) -> None:
         temporary = self.directory / f".stormlog-{self.slot}.prom.{os.getpid()}.tmp"
         try:
-            with open(temporary, "wb") as handle:
+            with open(temporary, "wb", opener=_plain_opener) as handle:
                 handle.write(body)
                 handle.write(self._own_lines())
                 handle.flush()
@@ -289,7 +295,7 @@ def _take_lock(path: Path) -> int | None:
         return None
     for _ in range(3):
         try:
-            descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+            descriptor = _open_plain(path, os.O_RDWR, 0o644)
         except PermissionError as exc:
             if not path.exists():
                 raise ValueError(
@@ -297,6 +303,11 @@ def _take_lock(path: Path) -> int | None:
                 ) from None
             # Another user's lock, or a read-only one: some other writer's.
             raise _in_use(path, _read_lock(path)) from None
+        except OSError as exc:  # a link, a directory, or another non-file
+            raise ValueError(
+                f"{path.name} in {path.parent} is not a plain file ({exc.strerror}); "
+                "remove it or choose another --prometheus-slot"
+            ) from None
         try:
             if _flock_path(descriptor, path):
                 return descriptor
@@ -305,6 +316,29 @@ def _take_lock(path: Path) -> int | None:
             raise
         os.close(descriptor)
     raise SlotInUse(f"{path.name} was taken by another writer while starting")
+
+
+def _open_plain(path: Path, flags: int, mode: int) -> int:
+    """Open or create ``path`` only as a regular file with no other names.
+
+    A symbolic link is refused by ``O_NOFOLLOW``; a hard link, a directory
+    or a device by the checks after the open, before anything is written.
+    ``OSError`` for each.
+    """
+    descriptor = os.open(path, flags | os.O_CREAT | _NOFOLLOW, mode)
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        os.close(descriptor)
+        raise OSError(errno.EINVAL, "not a plain file", str(path))
+    return descriptor
+
+
+def _plain_opener(path: str, flags: int) -> int:
+    """An ``open`` opener for a file written whole: refuse, then truncate."""
+    descriptor = _open_plain(Path(path), flags & ~os.O_TRUNC, 0o666)
+    if flags & os.O_TRUNC:
+        os.ftruncate(descriptor, 0)
+    return descriptor
 
 
 def _flock_path(descriptor: int, path: Path) -> bool:
