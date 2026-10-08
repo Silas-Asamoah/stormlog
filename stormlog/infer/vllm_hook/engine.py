@@ -326,6 +326,32 @@ class EngineRecorder:
             },
         )
 
+    # ------------------------------------------------------------ profiler
+    def profile_call(
+        self, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
+        """An ``EngineCore.profile`` call's direction and start, read before
+        vLLM runs it: the engine loop does nothing else until it returns."""
+        named = dict(zip(("is_start",), args))
+        named.update(kwargs)
+        return {
+            "is_start": bool(named.get("is_start", True)),
+            **{f"start_{name}": value for name, value in stamp().items()},
+        }
+
+    def on_profile(self, call: dict[str, Any] | None, raised: bool) -> None:
+        """The call's end; a profiler that raised still held the loop."""
+        if call is None:
+            return
+        self.writer.emit(
+            "engine_profile",
+            {
+                **call,
+                "raised": raised,
+                **{f"end_{name}": value for name, value in stamp().items()},
+            },
+        )
+
     # ------------------------------------------------------------ exit
 
     def on_free(self, request: Any) -> None:

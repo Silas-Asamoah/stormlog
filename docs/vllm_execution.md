@@ -134,6 +134,7 @@ stated bound.
 | `terminal` | engine | `Scheduler._free_request` runs |
 | `pause` | engine | `Scheduler.set_pause_state` returns |
 | `cache_reset` | engine | `Scheduler.reset_prefix_cache` returns or raises |
+| `engine_profile` | engine | `EngineCore.profile` returns or raises |
 | `heartbeat` | every epoch | every second |
 | `goodbye` | every epoch | the process exits cleanly |
 
@@ -147,7 +148,7 @@ stated bound.
  "parent_process_start_ns": 1789999944560000000,
  "vllm_version": "0.30.0", "enabled": true, "refused": null,
  "producer": "vllm:node-7:<boot>:2600:1790000000000000000",
- "observes": ["cache_reset", "enqueued", "pause"],
+ "observes": ["cache_reset", "enqueued", "pause", "profile"],
  "config": {"executor": "mp", "scheduler": "vllm.v1.core.sched.async_scheduler.AsyncScheduler",
             "runner": null, "tp": 2, "pp": 1, "dp": 1, "async_scheduling": true,
             "speculative": "ngram", "max_num_batched_tokens": 2048,
@@ -336,6 +337,22 @@ the reset succeeds only when no running request holds cache blocks.
 `succeeded` is the call's return value, or null when it raised (`raised`
 true; vLLM's exception passes through). The start stamp is read before the
 call and the end stamp after it. Listed in `observes` as `cache_reset`.
+
+**`engine_profile`**
+
+```json
+{"kind": "engine_profile", "is_start": false, "raised": false,
+ "start_wall_ns": …, "start_mono_ns": …, "start_wall_after_ns": …,
+ "end_wall_ns": …, "end_mono_ns": …, "end_wall_after_ns": …}
+```
+
+One per call to `EngineCore.profile`, which vLLM runs in the engine loop,
+between steps, to start (`is_start` true) or stop the workers' profilers.
+The engine does nothing else until it returns, so the bracket from the start
+stamp to the end stamp is how long the call held the loop: the engine side
+of a capture's start or stop, which the client's `infer.trace_window`
+stamps only bound. A call that raised (`raised` true; vLLM's exception
+passes through) held the loop too. Listed in `observes` as `profile`.
 
 **`heartbeat`** and `status.json`
 
@@ -532,9 +549,9 @@ phase stays open; with `--server-stopped` no step can follow, and the phase
 ends at the last record the client wrote. A step that scheduled no request
 (an idle scheduler call) is counted as empty, not written.
 
-**Stages.** Preemptions, cache resets and pause changes are written as
-`infer.stage` records on the engine's monotonic clock, each with its
-`epoch`, the raw `seq` and its `source_seq_max` in the metadata, and the
+**Stages.** Preemptions, cache resets, pause changes and profiler calls are
+written as `infer.stage` records on the engine's monotonic clock, each with
+its `epoch`, the raw `seq` and its `source_seq_max` in the metadata, and the
 bracketing wall reads:
 
 | `name` | One per | Refers to | Dated by |
@@ -543,6 +560,7 @@ bracketing wall reads:
 | `engine.cache_reset` | `cache_reset` record | the last step written before it | the reset call |
 | `engine.preempted_by_reset` | request running at a reset with `reset_running_requests` | its request, and the reset's step if it has one | the reset call |
 | `engine.pause_transition` | `pause` record, with `from` and `to` | the last step written before it | its stamp |
+| `engine.profile_call` | `engine_profile` record, with `is_start` and `raised` | the last step written before it | the call's bracket |
 
 vLLM lists a reset's preemptions in the next step's `preempted` along with
 the step's own, so of a step's preemptions those a reset since the previous

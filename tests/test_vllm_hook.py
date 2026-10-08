@@ -226,9 +226,16 @@ def _fake_vllm() -> dict[str, types.ModuleType]:
     class EngineCore:
         def __init__(self, scheduler: Any) -> None:
             self.scheduler = scheduler
+            self.profile_error: Exception | None = None
 
         def preprocess_add_request(self, request: Any) -> tuple[Any, int]:
             return request, 0
+
+        def profile(self, is_start: bool = True) -> None:
+            """vLLM 0.30.0 starts or stops the workers' profilers here, in
+            the engine loop between steps."""
+            if self.profile_error is not None:
+                raise self.profile_error
 
     class GPUModelRunner:
         def __init__(self) -> None:
@@ -539,7 +546,7 @@ def test_pause_transitions_and_the_state_each_step_saw(vllm: dict[str, Any]) -> 
     records = _records(vllm["root"], "engine")
     hellos = _of(records, "hello")
     assert [hello["observes"] for hello in hellos] == [
-        ["cache_reset", "enqueued", "pause"],
+        ["cache_reset", "enqueued", "pause", "profile"],
         [],
     ]
     pauses = _of(records, "pause")
@@ -603,6 +610,28 @@ def test_a_cache_reset_records_who_was_running_and_how_it_ended(
         assert reset["start_wall_ns"] <= reset["start_wall_after_ns"]
         assert reset["start_mono_ns"] <= reset["end_mono_ns"]
         assert reset["end_wall_ns"] <= reset["end_wall_after_ns"]
+
+
+def test_a_profiler_call_is_recorded_with_its_bracket(vllm: dict[str, Any]) -> None:
+    """The engine loop does nothing else while profile() runs: the call's
+    own bracket is how long a start or stop held it, raised or not."""
+    scheduler = vllm["Scheduler"](vllm_config())
+    core = vllm["EngineCore"](scheduler)
+    core.profile()
+    core.profile(is_start=False)
+    core.profile_error = RuntimeError("trace export failed")
+    with pytest.raises(RuntimeError, match="trace export"):
+        core.profile(False)
+
+    calls = _of(_records(vllm["root"], "engine"), "engine_profile")
+    assert [(c["is_start"], c["raised"]) for c in calls] == [
+        (True, False),
+        (False, False),
+        (False, True),
+    ]
+    for call in calls:
+        assert call["start_wall_ns"] <= call["start_wall_after_ns"]
+        assert call["start_mono_ns"] <= call["end_mono_ns"]
 
 
 def test_a_method_vllm_lacks_is_neither_patched_nor_claimed() -> None:
@@ -810,7 +839,7 @@ def test_hello_records_the_layout_the_profiler_and_the_process(
         }
     assert (engine["enabled"], engine["observes"]) == (
         True,
-        ["cache_reset", "enqueued", "pause"],
+        ["cache_reset", "enqueued", "pause", "profile"],
     )
     assert _of(_records(vllm["root"], "worker"), "hello")[0]["observes"] == []
     worker_config = _of(_records(vllm["root"], "worker"), "hello")[0]["config"]

@@ -10,7 +10,9 @@ reading the artifact:
   that step, dated by its ``schedule()`` call;
 - ``engine.cache_reset``: one per reset, and ``engine.preempted_by_reset``
   for each request it preempted, dated by the reset's call;
-- ``engine.pause_transition``: one per pause-state change.
+- ``engine.pause_transition``: one per pause-state change;
+- ``engine.profile_call``: one per ``EngineCore.profile`` call, dated by
+  its own bracket, the time it held the engine loop.
 
 vLLM lists a reset's preemptions in the next step's ``preempted`` too, so a
 step's preemptions that a reset since the previous step made are the reset's,
@@ -35,6 +37,7 @@ PREEMPTED = "engine.preempted"
 PREEMPTED_BY_RESET = "engine.preempted_by_reset"
 CACHE_RESET = "engine.cache_reset"
 PAUSE_TRANSITION = "engine.pause_transition"
+PROFILE_CALL = "engine.profile_call"
 _STAMP = ("wall_ns", "mono_ns", "wall_after_ns")
 
 
@@ -93,6 +96,8 @@ class StageBuilder:
                 self._cache_reset(record)
             elif record.kind == "pause":
                 self._pause(record)
+            elif record.kind == "engine_profile":
+                self._profile_call(record)
         return self.events
 
     def summary(self) -> dict[str, Any]:
@@ -220,6 +225,26 @@ class StageBuilder:
             record,
             self._anchor(record.seq),
             (at, at),
+            details,
+        )
+
+    def _profile_call(self, record: RawRecord) -> None:
+        data = record.data
+        start, end = _integer(data.get("start_mono_ns")), _integer(
+            data.get("end_mono_ns")
+        )
+        details = {
+            "is_start": bool(data.get("is_start")),
+            "raised": bool(data.get("raised")),
+            **_prefixed(data, "start_"),
+            **_prefixed(data, "end_"),
+        }
+        self._point(
+            PROFILE_CALL,
+            "profile_call",
+            record,
+            self._anchor(record.seq),
+            (start, end),
             details,
         )
 
@@ -388,6 +413,7 @@ __all__ = [
     "PAUSE_TRANSITION",
     "PREEMPTED",
     "PREEMPTED_BY_RESET",
+    "PROFILE_CALL",
     "ResetPreemptions",
     "StageBuilder",
 ]

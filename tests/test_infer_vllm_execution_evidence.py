@@ -39,6 +39,7 @@ from tests.vllm_execution_helpers import (
     cache_reset,
     completed,
     done,
+    engine_profile,
     enqueued,
     goodbye,
     heartbeat,
@@ -593,6 +594,34 @@ def test_a_pause_with_no_step_before_it_is_a_dated_fact(tmp_path: Path) -> None:
         (2, "PAUSED_ALL", "UNPAUSED", T0 - 40),
     ]
     assert summary["stages"] == {"engine.pause_transition": 1, "unanchored": 2}
+
+
+def test_a_profiler_call_is_a_stage_dated_by_its_bracket(tmp_path: Path) -> None:
+    """The engine side of a capture: each start or stop call, by how long it
+    held the engine loop, so a diagnosis can cut exactly that."""
+    result = _reduce(
+        tmp_path,
+        [
+            hello("engine", PID, START, observes=OBSERVES),
+            alias(OWN0, f"chatcmpl-{X0}", T0 - 30),
+            scheduled(0, T0, [member(OWN0, scheduled=8)]),
+            completed(0, T0 + SECOND, [done(OWN0)]),
+            engine_profile(T0 + SECOND + 5, is_start=True, duration_ns=2_000_000),
+            engine_profile(T0 + 2 * SECOND, is_start=False, duration_ns=SECOND),
+            heartbeat(T0 + 4 * SECOND, 5),
+        ],
+    )
+
+    calls = _stages(result)["engine.profile_call"]
+    assert [
+        (c.metadata["is_start"], c.start_ns, c.end_ns, c.iteration_ref.id)
+        for c in calls
+        if c.iteration_ref is not None
+    ] == [
+        (True, T0 + SECOND + 5, T0 + SECOND + 5 + 2_000_000, "0"),
+        (False, T0 + 2 * SECOND, T0 + 3 * SECOND, "0"),
+    ]
+    assert all(c.metadata["raised"] is False for c in calls)
 
 
 def test_other_clients_preemptions_follow_the_pseudonym_rules(tmp_path: Path) -> None:

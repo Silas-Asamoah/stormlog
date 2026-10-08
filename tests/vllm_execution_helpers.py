@@ -263,6 +263,19 @@ def pause(before: str, after: str, mono_ns: int) -> dict[str, Any]:
     return {"kind": "pause", "from": before, "to": after, **stamp(mono_ns)}
 
 
+def engine_profile(
+    start_mono_ns: int, *, is_start: bool, duration_ns: int, raised: bool = False
+) -> dict[str, Any]:
+    """An ``EngineCore.profile`` call holding the loop for ``duration_ns``."""
+    return {
+        "kind": "engine_profile",
+        "is_start": is_start,
+        "raised": raised,
+        **stamp(start_mono_ns, "start_"),
+        **stamp(start_mono_ns + duration_ns, "end_"),
+    }
+
+
 def cache_reset(
     running: list[str],
     start_mono_ns: int,

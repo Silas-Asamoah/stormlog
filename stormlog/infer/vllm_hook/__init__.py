@@ -180,15 +180,27 @@ def _patch_engine(settings: _Settings) -> None:
     _patch_optional(
         Scheduler, "reset_prefix_cache", "cache_reset", _wrap_reset_prefix_cache
     )
+    _patch_optional(
+        EngineCore, "profile", "profile", _wrap_profile, claimed_by=Scheduler
+    )
 
 
-def _patch_optional(cls: Any, name: str, kind: str, wrap: Callable[[Any], Any]) -> None:
-    """Wrap ``cls.name`` when this vLLM has it, and claim ``kind`` for it."""
+def _patch_optional(
+    cls: Any,
+    name: str,
+    kind: str,
+    wrap: Callable[[Any], Any],
+    claimed_by: Any = None,
+) -> None:
+    """Wrap ``cls.name`` when this vLLM has it, and claim ``kind`` for it on
+    ``claimed_by`` (``cls`` by default): the hello lists what the scheduler's
+    class claims."""
     original = getattr(cls, name, None)
     if original is None:
         return
     setattr(cls, name, wrap(original))
-    setattr(cls, OBSERVES_ATTRIBUTE, (*getattr(cls, OBSERVES_ATTRIBUTE, ()), kind))
+    owner = cls if claimed_by is None else claimed_by
+    setattr(owner, OBSERVES_ATTRIBUTE, (*getattr(owner, OBSERVES_ATTRIBUTE, ()), kind))
 
 
 def _wrap_set_pause_state(set_pause_state: Any) -> Any:
@@ -242,6 +254,23 @@ def _wrap_reset_prefix_cache(reset: Any) -> Any:
         return result
 
     return scheduler_reset_prefix_cache
+
+
+def _wrap_profile(profile: Any) -> Any:
+    def engine_profile(self: Any, *args: Any, **kwargs: Any) -> Any:
+        recorder = getattr(getattr(self, "scheduler", None), RECORDER_ATTRIBUTE, None)
+        if recorder is None:
+            return profile(self, *args, **kwargs)
+        call = _guard(recorder, lambda: recorder.profile_call(args, kwargs))
+        try:
+            result = profile(self, *args, **kwargs)
+        except BaseException:
+            _guard(recorder, lambda: recorder.on_profile(call, raised=True))
+            raise
+        _guard(recorder, lambda: recorder.on_profile(call, raised=False))
+        return result
+
+    return engine_profile
 
 
 def _enable_engine(scheduler: Any, vllm_config: Any, settings: _Settings) -> None:
