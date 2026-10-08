@@ -294,6 +294,8 @@ def heartbeat(mono_ns: int, last_seq: int, **counters: Any) -> dict[str, Any]:
         "bytes": 1024,
         "capped": False,
         "queued": 0,
+        # As this hook writes them; a test of an older hook drops the field.
+        "reserved": 0,
         "pending_iterations": 0,
         "range_misses": 0,
     }

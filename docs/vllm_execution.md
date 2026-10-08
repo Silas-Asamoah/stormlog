@@ -343,7 +343,8 @@ call and the end stamp after it. Listed in `observes` as `cache_reset`.
 {"kind": "heartbeat", "wall_ns": …, "mono_ns": …, "wall_after_ns": …,
  "last_seq": 1234,
  "dropped": {"alias": 3, "alias_oversized": 1},
- "errors": 0, "bytes": 1048576, "capped": false, "queued": 0, "pending": 0}
+ "errors": 0, "bytes": 1048576, "capped": false, "queued": 0, "pending": 0,
+ "reserved": 0}
 ```
 
 `dropped` counts dropped records by kind, and `<kind>_oversized` counts single
@@ -356,7 +357,10 @@ they take the next sequences after it. A record counts from just before its
 last stamp is taken, while it is serialized, until it is queued or dropped:
 the hook reserves it first, so a heartbeat stamped after a record's stamp
 counts it even when vLLM's own call (an enqueue's `add_request`) or a thread
-switch comes between the stamp and the record.
+switch comes between the stamp and the record. `reserved` is how many of the
+pending records were not queued yet: another thread's record, reserved after
+the stamp, may be queued ahead of them, so they need not take the next
+sequences.
 
 A worker's heartbeat adds `range_misses` (serving calls that ran without an
 iteration range), `startup_unranged` (warm-up, dummy and CUDA-graph capture
@@ -424,13 +428,21 @@ its log is known to be whole: `spans` from one heartbeat to a later one
 kind, `<kind>_oversized` included) and `errors` unchanged and the writer not
 capped, and with every record read that was accepted by the later
 heartbeat's stamp: through its `seq` plus its `pending`, plus any heartbeat
-the writer wrote before those records came (the span's `end_seq`), the
-first heartbeat after those also showing nothing lost, since
-a record lost while being written counts only later. `observes` is the
-hello's list, or null for a hook that does not give one. Every import
-computes it from all the heartbeats it read, including ones an earlier
-import consumed, under `basis` `heartbeat_counters/1`; a hook from before
-`pending` gives only `queued`, a lower bound.
+the writer wrote before those records came (the span's `end_seq`). A later
+heartbeat with records still `reserved` cannot say where they will land, so
+its span reaches as far as the first heartbeat after it with nothing
+reserved does. The first heartbeat written after those records must also
+show nothing lost, since a record lost while being written counts only
+later. A heartbeat without `reserved` (a hook from before the count, whose
+heartbeats give only `queued`, a lower bound) cannot say whether its
+pending records keep their order, so it closes a span only on a read that
+holds every record the epoch wrote (the epoch ended or gone, nothing
+missing), never on a live or prefix read. `held` counts the heartbeats that
+closed no span, by reason: `reserved_unknown` for those, `reserved_open`
+for one whose reserved records no later heartbeat has bounded yet.
+`observes` is the hello's list, or null for a hook that does not give one.
+Every import computes the block from all the heartbeats it read, including
+ones an earlier import consumed, under `basis` `heartbeat_counters/1`.
 
 A kind the hello observes is known not to have happened in an interval only
 when a span covers it, and a record is matched by its last stamp: the hook

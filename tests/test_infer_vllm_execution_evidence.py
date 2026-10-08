@@ -396,6 +396,82 @@ def test_a_heartbeat_written_among_pending_records_does_not_take_their_place(
     assert _spans(_coverage(tmp_path / "whole", records)) == [(1, 6)]
 
 
+def test_a_reserved_record_overtaken_by_another_thread_s_holds_the_span(
+    tmp_path: Path,
+) -> None:
+    """The engine thread reserves a pause before heartbeat 2's stamp and is
+    slow to emit it; meanwhile vLLM's input thread reserves and queues an
+    alias, which takes seq 3. Heartbeat 2's one pending record is then the
+    alias, not the pause: a live read through heartbeat 4 has read seq 3 but
+    not the pause, so no span may vouch for 2's stamp until a heartbeat with
+    nothing reserved bounds what is still to come."""
+    records = [
+        hello("engine", PID, START, observes=["pause"]),  # 0
+        heartbeat(T0, 0, pending=0, reserved=0),  # 1
+        heartbeat(T0 + SECOND, 1, pending=1, reserved=1),  # 2: the pause
+        alias("a-1", "chatcmpl-a", T0 + SECOND + 5),  # 3: reserved after 2
+        heartbeat(T0 + 2 * SECOND, 3, pending=1, reserved=1),  # 4
+        pause("UNPAUSED", "PAUSED_ALL", T0 + SECOND - 5),  # 5: stamped before 2
+        heartbeat(T0 + 3 * SECOND, 5, pending=0, reserved=0),  # 6
+        heartbeat(T0 + 4 * SECOND, 6, pending=0, reserved=0),  # 7
+    ]
+
+    assert _spans(_coverage(tmp_path / "live", records[:5])) == []
+    assert _spans(_coverage(tmp_path / "whole", records)) == [(1, 7)]
+
+
+def test_several_reservations_hold_the_span_until_none_is_open(
+    tmp_path: Path,
+) -> None:
+    """Heartbeat 2 counts two reserved records. One is queued and written
+    (seq 3), an alias reserved later overtakes the other (seq 4), heartbeat
+    5 still counts it reserved, and heartbeat 6 has it queued but not
+    written: only heartbeat 6, the first with nothing reserved, bounds the
+    span, through the record it is still ahead of (seq 7)."""
+    records = [
+        hello("engine", PID, START, observes=["pause"]),  # 0
+        heartbeat(T0, 0, pending=0, reserved=0),  # 1
+        heartbeat(T0 + SECOND, 1, pending=2, reserved=2),  # 2
+        pause("UNPAUSED", "PAUSED_ALL", T0 + SECOND - 9),  # 3: reserved before 2
+        alias("a-1", "chatcmpl-a", T0 + SECOND + 5),  # 4: reserved after 2
+        heartbeat(T0 + 2 * SECOND, 4, pending=1, reserved=1),  # 5
+        heartbeat(T0 + 3 * SECOND, 5, pending=1, reserved=0),  # 6
+        pause("PAUSED_ALL", "UNPAUSED", T0 + SECOND - 5),  # 7: reserved before 2
+        heartbeat(T0 + 4 * SECOND, 7, pending=0, reserved=0),  # 8
+    ]
+
+    for read_to in (6, 7):
+        live = _coverage(tmp_path / f"live{read_to}", records[: read_to + 1])
+        assert _spans(live) == []
+    whole = _coverage(tmp_path / "whole", records)
+    assert _spans(whole) == [(1, 8)]
+    assert whole["held"] == {}
+
+
+def test_a_hook_that_does_not_count_reservations_closes_no_live_span(
+    tmp_path: Path,
+) -> None:
+    """A heartbeat without ``reserved`` (#217's hook, before reservations)
+    cannot say whether its pending records keep their order, so it closes a
+    span only on a read that holds every record the epoch wrote, never on
+    a live or prefix read; the coverage block says why."""
+    records = [
+        hello("engine", PID, START, observes=["pause"]),  # 0
+        heartbeat(T0, 0, queued=0),  # 1
+        heartbeat(T0 + SECOND, 1, queued=0),  # 2
+        heartbeat(T0 + 2 * SECOND, 2, queued=0),  # 3
+    ]
+    for record in records[1:]:
+        del record["reserved"]
+
+    live = _coverage(tmp_path / "live", records)
+    assert _spans(live) == []
+    assert live["held"] == {"reserved_unknown": 2}
+    ended = _coverage(tmp_path / "ended", [*records, goodbye(T0 + 3 * SECOND, 3)])
+    assert _spans(ended) == [(1, 3)]
+    assert ended["held"] == {}
+
+
 def test_a_pending_record_lost_at_write_breaks_the_span(tmp_path: Path) -> None:
     """A record lost while being written counts only in a later heartbeat."""
     records, _ = _backlog(dropped_after=True)

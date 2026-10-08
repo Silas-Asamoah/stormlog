@@ -316,6 +316,9 @@ class EpochWriter:
                 # Accepted before this stamp and not yet written: they take
                 # the next sequences, after this record.
                 "pending": len(self._queue) + self._in_flight + self._reserved,
+                # Of those, the ones not queued yet: another thread's later
+                # record may be queued ahead of them.
+                "reserved": self._reserved,
             }
         try:
             status.update(self._status_fields())
